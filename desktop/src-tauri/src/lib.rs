@@ -254,7 +254,14 @@ pub fn run() {
             popup::hide(app);
             startup::open_dashboard(app);
         }))
-        .plugin(tauri_plugin_opener::init())
+        // Links are opened by the webviews' own new-window handler (`window.rs`), not by the
+        // plugin's injected click interceptor, which calls an IPC command the loopback dashboard
+        // is not granted and so swallowed every `target="_blank"` click.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_process::init())
         // The argument is what makes a login launch recognisable. Nothing else in a bare launch
         // distinguishes it from a person opening the app, and D7 needs the difference.
@@ -316,6 +323,7 @@ pub fn run() {
                     // to the loopback dashboard by `capabilities/dashboard-zoom.json`.
                     .zoom_hotkeys_enabled(true)
                     .on_navigation(window::navigation_allowed(app.handle().clone()))
+                    .on_new_window(window::open_new_windows_in_default_browser())
                     // A hidden window still loads pages: wry builds this one with WebView2
                     // IsVisible=false, and the bootstrap page navigates to the dashboard URL
                     // afterwards, so the eval that a later show or hide would rely on has nowhere

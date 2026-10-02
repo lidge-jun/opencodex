@@ -21,10 +21,16 @@ file, and removes it again. Seventeen clients work this way, each with a switch:
 | ZCode | `~/.zcode/v2/config.json` | JSON | on restart | loopback placeholder |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | after fully quitting and reopening Aside | loopback placeholder |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
-| omo | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
+| omo (Pi / senpi) | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
+
+"omo" names three products that share the `~/.omo` folder. The **omo** tab manages Pi-based omo
+(the senpi engine) through `~/.omo/agent/models.json`, as in the table above. Codex-based omo
+(LazyCodex) gets its own controls on the Codex tab, described in
+[omo (Codex / LazyCodex) role models](#omo-codex--lazycodex-role-models). OpenCode-based omo
+(oh-my-opencode) keeps its own config under OpenCode; opencodex does not read or write it.
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
@@ -520,6 +526,64 @@ listens on a non-loopback address, put a data-admission key (the token described
 key) in the app's API key field. The app sends it as `Authorization: Bearer`, which
 `/v1/chat/completions` accepts as proxy admission and never forwards upstream; see the
 [authentication matrix](/reference/proxy-formats/#authentication-matrix).
+
+## omo (Codex / LazyCodex) role models
+
+When LazyCodex is installed, the Codex tab shows an **omo (Codex / LazyCodex)** section listing
+every Codex agent role found in `$CODEX_HOME/agents/*.toml`, with the model each one is pinned
+to. Codex runs a role on that pin no matter which model the parent asks for, so this is where a
+role's model is actually decided. LazyCodex counts as installed when the `omo@sisyphuslabs`
+Codex plugin is enabled in `$CODEX_HOME/config.toml` and an installed copy under
+`$CODEX_HOME/plugins/cache/sisyphuslabs/omo/` carries its `lazycodex-install.json`. A `~/.omo`
+folder on its own does not count, because Pi-based omo creates it too. Without LazyCodex the
+section is hidden and the command line reports it as not installed. Pick a model on a row and
+press Save:
+
+- opencodex rewrites only the root `model = "..."` line of that role's file. The role's
+  instructions, comments, and other keys are left exactly as they were. A role with no pin gets
+  one added near the top of the file.
+- The same value is written to `codex.agents.<role>.model` in `~/.omo/omo.jsonc`, which
+  LazyCodex 5.1.1 and later reads. If that file does not exist it is not created. If it contains
+  comments it is left untouched, because saving would remove them; the tab says so, and you can
+  set the value there by hand.
+
+Nothing happens until you press Save; syncing or restarting opencodex never changes a role file.
+New Codex sessions pick up the change. The same controls exist on the command line:
+
+```bash
+ocx agent roles
+ocx agent roles set explorer xai/grok-4.5
+```
+
+### Auto-assign
+
+Auto-assign is part of omo (Codex / LazyCodex): it sits above the role table in that section and
+exists only while LazyCodex is detected. Without it the dashboard shows neither, the API answers
+409 `lazycodex_not_detected`, and `ocx agent roles suggest` is refused.
+
+Auto-assign proposes a model for every role at once. opencodex asks your
+default Codex model (the root `model` in Codex `config.toml`) one question: for each role, given its
+description and the start of its instructions, which capability tier (fast, standard or frontier)
+and how much reasoning (glance, measured, thorough or exhaustive) does it need? That model never
+picks a model. opencodex then picks the cheapest model from your picker list that reaches the tier:
+
+- Models listed under `codexRoleTiers` in the opencodex config (`{ "fast": [...], "standard": [...], "frontier": [...] }`)
+  have that tier.
+- Other models with a known price are ranked by price and split evenly across the three tiers. With only
+  one or two priced models, the dearest is frontier and the other, if any, is standard.
+- Models with no price and no listed tier are never proposed. List them to include them.
+
+Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
+it up or down. A role the model could not size clearly is shown as not sized, with the reason, and
+cannot be applied. Nothing is written until you press Apply on a row or Apply all. Applying uses the
+same save as picking by hand, and also rewrites the role's `model_reasoning_effort` when the file already has
+one. The effort is placed on the chosen model's own levels: its lowest, its default, one above the
+default, or its highest.
+
+```bash
+ocx agent roles suggest
+ocx agent roles suggest --model xai/grok-4.5 --apply
+```
 
 ## Kilo
 

@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOnResponse } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -32,7 +33,6 @@ import { persistKiroAccountState } from "../../providers/kiro-account-state-disk
 import { readDisplaySafeErrorText } from "./core-errors";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-  rotateAnthropicAccountOn429,
   getAnthropicPoolAccessSnapshot,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -177,13 +177,18 @@ export async function executeResponsesSidecars(
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !transportState.adapter.runTurn;
+  let sidecarOutputStarted = false;
+  const sidecarHasCommittedOutput = () => sidecarOutputStarted
+    || (logCtx.activeAttempt?.deliverySummary?.semanticBytes ?? 0) > 0
+    || (logCtx.activeAttempt?.deliverySummary?.sideEffectEvents ?? 0) > 0;
+  const noteSidecarOutput = () => { sidecarOutputStarted = true; options.onFirstOutput?.(); };
   const rotateSidecarProviderOn429 = async (
     retryAfter: string | null,
     responseHeaders?: Headers,
     retryParsed?: OcxParsedRequest,
     originalResponse?: Response,
   ): Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null> => {
-    if (route.providerName !== "kiro" && originalResponse && originalResponse.status !== 429) return null;
+    if (route.providerName !== "kiro" && !(route.providerName === "anthropic" && originalResponse?.status === 403) && originalResponse && originalResponse.status !== 429) return null;
     const refusal = route.providerName === "kiro" && originalResponse
       ? classifyKiroRefusal(originalResponse.status,
         await readDisplaySafeErrorText(originalResponse.clone(), options.abortSignal ?? new AbortController().signal, "")).kind
@@ -200,7 +205,7 @@ export async function executeResponsesSidecars(
     // sidecar loops used to flatten all three to `key-429`, so an account rotation read as a key
     // rotation in the attempt row and in the Logs UI.
     let recoveryKind: AttemptRecoveryKind = "key-429";
-    const rotated = route.providerName !== "kiro" || originalResponse?.status === 429
+    const rotated = !originalResponse || originalResponse.status === 429
       ? rotateProviderTransportOn429(config, route.providerName, route.provider, {
       retryAfter,
       now: Date.now(),
@@ -260,7 +265,6 @@ export async function executeResponsesSidecars(
       // web-search or image-bridge turn was terminal even with the pool fully enabled -- while
       // the very same 429 on the main response path rotated.
       transportState.anthropicPoolAccountId
-      && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
     ) {
       // Same intersection for the Anthropic roster: its own per-request bound still applies,
       // and the shared budget decides whether this request may spend another send at all.
@@ -268,16 +272,13 @@ export async function executeResponsesSidecars(
         "auth-recovery",
         `${route.providerName}|${route.modelId}|sidecar-anthropic-429`,
       );
-      if (!hop.allowed) return null;
-      const nextAccountId = rotateAnthropicAccountOn429(
-        config,
-        transportState.anthropicPoolAccountId,
-        retryAfter,
-        anthropicSessionKey,
-        Date.now(),
-        responseHeaders,
-        transportState.anthropicRouteDecision,
-      );
+      const nextAccountId = await rotateAnthropicAccountOnResponse(
+        originalResponse ?? new Response(null, { status: 429, headers: responseHeaders ?? (retryAfter ? { "retry-after": retryAfter } : undefined) }), {
+          config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
+          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: options.abortSignal,
+          allow429Recovery: !sidecarHasCommittedOutput(), allowAccountRefusal: !sidecarHasCommittedOutput(),
+          canRetry: hop.allowed && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+        });
       if (!nextAccountId) {
         hop.permit?.release();
         return null;
@@ -427,7 +428,7 @@ export async function executeResponsesSidecars(
       on429: rotateSidecarProviderOn429,
       retryOn429Policy: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro")
         ? null : rateLimitRetryPolicyFor(route.provider),
-      ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
+      onFirstOutput: noteSidecarOutput,
       ...(options.forceEmptyResponseId ? { forceEmptyResponseId: true } : {}),
       onCompletedResponse: (response, providerState) => {
         const served = transportState.replayOAuthCredentialSnapshot;
@@ -498,7 +499,7 @@ export async function executeResponsesSidecars(
       maxSearches: wsPlan.maxSearches,
       forceEmptyResponseId: true,
       abortSignal: options.abortSignal,
-      ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
+      onFirstOutput: noteSidecarOutput,
       onRequestBuilt: request => {
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);

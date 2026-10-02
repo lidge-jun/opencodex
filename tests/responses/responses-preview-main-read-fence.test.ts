@@ -4,11 +4,13 @@ import { mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import {
   resolveCodexAuthContext,
   type CodexAuthContext,
 } from "../../src/codex/auth-context";
 import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
+import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import {
   resetCodexModelEntitlementCacheForTests,
   seedCodexModelEntitlementsForTests,
@@ -38,6 +40,7 @@ import type { OcxConfig } from "../../src/types";
 import {
   codexHeaders,
   encryptedInput,
+  fakeChatGptJwt,
   recoverySse,
 } from "../helpers/agent-task-recovery";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -59,6 +62,9 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const NOW = 1_800_000_000_000;
 const PREFERRED_MODEL = "gpt-5.6-sol";
 const FALLBACK_MODEL = "xai/grok-4.5";
+const POOL_ACCESS_TOKEN = fakeChatGptJwt("pool-account", {
+  exp: Math.floor((NOW + 24 * 60 * 60_000) / 1_000),
+});
 const originalFetch = globalThis.fetch;
 const originalNow = Date.now;
 
@@ -108,7 +114,7 @@ function installCredentials(): void {
     },
   }));
   saveCodexAccountCredential("pool-a", {
-    accessToken: "pool-access-token",
+    accessToken: POOL_ACCESS_TOKEN,
     refreshToken: "pool-refresh-token",
     expiresAt: NOW + 24 * 60 * 60_000,
     chatgptAccountId: "pool-account",
@@ -166,6 +172,21 @@ function completedResponses(model = PREFERRED_MODEL): Response {
   });
 }
 
+/** Canonical ChatGPT always answers the adapter-forced upstream stream with SSE. */
+function completedCanonicalSse(model = PREFERRED_MODEL): Response {
+  const response = {
+    id: "resp_main_read_fence",
+    object: "response",
+    status: "completed",
+    model,
+    output: [],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  };
+  return new Response(`data: ${JSON.stringify({ type: "response.completed", response })}\n\n`, {
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
 function readableInput(): unknown[] {
   return [{
     type: "message",
@@ -213,6 +234,8 @@ beforeEach(() => {
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
+  clearMainAccountInfoCache();
+  resetMainCodexAccountIdentityTrackingForTests();
   clearComboSelectionState();
   clearComboTargetCooldowns();
   clearResponseStateMemoryForTests();
@@ -245,6 +268,8 @@ afterEach(() => {
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
+  clearMainAccountInfoCache();
+  resetMainCodexAccountIdentityTrackingForTests();
   clearComboSelectionState();
   clearComboTargetCooldowns();
   clearResponseStateForTests();
@@ -269,6 +294,9 @@ describe("preview and final authentication agree on the native-main read fence",
     const owned = await resolveCodexAuthContext(codexHeaders("caller-account"), config, "pool", {
       requestScopedMainCredential: true,
       modelId: PREFERRED_MODEL,
+      // This unit observes auth fencing, not the detached quota-prime worker. Without the seam,
+      // the unowned control below can keep reading into the next case after its assertion ends.
+      primeCodexPoolQuotas: async () => {},
     });
     expect(owned).toMatchObject({ kind: "pool", accountId: "pool-a" });
     expect(authJsonReads).toBe(0);
@@ -278,6 +306,7 @@ describe("preview and final authentication agree on the native-main read fence",
     await resolveCodexAuthContext(new Headers(), config, "pool", {
       requestScopedMainCredential: true,
       modelId: PREFERRED_MODEL,
+      primeCodexPoolQuotas: async () => {},
     });
     expect(authJsonReads).toBeGreaterThan(0);
   });
@@ -286,15 +315,18 @@ describe("preview and final authentication agree on the native-main read fence",
     seedMainDenial();
     calibrateMainReadCounter();
     const upstreamAuth: Array<string | null> = [];
-    globalThis.fetch = (async (_input, init) => {
-      upstreamAuth.push(new Headers(init?.headers).get("authorization"));
-      return completedResponses();
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.pathname.endsWith("/responses")) {
+        upstreamAuth.push(new Headers(init?.headers).get("authorization"));
+      }
+      return completedCanonicalSse();
     }) as typeof fetch;
 
     const response = await postSpawn(providerConfig());
 
     expect(response.status).toBe(200);
-    expect(upstreamAuth).toEqual(["Bearer pool-access-token"]);
+    expect(upstreamAuth).toEqual([`Bearer ${POOL_ACCESS_TOKEN}`]);
     expect(denialCacheMainReadStacks()).toEqual([]);
   });
 
@@ -313,15 +345,18 @@ describe("preview and final authentication agree on the native-main read fence",
     seedMainDenial();
     calibrateMainReadCounter();
     const upstreamAuth: Array<string | null> = [];
-    globalThis.fetch = (async (_input, init) => {
-      upstreamAuth.push(new Headers(init?.headers).get("authorization"));
-      return completedResponses();
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.pathname.endsWith("/responses")) {
+        upstreamAuth.push(new Headers(init?.headers).get("authorization"));
+      }
+      return completedCanonicalSse();
     }) as typeof fetch;
 
     const response = await postSpawn(providerConfig());
 
     expect(response.status).toBe(200);
-    expect(upstreamAuth).toEqual(["Bearer pool-access-token"]);
+    expect(upstreamAuth).toEqual([`Bearer ${POOL_ACCESS_TOKEN}`]);
     expect(authJsonReadStacks).toEqual([]);
     expect(authJsonReads).toBe(0);
   });
@@ -329,7 +364,7 @@ describe("preview and final authentication agree on the native-main read fence",
   test("the initial preview also fences main for recovery blocking and selector drain", async () => {
     seedMainDenial();
     calibrateMainReadCounter();
-    globalThis.fetch = (async () => completedResponses()) as typeof fetch;
+    globalThis.fetch = (async () => completedCanonicalSse()) as typeof fetch;
 
     const snapshot = nativeMainStartupGateSnapshot();
     blockedHomeId = snapshot.homeId ?? testDir;
@@ -463,7 +498,7 @@ describe("preview and final authentication agree on the native-main read fence",
       upstreamUrls.push(String(input));
       upstreamBodies.push(typeof init?.body === "string" ? init.body : "");
       upstreamAuth.push(new Headers(init?.headers).get("authorization"));
-      return completedResponses();
+      return completedCanonicalSse();
     }) as typeof fetch;
     let finalAuth: CodexAuthContext | undefined;
     const logCtx: RequestLogContext = { model: "", provider: "" };
@@ -485,7 +520,7 @@ describe("preview and final authentication agree on the native-main read fence",
     expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo).toBeUndefined();
     // The caller's own bearer is what main is served from. Neither stored credential may appear,
     // and the denial-cache validator -- the one read this file exists to fence -- never ran.
-    expect(upstreamAuth[0]).not.toBe("Bearer pool-access-token");
+    expect(upstreamAuth[0]).not.toBe(`Bearer ${POOL_ACCESS_TOKEN}`);
     expect(upstreamAuth[0]).not.toBe("Bearer physical-main-token");
     expect(denialCacheMainReadStacks()).toEqual([]);
   });
@@ -518,12 +553,6 @@ describe("preview and final authentication agree on the native-main read fence",
     expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo).toBe(FALLBACK_MODEL);
   });
 
-  // The two cases below are last on purpose. Both let a request reach native main, and observing
-  // a main credential writes module state in `main-account-cache.ts` that no reset helper in this
-  // file clears -- `beforeEach` rebuilds `OPENCODEX_HOME` and the read counters, not that cache.
-  // Running them earlier made the recovery/drain case above see three reads it does not make on
-  // its own. Keep read-count assertions ahead of them.
-
   /**
    * The other half of #4850, and the reason the seam is scoped to
    * `previewRequestScopedMainCredential` instead of being applied to every preview. A fix that
@@ -534,7 +563,7 @@ describe("preview and final authentication agree on the native-main read fence",
   test("a preview that owns no credential still probes physical main liveness", async () => {
     seedMainDenial();
     calibrateMainReadCounter();
-    globalThis.fetch = (async () => completedResponses()) as typeof fetch;
+    globalThis.fetch = (async () => completedCanonicalSse()) as typeof fetch;
 
     const response = await postSpawn(providerConfig(), {}, new Headers());
 
@@ -570,7 +599,7 @@ describe("preview and final authentication agree on the native-main read fence",
     globalThis.fetch = (async (_input, init) => {
       upstreamAuth.push(new Headers(init?.headers).get("authorization"));
       upstreamBodies.push(typeof init?.body === "string" ? init.body : "");
-      return completedResponses();
+      return completedCanonicalSse();
     }) as typeof fetch;
     let finalAuth: CodexAuthContext | undefined;
     const logCtx: RequestLogContext = { model: "", provider: "" };
@@ -589,7 +618,7 @@ describe("preview and final authentication agree on the native-main read fence",
     expect(upstreamBodies[0]).toContain(`"model":"${PREFERRED_MODEL}"`);
     expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo).toBeUndefined();
     // The caller's own bearer is forwarded. Neither stored credential may appear.
-    expect(upstreamAuth[0]).not.toBe("Bearer pool-access-token");
+    expect(upstreamAuth[0]).not.toBe(`Bearer ${POOL_ACCESS_TOKEN}`);
     expect(upstreamAuth[0]).not.toBe("Bearer physical-main-token");
   });
 });

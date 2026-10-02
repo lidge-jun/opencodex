@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../helpers/anthropic-shared-quota";
 /**
  * 429 credential failover is a safety net, not a routing policy.
  *
@@ -14,13 +15,17 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { clearComboTargetCooldowns, coolComboTarget, isComboTargetInCooldown } from "../../src/combos/failover";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { executeComboResponses, isAnthropicPoolLocalRefusal } from "../../src/server/responses/core-combo";
+import type { ResponsesDispatchers } from "../../src/server/responses/core-options";
 import {
   clearAnthropicAccountPoolState,
+  getAnthropicPoolRetryAfterSeconds,
   getEligibleAnthropicAccounts,
   hasAnthropicFailoverQuorum,
   isAnthropicAccountPoolEnabled,
   resolveAnthropicAccountForSession,
-  rotateAnthropicAccountOn429,
 } from "../../src/oauth/anthropic-routing";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
@@ -136,6 +141,110 @@ describe("Anthropic reactive 429 failover without the pool flag", () => {
     expect(rotateAnthropicAccountOn429(poolAbsent(), ids[0]!, null)).toBe(ids[1]);
     expect(rotateAnthropicAccountOn429(poolAbsent(), ids[1]!, null)).toBeNull();
   });
+
+  // The combo layer keys its target cooldown off this. While the pool holds the wait, its 429
+  // Retry-After is only its own earliest account cooldown restated, so the combo must not also
+  // park the target on it -- otherwise an account added a minute later sits ignored until the
+  // target cooldown expires, which for a weekly window is the 24h server-delay ceiling.
+  test("only the OAuth pool's own all-cooled 429 is a local refusal", async () => {
+    const ids = await seedAccounts(2);
+    const oauth = poolAbsent();
+    const refusal = (config = oauth, account?: string) =>
+      isAnthropicPoolLocalRefusal(config, "anthropic", 429, account);
+    expect(refusal()).toBe(false);
+    const weekly = String(4 * 86_400);
+    expect(rotateAnthropicAccountOn429(oauth, ids[0]!, weekly)).toBe(ids[1]);
+    // One account still eligible: an upstream 429 here is about THAT account, not the pool.
+    expect(refusal()).toBe(false);
+    expect(rotateAnthropicAccountOn429(oauth, ids[1]!, weekly)).toBeNull();
+    expect(getAnthropicPoolRetryAfterSeconds()).toBeGreaterThan(86_400);
+    expect(refusal()).toBe(true);
+    // Provenance, not just pool state: an identified account or an API-key provider is upstream
+    // speaking, so its Retry-After must still park the target in full.
+    expect(refusal(oauth, "anthropic-p0000000")).toBe(false);
+    const apiKey = { ...oauth, providers: { anthropic: { ...oauth.providers.anthropic!, authMode: "key" } } } as OcxConfig;
+    expect(refusal(apiKey)).toBe(false);
+    expect(isAnthropicPoolLocalRefusal(oauth, "anthropic", 503, undefined)).toBe(false);
+    // A fresh account makes the pool usable again at once, which a parked target would ignore.
+    await saveCredential("anthropic", {
+      access: "access-new", refresh: "refresh-new", expires: Date.now() + 3_600_000,
+      accountId: "uuid-new", email: "new@example.test",
+    } as never);
+    expect(refusal()).toBe(false);
+  });
+
+  // The combo-layer half, mirroring core-combo's call site: the target still cools (the
+  // anti-hammer guard), but for the local fallback rather than the pool's multi-day Retry-After.
+  // A single account is deliberately never cooled by rotation (see the no-op test above), so the
+  // pool cannot hold the wait there and an upstream Retry-After keeps parking the target as before.
+  test("a pool-held 429 cools the combo target for minutes, not for the pool's Retry-After", async () => {
+    const ids = await seedAccounts(2);
+    const weekly = String(4 * 86_400);
+    rotateAnthropicAccountOn429(poolAbsent(), ids[0]!, weekly);
+    rotateAnthropicAccountOn429(poolAbsent(), ids[1]!, weekly);
+    const now = Date.now();
+    const local = isAnthropicPoolLocalRefusal(poolAbsent(), "anthropic", 429, undefined, now);
+    expect(local).toBe(true);
+    const target = { provider: "anthropic", model: "claude-opus-5" };
+    clearComboTargetCooldowns("pool-held");
+    coolComboTarget("pool-held", target, { now, retryAfter: local ? undefined : weekly, status: 429 });
+    expect(isComboTargetInCooldown("pool-held", target, now + 1)).toBe(true);
+    expect(isComboTargetInCooldown("pool-held", target, now + 10 * 60_000)).toBe(false);
+    clearComboTargetCooldowns("pool-held");
+  });
+
+  // Production wiring, not a mirror of it: drive the real combo failure path with a child that
+  // answers exactly what the pool answers when every account is cooled -- a 429 carrying the
+  // earliest account reset as Retry-After. The control sends the SAME 429 while an account is
+  // still eligible, so the only difference between the two runs is who is holding the wait.
+  test("the combo failure path withholds only the pool's own Retry-After from the target", async () => {
+    const weekly = String(4 * 86_400);
+    const target = { provider: "anthropic", model: "claude-opus-5" };
+    const config = {
+      ...poolAbsent(),
+      combos: { waterfall: { strategy: "failover", targets: [{ ...target }] } },
+    } as OcxConfig;
+    const poolRefusal: ResponsesDispatchers = {
+      async handleResponses() {
+        return new Response(
+          JSON.stringify({ error: { type: "rate_limit_error", message: "All Anthropic OAuth accounts are temporarily rate-limited" } }),
+          { status: 429, headers: { "content-type": "application/json", "retry-after": weekly } },
+        );
+      },
+      async handleComboResponses() { throw new Error("nested combo dispatch is not expected"); },
+    };
+    const run = async () => {
+      const body = { model: "combo/waterfall", input: "hi", stream: false };
+      const budget = createTranslatorBudget();
+      try {
+        return await executeComboResponses(
+          new Request("http://127.0.0.1/v1/responses", {
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+          }),
+          body, "waterfall", config, { model: "", provider: "" }, { translatorBudget: budget }, poolRefusal,
+        );
+      } finally {
+        budget.dispose();
+      }
+    };
+
+    // Control: one account is still eligible, so this 429 is upstream speaking and parks in full.
+    const ids = await seedAccounts(2);
+    rotateAnthropicAccountOn429(config, ids[0]!, weekly);
+    clearComboTargetCooldowns("waterfall");
+    const controlAt = Date.now();
+    expect((await run()).status).toBe(429);
+    expect(isComboTargetInCooldown("waterfall", target, controlAt + 10 * 60_000 + 1_000)).toBe(true);
+
+    // Pool-held: every account cooled. The target still cools, but only for the local fallback.
+    rotateAnthropicAccountOn429(config, ids[1]!, weekly);
+    clearComboTargetCooldowns("waterfall");
+    const heldAt = Date.now();
+    expect((await run()).status).toBe(429);
+    expect(isComboTargetInCooldown("waterfall", target, heldAt + 1)).toBe(true);
+    expect(isComboTargetInCooldown("waterfall", target, heldAt + 10 * 60_000 + 1_000)).toBe(false);
+    clearComboTargetCooldowns("waterfall");
+  });
 });
 
 describe("proactive Anthropic routing stays opt-in", () => {
@@ -164,14 +273,26 @@ describe("proactive Anthropic routing stays opt-in", () => {
     // fail -- every behavioural test seeds two accounts, which satisfies the quorum either way,
     // so they would keep passing while the feature was dead for the users who never opted in.
     //
-    // Pin the shape instead: the flag may still appear in the rotator, but only alongside the
-    // presence check, never as a gate of its own.
+    // Pin the activation gate in the recorder, which the rotator now calls before
+    // choosing a replacement. The rotator may use the flag separately to select its
+    // proactive strategy, but must not reject a pool-off request before recording.
+    // #6340 folded the 429 and proven-403 paths into rotateAnthropicAccountOnRefusal and
+    // recordAnthropicAccountRefusal; the 429 entry points delegate to them.
     const source = await Bun.file("src/oauth/anthropic-routing.ts").text();
-    const start = source.indexOf("export function rotateAnthropicAccountOn429");
+    const start = source.indexOf("export function rotateAnthropicAccountOnRefusal");
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf("\n}", start));
-    const gate = body.split("\n").find(line => line.includes("isAnthropicAccountPoolEnabled"));
-    expect(gate, "the rotator no longer references the pool flag at all").toBeDefined();
+    const recordCall = body.indexOf("if (!recordAnthropicAccountRefusal(");
+    expect(recordCall, "the rotator no longer uses the recorder's quorum gate").toBeGreaterThan(-1);
+    expect(body.slice(0, recordCall), "the rotator added a pool-only gate before recording")
+      .not.toContain("isAnthropicAccountPoolEnabled");
+
+    const recordStart = source.indexOf("export function recordAnthropicAccountRefusal");
+    expect(recordStart).toBeGreaterThan(-1);
+    const recordBody = source.slice(recordStart, source.indexOf("\n}", recordStart));
+    const gate = recordBody.split("\n").find(line =>
+      line.trimStart().startsWith("if (") && line.includes("isAnthropicAccountPoolEnabled"));
+    expect(gate, "the recorder no longer checks the pool flag").toBeDefined();
     expect(gate, "the pool flag became a gate of its own again").toContain("hasAnthropicFailoverQuorum");
   });
 });

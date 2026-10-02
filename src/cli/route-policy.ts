@@ -1,5 +1,6 @@
 import {
   CliUsageError,
+  RuntimeApiError,
   printData,
   rejectArgs,
   runCliAction,
@@ -38,6 +39,7 @@ async function list(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   );
 }
 
+/** Show an existing routing profile, distinguishing malformed usage from a missing record. */
 async function show(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const id = args.shift();
@@ -46,7 +48,7 @@ async function show(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   rejectArgs(args, USAGE);
   const result = await runtimeRequest<{ profiles?: ProfileRow[] }>("/api/routing-profiles", {}, deps);
   const profile = (result.profiles ?? []).find(candidate => candidate.id === id);
-  if (!profile) throw new CliUsageError(`unknown routing profile: ${id}`, USAGE);
+  if (!profile) throw new RuntimeApiError(`unknown routing profile: ${id}`, 404, null);
   printData(profile, wantsJson);
 }
 

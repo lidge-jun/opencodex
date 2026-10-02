@@ -14,7 +14,8 @@ export type Page =
   | "remote"
   | "remote-workspace"
   | "codex-set"
-  | "integrations";
+  | "integrations"
+  | "claude";
 
 export const VALID_PAGES = new Set<Page>([
   "dashboard",
@@ -29,6 +30,7 @@ export const VALID_PAGES = new Set<Page>([
   "remote-workspace",
   "codex-set",
   "integrations",
+  "claude",
 ]);
 
 export function readPageFromHash(hash?: string): Page {
@@ -53,8 +55,8 @@ export function readPageFromHash(hash?: string): Page {
   // the destination page here keeps the initial hook state aligned until the
   // resolver replaces the hash with the exact nested destination.
   if (pageId === ("api" as Page)
-    || pageId === ("claude" as Page)
     || pageId === ("grok" as Page)) return "integrations";
+  if (raw === "integrations/claude" || raw === "integrations/claude/desktop") return "claude";
   return VALID_PAGES.has(pageId) ? pageId : "dashboard";
 }
 
@@ -73,6 +75,22 @@ export const DASHBOARD_TAB_HASHES = ["dashboard/providers", "dashboard/models"] 
 export const MODELS_TAB_HASHES = ["models/combos", "models/routing", "models/compatibility"] as const;
 /** Action deep link that opens the editable JEV Auto template in the Combos tab. */
 export const JEV_AUTO_CREATE_HASH = "models/combos/jev-auto";
+
+/** JEV Auto deep link; a self-hosted `jev-decision` row rides along as `?decisionProvider=`. */
+export function jevAutoCreateHash(decisionProvider?: string | null): string {
+  const id = decisionProvider?.trim();
+  return id && id !== "jev"
+    ? `${JEV_AUTO_CREATE_HASH}?${new URLSearchParams({ decisionProvider: id })}`
+    : JEV_AUTO_CREATE_HASH;
+}
+
+/** The decision provider a JEV Auto deep link pre-fills, or undefined when it is not one. */
+export function jevAutoCreateDecisionProvider(hash: string): string | null | undefined {
+  const { path, query } = splitHashQuery(normalizeHashPath(hash));
+  if (path !== JEV_AUTO_CREATE_HASH) return undefined;
+  const id = new URLSearchParams(query).get("decisionProvider")?.trim();
+  return id && id !== "jev" ? id : null;
+}
 
 /**
  * `#dashboard/update` is an action deep link, not a tab: the sidebar update button uses
@@ -115,13 +133,16 @@ export const INTEGRATION_TAB_HASHES = [
 
 /**
  * Routes that own a `?query` suffix: provider settings for one provider
- * (`#providers?provider=<name>`) and a protocol-pair prefilter on the compatibility matrix
- * (`#models/compatibility?inbound=chat&upstream=messages`). Anywhere else the query is dropped.
+ * (`#providers?provider=<name>`), a protocol-pair prefilter on the compatibility matrix
+ * (`#models/compatibility?inbound=chat&upstream=messages`), and the decision service a JEV Auto
+ * deep link pre-fills (`#models/combos/jev-auto?decisionProvider=<name>`). Anywhere else the
+ * query is dropped.
  */
-export const QUERY_HASH_PATHS: readonly string[] = ["providers", "models/compatibility"];
+export const QUERY_HASH_PATHS: readonly string[] = ["providers", "models/compatibility", JEV_AUTO_CREATE_HASH];
 
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
+    || (page === "claude" && ["claude/account", "claude/code", "claude/desktop", "claude/settings"].includes(rawHash))
     || (page === "logs" && rawHash === "logs/debug")
     || (page === "usage" && rawHash === "usage/companion")
     || (page === "codex-set" && rawHash === "codex-set/prompt")
@@ -181,7 +202,8 @@ export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
 
   /* Legacy top-level integration pages. */
   if (rawHash === "api") return { page: "integrations", replaceTo: "integrations/keys" };
-  if (rawHash === "claude") return { page: "integrations", replaceTo: "integrations/claude" };
+  if (rawHash === "integrations/claude") return { page: "claude", replaceTo: "claude/code" };
+  if (rawHash === "integrations/claude/desktop") return { page: "claude", replaceTo: "claude/desktop" };
   if (rawHash === "grok") return { page: "integrations", replaceTo: "integrations/grok" };
 
   // Legacy deep link from the removed dual-layout era.

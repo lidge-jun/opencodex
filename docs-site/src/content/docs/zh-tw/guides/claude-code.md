@@ -18,15 +18,20 @@ sticky session affinity 與依用量的新工作階段選擇。它**不**控制 
 `anthropicAccountPool.quotaWindow` 所設定的視窗挑選已知用量最低者（`five-hour` 為預設，亦可選
 `weekly` 或 `max-utilization`）；
 `round-robin` 平均分散（`stickyLimit`，預設 `1`）；`fill-first` 一直使用作用中帳號直到冷卻、重新認證
-或達到閾值，然後前進。它**預設關閉**、會在 GUI 顯示警告，而且尚未經過實戰驗證——Anthropic 可能
-限制看起來像自動輪換的帳號；輪換並不能保護你免受供應商執行機制的處置。
+或達到閾值，然後前進。它**預設關閉**，仍屬實驗性功能。
+
+儀表板會列出帳號池的適用條件：你本人擁有或獲授權使用的訂閱、官方 Claude Code 用戶端，以及有人看顧的工作階段。
+Anthropic 未認可自動帳號池；同一組織的帳號可能共用配額（新增帳號不一定能增加容量），切換帳號也無法避免供應商的
+執行處置。OpenCodex 不會傳送保溫（keep-warm）請求，預設也不會在背景更新 Claude 權杖或讀取用量：只有儀表板、選單列
+應用程式或 `ocx` 指令要求時才會讀取用量。門檻是選擇帳號的偏好，而非用量或計費上限。以上為產品說明，並非法律意見；
+請查閱 Anthropic 的現行條款。
 
 啟用時的營運契約：
 
 - 上游 **429** 會讓該帳號冷卻（有 `Retry-After` 時使用它，否則用預設 backoff）、清除其 affinity，
   並可能在同一個請求內輪換到另一個合格帳號（有上限）。
 - Affinity 是**程序本機**的（proxy 重啟後就會遺失）。
-- **401/403** 憑證失敗會隔離該帳號（`needsReauth`），直到重新認證前都不會參與選擇。
+- Token 更新失敗保留既有 `needsReauth` 規則。明確的訂閱或帳號計費 403 可在輸出前切換帳號，冷卻遵循 `Retry-After` 或預設十分鐘；一般權限拒絕不切換。詳見[帳號復原](/guides/claude-code/)。
 - 如果每個合格帳號都在冷卻，proxy 會回傳 **429**（不是 401），並在已知時附上 `Retry-After`。
 - 復原（包括 429 容錯移轉）會使用 `quotaWindow` 為合格的替代帳號排序，且不改變現有的冷卻或
   容錯移轉上限；`round-robin` 會忽略 `quotaWindow`。
@@ -260,7 +265,7 @@ opencodex 路由：
 
 ```bash
 ocx claude desktop bind claude-sonnet-4-6 xai/grok-4.7
-ocx claude desktop bind claude-opus-4-6 native/gpt-6-sol
+ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 

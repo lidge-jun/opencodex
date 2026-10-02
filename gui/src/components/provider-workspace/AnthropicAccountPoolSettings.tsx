@@ -1,8 +1,10 @@
 /**
  * Opt-in Anthropic OAuth account pool controls (#294).
- * Experimental — shows a strong warning because the feature is not battle-tested.
+ * Experimental. The conditions it is meant for are static helper text next to the toggle,
+ * with the selection details behind a disclosure: the notice describes how to use the pool,
+ * so it is not announced as a live alert. Load and save failures keep their own messages.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { getPoolSettings, putPoolSettings } from "../../pool-settings";
 import {
@@ -20,6 +22,9 @@ import {
 import AccountPoolStrategyControls from "../AccountPoolStrategyControls";
 import { Select } from "../../ui";
 
+/** The public guide section that explains pool selection, failover and its limits. */
+const ANTHROPIC_POOL_GUIDE_URL = "https://opencodex.me/guides/claude-code/#claude-oauth-account-pool-experimental";
+
 const QUOTA_WINDOW_LABEL_KEYS = {
   "five-hour": "accountPool.quotaWindowFiveHour",
   weekly: "accountPool.quotaWindowWeekly",
@@ -34,12 +39,40 @@ type PoolState = {
   quotaWindow: AccountPoolQuotaWindow;
 };
 
+/**
+ * The enabled status line names only what the selected strategy actually reads
+ * (src/oauth/anthropic-routing.ts). Round-robin rotates new sessions and refusal recovery
+ * through the ring and reads no usage, threshold or window. Fill-first drains the active
+ * account to its threshold in the window, then advances in stable order; at threshold 0 it
+ * stays until cooldown or sign-in. Quota keeps a healthy active account under the threshold
+ * and otherwise, and during recovery, picks the lowest usage in the window.
+ */
+function enabledStatus(
+  t: ReturnType<typeof useT>,
+  strategy: AccountPoolStrategy,
+  threshold: number,
+  quotaWindow: AccountPoolQuotaWindow,
+): string {
+  const window = t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]);
+  if (strategy === "round-robin") return t("anthropicPool.enabledRoundRobinDesc");
+  if (strategy === "fill-first") {
+    return threshold === 0
+      ? t("anthropicPool.enabledFillFirstNoThresholdDesc")
+      : t("anthropicPool.enabledFillFirstDesc", { threshold, window });
+  }
+  return threshold === 0
+    ? t("anthropicPool.enabledNoProactiveDesc", { window })
+    : t("anthropicPool.enabledDesc", { threshold, window });
+}
+
 export default function AnthropicAccountPoolSettings({
   apiBase,
   accountCount,
+  onThresholdChange,
 }: {
   apiBase: string;
   accountCount: number;
+  onThresholdChange?: (threshold: number) => void;
 }) {
   const t = useT();
   const [state, setState] = useState<PoolState | null>(null);
@@ -48,6 +81,24 @@ export default function AnthropicAccountPoolSettings({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
+  const onThresholdChangeRef = useRef(onThresholdChange);
+  const mountedRef = useRef(true);
+  const apiBaseRef = useRef(apiBase);
+  const saveAbortRef = useRef<AbortController | null>(null);
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      saveAbortRef.current?.abort();
+      saveAbortRef.current = null;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    onThresholdChangeRef.current = onThresholdChange;
+    apiBaseRef.current = apiBase;
+  }, [apiBase, onThresholdChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,6 +130,7 @@ export default function AnthropicAccountPoolSettings({
           quotaWindow: normalizeAccountPoolQuotaWindow(json.quotaWindow),
         });
         setDraft(String(nextThreshold));
+        onThresholdChangeRef.current?.(nextThreshold);
         setStickyDraft(String(nextSticky));
         setLoadError(false);
       })
@@ -99,6 +151,12 @@ export default function AnthropicAccountPoolSettings({
     stickyLimit: number;
     quotaWindow: AccountPoolQuotaWindow;
   }) => {
+    const requestApiBase = apiBase;
+    saveAbortRef.current?.abort();
+    const controller = new AbortController();
+    saveAbortRef.current = controller;
+    const currentRequest = () => mountedRef.current && apiBaseRef.current === requestApiBase
+      && saveAbortRef.current === controller && !controller.signal.aborted;
     const previousState = state;
     setState({
       enabled: next.enabled,
@@ -112,27 +170,31 @@ export default function AnthropicAccountPoolSettings({
     try {
       // The client owns the field mapping: `threshold` becomes `autoSwitchThreshold` and the
       // provider is always sent, so no call site can forget either.
-      const json = await putPoolSettings(apiBase, "anthropic", {
+      const json = await putPoolSettings(requestApiBase, "anthropic", {
         enabled: next.enabled,
         threshold: next.threshold,
         strategy: next.strategy,
         stickyLimit: next.stickyLimit,
         quotaWindow: next.quotaWindow,
-      });
+      }, (input, init) => fetch(input, init), { signal: controller.signal });
+      if (!currentRequest()) return;
       if (!json) throw new Error("save");
+      const savedThreshold = typeof json.autoSwitchThreshold === "number" ? json.autoSwitchThreshold : next.threshold;
       const savedStrategy = normalizeAccountPoolStrategy(json?.strategy ?? next.strategy);
       const savedSticky = normalizeAccountPoolStickyLimit(json?.stickyLimit ?? next.stickyLimit);
       const savedWindow = normalizeAccountPoolQuotaWindow(json?.quotaWindow ?? next.quotaWindow);
       setState({
         enabled: next.enabled,
-        threshold: next.threshold,
+        threshold: savedThreshold,
         strategy: savedStrategy,
         stickyLimit: savedSticky,
         quotaWindow: savedWindow,
       });
-      setDraft(String(next.threshold));
+      setDraft(String(savedThreshold));
+      onThresholdChangeRef.current?.(savedThreshold);
       setStickyDraft(String(savedSticky));
     } catch {
+      if (!currentRequest()) return;
       setError(t("anthropicPool.saveFailed"));
       if (previousState) {
         setState(previousState);
@@ -140,7 +202,9 @@ export default function AnthropicAccountPoolSettings({
         setStickyDraft(String(previousState.stickyLimit));
       }
     } finally {
-      setSaving(false);
+      const ownsSave = saveAbortRef.current === controller;
+      if (ownsSave) saveAbortRef.current = null;
+      if (ownsSave && mountedRef.current && apiBaseRef.current === requestApiBase) setSaving(false);
     }
   }, [apiBase, state, t]);
 
@@ -171,14 +235,7 @@ export default function AnthropicAccountPoolSettings({
               : loading
                 ? t("common.loading")
                 : enabled
-                  ? threshold === 0
-                    ? t("anthropicPool.enabledNoProactiveDesc", {
-                        window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
-                      })
-                    : t("anthropicPool.enabledDesc", {
-                        threshold,
-                        window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
-                      })
+                  ? enabledStatus(t, strategy, threshold, quotaWindow)
                   : t("anthropicPool.disabledDesc")}
           </div>
         </div>
@@ -203,13 +260,23 @@ export default function AnthropicAccountPoolSettings({
         </button>
       </div>
 
-      <div role="alert" className="card-sub anthropic-pool-card__notice">
+      <p className="card-sub anthropic-pool-card__notice">
         {t("anthropicPool.experimentalWarning")}
-      </div>
+      </p>
 
       {accountCount < 2 && (
         <div className="card-sub" style={{ marginTop: 8 }}>{t("anthropicPool.needTwoAccounts")}</div>
       )}
+
+      <details className="anthropic-pool-card__details">
+        <summary>{t("anthropicPool.detailsSummary")}</summary>
+        <p>{t("anthropicPool.detailsEnabling")}</p>
+        <p>{t("anthropicPool.detailsFailover")}</p>
+        <p>{t("anthropicPool.detailsActivity")}</p>
+        <p>
+          <a href={ANTHROPIC_POOL_GUIDE_URL} target="_blank" rel="noreferrer">{t("anthropicPool.detailsGuide")}</a>
+        </p>
+      </details>
 
       {enabled && state && (
         <>

@@ -8,7 +8,16 @@ import { InitialConfigPublicationError } from "../config/initialize";
 import { redactUserPath } from "../lib/redact";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
+import { pinSponsorsWithinKind } from "../providers/sponsor-order";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+
+/** Parse a setup TCP port; only an empty answer selects the default. */
+export function parseInitPort(raw: string): number | null {
+  const text = raw.trim();
+  if (!text) return 10100;
+  const value = /^\d+$/.test(text) ? Number(text) : NaN;
+  return Number.isInteger(value) && value >= 1 && value <= 65535 ? value : null;
+}
 
 class InitCancelledError extends Error {
   constructor(readonly exitCode: 1 | 130) {
@@ -110,6 +119,7 @@ export function cleanupOpenAiTierBackupAfterInit(configPath = getConfigPath()): 
   } catch { /* cleanup is best-effort; never block init on backup housekeeping */ }
 }
 
+/** Create a first configuration interactively, preserving existing files and refusing invalid input. */
 export async function runInit(): Promise<void> {
   const initial = observeInitialConfigState();
   if (initial === "exists") {
@@ -126,7 +136,7 @@ export async function runInit(): Promise<void> {
   try {
     console.log("\n🔧 opencodex (ocx) setup\n");
 
-    const providers = buildInitProviders();
+    const providers = pinSponsorsWithinKind(buildInitProviders());
     printMenu(providers);
 
     const choice = await prompt.ask("\nSelect default provider (number): ");
@@ -193,8 +203,13 @@ export async function runInit(): Promise<void> {
       };
     }
 
-    const portStr = await prompt.ask("\nProxy port [10100]: ");
-    const port = parseInt(portStr, 10) || 10100;
+    // A mistyped port re-asks instead of discarding every earlier answer; EOF and SIGINT
+    // still reject the pending question with InitCancelledError.
+    let port: number | null;
+    do {
+      port = parseInitPort(await prompt.ask("\nProxy port [10100]: "));
+      if (port === null) console.error("Proxy port must be a whole decimal number from 1 to 65535. Please try again.");
+    } while (port === null);
 
     initializeProviderModelSelection(providerName, providerConfig);
     const config: OcxConfig = {

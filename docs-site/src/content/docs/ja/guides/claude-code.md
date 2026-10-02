@@ -7,6 +7,13 @@ opencodex は `/v1/responses` と共に `POST /v1/messages`(`count_tokens` も)�
 Code から OAuth ログイン、アカウントプール、キーフェイルオーバー、サイドカーを含むすべてのルーティングプロバイダーを別途の
 認証作業なしで使えます。
 
+Messages API 経由の Devin ルート（SWE-2 を含む）では、テキストとツール呼び出しの送信を
+上流のターンが完了するまで待ち、遅れて届く推論署名を回答より先に送ります。これにより Claude Code の
+最終結果が空になるのを防ぎます。生成中も推論と keepalive による進行通知は送信されます。
+バッファはリクエストの 32 MiB の変換上限を共有し、キャンセルすると生成処理も停止します。
+この出力順序の修正は、生成された一部のシステムテキストを Cognition が拒否する別の問題を解決するものではありません。
+システム指示と安全上の制約は保持されます。
+
 ## クイックスタート
 
 ```bash
@@ -161,7 +168,7 @@ Anthropic モデル ID なので、代わりにピッカーの行を opencodex �
 
 ```bash
 ocx claude desktop bind claude-sonnet-4-6 xai/grok-4.7
-ocx claude desktop bind claude-opus-4-6 native/gpt-6-sol
+ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 

@@ -1,3 +1,4 @@
+import { loadDiscoveredNativeModels } from "../codex/catalog/discovered-natives";
 import { setConfiguredNativeOpenAiModels } from "../codex/catalog/native-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers-destination";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -20,10 +21,11 @@ export function configuredNativeOpenAiModelIds(config: Pick<OcxConfig, "provider
 
 /**
  * Rebuild every process-local registry derived from a committed config: user price overlays and
- * configured native GPT models. Called wherever a loaded, persisted or reconciled config becomes
- * current, so the two never disagree about which config is live.
+ * configured/discovered native GPT models. Called wherever loaded, persisted or reconciled
+ * config becomes current, so catalog registration follows the active config and OpenCodex home.
  */
 export function refreshConfigDerivedRegistries(config: OcxConfig): void {
   refreshUserCostOverlays(config);
   setConfiguredNativeOpenAiModels(configuredNativeOpenAiModelIds(config));
+  loadDiscoveredNativeModels();
 }

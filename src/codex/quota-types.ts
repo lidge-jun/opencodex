@@ -1,12 +1,8 @@
 /** Quota wire/storage shapes. This leaf must not import credential or config owners. */
-/**
- * Observed usage at which new identity-matched main-account requests are refused (#5694).
- *
- * The policy is on by default, so this constant is what every installation without an explicit
- * `codexMainAccountHardLock: false` admits against. 98 leaves one point of headroom under the
- * exhausted reading Codex Desktop already treats as its own disabled send button.
- */
+/** Long-window default; explicit main-account hard-lock thresholds may override it. */
 export const MAIN_ACCOUNT_HARD_LOCK_PERCENT = 98;
+export const MAIN_ACCOUNT_HARD_LOCK_SHORT_PERCENT = 90;
+export const MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT = 80;
 
 /**
  * How recently a 100% burst reading must have been observed to exclude an account when it
@@ -118,6 +114,7 @@ export type WhamUsageResponse = {
     secondary_window?: WhamUsageWindow | null;
     tertiary_window?: WhamUsageWindow | null;
   };
+  credits?: unknown;
   rate_limit_reset_credits?: { available_count: number } | null;
   additional_rate_limits?: WhamAdditionalRateLimit[] | null;
 };

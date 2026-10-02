@@ -71,6 +71,11 @@ host and port over a LAN IP or an alias.
 
 ## Dashboard layout
 
+Responses first-output timing includes streamed function arguments and custom-tool input, as well
+as text and reasoning. A tool-only turn can therefore have a first-output time even without prose.
+Empty deltas and tool-start notifications do not start this timer. It measures the proxy's first
+observed output, not the start of hidden model reasoning or exact model decoding throughput.
+
 Overview uses matching status cards and full-width settings rows. On wide screens, labels share
 one column and model/effort controls share another. On narrower screens, controls move below their
 labels in the same reading order. Long version labels are shortened visually; hover the version
@@ -87,9 +92,12 @@ is visible) and never forces an upstream refresh.
   provider-named window or prepaid credits.
 - A chip turns amber at 70% used and red at 90% used.
 - Hover or keyboard-focus a chip to see every reported window with its reset time and the time the
-  reading was taken. On a touch screen, the first tap shows those details.
+  reading was taken. The details stay open as the pointer moves from the chip into the popover,
+  including across the small visual gap. On a touch screen, the first tap shows those details.
 - Click a chip (or tap it a second time) to open that provider's Accounts tab in Providers, where
-  its accounts or API keys are managed.
+  its accounts or API keys are managed. The popover's **Open account management** link opens the
+  same tab; keyboard users can Tab from the chip to this link and press Enter. Escape closes the
+  popover and returns focus to the chip when focus was inside the popover.
 - The bar always stays on one line. When the chips do not fit, scroll it sideways or use the « and
   » buttons at either end.
 - Providers that report no quota window are left out. The bar is hidden when no provider reports one.
@@ -382,3 +390,9 @@ While browser authentication is pending, the dashboard does not recommend restar
 ### Usage chart keyboard and touch controls
 
 Usage heatmap days have one Tab entry point. Use Up/Down for adjacent days and Left/Right for adjacent weeks. Weekly bars expose the same day details on keyboard focus, pointer hover, or touch. Day labels include the date, request count, and token count; tooltip overlays stay within the viewport.
+
+### Claude
+
+The **Claude** sidebar page sits directly below **Codex**. One header and tab strip stay in place while you switch tabs, ordered Account, Code, Desktop, Settings. The Account tab shows what the Anthropic provider's **Accounts** tab shows on **Providers**: login, the browser option, the Claude account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Provider-level controls such as the default provider, removal, and the enabled switch stay on **Providers**. When Anthropic is not configured, **Add Anthropic** starts Claude sign-in directly, after the same risk notice the Add provider dialog shows. Opening Claude without a tab selects Account when Anthropic is configured, otherwise Code. Code holds the Claude connection switch; Settings shows that connection as On or Off, interception as Running or Stopped, and the intercept port. When interception is stopped, Settings shows why and offers **Start interception**, which starts it in place without restarting OpenCodex. On Desktop, one status row shows whether Claude Desktop runs the profile and whether it is saved, with Save and Save & apply beside it. Compatibility, agent instructions, and context controls remain on Code.
+
+Bookmarks select a tab directly: `#claude/account`, `#claude/code`, `#claude/desktop`, and `#claude/settings`. The former `#integrations/claude` and `#integrations/claude/desktop` bookmarks redirect to Code and Desktop. Arrow keys move between tabs; Home and End select the first and last tab.

@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { useT } from "../i18n/shared";
+import { useT, useI18n } from "../i18n/shared";
 import { useCopyFeedback } from "./use-copy-feedback";
 import { IconAlert, IconPause, IconPlay, IconX } from "../icons";
 import { displayAccountId } from "../lib/privacy";
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import { DEFAULT_ACCOUNT_PRIORITY, normalizeAccountPriority } from "../account-priority";
 import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
+import { AccountCreditsToggle, CreditsOnBadge } from "./CodexCreditSpend";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
+import CodexCreditsRow from "./CodexCreditsRow";
 import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
 import {
   doctorCopyButtonLabel,
@@ -22,6 +24,8 @@ import {
 
 export function CodexAccountPoolCards({
   pool,
+  creditsVisible,
+  loading = false,
   activeId,
   accountModeState,
   switchActionLabel,
@@ -40,10 +44,14 @@ export function CodexAccountPoolCards({
   onReauth,
   onEditAlias,
   onRemove,
+  onToggleCreditsAfterLimit,
+  creditsAfterLimitUpdatingId = null,
   onCopyDoctor,
   doctorCopyOutcomeFor,
 }: {
   pool: CodexAccountEntry[];
+  creditsVisible?: boolean;
+  loading?: boolean;
   activeId: string | null;
   accountModeState: CodexAccountModeState | null;
   switchActionLabel: string;
@@ -69,10 +77,14 @@ export function CodexAccountPoolCards({
   onReauth: (id: string) => void;
   onEditAlias: (account: CodexAccountEntry) => void;
   onRemove: (id: string) => void;
+  /** Writes one account's "use credits after limit" switch, shown in its "more" disclosure. */
+  onToggleCreditsAfterLimit?: (account: CodexAccountEntry, enabled: boolean) => void;
+  creditsAfterLimitUpdatingId?: string | null;
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
 }) {
   const t = useT();
+  const { locale } = useI18n();
   const isNext = (account: CodexAccountEntry) => !account.paused && activeId === account.id;
   const idCopy = useCopyFeedback<string>();
   // Which cards have their ⋯ disclosure open; the priority select renders inside it unless
@@ -82,6 +94,7 @@ export function CodexAccountPoolCards({
   return (
     <>
       {pool.map(a => {
+        const showCredits = creditsVisible === true && a.credits !== undefined;
         const healthStatus = a.health?.status;
         const planExcluded = a.selectionExcludedReason === "plan_excluded";
         const showReauth = Boolean(a.needsReauth) || oauthHealthShowsReauth(healthStatus);
@@ -107,6 +120,7 @@ export function CodexAccountPoolCards({
                 </span>
               )}
               <AccountPriorityBadge value={a.priority} />
+              <CreditsOnBadge enabled={a.creditsAfterLimit} />
               {a.id === pinnedId && !a.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
               <CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />
               {healthLabel && (
@@ -171,6 +185,15 @@ export function CodexAccountPoolCards({
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => void onEditAlias(a)}>
                   {t("prov.editAlias")}
                 </button>
+                {onToggleCreditsAfterLimit && (
+                  <AccountCreditsToggle
+                    accountLabel={a.alias ?? a.email}
+                    enabled={a.creditsAfterLimit}
+                    saving={creditsAfterLimitUpdatingId === a.id}
+                    disabled={creditsAfterLimitUpdatingId !== null}
+                    onChange={enabled => onToggleCreditsAfterLimit(a, enabled)}
+                  />
+                )}
                 <button
                   type="button"
                   className="btn-icon btn-icon-danger"
@@ -224,7 +247,8 @@ export function CodexAccountPoolCards({
                   plan={a.plan}
                   threshold={a.autoSwitchThresholdOverride ?? threshold}
                   t={t}
-                  pending={a.quota == null}
+                  pending={a.quota == null && (loading || !showCredits)}
+                  afterWeekly={showCredits && !loading ? <CodexCreditsRow credits={a.credits} t={t} locale={locale} /> : undefined}
                 />
               </>}
         </div>

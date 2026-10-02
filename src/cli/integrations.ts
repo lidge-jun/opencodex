@@ -368,3 +368,16 @@ export async function handleZcodeCommand(argv: string[], deps: RuntimeApiDeps = 
   }
   return code;
 }
+
+export async function handleClaudeInterceptCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  return runCliAction(async () => {
+    const args = [...argv];
+    const action = args.shift();
+    const wantsJson = takeFlag(args, "--json");
+    const usage = "Usage: ocx claude intercept start [--json]";
+    rejectArgs(args, usage);
+    if (action !== "start") throw new CliUsageError("Expected start", usage);
+    const result = await runtimeRequest("/api/claude-intercept/start", { method: "POST" }, deps);
+    printData(result, wantsJson, summaryLines(result));
+  });
+}

@@ -2,6 +2,7 @@
 import { serviceStayOutExitCode, WINDOWS_WRAPPER_PROTOCOL_ENV } from "../service/windows-wrapper-exit";
 import { isSupervisedServiceChild, serviceChildOwnershipDecisionForClassifiedChild } from "../service/service-child-ownership";
 import { SERVICE_MANAGED_ENV } from "../service/state";
+import { raiseWindowsProxyPriority } from "../service/windows-process-priority";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -126,7 +127,6 @@ import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxySti
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
-import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeShowStarPrompt } from "./star-prompt";
@@ -201,9 +201,9 @@ async function refreshOwnedRaycastCatalog(
 }
 
 initializeNodeLauncherContext();
-
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
+if (process.argv[2] === "__keyring-load-check") { console.log(JSON.stringify((await import("../lib/keyring-native")).inspectKeyringBinding())); process.exit(0); }
 if (process.argv[2] === "__codebuddy-mcp") {
   const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
   await runCodeBuddyMcpServer(process.argv[3] ?? "");
@@ -541,6 +541,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         // Port selection is check-then-bind. The lease prevents every cooperating start or
         // updater from turning that check into a different ownership decision.
         let port = await chooseListenPort(requestedPort, { sibling: siblingStart });
+        raiseWindowsProxyPriority();
         const serverModule = await import("../server");
         const readinessGate = createReadinessGate();
         const localAttestationSecret = createLocalAttestationSecret();
@@ -709,27 +710,9 @@ async function handleStart(options: { block?: boolean } = {}) {
       ? Promise.resolve(null)
       : syncClaudeAgentDefsAtProxyStartup(config, port),
     async () => {
-      try {
-        const { fetchAllModels } = await import("../server/management-api");
-        const { desktopVisibleNativeSlugs } = await import("../codex/catalog");
-        const { resolveAdmittedCodexModelEntitlements } = await import("../codex/model-entitlement-admission");
-        const { buildDesktopDiscoveryInputs } = await import("../claude/desktop-discovery-inputs");
-        const [models, modelEntitlements] = await Promise.all([
-          fetchAllModels(config),
-          resolveAdmittedCodexModelEntitlements(config, { clientVersion: null }),
-        ]);
-        const inputs = buildDesktopDiscoveryInputs({
-          config, models, modelEntitlements,
-          desktopNativeCandidates: desktopVisibleNativeSlugs(config),
-        });
-        buildDesktop3pRegistry(
-          inputs.nativeSlugs, inputs.routedModels,
-          config.claudeCode?.desktopProfile, inputs.nativeContextCap,
-        );
-      } catch {
-        // Best-effort; model discovery can rebuild it. Never reflect credential or provider errors.
-        console.warn("[opencodex] Claude Desktop model registry could not be initialized at startup.");
-      }
+      // Shared with the Claude Code CLI picker, which awaits this same build (desktop-3p-startup.ts).
+      const { initDesktop3pRegistry } = await import("../claude/desktop-3p-startup");
+      await initDesktop3pRegistry(config);
     },
   );
   if (!startupSync.ran) console.log(startupLeftCodexNativeLine(localClientSkipReason(config), server.port ?? port));
@@ -1210,7 +1193,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
 
   if (snapshot) {
     if (guardedStep?.effect === "approval-changed") {
-      return approvalChanged();
+      return approvalChanged(guardedStep.detail);
     }
     if (guardedStep?.effect === "manager-still-active") {
       return managerStillActive(record.service, record);
@@ -1271,7 +1254,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     if (siblingStopFoundOwner(siblingOfPort, live)) {
       record.proxy = "not-running";
       console.log(`The sibling instance is already gone; the proxy on port ${siblingOfPort} was left running.`);
-    } else if (live?.pid && !(await proveLiveProxyOwnedByHome(live))) {
+    } else if (live?.pid && (await proveLiveProxyOwnedByHome(live)) !== "proven") {
       stopFailed = true;
       ownershipBlocked = true;
       record.proxy = "ownership-refused";
@@ -1703,7 +1686,7 @@ async function handleStatus() {
     process.exit(1);
   }
 
-  const status = await collectStatus();
+  const status = await collectStatus({ mainAccountPolicy: wantsJson });
   if (wantsJson) {
     console.log(JSON.stringify(status.json, null, 2));
     return;

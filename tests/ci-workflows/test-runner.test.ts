@@ -575,6 +575,14 @@ describe("bun test argv", () => {
     }
   });
 
+  test("server admission fixtures finish in a dedicated process", () => {
+    const plan = resolveBunTestPlan([]);
+    expect(plan[0]?.args).toContain("**/active-registry-admission.test.ts");
+    expect(plan.find(lane => lane.label === "active-registry-admission.test.ts")?.args).toEqual([
+      "--isolate", "--parallel=1", "./tests/codex-integration/active-registry-admission.test.ts",
+    ]);
+  });
+
   test("serial lanes override caller parallelism without changing the main lane", () => {
     const plan = resolveBunTestPlan(["--parallel=2", "--only-failures"]);
     expect(plan[0]?.args).toContain("--parallel=2");

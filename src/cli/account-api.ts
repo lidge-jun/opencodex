@@ -347,6 +347,7 @@ interface OAuthAccountDto {
   needsReauth?: boolean;
   /** Present only for providers that support operator pause (generic OAuth pools). */
   paused?: boolean;
+  autoSwitchThresholdOverride?: number | null;
   autoSelectable?: boolean;
   skipReason?: unknown;
   /** Always sent by the management route; explicitly `null` when the tier is unknown. */
@@ -388,6 +389,7 @@ async function fetchOAuthRows(
     active: a.active ?? a.id === activeId,
     needsReauth: a.needsReauth,
     ...(a.paused === true ? { paused: true } : {}),
+    ...(name === "anthropic" && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
     ...(name === "kiro" && typeof a.autoSelectable === "boolean"
       ? { autoSelectable: a.autoSelectable } : {}),
     ...(name === "kiro" && a.autoSelectable === false && isKiroSkipReason(a.skipReason)

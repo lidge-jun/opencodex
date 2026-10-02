@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { isStandaloneTarget, standaloneExecutableName } from "./standalone-targets";
+import { stageStandaloneKeyringAddon } from "./standalone-keyring";
 
 function hostTarget(): string {
   const platform = process.platform === "darwin" ? "darwin" : process.platform === "win32" ? "windows" : "linux";
@@ -76,6 +77,10 @@ try {
   restoreGenPlaceholder();
 }
 if (compileExitCode !== 0) process.exit(compileExitCode);
+
+// N-API binaries cannot execute from Bun's virtual `$bunfs`. Keep the exact target addon outside
+// the compiled executable so source/npm resolution and packaged resolution share one binding API.
+stageStandaloneKeyringAddon(repoRoot, output, target);
 
 // bun's ad-hoc linker signature does not always cover the embedded payload;
 // macOS kills the executable on launch (SIGKILL) unless it is re-signed.

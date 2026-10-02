@@ -1,4 +1,6 @@
 import { parseAnthropicModelRoutes, readAnthropicModelRoutes } from "../../oauth/anthropic-model-routes";
+import { effectiveAnthropicAccountThreshold } from "../../oauth/anthropic-account-threshold";
+import { handleAnthropicAccountThreshold } from "./anthropic-account-threshold";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
@@ -290,12 +292,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       // browser profile other than the OS default, or on a different machine
       // than the proxy. Declining changes nothing else: the URL is still
       // returned below and every login surface renders it with a copy button.
+      //
+      // The launch outcome is returned rather than discarded, the same contract the Codex
+      // account login already keeps: a login whose browser never opened otherwise reads as one
+      // that did, and the dashboard can only say so if it is told. `openUrl` answers within its
+      // short settle window and never rejects.
       const { shouldOpenBrowserForLogin } = await import("../../oauth/open-browser-choice");
+      let browserLaunch: "started" | "failed" | "skipped" = "skipped";
       if (authUrl && !deviceCode && shouldOpenBrowserForLogin(body.openBrowser, config)) {
         const { openUrl } = await import("../../lib/open-url");
-        void openUrl(authUrl);
+        browserLaunch = (await openUrl(authUrl)).status === "started" ? "started" : "failed";
       }
-      return jsonResponse({ url: authUrl, instructions, deviceCode });
+      return jsonResponse({ url: authUrl, instructions, deviceCode, browserLaunch });
     } catch (err) {
       if (err instanceof OAuthMutationBusyError) throw err;
       const message = err instanceof Error ? err.message : String(err);
@@ -396,7 +404,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { isGenericFailoverProvider, kiroAutoSelection } = await import("../../oauth/generic-account-failover");
     const effectiveProvider = genericOAuthProviderConfig(provider, config);
     const supportsPause = effectiveProvider !== undefined
-      && isGenericFailoverProvider(provider, effectiveProvider);
+      && (provider === "anthropic" && effectiveProvider.authMode === "oauth"
+        || isGenericFailoverProvider(provider, effectiveProvider));
     const {
       oauthAccountHealthFields,
       projectOAuthAccountHealth,
@@ -417,6 +426,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
             });
           return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
             ...(supportsPause ? { paused: full?.paused === true } : {}),
+            ...(provider === "anthropic" && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
+              effectiveAutoSwitchThreshold: effectiveAnthropicAccountThreshold(config, full),
+              autoSwitchThreshold: effectiveAnthropicAccountThreshold(config) } : {}),
             ...(provider === "kiro" && full ? kiroAutoSelection(full) : {}) };
         }),
       };
@@ -492,6 +504,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
+  if (url.pathname === "/api/oauth/accounts/auto-switch" && req.method === "PUT") return handleAnthropicAccountThreshold(req, config);
   if (url.pathname === "/api/oauth/accounts/pause" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {});
     if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
@@ -504,7 +517,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
 
     const { isGenericFailoverProvider } = await import("../../oauth/generic-account-failover");
     const effectiveProvider = genericOAuthProviderConfig(provider, config);
-    if (!effectiveProvider || !isGenericFailoverProvider(provider, effectiveProvider)) {
+    if (!effectiveProvider || !(provider === "anthropic" && effectiveProvider.authMode === "oauth"
+      || isGenericFailoverProvider(provider, effectiveProvider))) {
       return jsonResponse({ error: "account pause is not supported for this OAuth provider" }, 400);
     }
 
@@ -513,8 +527,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (result.status === "not-found") return jsonResponse({ error: "account not found" }, 404);
 
     if (result.activeAccountChanged) {
-      const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
-      seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
+      if (provider === "anthropic") {
+        const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
+        resetAnthropicRoutingForManualSelection(result.activeAccountId);
+      } else {
+        const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
+        seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
+      }
       const { clearModelCache } = await import("../../codex/model-cache");
       const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
       clearModelCache(provider);

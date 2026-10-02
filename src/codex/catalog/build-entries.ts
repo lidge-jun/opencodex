@@ -369,9 +369,8 @@ export function orderForModelPicker(
  * Every generated routed row — current full-slug form, the June–July 2026
  * provider-name form, and legacy combo aliases — carries the stable
  * description prefix `Routed via opencodex → `; foreign rows from Cursor or
- * user tooling do not. `owned_by` cannot serve as the signal (upstream
- * ownership), and `comp_hash` defaults to "opencodex" for every normalized
- * row.
+ * user tooling do not. `owned_by` describes upstream ownership, and `comp_hash`
+ * describes history compatibility; neither is an authorship signal.
  */
 function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
   if (isNativeAliasCatalogEntry(entry)) return true;
@@ -782,11 +781,13 @@ export function mergeCatalogEntriesFromObservedState({
       delete entry[SPAWN_PRIORITY_FIELD];
     }
     const slug = String(entry.slug);
-    if (!isOcxAuthoredRoutedEntry(entry) || isNativeAliasCatalogEntry(entry)) continue;
+    if (!isOcxAuthoredRoutedEntry(entry)) continue;
     // The builder no longer copies a template's comp_hash onto routed rows (#5796), but a row
     // kept from disk may still carry one. Custom rows, Codex-forward aliases included, never
     // reach this loop: they are rebuilt from config.
-    entry.comp_hash = "opencodex";
+    // Clear the former synthetic "opencodex" marker as well: it is not upstream evidence.
+    entry.comp_hash = null;
+    if (isNativeAliasCatalogEntry(entry)) continue;
     const featuredRank = featuredRankOf(slug);
     entry.priority = featuredRank !== undefined
       ? featuredRank * priorityStride

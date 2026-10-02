@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, linkSync, mkdtempSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -7,6 +7,7 @@ import {
   loadOrCreateSpendLedgerSalt,
   SPEND_LEDGER_JOURNAL_FILENAME,
   SPEND_LEDGER_SALT_FILENAME,
+  SpendLedgerFileRefusedError,
   resetSharedSpendLedgerForTest,
   setSpendJournalFaultForTests,
 } from "../../src/lib/spend-reservation-ledger";
@@ -251,5 +252,48 @@ describe("spend ledger file journal", () => {
     // root id differently after a restart and hand every scope a fresh allowance.
     expect(loadOrCreateSpendLedgerSalt(mintSpendLedgerStorage(SPEND_LEDGER_SALT_FILENAME))).toBe(minted);
     if (posixModes) expect(modeOf(path)).toBe(0o600);
+  });
+
+  // #6314: a sync daemon held a second hard link to the journal for a moment, and the refusal
+  // said only "could not be opened safely". The guard stays strict; the refusal now names the
+  // file role and the condition, and nothing else.
+  test.skipIf(process.platform === "win32")("a second hard link is refused by role and condition, without a path", () => {
+    const dir = ownedHome("ocx-spend-journal-link-");
+    const journalPath = join(dir, SPEND_LEDGER_JOURNAL_FILENAME);
+    const alias = join(dir, "sync-staging-alias");
+    const journal = createOwnedFileSpendJournal(mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME));
+    journal.append(line("alias-one"));
+    const original = readFileSync(journalPath, "utf8");
+    linkSync(journalPath, alias);
+
+    let refused: unknown;
+    try { journal.append(line("alias-two")); } catch (error) { refused = error; }
+    expect(refused).toBeInstanceOf(SpendLedgerFileRefusedError);
+    expect(refused).toBeInstanceOf(SpendLedgerOwnerError);
+    const error = refused as SpendLedgerFileRefusedError;
+    expect(error.code).toBe("SPEND_LEDGER_OWNER_UNAVAILABLE");
+    expect(error.role).toBe("journal");
+    expect(error.refusal).toBe("extra-hard-link");
+    expect(error.message).toContain("(journal: extra-hard-link)");
+    expect(error.message).not.toContain(dir);
+    expect(error.message).not.toContain(SPEND_LEDGER_JOURNAL_FILENAME);
+    expect(() => journal.rewrite?.call(journal, [line("checkpoint")])).toThrow(/\(journal: extra-hard-link\)/);
+    expect(readFileSync(journalPath, "utf8")).toBe(original);
+
+    // Removing only the extra entry lets the same journal proceed: the refusal never damaged it.
+    unlinkSync(alias);
+    journal.append(line("alias-two"));
+    expect(journal.read()).toEqual([line("alias-one"), line("alias-two")]);
+  });
+
+  test("a salt with invalid content is refused as invalid-salt", () => {
+    const dir = ownedHome("ocx-spend-salt-invalid-");
+    writeFileSync(join(dir, SPEND_LEDGER_SALT_FILENAME), "not-a-salt\n", { mode: 0o600 });
+    let refused: unknown;
+    try { loadOrCreateSpendLedgerSalt(mintSpendLedgerStorage(SPEND_LEDGER_SALT_FILENAME)); } catch (error) { refused = error; }
+    expect(refused).toBeInstanceOf(SpendLedgerFileRefusedError);
+    expect((refused as SpendLedgerFileRefusedError).role).toBe("salt");
+    expect((refused as SpendLedgerFileRefusedError).refusal).toBe("invalid-salt");
+    expect((refused as Error).message).not.toContain(dir);
   });
 });

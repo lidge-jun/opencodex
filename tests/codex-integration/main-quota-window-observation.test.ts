@@ -107,7 +107,7 @@ describe("declared short-window producer evidence", () => {
       percent = 99;
       await fetchMainAccountInfo(true);
       const retained = getMainPolicyQuota();
-      expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "blocked" });
+      expect(getMainAccountHardLockStatus(enabled)).toMatchObject({ enabled: true, state: "blocked" });
       invalid = true;
       percent = 0;
       await fetchMainAccountInfo(true);
@@ -118,7 +118,7 @@ describe("declared short-window producer evidence", () => {
       expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
       invalid = false;
       await fetchMainAccountInfo(true);
-      expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "ready" });
+      expect(getMainAccountHardLockStatus(enabled)).toMatchObject({ enabled: true, state: "ready" });
       percent = 99;
       await fetchMainAccountInfo(true);
       expect(calls).toBe(5);
@@ -140,7 +140,7 @@ describe("declared short-window producer evidence", () => {
       headers.set("x-codex-primary-used-percent", "99");
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
       const retained = getMainPolicyQuota();
-      expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "blocked" });
+      expect(getMainAccountHardLockStatus(enabled)).toMatchObject({ enabled: true, state: "blocked" });
       headers.set("x-codex-primary-used-percent", "0");
       headers.set(`x-codex-${slot}-used-percent`, String(value));
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
@@ -151,7 +151,7 @@ describe("declared short-window producer evidence", () => {
       expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
       headers.set(`x-codex-${slot}-used-percent`, "0");
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
-      expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "ready" });
+      expect(getMainAccountHardLockStatus(enabled)).toMatchObject({ enabled: true, state: "ready" });
       headers.set("x-codex-primary-used-percent", "99");
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
       expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
@@ -301,7 +301,7 @@ describe("declared short-window producer evidence", () => {
         expect(getMainPolicyQuota()).not.toHaveProperty("shortObservedAt");
         expect(matchesMainQuotaCredential(accessToken, "fixture-main-a")).toBe(true);
         // The unknown 5h reading cannot hide the retained weekly99: either window blocks alone.
-        expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toEqual({ enabled: true, state: "blocked" });
+        expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toMatchObject({ enabled: true, state: "blocked" });
         // Unknown metadata replaces the legacy tuple but must retain trusted policy short99.
         const firstShortObservedAt = observationTime;
         await fetchMainAccountInfo(true);
@@ -315,7 +315,7 @@ describe("declared short-window producer evidence", () => {
           shortResetAt: 3_000_000_000, shortObservedAt: firstShortObservedAt, updatedAt: observationTime });
         const enabled = { codexMainAccountHardLock: true };
         expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("blocked");
-        expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000)).toEqual({ enabled: true, state: "blocked" });
+        expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000)).toMatchObject({ enabled: true, state: "blocked" });
         observationTime += 60_000;
         await fetchMainAccountInfo(true);
         expect(calls).toBe(5);
@@ -352,7 +352,7 @@ describe("declared short-window producer evidence", () => {
       });
       expect(getMainPolicyQuota()).not.toHaveProperty("shortPercent");
       expect(getMainPolicyQuota()).not.toHaveProperty("shortObservedAt");
-      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toEqual({ enabled: true, state: "blocked" });
+      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toMatchObject({ enabled: true, state: "blocked" });
       const firstShortObservedAt = observationTime;
       applyAccountQuotaFromUpstreamHeaders(MAIN, new Headers({
         "x-codex-primary-used-percent": "99", "x-codex-primary-window-minutes": "300",
@@ -368,7 +368,7 @@ describe("declared short-window producer evidence", () => {
         shortResetAt: 3_000_000_000, shortObservedAt: firstShortObservedAt, updatedAt: observationTime });
       const enabled = { codexMainAccountHardLock: true };
       expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("blocked");
-      expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000)).toEqual({ enabled: true, state: "blocked" });
+      expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000)).toMatchObject({ enabled: true, state: "blocked" });
       headers.set("x-codex-primary-used-percent", "0");
       observationTime += 60_000;
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);

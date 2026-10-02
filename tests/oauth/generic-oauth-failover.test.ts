@@ -23,7 +23,12 @@ import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from ".
 import { subscribeAccountSelections } from "../../src/lib/account-selection-events";
 import { resolveCopilotApiBaseUrl } from "../../src/oauth/github-copilot";
 import { resolveProviderTransport } from "../../src/providers/xai-transport";
-import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { bindRouteReasoningReplayScope } from "../../src/server/responses/core-replay";
+import {
+  clearReasoningReplayCacheForTests,
+  commitReasoningReplayServingIdentity,
+} from "../../src/responses/reasoning-replay-cache";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -376,7 +381,7 @@ describe("sidecar on429 wiring", () => {
 
     // Anthropic's pool is excluded from generic failover, so it needs its own arm here or a 429
     // inside a web-search/image turn is terminal while the same 429 on the main path rotates.
-    const anthropic = body.indexOf("rotateAnthropicAccountOn429(");
+    const anthropic = body.indexOf("rotateAnthropicAccountOnResponse(");
     expect(anthropic).toBeGreaterThan(oauth);
 
     // REACHABILITY, not mention. The first draft of this arm sat behind an unconditional early
@@ -452,6 +457,84 @@ describe("sidecar on429 wiring", () => {
     expect(arm.match(/oauthCredentialSnapshot: transportState\.replayOAuthCredentialSnapshot/g)).toHaveLength(4);
   });
 
+  test("Kiro refusal rotation rebinds continuation ownership before replay", () => {
+    const refusalStart = coreSource.indexOf("// Generic OAuth account failover (#2568)");
+    const armStart = coreSource.indexOf('if (route.providerName === "kiro")', refusalStart);
+    const armEnd = coreSource.indexOf("} else {", armStart);
+    const arm = coreSource.slice(armStart, armEnd);
+    const applied = arm.indexOf("applyFailoverSnapshot(snapshot)");
+    const rebound = arm.indexOf("bindRouteReasoningReplayScope({", applied);
+    const replayed = arm.indexOf('rebuildAndRefetch("oauth-account-429"', rebound);
+
+    expect(applied).toBeGreaterThan(-1);
+    expect(rebound).toBeGreaterThan(applied);
+    expect(replayed).toBeGreaterThan(rebound);
+    expect(arm.slice(rebound, replayed)).toContain(
+      "oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot",
+    );
+  });
+
+  test("generic OAuth 429 rotation rebinds continuation ownership before replay", () => {
+    // The non-Kiro arm rotates through the same applyFailoverSnapshot; without a rebind the
+    // replay would carry the 429'd account's continuation and encrypted reasoning.
+    const refusalStart = coreSource.indexOf("// Generic OAuth account failover (#2568)");
+    const kiroArm = coreSource.indexOf('if (route.providerName === "kiro")', refusalStart);
+    const armStart = coreSource.indexOf("} else {", kiroArm);
+    const armEnd = coreSource.indexOf('rebuildAndRefetch("oauth-account-429"', armStart);
+    const arm = coreSource.slice(armStart, armEnd);
+    const applied = arm.indexOf("applyFailoverSnapshot(snapshot)");
+    const rebound = arm.indexOf("bindRouteReasoningReplayScope({", applied);
+
+    expect(armStart).toBeGreaterThan(kiroArm);
+    expect(armEnd).toBeGreaterThan(armStart);
+    expect(applied).toBeGreaterThan(-1);
+    expect(rebound).toBeGreaterThan(applied);
+    expect(arm.slice(rebound)).toContain(
+      "oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot",
+    );
+  });
+
+  test("a failover rebind discards the previous account's continuation scope", () => {
+    // The source-order test above proves the arm binds before replay; this one proves the bind
+    // itself retires the old account's replay state. The arm hands the NEW snapshot to
+    // bindRouteReasoningReplayScope, so a continuation served under account-old and retried under
+    // account-new must strip the old store's encrypted blobs and foreign reasoning item ids.
+    clearReasoningReplayCacheForTests();
+    const parsed = {
+      modelId: "claude-sonnet-4.5",
+      context: { messages: [] },
+      stream: false,
+      options: {},
+      _reasoningReplayScope: { clientThreadId: "thread-failover-rebind" },
+    } as unknown as OcxParsedRequest;
+    const provider = {
+      adapter: "kiro",
+      baseUrl: "https://q.us-east-1.amazonaws.com",
+      authMode: "oauth",
+    } as unknown as OcxProviderConfig;
+    const bind = (accountId: string) =>
+      bindRouteReasoningReplayScope({
+        parsed,
+        providerName: "kiro",
+        provider,
+        adapterName: "kiro",
+        oauthCredentialSnapshot: { accountId, generation: "1" },
+      });
+
+    bind("account-old");
+    commitReasoningReplayServingIdentity(parsed._reasoningReplayScope);
+    const servedIdentity = parsed._reasoningReplayScope?.current?.credentialIdentity;
+    expect(servedIdentity).toBeTruthy();
+    expect(parsed._stripReasoningEncryptedContent).toBeUndefined();
+
+    bind("account-new");
+
+    expect(parsed._reasoningReplayScope?.current?.credentialIdentity).not.toBe(servedIdentity);
+    expect(parsed._stripReasoningEncryptedContent).toBe(true);
+    expect(parsed._dropForeignReasoningItemIds).toBe(true);
+    clearReasoningReplayCacheForTests();
+  });
+
   test("every 429 recovery loop carries all three rotators (#3495 follow-up)", () => {
     // This unit found the same defect twice: the streaming loop grew generic OAuth rotation and
     // the continuation loop did not, and the sidecar hook grew generic rotation while Anthropic
@@ -463,7 +546,7 @@ describe("sidecar on429 wiring", () => {
     // identical limit recovers one loop over.
     const rotators = {
       key: /hasKeyPoolFailover\(/g,
-      anthropic: /rotateAnthropicAccountOn429\(/g,
+      anthropic: /rotateAnthropicAccountOnResponse\(/g,
       generic: /rotateGenericOAuthAccountOn429\(/g,
     };
     const counts = Object.fromEntries(

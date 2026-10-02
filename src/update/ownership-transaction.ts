@@ -9,19 +9,37 @@ type Environment = Record<string, string | undefined>;
 export interface UpdateOwnershipTransaction {
   controlEnvironment(environment?: Environment): Environment;
   unprivilegedEnvironment(environment?: Environment): Environment;
+  /**
+   * Free the lease before a service-manager-mediated start that cannot join it —
+   * the manager's `ocx start` child runs with the stored registration environment,
+   * not a delegated token, so held through the repair's serving wait the lease
+   * keeps that proxy from starting (#5760). Idempotent; controlEnvironment keeps
+   * injecting the token afterwards, which a released lease self-corrects (the
+   * delegated join fails and the child acquires normally).
+   */
+  release(): void;
+  /**
+   * Take the lease back before re-reading ownership and mutating directly: the
+   * released refresh window could have admitted a claim that must be vetoed, not
+   * killed unleased. No-op while held; a still-claimed lease throws (bounded),
+   * which callers must treat as fail-closed.
+   */
+  reacquire(): void;
 }
 
 /** One lease spans awaited stop, replacement and recovery. Never publish its token globally. */
 export async function withUpdateOwnershipLease<T>(
   paths: string[], run: (transaction: UpdateOwnershipTransaction) => Promise<T>,
 ): Promise<T> {
-  const lease = acquireOwnershipMutationLease(paths);
+  let lease = acquireOwnershipMutationLease(paths);
   let released = false;
   const release = () => { if (!released) { released = true; lease.release(); } };
   try {
     return await run({
       controlEnvironment: (env = process.env) => ownershipMutationLeaseChildEnvironment(env, lease.token),
       unprivilegedEnvironment: (env = process.env) => unprivilegedOwnershipMutationEnvironment(env),
+      release: () => release(),
+      reacquire: () => { if (released) { lease = acquireOwnershipMutationLease(paths); released = false; } },
     });
   } finally { release(); }
 }

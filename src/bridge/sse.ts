@@ -88,7 +88,7 @@ export function bridgeToResponsesSSE(
      * response.completed — codex-rs collect_compaction_output requires exactly one.
      */
     compaction?: boolean;
-    /** One-shot: first non-empty text/thinking/raw-reasoning delta observed (WP4 TTFT). */
+    /** One-shot: first non-empty text/thinking/raw-reasoning/tool-input delta observed. */
     onFirstOutput?: () => void;
     onTerminal?: (status: ResponsesTerminalStatus) => void;
     onCompletedResponse?: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => void;
@@ -707,7 +707,9 @@ export function bridgeToResponsesSSE(
             ? event.thinking.length > 0
             : event.type === "reasoning_raw_delta"
               ? event.text.length > 0
-              : false;
+              : event.type === "tool_call_delta"
+                ? event.arguments.length > 0
+                : false;
         if (!nonEmpty) return;
         firstOutputReported = true;
         try { options?.onFirstOutput?.(); } catch { /* metrics must not break the stream */ }

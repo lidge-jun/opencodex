@@ -836,7 +836,7 @@ export function createDevinAdapter(
                 refusedUsage = refusedUsage ? mergeDevinUsage(refusedUsage, next) : next;
               }
               if (event.kind === "reasoning") heldPayloadBytes += event.text.length * 2;
-              if (event.kind === "reasoning_signature") heldPayloadBytes += event.signature.length * 2;
+              if (event.kind === "reasoning_signature") heldPayloadBytes += (event.signature.length + (event.signatureType?.length ?? 0)) * 2;
               if (held.length > HELD_REASONING_MAX_EVENTS || heldPayloadBytes > HELD_REASONING_MAX_PAYLOAD_BYTES) {
                 visible = true;
                 clearInterval(heartbeatTimer);

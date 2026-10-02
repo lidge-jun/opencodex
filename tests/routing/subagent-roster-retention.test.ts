@@ -137,7 +137,7 @@ describe("picker updates preserve roster and persistence intent", () => {
   test.each([null, [], 1, "bad", {}, { pickerOrderMode: "provider" }, { models: null },
     { models: [1] }, { pickerOrder: [" "] }, { pickerOrder: ["alpha/one", " alpha/one "] },
     { pickerOrder: ["absent/model"], models: ["replacement"] },
-    { pickerOrder: null, pickerOrderMode: "custom" }, { pickerOrder: ["gpt-5.5"] },
+    { pickerOrder: null, pickerOrderMode: "custom" }, { pickerOrder: ["gpt-9.9-imaginary"] },
   ])("invalid body %j is rejected before any mutation", async body => {
     const config = makeConfig({ subagentModels: ["keep"], modelPickerOrder: ["alpha/one"], modelPickerOrderMode: "most-used" });
     const before = structuredClone(config);
@@ -160,6 +160,17 @@ describe("picker updates preserve roster and persistence intent", () => {
     for (const id of ["alpha/one", "beta/two"]) {
       expect((await handleAgentSettingsRoutes(context(config, { pickerOrder: [id] })))?.status).toBe(400);
     }
+  });
+  test("a visible bare native id orders the complete picker; a disabled one is rejected (#6338)", async () => {
+    const config = makeConfig({ subagentModels: ["keep"] });
+    const ok = context(config, { pickerOrder: ["gpt-5.5", "beta/two"] });
+    expect((await handleAgentSettingsRoutes(ok))?.status).toBe(200);
+    expect(config.modelPickerOrder).toEqual(["gpt-5.5", "beta/two"]);
+    const disabled = makeConfig({ disabledModels: ["gpt-5.5"] });
+    const before = structuredClone(disabled);
+    const rejected = context(disabled, { pickerOrder: ["gpt-5.5"] });
+    expect((await handleAgentSettingsRoutes(rejected))?.status).toBe(400);
+    expect(disabled).toEqual(before);
   });
   test.each([{ pickerOrder: null }, { pickerOrder: ["beta/two"] }])("failed picker save %j restores fields AND deletion provenance", async ({ pickerOrder }) => {
     const config = makeConfig({ subagentModels: ["keep"], modelPickerOrder: ["alpha/one"], modelPickerOrderMode: "most-used" });

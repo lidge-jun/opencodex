@@ -295,8 +295,8 @@ placement the Anthropic adapter uses (`resolveAnthropicMessagesUrl`, `anthropicB
 builder never mutates its input. A dropped field has no name in the feature vocabulary, so it
 records no feature effect.
 
-Caller betas. The only caller header the lane receives is `anthropic-beta`, which the ingress
-hands over explicitly; `Authorization` and `x-api-key` never reach the provider.
+Caller betas. The ingress hands over `anthropic-beta` explicitly; caller `Authorization` and
+`x-api-key` never reach the managed provider.
 `src/adapters/anthropic/beta-allowlist.ts` keeps a value only when it is on the list for the
 destination's class and re-emits it in the list's own spelling: `interleaved-thinking-2025-05-14`
 for `api.anthropic.com`, nothing for an Anthropic-compatible host. Proxy-owned betas (the OAuth
@@ -314,6 +314,26 @@ dropped, a message left empty dropped) and the trace gains `opaque-state-strippe
 fails closed. Because the source body is never mutated, each build — including one after a key
 re-selection moves to another domain — decides from the full envelope copy the lane was given.
 
+Client identity. `src/adapters/anthropic/client-identity.ts` captures a bounded observed CLI bundle
+on an opaque request-local handle: CLI-class UA plus valid session UUID, `X-App: cli`, JS and Node
+SDK markers are required. Optional allowlisted SDK and request-id fields retain valid scalars.
+Duplicates, oversized/invalid values and headers named by `Connection` cannot gain forwarding
+authority. The handle stores its headers privately in a WeakMap and serializes without them.
+The native builder applies it only for first-party Anthropic, independently of bearer/UUID
+selection. Operator `provider.headers` names take precedence case-insensitively over the observed
+identity bundle without duplicate spelling; unconfigured names retain the observed client values.
+Caller credentials, proxy/hop headers, arbitrary SDK names and betas are never part of the bundle.
+These are compatibility observations, not authorization or proof of client provenance. Missing
+identity, generated Responses, caller-forward and compatible destinations keep their contracts.
+The accepted native first-party behavior preserves one genuine Claude Code session id and its
+metadata device/session components across token refresh and an eligible unpooled account switch,
+matching a genuine client on a manual account switch. Consequently, accounts serving that session
+are linkable upstream. Pooled accounts stay on the Responses bridge described below. Traffic without
+a genuine client identity retains per-credential synthesized session ids.
+`tests/adapters/anthropic/anthropic-client-identity.test.ts` and
+`tests/claude-integration/messages-native-oauth.test.ts` cover header continuity through refresh
+and account switch, destination isolation, bounded parsing and credential exclusion.
+
 OAuth. Behind `managedMessagesNativeOAuth`, which `resolveProtocolSettings` treats as off unless
 `managedMessagesNative` is on. Only the `anthropic` provider the OAuth store serves, only to
 `api.anthropic.com` (the builder refuses any other host for an OAuth token), and only an unpooled
@@ -325,7 +345,14 @@ dispatch by the same steps that transport takes for an unpooled route (capture t
 resolve the active snapshot, commit against the capture) and re-checks the binding before every
 physical send, re-resolving through the same owner if it moved. Planning and `count_tokens` read
 config and the read-only account set only; nothing selects, refreshes or writes. The body gets the
-Claude Code identity block and declared client tool names under the OAuth prefix; the answer's
+Claude Code identity block and declared client tool names under the OAuth prefix.
+`src/adapters/anthropic/account-metadata.ts` copy-on-write aligns a valid JSON-string
+`metadata.user_id.account_uuid` with the provider UUID captured alongside the native binding.
+The local pool id is never used; malformed, absent and unknown metadata stays unchanged.
+Every rebuild starts from the source body; the binding also checks UUID equality before send.
+Conflicting provider credential headers fail before dispatch on every OAuth build, including
+builds without a provider UUID.
+Key-auth and caller-forward requests retain their metadata. The answer's
 `tool_use` names are mapped back for exactly those names. A 401 or 429 is answered as the bridge
 answers an unpooled account: no refresh replay, no same-token replay, no rotation.
 

@@ -153,6 +153,10 @@ Codex Desktop 로그인처럼 다른 계정이 소진된 뒤에만 쓰고 싶은
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td><a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a>의 후원에 감사합니다. PackyCode는 안정적인 고성능 API 릴레이 프로바이더로, Claude Code, Codex, Gemini 등의 릴레이를 제공합니다. 자동 failover, 스마트 라우팅, 무제한 동시성으로 AI를 실제 생산성 도구로 만듭니다. <a href="https://www.packyapi.com/register?aff=k5KT">이 링크로 등록</a>하고 바로 시작하세요. Add provider 선택기에서 <code>PackyCode</code>를 고르거나 <code>ocx provider add packycode</code>를 실행하세요.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td><a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a>의 후원에 감사합니다. TokenLab은 코딩 에이전트에게 주요 모델용 API 키 하나를 제공하며, OpenAI Responses와 Chat Completions, Anthropic Messages, Gemini 네이티브 API 형식을 스트리밍과 도구 호출까지 지원합니다. MCP 서버와 에이전트 Skills도 제공해 쉽게 연동할 수 있습니다. 전달 모드를 고르고 쓴 만큼 결제하세요. Add provider 선택기에서 <code>TokenLab</code>을 고르거나 <code>ocx provider add tokenlab</code>을 실행하세요.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
+</tr>
 </tbody>
 </table>
 
@@ -344,6 +348,11 @@ TypeSafe JEV는 명시적으로 켠 Combo에서 첫 모델과 reasoning effort�
 JEV는 `jev-auto`에서만, 논리적 모델 호출당 한 번만 호출됩니다. 자격 증명이 없거나 네트워크가
 실패하거나 결정이 잘못되면 현재 적격인 첫 대상으로 fail-open하며, 호출자 취소는 여전히 요청을
 취소합니다. 자동 테스트는 모의 TypeSafe 엔드포인트를 쓰며 실제 JEV 계정은 검증하지 않습니다.
+
+JEV Combo는 키가 필요 없는 Ollama `tev1` 같은 자체 호스팅 결정 모델을 대신 쓸 수도 있습니다.
+`baseUrl`이 전체 `/v1/systemone` 엔드포인트인 `jev-decision` 프로바이더를 추가하고 Combo의
+`decisionProvider`에 지정하세요. TypeSafe 자격 증명은 그곳으로 전송되지 않습니다. 자세한 내용은
+[자체 호스팅 결정 모델](https://opencodex.me/ko/guides/combos/)을 보세요.
 
 ## 프로바이더 및 adapter
 

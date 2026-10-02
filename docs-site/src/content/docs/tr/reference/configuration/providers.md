@@ -275,10 +275,8 @@ ve otomatik rotasyon sağlayıcı kısıtlamalarını tetikleyebilir.
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Kullanıma dayalı hesap seçiminde kullanılan, sağlayıcının bildirdiği önbelleğe alınmış kullanım çubuğu. `five-hour` mevcut davranışı korur. `weekly` haftalık çubuğu kullanır ve başka uygun hesap kaldığı sürece 5 saatlik çubuğu tükenmiş hesapları atlar; hiçbiri kalmazsa bu hesaplara geri döner. `max-utilization` bilinen en yüksek değeri kullanır; haftalık değer henüz yokken 5 saatlik değeri kullanabilir, ikisi de bilinmiyorsa hesap unknown kullanım sırasını izler. Bilinen kullanım unknown değerlerden önce gelir; tüm uygun hesaplar unknown olsa bile uygun sıradaki bir hesap seçilir. Belgelenen daha düşük 5 saatlik kullanım eşitlik bozmasından sonra tam eşitlikte de uygun sıra korunur. Sağlıklı affinity oturumları önceden yeniden dengelenmez. Yeni oturum ataması ve uygun bir 429 yedeğine geçildikten sonraki yönlendirme kurtarmasında `quota`, uygun adayları doğrudan bu pencereye göre sıralar; `fill-first`, bu pencerenin eşik ve tükenme kurallarıyla kararlı sırada ilerler; `round-robin` ayarı yok sayar. Cooldown, yük devretme sınırları ve yeniden kimlik doğrulama uygunluğu ayrı yerel durum olarak kalır. Hesap başına haftalık çubuklar ancak dashboard Sağlayıcılar sayfasında sorgulandıktan sonra bilinir. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Bir round-robin seçiminde tutulan başarılı yeni oturum bağlamaları. Aralık 1–100. |
 
-Etkinleştirildiğinde 429, `Retry-After`'dan veya varsayılan bir geri çekilmeden
-sınırlı soğuma kaydeder ve istek içinde dönebilir. Bağlılık işleme özeldir ve
-boyut sınırlıdır. Kimlik bilgisi 401/403, hesabı yeniden kimlik doğrulama
-gerektiriyor olarak işaretler. Uygun tüm hesaplar soğuyorsa istemciler bir
+Yalnızca ortak 5 saatlik veya haftalık kotanın reddini doğrulayan 429 hesabı soğutur ve değiştirir. Geçici hız sınırı bağlılığı koruyarak hesap kabulünü duraklatır; istek başına aynı hesapta bir kısa yeniden deneme ve uygun başka hesaba bir geçiş yapılabilir. Kanıt başlığı olmayan 429 yalnızca aynı hesapta bir kısa yeniden denemeye izin verir, hesabı soğutmaz ve Retry-After üretmez. Varsayılan tek hesap davranışı değişmez. Fable reddi Sonnet erişimini engellemez; elle seçim ve bağlılık da istenen modelin ortak ve aile kotalarını denetler. Pasif aile bilgisi otuz dakika veya bilinen sıfırlama anında eskir ve tek bir hizmet isteğiyle yeniden doğrulanır. Eşikler esnek tercihlerdir; tüm adaylar tükenince mevcut geri dönüş korunur. Bunlar katı kullanım veya faturalama tavanları değildir. Bağlılık işleme özeldir ve
+boyut sınırlıdır. Token yenileme hataları mevcut yeniden kimlik doğrulama kurallarını korur. Doğrulanmış abonelik veya hesap ödeme 403 hatası çıktı başlamadan hesap değiştirebilir ve `Retry-After` veya varsayılan on dakika soğuma uygular. Genel izin reddi hesap değiştirmez. Uygun tüm hesaplar soğuyorsa istemciler bir
 kimlik doğrulama hatası değil, bilindiğinde `Retry-After` ile 429 alır.
 
 :::caution[Deneysel]
@@ -426,6 +424,8 @@ yürütmeyi kapalı bırakın.
 ## xAI Grok 4.7
 
 Grok 4.7, OAuth üzerinde Fast ile `low` / `medium` / `high` / `xhigh` düzeylerini ve 500.000 tokenlık bağlam penceresini destekler. [xAI standart fiyatı](https://docs.x.ai/developers/models/grok-4.7) milyon token başına giriş için $2,00, önbellekli giriş için $0,50 ve çıkış için $6,00; 200.000 token ve üzeri bağlamda sırasıyla $4,00 / $1,00 / $12,00’dır.
+
+Sağlayıcı için açık bir `fastWire` yapılandırılmadığında, `allowedModels` ile sınırlandırılmış bir opencodex API anahtarının OAuth Fast istekleri için `xai/grok-4.7-build-fast` (veya sağlayıcı öneki olmayan model kimliği) iznine sahip olması gerekir. Yalnızca `xai/grok-4.7` izni bu Fast modeline erişim sağlamaz. Yalnızca Fast modeline izin veren anahtar bu modeli kullanabilir; normal istekler veya Fast kapalıyken yapılan istekler yine `xai/grok-4.7` izni gerektirir. Açık bir `fastWire` yapılandırılmışsa gerçekten gönderilen modele izin verin: örneğin, `service-tier` türü `xai/grok-4.7` modelini korur ve bu modelin iznini gerektirir. Sağlayıcı kısıtlamaları geçerliliğini korur.
 
 ## OpenRouter sağlayıcı yönlendirmesi
 

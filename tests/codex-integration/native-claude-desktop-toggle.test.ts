@@ -43,7 +43,7 @@ async function dispatch(path: string, init?: RequestInit, deps: ManagementApiDep
       writeDesktop3pConfig(port, slugs, models, key, mode, profile, cap, { lockPath: join(root, "lifecycle.sqlite") }),
     removeDesktop3pStandardPivot: options => removeDesktop3pStandardPivot({ ...options, lifecycleLockDeps: { lockPath: join(root, "lifecycle.sqlite") } }),
     ...deps,
-  });
+  }, "admin-token", undefined, { trustedLoopback: true });
 }
 
 async function toggle(enabled: boolean, deps: ManagementApiDeps = {}) {

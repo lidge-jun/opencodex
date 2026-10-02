@@ -1,3 +1,6 @@
+import { anthropicFamilyRejected, claimAnthropicFamilyRevalidation } from "../../oauth/anthropic-model-quota";
+import { anthropicRatePauseUntil } from "../../oauth/anthropic-rate-limit-policy";
+import { bindAnthropicRefusalCredential } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { OAuthAccessSnapshot } from "../../oauth";
@@ -15,8 +18,11 @@ import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from
 import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-routing";
 import { resolveAnthropicModelRoute, routeCandidates, type AnthropicRouteDecision } from "../../oauth/anthropic-model-routes";
 import {
+  resolveAnthropicDispatchAccountId,
   isAnthropicAccountPoolEnabled,
   getAnthropicPoolAccessSnapshot,
+  getAnthropicAccountHealthSnapshot,
+  AnthropicAccountCooldownError,
   getEligibleAnthropicAccounts,
   commitAnthropicSelectionRouting,
   formatAnthropicProviderForLog,
@@ -171,7 +177,7 @@ export async function prepareResponsesTransport(
           ? await getAnthropicPoolAccessSnapshot(oauthSelection.accountId)
           : await getValidAccessSnapshotForAccount(route.providerName, oauthSelection.accountId, { requireUsableAccount: true });
       }
-      if (anthropicRouteDecision && !routeCandidates(getEligibleAnthropicAccounts(), anthropicRouteDecision).includes(candidate.accountId)) return null;
+      if (anthropicRouteDecision && !routeCandidates(getEligibleAnthropicAccounts(Date.now(), route.modelId), anthropicRouteDecision).includes(candidate.accountId)) return null;
       const committed = await commitOAuthAccountSelection(route.providerName, candidate.accountId, {
         expectedSelection: oauthSelection,
         expectedCredentialGeneration: candidate.generation,
@@ -180,7 +186,7 @@ export async function prepareResponsesTransport(
       if (committed) {
         if (route.providerName === "anthropic" && !commitAnthropicSelectionRouting(
           candidate.accountId, oauthSelection, committed,
-          { config, sessionKey: anthropicSessionKey, reason: anthropicReason, expectedCredentialGeneration: candidate.generation, routeDecision: anthropicRouteDecision },
+          { config, sessionKey: anthropicSessionKey, reason: anthropicReason, expectedCredentialGeneration: candidate.generation, routeDecision: anthropicRouteDecision, model: route.modelId },
         )) return null;
         oauthSelection = committed;
         servingOAuthSnapshot = candidate;
@@ -191,9 +197,13 @@ export async function prepareResponsesTransport(
       // Resolve that choice, not the rejected candidate, before trying admission again.
       oauthSelection = captureOAuthAccountSelection(route.providerName);
       if (!oauthSelection) return null;
-      const revisedAnthropicId = route.providerName === "anthropic" && anthropicRouteDecision
-        ? resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision).accountId : null;
-      if (route.providerName === "anthropic" && anthropicRouteDecision && !revisedAnthropicId) return null;
+      // A revision also changes on per-account policy edits. Re-evaluate the selector
+      // after credential waits even without a model route, rather than reusing stale active.
+      const revisedAnthropic = route.providerName === "anthropic"
+        ? resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision, route.modelId) : null;
+      const revisedAnthropicId = revisedAnthropic?.accountId;
+      if (route.providerName === "anthropic" && !revisedAnthropicId) return null;
+      if (revisedAnthropic) anthropicReason = revisedAnthropic.reason;
       candidate = route.providerName === "anthropic"
         ? await getAnthropicPoolAccessSnapshot(revisedAnthropicId ?? oauthSelection.accountId)
         : await getValidAccessSnapshotForAccount(route.providerName, oauthSelection.accountId, { requireUsableAccount: true });
@@ -210,8 +220,11 @@ export async function prepareResponsesTransport(
     const admitted = await commitResolvedOAuthSelection(candidate);
     if (!admitted) throw new Error("OAuth selection changed during credential recovery");
     if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== admitted.accountId) {
-      const replayLease = await acquireAccountLease("kiro", admitted.accountId, { maxConcurrentPerAccount: kiroCap });
-      if (!replayLease || !options.accountLoad) {
+      const signal = options.abortSignal ?? req.signal;
+      const replayLease = await acquireAccountLease("kiro", admitted.accountId, {
+        maxConcurrentPerAccount: kiroCap, signal,
+      });
+      if (!replayLease || !options.accountLoad || options.accountLoad.cancelled || signal.aborted) {
         replayLease?.release();
         throw new Error("Kiro replay account capacity is full");
       }
@@ -256,16 +269,20 @@ export async function prepareResponsesTransport(
     retryParsed: OcxParsedRequest = parsed,
   ): Promise<OAuthAccessSnapshot | null> => {
     if (route.provider.googleMode === "cloud-code-assist" && !snapshot.projectId) return null;
+    const signal = options.abortSignal ?? req.signal;
     let speculative = kiroLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId
-      ? await acquireAccountLease("kiro", snapshot.accountId, { maxConcurrentPerAccount: kiroCap }) : null;
+      ? await acquireAccountLease("kiro", snapshot.accountId, { maxConcurrentPerAccount: kiroCap, signal }) : null;
+    if (speculative && (options.accountLoad?.cancelled || signal.aborted)) { speculative.release(); return null; }
     if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId && !speculative) return null;
     let committed: OAuthAccessSnapshot | null;
     try { committed = await commitResolvedOAuthSelection(snapshot); }
     catch (error) { speculative?.release(); throw error; }
     if (!committed) { speculative?.release(); return null; }
+    if (speculative && (options.accountLoad?.cancelled || signal.aborted)) { speculative.release(); return null; }
     if (kiroLoadEnabled && committed.accountId !== (speculative?.accountId ?? options.accountLoad?.lease?.accountId)) {
       speculative?.release();
-      speculative = await acquireAccountLease("kiro", committed.accountId, { maxConcurrentPerAccount: kiroCap });
+      speculative = await acquireAccountLease("kiro", committed.accountId, { maxConcurrentPerAccount: kiroCap, signal });
+      if (speculative && (options.accountLoad?.cancelled || signal.aborted)) { speculative.release(); return null; }
       if (!speculative) return null;
     }
     if (speculative && options.accountLoad) {
@@ -291,6 +308,12 @@ export async function prepareResponsesTransport(
       // the retry. Keep both owners synchronized; for ordinary paths they are identical.
       parsed._kiroAuthContext = kiroContext;
       if (retryParsed !== parsed) retryParsed._kiroAuthContext = { ...kiroContext };
+    }
+    if (route.providerName === "zed") {
+      // Zed signs with its own user id; `snapshot.accountId` is the local slot hash.
+      const zedContext = { userId: snapshot.providerUserId ?? "" };
+      parsed._zedAuthContext = zedContext;
+      if (retryParsed !== parsed) retryParsed._zedAuthContext = { ...zedContext };
     }
     // Re-stamp: a request that rotated accounts must be attributed to the account that actually
     // served it. All three rotation sites funnel through here, so this is the only re-stamp
@@ -337,7 +360,8 @@ export async function prepareResponsesTransport(
     const selected = captureOAuthAccountSelection(route.providerName);
     const row = getAccountCredentialWithStatus(route.providerName, binding.snapshot.accountId);
     return selected?.accountId === binding.selection.accountId && selected?.revision === binding.selection.revision
-      && !!row && !row.needsReauth && row.credential.expires > Date.now()
+      && !!row && !row.paused && !row.needsReauth && row.credential.expires > Date.now()
+      && (route.providerName !== "anthropic" || !getAnthropicAccountHealthSnapshot(binding.snapshot.accountId) && !anthropicRatePauseUntil(binding.snapshot.accountId) && !anthropicFamilyRejected(binding.snapshot.accountId, route.modelId))
       && credentialGeneration(row.credential) === binding.snapshot.generation;
   };
   const resolveSelectionAdapter = (provider: OcxProviderConfig, retention = config.cacheRetention): ProviderAdapter => {
@@ -399,7 +423,16 @@ export async function prepareResponsesTransport(
   };
   const refreshDispatchAdapter = async (requestParsed: OcxParsedRequest): Promise<ProviderAdapter> => {
     if (route.provider.authMode === "oauth") {
-      if (!servingOAuthSnapshot || !await applyFailoverSnapshot(servingOAuthSnapshot, requestParsed)) {
+      // Pacing may outlive admission. Preserve local pause/cooldown reasons even when
+      // a strict route rejects the old proposal before another bearer can be resolved.
+      let candidate = servingOAuthSnapshot;
+      if (route.providerName === "anthropic") {
+        oauthSelection = captureOAuthAccountSelection(route.providerName);
+        const accountId = await resolveAnthropicDispatchAccountId(config, anthropicSessionKey, anthropicRouteDecision, route.modelId);
+        candidate = await getAnthropicPoolAccessSnapshot(accountId);
+      }
+      if (!candidate || !await applyFailoverSnapshot(candidate, requestParsed)) {
+        if (route.providerName === "anthropic") await resolveAnthropicDispatchAccountId(config, anthropicSessionKey, anthropicRouteDecision, route.modelId);
         throw new Error("OAuth account selection changed before dispatch");
       }
     } else {
@@ -486,18 +519,22 @@ export async function prepareResponsesTransport(
           // Reselection can choose a provider override instead of the supplied executor.
           // Either way the send crosses the physical boundary, so the connection policy is
           // applied around whichever implementation was just selected (#4992).
-          commitKeyAttemptSend();
           // The binding travels with the send, so a rebuilt request resolves its provider route
           // against the destination it is actually going to rather than the one this dispatch
           // started with. Account reselection can move the upstream host, which would otherwise
           // apply a host-scoped decision to a different host.
-          const response = await sendWithConnectionPolicy(
-            fetchImpl,
-            destination,
-            { ...dispatchInit, redirect: "manual" },
-            { providerName: route.providerName, provider: route.provider },
-          );
-          if (!response.ok) await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
+          const releaseFamily = snapshot ? claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
+          if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
+          let response: Response;
+          try {
+            commitKeyAttemptSend();
+            response = await sendWithConnectionPolicy(
+              fetchImpl,
+              destination,
+              { ...dispatchInit, redirect: "manual" },
+              { providerName: route.providerName, provider: route.provider },
+            );
+          } finally { releaseFamily(); }
           // Observe each physical response before retries replace it. The binding belongs to
           // this dispatch, so a manual switch cannot file A's headers against B. Header
           // overrides and credential replacement make ownership unprovable: skip those writes.
@@ -505,10 +542,12 @@ export async function prepareResponsesTransport(
             try {
               const current = getAccountCredentialWithStatus("anthropic", snapshot.accountId);
               if (current && !current.needsReauth && credentialGeneration(current.credential) === snapshot.generation) {
-                recordAnthropicAccountQuotaFromHeaders(snapshot.accountId, response.headers, writerGeneration);
+                bindAnthropicRefusalCredential(response, snapshot);
+                recordAnthropicAccountQuotaFromHeaders(snapshot.accountId, response.headers, writerGeneration, response.status, route.modelId);
               }
             } catch { /* best-effort observation cannot fail the response */ }
           }
+          if (!response.ok) await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
           return response;
         }
         const nextAdapter = await refreshDispatchAdapter(requestParsed);
@@ -559,12 +598,13 @@ export async function prepareResponsesTransport(
         const routeResult = resolveAnthropicModelRoute(config, route.modelId);
         if (routeResult.error) return formatErrorResponse(400, "invalid_request_error", `Invalid Anthropic model routes: ${routeResult.error}`);
         anthropicRouteDecision = routeResult.decision;
-        const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision);
+        const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision, route.modelId);
         if (!selection.accountId) {
+          if (selection.reason === "paused") return formatErrorResponse(403, "permission_error", "Anthropic OAuth accounts are paused. Resume an account in account settings and retry.");
           // Route names may resemble account IDs; log only the matched rule position.
           if (anthropicRouteDecision) console.warn(`[anthropic-pool] route:#${anthropicRouteDecision.position} ${selection.reason}; answering locally`);
           if (selection.reason === "all-cooled") {
-            const retryAfterSec = getAnthropicPoolRetryAfterSeconds(Date.now(), anthropicRouteDecision);
+            const retryAfterSec = getAnthropicPoolRetryAfterSeconds(Date.now(), anthropicRouteDecision, route.modelId);
             return formatErrorResponse(
               429,
               "rate_limit_error",
@@ -648,11 +688,18 @@ export async function prepareResponsesTransport(
         if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
           return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         if (kiroLoadEnabled) {
+          const transportSignal = options.abortSignal ?? req.signal;
           const lease = await acquireAccountLease("kiro", admitted.accountId, {
-            maxConcurrentPerAccount: kiroCap, waitMs: KIRO_ACCOUNT_WAIT_MS, signal: options.abortSignal ?? req.signal,
+            maxConcurrentPerAccount: kiroCap, waitMs: KIRO_ACCOUNT_WAIT_MS, signal: transportSignal,
           });
-          if (!lease) return (options.abortSignal ?? req.signal).aborted
+          if (!lease) return transportSignal.aborted
             ? clientCancelledResponse() : capacityResponse();
+          // The lease may be granted between the holder's cleanup and this install;
+          // re-check cancellation before the holder can no longer reach it.
+          if (options.accountLoad?.cancelled || transportSignal.aborted) {
+            lease.release();
+            return clientCancelledResponse();
+          }
           if (options.accountLoad) options.accountLoad.lease = lease;
           else lease.release();
         }
@@ -697,6 +744,9 @@ export async function prepareResponsesTransport(
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
+        }
+        if (route.providerName === "zed") {
+          parsed._zedAuthContext = { userId: resolved.providerUserId ?? "" };
         }
         // Project identity belongs to the admitted account on EVERY request, including
         // the request after a pool transition made that account the persisted active one.

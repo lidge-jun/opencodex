@@ -116,6 +116,28 @@ describe("proxy process-state ownership", () => {
     expect(isOcxCommandLine("ocx.exes start")).toBe(false);
   });
 
+  test("a transient Windows command-line probe failure is retried once", () => {
+    const trustedSystem32 = join(testDir, "trusted", "System32");
+    const trustedWmic = join(trustedSystem32, "wbem", "WMIC.exe");
+    const trustedPowerShell = join(trustedSystem32, "WindowsPowerShell", "v1.0", "powershell.exe");
+    const calls: string[] = [];
+    mkdirSync(dirname(trustedPowerShell), { recursive: true });
+    writeFileSync(trustedPowerShell, "", { mode: 0o755 });
+    setProcessCommandLinePlatformForTests("win32");
+    setTrustedWindowsSystemDirectoryResolverForTests(() => trustedSystem32);
+    // WMIC absent, the first CIM read times out, the retry answers — an unchanged
+    // process must not read as foreign because one probe flaked.
+    setProcessCommandLineExecForTests(executable => {
+      calls.push(executable);
+      if (executable === trustedPowerShell && calls.filter(entry => entry === trustedPowerShell).length === 2) {
+        return "C:\\tools\\ocx.exe start\n";
+      }
+      throw new Error("probe unavailable");
+    });
+    expect(isLikelyOcxProcess(4242)).toBe(true);
+    expect(calls).toEqual([trustedWmic, trustedPowerShell, trustedPowerShell]);
+  });
+
   test("the ownership probe distinguishes a real owner from a reused PID", () => {
     // The stop-side teardown recovery asks this about a PID recorded in a receipt. Bare
     // liveness said "still running" for any process that inherited the number, so the

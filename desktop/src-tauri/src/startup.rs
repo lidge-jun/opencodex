@@ -526,10 +526,14 @@ impl Startup {
     /// Consume the decision and publish the extended ceiling in the same critical section, so
     /// the guard's next expiry check sees either a pending/answered prompt or the new deadline,
     /// never the gap between them.
-    fn resolve_consent(&self, deadline: Instant) {
+    fn resolve_consent(&self, mut deadline: Instant, approved: bool) -> Instant {
+        if approved && cfg!(target_os = "windows") {
+            deadline += Duration::from_secs(60);
+        }
         let mut live = self.live();
         live.deadline = deadline;
         live.consent = ConsentState::Idle;
+        deadline
     }
 
     fn set_deadline(&self, deadline: Instant) {
@@ -933,7 +937,7 @@ async fn run(app: &AppHandle, started: Instant) {
                     deadline += asked.elapsed();
                     // The extension and the clear are one critical section: the guard sees
                     // either a prompt still pending or the moved ceiling, never the gap.
-                    startup.resolve_consent(deadline);
+                    deadline = startup.resolve_consent(deadline, approved);
                     if !approved {
                         attach_as_guest(
                             app,
@@ -2482,10 +2486,33 @@ mod tests {
             Expiry::Blocked
         ));
         // Once the run publishes the moved ceiling the guard waits on it instead of firing.
-        startup.resolve_consent(tokio::time::Instant::now() + Duration::from_secs(60));
+        startup.resolve_consent(tokio::time::Instant::now() + Duration::from_secs(60), false);
         assert!(matches!(
             startup.expire_run(tokio::time::Instant::now(), 1, "expired".to_owned()),
             Expiry::Waiting(_)
+        ));
+    }
+
+    #[test]
+    fn approved_windows_takeover_has_one_bounded_extended_deadline() {
+        let startup = Startup::new();
+        startup.generation.store(1, Ordering::SeqCst);
+        let deadline = Instant::now() - Duration::from_secs(5);
+        assert_eq!(startup.resolve_consent(deadline, false), deadline);
+        let extended = startup.resolve_consent(deadline, true);
+        if cfg!(target_os = "windows") {
+            assert_eq!(extended - deadline, Duration::from_secs(60));
+            assert!(matches!(
+                startup.expire_run(deadline - DEADLINE, 1, "expired".to_owned()),
+                Expiry::Waiting(_)
+            ));
+        } else {
+            assert_eq!(extended, deadline);
+        }
+        startup.resolve_consent(Instant::now() - Duration::from_secs(95), true);
+        assert!(matches!(
+            startup.expire_run(deadline - DEADLINE, 1, "expired".to_owned()),
+            Expiry::Fired(_)
         ));
     }
 

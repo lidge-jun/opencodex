@@ -27,13 +27,14 @@ import { atomicWriteFileNoFollowUnclaimed } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { MAX_PENDING_OAUTH_MUTATIONS } from "../lib/translator-budget";
-import { publishAccountSelection, publishOAuthAccountPauseChange } from "../lib/account-selection-events";
+import { publishAccountSelection, publishOAuthAccountPauseChange, publishOAuthAccountRoutingPolicyChange } from "../lib/account-selection-events";
 import {
   captureConfigGeneration,
   type GenerationContext,
 } from "../lib/state-store-sweeper";
 import { validateCopilotApiBaseUrl } from "./github-copilot";
 import { validateDevinApiBaseUrl } from "./devin/api-base";
+import { parseAnthropicAccountThreshold } from "./anthropic-account-threshold";
 import type { OAuthAccountSelection, OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
 export type AuthStore = Record<string, ProviderAccountSet>;
@@ -626,6 +627,8 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
   if (typeof candidate.alias === "string" && candidate.alias.trim()) account.alias = candidate.alias.trim();
   if (candidate.needsReauth === true) account.needsReauth = true;
   if (candidate.paused === true) account.paused = true;
+  const threshold = parseAnthropicAccountThreshold(candidate.autoSwitchThresholdOverride);
+  if (threshold !== null) account.autoSwitchThresholdOverride = threshold;
   if (typeof candidate.addedAt === "number") account.addedAt = candidate.addedAt;
   if (typeof candidate.loginId === "string"
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate.loginId)) {
@@ -783,7 +786,7 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
   drainOAuthMutations();
   return result;
 }
-export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[]; finalizeResult?: (result: T, store: AuthStore) => void }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[]; finalizeResult?: (result: T, store: AuthStore) => void; afterPersist?: (result: T) => void }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
     const selections = new Map(Object.entries(store).map(([provider, set]) => [provider, {
@@ -821,6 +824,9 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
     options?.finalizeResult?.(result, store);
     persist(store);
     if (scrubbedProviders.length > 0) scrubLegacyBackup(scrubbedProviders);
+    // A committed observer may establish ordering before the generic selection
+    // publication, but its failure can never turn a durable write into a reported failure.
+    try { options?.afterPersist?.(result); } catch { /* The authoritative write already committed. */ }
     for (const provider of changedProviders) publishAccountSelection(provider, "oauth");
     return result;
   }finally{guard.release();}}, retainedValues, options?.waitMs);
@@ -1224,6 +1230,39 @@ export type SetAccountPausedResult =
   | { status: "unchanged"; activeAccountId: string; activeAccountChanged: boolean }
   | { status: "not-found" };
 
+/** Serialize policy with refresh/removal; stale pre-wait selection proposals must retry. */
+export async function setAnthropicAccountThreshold(
+  accountId: string,
+  threshold: number | null,
+  options: { assertBeforePersist?: () => void } = {},
+): Promise<boolean> {
+  const normalizedThreshold = threshold === null ? null : parseAnthropicAccountThreshold(threshold);
+  if (threshold !== null && normalizedThreshold === null) {
+    throw new Error("threshold must be an integer 0-100 or null");
+  }
+  const result = await mutateStore(store => {
+    const set = store.anthropic;
+    const account = set?.accounts.find(row => row.id === accountId);
+    if (!set || !account) return { status: "not-found" as const };
+    if ((account.autoSwitchThresholdOverride ?? null) === normalizedThreshold) return { status: "unchanged" as const };
+    const before = accountSelection(set);
+    if (normalizedThreshold === null) delete account.autoSwitchThresholdOverride;
+    else account.autoSwitchThresholdOverride = normalizedThreshold;
+    set.selectionRevision = randomUUID();
+    return { status: "updated" as const, before, after: accountSelection(set) };
+  }, [accountId, normalizedThreshold], { assertBeforePersist: options.assertBeforePersist, afterPersist: result => {
+    if (result.status !== "updated") return;
+    // Publish the policy-owned transition before the generic selection event. This
+    // preserves an exact previous-revision manual intent without opening an ABA gap.
+    publishOAuthAccountRoutingPolicyChange(Object.freeze({
+      provider: "anthropic",
+      before: Object.freeze(result.before),
+      after: Object.freeze(result.after),
+    }));
+  } });
+  return result.status !== "not-found";
+}
+
 /** Persist an operator pause and move an active account to the next usable unpaused slot when available. */
 export async function setAccountPaused(
   provider: string,
@@ -1323,6 +1362,7 @@ export async function replaceProviderAccountSet(
         ...(account.alias ? { alias: account.alias } : {}),
         ...(account.needsReauth ? { needsReauth: true } : {}),
         ...(account.paused ? { paused: true } : {}),
+        ...(account.autoSwitchThresholdOverride !== undefined ? { autoSwitchThresholdOverride: account.autoSwitchThresholdOverride } : {}),
         ...(account.addedAt !== undefined ? { addedAt: account.addedAt } : {}),
         ...(account.loginId ? { loginId: account.loginId } : {}),
       })),
@@ -1380,4 +1420,6 @@ export async function markAccountNeedsReauth(
 }
 
 export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>;assertOwnership?: (store: AuthStore) => void}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};opts.assertOwnership?.(store);account.credential=safe;delete account.needsReauth;return{superseded:false};},[provider,accountId,safe,opts.expectedGeneration]);}
-export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string,writerGeneration=captureConfigGeneration()):Promise<boolean>{const key=oauthAccountKey(provider,accountId);if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||credentialGeneration(account.credential)!==generation)return false;if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;account.needsReauth=true;return true;},[provider,accountId,generation]);}
+// A late refresh failure must not change an operator-paused account's health. Check under
+// the mutation lock, not before awaiting it, so a concurrent pause cannot be overwritten.
+export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string,writerGeneration=captureConfigGeneration()):Promise<boolean>{const key=oauthAccountKey(provider,accountId);if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||account.paused||credentialGeneration(account.credential)!==generation)return false;if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;account.needsReauth=true;return true;},[provider,accountId,generation]);}

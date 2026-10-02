@@ -1,6 +1,7 @@
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { windowsEnvIndirectBatchValue } from "../lib/win-paths";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
@@ -83,6 +84,8 @@ function shQuote(value: string): string {
 export function buildUnixCodexShim(realCodexPath: string, bunPath: string, cliPath: string, bunRuntimeSource: BunRuntimeSource, tokenFile = serviceApiTokenFilePath()): string {
   const internalCommands = CODEX_INTERNAL_COMMANDS.join("|");
   const valueOptions = CODEX_GLOBAL_OPTIONS_WITH_VALUE.join("|");
+  const cliArgs = selfLaunchArgv([], { sourceEntrypoint: cliPath, isStandaloneExecutable: bunRuntimeSource === "standalone" })
+    .map(arg => `${shQuote(arg)} `).join("");
   return `#!/usr/bin/env sh
 # ${SHIM_MARKER}
 # ${UNIX_SHIM_REVISION_MARKER}
@@ -154,7 +157,7 @@ case "$ocx_subcommand" in
     ;;
   *)
     if [ -z "$OCX_SHIM_BYPASS" ]; then
-      if ! ${BUN_RUNTIME_SOURCE_ENV}=${shQuote(bunRuntimeSource)} ${BUN_RUNTIME_PATH_ENV}=${shQuote(bunPath)} ${shQuote(bunPath)} ${shQuote(cliPath)} ensure >/dev/null 2>&1; then
+      if ! ${BUN_RUNTIME_SOURCE_ENV}=${shQuote(bunRuntimeSource)} ${BUN_RUNTIME_PATH_ENV}=${shQuote(bunPath)} ${shQuote(bunPath)} ${cliArgs}ensure >/dev/null 2>&1; then
         printf '%s\\n' ${shQuote(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC)} >&2
       fi
     fi
@@ -184,12 +187,13 @@ function windowsBatchSet(name: string, value: string): string {
 export function buildWindowsCodexShim(realCodexPath: string, bunPath: string, cliPath: string, bunRuntimeSource: BunRuntimeSource): string {
   const internalCommandChecks = CODEX_INTERNAL_COMMANDS.map(command => `if /I "%~1"=="${command}" goto run_codex`).join("\r\n");
   const valueOptionChecks = CODEX_GLOBAL_OPTIONS_WITH_VALUE.map(option => `if /I "%~1"=="${option}" goto skip_option_value`).join("\r\n");
+  const cliArgs = selfLaunchArgv([], { sourceEntrypoint: cliPath, isStandaloneExecutable: bunRuntimeSource === "standalone" });
   return `@echo off\r
 rem ${SHIM_MARKER}\r
 setlocal\r
 ${windowsBatchSet("OCX_REAL_CODEX", realCodexPath)}\r
 ${windowsBatchSet("OCX_BUN", bunPath)}\r
-${windowsBatchSet("OCX_CLI", cliPath)}\r
+${cliArgs.length ? windowsBatchSet("OCX_CLI", cliArgs[0]!) : ""}\r
 ${windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath())}\r
 if "%OPENCODEX_API_AUTH_TOKEN%"=="" if exist "%OCX_API_TOKEN_FILE%" set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"\r
 if not "%OCX_SHIM_BYPASS%"=="" goto run_codex\r
@@ -216,7 +220,7 @@ goto scan_codex_args\r
 setlocal\r
 ${windowsBatchSet(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource)}\r
 ${windowsBatchSet(BUN_RUNTIME_PATH_ENV, bunPath)}\r
-"%OCX_BUN%" "%OCX_CLI%" ensure >nul 2>nul\r
+"%OCX_BUN%" ${cliArgs.length ? '"%OCX_CLI%" ' : ""}ensure >nul 2>nul\r
 if errorlevel 1 echo ${CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC} 1>&2\r
 endlocal\r
 :run_codex\r
@@ -232,6 +236,8 @@ export function buildWindowsPowerShellCodexShim(realCodexPath: string, bunPath: 
   const internalCommands = CODEX_INTERNAL_COMMANDS.map(command => psString(command)).join(", ");
   const valueOptions = CODEX_GLOBAL_OPTIONS_WITH_VALUE.map(option => psString(option)).join(", ");
   const tokenFile = serviceApiTokenFilePath();
+  const cliArgs = selfLaunchArgv([], { sourceEntrypoint: cliPath, isStandaloneExecutable: bunRuntimeSource === "standalone" })
+    .map(arg => `${psString(arg)} `).join("");
   return `#!/usr/bin/env pwsh
 # ${SHIM_MARKER}
 $hadApiAuthToken = Test-Path Env:\\OPENCODEX_API_AUTH_TOKEN
@@ -263,7 +269,7 @@ if (-not $skipEnsure) {
   $ocxEnsureFailed = $false
   # Caught, not propagated: a throwing ensure used to escape this wrapper and Codex never
   # launched at all, which is a lockout produced by the autostart helper itself (#5261).
-  try { & ${psString(bunPath)} ${psString(cliPath)} ensure *> $null; if ($LASTEXITCODE -ne 0) { $ocxEnsureFailed = $true } }
+  try { & ${psString(bunPath)} ${cliArgs}ensure *> $null; if ($LASTEXITCODE -ne 0) { $ocxEnsureFailed = $true } }
   catch { $ocxEnsureFailed = $true }
   finally {
     if ($null -eq $priorRuntimeSource) { Remove-Item Env:\\${BUN_RUNTIME_SOURCE_ENV} -ErrorAction SilentlyContinue }

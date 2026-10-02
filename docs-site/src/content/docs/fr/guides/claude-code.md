@@ -19,17 +19,24 @@ choisit la plus faible utilisation connue dans la fenêtre configurée par `anth
 (`five-hour` par défaut, `weekly` ou `max-utilization`) lorsqu'elle dépasse `autoSwitchThreshold` ; `round-robin`
 répartit les sessions uniformément (`stickyLimit`, `1` par défaut) ; `fill-first` utilise le compte actif jusqu'à
 un délai de récupération, une réauthentification ou le seuil, puis passe au suivant. Cette fonction est
-**désactivée par défaut**, affiche un avertissement dans l'interface et n'a pas été éprouvée en production.
-Anthropic peut restreindre les comptes dont l'activité ressemble à une rotation automatisée ; la rotation ne
-protège pas contre l'application des règles du fournisseur.
+**désactivée par défaut** et reste expérimentale.
+
+Le tableau de bord indique les conditions prévues : des abonnements qui vous appartiennent ou que vous êtes
+autorisé à utiliser, le client Claude Code officiel et une personne qui supervise la session. Anthropic n'a pas
+approuvé le regroupement automatique de comptes, des comptes d'une même organisation peuvent partager un quota
+(un compte de plus n'ajoute alors pas forcément de capacité), et changer de compte ne protège pas contre
+l'application des règles du fournisseur. OpenCodex n'envoie aucune requête de maintien à chaud (keep-warm) et,
+par défaut, ne rafraîchit pas les jetons Claude et ne lit pas l'usage en arrière-plan : l'usage est lu quand le
+tableau de bord, l'app de la barre des menus ou une commande `ocx` le demande. Les seuils sont des préférences
+de sélection, pas des plafonds d'usage ou de facturation. Ces indications ne constituent pas un avis juridique ;
+consultez les conditions actuelles d'Anthropic.
 
 Comportement lorsque cette option est activée :
 
 - Un **429** en amont place le compte en temporisation selon `Retry-After` lorsqu'il est présent, ou selon un délai de repli,
   efface ses affinités et peut faire basculer la requête vers un autre compte admissible, dans les limites prévues.
 - L'affinité est **locale au processus** et disparaît au redémarrage du proxy.
-- Les erreurs d'identification **401/403** mettent le compte en quarantaine (`needsReauth`) afin de l'exclure de la
-  sélection jusqu'à sa réauthentification.
+- Les erreurs de renouvellement du jeton conservent la règle `needsReauth`. Un 403 confirmé lié à un abonnement ou à la facturation du compte peut déclencher un basculement avant la sortie, avec une temporisation selon `Retry-After` ou de dix minutes. Un refus d’autorisation ordinaire reste terminal. Voir la [reprise des comptes](/guides/claude-code/).
 - Si chaque compte éligible est en temporisation, le proxy renvoie **429** (et non 401) avec `Retry-After`
   lorsqu'il est connu.
 - La récupération, y compris le basculement 429, utilise `quotaWindow` pour classer les comptes de
@@ -190,7 +197,7 @@ du sélecteur à une route opencodex :
 
 ```bash
 ocx claude desktop bind claude-sonnet-4-6 xai/grok-4.7
-ocx claude desktop bind claude-opus-4-6 native/gpt-6-sol
+ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 

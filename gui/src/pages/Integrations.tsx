@@ -4,11 +4,11 @@ import { useT } from "../i18n/shared";
 import ClientMark from "../components/ClientMark";
 import { INTEGRATION_MARKS } from "../components/integration-marks";
 import ApiKeys from "./ApiKeys";
-import Claude from "./Claude";
 import Grok from "./Grok";
 import CursorIntegrationPage from "./integrations/CursorIntegrationPage";
 import IntegrationsOverview from "./integrations/IntegrationsOverview";
 import AsideProfilesPage from "./integrations/AsideProfilesPage";
+import LazyCodexRoleModels from "./integrations/LazyCodexRoleModels";
 import FileIntegrationPage, {
   type FileIntegrationClientId,
 } from "./integrations/FileIntegrationPage";
@@ -16,7 +16,6 @@ import { FILE_CLIENTS, TABS, type IntegrationTab } from "./integrations/integrat
 
 function readIntegrationTab(hash = window.location.hash): IntegrationTab {
   const raw = normalizeHashPath(hash);
-  if (raw === "integrations/claude/desktop") return "claude";
   const match = TABS.find(tab => tab.hash === raw);
   return match?.id ?? "overview";
 }
@@ -192,9 +191,9 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
                 >
                   {t("integrations.codex.openService")}
                 </button>
+                <LazyCodexRoleModels apiBase={apiBase} active={active} />
               </section>
             )}
-            {definition.id === "claude" && <Claude apiBase={apiBase} active={active} />}
             {definition.id === "grok" && <Grok apiBase={apiBase} active={active} />}
             {definition.id === "cursor" && <CursorIntegrationPage apiBase={apiBase} active={active} />}
             {FILE_CLIENTS.has(definition.id as FileIntegrationClientId) && (

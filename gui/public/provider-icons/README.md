@@ -382,3 +382,12 @@ committing it.
   gradient is the brand, so it must never be masked.
 
 - `factory-droid.svg` — Factory Docs favicon, fetched 2026-09-28 from `https://docs.factory.ai/favicon.svg`; unmodified first-party asset for Factory Droid.
+
+## TokenLab (2026-09-29)
+
+- `tokenlab.svg` — TokenLab's "Specimen Split" symbol, `logos/tokenlab-symbol.svg` from the
+  sponsor asset pack TokenLab supplied for its Standard sponsorship (`SPONSORS.md`), committed
+  byte for byte (416 bytes, MD5 `fcb8c1325a34ed52b1dc89eabf08a0e6`), `<title>`/`<desc>` included
+  since they do not affect rendering. `viewBox="0 0 48 48"`, one `#151714` ink, so it is
+  **masked** like `packycode.svg`: as an image it vanishes on the dark tile. The pack's reverse
+  symbol (`#F5F5F1`) is the same geometry and is not needed once the mark follows the theme.

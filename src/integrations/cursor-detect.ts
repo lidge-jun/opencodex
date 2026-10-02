@@ -91,8 +91,9 @@ export function cursorProductJsonCandidates(deps: CursorDetectDeps): Array<{ roo
     return out;
   }
   // Linux: AppImages carry product.json only once extracted, so this covers the tarball /
-  // package layouts and stays best-effort.
-  for (const dir of ["/opt", join(deps.homedir, ".local", "share")]) {
+  // package layouts and stays best-effort. /usr/share covers distro-style installs of the
+  // tarball (e.g. /usr/share/cursor), which is where the Private Inference .deb lands.
+  for (const dir of ["/opt", "/usr/share", join(deps.homedir, ".local", "share")]) {
     for (const entry of deps.listDir(dir)) {
       if (!/^cursor/i.test(entry)) continue;
       const root = join(dir, entry);

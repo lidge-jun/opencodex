@@ -154,6 +154,10 @@ opencodex 还能为 Codex 认证管理一个 **ChatGPT 账户池**。添加多�
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td>感谢 <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> 赞助本项目！PackyCode 是一家稳定、高性能的 API 中转提供商，为 Claude Code、Codex、Gemini 等提供中转服务。凭借自动故障转移、智能路由和无限并发，它让 AI 成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">通过此链接注册</a>并开始使用！在添加提供商选择器中选择 <code>PackyCode</code>，或运行 <code>ocx provider add packycode</code>。<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td>感谢 <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> 赞助本项目！TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。在添加提供商选择器中选择 <code>TokenLab</code>，或运行 <code>ocx provider add tokenlab</code>。</td>
+</tr>
 </tbody>
 </table>
 
@@ -343,6 +347,10 @@ JEV 可选的推理强度。未改动强度设置的目标允许该模型当前�
 JEV 只用于 `jev-auto`，且每次逻辑模型调用只咨询一次。缺少凭据、网络失败或决策无效时，会回退
 （fail-open）到当前第一个可用目标；调用方取消仍会取消请求。自动化测试使用模拟的 TypeSafe 端点，
 不验证真实的 JEV 账户。
+
+JEV Combo 也可以改用自托管的决策模型，例如无需密钥的 Ollama `tev1`：添加一个 `baseUrl` 为完整
+`/v1/systemone` 端点的 `jev-decision` 提供商，并将其设为 Combo 的 `decisionProvider`。TypeSafe 凭据
+绝不会发送到该端点。详见[自托管决策模型](https://opencodex.me/zh-cn/guides/combos/)。
 
 ## 提供商与适配器
 

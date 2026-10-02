@@ -1,3 +1,4 @@
+import { forgetMainAccountUsage, observeMainAccountUsage, type FreshWindow } from "./main-account-external-usage";
 import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
@@ -10,7 +11,7 @@ import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaW
 
 import { CodexQuotaHistory, QUOTA_HISTORY_LIMITS, type QuotaHistoryWindow } from "./quota-history";
 import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity } from "./account-store";
-import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_PERCENT, resetAtToMs } from "./quota-types";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT, resetAtToMs } from "./quota-types";
 import type { PoolQuotaWriter, StoredAccountQuota, WhamUsageResponse, WhamUsageWindow } from "./quota-types";
 
 export type { StoredAccountQuota, WhamUsageResponse } from "./quota-types";
@@ -260,7 +261,7 @@ function assignCarriedShort(
   const existingShortPercent = existing.shortPercent;
   const preserveBlockingEvidence = policyEvidence
     && finitePercent(existingShortPercent)
-    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT
     && existingShortPercent <= 100;
   if (!preserveBlockingEvidence && shortResetHasElapsed(existing.shortResetAt, now)) return;
   if (existing.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
@@ -288,6 +289,10 @@ export function setAccountQuotaFromParsed(
   mainWriter?: MainQuotaWriter,
   policyQuota: MainPolicyQuotaObservation | null = accountId === MAIN_CODEX_ACCOUNT_ID ? quota : null,
   historyEvidence?: QuotaObservationEvidence,
+  // Pool responses carry their credential provenance separately from the optional history
+  // writer: when capture failed before dispatch, an absent writer must fail closed instead
+  // of reading as a writer-free legacy/login observation.
+  poolRequest = false,
 ): void {
   quota = withoutRetiredCodexQuota(quota);
   policyQuota = withoutRetiredCodexQuota(policyQuota);
@@ -298,7 +303,10 @@ export function setAccountQuotaFromParsed(
   hydrateAccountQuotasFromDisk();
   const legacyExisting = accountQuota.get(accountId);
   const updatedAt = Date.now();
-  if (historyEvidence && historyEvidence.writer.accountId === accountId && isPoolQuotaWriterLive(historyEvidence.writer)) {
+  const livePoolEvidence = historyEvidence
+    ? historyEvidence.writer.accountId === accountId && isPoolQuotaWriterLive(historyEvidence.writer)
+    : !poolRequest;
+  if (historyEvidence && livePoolEvidence) {
     quotaHistory.append(historyEvidence.writer, { observedAt: historyEvidence.observedAt, source: historyEvidence.source,
       credentialGeneration: historyEvidence.writer.credentialGeneration, windows: historyWindows(historyEvidence.raw),
     }, updatedAt);
@@ -308,6 +316,19 @@ export function setAccountQuotaFromParsed(
   const next = mergeAccountQuota(quota, legacyExisting, updatedAt);
   accountQuota.set(accountId, next);
   if (isMain) {
+    if (mainWriter && policyQuota && snapshotHasUsage(policyQuota)) {
+      const windows: FreshWindow[] = [];
+      const add = (kind: FreshWindow["kind"], percent: number | undefined, reset: number | undefined) => {
+        if (finitePercent(percent) && percent >= 0 && percent <= 100
+          && typeof reset === "number" && Number.isFinite(reset) && reset > 0) {
+          windows.push({ kind, percent, resetAtMs: resetAtToMs(reset) });
+        }
+      };
+      add("short", policyQuota.shortPercent, policyQuota.shortResetAt);
+      if (policyQuota.monthlyIsPrimaryWindow === true) add("long", policyQuota.monthlyPercent, policyQuota.monthlyResetAt);
+      else add("long", policyQuota.weeklyPercent, policyQuota.weeklyResetAt);
+      observeMainAccountUsage(mainWriter.identityKey, windows, updatedAt);
+    }
     const policyExisting = mainWriter && mainPolicyQuota?.identityKey === mainWriter.identityKey
       ? mainPolicyQuota.quota
       : undefined;
@@ -323,7 +344,7 @@ export function setAccountQuotaFromParsed(
   schedulePersistAccountQuotas();
   // Credits carry the previous usage tuple; they must not refresh its observation clock.
   if (!(quota.resetCredits !== undefined && !snapshotHasUsage(quota))) {
-    if (!isMain && policyQuota) observeCodexLowQuota(accountId, policyQuota);
+    if (!isMain && policyQuota && livePoolEvidence) observeCodexLowQuota(accountId, policyQuota);
     notifyCodexQuotaSnapshot(accountId, next);
   }
 }
@@ -364,7 +385,7 @@ function mergeAccountQuota(
     && quota.weeklyPercent === undefined
     && quota.monthlyIsPrimaryWindow !== true
     && finitePercent(existingWeeklyPercent)
-    && existingWeeklyPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingWeeklyPercent >= MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT
     && existingWeeklyPercent <= 100;
   if (snapshotHasWeekly(quota) && !preserveKnownWeekly) {
     if (quota.weeklyPercent !== undefined) next.weeklyPercent = quota.weeklyPercent;
@@ -397,7 +418,7 @@ function mergeAccountQuota(
   const preserveKnownShort = policyEvidence
     && quota.shortPercent === undefined
     && finitePercent(existingShortPercent)
-    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT
     && existingShortPercent <= 100;
   if (snapshotHasShort(quota) && !preserveKnownShort) {
     if (quota.shortPercent !== undefined) {
@@ -581,7 +602,7 @@ export function applyAccountQuotaFromUpstreamHeaders(
   headers: Headers,
   writerGeneration = captureConfigGeneration(),
   mainWriter?: MainQuotaWriter,
-  options?: { modelId?: string; poolWriter?: PoolQuotaWriter },
+  options?: { modelId?: string; poolWriter?: PoolQuotaWriter; poolResponse?: boolean },
 ): void {
   const quota = parseUpstreamQuotaHeaders(headers, options);
   if (!quota) return;
@@ -591,7 +612,8 @@ export function applyAccountQuotaFromUpstreamHeaders(
   const validHistory = !["x-codex-primary-used-percent", "x-codex-secondary-used-percent", "x-codex-tertiary-used-percent"]
     .some(name => isInvalidPolicyUsagePercent(headers.get(name)));
   setAccountQuotaFromParsed(accountId, quota, writerGeneration, mainWriter, policyQuota,
-    options?.poolWriter && validHistory ? { writer: options.poolWriter, observedAt: Date.now(), source: "response-header", raw: quota } : undefined);
+    options?.poolWriter && validHistory ? { writer: options.poolWriter, observedAt: Date.now(), source: "response-header", raw: quota } : undefined,
+    options?.poolResponse === true);
 }
 
 export function updateAccountQuota(
@@ -770,6 +792,7 @@ function forgetCodexQuotaBaseline(accountId?: string): void {
 }
 
 export function clearAccountQuota(accountId?: string): void {
+  if (!accountId || accountId === MAIN_CODEX_ACCOUNT_ID) forgetMainAccountUsage();
   if (accountId) hydrateAccountQuotasFromDisk();
   quotaHistory.clear(accountId);
   if (accountId) {
@@ -827,8 +850,8 @@ function filterMainPolicyMonthlyQuota(
 
 /**
  * Parse ordinary main-policy usage, rejecting messages with invalid numeric window percentages.
- * Mark a valid primary of at least 24h as replacement evidence only when both other windows
- * are explicitly null or at least 24h. A null result supplies no usable policy observation.
+ * A measured long primary, or explicitly absent primary with measured weekly secondary,
+ * proves replacement only with complete long/null topology. Null supplies no usable evidence.
  */
 export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQuotaObservation | null {
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
@@ -840,7 +863,8 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
   // carries a valid usage reading: a long window without used_percent leaves that
   // window's usage unknown, and unknown usage must never release a block.
   // Headers never supply this proof, and reset time alone still cannot release a block.
-  if (quota && normalizeUsagePercent(primary?.used_percent) !== undefined && isExplicitLongWindow(primary)
+  if (quota && (isMeasuredLongWindow(primary)
+      || (primary === null && isMeasuredLongWindow(secondary) && quota.weeklyPercent !== undefined))
     && (secondary === null || isMeasuredLongWindow(secondary))
     && (tertiary === null || isMeasuredLongWindow(tertiary))) {
     return { ...quota, shortWindowAbsent: true };

@@ -23,9 +23,16 @@ seçim yapar: `quota` (varsayılan), `autoSwitchThreshold` üzerinde olduğunda
 seçer (`five-hour` varsayılandır; `weekly` ve `max-utilization` da kullanılabilir); `round-robin` eşit olarak dağıtır
 (`stickyLimit`, varsayılan `1`); `fill-first`, bekleme süresi, yeniden kimlik
 doğrulama veya eşiğe kadar aktif hesabı tüketir, ardından ilerler. **Varsayılan
-olarak kapalıdır**, bir GUI uyarısı gösterir ve sahada kapsamlı olarak test
-edilmemiştir — Anthropic otomatik rotasyona benzeyen hesapları kısıtlayabilir;
-rotasyon sağlayıcı yaptırımlarına karşı koruma sağlamaz.
+olarak kapalıdır** ve deneyseldir.
+
+Pano, havuzun hangi koşullar için tasarlandığını gösterir: size ait olan veya kullanma yetkiniz bulunan
+abonelikler, gerçek Claude Code istemcisi ve oturumu gözeten bir kişi. Anthropic otomatik hesap havuzunu
+onaylamamıştır; aynı kuruluştaki hesaplar kotayı paylaşabilir (yeni hesap kapasite eklemeyebilir) ve hesap
+değiştirmek sağlayıcı yaptırımlarına karşı koruma sağlamaz. OpenCodex hesapları sıcak tutmak için (keep-warm)
+istek göndermez ve varsayılan olarak Claude jetonlarını arka planda yenilemez ya da kullanımı arka planda
+okumaz: kullanım, pano, menü çubuğu uygulaması veya bir `ocx` komutu istediğinde okunur. Eşikler hesap
+seçimi için tercihtir; kullanım veya faturalandırma sınırı değildir. Bu bir ürün açıklamasıdır, hukuki
+tavsiye değildir; Anthropic'in güncel koşullarını kontrol edin.
 
 Etkinleştirildiğinde operasyonel sözleşme:
 
@@ -34,8 +41,7 @@ Etkinleştirildiğinde operasyonel sözleşme:
   içinde uygun başka bir hesaba dönebilir (sınırlı).
 - Bağlılık **işleme özeldir (process-local)** (proxy yeniden başlatıldığında
   kaybolur).
-- **401/403** kimlik bilgisi hataları hesabı karantinaya alır (`needsReauth`),
-  böylece yeniden kimlik doğrulanana kadar seçimden hariç tutulur.
+- Token yenileme hataları mevcut `needsReauth` kuralını korur. Doğrulanmış abonelik veya hesap ödeme 403 hatası çıktı başlamadan hesap değiştirebilir; soğuma `Retry-After` veya varsayılan on dakikadır. Genel izin reddi terminal kalır. Bkz. [hesap kurtarma](/guides/claude-code/).
 - Uygun tüm hesaplar soğutuluyorsa, proxy bilindiğinde `Retry-After` ile
   birlikte **429** (401 değil) döndürür.
 - 429 yük devretmesi dahil kurtarma, mevcut soğuma ve yük devretme sınırlarını
@@ -271,7 +277,7 @@ kimliğidir; bu yüzden bir seçici satırını bir opencodex rotasına bağlars
 
 ```bash
 ocx claude desktop bind claude-sonnet-4-6 xai/grok-4.7
-ocx claude desktop bind claude-opus-4-6 native/gpt-6-sol
+ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 

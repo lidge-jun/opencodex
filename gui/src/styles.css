@@ -1912,23 +1912,21 @@ dialog.modal-overlay::backdrop {
 }
 
 /*
- * Claude account-pool card — the same inset `.account-pool-strategy-card` above already
- * fixes, on the card that still had it. `.card` has no padding, so each child brings its
- * own 16px: `.card-row`, `.card-sub` and `.setting-row` do, the warning box and the
- * threshold field do not, so those two rendered flush against the card border.
- *
- * The warning takes margin, not padding: it is a bordered box, so its own padding insets
- * the text and leaves the border itself on the card edge. The field takes padding — the
- * `.input` inside is full-width, so the field owns the inset for the whole group.
+ * Claude account-pool card. `.card` has no padding, so each child brings its own 16px inset.
+ * The conditions notice is quiet helper text, not a tinted alert box: it takes the inset as
+ * margin (padding zeroed) so the measure applies to the text. The field takes padding because
+ * the full-width `.input` inside it needs the inset for the whole group.
  */
 .anthropic-pool-card { margin-top: 12px; }
 .anthropic-pool-card__notice {
-  margin: 10px 16px 0;
-  padding: 10px 16px;
-  border: 1px solid var(--border, #c9a227);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--warn, #c9a227) 12%, transparent);
+  margin: 2px 16px 0;
+  padding: 0;
+  max-width: var(--prose-measure);
+  text-wrap: pretty;
 }
+.anthropic-pool-card__details { margin: 8px 16px 12px; font-size: var(--text-label); line-height: var(--leading-body); color: var(--muted); }
+.anthropic-pool-card__details > summary { cursor: pointer; width: fit-content; color: var(--text); }
+.anthropic-pool-card__details > p { margin: 6px 0 0; max-width: var(--prose-measure); text-wrap: pretty; }
 .anthropic-pool-card__field {
   display: block;
   margin-top: 12px;
@@ -2797,7 +2795,7 @@ button.prov-account-row.active { cursor: default; }
 }
 .claude-desktop-toolbar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-bottom: 12px;
 }
 .claude-tabs button {

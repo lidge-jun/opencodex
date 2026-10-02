@@ -9,6 +9,9 @@ Native steering follows [the shared WebSocket contract](transports/streaming-hea
 
 Encrypted-task and fallback request handling follow the Responses
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+For policy-selected turns, both subagent selection and the post-recovery selection retain the
+[original policy authorization](transports/policy-fallback.md);
+ordinary subagent fallback configuration does not authorize a destination outside that evaluation.
 
 Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
 
@@ -294,14 +297,16 @@ by that retirement. Quota fallback retains independent shared/Reserve evidence.
 
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
-widening Codex's five-row advertisement window. Fresh defaults are the GPT-6 trio: Astra, Sol,
-Luna. Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
+widening Codex's five-row advertisement window. Fresh defaults are Astra, GPT-6.1 Sol and Luna
+(`DEFAULT_SUBAGENT_MODELS`). Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
 non-Astra choices, then move retained bare `gpt-5.5` last. The old fifth choice is dropped;
 an unmarked empty list becomes Astra only, and an unset list receives the fresh defaults.
 A second one-time step rewrites bare `gpt-5.6-sol`/`gpt-5.6-luna` to their GPT-6 rows in place
 and drops every other bare `gpt-5.5`/`gpt-5.6` id; ids with a `/` are untouched, and a list left
 empty by the cleanup receives the defaults.
-`subagentModelsVersion: 2` records completion, so later user edits (including an empty list or
+A third one-time step (version 3) rewrites bare `gpt-6-sol` to `gpt-6.1-sol` in place without
+duplicating it; routed and account-qualified ids keep their spelling, and GPT-6 Sol re-added later
+stays. `subagentModelsVersion: 3` records completion, so later user edits (including an empty list or
 removing Astra) persist. The migration rebases on the latest disk config under the existing
 mutation lock; failed persistence degrades to an in-memory roster for that run without a stale
 whole-config overwrite. Existing disabled-model visibility rules remain unchanged.
@@ -310,6 +315,86 @@ Quota-aware fallback walks a configured chain when the featured model is exhaust
 availability on a bounded interval (default 60 s, `src/codex/subagent-model-fallback.ts`). It rewrites
 the requested model id only; effort remains owned by the caps described under
 [Ultra reasoning level](catalog.md#ultra-reasoning-level).
+
+### Per-role model pins
+
+Codex overrides a child's spawn-time model with the root `model` key of
+`$CODEX_HOME/agents/<role>.toml`, so that pin decides which model a role runs on.
+`src/codex/agent-role-models.ts` is opencodex's only writer into those files, and it writes only
+that one key, only when a user picks a role's model in the dashboard's omo (Codex / LazyCodex)
+section on the Codex tab (`PUT /api/codex-agent-roles/{role}`) or with `ocx agent roles set`,
+and only while LazyCodex is detected. No sync, startup, or
+catalog path calls it, and opencodex never creates, repairs, or removes a role file.
+
+- The key is located by the same TOML-aware scan the pin reader uses
+  (`locateTomlModelKey` in `src/codex/subagent-model-fallback.ts`), so a `model =` line inside
+  the instructions multiline string is never read or edited. A key under a table header is not
+  the root pin.
+- An existing one-line string value is replaced inside its span; every other byte, including
+  quote style when the new value allows it, trailing comments, line endings, and a leading BOM,
+  is kept. A missing key is inserted after the leading comment block. A non-string value is
+  refused rather than duplicated.
+- The original file and the edited result must both parse as TOML; otherwise the write is
+  refused with `invalid_role_file` and the file keeps its bytes, so an edit can never turn a
+  role Codex rejects into one it loads. Other write failures answer a fixed `write_failed`
+  message without the filesystem path or owner details.
+- The role name must equal a listed `*.toml` stem, which is also the path-traversal check. The
+  target must be a regular file owned by the running user; the replacement is atomic and does
+  not follow a symbolic link.
+- The same pick is mirrored into LazyCodex's `codex.agents.<role>.model`; that half belongs to
+  [client integrations](clients/integrations.md#omo-codex-lazycodex-role-models). The role file is written first
+  and stands even when the mirror is skipped.
+
+Sibling instances refuse the write, because it reaches the shared `CODEX_HOME`.
+
+### Role model auto-assign
+
+`POST /api/codex-agent-roles/auto-assign` (dashboard Auto-assign, `ocx agent roles suggest`) proposes a
+model for every role and writes nothing. It belongs to omo (Codex / LazyCodex): without
+`detectLazyCodex()` it answers 409 `lazycodex_not_detected` before reading the body or calling a model,
+the same refusal as the PUT. Applying a proposal is the ordinary
+`PUT /api/codex-agent-roles/{role}`, now with an optional `effort`. The work splits in two on purpose:
+
+- **Sizing is one model call.** `src/codex/role-sizing.ts` holds the rubric (ported from the MIT-licensed
+  modelchk skill, cited in the file) as the system prompt, the neutral vocabulary
+  (`fast|standard|frontier`, `glance|measured|thorough|exhaustive`), and the validator. Each role sends its
+  name and the first 1500 characters of `description` plus `developer_instructions`; a role with neither
+  is not sent. The call goes through the proxy's own `/v1/chat/completions` via
+  `postLocalChatCompletion` (`src/lib/local-chat-completion.ts`, shared with the routed vision describer), on
+  the root `model` of Codex `config.toml` unless the caller names one. An answer that is not the strict JSON
+  shape, a missing role, or a field outside the vocabulary leaves that role **unsized** with the reason;
+  nothing is guessed. Keys beyond the five answer fields are ignored, and all five stay required. The
+  sizing model never names a model.
+- **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from
+  `subagentSelectableModels` (the same list the role picker renders) and tiers them: `codexRoleTiers` in the
+  opencodex config first, then price rank (input plus output per 1M tokens). Three or more priced models
+  split evenly across the three tiers. Fewer are anchored at the top, the dearest frontier and each cheaper
+  one a tier lower, so one is frontier and two are standard and frontier; fast is the tier left empty,
+  which keeps a standard role on the cheaper model. Unpriced, unmapped models are never proposed. A role
+  gets the lowest sufficient tier, then the lowest price. Effort binds to ladder positions of the chosen
+  model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
+  only for a role whose file already sets `model_reasoning_effort`, and written by the same span-preserving
+  editor as `model`, located by the same TOML-aware scan.
+
+The sizing call is injectable (`completeCodexRoleSizing` on the management deps), so route tests answer it
+without a provider. Sibling instances refuse the preview too: it sits under the refused
+`/api/codex-agent-roles` prefix, and its proposals could not be applied there anyway.
+
+### Delegation model suggest
+
+`POST /api/injection-model/suggest` (Subagents page **Suggest**, `ocx agent injection suggest`) applies the
+same sizing to the delegation default. The caller describes the work Codex usually hands off (nonblank, at
+most 1500 characters, the role excerpt limit); `proposeDelegationModel` in
+`src/server/management/codex-role-auto-assign.ts` sends it as one role named `delegated-work` with the same
+parser and the role rubric followed by a short addendum (`DELEGATED_WORK_SIZING_SYSTEM_PROMPT`) that has the
+sizer size the described one-shot work rather than a standing role; the role rubric's own text is unchanged.
+It maps the answer with the same `buildRoleProposals`. Two things differ from roles in the mapping,
+both at the call site: candidates are the `available` list `GET /api/injection-model` offers (one helper
+builds both), with effort ladders cut to the Codex levels `PUT /api/injection-model` accepts, and
+`alwaysProposeEffort` proposes an effort even when none is set, because the delegation effort is a
+picker of its own. The route writes nothing; the page shows tier, effort, rationale and move triggers,
+and **Use this** goes through the page's ordinary `PUT /api/injection-model` save. It is not
+sibling-refused, like the `PUT` it feeds, since both touch only this instance's config.
 
 `injectionModel` and `injectionEffort` are shared selections with two independent consumers.
 `multiAgentGuidanceEnabled` controls only OpenCodex-authored delegation guidance.

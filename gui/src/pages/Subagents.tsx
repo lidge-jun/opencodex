@@ -376,6 +376,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           onFallbackPollMsChange={pollMs => { fallbackRevision.current += 1; setFallbackPollMs(pollMs); }}
           onFallbackSave={() => { void saveFallback(); }}
         delegation={{
+          apiBase,
           model: delegation.model,
           effort: delegation.effort,
           efforts: delegation.efforts,

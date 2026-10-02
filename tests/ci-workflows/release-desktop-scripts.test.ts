@@ -154,6 +154,8 @@ describe("desktop release scripts", () => {
   test("the Linux sidecar verifier takes the staged AppImage directory and keeps the local default", () => {
     const verifier = readFileSync(repoPath("desktop", "scripts", "verify-linux-sidecar.sh"), "utf8");
     expect(verifier).toContain('bundle="${1:-$root/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage}"');
+    expect(verifier).toContain("usr/lib/OpenCodex/keyring/keyring.linux-x64-gnu.node");
+    expect(verifier).toContain("__keyring-load-check");
     const wrapper = readFileSync(repoPath("desktop", "scripts", "appimage-patchelf.py"), "utf8");
     expect(wrapper).toContain('os.environ.get("CARGO_TARGET_DIR"');
     expect(wrapper).toContain("APPDIR_SIDECAR_TAIL");
@@ -533,6 +535,23 @@ describe("widget extension signing", () => {
     expect(build?.env?.WIDGET_SIGN_REQUIRED).toContain("DESKTOP_SIGNING_CONFIGURED");
     expect(workflow.jobs?.["package-desktop"]?.env?.DESKTOP_SIGNING_CONFIGURED)
       .toContain("APPLE_CERTIFICATE");
+  });
+
+  test("the packaged keyring addons are Developer ID signed before the bundler copies them", () => {
+    // Notarization refused 2.73.0-preview.20260930: Resources/keyring/*.node were ad-hoc or
+    // unsigned and had no secure timestamp, and Tauri does not sign files under Resources.
+    const sign = steps.find(step => step.name === "Sign the packaged keyring addons");
+    expect(sign?.if).toBe("runner.os == 'macOS'");
+    expect(sign?.env?.MACOS_SIGN_IDENTITY).toContain("APPLE_SIGNING_IDENTITY");
+    expect(sign?.run).toContain("desktop/src-tauri/resources/keyring/*.darwin-*.node");
+    expect(sign?.run).toContain('codesign --force --timestamp --options runtime --sign "$MACOS_SIGN_IDENTITY"');
+    expect(sign?.run).toContain('grep -q "TeamIdentifier=$APPLE_TEAM_ID" <<<"$description"');
+    expect(sign?.run).toContain('grep -q "Timestamp=" <<<"$description"');
+    // A real release never falls back to unsigned addons; only a dry run may.
+    expect(sign?.run).toContain("A real release must sign the packaged keyring addons.");
+    expect(indexOfStepRunning("security create-keychain")).toBeLessThan(indexOfStep(sign!.name!));
+    expect(indexOfStep("Prepare macOS sidecars")).toBeLessThan(indexOfStep(sign!.name!));
+    expect(indexOfStep(sign!.name!)).toBeLessThan(indexOfStep("Build desktop bundles"));
   });
 
   test("the certificate is importable before the widget is signed and is removed afterwards", () => {

@@ -24,6 +24,9 @@ export const DEVIN_STATIC_MODELS = [
   // 260923 preemptive: GPT-6 Sol and Luna (OpenAI announced 2026-09-22) added ahead of this provider's own catalog; mirrors the GPT-5.6 Sol/Luna rows.
   "gpt-6-sol",
   "gpt-6-luna",
+  // 260930 preemptive: GPT-6.1 Sol (devin.ai/blog/gpt-6-1-sol says it is live; the uid is not published).
+  // Spelled the way Devin spells gpt-5.6-sol; live discovery replaces this seed once a credential is present.
+  "gpt-6-1-sol",
   "claude-opus-4-8",
   "claude-fable-5-1",
   "claude-sonnet-5",
@@ -61,6 +64,8 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-6-astra": 1_000_000,
   "gpt-6-sol": 1_000_000,
   "gpt-6-luna": 1_000_000,
+  // 260930 preemptive: unmeasured; mirrors the GPT-6 Sol row Cognition serves.
+  "gpt-6-1-sol": 1_000_000,
   "claude-opus-4-8": 1_000_000,
   // 260923: read from the live catalog (devin/claude-opus-5-5 context_length 1_000_000).
   "claude-opus-5-5": 1_000_000,
@@ -202,6 +207,22 @@ function effortIndex(rung: string | undefined): number {
   return rung === undefined ? -1 : FAMILY_EFFORT_LADDER.indexOf(rung);
 }
 
+function axisMismatchCount(
+  axes: ModelCatalogEntry["familyAxes"],
+  targets: Record<string, number>,
+  baseline: number,
+): number {
+  let mismatches = baseline;
+  for (const [axis, value] of Object.entries(axes ?? {})) {
+    if (isEffortAxis(axis)) continue;
+    const target = Object.hasOwn(targets, axis) ? targets[axis]! : 0;
+    if (target !== 0) {
+      if (value.order === target) mismatches--;
+    } else if (value.order !== 0) mismatches++;
+  }
+  return mismatches;
+}
+
 /**
  * The member closest to `targets` on the non-effort axes, then the lowest rung
  * at or above `effort`, falling back to the highest rung below it. A missing
@@ -222,11 +243,15 @@ function closestMember(
   effort: string | undefined,
 ): ModelCatalogEntry | undefined {
   const want = effortIndex(effort);
+  // The baseline counts only `targets`, so scan it once: recomputing it per member
+  // made a wide anchor (many exposed axes) quadratic in members x axes.
+  let mismatchBaseline = 0;
+  for (const order of Object.values(targets)) if (order !== 0) mismatchBaseline++;
   let best: ModelCatalogEntry | undefined;
   let bestScore: number[] | undefined;
   for (const member of members) {
     const axes = member.familyAxes ?? {};
-    const mismatches = Object.entries(targets).filter(([axis, order]) => (axes[axis]?.order ?? 0) !== order).length;
+    const mismatches = axisMismatchCount(axes, targets, mismatchBaseline);
     const have = effortIndex(devinFamilyEffortOf(member));
     const lowered = want > 0 && have < want ? 1 : 0;
     const distance = want < 0 ? 0
@@ -258,18 +283,18 @@ export function selectDevinFamilyMember(
   anchor?: ModelCatalogEntry,
   options: { includeDisabled?: boolean } = {},
 ): ModelCatalogEntry | undefined {
-  const axisNames = new Set(members.flatMap((m) => Object.keys(m.familyAxes ?? {})).filter((a) => !isEffortAxis(a)));
   const base = anchor
     ?? members.find((m) => m.isFamilyDefault)
-    ?? closestMember(members, Object.fromEntries([...axisNames].map((a) => [a, 0])), "medium");
+    ?? closestMember(members, {}, "medium");
   if (!base) return undefined;
-  const targets: Record<string, number> = {};
-  for (const axis of axisNames) targets[axis] = base.familyAxes?.[axis]?.order ?? 0;
-  if (request.fast && axisNames.has(FAST_AXIS)) targets[FAST_AXIS] = 1;
-  if (request.longContext && axisNames.has(LONG_CONTEXT_AXIS)) targets[LONG_CONTEXT_AXIS] = 1;
+  const targets = Object.fromEntries(Object.entries(base.familyAxes ?? {})
+    .filter(([axis]) => !isEffortAxis(axis))
+    .map(([axis, value]) => [axis, value.order]));
+  if (request.fast) targets[FAST_AXIS] = 1;
+  if (request.longContext) targets[LONG_CONTEXT_AXIS] = 1;
   // `none` means no reasoning. Families like Claude Sonnet 4.6 express that as
   // Thinking off rather than as an effort rung.
-  if (request.effort === "none" && axisNames.has(THINKING_AXIS)) targets[THINKING_AXIS] = 0;
+  if (request.effort === "none") targets[THINKING_AXIS] = 0;
   const enabled = options.includeDisabled ? members : members.filter((m) => !m.disabled);
   return closestMember(enabled.length > 0 ? enabled : members, targets, request.effort ?? devinFamilyEffortOf(base));
 }

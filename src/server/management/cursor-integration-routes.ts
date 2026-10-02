@@ -12,6 +12,7 @@ import { readRuntimePort } from "../../config/process-state";
 import { filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextTier, nativeReasoningEfforts, uniqueCatalogModelsForRawPublicList, visibleNativeSlugs } from "../../codex/catalog";
 import { cursorLastSeen, type CursorSeen } from "../../integrations/cursor-seen";
 import { detectCursorInstalls, type CursorInstall } from "../../integrations/cursor-detect";
+import { buildCursorLocalInstallerHint, type CursorLocalInstallerHint } from "../../integrations/cursor-local-installer";
 import { loadCursorEffortTable } from "../../integrations/cursor-effort-table";
 import { configuredApiAuthToken, isApiAuthRequired, jsonResponse } from "../auth-cors";
 import { localInferenceDestination } from "../../lib/local-destinations";
@@ -127,10 +128,29 @@ export async function buildCursorIntegrationStatus(
   };
 }
 
+/**
+ * The cursor-local installer the update channel advertises (#5679), resolved only on an explicit
+ * user action. The status route above is polled while the Cursor tab is open and must stay
+ * local, so the remote channel lookup lives behind its own route the dashboard calls from a
+ * button, never on page load.
+ */
+export function resolveCursorLocalInstaller(
+  installs: CursorInstall[] = detectCursorInstalls(),
+  deps?: Parameters<typeof buildCursorLocalInstallerHint>[1],
+): Promise<CursorLocalInstallerHint> {
+  return buildCursorLocalInstallerHint({
+    regularInstalled: pick(installs, "regular") !== undefined,
+    privateInferenceInstalled: pick(installs, "private-inference") !== undefined,
+  }, deps);
+}
+
 export async function handleCursorIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url } = ctx;
   if (url.pathname === "/api/native-integrations/cursor" && req.method === "GET") {
     return jsonResponse(await buildCursorIntegrationStatus(ctx));
+  }
+  if (url.pathname === "/api/native-integrations/cursor/local-installer" && req.method === "GET") {
+    return jsonResponse(await resolveCursorLocalInstaller());
   }
   return null;
 }

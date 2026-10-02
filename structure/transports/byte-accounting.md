@@ -56,6 +56,10 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
+Devin's [Messages ordering buffer](../clients/claude-desktop.md#devin-messages-output-ordering) charges retained
+semantic events consumed from the independently bounded adapter queue to the shared translator
+budget until downstream delivery. Cancellation and overflow release held events before producer shutdown.
+
 `src/web-search/run-turn-loop.ts` charges retained iteration events and generated replay history to
 the request translator budget. Each owner releases its own reservations on completion, error,
 cancellation or consumer closure; a buffer-limit failure terminates without another search.
@@ -103,6 +107,14 @@ Translated audio/file admission follows the [final-adapter input contract](../ad
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 ## Response-log inspection
+
+`src/lib/redact.ts` scans XML identifying attributes over disjoint tag spans rather than
+searching the remaining suffix from each opening delimiter. Tag terminators are quote-aware,
+so `>` inside a single- or double-quoted attribute cannot hide later credential attributes.
+The decoded and raw passes
+retain the original-offset mapping and mask a credential-bearing element through the rest
+of the input. `tests/lib/redact.test.ts` counts delimiter searches and scanned characters across doubled inputs
+without a machine-speed deadline, as well as malformed and escaped credential coverage.
 
 `src/server/response-log-body.ts` forwards raw response chunks on downstream demand.
 Diagnostic retention is limited to 32 MiB for JSON and an 8 KiB prefix for other
@@ -182,3 +194,5 @@ Schema size still determines traversal work and the cost of copying a changed br
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The [compaction routing override](responses-failover.md#compaction-routing-overrides) changes model and effort scalars on the already-read request body, before parsing, within the existing body-reader budget.
+
+`src/lib/sse-decoder.ts` recognizes CR, LF and CRLF line endings, including CRLF split between fetch chunks. Delimiters are consumed before field retention; event/comment ordering, EOF dispatch and translator-budget release remain shared across all three forms. The delimiter search keeps native `indexOf` cursors for the next CR and LF in each decoded chunk, so scanning stays linear for every framing.

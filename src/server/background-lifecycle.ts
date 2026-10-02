@@ -79,8 +79,8 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
       .catch(() => {
         // The next tick adopts it.
       });
-    // Opt-in: the tick is a no-op unless catalogAutoRefresh.enabled is true, and the
-    // interval is unref'd, so a default install pays one dormant timer. The scheduler
+    // Default-on: explicit false or a zero cadence makes ticks dormant. Both startup
+    // and interval timers are unref'd. The scheduler
     // module keeps every heavy import inside its tick, so naming it statically here
     // costs a module record and nothing else.
     startCatalogAutoRefresh();

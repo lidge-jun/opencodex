@@ -224,8 +224,8 @@ const stateProbe = `
   const additions = {
     appOwnedMemoryBudgetMb: 256, fastRows: true, managementUsageMaxReadBytes: 67108864,
     openaiProviderTierVersion: 2,
-    subagentModels: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'],
-    subagentModelsVersion: 2,
+    subagentModels: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna'],
+    subagentModelsVersion: 3,
   };
   for (const config of [persisted, loaded]) {
     if (Object.keys(config).some(key => !Object.hasOwn(seed, key) && !Object.hasOwn(additions, key))) throw new Error('unexpected startup config addition');

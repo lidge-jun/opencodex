@@ -304,7 +304,7 @@ This stops partial weekly/Spark or credits-only refreshes from renewing obsolete
 The separately retained main-policy snapshot preserves omitted blocking short evidence even after
 its reset clock passes. Credits-only, partial weekly-only, and metadata-only updates cannot remove an
 existing blocking short usage reading or release its hard lock; a fresh short reading can replace
-it. A validated long-primary WHAM snapshot can also retire the short tuple as described below.
+it. A validated complete WHAM snapshot can also retire the short tuple as described below.
 Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking weekly reading.
 
 The Codex writer explicitly asks `src/quota/reset-observer.ts` to retain an absent short window
@@ -317,17 +317,18 @@ Regression coverage lives in `tests/codex-integration/codex-quota-parser-parity.
 `tests/usage/quota-reset-observation.test.ts`, and `tests/usage/quota-reset-seen-store.test.ts`.
 
 `codexMainAccountHardLock` is a local admission policy that is **on by default** since #5694, at
-`MAIN_ACCOUNT_HARD_LOCK_PERCENT` = 98%. The 5h/short window and the weekly window each govern on
-their own: either one at 98% blocks, and an unknown or invalid reading in one never hides a block
+short 90% and long `MAIN_ACCOUNT_HARD_LOCK_PERCENT` = 98%, overridden by ordered integer
+`codexMainAccountHardLockThresholds` in 80..100. The 5h/short and weekly windows each govern on
+their own: either one reaching its effective threshold blocks, and an unknown or invalid reading in one never hides a block
 in the other (unknown still admits). Monthly governs only a monthly-only account. A block holds
-until every blocking window reads lower, so its reported `resetAt` is the latest blocking reset,
+until every blocking window reads lower or is authoritatively absent, so `resetAt` is the latest blocking reset,
 omitted when any blocking window has none. In the policy snapshot a reset-only weekly observation
 keeps a blocking weekly tuple, mirroring the short-window rule; monthly-primary evidence still replaces it.
 It blocks newly admitted identity-matched main-account requests. Pool alternatives remain eligible;
 explicit main selection and stored Direct substitution do not override it. It neither pauses the
 account nor clears upstream cooldown/reauth state, and management quota refresh remains available.
-Only a fresh valid reading below 98%, including 0%, releases a measured block; passing a reset
-timestamp alone does not. The minute sweep waits locally until the latest known blocking reset;
+Fresh valid usage below the effective threshold, including 0%, or validated WHAM absence retires a measured short block;
+passing a reset timestamp alone does not. The minute sweep waits locally until the latest known blocking reset;
 when no future reset is known or reads remain blocked, main recovery uses the same capped
 5/10/20/40/60-minute delay calculation as usage-query failures. Skipped ticks do not extend it;
 the physical bearer is reconciled before checking the delay, and late results cannot charge
@@ -336,7 +337,7 @@ current credential before the recovery worker takes a profile lease or prepares 
 credential has a separate key and may proceed immediately.
 Nonterminal 401/403 responses do not arm the successful-but-blocked recovery delay; the next
 sweep may retry, while terminal authentication failure keeps its reauth quarantine.
-Only fresh lower usage releases the lock; no inference or reset-credit consumption is added. Failed,
+Only fresh lower usage or validated window absence releases the lock; no reset-credit consumption is added. Failed,
 missing, non-finite or out-of-range readings do not release the block. Policy validation precedes
 legacy clamping. Supplementary monthly data cannot become the fallback governing window without a
 monthly-only plan or explicit primary-monthly evidence. Previously unobserved usage is unknown, not
@@ -353,24 +354,26 @@ policy.
 The trade-off is admission, not accounting. The main account's Luna Reserve needs an exhausted
 ordinary window to activate, so while the lock is blocking Reserve cannot engage; an operator who
 wants Reserve turns the setting off rather than deleting the key. This is not a reservation of the
-last 2%: already-admitted, parallel, unmatched-keyring, or direct upstream traffic can still reach
+remaining headroom: already-admitted, parallel, unmatched-keyring, or direct upstream traffic can still reach
 exhaustion. Settings and the main-account DTO report enabled state separately from the current
 `off`, `unknown`, `ready`, or `blocked` status. Status semantics stay in
-`tests/codex-integration/main-account-hard-lock-policy.test.ts`; the default-on resolver, the 98%
-boundary, the admission consequence, and the settings opt-out round trip are covered by the
+`tests/codex-integration/main-account-hard-lock-policy.test.ts`; the default-on resolver, the per-window
+boundaries, the admission consequence, and the settings opt-out round trip are covered by the
 hard-lock tests registered in `scripts/test-layout/layout.json`, including
 `tests/config/settings-main-account-hard-lock.test.ts`.
 
-A single fresh valid WHAM response with an explicitly long primary window can replace an obsolete
-short-window tuple when secondary and tertiary windows are explicitly null or also explicitly long with a valid usage reading.
+A single fresh valid WHAM response with a measured long primary, or an explicitly null primary and
+measured secondary that supplies parsed weekly usage, can replace an obsolete short-window tuple.
+Secondary and tertiary must each be explicitly null or explicitly long with a valid usage reading.
 Long means **at least 24 hours**, matching the parser's short/long discriminator; a one-day primary
 qualifies, not only a seven-day or monthly window. The policy trusts that one reported topology;
 it does not require repeated observations or independently confirm upstream window completeness.
-Omitted secondary/tertiary fields, a long auxiliary window without a usage reading, an unknown primary duration, partial headers, or invalid usage cannot prove that the
-short window disappeared. Replacement proof belongs only to that observation and is never persisted;
-the resulting weekly/monthly window still blocks at 98%. This prevents old short-window exhaustion
+Any omitted window field, an unreadable long window, an unknown duration, partial headers, or invalid usage
+cannot prove that the short window disappeared. All-null credits-only and tertiary-only Go/Free responses remain insufficient. Replacement proof belongs only to that observation and is never persisted;
+the resulting weekly/monthly window still blocks at its long threshold (98% by default). This prevents old short-window exhaustion
 from surviving indefinitely on a now weekly/monthly account. Coverage lives in
 `tests/codex-integration/main-quota-evidence-validation.test.ts`,
+`tests/codex-integration/main-account-hard-lock-retirement.test.ts`,
 `tests/codex-integration/main-quota-provenance.test.ts`, and
 `tests/codex-integration/main-account-hard-lock-recovery.test.ts`.
 

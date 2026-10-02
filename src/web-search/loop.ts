@@ -1,5 +1,5 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxProviderOpaqueToolCallMetadata, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
+import type { AdapterEvent, OcxConfig, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxProviderOpaqueToolCallMetadata, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
@@ -282,7 +282,7 @@ export interface WebSearchLoopDeps {
   /** Required for the openai backend; unused (and typically undefined) for the anthropic backend. */
   forwardProvider?: OcxProviderConfig;
   /** Required for the anthropic backend: the stored-OAuth provider that runs web_search_20250305. */
-  anthropicSidecar?: { providerName: string; provider: OcxProviderConfig };
+  anthropicSidecar?: { providerName: string; provider: OcxProviderConfig; config: OcxConfig };
   /** Required for the xai backend: the stored Grok OAuth provider (L7). */
   xaiSidecar?: { providerName: string; provider: OcxProviderConfig };
   /** Required for the gemini backend: the stored Antigravity CCA provider (L8). */
@@ -325,7 +325,7 @@ export interface WebSearchLoopDeps {
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
-   * 429 failover hook: rotate the provider's active credential and return a rebuilt adapter,
+   * Account/key failover hook (429, plus provider-classified pre-output refusals): rotate the provider's active credential and return a rebuilt adapter,
    * or null when the pool is exhausted. Async hooks support OAuth refresh; existing synchronous
    * key-pool hooks remain valid.
    *
@@ -346,6 +346,7 @@ export interface WebSearchLoopDeps {
     retryAfterHeader: string | null,
     responseHeaders?: Headers,
     retryParsed?: OcxParsedRequest,
+    // A 403 requires this complete response; status-only callbacks retain 429 semantics.
     originalResponse?: Response,
   ) =>
     | { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind }
@@ -405,6 +406,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // One iteration beyond the forced answer is reserved for its empty-answer recovery below.
   const HARD_CAP = maxSearches + 3;
   let emptyAnswerRetries = 0;
+  let accountRefusalOutputStarted = false;
   const connectTimeoutMs = deps.connectTimeoutMs ?? 200_000;
   const routedModelStallTimeoutMs = deps.routedModelStallTimeoutMs ?? 200_000;
 
@@ -571,6 +573,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
       while ((prepared.response.status === 429
+        || (prepared.response.status === 403 && deps.incomingMeta?.providerName === "anthropic" && !accountRefusalOutputStarted)
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);
@@ -663,10 +666,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // Codex show only `Working` until both Kiro attempts had finished (often 30-40 seconds).
         // Tool events remain buffered below, so the decision to invoke the hosted sidecar is still
         // atomic and no search call can escape before its stream has validated successfully.
-        else if (event.type === "text_delta" && event.phase === "commentary") yield event;
+        else if (event.type === "text_delta" && event.phase === "commentary") { accountRefusalOutputStarted = true; yield event; }
         else if (liveWindowOpen && LIVE_STREAMABLE.has(event.type)) {
           // Live events are ALSO buffered: the scanner still needs them for thinking extraction
           // and the forced-answer output check; only the terminal replay skips them (by count).
+          accountRefusalOutputStarted = true;
           yield event;
           streamedPassthroughCount++;
           events.push(event);
@@ -739,7 +743,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // signal would otherwise look like an ordinary degradable failure).
         try {
           if (backend === "anthropic" && anthropicSidecar) {
-            outcome = await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal);
+            outcome = await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal, anthropicSidecar.config);
           } else if (backend === "xai") {
             // L7: stored Grok OAuth to the pinned api.x.ai Responses endpoint; same
             // never-throws contract and no Codex/OpenAI pool outcome recording (F5 parity).
@@ -937,6 +941,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // The thinking that led to the search belongs to the FIRST call's assistant replay turn.
           const iterationThinking = extractIterationThinking(split.passthrough);
           for (const [callIndex, call] of split.calls.entries()) {
+            accountRefusalOutputStarted = true;
             yield* runSearchCall(call, callIndex === 0 ? iterationThinking : []);
           }
         } catch (e) {

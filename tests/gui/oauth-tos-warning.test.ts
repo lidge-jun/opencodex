@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  oauthTosCopyKeys,
   oauthTosRisk,
   oauthTosRiskBodyKey,
   oauthTosRiskTitleKey,
@@ -19,6 +20,7 @@ describe("oauth ToS risk map", () => {
   test("flags elevated unofficial bridges", () => {
     expect(oauthTosRisk("github-copilot")).toBe("elevated");
     expect(oauthTosRisk("cursor")).toBe("elevated");
+    expect(oauthTosRisk("zed")).toBe("elevated");
   });
 
   test("leaves lower-risk OAuth providers unmarked", () => {
@@ -36,6 +38,27 @@ describe("oauth ToS risk map", () => {
     expect(oauthTosRiskTitleKey("elevated")).toBe("oauthTos.elevatedTitle");
     expect(oauthTosRiskBodyKey("high")).toBe("oauthTos.highBody");
     expect(oauthTosRiskBodyKey("elevated")).toBe("oauthTos.elevatedBody");
+  });
+
+  test("Anthropic gets its own dialog copy; other providers keep the shared keys", () => {
+    expect(oauthTosCopyKeys(" Anthropic ", "high")).toEqual({
+      title: "oauthTos.anthropicTitle",
+      body: "oauthTos.anthropicBody",
+      conditions: "oauthTos.anthropicConditions",
+      saferPath: "oauthTos.anthropicSaferPath",
+      acknowledge: "oauthTos.anthropicAcknowledge",
+      continue: "oauthTos.anthropicContinue",
+    });
+    expect(oauthTosCopyKeys("google-antigravity", "high")).toEqual({
+      title: "oauthTos.highTitle",
+      body: "oauthTos.highBody",
+      conditions: null,
+      saferPath: "oauthTos.saferPath",
+      acknowledge: "oauthTos.acknowledge",
+      continue: "oauthTos.continue",
+    });
+    expect(oauthTosCopyKeys("cursor", "elevated").title).toBe("oauthTos.elevatedTitle");
+    expect(oauthTosCopyKeys("cursor", "elevated").saferPath).toBeNull();
   });
 });
 
@@ -60,7 +83,8 @@ describe("oauth ToS warning UI seam", () => {
     expect(modal).toContain("requestLoginOAuth");
     expect(modal).toContain("if (oauthBusy) return");
     expect(modal).toContain("!oauthTosPending");
-    expect(warn).toContain("oauthTos.acknowledge");
+    expect(warn).toContain("oauthTosCopyKeys(providerId, level)");
+    expect(warn).toContain("t(copy.acknowledge)");
     expect(warn).toContain("disabled={!acknowledged || submitted}");
     expect(warn).toContain("showModal()");
     expect(warn).toContain("onCancel={handleCancel}");
@@ -77,8 +101,13 @@ describe("oauth ToS warning UI seam", () => {
       "oauthTos.saferPath",
       "oauthTos.acknowledge",
       "oauthTos.continue",
+      "oauthTos.anthropicTitle",
+      "oauthTos.anthropicConditions",
+      "oauthTos.anthropicSaferPath",
+      "oauthTos.anthropicAcknowledge",
+      "oauthTos.anthropicContinue",
     ];
-    for (const locale of ["en", "de", "ko", "zh", "zh-TW", "ru", "ja"]) {
+    for (const locale of ["en", "de", "fr", "ja", "ko", "ru", "tr", "vi", "zh", "zh-TW"]) {
       const text = await Bun.file(`gui/src/i18n/${locale}.ts`).text();
       for (const key of keys) {
         expect(text).toContain(`"${key}"`);

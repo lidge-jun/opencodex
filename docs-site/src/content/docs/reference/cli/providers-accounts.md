@@ -137,9 +137,9 @@ Remove the stored OAuth credential for a provider.
 
 ## Accounts and key pools
 
-### Main-account 98% protection
+### Main-account quota protection
 
-In **Codex settings → Multi-auth → Advanced settings**, **Block main account at 98%**
+In **Codex settings → Multi-auth → Advanced settings**, **Block main account**
 is on by default beside Ultra Fast. Switching it off applies immediately; turning it back on first
 shows the consequences, and cancelling does not change the setting. The main-account card shows
 monitoring, unknown usage, or a current policy block even when Advanced settings is closed.
@@ -151,24 +151,39 @@ account usable ([#5694](https://github.com/lidge-jun/opencodex/issues/5694)). Th
 Reserve: while the block is in force, Reserve on that main account cannot activate. To let the main
 account run to exhaustion and hand over to Reserve, turn the switch off.
 
-The **5h window and the weekly window each block on their own**: either one reaching 98% blocks
+The **5h window and the weekly window each block on their own**: the 5h window reaching 90% or the weekly window reaching 98% blocks
 immediately, even while the other still has headroom. Monthly-only accounts use their monthly
 window. The block releases automatically, with the switch still on, once every blocking window
-reports a fresh reading below 98% (a 0% reset counts); the next 98% observation blocks again.
+reports a fresh reading below its threshold (a 0% reset counts); the next observation at the threshold blocks again.
+Configure `codexMainAccountHardLockThresholds` in `config.json` with optional `short` and `long`
+percentages, for example `{ "short": 90, "long": 98 }`. Both must be integers from 80 through 100,
+and `short` must not exceed `long`; omitted fields use the defaults. The settings API accepts the
+same object and returns the effective values in `mainAccountHardLock.thresholds`.
+
+The dashboard and `ocx status` show **possible usage outside opencodex** when fresh readings rise
+by at least one point in the same reset episode without recent main-account activity through this
+proxy. This is an advisory observation, not proof: a long-running turn can also cause it. The lock
+may not prevent exhaustion from outside traffic. The process-local notice clears on identity or
+reset changes and expires after six hours or at the observed reset, whichever comes first.
+`ocx status --json` exposes the state, effective thresholds, blocking window kind, and optional
+`externalUsage` warning under `mainAccountHardLock` when live management evidence is available.
+
 An unreadable 5h reading cannot hide a weekly block. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
 While blocked, the minute sweep waits for the latest known blocking reset, then checks owned usage.
 If no future reset is known or a check remains blocked, recovery uses a capped 5/10/20/40/60-minute
-schedule; a longer `Retry-After` also delays profile and token preparation. Only a fresh valid reading
+schedule; a longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
 can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
 a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
 
 Protection treats one fresh valid WHAM usage response as a replacement for the old 5h reading when
-its primary window explicitly lasts **at least 24 hours** and secondary/tertiary windows are explicitly `null`
-or also explicitly last at least 24 hours and report their usage. This follows the parser's short/long boundary, so a
+its primary window explicitly lasts **at least 24 hours** and reports valid usage, or its primary window is
+explicitly `null` and a measured secondary supplies the weekly usage. In either case, secondary/tertiary
+windows must be explicitly `null` or explicitly last at least 24 hours and report valid usage. This follows the parser's short/long boundary, so a
 one-day window qualifies as well as weekly/monthly windows. The current window still uses the same
-98% threshold. This relies on the single reported snapshot; repeated observations are not required.
-Omitted secondary/tertiary fields, an unknown primary duration, or partial response headers cannot clear a previous block.
+configured long-window threshold (98% by default). This relies on the single reported snapshot; repeated observations are not required.
+Any omitted window field, an unknown duration, or partial response headers cannot clear a previous block.
+All-null responses carrying only credits and supplementary monthly-only readings also cannot establish recovery.
 The proxy checks the stored credential again before applying a delayed response. An unreadable file
 or replaced bearer cannot update the usage cache, release the lock, or quarantine the new credential,
 even for the same account with no second quota read.
@@ -188,7 +203,7 @@ keyring credentials, and traffic outside the proxy can still spend quota. Added 
 providers remain available.
 
 With protection on, an owned startup restores the main credential's in-memory identity
-binding after native-profile recovery and cleanup, so a persisted 98% block survives a restart.
+binding after native-profile recovery and cleanup, so a persisted policy block survives a restart.
 Caller-owned Direct, exact-main, main-fallback, and main-pin requests can briefly receive 503
 while that binding is pending; healthy stored Pool accounts stay eligible throughout. No
 credential is read from a foreign or unconfirmed service home for this initialization.
@@ -222,7 +237,7 @@ Each compatibility request checks a credential-bound server authorization, cache
 requires ordinary usage to be disallowed, the Luna Reserve banner, and exactly one allowed Reserve
 bucket. Missing, denied, stale or mismatched evidence refuses the request; it does not switch accounts
 or silently use ordinary Luna. Passive usage can revoke authorization but cannot create it.
-Global cooldown, pause, reauthentication and the 98% hard lock still apply. Turn the hard lock off if
+Global cooldown, pause, reauthentication and the main-account hard lock still apply. Turn the hard lock off if
 you want to use Reserve on an exhausted main account; doing so does not grant server entitlement.
 This compatibility path supports conversation requests and compaction, not Reserve as a vision or
 web-search helper or a standalone search-relay model. Choose another model for those helpers.
@@ -251,7 +266,7 @@ alias <provider> <id|alias> <display-name|->  Set or clear an account's display 
 pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
-clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -469,20 +484,39 @@ Clear the manual Codex account selection without resolving an account id, so it 
 
 ### `ocx account pause|resume <provider> <id|alias|main> [--json]`
 
-Pause or resume one account in the Codex pool or a generic OAuth provider pool, including
+Pause or resume one account in the Codex, Anthropic, or generic OAuth provider pool, including
 `google-antigravity`. For the Codex pool, `main` identifies only the built-in Codex account;
-generic OAuth accounts must be identified by id or a unique alias. A paused generic OAuth account
+OAuth accounts must be identified by id or a unique alias. A paused OAuth account
 is excluded from request selection, 429 failover, and proactive token refresh, and cannot be
 selected manually. Pausing the active account switches to the next usable account when one exists.
 If every account is paused, requests that need that pool return 403 until an account is resumed.
 
-For a generic OAuth provider, identify the account by id or by a unique exact or case-insensitive
+For Anthropic and generic OAuth providers, identify the account by id or by a unique exact or case-insensitive
 alias. The JSON response reports the account id, pause state, and active account id.
+
+Anthropic pause applies even when proactive pooling is disabled, including session affinity and
+429 successors. It survives restart and reauthentication, preserves credentials and health,
+and does not interrupt a turn already sent. Removing the account removes its pause state.
+Per-account Anthropic auto-switch thresholds are not part of this control.
 
 ```bash
 ocx account pause google-antigravity <account-id-or-alias>
 ocx account resume google-antigravity <account-id-or-alias>
 ```
+
+### `ocx account clear-cooldown <openai|anthropic> <id|alias|main> [--json]`
+
+Drops a process-local failure cooldown without changing stored credentials. Use `openai` for a Codex
+pool account or `anthropic` for an Anthropic OAuth account; other providers are rejected. Both forms
+accept an account id or unique alias, while `main` is specific to the Codex pool.
+
+```bash
+ocx account clear-cooldown anthropic <id-or-alias>
+```
+
+The command reports success even when no cooldown is active, with `cleared: false` in JSON. Clearing
+an Anthropic cooldown also advances the account generation so an older in-flight quota probe cannot
+restore the cleared state or publish stale quota-derived eligibility afterward.
 
 ### `ocx account refresh <provider> [--json]`
 
@@ -499,7 +533,11 @@ instead (exit 0), matching the dashboard's quota bars.
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Controls the `openai` Codex pool threshold, or stores a threshold for a generic OAuth pool. `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0–100. A generic pool threshold steers selection only while `pool.kernel` is on with `strategy: "fill-first"`; with the flag off, saving one does not enable threshold-based switching. It never changes the provider enablement override or disables reactive 429 rotation. `status` and mutation output for generic pools use the confirmed server response. For generic pools, `poolEnabled` is the stored provider override (`null` means unspecified), not inherited effective state; `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability, which never reports `enabled: true`. API-key providers, Anthropic and invalid values are rejected.
+Controls the `openai` Codex pool threshold, or stores a threshold for a generic OAuth pool. `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0–100. A generic pool threshold steers selection only while `pool.kernel` is on with `strategy: "fill-first"`; with the flag off, saving one does not enable threshold-based switching. It never changes the provider enablement override or disables reactive 429 rotation. `status` and mutation output for generic pools use the confirmed server response. For generic pools, `poolEnabled` is the stored provider override (`null` means unspecified), not inherited effective state; `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability, which never reports `enabled: true`. API-key providers and invalid values are rejected.
+
+### `ocx account auto-switch anthropic … --account <id>`
+
+For Anthropic OAuth, use `ocx account auto-switch anthropic threshold 90 --account <id>` (integer 0–100), `off --account <id>` (0), `on --account <id>` (80), `inherit --account <id>` (reset), or `status --account <id>` (read-only); append `--json` for structured output. The account card offers the same custom-threshold toggle. Missing/null inherits `anthropicAccountPool.autoSwitchThreshold` (default 80); 0 disables usage-driven switching for that account, not pause or reactive 429 recovery. Overrides survive restart and re-login and are removed with the account. With pooling enabled, quota and fill-first compare each source/candidate against its own threshold in the selected quota window. Manual/affinity precedence, identity-less round-robin/fill-first behavior, unknown-quota fallback and all-drained fallback remain unchanged. Round-robin is not usage-driven; disabled pools ignore these thresholds. Model-route allowlists still constrain every candidate.
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }
@@ -774,3 +812,6 @@ ocx account routes anthropic --clear
 ```
 
 The file is limited to 64 KiB. The server validates each route and stores it under `anthropicAccountPool.routes`; writes require the running proxy. Use stored account IDs from `ocx account list anthropic --json`. Rules only affect the enabled pool and never claim that an account is entitled to a model. Request logs identify a matched rule as `route:#<n>` (1-based list position), without its operator name.
+
+Vision and web-search helpers match their own model independently and can fail locally when their
+strict route has no eligible account. See [Anthropic helper account routing](/reference/configuration/providers/#anthropicaccountpool-experimental).

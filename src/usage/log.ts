@@ -506,7 +506,7 @@ const KNOWN_AFFINITY_MOVES = new Set<NonNullable<PersistedUsageEntry["affinity"]
 ]);
 const KNOWN_AFFINITY_REASONS = new Set<NonNullable<PersistedUsageEntry["affinityReason"]>>([
   "healthy", "quota_headroom", "quota_refusal", "transient", "transient_hold_expired",
-  "unusable", "paused", "plan_excluded", "cooldown", "quota_avoided", "generation",
+  "unusable", "paused", "plan_excluded", "credits_off", "cooldown", "quota_avoided", "generation",
   "expired", "model_lane",
 ]);
 const KNOWN_CONVERSATION_STATE_SCRUBS = new Set<NonNullable<PersistedUsageEntry["conversationStateScrub"]>>([
@@ -645,7 +645,8 @@ function normalizeAttemptTierOutcome(raw: unknown): AttemptTierOutcome | null {
     && outcome.wireKind !== null
     && outcome.wireKind !== "service-tier"
     && outcome.wireKind !== "anthropic-speed"
-    && outcome.wireKind !== "cursor-variant") return null;
+    && outcome.wireKind !== "cursor-variant"
+    && outcome.wireKind !== "model-variant") return null;
   if ("wireValue" in outcome && outcome.wireValue !== null && typeof outcome.wireValue !== "string") return null;
   if ("fastDowngradeReason" in outcome
     && (typeof outcome.fastDowngradeReason !== "string"
@@ -665,6 +666,7 @@ function normalizeAttemptTierOutcome(raw: unknown): AttemptTierOutcome | null {
       || outcome.wireKind === "service-tier"
       || outcome.wireKind === "anthropic-speed"
       || outcome.wireKind === "cursor-variant"
+      || outcome.wireKind === "model-variant"
       ? { wireKind: outcome.wireKind }
       : {}),
     ...(outcome.wireValue === null

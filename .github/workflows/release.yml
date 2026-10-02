@@ -126,18 +126,28 @@ jobs:
         include:
           - os: ubuntu-latest
             target: bun-linux-x64
+            dependency_os: linux
+            dependency_cpu: x64
             smoke: true
           - os: macos-latest
             target: bun-darwin-arm64
+            dependency_os: darwin
+            dependency_cpu: arm64
             smoke: true
           - os: macos-latest
             target: bun-darwin-x64
+            dependency_os: darwin
+            dependency_cpu: x64
             smoke: false
           - os: windows-latest
             target: bun-windows-x64
+            dependency_os: win32
+            dependency_cpu: x64
             smoke: true
           - os: ubuntu-latest
             target: bun-linux-arm64
+            dependency_os: linux
+            dependency_cpu: arm64
             smoke: false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -153,7 +163,7 @@ jobs:
         uses: ./.github/actions/setup-project-bun
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --os=${{ matrix.dependency_os }} --cpu=${{ matrix.dependency_cpu }}
 
       - name: Build dashboard
         run: bun run build:gui
@@ -200,9 +210,9 @@ jobs:
           set -euo pipefail
           cd "dist/standalone/$STANDALONE_TARGET"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            powershell -NoProfile -Command 'Compress-Archive -Path ocx.exe,gui -DestinationPath ("../../ocx-{0}-{1}.zip" -f $env:RELEASE_VERSION,$env:STANDALONE_TARGET) -Force'
+            powershell -NoProfile -Command 'Compress-Archive -Path ocx.exe,gui,keyring -DestinationPath ("../../ocx-{0}-{1}.zip" -f $env:RELEASE_VERSION,$env:STANDALONE_TARGET) -Force'
           else
-            tar -czf "../../ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" ocx gui
+            tar -czf "../../ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" ocx gui keyring
           fi
           cd ../..
           # The pre-publication verifier resolves every recorded checksum from
@@ -232,16 +242,22 @@ jobs:
         include:
           - os: macos-latest
             target: universal-apple-darwin
+            dependency_os: darwin
+            dependency_cpu: "*"
             bundles: app,dmg
             sidecar-targets: macos
             artifact-suffixes: macos.dmg,macos.app.tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            dependency_os: win32
+            dependency_cpu: x64
             bundles: msi
             sidecar-targets: x86_64-pc-windows-msvc
             artifact-suffixes: windows-x64.msi
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            dependency_os: linux
+            dependency_cpu: x64
             bundles: appimage,deb
             sidecar-targets: x86_64-unknown-linux-gnu
             artifact-suffixes: linux-x86_64.AppImage,linux-amd64.deb
@@ -275,7 +291,7 @@ jobs:
         run: bun scripts/release-version-sources.ts check "$RELEASE_VERSION"
 
       - name: Install project dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --os=${{ matrix.dependency_os }} --cpu=${{ matrix.dependency_cpu }}
 
       - name: Build dashboard
         run: bun run build:gui
@@ -397,6 +413,45 @@ jobs:
           echo "$description" | grep -q "flags=.*runtime"
           echo "$description" | grep -q "Timestamp="
 
+      # Tauri signs the app, its sidecar and the widget it is handed, but nothing under Resources.
+      # The packaged keyring addons (#6161) are Mach-O code, so Apple notarization rejects the whole
+      # app unless each carries the Developer ID signature, the hardened runtime and a secure
+      # timestamp (2.73.0-preview.20260930 was refused for exactly that). Sign them in place, after
+      # the certificate import and before the bundler copies them.
+      - name: Sign the packaged keyring addons
+        if: runner.os == 'macOS'
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          addons=(desktop/src-tauri/resources/keyring/*.darwin-*.node)
+          if [ "${#addons[@]}" -eq 0 ]; then
+            echo "::error::No macOS keyring addon was prepared for the bundle."
+            exit 1
+          fi
+          if [ "${DESKTOP_SIGNING_CONFIGURED}" != "true" ]; then
+            if [ "${DRY_RUN}" != "true" ]; then
+              echo "::error::A real release must sign the packaged keyring addons."
+              exit 1
+            fi
+            echo "No signing material; the keyring addons stay as prepared for this non-release build."
+            exit 0
+          fi
+          for addon in "${addons[@]}"; do
+            codesign --force --timestamp --options runtime --sign "$MACOS_SIGN_IDENTITY" "$addon"
+            codesign --verify --strict "$addon"
+            description="$(codesign -dvvv "$addon" 2>&1)"
+            echo "$description"
+            # Here-strings, not pipes: under pipefail a matcher that exits on its first hit can
+            # SIGPIPE the writer and fail the assertion it was meant to pass.
+            grep -q "TeamIdentifier=$APPLE_TEAM_ID" <<<"$description"
+            grep -q "flags=.*runtime" <<<"$description"
+            grep -q "Timestamp=" <<<"$description"
+          done
+
       - name: Prepare Windows installer version
         if: runner.os == 'Windows'
         shell: bash
@@ -429,6 +484,15 @@ jobs:
         # linuxdeploy suppresses its own stderr at the default verbosity. Keep
         # diagnostics on the first attempt; Apple signing commands stay non-verbose.
         run: bunx tauri ${{ runner.os == 'Linux' && '--verbose' || '' }} build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config "${{ runner.os == 'Windows' && format('{0}/opencodex-msi.json', runner.temp) || '{}' }}"
+
+      - name: Verify the packaged universal macOS runtime
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          app=desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/OpenCodex.app
+          test -f "$app/Contents/Resources/keyring/keyring.darwin-arm64.node"
+          test -f "$app/Contents/Resources/keyring/keyring.darwin-x64.node"
+          bash desktop/scripts/verify-macos-runtime.sh "$app"
 
       # Tauri patches a bundle-type marker into the application binary for each Linux format.
       # Keep each format in its own Cargo target so the deb cannot inherit the AppImage marker

@@ -1,5 +1,7 @@
 import type { Server } from "bun";
+import { cliCatalogKind, rewriteCliCatalogResponse, type CliCatalogKind } from "./cli-catalog";
 import type { PemKeyPair } from "./local-ca";
+import type { PickerModelEntry } from "./picker-bootstrap";
 
 /**
  * TLS listener that terminates intercepted `api.anthropic.com` tunnels.
@@ -9,7 +11,8 @@ import type { PemKeyPair } from "./local-ca";
  * handed to the router's own request handler, which already knows how to route mapped models
  * to providers and pass genuine Claude models through with the caller's subscription
  * credential. Every other path (usage, feedback, model listings, …) is relayed verbatim to
- * the real upstream so the client keeps behaving like a first-party install.
+ * the real upstream so the client keeps behaving like a first-party install. The one exception
+ * is the Claude Code CLI's own picker catalog, which `cliCatalog` may extend (cli-catalog.ts).
  */
 
 export const CLAUDE_INTERCEPT_UPSTREAM = "https://api.anthropic.com";
@@ -93,6 +96,11 @@ export interface ClaudeInterceptListenerOptions<T = undefined> {
   dispatch: (req: Request, server: Server<T>) => Promise<Response>;
   /** Per-request decision for every path; absent preserves the existing path split. */
   route?: (req: Request) => "router" | "relay-native";
+  /**
+   * Rows to merge into a relayed Claude Code CLI picker catalog, or null to relay it unchanged.
+   * Consulted for every catalog GET, including ones `route` sends to the native upstream.
+   */
+  cliCatalog?: (req: Request, kind: CliCatalogKind) => Promise<readonly PickerModelEntry[] | null>;
   upstreamBase?: string;
   maxRequestBodySize?: number;
   idleTimeout?: number;
@@ -113,13 +121,20 @@ export function startClaudeInterceptListener<T = undefined>(options: ClaudeInter
     ...(options.maxRequestBodySize !== undefined ? { maxRequestBodySize: options.maxRequestBodySize } : {}),
     async fetch(req, requestServer) {
       const url = new URL(req.url);
-      if (options.route?.(req) === "relay-native") {
-        return relayToUpstream(req, CLAUDE_INTERCEPT_UPSTREAM, options.fetchImpl);
-      }
-      if (isClaudeInterceptedPath(url.pathname, req.method)) {
+      const native = options.route?.(req) === "relay-native";
+      if (!native && isClaudeInterceptedPath(url.pathname, req.method)) {
         return options.dispatch(rewriteInterceptedRequest(req, loopbackOrigin), requestServer);
       }
-      return relayToUpstream(req, upstreamBase, options.fetchImpl);
+      const upstream = native ? CLAUDE_INTERCEPT_UPSTREAM : upstreamBase;
+      const catalog = options.cliCatalog ? cliCatalogKind(req.method, url.pathname) : null;
+      if (catalog) {
+        let models: readonly PickerModelEntry[] | null = null;
+        try { models = await options.cliCatalog!(req, catalog); } catch { /* Fail open: relay unchanged. */ }
+        if (models && models.length > 0) {
+          return rewriteCliCatalogResponse(await relayToUpstream(req, upstream, options.fetchImpl), catalog, models);
+        }
+      }
+      return relayToUpstream(req, upstream, options.fetchImpl);
     },
   });
   loopbackOrigin = `http://127.0.0.1:${server.port}`;

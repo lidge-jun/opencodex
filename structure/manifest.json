@@ -199,7 +199,16 @@
       ]
     },
     {
-      "path": "transports/responses-spend.md",
+        "path": "transports/policy-fallback.md",
+        "tier": 3,
+        "title": "Policy Candidate Fallback",
+        "scope": "Original policy authorization, concrete candidate retries and physical destination deduplication.",
+        "documents": [
+          "src/server/"
+        ]
+      },
+      {
+        "path": "transports/responses-spend.md",
       "tier": 3,
       "title": "Responses Spend Reservations",
       "scope": "Credential-hop and durable spend reservations, and what a spent budget tells the client.",
@@ -235,7 +244,7 @@
       "path": "data-planes/images.md",
       "tier": 3,
       "title": "Images Data Plane",
-      "scope": "Standalone image generation and edit relay.",
+      "scope": "Standalone image generation/edit relay and local hosted Responses image display.",
       "documents": [
         "src/server/"
       ]
@@ -268,6 +277,13 @@
       ]
     },
     {
+      "path": "providers/anthropic-account-thresholds.md",
+      "tier": 4,
+      "title": "Anthropic Account Thresholds",
+      "scope": "Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes.",
+      "documents": ["src/oauth/"]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",
@@ -282,6 +298,27 @@
         "src/server/",
         "src/types/",
         "src/web-search/"
+      ]
+    },
+    {
+      "path": "providers/jev-decision.md",
+      "tier": 4,
+      "title": "JEV Decision Routing",
+      "scope": "JEV Combo decision methods (TypeSafe, self-hosted System One rows, opencodex models), the decision request path, dashboard surfaces, and the content-free statistics projection.",
+      "documents": [
+        "src/combos/",
+        "src/server/",
+        "src/usage/"
+      ]
+    },
+    {
+      "path": "providers/anthropic-account-pool.md",
+      "tier": 4,
+      "title": "Anthropic Account Pool",
+      "scope": "Anthropic OAuth account pause, model routes, and quota labels.",
+      "documents": [
+        "src/oauth/",
+        "src/providers/"
       ]
     },
     {
@@ -420,6 +457,17 @@
         "src/clients/",
         "src/integrations/",
         "src/lib/"
+      ]
+    },
+    {
+      "path": "clients/chatgpt-desktop.md",
+      "tier": 5,
+      "title": "ChatGPT Desktop",
+      "scope": "Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries.",
+      "documents": [
+        "src/chatgpt/",
+        "src/cli/",
+        "src/codex/"
       ]
     },
     {

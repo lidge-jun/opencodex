@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { deriveDesktopStartup } from "../../src/service/desktop-startup";
 import { collectStartupHealth, deriveStartupHealth, formatStartupRoutingDetail, injectedRoutingRestartWarningLines, startupHealthSummary } from "../../src/codex/autostart-health";
 import { unusedProxyWarningLines } from "../../src/cli/status";
 import { classifyCodexRouting, hasInjectedCodexRouting } from "../../src/codex/inject";
@@ -674,5 +675,30 @@ describe("routing adoption (#4550)", () => {
         { pid: 4321, commandLine: "vim note.txt", executable: "vim" },
       ],
     })).toEqual({ status: "enumerated", processes: [{ pid: 4242, commandLine: "codex chat" }] });
+  });
+});
+
+describe("macOS desktop startup protection", () => {
+  const facts = { owned: true, loginEnabled: true, running: true };
+  test("credits verified desktop supervision without claiming a CLI service", () => {
+    const desktop = deriveDesktopStartup(facts);
+    const health = deriveStartupHealth({ ...base, platform: "darwin", desktop });
+    expect(health).toMatchObject({ protection: "desktop", rebootSafe: true, status: "protected", serviceInstalled: false });
+    expect(startupHealthSummary(health)).toContain("desktop app");
+  });
+  test("missing ownership, login registration or running supervisor never grants protection", () => {
+    for (const key of ["owned", "loginEnabled", "running"] as const) {
+      const desktop = deriveDesktopStartup({ ...facts, [key]: false });
+      expect(deriveStartupHealth({ ...base, platform: "darwin", desktop }).rebootSafe).toBe(false);
+    }
+  });
+  test("desktop evidence cannot protect another OS or an unrelated gateway", () => {
+    const desktop = deriveDesktopStartup(facts);
+    expect(deriveStartupHealth({ ...base, desktop }).status).toBe("at-risk");
+    expect(deriveStartupHealth({ ...base, platform: "darwin", routingKind: "custom-local", desktop }).status).toBe("at-risk");
+  });
+  test("a failed follow-up probe revokes the desktop protection claim", () => {
+    const health = deriveStartupHealth({ ...base, platform: "darwin", desktop: deriveDesktopStartup(facts) });
+    expect(markStartupHealthDiagnosticStale(health)).toMatchObject({ protection: "none", rebootSafe: false, diagnosticStale: true });
   });
 });

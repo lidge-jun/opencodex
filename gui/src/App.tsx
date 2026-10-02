@@ -7,6 +7,7 @@ import Subagents from "./pages/Subagents";
 import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
+import Claude from "./pages/Claude";
 import CodexSet from "./pages/CodexSet";
 import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
@@ -16,7 +17,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import QuotaSummaryBar from "./components/quota-summary-bar/QuotaSummaryBar";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { DesktopStarOnboarding } from "./components/desktop-star-onboarding";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconClaude, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
@@ -48,6 +49,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   "remote-workspace": "nav.remoteWorkspace",
   "codex-set": "nav.codexSet",
   integrations: "nav.integrations",
+  claude: "nav.claude",
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -56,14 +58,7 @@ configureApiTargets(INITIAL_TARGETS);
 installApiAuthFetch();
 const THEME_KEY = "ocx-theme";
 
-/**
- * Every sidebar row maps one-to-one onto a page again.
- *
- * The Claude row was the exception: a second entry pointing at a tab of Integrations,
- * which needed `subPath`, `activeHashes`, and an `isNavEntryActive` helper whose only
- * job was stopping the sidebar from lighting two rows and claiming the user was in two
- * places. Removing the duplicate removed all four.
- */
+/** Every sidebar row maps to its own page. */
 type NavEntry = {
   id: Page;
   tkey: TKey;
@@ -73,6 +68,7 @@ type NavEntry = {
 const NAV: NavEntry[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
   { id: "codex-set", tkey: "nav.codexSet", Icon: IconCodex },
+  { id: "claude", tkey: "nav.claude", Icon: IconClaude },
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
@@ -576,6 +572,7 @@ export default function App() {
                 {page === "remote" && !remotePairingRequired && <RemoteLink apiBase={sharedBase} sessionReady={sharedSessionReady} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
                 {page === "remote-workspace" && <RemoteWorkspaceRoute available={remoteWorkspaceAvailable} apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} onOpenRemoteLink={() => navigateToPage("remote")} />}
                 {page === "codex-set" && <CodexSet apiBase={sharedBase} />}
+                {page === "claude" && <Claude apiBase={sharedBase} />}
                 {page === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
               </>
             )}

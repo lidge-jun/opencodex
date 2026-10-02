@@ -86,7 +86,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 99 total: 82 key-based, 13 OAuth, three local, and one default
+documented split is 101 total: 83 key-based, 14 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
 quickstarts carry the same counts.
 
@@ -185,6 +185,10 @@ Those controls still have no owner, so there is no image-publish workflow or off
 The scheduler wrapper retries child exits, including zero, after five seconds. Only the
 opt-in CLI stay-out code ends it successfully; missing Bun/CLI paths still exit with
 installation error 3. Explicit service stop terminates the wrapper itself.
+Timestamp expansion in the scheduler wrapper stays outside parenthesized batch
+blocks so locale dates containing parentheses cannot abort prelaunch checks or
+transactional-backup recovery. Delayed expansion stays disabled to preserve
+exclamation marks in paths.
 `src/service/windows-wrapper-exit.ts` defines the opt-in contract: new wrappers set
 `OCX_WINDOWS_WRAPPER_PROTOCOL=1`, and all three CLI live-owner exits return 42 in that
 service context. The wrapper translates 42 into a successful exit; legacy service
@@ -403,7 +407,11 @@ working tree and pins that wiring.
 
 The `package-standalone` job in `.github/workflows/release.yml` also builds Bun compiled
 `ocx` archives for Linux, macOS, and Windows, bundles `gui/dist`, smoke-tests `/healthz`, and
-publishes SHA-256 sidecars for the attach job.
+publishes SHA-256 sidecars for the attach job. Each archive also carries the target-matching
+`@napi-rs/keyring` native addon under `keyring/`; the macOS release installs both optional Darwin
+packages so its separate arm64 and x64 builds cannot silently reuse the hosted runner's
+architecture. Desktop preparation copies those same pinned assets into Tauri resources. The loader
+and packaged-app proof are owned by the [desktop keyring contract](../desktop-shell.md#packaged-native-keyring-binding).
 
 Opening a release starts with the `dev` pre-move. Dispatch
 `.github/workflows/dev-version-bump.yml` with the intended version, merge the pull request it opens,

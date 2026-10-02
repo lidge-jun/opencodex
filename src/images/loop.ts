@@ -335,6 +335,7 @@ export interface ImageBridgeDeps {
     retryAfterHeader: string | null,
     responseHeaders?: Headers,
     retryParsed?: OcxParsedRequest,
+    // A 403 requires this complete response; status-only callbacks retain 429 semantics.
     originalResponse?: Response,
   ) =>
     | { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind }
@@ -687,6 +688,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       }
       // 429 key-failover parity with web-search / normal routed path.
       while ((prepared.response.status === 429
+        || (prepared.response.status === 403 && deps.incomingMeta?.providerName === "anthropic")
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);

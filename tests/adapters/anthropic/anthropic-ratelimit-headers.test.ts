@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../../helpers/anthropic-shared-quota";
 /** Anthropic response observations must preserve account usage and probe semantics. */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -8,7 +9,6 @@ import {
   clearAnthropicAccountPoolState,
   forgetAnthropicFailoverQuorum,
   getAnthropicAccountHealthSnapshot,
-  rotateAnthropicAccountOn429,
   resetAnthropicRoutingForManualSelection,
   resolveAnthropicAccountForSession,
 } from "../../../src/oauth/anthropic-routing";
@@ -170,8 +170,7 @@ describe("Anthropic cooldown honours the stated window", () => {
     });
     rotateAnthropicAccountOn429(poolEnabled(), ids[0]!, null, null, start, healthy);
     const health = getAnthropicAccountHealthSnapshot(ids[0]!, start);
-    expect(health?.cooldownUntil).toBe(start + 60_000);
-    expect(health?.cooldownSource).toBe("default");
+    expect(health).toBeNull();
   });
 
   test("both windows rejected cools until the LAST one reopens", async () => {

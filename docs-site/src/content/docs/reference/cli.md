@@ -83,6 +83,13 @@ override only raises: the 750 ms default and the 1500 ms stop/start budgets keep
 `1000` lengthens only the default probe. Unset, empty, fractional, negative, zero, or larger values
 are ignored and the shipped ceilings apply.
 
+On Windows the proxy also raises its own process to ABOVE_NORMAL priority when it starts, which
+reduces scheduling delays on a host saturated by other NORMAL-priority work (antivirus scans,
+encoders, emulators) without guaranteeing the probe stays under these ceilings at extreme load.
+The boost applies to the proxy process only — work it spawns still runs at NORMAL — and a
+CPU-heavy proxy can itself delay NORMAL-priority applications. The change is best-effort; set
+`OCX_DISABLE_PRIORITY_BOOST=1` in the proxy's environment to leave the priority unchanged.
+
 ## Exit codes and confirmation
 
 Successful commands exit 0. Invalid usage, unknown commands or resources, failed API operations,
@@ -149,3 +156,19 @@ refreshes the update-notification cache in a detached process, and
 implementation details, not stable user-facing commands. The dashboard records the worker PID,
 recovers an active job whose worker died, treats older PID-less active records as stale after ten
 minutes, and protects a live worker from concurrent updates.
+
+## Capability argument validation
+
+`ocx capabilities` rejects unknown arguments, repeated flags and blank `--route` values with exit 64. A valid route with no declared capability exits 4.
+
+## Integer option values
+
+Integer options such as `--limit` require decimal whole numbers within JavaScript safe-integer bounds. Digit separators such as `1_000` and `1,000` are accepted. Empty values, hexadecimal, exponent notation and fractions are rejected before a request is sent.
+
+## Windows JSON configuration files
+
+`ocx config validate <file>` and `ocx config import <file> --yes` accept UTF-8 JSON with or without a leading BOM, including stdin (`-`). This supports UTF-8 exports from Windows PowerShell and editors. UTF-16 input is not accepted.
+
+## Default alias listing
+
+`ocx alias --json` is equivalent to `ocx alias list --json`. The output flag can precede or follow an explicit alias action.

@@ -67,6 +67,7 @@
 .claudecode-workspace-rail-row {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: var(--space-0-5);
   width: 100%;
   min-height: 46px;

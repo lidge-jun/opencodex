@@ -96,11 +96,11 @@ Deep links (`gui/src/protocol-deep-links.ts`) carry their target in the hash que
 and drops elsewhere. Each plan candidate links to `#providers?provider=<name>` (`gui/src/pages/providers-deep-link.ts` selects that provider and opens its Settings tab, and drops
 the query once another provider is chosen) and to `#models/compatibility?inbound=…&upstream=…`; a traced Logs row links to the compatibility pair it took. Each chip of the header quota strip
 (`gui/src/components/quota-summary-bar/QuotaSummaryBar.tsx`, one scrolling row with « / » paging) links to `#providers?provider=<name>&tab=accounts`, which opens that provider's
-Accounts tab through `revealProviderAccounts` instead; following the same link again re-dispatches `hashchange` so it re-applies. Links push history, the matrix replaces
+Accounts tab through `revealProviderAccounts` instead; following the same link again re-dispatches `hashchange` so it re-applies. A transparent hit area above the fixed quota popover spans both its width and the visible chip width and bridges their measured gap, keeping details open during pointer travel. The popover is a named group with an account-management link; its text-only quota table describes the chip; focus stays open between its chip and link, and Escape restores focus to the chip. Links push history, the matrix replaces
 the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
 so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
 `gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`, `gui/tests/providers-deep-link.test.tsx`,
-`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`.
+`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS.
 
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
@@ -110,9 +110,9 @@ Provider Overview consumes the existing shared `add-provider-presets` resource f
 presentation. `matchingWorkspacePreset` requires the configured id, adapter and normalized
 endpoint to match; a custom endpoint or absent sponsor metadata suppresses the introduction.
 `ProviderSponsor` keeps localized promotional copy and outbound HTTP(S) links separate from
-operator notes. Notes remain complete and editable once in the main column; stats and current
-account quota remain in the side column. This presentation does not write provider configuration
-or participate in routing.
+operator notes; its brand table maps each sponsor preset id (OrcaRouter, PackyCode, TokenLab) to a
+name and i18n copy, and a sponsor preset without a row renders nothing. Notes stay editable once in
+the main column; stats and account quota stay in the side column. Nothing here writes config or routes.
 
 Provider marks remain a name-to-asset projection in `gui/src/provider-icons.ts`. The Crusoe preset
 maps to the self-hosted multicolor `gui/public/provider-icons/crusoe.svg`; the gradient is rendered
@@ -132,7 +132,7 @@ single forms, and the shell pattern is the part worth keeping stable:
 | Codex accounts | Account pool cards, add-account flow, switch and reset modals (`gui/src/components/CodexAccountPool.tsx`, `gui/src/components/AddCodexAccountModal.tsx`), plus the generic account-targeting picker opt-in on `gui/src/pages/codex-set-multiauth.tsx`. Add/delete/login completion is projected to one boolean before presentation; pending catalog work is a warning, not a failed account mutation. The main card's native-main device reauth (#3898) is owned by `gui/src/components/use-main-device-reauth.ts`: the dedicated `/api/codex-auth/main/reauth-device` namespace only — never the pool login route — with flowId-owned polling, an allowlisted verification URL, and no token fields accepted from payloads. The main-device reauth hook retains flow ownership from the Cancel click, while DELETE is unresolved and after retryable failure; polling normally continues. A concurrent GET HTTP error cannot expose a replacement login POST before DELETE settles. If a retryable DELETE failure races with a non-2xx GET while the flow is pending or committing, either response order preserves same-flow Cancel retry, restores the last server-provided device code, verification URL, and phase when needed, and keeps the existing poll cadence so a later terminal result remains observable. Outside same-flow cancellation ownership, a GET HTTP failure still stops polling without starting a second login POST. The cancellation-failure indication survives pending status updates until a trusted terminal result releases ownership. A successful DELETE with a terminal `failed` DTO releases it and uses the same closed failure-code mapping as polling; only `succeeded` notifies login completion. Unrecognized or nonterminal DTO status values remain retryable. A DELETE response with HTTP 404 and code `unknown_flow` releases the expired flow and shows the existing generic failure state so device re-login is available again; it claims neither login success nor confirmed cancellation. Confirmed cancellation also makes device re-login available. Start, polling and cancellation completions verify their controller or flow ownership after asynchronous response reads; replaced flows and unmounted hooks cannot update a newer flow or notify completion. Effect setup restores mounted state after the StrictMode development cleanup cycle. |
 | Dashboard overview | Overview, Providers, and Models tabs at the page level (`gui/src/pages/Dashboard.tsx`), the 30-day token and coverage stats in the overview head (`gui/src/pages/dashboard-overview-head.tsx`), and the effort-cap, injection, maintenance, sidecar, and memory panels below it (`gui/src/pages/dashboard-overview-panels.tsx`). |
 
-JEV setup and its Stats tab reuse these shells; see [providers-and-adapters.md](./providers-and-adapters.md#typesafe-jev-decision-provider).
+JEV setup and its Stats tab reuse these shells; see [providers/jev-decision.md](./providers/jev-decision.md).
 
 The native-main reauth poller captures an immutable accepted flow id for queued callbacks.
 Its POST, GET and DELETE JSON reads retain API error codes, but non-2xx responses never
@@ -141,7 +141,7 @@ that tested contract without disabling the rule for other calls.
 
 Rail selection is component-local state today, so a reload returns to the workspace's default
 selection rather than the previously selected row. An OAuth ToS warning is shown before a login that
-requires acceptance (`gui/src/components/OAuthTosWarningModal.tsx`). Provider-login polling follows the [current continuation contract](gui-and-management-api.md#oauth-login-continuations): device approval shows its code and verification link without a callback paste field; a later manual step replaces that hint and restores paste. Discovery reflects the current management principal.
+requires acceptance (`gui/src/components/OAuthTosWarningModal.tsx`); `oauthTosCopyKeys` in `gui/src/oauth-tos-risk.ts` picks every key it renders, and Anthropic has its own subscription-connection title, conditions, API-key alternative, acknowledgement and continue copy. Each mount starts unchecked, and Cancel, Escape and the backdrop never start OAuth (`gui/tests/oauth-tos-warning-modal.test.tsx`). The Claude account-pool card states its usage conditions as static helper text with a closed details disclosure. Only a failed save is announced as an alert (`role="alert"`); a failed load replaces the status line with static text and disables the toggle. The enabled status line is chosen by strategy, so round-robin never claims to read usage, the threshold or the quota window (`gui/tests/anthropic-pool-conditions.test.tsx`). Provider-login polling follows the [current continuation contract](gui-and-management-api.md#oauth-login-continuations): device approval shows its code and verification link without a callback paste field; a later manual step replaces that hint and restores paste. Discovery reflects the current management principal.
 
 The `/#codex-auth` add-account modal has a three-step manual-code UX contract on top of the existing
 OAuth polling API: submit request, waiting-for-login completion, and terminal success/failure. Once
@@ -166,7 +166,7 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 `OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
 through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
 is a measured value. Separate attempts add credits when usage is merged. The field is independent
-of token estimation (`estimated` describes tokens) and is never treated as USD or token usage.
+of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload.
 
 ### Upstream key account attribution
 
@@ -178,7 +178,7 @@ keychain resolution. The log contains the digest, not raw keys, references, or p
 Existing Codex and OAuth label formats remain valid. Replacing a literal or reference changes
 identity; rotating the secret behind the same reference preserves the logical account.
 
-`src/usage/jev-stats.ts` owns the parallel content-free JEV projection; its accumulator contract lives in [providers-and-adapters.md](./providers-and-adapters.md#typesafe-jev-decision-provider).
+`src/usage/jev-stats.ts` owns the parallel content-free JEV projection; its accumulator contract lives in [providers/jev-decision.md](./providers/jev-decision.md).
 
 `src/providers/label.ts` stamps only key authentication, including implicit custom-provider
 keys. `src/server/request-log.ts` commits identity at dispatch after queued selection changes,
@@ -597,4 +597,4 @@ label `anthropic-fast-downgrade` projects to `fast_downgrade`, separate from rea
 Cursor Claude Fast pricing applies the published Fast tuples to Opus 4.8, Opus 5 and Opus 5.5.
 Explicit `-fast` model IDs use the Fast tuple directly; a Cursor variant tier outcome applies
 the same 2x multiplier to a base model estimate. Opus 4.7 remains standard-priced because its
-upstream Fast mode is unavailable. Configured model prices retain precedence over compiled rows.
+upstream Fast mode is unavailable. Configured model prices retain precedence over compiled rows. Main-account protection copy uses the effective short/long thresholds from the server projection. The main account card and setting render an amber advisory for possible usage outside opencodex, including when the admission policy is off; warning detection and expiry belong to [main-account observations](providers/openai-accounts.md#main-account-policy-observations).

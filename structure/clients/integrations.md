@@ -97,6 +97,30 @@ inspection. Failure retains the static-table fallback. Parsed content is cached 
 size; the returned table always uses the current install version, including on a cache hit.
 `tests/providers/cursor/cursor-effort-table.test.ts` covers cache reuse, version refresh and unsafe files.
 
+`src/integrations/cursor-detect.ts` looks for `cursor*` install roots under `/opt`, `/usr/share` and
+`~/.local/share` on Linux and classifies each by `product.json` `nameLong`. When only a regular install
+is found, `src/integrations/cursor-local-installer.ts` resolves the Private Inference installer that
+Cursor's `cursor-local` update channel advertises for the host platform and architecture (only
+`x64` and `arm64` on Windows, macOS and Linux map; any other host resolves to `unsupported-platform`
+with no request)
+(`<updateHost>/updates/api/update/<platform>/cursor-local/0.0.0/manual-check/stable`, 4 s timeout).
+The decoded manifest is capped at 64 KiB before JSON parsing. Only a bounded
+`https://downloads.cursor.com/local-mode/` URL with a bounded version is accepted (a Linux
+`.AppImage.zsync` delta-metadata URL is mapped to its sibling `.AppImage`); anything else
+resolves to `available: false` with reason `unreachable` or `unusable-response`, and nothing is
+requested when Private Inference is already installed or no regular install exists. The module never
+downloads or launches the installer, and the lookup is never part of the polled status:
+`GET /api/native-integrations/cursor` stays local, and `resolveCursorLocalInstaller` in
+`src/server/management/cursor-integration-routes.ts` answers only
+`GET /api/native-integrations/cursor/local-installer`, which the dashboard calls from an explicit
+button and then renders the link. A failed or missing route (a hub that predates it) renders as
+the unavailable case. `tests/providers/cursor/cursor-integration-status.test.ts` pins that a
+regular-only status makes no remote request. `tests/providers/cursor/cursor-local-installer.test.ts` covers the
+manifest shapes, failures, skip conditions, the OS/architecture mapping, blank versions, the cache
+windows and request sharing. Answers are cached per update host and platform (30 minutes after a
+success, 5 after a failure) and concurrent lookups share one request, so repeated presses cost at
+most one bounded wait per failure window.
+
 ## Data Flow
 
 ```text
@@ -134,9 +158,11 @@ writes the provider cache. With no usable snapshot the request is refused, which
 process and equally a snapshot retired because the configuration or the provider cache moved. The
 roster is gathered and projected from a detached copy of the configuration
 (`src/config/admitted-identity.ts`) taken before the gather, so an edit that lands mid-load changes
-neither half of the result; the same admission is revalidated against the resident object and the
-configuration file before anything is retained, so such an edit leaves no snapshot rather than one
-recorded under a state its rows never had. The identity a caller carries between a preview and the
+neither half of the result. `src/server/management/model-rows.ts` revalidates the admission and gathered
+cache revisions before committing the [new-arrival policy](../catalog.md#shared-catalog), then captures
+the resulting configuration for projection and retention. A superseded gather applies policy only
+to its detached projection and retains no snapshot; a failed discovery commit refuses the export.
+The identity a caller carries between a preview and the
 mutation that confirms it is process-local and opaque, and describes nothing about the
 configuration. The
 Integrations collection read populates one when discovery succeeds and the configuration can be
@@ -424,6 +450,41 @@ separate. Restore reconciles target intent from validated snapshot ownership wit
 sibling policy. Profile journal views retain source-store provenance for older legacy entries.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](../remote-workspace.md).
+
+## omo variants
+
+"omo" names three products, and each surface here serves exactly one of them:
+
+| Variant | Its own evidence | opencodex surface |
+| --- | --- | --- |
+| Pi-based omo (senpi engine) | `~/.omo/agent`, or `OMO_CODING_AGENT_DIR` / `SENPI_CODING_AGENT_DIR` / `PI_CODING_AGENT_DIR` (`omoAgentDir()`) | the `omo` file integration and tab, `providers.opencodex` in `models.json` |
+| Codex-based omo (LazyCodex) | `[plugins."omo@sisyphuslabs"] enabled = true` in `$CODEX_HOME/config.toml` plus `lazycodex-install.json` in an installed copy under `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/<version>/` (`detectLazyCodex()` in `src/clients/lazycodex.ts`) | role model pins and the omo.jsonc mirror below, on the Codex tab |
+| OpenCode-based omo (oh-my-opencode) | its config under OpenCode | none; nothing here reads or writes it |
+
+`~/.omo` alone identifies none of them: Pi-based omo and LazyCodex both use it.
+
+### omo (Codex / LazyCodex) role models
+
+Separate from the `models.json` provider integration above, and only when `detectLazyCodex()`
+reports LazyCodex installed, `src/clients/omo-role-models.ts`
+mirrors a dashboard or `ocx agent roles set` pick into `codex.agents.<role>.model` of
+`~/.omo/omo.jsonc`, which LazyCodex 5.1.1 and later reads. The home is resolved the way omo
+resolves it: `HOME`, then `USERPROFILE`, then the OS home. This write has no ownership record,
+snapshot, or journal. It changes one value the user just chose and leaves every other key as it
+was, re-serialized with the file's indentation, line endings, and BOM.
+
+It never creates the file and never writes one it would damage: a missing file reports
+`absent`, a document that is not an object or whose `codex`, `codex.agents`, or role entry is
+not an object reports `invalid`, and a file containing any `//` or block comment reports
+`skipped_comments`, because re-serializing JSONC would drop those comments. The management
+response carries that status and the dashboard shows it; the role TOML write described in
+[subagents](../subagents.md#per-role-model-pins) is not rolled back by a skipped mirror.
+An explicit `null` in any of those three places counts as not an object. A file that exists but
+cannot be read lists as `unreadable`, so the role table still loads, and a save reports
+`write_failed` for the mirror.
+Without LazyCodex, `GET /api/codex-agent-roles` answers `lazycodex.detected: false` with no roles
+and without opening omo.jsonc, and `PUT` answers 409 `lazycodex_not_detected` before touching a
+role file.
 
 ## Kilo global JSONC
 

@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../../helpers/anthropic-shared-quota";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +16,6 @@ import {
   parseAccountPoolQuotaWindow,
   resolveAnthropicAccountForSession,
   resetAnthropicRoutingForManualSelection,
-  rotateAnthropicAccountOn429,
   getAnthropicPoolAccessSnapshot,
   promoteAnthropicActiveAccount,
   anthropicSessionAffinitySizeForTests,
@@ -252,13 +252,24 @@ describe("anthropic account pool", () => {
     expect(resolveAnthropicAccountForSession("uncommitted", quota).accountId).toBe(bId);
   });
 
-  test("default off always returns the active account", async () => {
+  test("default off retains the healthy active account", async () => {
     const { aId, bId } = await seedTwoAccounts();
     expect(isAnthropicAccountPoolEnabled(cfg(false))).toBe(false);
     const sel = resolveAnthropicAccountForSession("session-1", cfg(false));
     expect(sel.accountId).toBe(aId);
     expect(sel.reason).toBe("pool-disabled");
     expect(sel.accountId).not.toBe(bId);
+  });
+
+  test("pool-off ignores proactive preferences but names recovery from an upstream 429", async () => {
+    const { aId, bId } = await seedTwoAccounts();
+    const config = cfg(false, 80, { strategy: "round-robin" });
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 95 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 5 });
+    expect(resolveAnthropicAccountForSession("new", config)).toMatchObject({ accountId: aId, reason: "pool-disabled" });
+    expect(rotateAnthropicAccountOn429(config, aId, "60")).toBe(bId);
+    expect(resolveAnthropicAccountForSession("new", config)).toMatchObject({ accountId: bId, reason: "only-eligible" });
+    expect(getAccountSet("anthropic")!.activeAccountId).toBe(aId); // A proposal is not a committed send.
   });
 
   test("affinity sticks across resolves until cooled", async () => {

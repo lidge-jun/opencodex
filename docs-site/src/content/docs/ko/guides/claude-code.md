@@ -7,6 +7,13 @@ opencodex는 `/v1/responses`와 함께 `POST /v1/messages`(및 `count_tokens`)�
 Code에서 OAuth 로그인, 계정 풀, 키 장애 조치, 사이드카를 포함한 모든 라우팅 제공자를 별도의
 인증 작업 없이 사용할 수 있어요.
 
+Messages API를 통해 사용하는 Devin 경로(SWE-2 포함)에서는 늦게 도착하는 추론 서명을 답변보다 먼저
+보낼 수 있도록, 상위 제공자의 턴이 완료될 때까지 텍스트와 도구 호출 전송을 기다려요. 이렇게 하면 Claude Code의
+최종 결과가 비어 버리는 것을 막을 수 있어요. 생성 중에도 추론과 keepalive 진행 알림은 계속 전달돼요.
+버퍼에는 요청의 32 MiB 변환 한도가 함께 적용되며, 요청을 취소하면 생성 작업도 중단돼요.
+이 출력 순서 수정으로 Cognition이 생성된 일부 시스템 텍스트를 거부하는 별개의 문제가 해결되지는 않아요.
+시스템 지시와 안전 제약은 그대로 유지해요.
+
 ## 빠른 시작
 
 ```bash
@@ -184,7 +191,7 @@ opencodex 라우트에 묶어서 씁니다.
 
 ```bash
 ocx claude desktop bind claude-sonnet-4-6 xai/grok-4.7
-ocx claude desktop bind claude-opus-4-6 native/gpt-6-sol
+ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 

@@ -146,8 +146,8 @@
 .pwi-pacing-head h3, .pwi-pacing-card h4 { margin: 0; color: var(--text); font-size: var(--text-control); }
 .pwi-pacing-head p { margin: 4px 0 0; color: var(--muted); font-size: var(--text-caption); line-height: 1.45; }
 .pwi-pacing-toggle { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: var(--text-label); }
-.pwi-pacing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: end; }
-.pwi-pacing-grid--model { grid-template-columns: minmax(160px, 2fr) repeat(2, minmax(110px, 1fr)) auto; }
+.pwi-pacing-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: end; }
+.pwi-pacing-grid--model { grid-template-columns: minmax(160px, 2fr) repeat(3, minmax(110px, 1fr)) auto; }
 .pwi-pacing-status { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .pwi-pacing-status span { padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-xs); color: var(--muted); font-size: var(--text-caption); }
 .pwi-pacing-status strong { display: block; overflow: hidden; color: var(--text); font-size: var(--text-label); text-overflow: ellipsis; white-space: nowrap; }

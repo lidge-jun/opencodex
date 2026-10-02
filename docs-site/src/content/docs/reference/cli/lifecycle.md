@@ -149,6 +149,10 @@ current port holder and retry the restart after the conflict is resolved.
 Idempotently ensure a background proxy is running, then sync its live model catalog. If
 `codexAutoStart` is `false`, it prints that autostart is disabled and does nothing.
 
+With a validated connected-client configuration, `ensure` succeeds without starting a local
+provider proxy after reconciling the client journal. This does not probe or certify the remote
+hub's availability. Invalid or mismatched client state still fails.
+
 ### `ocx restore [back]` · `ocx eject [back]`
 
 Restore native Codex **without** stopping the proxy — strips the injected config lines and routed
@@ -230,6 +234,10 @@ service and shim diagnostics. `ocx doctor` uses the same live-first rule for its
 section, so the two commands should agree on restart protection. If you are diagnosing a discrepancy,
 compare the reported live startup verdict with the local service details rather than treating the shell
 probe as more authoritative.
+
+The `clients=pending-restart(...)` diagnostic lists Codex CLI clients that predate the routing
+injection. On macOS, Electron renderer, utility, and crashpad helpers under Codex.app's framework
+are excluded from that client list, including helpers whose executable paths contain spaces.
 
 Human output also includes an **OAuth health** block after the OAuth logins summary: `OAuth health:
 ok` when every known account is healthy, or `OAuth health: warning` with one redacted line per
@@ -496,6 +504,10 @@ priority (`7`, also the scheduler default when omitted) can delay the proxy's he
 CPU contention, making the tray report Offline even while the process is alive. After upgrading,
 run `ocx service repair` to migrate that registered priority and restart the service. This migration
 may request UAC approval; a priority already set to normal or high does not itself trigger replacement.
+
+The Windows wrapper supports locale dates containing parentheses, including Korean and Japanese
+date formats. After upgrading, run `ocx service repair` to replace an older generated wrapper
+that exits before launching Bun on those locales.
 
 The Windows wrapper verifies its baked Bun runtime and CLI entry before every start attempt. If an
 interrupted package update removed either file, it logs one `installation is incomplete` message and
@@ -842,3 +854,7 @@ publishes them to npm.
 ## Remote Hub client lifecycle
 
 Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, and `ocx connect rotate --pairing-code-stdin`. The initial catalog download fails after five seconds without incoming bytes, but active transfers may run longer; use `--catalog-timeout <seconds>` (1–120) to override that inactivity window. `ocx disconnect` restores local state offline and does not revoke the hub key. While connected only, `ocx connect revoke --admin-token-stdin` revokes the persisted `apiKeyId`; after disconnect use the hub's **Integrations → API Keys** page. Secrets are stdin-only and never belong in argv.
+
+## Setup port validation
+
+`ocx init` accepts TCP ports 1–65535 as decimal whole numbers. Press Enter to use 10100. Invalid input such as `0`, `10100oops` or `1.5` is never silently replaced or truncated; setup reports it and asks for the port again.

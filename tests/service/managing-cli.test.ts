@@ -113,6 +113,75 @@ describe("Windows managing CLI selection", () => {
   });
 });
 
+describe("managing CLI probe resilience", () => {
+  const windowsDeps = (spawn: typeof spawnSync) => ({
+    platform: "win32" as const,
+    env: { PATH: "C:\\Program Files\\nodejs", PATHEXT: ".CMD" },
+    execPath: "C:\\other\\ocx.exe",
+    exists: (path: string) => path === "C:\\Program Files\\nodejs\\ocx.CMD",
+    isFile: () => true,
+    ownVersion: () => "2.76.0",
+    spawn,
+  });
+
+  test("a transient probe failure is retried once before reading unknown", () => {
+    let calls = 0;
+    const spawn = (() => {
+      calls += 1;
+      return calls === 1
+        ? { status: null, stdout: "", stderr: "", error: new Error("timed out") }
+        : { status: 0, stdout: "2.67.0", stderr: "" };
+    }) as unknown as typeof spawnSync;
+    const result = observeManagingClis(null, windowsDeps(spawn));
+    expect(result.path).toMatchObject({ status: "observed", version: "2.67.0" });
+    expect(calls).toBe(2);
+  });
+
+  test("a failing probe is not retried off Windows", () => {
+    let calls = 0;
+    const spawn = (() => {
+      calls += 1;
+      return { status: 1, stdout: "", stderr: "" };
+    }) as unknown as typeof spawnSync;
+    const result = observeManagingClis(null, {
+      platform: "linux", env: { PATH: "/opt" }, execPath: "/other/ocx",
+      exists: path => path === "/opt/ocx", isFile: () => true,
+      ownVersion: () => "2.76.0", spawn,
+    });
+    expect(result.path.status).toBe("unknown");
+    expect(calls).toBe(1);
+  });
+
+  test("a persistently failing probe stays fail-closed after the bounded retry", () => {
+    let calls = 0;
+    const spawn = (() => {
+      calls += 1;
+      return { status: 1, stdout: "", stderr: "" };
+    }) as unknown as typeof spawnSync;
+    const result = observeManagingClis(null, windowsDeps(spawn));
+    expect(result.path.status).toBe("unknown");
+    expect(calls).toBe(2);
+  });
+
+  test("a Windows command shim probes through one verbatim-quoted cmd /c line", () => {
+    const seen: { command: string; args: readonly string[]; verbatim: unknown }[] = [];
+    const spawn = ((command: string, args: readonly string[], options: { windowsVerbatimArguments?: boolean }) => {
+      seen.push({ command, args, verbatim: options?.windowsVerbatimArguments });
+      return { status: 0, stdout: "2.67.0", stderr: "" };
+    }) as unknown as typeof spawnSync;
+    const shim = "C:\\Program Files\\nodejs\\ocx.CMD";
+    const result = observeManagingClis(null, windowsDeps(spawn));
+    expect(result.path).toMatchObject({ status: "observed", version: "2.67.0" });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.command.toLowerCase()).toBe("cmd.exe");
+    // cmd re-parses the /c remainder: more than one quoted part strips the outer
+    // quotes and truncates at the first space, so each part is quoted inside one
+    // wrapping pair and the whole argument is passed verbatim.
+    expect(seen[0]!.args).toEqual(["/c", `""${shim}" "--version""`]);
+    expect(seen[0]!.verbatim).toBe(true);
+  });
+});
+
 describe("managing CLI self observation", () => {
   test("POSIX differing case probes the selected executable", () => {
     const selected = "/opt/ocx";

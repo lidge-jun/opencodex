@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { baseProviderLabel } from "../../src/providers/label";
+import { baseProviderLabel, poolAccountProviderLabel } from "../../src/providers/label";
 import { summarizeUsage } from "../../src/usage/summary";
 import type { PersistedUsageEntry } from "../../src/usage/log";
 
 const FIXED_NOW = Date.UTC(2026, 5, 28, 12, 0, 0);
+
+test("pool account labels must belong to the configured provider", () => {
+  expect(poolAccountProviderLabel("anthropic-pabc123", "anthropic")).toBe("anthropic-pabc123");
+  expect(poolAccountProviderLabel("other-pabc123", "anthropic")).toBeUndefined();
+  expect(poolAccountProviderLabel("anthropic", "anthropic")).toBeUndefined();
+  expect(poolAccountProviderLabel("anthropic-kabc123", "anthropic")).toBeUndefined();
+});
 function entry(overrides: Partial<PersistedUsageEntry> & { ts: number }): PersistedUsageEntry {
   const { ts, ...rest } = overrides;
   return {

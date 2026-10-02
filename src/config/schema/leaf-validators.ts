@@ -43,6 +43,9 @@ import {
 import { getConfigDir } from "../paths";
 import { COMPACTION_TRIGGERS } from "./compaction-triggers";
 
+/** Experimental macOS ChatGPT app-server shim; only a strict optional boolean is accepted. */
+export const chatgptDesktopSchema = z.object({ appServerShim: z.boolean().optional() }).strict();
+
 /** One definition of "usable secret", shared by the schema and the warnings. */
 export function isUsableApiKeySecret(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
@@ -294,6 +297,7 @@ export const providerConfigSchema = z.object({
   autoReviewModelOverrides: autoReviewModelOverridesSchema.optional(),
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
+  tlsProfile: z.literal("antigravity-browser").optional(),
   alias: z.string().optional(),
   modelAliases: z.record(z.string(), z.string()).optional(),
   modelDisplayNames: modelDisplayNamesSchema.optional(),
@@ -1058,6 +1062,7 @@ export const quotaResetNotifySchema = z.object({
 
 /**
  * Catalog auto-refresh section (issue #3630).
+ * Missing section or enabled flag uses the hourly default-on scheduler.
  *
  * `.strict()` like its neighbour: a typo in an optional feature section should surface as a
  * rejected write rather than a silently ignored key that leaves the operator believing they

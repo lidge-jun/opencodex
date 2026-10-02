@@ -74,7 +74,8 @@ import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaRepo
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
-import { resolveJevDecision } from "../../combos/jev";
+import { probeJevDecisionProvider } from "../../combos/jev";
+import { comboDependsOnProviderRoute } from "./decision-model-validation";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -137,6 +138,7 @@ import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostR
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
+import { providerTlsProfileDiagnostic } from "../../lib/provider-tls-profile";
 
 type ProviderPatchApplication =
   | { error: string }
@@ -245,7 +247,7 @@ function providerEditorCandidate(
 
   for (const name of removedProviders) {
     const dependentCombos = Object.entries(persisted.combos ?? {})
-      .filter(([, combo]) => combo.targets.some(target => target.provider === name))
+      .filter(([, combo]) => comboDependsOnProviderRoute(persisted, combo, name))
       .map(([id]) => id)
       .sort((a, b) => a.localeCompare(b));
     if (dependentCombos.length > 0) {
@@ -930,8 +932,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
   if (url.pathname === "/api/providers" && req.method === "GET") {
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
-      name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
-      hasApiKey: !!p.apiKey,
+      name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel, hasApiKey: !!p.apiKey,
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
@@ -962,7 +963,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       ...(name === "xai" ? { xaiResponsesOptInState: xaiResponsesOptInState(p) } : {}),
       // Only opt-in Fast lanes (Anthropic fast mode bills usage credits) get a dashboard switch.
       ...(getProviderRegistryEntry(name)?.fastOptIn === true ? { fastOptIn: { enabled: p.fastEnabled === true } } : {}),
-      discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
+      discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name), ...providerTlsProfileDiagnostic(name, p),
       ...(name === "openai" && isCanonicalOpenAiForwardProvider(p)
         ? { entitlement: getCodexModelEntitlementStatus(config) }
         : {}),
@@ -1489,6 +1490,15 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const next = applied.next;
 
     const pacingOnly = keys.every(key => key === "requestPacing");
+    // A combo naming this row as its decisionProvider is only as valid as the row: an adapter
+    // or baseUrl edit could fail the combo's load-time checks and get it salvaged away on the
+    // next reload. Disabling the row stays allowed (not editorTouched; runtime fails open).
+    const decisionDependent = () => Object.values(config.combos ?? {})
+      .some(combo => (typeof combo.decisionProvider === "string" && combo.decisionProvider.trim() === name)
+        || (typeof combo.decisionModel === "string" && combo.decisionModel.trim().startsWith(`${name}/`)));
+    const { decisionModelProviderPatchError } = await import("./decision-model-validation");
+    const decisionModelError = applied.editorTouched ? decisionModelProviderPatchError(config, name, next) : null;
+    if (decisionModelError) return jsonResponse({ error: decisionModelError }, 400);
     if (applied.editorTouched && !pacingOnly) {
       const providerError = canonicalBudgetOnly
         ? canonicalOpenAiBudgetPatchError(next, rawBody, keys, config)
@@ -1513,6 +1523,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         const allowBenchmarkAddresses = name === "openai" && isCanonicalOpenAiForwardProvider(next);
         const resolvedError = await providerDestinationResolvedError(name, next, { allowBenchmarkAddresses });
         if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
+      }
+      if (decisionDependent()) {
+        const validation = validateConfigCandidate({ ...config, providers: { ...config.providers, [name]: next } });
+        if (!validation.ok) return jsonResponse({ error: validation.error }, 400);
       }
     } else if (applied.enablingOpenAi) {
       // Same DNS gate as POST: Clash fake-IP only. Never honor a persisted
@@ -1567,8 +1581,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // A PATCH that managed headers owns the resulting block: the clear path restores
       // registry static headers, so exact-match stripping must not erase them again.
       const candidate = replay.headersTouched ? replay.next : stripRegistryOnlyStaticHeaders(name, replay.next);
+      const decisionModelError = replay.editorTouched ? decisionModelProviderPatchError(config, name, candidate) : null;
+      if (decisionModelError) { replayError = decisionModelError; return; }
       const pinsTouched = Object.hasOwn(rawBody, "pinnedReasoningEffort") || Object.hasOwn(rawBody, "modelPinnedReasoningEfforts");
-      if (pinsTouched) {
+      if (pinsTouched || (replay.editorTouched && !pacingOnly && decisionDependent())) {
         const validation = validateConfigCandidate({ ...config, providers: { ...config.providers, [name]: candidate } });
         if (!validation.ok) { replayError = validation.error; return; }
       }
@@ -1616,34 +1632,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
       });
     }
-    if (name === "jev" && providerMatchesRegistryTransport(name, prov)) {
-      const probe = { targetKey: "jev/probe", effort: null } as const;
-      const decision = await resolveJevDecision({
-        body: { input: "Verify the configured TypeSafe JEV decision service." },
-        candidates: [{
-          key: probe.targetKey,
-          provider: "jev",
-          model: "jev-latest",
-          reasoningEfforts: [],
-        }],
-        fallback: probe,
-        config,
-        signal: req.signal,
-      });
-      if (decision.gate === "apply") {
-        return jsonResponse({
-          ok: true,
-          latencyMs: decision.latencyMs,
-          message: "Connected. TypeSafe JEV answered a decision probe.",
-        });
+    // Decision services answer through the bounded JEV client. A retargeted `jev` row is neither
+    // TypeSafe nor a self-hosted service, so it is not probed at all: its key stays unsent.
+    if (prov.adapter === "jev-decision") {
+      if (name === "jev" && !providerMatchesRegistryTransport(name, prov)) {
+        return jsonResponse({ applicable: false, reason: "retargeted_decision_service", latencyMs: 0 });
       }
-      return jsonResponse({
-        ok: false,
-        latencyMs: decision.latencyMs,
-        error: decision.gate === "missing_key"
-          ? "TypeSafe JEV API key is not configured"
-          : `TypeSafe JEV decision probe failed (${decision.gate})`,
-      });
+      return jsonResponse(await probeJevDecisionProvider(config, name, { signal: req.signal }));
     }
     if (prov.liveModels === false) {
       // A static catalog has no live discovery endpoint to test. This is neither
@@ -1660,6 +1655,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (prov.authMode === "oauth" && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
+    if (prov.adapter === "zed") return (await import("./zed-provider-probe")).probeZedProvider(prov, apiKey, snapshot?.providerUserId);
     if (prov.adapter === "cursor") {
       const started = Date.now();
       const live = await fetchCursorUsableModels({
@@ -1845,7 +1841,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }, 409);
     }
     const dependentCombos = Object.entries(config.combos ?? {})
-      .filter(([, combo]) => combo.targets.some(target => target.provider === name))
+      .filter(([, combo]) => comboDependsOnProviderRoute(config, combo, name))
       .map(([id]) => id)
       .sort((a, b) => a.localeCompare(b));
     if (dependentCombos.length > 0) {

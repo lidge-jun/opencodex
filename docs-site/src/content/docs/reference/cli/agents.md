@@ -7,7 +7,7 @@ These commands control agent policy and routing, inspect the live proxy, and con
 
 ## Agent policy
 
-### `ocx agent <status|injection|effort|subagents|fallback|sidecar> ...`
+### `ocx agent <status|injection|effort|subagents|fallback|roles|sidecar> ...`
 
 Manage the headless multi-agent roster, effort caps, prompt injection, fallback, and sidecar settings.
 Use `status` for the current policy. See [Sub-agent surfaces](/guides/sub-agent-surface/) for how
@@ -16,6 +16,28 @@ surface modes, delegation, effort, and fallback behavior fit together.
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ```
+
+`ocx agent roles` is for omo (Codex / LazyCodex). It lists each Codex agent role in
+`$CODEX_HOME/agents` with its model pin and whether `~/.omo/omo.jsonc` can be updated, or says
+LazyCodex is not installed, in which case `set` is refused. `ocx agent roles set <role> <model>` rewrites only
+that role's root `model` line and mirrors the value into omo.jsonc at
+`codex.agents.<role>.model`. A missing omo.jsonc, or one containing comments, is left unchanged
+and the command says so. See [omo (Codex / LazyCodex) role models](/guides/integrations/#omo-codex--lazycodex-role-models).
+
+```bash
+ocx agent roles set explorer xai/grok-4.5
+```
+
+`ocx agent roles suggest` is omo (Codex / LazyCodex) only, refused like `set` when LazyCodex is not
+installed. It sizes every role with one call to the default Codex model (or `--model`) and
+prints a proposed model and effort per role without writing anything. `--apply` writes every proposal
+through the same write as `set`, skipping and naming the roles whose model and effort already match.
+See [Auto-assign](/guides/integrations/#auto-assign).
+
+`ocx agent injection suggest <work>` does the same for the delegation model: it sizes the described
+work, proposes the cheapest sufficient model and an effort from the delegation picker's list, and writes
+nothing unless `--apply` is given, which saves through the same write as `injection set`. See
+[Delegation model and effort](/guides/sub-agent-surface/#delegation-model-and-effort).
 
 `ocx agent sidecar web --list` and `ocx agent sidecar vision --list` print the models the
 server currently offers for each sidecar — the exact filtered set the dashboard picker shows
@@ -130,6 +152,18 @@ unqualified bare OpenAI model id. Bare `gpt-5.6-*` native aliases use Codex Pool
 Account-qualified OpenAI routes remain distinct, while provider-qualified routes such as
 `openai-apikey/gpt-5.6-*` use their configured API key and never fall through to the native alias.
 Read the safety and visibility contract in the guide before enabling the compatibility pair.
+With `--strategy jev` only, the decision method is chosen by one of two mutually exclusive flags.
+`--decision-provider <provider|->` names a configured `jev-decision` row (for example a self-hosted
+Ollama `tev1`) as a System One-compatible server. `--decision-model <route|->` names an ordinary
+opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as JSON; it cannot be
+this combo or any JEV combo. Omitting both uses TypeSafe. `--decision-timeout <ms|->` sets the
+decision deadline (1000–120000, default 4000); `-` clears any of the three.
+
+`ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
+[--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an
+unsaved selection and reports the gate, backend, and latency; it may spend one decision call.
+`ocx combo discover [--query <text>]` lists configured System One rows and catalog models that look
+like decision models, with the derived endpoint.
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 
@@ -451,3 +485,15 @@ backup can restore the configuration; store exported files as secrets.
 `ocx usage` reads the connected hub with this client's enrolled data key. Human output identifies the hub source and client-key scope; `--json` returns the same scoped data. Range, surface, provider/model filters and custom `--since`/`--until` bounds remain available. Account breakdowns and other clients' records are not shared. An old or unavailable hub produces an explicit error instead of substituting local usage; upgrade the hub if it does not support this read.
 
 The read-only data-plane endpoint is `GET /v1/usage`, using `x-opencodex-api-key` with a configured client key. Environment-wide and admin keys are refused. It accepts `range`, `surface`, `provider`, `model`, `since`, and `until`; unknown/repeated options and caller-selected key IDs are rejected. Oversized skipped rows retain the explicit incomplete-history warning.
+
+## Explain a listed request
+
+Human `ocx logs` output includes `id=<request-id>`. Pass that value to `ocx logs explain <request-id>` to inspect routing decisions. Rows without an ID or with control characters in their ID omit the field instead of displaying a different lookup key. JSON and JSONL output retain their existing schema.
+
+## Routing profile lookup status
+
+`ocx route policy show <id>` exits 4 when the profile does not exist. Missing or invalid command arguments exit 2. Scripts can distinguish a missing profile from incorrect usage.
+
+## Upstream error details
+
+When an upstream error envelope contains several message fields, OpenCodex uses the first nonblank string in its established priority order. Empty or malformed fields no longer hide a valid fallback diagnostic.

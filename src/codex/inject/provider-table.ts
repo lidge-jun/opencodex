@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { OCX_SECTION_MARKER } from "../injected-marker";
+import { OCX_ROUTING_MARKER_LINE, OCX_SECTION_MARKER } from "../injected-marker";
 import { splitSourceLines, type SourceLine } from "../toml-source-lines";
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -61,7 +61,10 @@ function providerLines(content: string): { bom: string; lines: SourceLine[]; own
       section = headerKind(text);
       if (section === "provider") {
         const previous = lines[index - 1];
-        if (previous?.structural && previous.text.trim() === OCX_SECTION_MARKER) owned.add(index - 1);
+        const marker = previous?.text.trim();
+        if (previous?.structural && (marker === OCX_SECTION_MARKER || marker === OCX_ROUTING_MARKER_LINE)) {
+          owned.add(index - 1);
+        }
       }
     } else if (line.structural && unsupportedProviderAssignment(text, section)) {
       // These forms have no independently removable table span. Do not append a

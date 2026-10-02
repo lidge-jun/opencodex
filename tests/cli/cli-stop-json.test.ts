@@ -341,6 +341,74 @@ describe("approval-bound stop", () => {
     expect(proxyStops).toBe(0);
   });
 
+  test("an approval-changed refusal names the guard fact that failed", async () => {
+    const stop = async () => ({ ok: true, summary: summarize(record(), { exitCode: 0 }) });
+
+    // Token vs manager-inspection discrimination: the umbrella outcome has to say
+    // WHICH re-verification failed, or a transient probe and genuine drift look alike.
+    const tokenFlip = { ...STOP_RESOLVE,
+      takeover: { ...STOP_RESOLVE.takeover, token: "b".repeat(64) } } as ResolveJson;
+    const refused = await runApprovedStop(STOP_APPROVAL, async () => tokenFlip,
+      TRACKED_STOP_TARGET, BOUND_STOP_MANAGER, stop);
+    expect(refused.summary).toMatchObject({ outcome: "approval-changed",
+      detail: "the compatibility fingerprint changed" });
+    expect(refused.summary.message).toContain("the compatibility fingerprint changed");
+
+    const pidDrift = { ...STOP_RESOLVE,
+      liveness: { ...STOP_RESOLVE.liveness, pid: 43 } } as ResolveJson;
+    const drifted = await runApprovedStop(STOP_APPROVAL, async () => pidDrift,
+      TRACKED_STOP_TARGET, BOUND_STOP_MANAGER, stop);
+    expect(drifted.summary.detail).toBe("the live PID is now 43 (approved 42)");
+
+    const blockedNow = { ...STOP_RESOLVE,
+      takeover: { kind: "blocked", reason: "managing-cli-unknown", detail: "x",
+        minimumCliVersion: "2.61.0" } } as ResolveJson;
+    const blocked = await runApprovedStop(STOP_APPROVAL, async () => blockedNow,
+      TRACKED_STOP_TARGET, BOUND_STOP_MANAGER, stop);
+    expect(blocked.summary.detail).toBe("takeover compatibility is now blocked (managing-cli-unknown)");
+
+    const untracked = await runApprovedStop(STOP_APPROVAL, async () => STOP_RESOLVE,
+      () => null, BOUND_STOP_MANAGER, stop);
+    expect(untracked.summary.detail).toBe("the tracked runtime record could not be verified");
+
+    const managerGone = await runApprovedStop(STOP_APPROVAL, async () => STOP_RESOLVE,
+      TRACKED_STOP_TARGET, () => ({ kind: "unknown" as const, reason: "CIM read failed" }), stop);
+    expect(managerGone.summary.detail).toBe("the service manager could not be re-verified (CIM read failed)");
+
+    const unresolved = await runApprovedStop(STOP_APPROVAL, async () => null,
+      TRACKED_STOP_TARGET, BOUND_STOP_MANAGER, stop);
+    expect(unresolved.summary.detail).toBe("the runtime could not be re-resolved");
+
+    const swapped = await runGuardedManagerStep(
+      { approval: STOP_APPROVAL, manager: BOUND_STOP_MANAGER() },
+      {
+        revalidateManager: () => ({ kind: "absent" }),
+        stopManager: () => "stopped",
+        signalApproved: async () => false,
+        settle: async () => true,
+        managerState: async () => "inactive",
+      });
+    expect(swapped.effect).toBe("approval-changed");
+    expect(swapped.detail).toBe("the service manager changed between approval and stop");
+
+    // An unprovable manager is not a proven swap: the refusal names the observation
+    // failure and its reason, and no stop or signal runs against an unknown target.
+    let managerStops = 0, signals = 0;
+    const unprovable = await runGuardedManagerStep(
+      { approval: STOP_APPROVAL, manager: BOUND_STOP_MANAGER() },
+      {
+        revalidateManager: () => ({ kind: "unknown" as const, reason: "the process table could not be read" }),
+        stopManager: () => { managerStops += 1; return "stopped"; },
+        signalApproved: async () => { signals += 1; return false; },
+        settle: async () => true,
+        managerState: async () => "inactive",
+      });
+    expect(unprovable.effect).toBe("approval-changed");
+    expect(unprovable.detail).toBe("the service manager could not be re-verified (the process table could not be read)");
+    expect(managerStops).toBe(0);
+    expect(signals).toBe(0);
+  });
+
   test("an asynchronous manager stop settles before status decides success", async () => {
     const order: string[] = [];
     let state: "active" | "inactive" = "active";
