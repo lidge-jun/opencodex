@@ -1,8 +1,8 @@
 /** 7d_oi attribution is fixture-confirmed for Fable; it is not a future-family wildcard. */
 import type { ProviderQuotaWindow } from "../quota-types";
-export function parseAnthropicFamilyHeaders(headers: Headers, now: number): ProviderQuotaWindow[] {
+export function parseAnthropicFamilyHeaders(headers: Headers, now: number, status?: number): ProviderQuotaWindow[] {
   const value = headers.get("anthropic-ratelimit-unified-7d_oi-utilization")?.trim();
-  const rejected = headers.get("anthropic-ratelimit-unified-7d_oi-status")?.trim() === "rejected";
+  const rejected = status === 429 && headers.get("anthropic-ratelimit-unified-7d_oi-status")?.trim() === "rejected";
   const numeric = value && /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : undefined;
   // The observed overage fixture is 1.01; spent evidence clamps to the display ceiling.
   const percent = numeric !== undefined && Number.isFinite(numeric) && numeric >= 0 && numeric <= 1.01

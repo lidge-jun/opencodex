@@ -1,5 +1,5 @@
 import { parseAnthropicFamilyHeaders, mergeAnthropicFamilyWindows } from "./anthropic-family-headers";
-import { observeAnthropicFamilyQuota, ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS } from "../../oauth/anthropic-model-quota";
+import { observeAnthropicFamilyQuota, clearAnthropicRequestedFamilyQuota, ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS } from "../../oauth/anthropic-model-quota";
 import { createHash } from "node:crypto";
 import { getValidAccessTokenForAccount } from "../../oauth";
 import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
@@ -241,10 +241,10 @@ function anthropicHeaderResetAt(value: string | null): number | undefined {
   return Number.isFinite(new Date(timestamp).getTime()) ? timestamp : undefined;
 }
 
-export function parseAnthropicRateLimitHeaders(headers: Headers): ProviderQuota | null {
+export function parseAnthropicRateLimitHeaders(headers: Headers, status?: number): ProviderQuota | null {
   const fiveHourPercent = normalizeUtilizationFraction(headers.get("anthropic-ratelimit-unified-5h-utilization"));
   const weeklyPercent = normalizeUtilizationFraction(headers.get("anthropic-ratelimit-unified-7d-utilization"));
-  const customWindows = parseAnthropicFamilyHeaders(headers, Date.now());
+  const customWindows = parseAnthropicFamilyHeaders(headers, Date.now(), status);
   if (fiveHourPercent === undefined && weeklyPercent === undefined && !customWindows.length) return null;
   const fiveHourResetAt = anthropicHeaderResetAt(headers.get("anthropic-ratelimit-unified-5h-reset"));
   const weeklyResetAt = anthropicHeaderResetAt(headers.get("anthropic-ratelimit-unified-7d-reset"));
@@ -274,12 +274,15 @@ export function recordAnthropicAccountQuotaFromHeaders(
   accountId: string,
   headers: Headers,
   writerGeneration: number,
+  status?: number,
+  model?: string,
 ): void {
   if (!accountId) return;
-  const observed = parseAnthropicRateLimitHeaders(headers);
-  if (!observed) return;
   const key = accountCacheKey("anthropic", accountId);
   if (!mayCommitAccountQuotaKey(key, writerGeneration)) return;
+  if (status !== undefined && status >= 200 && status < 300) clearAnthropicRequestedFamilyQuota(accountId, model);
+  const observed = parseAnthropicRateLimitHeaders(headers, status);
+  if (!observed) return;
   // Hydrate before writing, for the same reason `recordPassiveAccountQuota` does: this write
   // arrives unprompted from the request path, and `persistAccountQuotaCache` serializes the
   // whole map. Landing before any reader has hydrated would persist this single row and erase

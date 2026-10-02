@@ -81,10 +81,13 @@ export async function rotateAnthropicAccountOnResponse(
       const wait = Math.max(delay, (anthropicRatePauseUntil(sent.accountId) ?? now) - now);
       if (!state.sameAccount && wait <= ANTHROPIC_MAX_INLINE_THROTTLE_MS && !current.paused) {
         state.sameAccount = true;
+        // Millisecond rounding can wake just before this deadline; later extensions still bind.
+        const retryAt = now + wait;
         try { await sleepWithAbort(wait, options.signal); } catch { return null; }
         const live = getAccountCredentialWithStatus("anthropic", sent.accountId);
         if (!live || live.paused || live.needsReauth || options.signal?.aborted
-          || credentialGeneration(live.credential) !== sent.generation || anthropicRatePauseUntil(sent.accountId)) return null;
+          || credentialGeneration(live.credential) !== sent.generation
+          || anthropicRatePauseUntil(sent.accountId, Math.max(Date.now(), retryAt))) return null;
         return sent.accountId;
       }
       if (kind === "transient-rate" && !state.detour) {

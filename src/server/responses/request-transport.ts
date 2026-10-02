@@ -543,7 +543,7 @@ export async function prepareResponsesTransport(
               const current = getAccountCredentialWithStatus("anthropic", snapshot.accountId);
               if (current && !current.needsReauth && credentialGeneration(current.credential) === snapshot.generation) {
                 bindAnthropicRefusalCredential(response, snapshot);
-                recordAnthropicAccountQuotaFromHeaders(snapshot.accountId, response.headers, writerGeneration);
+                recordAnthropicAccountQuotaFromHeaders(snapshot.accountId, response.headers, writerGeneration, response.status, route.modelId);
               }
             } catch { /* best-effort observation cannot fail the response */ }
           }

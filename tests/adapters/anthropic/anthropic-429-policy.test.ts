@@ -1,5 +1,5 @@
 /** Physical response attribution through the real adapter and response/search loops. */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -273,4 +273,41 @@ test("streamed continuation after output cannot retry a headerless refusal", asy
   });
   await response.text();
   expect(sent).toHaveLength(2);
+});
+
+
+import { recordAnthropicAccountRefusal } from "../../../src/oauth/anthropic-routing";
+import { pauseAnthropicRateAdmission } from "../../../src/oauth/anthropic-rate-limit-policy";
+
+test.each([undefined, "invalid", "0", "past", "future"])("aggregate shared rejection uses reset %s or the default", async reset => {
+  const [a] = await seed();
+  const now = Date.now();
+  const headers = new Headers({ "anthropic-ratelimit-unified-status": "rejected" });
+  const resetAt = Math.floor((now + 300_000) / 1000) * 1000;
+  if (reset !== undefined) headers.set("anthropic-ratelimit-unified-reset",
+    reset === "future" ? String(resetAt / 1000) : reset === "past" ? String((now - 1000) / 1000) : reset);
+  expect(classifyAnthropic429(headers, now)).toBe("shared-quota");
+  expect(recordAnthropicAccountRefusal(configFor(() => answer(false)), a!, 429, null, now, headers)).toBe(true);
+  expect(getAnthropicAccountHealthSnapshot(a!, now)).toEqual({
+    cooldownUntil: reset === "future" ? resetAt : now + 60_000,
+    cooldownSource: reset === "future" ? "reset-derived" : "default",
+  });
+});
+
+test.each([false, true])("early throttle timer retries unless a concurrent pause extends it (%s)", async extended => {
+  const [a] = await seed();
+  const response = refused({ "retry-after": "0.02" });
+  const cred = getAccountCredential("anthropic", a!)!;
+  bindAnthropicRefusalCredential(response, { provider: "anthropic", accountId: a!, accessToken: cred.access, generation: credentialGeneration(cred) });
+  const start = Date.now(); let clock = start;
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  try {
+    const retry = rotateAnthropicAccountOnResponse(response, {
+      config: configFor(() => answer(false)), accountId: a!, canRetry: true, requestKey: {},
+    });
+    clock = start + 19;
+    if (extended) pauseAnthropicRateAdmission(a!, start + 200);
+    expect(await retry).toBe(extended ? null : a!);
+    expect(anthropicRatePauseUntil(a!)).toBe(extended ? start + 200 : undefined);
+  } finally { now.mockRestore(); }
 });

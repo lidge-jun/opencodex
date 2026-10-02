@@ -167,7 +167,7 @@ function familyHeaders(percent?: string, rejected = false, reset = Date.now() + 
     "anthropic-ratelimit-unified-7d_oi-reset": String(Math.floor(reset / 1000)),
   });
 }
-function observe(id: string, headers: Headers) { recordAnthropicAccountQuotaFromHeaders(id, headers, 0); }
+function observe(id: string, headers: Headers) { recordAnthropicAccountQuotaFromHeaders(id, headers, 0, 429); }
 function pick(config: OcxConfig, model: string, key?: string, now = Date.now()) {
   return resolveAnthropicAccountForSession(key, config, now, null, model).accountId;
 }
@@ -371,4 +371,71 @@ test("an older active probe cannot erase a newer family refusal", async () => {
   expect(anthropicFamilyRejected(a!, FABLE)).toBe(true);
   expect(getCachedProviderAccountQuota("anthropic", a!)?.customWindows?.[0]?.rejected).toBe(true);
   globalThis.fetch = originalFetch;
+});
+
+
+test.each([200, 400, 403, 503])("non-429 status %s keeps rejected family headers soft", async status => {
+  const [a] = await seed(1);
+  const config = configFor(() => {
+    const response = status === 200 ? answer(false)
+      : new Response("synthetic refusal", { status });
+    for (const [key, value] of familyHeaders("0.3", true)) response.headers.set(key, value);
+    return response;
+  });
+  config.providers.anthropic!.models = [FABLE]; config.anthropicAccountPool = { enabled: true };
+  await (await post(config, { model: "anthropic/" + FABLE })).text();
+  expect(getCachedProviderAccountQuota("anthropic", a!)?.customWindows?.[0]).toMatchObject({ percent: 30 });
+  expect(getCachedProviderAccountQuota("anthropic", a!)?.customWindows?.[0]?.rejected).toBeUndefined();
+  expect(anthropicFamilyRejected(a!, FABLE)).toBe(false);
+  expect(getEligibleAnthropicAccounts(Date.now(), FABLE)).toContain(a!);
+});
+
+test("successful stale-family revalidation without headers restores concurrent sends", async () => {
+  const [a] = await seed(1);
+  observeAnthropicFamilyQuota(a!, [{ label: "Fable", scope: "model", percent: 100, rejected: true }],
+    Date.now() - ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS);
+  const bothEntered = deferred<void>(); const replies = deferred<Response>();
+  const config = configFor(() => {
+    if (sent.length === 1) {
+      const response = answer(false);
+      for (const key of [...response.headers.keys()]) response.headers.delete(key);
+      return response;
+    }
+    if (sent.length === 3) bothEntered.resolve();
+    return replies.promise.then(response => response.clone());
+  });
+  config.providers.anthropic!.models = [FABLE]; config.anthropicAccountPool = { enabled: true };
+  await (await post(config, { model: "anthropic/" + FABLE })).text();
+  const second = post(config, { model: "anthropic/" + FABLE });
+  const third = post(config, { model: "anthropic/" + FABLE });
+  // Either both reach the physical boundary or a local admission refusal resolves first.
+  await Promise.race([bothEntered.promise, second, third]);
+  replies.resolve(answer(false));
+  const responses = await Promise.all([second, third]);
+  await Promise.all(responses.map(response => response.text()));
+  expect(responses.map(response => response.status)).toEqual([200, 200]);
+  expect(sent).toHaveLength(3);
+});
+
+test("family observation preserves an in-flight shared-cooldown recovery", async () => {
+  const [a] = await seed(1);
+  const now = Date.now();
+  const config = configFor(() => answer(false)); config.anthropicAccountPool = { enabled: true };
+  recordAnthropicAccountRefusal(config, a!, 429, null, now, new Headers({
+    "anthropic-ratelimit-unified-5h-status": "rejected",
+    "anthropic-ratelimit-unified-5h-reset": String(Math.floor((now + 300_000) / 1000)),
+  }));
+  const entered = deferred<void>(); const result = deferred<Response>();
+  globalThis.fetch = (async () => { entered.resolve(); return result.promise; }) as typeof fetch;
+  try {
+    const probe = fetchProviderAccountQuotas("anthropic", true);
+    await entered.promise;
+    observe(a!, familyHeaders("0.3", true));
+    result.resolve(Response.json({ five_hour: { utilization: 10 }, seven_day: { utilization: 20 }, limits: [] }));
+    const [row] = await probe;
+    expect(getAnthropicAccountHealthSnapshot(a!)).toBeNull();
+    expect(row?.quota).toMatchObject({ fiveHourPercent: 10, weeklyPercent: 20 });
+    expect(anthropicFamilyRejected(a!, FABLE)).toBe(true);
+    expect(getCachedProviderAccountQuota("anthropic", a!)?.customWindows?.[0]).toMatchObject({ percent: 30, rejected: true });
+  } finally { globalThis.fetch = originalFetch; }
 });

@@ -188,6 +188,11 @@ function parseRateLimitReset(
     if (delayUntil(resetAt, now) === undefined) continue;
     if (latest === undefined || resetAt > latest) latest = resetAt;
   }
+  if (latest === undefined && !rejectedQuotaWindows.length
+    && headers.get("anthropic-ratelimit-unified-status")?.trim() === "rejected") {
+    const resetAt = Number(headers.get("anthropic-ratelimit-unified-reset")?.trim()) * 1000;
+    if (delayUntil(resetAt, now) !== undefined) latest = resetAt;
+  }
   if (latest === undefined) return undefined;
   return { delayMs: latest - now, rejectedQuotaWindows };
 }

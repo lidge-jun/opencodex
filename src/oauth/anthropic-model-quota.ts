@@ -1,5 +1,4 @@
 /** Model-scoped passive quota evidence. Reimplemented from documented behavior, not ported code. */
-import { noteAnthropicCooldownMutation } from "../providers/quota/anthropic-cooldown-recovery";
 import { credentialGeneration, getAccountCredential } from "./store";
 import { getCachedProviderAccountQuota } from "../providers/quota/account-cache";
 import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
@@ -24,6 +23,9 @@ export function anthropicModelExhausted(accountId: string, model?: string): bool
 
 interface FamilyObservation { generation: string; seenAt: number; resetAt?: number; busy: boolean; }
 const spentFamilies = new Map<string, FamilyObservation>();
+const familyGenerations = new Map<string, number>();
+let nextFamilyGeneration = 1;
+export function anthropicFamilyQuotaGeneration(id: string): number { return familyGenerations.get(id) ?? 0; }
 const keyFor = (id: string, family: string) => `${id}\0${family}`;
 function ownedObservation(id: string, family: string): FamilyObservation | undefined {
   const key = keyFor(id, family);
@@ -36,12 +38,12 @@ function ownedObservation(id: string, family: string): FamilyObservation | undef
 export function observeAnthropicFamilyQuota(id: string, windows: ProviderQuotaWindow[], now: number, authoritative = false): void {
   const credential = getAccountCredential("anthropic", id);
   if (!credential) return;
+  if (authoritative || windows.some(window => window.scope === "model")) familyGenerations.set(id, nextFamilyGeneration++);
   if (authoritative) for (const key of spentFamilies.keys()) if (key.startsWith(`${id}\0`)) spentFamilies.delete(key);
   for (const window of windows) {
     if (window.scope !== "model") continue;
     const key = keyFor(id, window.label);
     if (!window.rejected) { spentFamilies.delete(key); continue; }
-    noteAnthropicCooldownMutation(id);
     spentFamilies.set(key, { generation: credentialGeneration(credential), seenAt: now, resetAt: window.resetAt, busy: false });
   }
 }
@@ -61,7 +63,12 @@ export function claimAnthropicFamilyRevalidation(id: string, model?: string, now
   entry.busy = true;
   return () => { entry.busy = false; };
 }
-export function clearAnthropicFamilyQuota(): void { spentFamilies.clear(); }
+/** An owned successful send proves admission for its requested family even without headers. */
+export function clearAnthropicRequestedFamilyQuota(id: string, model?: string): void {
+  const family = anthropicModelFamily(model);
+  if (family && spentFamilies.delete(keyFor(id, family))) familyGenerations.set(id, nextFamilyGeneration++);
+}
+export function clearAnthropicFamilyQuota(): void { spentFamilies.clear(); familyGenerations.clear(); }
 
 export function anthropicModelWeeklyPercent(quota: ProviderQuota | null, model?: string): number | undefined {
   const family = anthropicModelFamily(model);
