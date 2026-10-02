@@ -1,4 +1,10 @@
-import { promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dialog";
+import {
+  clearRememberedAdminToken,
+  getRememberedAdminToken,
+  promptForAdminToken,
+  rememberedAdminTokenScope,
+  type AdminTokenVerifier,
+} from "./admin-token-dialog";
 import { createBoundedFetch } from "./bounded-fetch";
 import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
 
@@ -9,14 +15,16 @@ import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiT
 export const SESSION_UNAVAILABLE_EVENT = "opencodex:session-unavailable";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
-// Any guarded route answers 401 for a bad token; this one is a cheap config read. /api/settings
-// also resolves the Codex runtime and startup health, which made the token prompt hang.
+// Any guarded route answers 401 for a bad token; this one is a cheap config read. /api/combos
+// avoids resolving the Codex runtime and startup health, which made the token prompt hang.
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/combos";
 const SESSION_REBOOTSTRAP_TIMEOUT_MS = 10_000;
 const RESOLUTION_WATCHDOG_MS = 15_000;
 const MACHINE_SESSION_HEADER = "X-OpenCodex-Machine-Session";
 const MACHINE_GUI_ORIGIN_HEADER = "X-OpenCodex-Machine-GUI-Origin";
 const MACHINE_CSRF_HEADER = "X-OpenCodex-Machine-CSRF-Token";
+const RELAY_EXPECTED_ORIGIN_HEADER = "X-OpenCodex-Relay-Expected-Origin";
+const RELAY_EXPECTED_CONNECTION_HEADER = "X-OpenCodex-Relay-Expected-Connection";
 
 interface ApiSessionState {
   token: string | null;
@@ -32,7 +40,7 @@ interface TargetRuntime {
   promptCancelled: boolean;
 }
 
-type AdminTokenPrompt = (verifyToken: AdminTokenVerifier) => Promise<string | null>;
+type AdminTokenPrompt = (verifyToken: AdminTokenVerifier, scope: string) => Promise<string | null>;
 type RebootstrapResult = { kind: "minted"; token: string } | { kind: "unavailable" } | { kind: "failed" };
 
 let installed = false;
@@ -208,7 +216,13 @@ function classify(input: RequestInfo | URL): { plane: ApiPlane; bootstrap: boole
   return null;
 }
 
-function sessionHeaders(plane: ApiPlane, input: RequestInfo | URL, init?: RequestInit, overrideToken?: string | null): Headers {
+function sessionHeaders(
+  plane: ApiPlane,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  overrideToken?: string | null,
+  relayTarget?: ApiTarget,
+): Headers {
   const state = runtime(plane);
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
   const token = overrideToken === undefined ? state.session.token : overrideToken;
@@ -218,11 +232,20 @@ function sessionHeaders(plane: ApiPlane, input: RequestInfo | URL, init?: Reques
     headers.set("X-OpenCodex-GUI-Origin", state.session.browserOrigin);
     if (method !== "GET" && method !== "HEAD") headers.set("X-OpenCodex-CSRF-Token", state.session.csrfToken);
   }
-  if (plane === "shared" && state.target.transport === "relay") {
+  if (plane === "shared") {
+    // Stamp the connection the credential was resolved against, not whatever is current:
+    // a relay target captured mid-resolution keeps naming its own hub connection, so a
+    // listener rebound to a different hub refuses (409) before the credential is forwarded.
+    const relay = relayTarget ?? state.target;
+    if (relay.transport !== "relay") return headers;
     const machine = runtime("machine").session;
     if (machine.token) headers.set(MACHINE_SESSION_HEADER, machine.token);
     if (machine.browserOrigin) headers.set(MACHINE_GUI_ORIGIN_HEADER, machine.browserOrigin);
     if (method !== "GET" && method !== "HEAD" && machine.csrfToken) headers.set(MACHINE_CSRF_HEADER, machine.csrfToken);
+    if (relay.relayGeneration) {
+      headers.set(RELAY_EXPECTED_ORIGIN_HEADER, relay.serverOrigin);
+      headers.set(RELAY_EXPECTED_CONNECTION_HEADER, relay.relayGeneration);
+    }
   }
   return headers;
 }
@@ -232,18 +255,18 @@ function withAuth(
   input: RequestInfo | URL,
   init?: RequestInit,
   overrideToken?: string | null,
+  relayTarget?: ApiTarget,
 ): [RequestInfo | URL, RequestInit | undefined] {
-  const headers = sessionHeaders(plane, input, init, overrideToken);
+  const headers = sessionHeaders(plane, input, init, overrideToken, relayTarget);
   if (input instanceof Request) return [new Request(input, { headers }), init ? { ...init, headers } : undefined];
   return [input, { ...init, headers }];
 }
 
-async function reBootstrapSessionToken(plane: ApiPlane): Promise<RebootstrapResult> {
+async function reBootstrapSessionToken(plane: ApiPlane, target: ApiTarget): Promise<RebootstrapResult> {
   if (!rawFetch) return { kind: "failed" };
-  const state = runtime(plane);
   const bounded = createBoundedFetch(rebootstrapTimeoutMs);
   try {
-    const [input, init] = withAuth(plane, state.target.bootstrapPath, { cache: "no-store", signal: bounded.signal }, null);
+    const [input, init] = withAuth(plane, target.bootstrapPath, { cache: "no-store", signal: bounded.signal }, null, target);
     const response = await rawFetch(input, init);
     if (!response.ok) return response.status >= 400 && response.status < 500 ? { kind: "unavailable" } : { kind: "failed" };
     const html = await response.text();
@@ -253,15 +276,22 @@ async function reBootstrapSessionToken(plane: ApiPlane): Promise<RebootstrapResu
   finally { bounded.clear(); }
 }
 
-async function verifyAdminToken(plane: ApiPlane, token: string): ReturnType<AdminTokenVerifier> {
+async function verifyAdminToken(plane: ApiPlane, target: ApiTarget, token: string): ReturnType<AdminTokenVerifier> {
   if (!rawFetch) return "unavailable";
+  const bounded = createBoundedFetch(rebootstrapTimeoutMs);
   try {
-    const state = runtime(plane);
-    const [input, init] = withAuth(plane, `${state.target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`, { cache: "no-store" }, token);
+    const [input, init] = withAuth(
+      plane,
+      `${target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`,
+      { cache: "no-store", signal: bounded.signal },
+      token,
+      target,
+    );
     const response = await rawFetch(input, init);
     if (response.status === 401) return "rejected";
     return response.ok ? "accepted" : "unavailable";
   } catch { return "unavailable"; }
+  finally { bounded.clear(); }
 }
 
 async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null, callerSignal?: AbortSignal): Promise<string | null> {
@@ -271,9 +301,14 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
     const body = (async () => {
       const current = state.session.token;
       if (current && current !== failedToken) return current;
+      // Capture the target this resolution belongs to: the remembered credential is
+      // scoped to it, and both the silent verification and the prompt must send it to
+      // that server even if targets are reconfigured mid-resolution.
+      const target = state.target;
+      const scope = rememberedAdminTokenScope(target);
       let watchdog: ReturnType<typeof setTimeout> | undefined;
       const renewed = await Promise.race([
-        reBootstrapSessionToken(plane),
+        reBootstrapSessionToken(plane, target),
         new Promise<RebootstrapResult>(resolve => { watchdog = setTimeout(() => resolve({ kind: "failed" }), resolutionWatchdogMs); }),
       ]).finally(() => clearTimeout(watchdog));
       if (renewed.kind === "minted") return renewed.token;
@@ -285,9 +320,26 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
         state.promptCancelled = true;
         return null;
       }
-      const prompted = await requestAdminToken(token => verifyAdminToken(plane, token));
+      const remembered = getRememberedAdminToken(scope);
+      if (remembered) {
+        if (remembered === failedToken) {
+          // The stored token just caused this 401: it is revoked. Clear it
+          // now so it cannot linger until the next visit.
+          clearRememberedAdminToken(scope);
+        } else {
+          const verdict = await verifyAdminToken(plane, target, remembered);
+          if (verdict === "accepted") {
+            state.session = { token: remembered, csrfToken: null, browserOrigin: null, serverOrigin: target.serverOrigin };
+            return remembered;
+          }
+          if (verdict === "rejected") clearRememberedAdminToken(scope);
+          // "unavailable" (network/server error) leaves the stored token
+          // intact: a transient outage must not delete a valid credential.
+        }
+      }
+      const prompted = await requestAdminToken(token => verifyAdminToken(plane, target, token), scope);
       if (prompted) {
-        state.session = { token: prompted, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin };
+        state.session = { token: prompted, csrfToken: null, browserOrigin: null, serverOrigin: target.serverOrigin };
         return prompted;
       }
       state.promptCancelled = true;
