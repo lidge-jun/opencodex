@@ -67,6 +67,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("opencode-go", "opencode.svg"),
     ("opencode-zen", "opencode.svg"),
     ("openrouter", "openrouter-color.svg"),
+    ("opengateway", "opengateway.svg"),
     ("opper", "opper.svg"),
     ("qianfan", "qianfan-color.svg"),
     ("qoder", "qoder.svg"),
@@ -128,6 +129,7 @@ fn paint(file: &str) -> &'static str {
         | "novita.svg"
         | "ollama-color.svg"
         | "opencode.svg"
+        | "opengateway.svg"
         | "opper.svg"
         | "packycode.svg"
         | "siliconflow.svg"
@@ -189,6 +191,7 @@ fn svg(file: &str) -> Option<&'static str> {
         "openai.svg" => svg!("openai.svg"),
         "opencode.svg" => svg!("opencode.svg"),
         "openrouter-color.svg" => svg!("openrouter-color.svg"),
+        "opengateway.svg" => svg!("opengateway.svg"),
         "opper.svg" => svg!("opper.svg"),
         "orcarouter.svg" => svg!("orcarouter.svg"),
         "packycode.svg" => svg!("packycode.svg"),

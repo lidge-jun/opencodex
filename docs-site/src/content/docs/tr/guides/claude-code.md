@@ -23,9 +23,16 @@ seçim yapar: `quota` (varsayılan), `autoSwitchThreshold` üzerinde olduğunda
 seçer (`five-hour` varsayılandır; `weekly` ve `max-utilization` da kullanılabilir); `round-robin` eşit olarak dağıtır
 (`stickyLimit`, varsayılan `1`); `fill-first`, bekleme süresi, yeniden kimlik
 doğrulama veya eşiğe kadar aktif hesabı tüketir, ardından ilerler. **Varsayılan
-olarak kapalıdır**, bir GUI uyarısı gösterir ve sahada kapsamlı olarak test
-edilmemiştir — Anthropic otomatik rotasyona benzeyen hesapları kısıtlayabilir;
-rotasyon sağlayıcı yaptırımlarına karşı koruma sağlamaz.
+olarak kapalıdır** ve deneyseldir.
+
+Pano, havuzun hangi koşullar için tasarlandığını gösterir: size ait olan veya kullanma yetkiniz bulunan
+abonelikler, gerçek Claude Code istemcisi ve oturumu gözeten bir kişi. Anthropic otomatik hesap havuzunu
+onaylamamıştır; aynı kuruluştaki hesaplar kotayı paylaşabilir (yeni hesap kapasite eklemeyebilir) ve hesap
+değiştirmek sağlayıcı yaptırımlarına karşı koruma sağlamaz. OpenCodex hesapları sıcak tutmak için (keep-warm)
+istek göndermez ve varsayılan olarak Claude jetonlarını arka planda yenilemez ya da kullanımı arka planda
+okumaz: kullanım, pano, menü çubuğu uygulaması veya bir `ocx` komutu istediğinde okunur. Eşikler hesap
+seçimi için tercihtir; kullanım veya faturalandırma sınırı değildir. Bu bir ürün açıklamasıdır, hukuki
+tavsiye değildir; Anthropic'in güncel koşullarını kontrol edin.
 
 Etkinleştirildiğinde operasyonel sözleşme:
 

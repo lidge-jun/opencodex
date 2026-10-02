@@ -916,6 +916,14 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["`status` reads the route; `set` writes only submitted fields. Enabling first-party requires a running Claude intercept."],
   },
   {
+    command: ["claude", "intercept", "start"],
+    summary: "Start the local Claude interception pair on demand.",
+    routes: [{ method: "POST", path: "/api/claude-intercept/start" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the management response as JSON." }],
+    mutates: true,
+    json: "payload",
+  },
+  {
     command: ["claude", "desktop", "status"],
     summary: "Applied-vs-desired Claude Desktop state, including staleness, drift, and health.",
     routes: [{ method: "GET", path: "/api/claude-desktop/status" }],

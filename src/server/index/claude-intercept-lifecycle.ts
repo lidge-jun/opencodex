@@ -8,6 +8,8 @@ import {
   startClaudeIntercept,
   type ClaudeInterceptHandle,
   type StartClaudeInterceptOptions,
+  type ClaudeInterceptOutcome,
+  ClaudeInterceptProxyBindError,
 } from "../../claude/intercept/runtime";
 
 /**
@@ -20,6 +22,8 @@ export interface ClaudeInterceptLifecycle<T> {
   /** True once the TLS listener has bound and `requestServer` is it. */
   ownsListener(requestServer: Server<T>): boolean;
   start(options: StartClaudeInterceptOptions<T>): void;
+  ensure(): Promise<ClaudeInterceptOutcome>;
+  lastOutcome(): ClaudeInterceptOutcome | null;
   stop(): Promise<void>;
 }
 
@@ -53,34 +57,76 @@ export async function loadPickerRoutesFromCatalog(): Promise<PickerRouteInput> {
 
 export function createClaudeInterceptLifecycle<T>(): ClaudeInterceptLifecycle<T> {
   let listener: Server<T> | null = null;
-  let pending: Promise<ClaudeInterceptHandle<T> | null> = Promise.resolve(null);
+  let options: StartClaudeInterceptOptions<T> | undefined;
+  let handle: ClaudeInterceptHandle<T> | null = null;
+  let inflight: Promise<ClaudeInterceptOutcome> | undefined;
+  let stopped = false;
+  let startupPending = false;
+  let retryAfterStartup = false;
+  let observed: ClaudeDesktopModeObservation | undefined;
+  const stateOf = (bound: ClaudeInterceptHandle<T>) => ({ proxyPort: bound.proxyPort, caCertPath: bound.caCertPath, pickerProxyPort: bound.pickerProxyPort, pickerReason: bound.pickerReason ?? null, pickerFailurePort: bound.pickerFailurePort });
+  let outcome: ClaudeInterceptOutcome | null = null;
+  const ensure = (): Promise<ClaudeInterceptOutcome> => {
+    if (stopped) return Promise.resolve(outcome = { ok: false, reason: "stopped" });
+    if (inflight) {
+      if (startupPending) retryAfterStartup = true;
+      return inflight;
+    }
+    if (handle) {
+      if (options) observed = observeClaudeDesktopMode(options.config);
+      return Promise.resolve(outcome = { ok: true, state: stateOf(handle) });
+    }
+    if (!options) return Promise.resolve(outcome = { ok: false, reason: "failed" });
+    const opts = options;
+    const run = async (): Promise<ClaudeInterceptOutcome> => {
+      if (opts.config.runtimeRole === "client") return { ok: false, reason: "client_role" };
+      if (!claudeInterceptEnabled(opts.config)) return { ok: false, reason: "disabled" };
+      if (opts.requestedPort === 0 && typeof opts.config.claudeCode?.intercept?.port !== "number")
+        return { ok: false, reason: "ephemeral_port" };
+      try {
+        observed = observeClaudeDesktopMode(opts.config);
+        handle = await startClaudeIntercept<T>({
+          ...opts,
+          desiredClients: () => buildInterceptDesiredClients(opts.config, observed!)(),
+          loadPickerRoutes: opts.loadPickerRoutes ?? loadPickerRoutesFromCatalog,
+          dispatch: (req, requestServer) => {
+            listener ??= requestServer;
+            return opts.dispatch(req, requestServer);
+          },
+        });
+        if (!handle) return { ok: false, reason: "disabled" };
+        listener = handle.listener;
+        console.log(`🔐 Claude intercept proxy active on http://127.0.0.1:${handle.proxyPort} (CONNECT api.anthropic.com → local TLS)`);
+        return { ok: true, state: stateOf(handle) };
+      } catch (error) {
+        listener = null;
+        console.warn(`⚠ Claude intercept proxy could not start: ${error instanceof Error ? error.message : String(error)}`);
+        return error instanceof ClaudeInterceptProxyBindError && error.code === "EADDRINUSE"
+          ? { ok: false, reason: "port_in_use", port: error.port }
+          : { ok: false, reason: "failed" };
+      }
+    };
+    inflight = run().then(async result => {
+      // An ensure arriving during startup first joins that attempt, then retries its null outcome.
+      if (!result.ok && retryAfterStartup && !stopped) return run();
+      return result;
+    }).then(result => outcome = result).finally(() => {
+      inflight = undefined; startupPending = false; retryAfterStartup = false;
+    });
+    return inflight;
+  };
   return {
     ownsListener: requestServer => listener !== null && requestServer === listener,
-    start(options) {
-      const dispatch = options.dispatch;
-      const observed = observeClaudeDesktopMode(options.config);
-      pending = startClaudeIntercept<T>({
-        ...options,
-        // A disabled Claude surface relays everything while the bound listener lives until restart.
-        desiredClients: buildInterceptDesiredClients(options.config, observed),
-        loadPickerRoutes: options.loadPickerRoutes ?? loadPickerRoutesFromCatalog,
-        dispatch: (req, requestServer) => {
-          listener ??= requestServer;
-          return dispatch(req, requestServer);
-        },
-      }).then(handle => {
-        if (handle) {
-          listener = handle.listener;
-          console.log(`🔐 Claude intercept proxy active on http://127.0.0.1:${handle.proxyPort} (CONNECT api.anthropic.com → local TLS)`);
-        }
-        return handle;
-      }).catch((error: unknown) => {
-        console.warn(`⚠ Claude intercept proxy could not start: ${error instanceof Error ? error.message : String(error)}`);
-        return null;
-      });
-    },
+    start(opts) { options = opts; startupPending = true; void ensure(); },
+    ensure,
+    lastOutcome: () => outcome,
     async stop() {
-      await (await pending)?.stop();
+      stopped = true;
+      await inflight;
+      await handle?.stop();
+      handle = null;
+      listener = null;
+      outcome = { ok: false, reason: "stopped" };
     },
   };
 }

@@ -1,3 +1,4 @@
+import { markAnthropicFamilyEnumeration } from "./anthropic-family-headers";
 import { effectiveCodexAuthAccountId, fetchMainAccountInfoSnapshot, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
@@ -311,7 +312,10 @@ async function readAnthropicUsageQuota(accessToken: string): Promise<ProviderQuo
     updatedAt: Date.now(),
   };
   // Empty / schema-changed payloads must not cache as "success with no bars".
-  return hasQuotaRows(quota) ? quota : null;
+  return hasQuotaRows(quota) ? markAnthropicFamilyEnumeration(quota, Array.isArray(body.limits) && body.limits.every(raw => {
+    const kind = asRecord(raw)?.kind;
+    return kind === "session" || kind === "weekly_all" || kind === "weekly_scoped" && parseClaudeLimit(raw) !== null;
+  })) : null;
 }
 
 /**

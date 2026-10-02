@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../../helpers/anthropic-shared-quota";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5,7 +6,6 @@ import { join } from "node:path";
 import {
   clearAnthropicAccountPoolState,
   getAnthropicAccountHealthSnapshot,
-  rotateAnthropicAccountOn429,
 } from "../../../src/oauth/anthropic-routing";
 import { getAccountSet, saveAccountCredential, saveCredential } from "../../../src/oauth/store";
 import { clearAccountQuotaCache, fetchProviderAccountQuotas, getCachedProviderAccountQuota } from "../../../src/providers/quota";

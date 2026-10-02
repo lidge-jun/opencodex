@@ -1025,6 +1025,12 @@ export interface OcxConfig {
   /** Account ids administratively excluded from future pool selection until resumed. */
   pausedCodexAccountIds?: string[];
   /**
+   * Account ids, `__main__` included, allowed to keep serving from ChatGPT credits once one of
+   * their usage windows is full. Every other account is skipped by selection at 100% until its
+   * window resets, so spending credits is opt-in.
+   */
+  creditCodexAccountIds?: string[];
+  /**
    * Codex pool selection policy. Absent means no policy, so an existing install rotates exactly
    * as before.
    *

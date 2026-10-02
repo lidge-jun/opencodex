@@ -223,6 +223,11 @@ still cover the rule, which is a judgement only review makes.
   confirmed keychain untrust, so a later process retries it; a controller enable refuses while it
   exists; see [`claude-desktop.md`](clients/claude-desktop.md).
   Enforced by `tests/claude-integration/claude-picker-recovery.test.ts`.
+- **INV-CLIPICKER-01** — The intercept adds opencodex rows to the Claude Code CLI's `cc` model
+  catalog only for a CLI-classified User-Agent with `claudeCode.cliFirstParty` on, advertises only
+  Desktop 3P aliases the registry decodes, and relays the upstream bytes unchanged on any failure;
+  see [`runtime.md`](runtime.md).
+  Enforced by `tests/claude-integration/claude-cli-picker.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage

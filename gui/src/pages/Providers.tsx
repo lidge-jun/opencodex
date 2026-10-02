@@ -1,9 +1,12 @@
 import { readUsageResponseJson, usageSummary30dResourceKey } from "../usage-summary-resource";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
+import ProviderAuthPanel from "../components/provider-workspace/ProviderAuthPanel";
+import type { ProviderAuthHandlers } from "../components/provider-workspace/types";
+import type { CatalogLoginHint } from "../components/provider-catalog/login-hint-visibility";
 import { matchingWorkspacePreset, type CatalogPreset } from "../components/provider-catalog/provider-presets";
-import { isAccountProvider, type WorkspaceProvider } from "../provider-workspace/catalog";
+import { applyActiveAccountReauth, buildProviderWorkspace, isAccountProvider, type WorkspaceProvider } from "../provider-workspace/catalog";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
 import { oauthTosRisk } from "../oauth-tos-risk";
 import { ToastNotice, type NoticeTone } from "../ui";
@@ -212,7 +215,25 @@ function useAccountSelectionEvents(
   return useCallback(() => recoverRef.current(), []);
 }
 
-export default function Providers({ apiBase }: { apiBase: string }) {
+/** Sign-in controls handed to `scopeEmpty`: the same login the Add provider Accounts row starts. */
+export type ScopedProviderLogin = {
+  busy: boolean;
+  hint: CatalogLoginHint | null;
+  onSignIn: () => void;
+  onCancel: () => void;
+};
+
+/**
+ * `scopeProvider` renders only that provider's Accounts content (the Claude page's Account
+ * tab): the ProviderAuthPanel that ProviderDetails shows on its Accounts tab, with the same
+ * props, handlers and modals, and none of the page head, rail, detail header or tabs.
+ * `scopeEmpty` fills the slot while that provider is not configured.
+ */
+export default function Providers({ apiBase, scopeProvider, scopeEmpty }: {
+  apiBase: string;
+  scopeProvider?: string;
+  scopeEmpty?: (login: ScopedProviderLogin) => ReactNode;
+}) {
   const t = useT();
   const configCacheKey = `ocx.providers.config.v1:${apiBase}`;
   const [config, setConfig] = useState<ProvidersConfig | null>(
@@ -353,7 +374,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   // WP3: one Codex account controller for the whole Providers page, shared by the
   // Overview tab and the Accounts tab so a mutation on either is instantly visible on
   // both. Mounting CodexAccountPool twice used to fork this state.
-  const codexPool = useCodexAccountPool(apiBase);
+  // A scoped view of a non-Codex provider never shows this controller, so it does not poll.
+  const codexPool = useCodexAccountPool(apiBase, !scopeProvider || scopeProvider === "openai");
   // Single source for Codex reauth health: the controller derives it from the same
   // accounts/active pair this page used to poll on its own 30s timer.
   const codexActiveNeedsReauth = codexPool.activeNeedsReauth;
@@ -379,9 +401,17 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     };
   }, [oauthStatus, codexPool.accounts, codexPool.loadState, codexActiveNeedsReauth]);
 
+  // A scoped view reads only its own provider's rosters, keys and quota enrichment. The hook
+  // derives every read (bootstrap, quota=1 enrichment, selection refresh, 30s recovery) from
+  // the config it is given, so narrowing that config is what keeps the others quiet.
+  const poolConfig = useMemo(() => {
+    if (!scopeProvider || !config) return config;
+    const scoped = config.providers[scopeProvider];
+    return { ...config, providers: scoped ? { [scopeProvider]: scoped } : {} };
+  }, [config, scopeProvider]);
   const pools = useProviderAccountPools({
     apiBase, t: t as unknown as Parameters<typeof useProviderAccountPools>[0]["t"],
-    config, oauthStatus: oauthStatusWithCodex, aliveRef,
+    config: poolConfig, oauthStatus: oauthStatusWithCodex, aliveRef,
     notify,
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
   });
@@ -437,8 +467,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         : mode === "forward" || mode === "local"
           ? undefined
           : () => fetchKeyPools([provider], true);
+    // A scoped view has no workspace shell, so no provider-report read will ever settle the
+    // epoch; the forced account read is the whole refresh there.
+    if (scopeProvider) return readAccounts?.() ?? Promise.resolve(true);
     return beginQuotaRefresh(readAccounts);
-  }, [config, codexPool, fetchAccountSets, fetchKeyPools, beginQuotaRefresh]);
+  }, [config, codexPool, fetchAccountSets, fetchKeyPools, beginQuotaRefresh, scopeProvider]);
 
   /**
    * Force a fresh read of EVERY provider's quota, for the overview where no provider
@@ -515,14 +548,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   if (!config) {
     return (
       <>
-        <div className="page-head">
+        {!scopeProvider && <div className="page-head">
           <h2>{t("nav.providers")}</h2>
-        </div>
+        </div>}
         {status
           ? <ToastNotice tone={statusTone} onDismiss={clearStatus} dismissLabel={t("common.close")}>{status}</ToastNotice>
           : (
             <div className="providers-workspace providers-workspace--boot" aria-busy="true">
-              <div className="providers-workspace-rail providers-workspace-rail--boot" aria-hidden="true" />
+              {!scopeProvider && <div className="providers-workspace-rail providers-workspace-rail--boot" aria-hidden="true" />}
               <div className="providers-workspace-main">
                 <p className="muted"><span className="spin" aria-hidden="true" /> {t("prov.loadingConfig")}</p>
               </div>
@@ -578,18 +611,71 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     revealProviderAccounts(provider);
   };
 
+  const authHandlers: ProviderAuthHandlers = {
+    onLogin: requestLoginOAuth,
+    onNativeLoginSettled,
+    onCancelLogin: cancelLoginOAuth,
+    onLogout: logoutOAuth,
+    onReauth: (provider, accountId) => requestLoginOAuth(provider, true, accountId),
+    onSwitchAccount: switchAccount,
+    onPauseAccount: pauseAccount,
+    onAccountPoolThreshold: setAccountPoolThreshold,
+    onAccountThreshold: setAccountThreshold,
+    onRemoveAccount: removeAccount,
+    onRetryAccounts: async provider => { await fetchAccountSets([provider]); },
+    onAddApiKey: addApiKeyValue,
+    onSwitchApiKey: switchApiKey,
+    onRemoveApiKey: removeApiKey,
+    onEditAlias: editCredentialAlias,
+    onRefreshQuota: refreshProviderQuota,
+  };
+
+  // Derived exactly as the workspace shell derives its rows, so the panel sees the same item.
+  const scopedConfigured = scopeProvider ? config.providers[scopeProvider] as WorkspaceProvider | undefined : undefined;
+  const scopedSections = scopeProvider && scopedConfigured
+    ? applyActiveAccountReauth(buildProviderWorkspace({ [scopeProvider]: scopedConfigured }), activeAccountNeedsReauth)
+    : null;
+  const scopedItem = scopedSections
+    ? [...scopedSections.ready, ...scopedSections.needsSetup, ...scopedSections.disabled][0] ?? null
+    : null;
+
   return (
     <>
-      <div className="page-head">
+      {!scopeProvider && <div className="page-head">
         <h2>{t("nav.providers")}</h2>
         <div className="row">
           <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
         </div>
-      </div>
+      </div>}
       {status && (
         <ToastNotice tone={statusTone} onDismiss={clearStatus} dismissLabel={t("common.close")}>{status}</ToastNotice>
       )}
-      <ProviderWorkspaceShell
+      {scopeProvider ? (scopedItem ? (
+        <ProviderAuthPanel
+          item={scopedItem}
+          apiBase={apiBase}
+          oauth={accountLoginStatus[scopedItem.name] ?? oauthStatus[scopedItem.name]}
+          accounts={accountSets[scopedItem.name]?.accounts ?? []}
+          keys={keyPools[scopedItem.name] ?? []}
+          accountLoadState={accountLoadStates[scopedItem.name] ?? (scopedItem.authMode === "oauth" ? "idle" : "ready")}
+          switchingAccountId={switchingAccount?.provider === scopedItem.name ? switchingAccount.accountId : null}
+          pausingAccountId={pausingAccount?.provider === scopedItem.name ? pausingAccount.accountId : null}
+          busy={busy === scopedItem.name}
+          loginHint={loginInfo}
+          authHandlers={authHandlers}
+          onUpdateProvider={updateProvider}
+          codexController={codexPool}
+        />
+      ) : scopeEmpty?.({
+        busy: busy === scopeProvider,
+        hint: loginInfo?.provider === scopeProvider ? loginInfo : null,
+        // Straight to the warning-aware OAuth entry, the call onAccountLogin makes for this
+        // provider once discovery lists it. /api/oauth/login validates the provider against its
+        // own static registry, so a cold mount (or a failed /api/oauth/providers read) must not
+        // leave this button waiting on discovery or silently doing nothing.
+        onSignIn: () => requestLoginOAuth(scopeProvider),
+        onCancel: () => { void cancelLoginOAuth(scopeProvider); },
+      })) : <ProviderWorkspaceShell
         onRemoveProvider={removeProvider}
         providers={config.providers as Record<string, WorkspaceProvider>}
         apiBase={apiBase}
@@ -653,24 +739,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             pausingAccountId={pausingAccount?.provider === item.name ? pausingAccount.accountId : null}
             busyProvider={busy}
             loginHint={loginInfo}
-            authHandlers={{
-              onLogin: requestLoginOAuth,
-              onNativeLoginSettled,
-              onCancelLogin: cancelLoginOAuth,
-              onLogout: logoutOAuth,
-              onReauth: (provider, accountId) => requestLoginOAuth(provider, true, accountId),
-              onSwitchAccount: switchAccount,
-              onPauseAccount: pauseAccount,
-              onAccountPoolThreshold: setAccountPoolThreshold,
-              onAccountThreshold: setAccountThreshold,
-              onRemoveAccount: removeAccount,
-              onRetryAccounts: async provider => { await fetchAccountSets([provider]); },
-              onAddApiKey: addApiKeyValue,
-              onSwitchApiKey: switchApiKey,
-              onRemoveApiKey: removeApiKey,
-              onEditAlias: editCredentialAlias,
-              onRefreshQuota: refreshProviderQuota,
-            }}
+            authHandlers={authHandlers}
             onRefreshQuota={() => refreshProviderQuota(item.name)}
             isDefault={item.name === config.defaultProvider}
             onRemoveProvider={removeProvider}
@@ -681,7 +750,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           />
           );
         }}
-      />
+      />}
       <ProvidersPageModals
         apiBase={apiBase}
         config={config}

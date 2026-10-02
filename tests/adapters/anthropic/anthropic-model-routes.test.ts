@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../../helpers/anthropic-shared-quota";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { OAUTH_PROVIDERS } from "../../../src/oauth";
 import { getAccountCredential, setAnthropicAccountThreshold } from "../../../src/oauth/store";
@@ -6,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
-import { clearAnthropicAccountPoolState, bindAnthropicSessionAffinity, getAnthropicAccountHealthSnapshot, getAnthropicSidecarAccessToken, getAnthropicPoolAccessSnapshot, getAnthropicPoolRetryAfterSeconds, promoteAnthropicActiveAccount, resolveAnthropicAccountForSession, rotateAnthropicAccountOn429 } from "../../../src/oauth/anthropic-routing";
+import { clearAnthropicAccountPoolState, bindAnthropicSessionAffinity, getAnthropicAccountHealthSnapshot, getAnthropicSidecarAccessToken, getAnthropicPoolAccessSnapshot, getAnthropicPoolRetryAfterSeconds, promoteAnthropicActiveAccount, resolveAnthropicAccountForSession,} from "../../../src/oauth/anthropic-routing";
 import { parseAnthropicModelRoutes, resolveAnthropicModelRoute } from "../../../src/oauth/anthropic-model-routes";
 import { captureOAuthAccountSelection, getAccountSet, markAccountNeedsReauth, replaceProviderAccountSet, saveAccountCredential, saveCredential, setAccountPaused, setActiveAccount } from "../../../src/oauth/store";
 import { clearUpstreamHostHealth, getUpstreamHostHealth, upstreamHostHealthKey } from "../../../src/codex/upstream-host-health";
@@ -133,7 +134,7 @@ test("a paused route successor is skipped on disabled-pool 429 failover", async 
   const cfg = config(ids, async token => {
     if (token.includes("synthetic-access-0")) {
       await setAccountPaused("anthropic", ids[0]!, true);
-      return Response.json({ error: { type: "rate_limit_error", message: "synthetic refusal" } }, { status: 429, headers: { "retry-after": "60" } });
+      return Response.json({ error: { type: "rate_limit_error", message: "synthetic refusal" } }, { status: 429, headers: { "anthropic-ratelimit-unified-5h-status": "rejected", "retry-after": "60" } });
     }
     return answer();
   });
@@ -444,7 +445,7 @@ test("route constrains affinity and 429 replacement even when an outsider has be
 test("routed 429 retries only a routed sibling and never the eligible outsider", async () => {
   const ids = await seed();
   const cfg = config(ids, token => token.includes("synthetic-access-1")
-    ? Response.json({ type: "error", error: { type: "rate_limit_error", message: "limited" } }, { status: 429, headers: { "retry-after": "30" } })
+    ? Response.json({ type: "error", error: { type: "rate_limit_error", message: "limited" } }, { status: 429, headers: { "anthropic-ratelimit-unified-5h-status": "rejected", "retry-after": "30" } })
     : answer());
   cfg.anthropicAccountPool!.routes![0]!.accounts = [ids[1]!, ids[2]!];
   const response = await post(cfg);
@@ -456,7 +457,7 @@ test("routed 429 retries only a routed sibling and never the eligible outsider",
 test("routed 429 without an alternate retains upstream refusal and scoped cooldown", async () => {
   const ids = await seed();
   const cfg = config(ids, () => Response.json({ type: "error", error: { type: "rate_limit_error", message: "limited" } },
-    { status: 429, headers: { "retry-after": "30" } }));
+    { status: 429, headers: { "anthropic-ratelimit-unified-5h-status": "rejected", "retry-after": "30" } }));
   cfg.anthropicAccountPool!.routes![0]!.accounts = [ids[1]!];
   cfg.anthropicAccountPool!.routes![0]!.name = ACCOUNT_LIKE_ROUTE;
   const first = await post(cfg);

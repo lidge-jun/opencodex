@@ -1,3 +1,6 @@
+import { mergeAnthropicFamilyWindows, hasAnthropicFamilyEnumeration } from "./anthropic-family-headers";
+import { getCachedProviderAccountQuota } from "./account-cache";
+import { observeAnthropicFamilyQuota, anthropicFamilyQuotaGeneration } from "../../oauth/anthropic-model-quota";
 import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus } from "../../oauth/store";
 import type { ProviderQuota } from "../quota-types";
 
@@ -42,6 +45,7 @@ export function clearAnthropicCooldownGenerations(): void {
 export type AnthropicCooldownRecoveryProbe = Readonly<{
   requiresFreshDispatch: boolean;
   isCurrentCredential(): boolean;
+  isCurrentFamily(): boolean;
   isCurrent(): boolean;
   settle(quota: ProviderQuota): "cleared" | "retained" | "superseded";
 }>;
@@ -67,6 +71,7 @@ export async function captureAnthropicCooldownRecoveryProbe(
   // Lazy because anthropic-routing reads the quota cache on normal request routing.
   const routing = await import("../../oauth/anthropic-routing");
   const cooldownGeneration = anthropicCooldownGeneration(accountId);
+  const familyGeneration = anthropicFamilyQuotaGeneration(accountId);
   const claim = routing.captureAnthropicCooldownRecovery(accountId);
   const isCurrentCredential = () => {
     const current = getAccountCredential("anthropic", accountId);
@@ -75,6 +80,7 @@ export async function captureAnthropicCooldownRecoveryProbe(
   return {
     requiresFreshDispatch: claim !== null,
     isCurrentCredential,
+    isCurrentFamily: () => anthropicFamilyQuotaGeneration(accountId) === familyGeneration,
     isCurrent: () => isCurrentCredential()
       && anthropicCooldownGeneration(accountId) === cooldownGeneration,
     settle: quota => claim === null ? "retained"
@@ -107,12 +113,24 @@ export async function probeAnthropicQuotaWithRecovery(
   }
   // Clearing the claimed cooldown intentionally advances the fence. Adopt that exact new
   // generation; any later observation/429 then invalidates publication before a cache write.
+  const ownsFamily = probe.isCurrentFamily();
+  const authoritative = ownsFamily && hasAnthropicFamilyEnumeration(quota);
+  if (ownsFamily) observeAnthropicFamilyQuota(accountId, quota.customWindows ?? [], quota.updatedAt, authoritative);
+  if (!authoritative) {
+    const cached = getCachedProviderAccountQuota("anthropic", accountId)?.customWindows;
+    const windows = ownsFamily ? mergeAnthropicFamilyWindows(cached, quota.customWindows)
+      : cached ?? [];
+    // A superseded family enumeration has no authority, including over absent families.
+    if (!ownsFamily || windows.length) quota = { ...quota, customWindows: windows };
+  }
   const publicationGeneration = anthropicCooldownGeneration(accountId);
+  const publicationFamilyGeneration = anthropicFamilyQuotaGeneration(accountId);
   afterSettlementForTests?.();
   return {
     quota,
     isCurrent: () => probe.isCurrentCredential()
       && anthropicCooldownGeneration(accountId) === publicationGeneration
+      && anthropicFamilyQuotaGeneration(accountId) === publicationFamilyGeneration
       && mayPublish(),
   };
 }

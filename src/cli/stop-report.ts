@@ -76,6 +76,11 @@ export interface StopSummaryJson {
   sharedTeardown: StopSharedTeardownOutcome;
   /** One stable human-readable line for a caller's UI. */
   message: string;
+  /**
+   * The single guard fact that failed on a `approval-changed` refusal, when the
+   * run can name one. Additive on `ocx-stop/1`; absent on every other outcome.
+   */
+  detail?: string;
 }
 
 /** What handleStop returns: the pre-existing boolean plus the structured twin. */

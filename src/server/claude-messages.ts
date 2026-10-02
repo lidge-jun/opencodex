@@ -28,6 +28,7 @@ import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
+import { classifyInterceptClient } from "../claude/intercept/client-class";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
 import { carriesMessageThread, messageThreadUnsupportedResponse } from "../claude/message-threads";
 import {
@@ -85,6 +86,7 @@ import { requestPathForLane } from "../protocols/path";
 import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols/settings";
 import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
 import { recordProtocolShadowPlan } from "../protocols/shadow-plan";
+import { captureAnthropicClientIdentity } from "../adapters/anthropic/client-identity";
 import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
 import {
   isApiAuthRequired,
@@ -924,8 +926,10 @@ async function handleClaudeMessagesWithBudget(
       req.headers.get("anthropic-beta") ?? undefined,
     );
     // Client surface discrimination: Desktop 3P aliases resolve through the
-    // desktop registry; Code uses readable aliases or direct model names.
-    if (isRec(anthropicBody) && typeof anthropicBody.model === "string" && resolveDesktop3pAlias(anthropicBody.model)) {
+    // desktop registry; Code uses readable aliases or direct model names. The CLI's first-party
+    // picker also offers registry aliases, so a CLI-classified User-Agent stays the Code surface.
+    if (isRec(anthropicBody) && typeof anthropicBody.model === "string" && resolveDesktop3pAlias(anthropicBody.model)
+      && classifyInterceptClient(req.headers.get("user-agent")) !== "cli") {
       logCtx.surface = "claude-desktop";
       recordDesktopRequest();
     }
@@ -1201,7 +1205,8 @@ async function handleClaudeMessagesWithBudget(
     return await handleNativeMessages({
       req, config, logCtx, ...(logIds ? { logIds } : {}),
       route: nativeMessagesRoute, body: nativeBody, requestedModel, translatorBudget, selector: nativeSelector,
-      // The one caller header the native lane is given; the builder allowlists it.
+      // Compatibility identity is an opaque request-local handle, separate from credentials.
+      clientIdentity: captureAnthropicClientIdentity(req.headers),
       callerAnthropicBeta: req.headers.get("anthropic-beta"),
     });
   }

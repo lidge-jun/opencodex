@@ -28,7 +28,7 @@ the [source-owned credential contract](codex-home.md#orca-source-owned-account-i
 
 ## Config surface
 
-`src/config/schema/compaction-recovery.ts` strictly validates opt-in `compactionRecovery`; invalid disk values disable it with a warning, while candidate writes reject them. `src/config/schema/blocked-model-redirects.ts` applies the same read-degrade/write-reject boundary to malformed `blockedModelRedirects` maps. The [failure-only contract](transports/responses-failover.md) leaves provider identity, accounts and client compaction unchanged.
+`src/config/schema/compaction-recovery.ts` strictly validates opt-in `compactionRecovery`; invalid disk values disable it with a warning, while candidate writes reject them. `src/config/schema/blocked-model-redirects.ts` applies the same read-degrade/write-reject boundary to malformed `blockedModelRedirects` maps. The [failure-only contract](transports/responses-failover.md) leaves provider identity, accounts and client compaction unchanged. `src/cli/config-command.ts` accepts one leading UTF-8 BOM when parsing validate/import input from a file or stdin. JSON syntax and schema validation still run before persistence; BOM characters inside string values remain data.
 
 `skills.catalog_refresh` in the proxy JSON configuration accepts `per_session` (the runtime default when absent) or `per_turn`. The former retains received skills instructions for a conversation; the latter passes through the current catalog. This is separate from Codex's `skills.include_instructions` TOML switch and does not change the live dashboard probe. See the [Responses snapshot contract](transports/responses.md#responses-httpsse).
 
@@ -528,7 +528,7 @@ it owns the refusal as well as the request. `runtimeBaseUrl` resolves the live l
 states that the listener serves only the machine routes, points custom-model and other management
 edits at the hub the machine is connected to, and gives the on-machine alternative: edit
 `customModels` in `config.json`, then run `ocx sync`. The status is also the honest exit code, since
-`runCliAction` maps 404 to exit 4 and would otherwise report a missing record.
+`runCliAction` maps 404 to exit 4 and would otherwise report a missing record. Shared integer options in `src/cli/runtime-api.ts` accept decimal safe integers with optional comma/underscore separators between digits and apply each caller's minimum. Blank, hexadecimal, exponential, fractional and unsafe values fail before management requests.
 
 A 404 body carrying both `method` and `path` is rendered as the route that listener does not serve,
 so any not-served-here answer stays legible rather than printing a bare token. `ocx models edit` in

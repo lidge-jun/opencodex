@@ -391,3 +391,11 @@ committing it.
   since they do not affect rendering. `viewBox="0 0 48 48"`, one `#151714` ink, so it is
   **masked** like `packycode.svg`: as an image it vanishes on the dark tile. The pack's reverse
   symbol (`#F5F5F1`) is the same geometry and is not needed once the mark follows the theme.
+
+## OpenGateway (2026-10-02)
+
+- `opengateway.svg` — OpenGateway's header logo, `https://opengateway.ai/logo.svg` (the asset the
+  site's own header renders), committed byte for byte (860 bytes, MD5 `b510e841406d8bcb24fb4ad584f128fd`). `viewBox="0 0 1140 650"`
+  (1.75:1, inside the 2.5 lockup limit), pure geometry (`rect`/`path`), drawn in `currentColor`, so it
+  is **masked**: as an image `currentColor` resolves to black and vanishes on the dark tile. The site
+  favicon `https://opengateway.ai/icon.svg` was rejected: its "OG" is a `<text>` glyph.

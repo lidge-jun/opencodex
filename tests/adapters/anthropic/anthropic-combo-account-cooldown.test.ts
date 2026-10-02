@@ -56,7 +56,7 @@ async function seed(count: number): Promise<string[]> {
 function spent(): Response {
   return Response.json(
     { type: "error", error: { type: "rate_limit_error", message: "synthetic weekly quota exhausted" } },
-    { status: 429, headers: { "retry-after": SPENT_WEEK_RETRY_AFTER } },
+    { status: 429, headers: { "anthropic-ratelimit-unified-5h-status": "rejected", "retry-after": SPENT_WEEK_RETRY_AFTER } },
   );
 }
 

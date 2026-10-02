@@ -467,6 +467,15 @@ function showCodexCreditsError(value: unknown): string | null {
   return "schema_invalid: showCodexCredits: must be a boolean or omitted";
 }
 
+function creditCodexAccountIdsError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "creditCodexAccountIds")) return null;
+  const ids = raw.creditCodexAccountIds;
+  if (ids === undefined) return null;
+  if (Array.isArray(ids) && ids.every(id => typeof id === "string" && /^[a-zA-Z0-9._-]{1,64}$/.test(id))) return null;
+  return "schema_invalid: creditCodexAccountIds: must be an array of account ids or omitted";
+}
+
 function oauthOpenBrowserError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw || !Object.hasOwn(raw, "oauthOpenBrowser")) return null;
@@ -662,6 +671,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? dropCodexSafetyBufferingError(value)
     ?? oauthOpenBrowserError(value)
     ?? showCodexCreditsError(value)
+    ?? creditCodexAccountIdsError(value)
     ?? runtimeRoleError(value)
     ?? remoteGuiConfigError(value)
     ?? clientConnectionConfigError(value)

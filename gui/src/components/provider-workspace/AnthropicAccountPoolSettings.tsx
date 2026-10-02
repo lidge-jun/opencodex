@@ -1,6 +1,8 @@
 /**
  * Opt-in Anthropic OAuth account pool controls (#294).
- * Experimental — shows a strong warning because the feature is not battle-tested.
+ * Experimental. The conditions it is meant for are static helper text next to the toggle,
+ * with the selection details behind a disclosure: the notice describes how to use the pool,
+ * so it is not announced as a live alert. Load and save failures keep their own messages.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
@@ -20,6 +22,9 @@ import {
 import AccountPoolStrategyControls from "../AccountPoolStrategyControls";
 import { Select } from "../../ui";
 
+/** The public guide section that explains pool selection, failover and its limits. */
+const ANTHROPIC_POOL_GUIDE_URL = "https://opencodex.me/guides/claude-code/#claude-oauth-account-pool-experimental";
+
 const QUOTA_WINDOW_LABEL_KEYS = {
   "five-hour": "accountPool.quotaWindowFiveHour",
   weekly: "accountPool.quotaWindowWeekly",
@@ -33,6 +38,32 @@ type PoolState = {
   stickyLimit: number;
   quotaWindow: AccountPoolQuotaWindow;
 };
+
+/**
+ * The enabled status line names only what the selected strategy actually reads
+ * (src/oauth/anthropic-routing.ts). Round-robin rotates new sessions and refusal recovery
+ * through the ring and reads no usage, threshold or window. Fill-first drains the active
+ * account to its threshold in the window, then advances in stable order; at threshold 0 it
+ * stays until cooldown or sign-in. Quota keeps a healthy active account under the threshold
+ * and otherwise, and during recovery, picks the lowest usage in the window.
+ */
+function enabledStatus(
+  t: ReturnType<typeof useT>,
+  strategy: AccountPoolStrategy,
+  threshold: number,
+  quotaWindow: AccountPoolQuotaWindow,
+): string {
+  const window = t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]);
+  if (strategy === "round-robin") return t("anthropicPool.enabledRoundRobinDesc");
+  if (strategy === "fill-first") {
+    return threshold === 0
+      ? t("anthropicPool.enabledFillFirstNoThresholdDesc")
+      : t("anthropicPool.enabledFillFirstDesc", { threshold, window });
+  }
+  return threshold === 0
+    ? t("anthropicPool.enabledNoProactiveDesc", { window })
+    : t("anthropicPool.enabledDesc", { threshold, window });
+}
 
 export default function AnthropicAccountPoolSettings({
   apiBase,
@@ -204,14 +235,7 @@ export default function AnthropicAccountPoolSettings({
               : loading
                 ? t("common.loading")
                 : enabled
-                  ? threshold === 0
-                    ? t("anthropicPool.enabledNoProactiveDesc", {
-                        window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
-                      })
-                    : t("anthropicPool.enabledDesc", {
-                        threshold,
-                        window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
-                      })
+                  ? enabledStatus(t, strategy, threshold, quotaWindow)
                   : t("anthropicPool.disabledDesc")}
           </div>
         </div>
@@ -236,13 +260,23 @@ export default function AnthropicAccountPoolSettings({
         </button>
       </div>
 
-      <div role="alert" className="card-sub anthropic-pool-card__notice">
+      <p className="card-sub anthropic-pool-card__notice">
         {t("anthropicPool.experimentalWarning")}
-      </div>
+      </p>
 
       {accountCount < 2 && (
         <div className="card-sub" style={{ marginTop: 8 }}>{t("anthropicPool.needTwoAccounts")}</div>
       )}
+
+      <details className="anthropic-pool-card__details">
+        <summary>{t("anthropicPool.detailsSummary")}</summary>
+        <p>{t("anthropicPool.detailsEnabling")}</p>
+        <p>{t("anthropicPool.detailsFailover")}</p>
+        <p>{t("anthropicPool.detailsActivity")}</p>
+        <p>
+          <a href={ANTHROPIC_POOL_GUIDE_URL} target="_blank" rel="noreferrer">{t("anthropicPool.detailsGuide")}</a>
+        </p>
+      </details>
 
       {enabled && state && (
         <>

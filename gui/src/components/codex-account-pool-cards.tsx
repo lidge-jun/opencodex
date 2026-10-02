@@ -6,6 +6,7 @@ import { displayAccountId } from "../lib/privacy";
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import { DEFAULT_ACCOUNT_PRIORITY, normalizeAccountPriority } from "../account-priority";
 import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
+import { AccountCreditsToggle, CreditsOnBadge } from "./CodexCreditSpend";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
@@ -43,6 +44,8 @@ export function CodexAccountPoolCards({
   onReauth,
   onEditAlias,
   onRemove,
+  onToggleCreditsAfterLimit,
+  creditsAfterLimitUpdatingId = null,
   onCopyDoctor,
   doctorCopyOutcomeFor,
 }: {
@@ -74,6 +77,9 @@ export function CodexAccountPoolCards({
   onReauth: (id: string) => void;
   onEditAlias: (account: CodexAccountEntry) => void;
   onRemove: (id: string) => void;
+  /** Writes one account's "use credits after limit" switch, shown in its "more" disclosure. */
+  onToggleCreditsAfterLimit?: (account: CodexAccountEntry, enabled: boolean) => void;
+  creditsAfterLimitUpdatingId?: string | null;
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
 }) {
@@ -114,6 +120,7 @@ export function CodexAccountPoolCards({
                 </span>
               )}
               <AccountPriorityBadge value={a.priority} />
+              <CreditsOnBadge enabled={a.creditsAfterLimit} />
               {a.id === pinnedId && !a.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
               <CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />
               {healthLabel && (
@@ -178,6 +185,15 @@ export function CodexAccountPoolCards({
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => void onEditAlias(a)}>
                   {t("prov.editAlias")}
                 </button>
+                {onToggleCreditsAfterLimit && (
+                  <AccountCreditsToggle
+                    accountLabel={a.alias ?? a.email}
+                    enabled={a.creditsAfterLimit}
+                    saving={creditsAfterLimitUpdatingId === a.id}
+                    disabled={creditsAfterLimitUpdatingId !== null}
+                    onChange={enabled => onToggleCreditsAfterLimit(a, enabled)}
+                  />
+                )}
                 <button
                   type="button"
                   className="btn-icon btn-icon-danger"

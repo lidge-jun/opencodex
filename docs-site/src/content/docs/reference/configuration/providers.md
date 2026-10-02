@@ -45,6 +45,7 @@ separate. Full request URLs such as `/api/v1/responses` are not provider base UR
 | `contextCapValue?` | `number` | `350000` | Default used on first enable. A later enable restores the selected provider value. Updating the global value with `setAll: true` changes enabled caps only; `setAll: true` without a value enables all configured providers at the current global value. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by Codex Auth. Secrets live separately in `codex-accounts.json`. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from Pool selection until resumed, including the main `__main__` account when paused. |
+| `creditCodexAccountIds?` | `string[]` | `[]` | Accounts allowed to keep serving from ChatGPT credits after a usage limit, including the main `__main__` account. Upstream does not refuse an account that holds credits at 100%; it serves the request and draws the balance. Spending is opt-in: an account not listed here is skipped by selection while one of its usage windows (weekly or monthly, only monthly on 30-day plans, or the 5-hour window) reads 100% with its reset still ahead, and returns once that reset passes. A weekly or monthly reading without a reset time does not hold the account; a 5-hour reading at 100% without a reset holds it only while that reading is still fresh. When no other account is available, automatic selection finds none rather than spending credits. An unlisted `__main__` is also refused, like a hard-lock refusal, when a request names it or carries its credential. Listing `__main__` does not lift the main-account hard lock (on by default at 98%), which still stops the main login first; turn the lock off to let the main account spend credits (a lock at 100% still stops it at 100%). New accounts start unlisted. Managed by the **Use credits** switch in the Codex Auth header and the **Use credits after limit** switch in each account card's **⋯** menu. |
 | `codexQuotaAutoRefresh?` | `Record<string, object>` | `{}` | Per-Codex-login-account opt-in for automatic `fiveHour` and `weekly` window activation in Pool mode; Direct mode does not run this worker. In Providers/Codex Auth **Advanced settings**, one control enables or disables both supported windows across all current main and added accounts. New accounts are not opted in automatically. Enable skips windows absent from live WHAM data; disable also clears stale enabled windows. The UI reuses granular `/api/settings` writes, reconciles partial failures, and retries the original ON/OFF intent without replacing unrelated settings or completed reset markers. The API still rejects enabling an unavailable window with HTTP 409. At a reported reset time, opencodex sends one minimal non-stored Codex message using that account's quota and persists the activated timestamp. This does not apply to API-key providers. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | Optional map from an arbitrary public model selector to a stored Codex account target. When account-qualified picker rows are enabled, each selector whose target is present adds separate `<selector>/<native-openai-model>` rows to the Codex picker; each row uses only that account. With any selector active, bare native rows are hidden in the picker, but their ids remain routable and listed by raw `/v1/models` unless explicitly disabled. |
 | `codexAccountPickerEnabled?` | `boolean` | off when the map is empty | Controls whether eligible `codexAccountNamespaces` mappings generate account-qualified Codex picker rows. `true` allows mapped rows to appear. If omitted with a non-empty map, it is treated as enabled for backward compatibility; if the map is empty, it is off. `false` hides generated rows and restores bare native picker rows without deleting mappings or disabling exact `<selector>/<native-openai-model>` routing. |
@@ -873,8 +874,10 @@ Rotation does not protect against provider enforcement; multi-account use may vi
 ### `anthropicAccountPool` (experimental)
 
 This opt-in pools multiple Anthropic OAuth accounts already stored in `auth.json`. It is off by
-default and not battle-tested. Accounts in the same organization may share quota, and automated
-rotation may trigger provider restrictions.
+default and experimental, and Anthropic has not endorsed automated account pooling. Accounts in the
+same organization may share quota, and switching accounts does not protect against provider
+restrictions. See the [Claude Code guide](/guides/claude-code/#claude-oauth-account-pool-experimental)
+for the subscription and client conditions the pool is meant for.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -892,11 +895,20 @@ helper fails locally before any provider request; it does not silently use an ac
 route. When the main request works but image description or web search fails, check the helper's
 configured model and the accounts eligible for that model's route.
 
-When enabled, 429 records a cooldown and may rotate within the request. The cooldown length comes
-from a usable `Retry-After`, otherwise from the latest valid reset time among rate-limit windows
-Anthropic reports as `rejected`, including weekly windows. Valid upstream deadlines are not
-shortened to a fixed cooldown ceiling; non-finite or unrepresentable deadlines are ignored.
-A refusal with no usable deadline falls back to a 60-second default backoff. Affinity is process-local
+Shared-quota 429s (rejected shared 5h/7d windows) cool the serving account and may recover
+on an eligible sibling. Retry-After wins, otherwise the latest valid rejected reset is used,
+with a 60-second default when no deadline is usable. A transient rate throttle pauses only
+that account's admission, preserves affinity, and permits one short same-account retry plus
+at most one sibling detour per request. A headerless 429 permits at most one short retry on
+the same account, leaves account health intact, and adds no synthetic Retry-After. These
+retries share the physical-send budget and stop on cancellation or committed streamed output.
+Default single-account behavior is unchanged. The requested model's shared 5-hour/weekly and
+family weekly evidence determine its pool admission. A Fable-only rejection keeps Sonnet
+eligible on the same account. Passive Fable evidence ages out after thirty minutes or its
+known reset and is revalidated by one serving request at a time. Usage thresholds remain
+soft preferences with an all-drained fallback; these controls are not hard usage or billing caps.
+Active usage probes preserve absent family windows unless the response authoritatively enumerates limits.
+Affinity is process-local
 and size-bounded. Token-refresh credential failures retain the existing reauthentication policy. Classified pre-output account-entitlement/billing 403s clear affinity and cool the account for `Retry-After`, or ten minutes by default, before trying an eligible replacement. Generic or request-level 403s remain terminal; see [Claude account recovery](/guides/claude-code/). If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.
 

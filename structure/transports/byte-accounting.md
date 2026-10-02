@@ -194,3 +194,5 @@ Schema size still determines traversal work and the cost of copying a changed br
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The [compaction routing override](responses-failover.md#compaction-routing-overrides) changes model and effort scalars on the already-read request body, before parsing, within the existing body-reader budget.
+
+`src/lib/sse-decoder.ts` recognizes CR, LF and CRLF line endings, including CRLF split between fetch chunks. Delimiters are consumed before field retention; event/comment ordering, EOF dispatch and translator-budget release remain shared across all three forms. The delimiter search keeps native `indexOf` cursors for the next CR and LF in each decoded chunk, so scanning stays linear for every framing.

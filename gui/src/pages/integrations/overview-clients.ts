@@ -315,7 +315,7 @@ function claudeRow(
 ): OverviewRow {
   const base = {
     id: "claude" as const,
-    hash: "integrations/claude",
+    hash: "claude/code",
     labelKey: "integrations.tab.claude" as TKey,
     toggle: "claude" as const,
     toggleBlocked: native?.disableBlocked ?? null,
@@ -364,7 +364,7 @@ function claudeDesktopRow(
 ): OverviewRow {
   const base = {
     id: "claudeDesktop" as const,
-    hash: "integrations/claude/desktop",
+    hash: "claude/desktop",
     // "Desktop" alone is ambiguous next to ten other client names.
     labelKey: "claudeDesktop.title" as TKey,
     toggle: "claude-desktop" as const,

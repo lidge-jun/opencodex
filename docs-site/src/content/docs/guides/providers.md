@@ -490,7 +490,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 101 built-in presets: 83 key-based, 14 OAuth, three local, and one default
+opencodex ships 102 built-in presets: 84 key-based, 14 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -583,9 +583,19 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | Opper | `https://api.opper.ai/v3/compat` |
 | TokenLab | `https://api.tokenlab.sh/v1` |
+| OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
+
+**OpenGateway** is an OpenAI-compatible gateway operated by Sionic AI at
+`https://apis.opengateway.ai/v1`. Its public catalog contains about 80 active models
+(as verified on 2026-10-02); the preset automatically refreshes the live model list from
+public `GET /v1/models` and keeps active Chat Completions models (plus the Responses-only `openai/o3-pro`, which is pinned to Responses). Sionic-served
+`deepseek/deepseek-v4.1-flash-ultrafast` and `z-ai/glm-5.3-flash-ultrafast` are listed first.
+Create a key in the [OpenGateway dashboard](https://opengateway.ai/api-keys), then run
+`ocx provider add opengateway` or select **OpenGateway** in the dashboard. Chat requests
+use the configured Bearer key; the public model list does not validate that key.
 
 **TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
 OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),

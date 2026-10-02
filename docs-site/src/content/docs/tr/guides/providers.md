@@ -327,7 +327,7 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 101 yerleşik önayar ile birlikte gelir: 83 anahtar tabanlı, 14
+opencodex 102 yerleşik önayar ile birlikte gelir: 84 anahtar tabanlı, 14
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
@@ -396,9 +396,19 @@ yalnızca Cline IDE/CLI içinde mevcuttur; `minimax/minimax-m2.5` belgelenmiş A
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
+| OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …ve daha fazlası | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
+
+**OpenGateway**, Sionic AI tarafından işletilen OpenAI uyumlu bir ağ geçididir:
+`https://apis.opengateway.ai/v1`. Genel katalogda yaklaşık 80 etkin model bulunur
+(2026-10-02 tarihinde doğrulandı). Önayar, genel `GET /v1/models` üzerinden listeyi otomatik
+yeniler ve etkin Chat Completions modellerini (ve yalnızca Responses ile sunulup Responses'a yönlendirilen `openai/o3-pro` modelini) tutar. Sionic tarafından sunulan
+`deepseek/deepseek-v4.1-flash-ultrafast` ve `z-ai/glm-5.3-flash-ultrafast` ilk sırada listelenir.
+[OpenGateway panelinde](https://opengateway.ai/api-keys) bir anahtar oluşturun, ardından
+`ocx provider add opengateway` çalıştırın veya panelde **OpenGateway** seçin. Chat istekleri
+yapılandırılmış Bearer anahtarını kullanır; genel model listesi anahtarı doğrulamaz.
 
 **OpenCode Zen** (`opencode-zen`) ve anahtarsız **OpenCode Free** önayarı
 `https://opencode.ai/zen/v1` adresini paylaşır. Bu ağ geçidindeki ücretsiz

@@ -44,7 +44,7 @@ async function dispatch(path: string, init: RequestInit, inputConfig: OcxConfig,
   const response = await handleManagementAPI(new Request(url, {
     ...init,
     headers: { Host: url.host, "Content-Type": "application/json", ...(init.headers ?? {}) },
-  }), url, inputConfig, deps);
+  }), url, inputConfig, { ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "claude-intercept", "ca.pem"), pickerProxyPort: null } }), ...deps }, "admin-token", undefined, { trustedLoopback: true });
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 

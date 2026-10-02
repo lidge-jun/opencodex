@@ -30,6 +30,7 @@ export interface ResponsesTerminalRepairPolicy {
 
 export type ProviderModelDiscoveryScalar = string | number | boolean;
 
+/** Path segment `*` projects at most 256 array elements; containsAny/All match projected scalars exactly. */
 export type ProviderModelDiscoveryPredicate =
   | {
       path: readonly string[];
@@ -70,6 +71,8 @@ interface ProviderModelDiscoverySharedSpec {
   idField?: string;
   /** Declarative eligibility rules evaluated against each untrusted model row. */
   filter?: ProviderModelDiscoveryFilter;
+  /** Stable partition: admitted original rows matching ANY predicate precede other rows. Registry-only. */
+  preferFirst?: readonly ProviderModelDiscoveryPredicate[];
   /** Optional lower byte ceiling; the process-wide hard ceiling still wins. */
   maxResponseBytes?: number;
   /** Optional lower raw-row ceiling; the process-wide hard ceiling still wins. */

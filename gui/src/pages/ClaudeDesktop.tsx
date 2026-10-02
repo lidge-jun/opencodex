@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import ClaudeInterceptStart from "../components/ClaudeInterceptStart";
+import { useCallback, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { LANE_PAGE, defaultCollapsedFamilies, laneView, rowStartsOpen } from "./claude-desktop-lane";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { IconChevron } from "../icons";
@@ -68,6 +69,9 @@ interface DesktopFirstPartyStatus {
   applied: boolean;
   stale: boolean;
   interceptEnabled: boolean;
+  interceptReason?: string | null;
+  pickerReason?: string | null;
+  pickerFailurePort?: number;
   interceptRunning: boolean;
   proxyPort: number;
   caCertPath: string;
@@ -230,12 +234,9 @@ function seedDesktop(cacheKey: string) {
 export default function ClaudeDesktop({
   apiBase,
   active = true,
-  onPortChange,
 }: {
   apiBase: string;
   active?: boolean;
-  /** Keeps the Claude page intro subtitle in sync once /api/claude-desktop settles (port or failure). */
-  onPortChange?: (port: number | null) => void;
 }) {
   const { t, locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
@@ -315,16 +316,6 @@ export default function ClaudeDesktop({
     ? Object.fromEntries(resourceData.data.models.map(model => [model.route, resourceData.profile.assignments[model.route]?.family ?? "opus"]))
     : {} as Record<string, Family>;
   const destinations = Object.keys(draftDestinations).length > 0 ? draftDestinations : resourceDestinations;
-
-  useEffect(() => {
-    if (!onPortChange) return;
-    if (typeof data?.port === "number") {
-      onPortChange(data.port);
-      return;
-    }
-    // Cold failure with no port: stop the parent subtitle from claiming "Loading…" forever.
-    if (loadState.kind === "failed-cold") onPortChange(null);
-  }, [data?.port, loadState.kind, onPortChange]);
 
   const dirty = useMemo(
     () => profile !== null && savedProfile !== null && JSON.stringify(profile) !== JSON.stringify(savedProfile),
@@ -527,8 +518,8 @@ export default function ClaudeDesktop({
 
   return (
     <>
-      {/* Title/subtitle live on Claude.tsx above the Code/Desktop strip. */}
       <div className="claude-desktop-toolbar">
+        <p className="claude-panel-lead">{t("claudeDesktop.subtitle", { port: data.port })}</p>
         <div className="claude-profile-tools">
           <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={event => void importProfile(event)} />
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => importRef.current?.click()}>{t("claudeDesktop.importJson")}</button>
@@ -604,9 +595,7 @@ export default function ClaudeDesktop({
           <span className="claude-status-health">
             {status.firstParty.interceptRunning
               ? t("claudeDesktop.firstParty.proxyRunning", { port: status.firstParty.proxyPort })
-              : status.firstParty.interceptEnabled
-                ? t("claudeDesktop.firstParty.proxyStopped", { port: status.firstParty.proxyPort })
-                : t("claudeDesktop.firstParty.interceptDisabled")}
+              : <ClaudeInterceptStart apiBase={apiBase} reason={status.firstParty.interceptReason} port={status.firstParty.proxyPort} onStarted={() => statusResource.refresh()} />}
           </span>
         )}
         {status?.health.lastRequestAt && (
@@ -620,6 +609,19 @@ export default function ClaudeDesktop({
             {t("claudeDesktop.health.stats", { count: status.health.requestCount, errors: status.health.errorCount })}
           </span>
         )}
+        {/* One row for both answers: whether Desktop runs the profile, and whether the
+            profile on screen is saved. The actions stay with the state they change. */}
+        <span className="claude-status-actions">
+          <span className={`claude-dirty${dirty ? " active" : ""}`}>{dirty ? t("claudeDesktop.unsaved") : t("claudeDesktop.upToDate")}</span>
+          <span className="claude-save-actions">
+            <button type="button" className="btn btn-ghost btn-sm" disabled={!dirty || pending !== null} onClick={() => void save(false)}>
+              {pending === "save" ? t("claudeDesktop.saving") : t("common.save")}
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" disabled={pending !== null} onClick={() => void save(true)}>
+              {pending === "apply" ? t("claudeDesktop.applying") : pending === "save" ? t("claudeDesktop.saving") : status?.desiredEnabled === false ? t("claudeDesktop.enableApply") : modeDirty ? t("claudeDesktop.switchModeApply") : t("claudeDesktop.saveApply")}
+            </button>
+          </span>
+        </span>
       </div>
       {status?.riskWarning && selectedMode !== "first-party" && <p className="claude-mode-risk" role="note">{t("claudeDesktop.mode.firstPartyRisk")}</p>}
 
@@ -634,6 +636,8 @@ export default function ClaudeDesktop({
             key={`${status.firstParty.picker.reason}:${status.firstParty.picker.desired}:${status.firstParty.picker.effective}:${status.firstParty.picker.models}:${status.firstParty.picker.hint ?? ""}`}
             apiBase={apiBase}
             picker={status.firstParty.picker}
+            pickerReason={status.firstParty.pickerReason}
+            pickerFailurePort={status.firstParty.pickerFailurePort}
             onUpdated={() => void statusResource.refresh()}
           />
         )
@@ -651,18 +655,6 @@ export default function ClaudeDesktop({
           }}
         />
       )}
-
-      <div className="claude-profile-bar">
-        <span className={`claude-dirty${dirty ? " active" : ""}`}>{dirty ? t("claudeDesktop.unsaved") : t("claudeDesktop.upToDate")}</span>
-        <div className="claude-save-actions">
-          <button type="button" className="btn btn-ghost" disabled={!dirty || pending !== null} onClick={() => void save(false)}>
-            {pending === "save" ? t("claudeDesktop.saving") : t("common.save")}
-          </button>
-          <button type="button" className="btn btn-primary" disabled={pending !== null} onClick={() => void save(true)}>
-            {pending === "apply" ? t("claudeDesktop.applying") : pending === "save" ? t("claudeDesktop.saving") : status?.desiredEnabled === false ? t("claudeDesktop.enableApply") : modeDirty ? t("claudeDesktop.switchModeApply") : t("claudeDesktop.saveApply")}
-          </button>
-        </div>
-      </div>
 
       {data.models.length === 0 && (
         <EmptyState title={t("claudeDesktop.emptyTitle")}>{t("claudeDesktop.emptyHint")}</EmptyState>

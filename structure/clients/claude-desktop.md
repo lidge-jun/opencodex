@@ -80,6 +80,8 @@ only while CLI first-party intent is off. An owned env observed with
 `claudeCode.cliFirstParty === true` is not Desktop-mode evidence, even when the
 intercept is disabled; foreign proxy settings do not count.
 `resolveClaudeDesktopApplyMode` preserves the resolved mode.
+First-party apply refuses `port_mismatch` before writing settings when the configured proxy port differs from the bound pair. Picker listener failures show their reason instead of offering a main-pair start that cannot repair them.
+
 An apply for a first-party install with `claudeCode.intercept.enabled: false` is refused with
 `intercept_disabled` rather than switched to gateway. New installs apply gateway.
 `src/claude/desktop-risk.ts` owns the account-suspension warning: first-party sends subscription

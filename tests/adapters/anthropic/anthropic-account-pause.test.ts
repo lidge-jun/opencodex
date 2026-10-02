@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../../helpers/anthropic-shared-quota";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +9,7 @@ import { AnthropicTokenError } from "../../../src/oauth/anthropic";
 import {
   bindAnthropicSessionAffinity, clearAnthropicAccountPoolState, getAnthropicAccountHealthSnapshot,
   getAnthropicPoolAccessSnapshot, getEligibleAnthropicAccounts, hasAnthropicFailoverQuorum,
-  promoteAnthropicActiveAccount, resolveAnthropicAccountForSession, rotateAnthropicAccountOn429,
+  promoteAnthropicActiveAccount, resolveAnthropicAccountForSession,
 } from "../../../src/oauth/anthropic-routing";
 import {
   captureOAuthAccountSelection, createOAuthRefreshIntentLock, getAccountCredential, getAccountSet,

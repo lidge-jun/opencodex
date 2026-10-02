@@ -430,3 +430,7 @@ Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) requires original Responses ingress; translated Chat and Messages calls retain their own routing.
+
+Managed native Anthropic OAuth metadata follows [the native Messages binding contract](protocol-paths.md#managed-native-messages): the serving credential's provider UUID replaces only recognized account metadata, with each attempt rebuilt from the source.
+
+Managed native Messages retain a coherent observed CLI identity bundle only for first-party Anthropic; [native Messages](protocol-paths.md#managed-native-messages) owns its bounds and credential separation. Header identity never selects an account or authorizes a request.
