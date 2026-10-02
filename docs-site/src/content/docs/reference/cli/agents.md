@@ -489,9 +489,11 @@ The read-only data-plane endpoint is `GET /v1/usage`, using `x-opencodex-api-key
 ## Explain a listed request
 
 Human `ocx logs` output includes `id=<request-id>`. Pass that value to `ocx logs explain <request-id>` to inspect routing decisions. Rows without an ID or with control characters in their ID omit the field instead of displaying a different lookup key. JSON and JSONL output retain their existing schema.
+
 ## Routing profile lookup status
 
 `ocx route policy show <id>` exits 4 when the profile does not exist. Missing or invalid command arguments exit 2. Scripts can distinguish a missing profile from incorrect usage.
+
 ## Upstream error details
 
 When an upstream error envelope contains several message fields, OpenCodex uses the first nonblank string in its established priority order. Empty or malformed fields no longer hide a valid fallback diagnostic.

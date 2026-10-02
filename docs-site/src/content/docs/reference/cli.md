@@ -160,12 +160,15 @@ minutes, and protects a live worker from concurrent updates.
 ## Capability argument validation
 
 `ocx capabilities` rejects unknown arguments, repeated flags and blank `--route` values with exit 64. A valid route with no declared capability exits 4.
+
 ## Integer option values
 
 Integer options such as `--limit` require decimal whole numbers within JavaScript safe-integer bounds. Digit separators such as `1_000` and `1,000` are accepted. Empty values, hexadecimal, exponent notation and fractions are rejected before a request is sent.
+
 ## Windows JSON configuration files
 
 `ocx config validate <file>` and `ocx config import <file> --yes` accept UTF-8 JSON with or without a leading BOM, including stdin (`-`). This supports UTF-8 exports from Windows PowerShell and editors. UTF-16 input is not accepted.
+
 ## Default alias listing
 
 `ocx alias --json` is equivalent to `ocx alias list --json`. The output flag can precede or follow an explicit alias action.
