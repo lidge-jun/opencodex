@@ -41,19 +41,22 @@ export function CodexCreditSpendSwitch({ summary, busy, onToggleAll }: {
 }
 
 /** One account's switch, rendered inside its card's "more" disclosure. */
-export function AccountCreditsToggle({ accountLabel, enabled, saving, disabled, onChange }: {
+export function AccountCreditsToggle({ accountLabel, enabled, saving, disabled, hint, onChange }: {
   accountLabel: string;
   /** Absent on rows from an older server; the default is off. */
   enabled: boolean | undefined;
   saving: boolean;
   disabled: boolean;
+  /** Replaces the shared hint; the main login uses it to name its hard lock. */
+  hint?: string;
   onChange(enabled: boolean): void;
 }) {
   const t = useT();
   const hintId = useId();
   const on = enabled === true;
+  const description = hint ?? t("codexAuth.creditsAfterLimitHint");
   return (
-    <div className="codex-account-credits" title={t("codexAuth.creditsAfterLimitHint")} aria-busy={saving || undefined}>
+    <div className="codex-account-credits" title={description} aria-busy={saving || undefined}>
       <span className="codex-account-credits__label">{t("codexAuth.creditsAfterLimit")}</span>
       <button
         type="button"
@@ -66,7 +69,7 @@ export function AccountCreditsToggle({ accountLabel, enabled, saving, disabled, 
       >
         <span className="toggle-knob" />
       </button>
-      <span id={hintId} className="sr-only">{t("codexAuth.creditsAfterLimitHint")}</span>
+      <span id={hintId} className="sr-only">{description}</span>
     </div>
   );
 }

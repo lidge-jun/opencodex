@@ -6,11 +6,13 @@ import {
   CodexAccountCooldownError,
   CodexMainAccountCreditsOffError,
   CodexMainAccountHardLockError,
+  cooldownErrorMessage,
   resolveCodexAuthContext,
+  shouldMarkAccountNeedsReauthForCodexAuthFailure,
 } from "../../src/codex/auth-context";
 import { setCodexAccountCreditsAfterLimit } from "../../src/codex/account-credit-use";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
-import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
+import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import * as mainAccount from "../../src/codex/main-account";
 import * as authCollision from "../../src/codex/auth-collision";
@@ -176,4 +178,38 @@ test("selection leaves a held main login out of the candidates on its own", () =
   expect(pickLowestUsageCodexAccount(cfg, POOL)).toBe(MAIN);
   setCodexAccountCreditsAfterLimit(cfg, MAIN, false);
   expect(pickLowestUsageCodexAccount(cfg, POOL)).toBeNull();
+});
+
+test("a full window that lands during the token refresh stays a policy refusal, not a reauth", async () => {
+  // The second policy check runs after the awaited refresh; a refusal there must not be read as a
+  // failed login, or a valid main account would stay marked for reauthentication past its reset.
+  const cfg = config();
+  const resetAt = Date.now() + DAY_MS;
+  mainWeekly(50, resetAt);
+  const refused = await resolveCodexAuthContext(new Headers(), cfg, "pool", {
+    getValidMainAccountToken: async () => {
+      mainWeekly(100, resetAt);
+      return { accessToken: bearer(), chatgptAccountId: accountId };
+    },
+  }).catch(error => error);
+  expect(refused).toBeInstanceOf(CodexMainAccountCreditsOffError);
+  expect(isAccountNeedsReauth(MAIN)).toBe(false);
+  expect(shouldMarkAccountNeedsReauthForCodexAuthFailure(refused)).toBe(false);
+});
+
+test("the client sees the credits remedy, not cooldown-clearing advice", () => {
+  const message = cooldownErrorMessage(new CodexMainAccountCreditsOffError(Date.now() + DAY_MS));
+  expect(message).toContain("spending ChatGPT credits is off");
+  expect(message).not.toContain("clear-cooldown");
+});
+
+test("with the default hard lock on, allowing credits does not lift the main lock", async () => {
+  // The two policies are separate on purpose: the lock (98% by default) still stops the main
+  // login first, and the dashboard says so next to the main account's credits switch.
+  const cfg = config();
+  delete cfg.codexMainAccountHardLock;
+  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
+  mainWeekly(100, Date.now() + DAY_MS);
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+    .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
 });

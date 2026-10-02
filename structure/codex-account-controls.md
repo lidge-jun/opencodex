@@ -53,7 +53,10 @@ checks it where the main-account hard lock is checked: `assertMainAccountPolicy`
 `CodexMainAccountCreditsOffError` (a cooldown error, mapped like the hard lock), and
 `requestOwnedMainPinState` stops preserving a caller's own main credential. Both read the main
 policy quota the lock reads and no plan, because several of those callers may not open the physical
-auth file.
+auth file. The two main-account policies stay separate: listing `__main__` does not lift the hard lock
+(98% by default), which refuses first, and the main card's switch says so. Both refusals are
+policy, not authentication: they keep their own message in `cooldownErrorMessage` and never mark the
+login for reauthentication, including when the window fills during the awaited token refresh.
 
 `PUT /api/codex-auth/accounts/credits` writes one account (`{ id, creditsAfterLimit }`, pool
 accounts and `__main__`) or the whole list (`{ all }`: on lists `__main__` and every selectable

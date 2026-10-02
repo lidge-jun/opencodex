@@ -2379,6 +2379,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.creditsAfterLimit": "Limitten sonra kredi kullan",
   "codexAuth.creditsAfterLimitHint": "Varsayılan olarak kapalı: kullanım penceresi %100’e ulaşan hesap sıfırlanana kadar devre dışı kalır ve ChatGPT kredileri harcanmaz. Bir hesabın kredileriyle çalışmaya devam etmesi için onu açın. Yeni hesaplar kapalı başlar.",
   "codexAuth.creditsAfterLimitAria": "{email} için kullanım limitinden sonra kredi kullan",
+  "codexAuth.creditsAfterLimitMainHint": "Ana hesabın katı kilidi (varsayılan %98) onu yine önce durdurur. Ana hesabın kredi harcaması için kilidi kapatın veya %100’e yükseltin.",
   "codexAuth.creditSpend": "Kredi kullan",
   "codexAuth.creditSpendAria": "Kullanım limitinden sonra ChatGPT kredisi kullan",
   "codexAuth.creditsOn": "Kredi kullanır",

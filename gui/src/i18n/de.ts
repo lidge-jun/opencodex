@@ -1817,6 +1817,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.creditsAfterLimit": "Credits nach dem Limit nutzen",
   "codexAuth.creditsAfterLimitHint": "Standardmäßig aus: Ein Konto, dessen Nutzungsfenster 100 % erreicht, wird bis zum Zurücksetzen ausgewechselt, sodass seine ChatGPT-Credits nicht verbraucht werden. Schalte ein Konto ein, damit es mit seinen Credits weiterarbeitet. Neue Konten starten ausgeschaltet.",
   "codexAuth.creditsAfterLimitAria": "Credits nach dem Nutzungslimit nutzen für {email}",
+  "codexAuth.creditsAfterLimitMainHint": "Die Hard-Sperre des Hauptkontos (standardmäßig 98 %) stoppt es weiterhin zuerst. Schalte die Sperre aus oder setze sie auf 100 %, damit das Hauptkonto Credits nutzen kann.",
   "codexAuth.creditSpend": "Credits nutzen",
   "codexAuth.creditSpendAria": "ChatGPT-Credits nach dem Nutzungslimit nutzen",
   "codexAuth.creditsOn": "Nutzt Credits",

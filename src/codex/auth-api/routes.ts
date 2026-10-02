@@ -120,7 +120,11 @@ export async function handleCodexAuthAPI(
   // through the usual block reason, so nothing is cleared here. `{ all }` is the dashboard's
   // global switch: on lists every current account, off clears the list.
   if (url.pathname === "/api/codex-auth/accounts/credits" && req.method === "PUT") {
-    const body = await req.json().catch(() => ({})) as { id?: unknown; creditsAfterLimit?: unknown; all?: unknown };
+    const parsed: unknown = await req.json().catch(() => null);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return jsonResponse({ error: "body must be an object" }, 400);
+    }
+    const body = parsed as { id?: unknown; creditsAfterLimit?: unknown; all?: unknown };
     const runtimeConfig = getRuntimeConfig(config);
     if (body.all !== undefined) {
       if (typeof body.all !== "boolean") return jsonResponse({ error: "all must be a boolean" }, 400);

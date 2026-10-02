@@ -1861,6 +1861,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.creditsAfterLimit": "한도 도달 후 크레딧 사용",
   "codexAuth.creditsAfterLimitHint": "기본은 꺼짐입니다. 사용량이 100%에 도달한 계정은 리셋될 때까지 다른 계정으로 전환되어 ChatGPT 크레딧을 쓰지 않습니다. 켠 계정만 한도 이후에도 크레딧으로 계속 사용됩니다. 새로 추가한 계정은 꺼진 상태로 시작합니다.",
   "codexAuth.creditsAfterLimitAria": "{email} 계정의 한도 도달 후 크레딧 사용",
+  "codexAuth.creditsAfterLimitMainHint": "메인 계정은 하드 잠금(기본 98%)이 먼저 막습니다. 메인 계정이 크레딧을 쓰게 하려면 잠금을 끄거나 100%로 올리세요.",
   "codexAuth.creditSpend": "크레딧 사용",
   "codexAuth.creditSpendAria": "한도 도달 후 ChatGPT 크레딧 사용",
   "codexAuth.creditsOn": "크레딧 사용",

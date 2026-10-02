@@ -23,6 +23,8 @@ import { clearAccountNeedsReauth, clearAccountQuota, handleCodexAuthAPI, updateA
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import type { OcxConfig } from "../../src/types";
+import { configSchema } from "../../src/config/schema/config-schema";
+import { validateConfigCandidate } from "../../src/config/diagnostics";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
@@ -268,7 +270,25 @@ describe("codex credits after the usage limit", () => {
       expect((await putCredits(config, { id: "../etc", creditsAfterLimit: true })).status).toBe(400);
       expect((await putCredits(config, { id: "missing", creditsAfterLimit: true })).status).toBe(404);
       expect((await putCredits(config, { id: "spender", creditsAfterLimit: "yes" })).status).toBe(400);
+      expect((await putCredits(config, null)).status).toBe(400);
+      expect((await putCredits(config, [true])).status).toBe(400);
       expect(config.creditCodexAccountIds).toBeUndefined();
     });
+  });
+});
+
+describe("creditCodexAccountIds in the config file", () => {
+  test("a malformed list on load degrades to no account spending, without failing the parse", () => {
+    expect(configSchema.shape.creditCodexAccountIds.parse(["bad id!"])).toBeUndefined();
+    expect(configSchema.shape.creditCodexAccountIds.parse("side-pro")).toBeUndefined();
+    expect(configSchema.shape.creditCodexAccountIds.parse(["side-pro", "__main__"])).toEqual(["side-pro", "__main__"]);
+  });
+
+  test("a write with a malformed list is rejected", () => {
+    const result = validateConfigCandidate({ ...makeConfig(), creditCodexAccountIds: ["bad id!"] });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("creditCodexAccountIds");
+    const valid = validateConfigCandidate({ ...makeConfig(), creditCodexAccountIds: ["spender"] });
+    expect(valid.ok ? "" : valid.error).not.toContain("creditCodexAccountIds");
   });
 });

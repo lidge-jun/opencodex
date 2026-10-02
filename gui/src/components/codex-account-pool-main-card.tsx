@@ -186,6 +186,7 @@ export function CodexAccountPoolMainCard({
                 enabled={main.creditsAfterLimit}
                 saving={creditsAfterLimitUpdatingId === "__main__"}
                 disabled={creditsAfterLimitUpdatingId !== null}
+                hint={t("codexAuth.creditsAfterLimitMainHint")}
                 onChange={enabled => onToggleCreditsAfterLimit(mainSwitchEntry, enabled)}
               />
             </div>

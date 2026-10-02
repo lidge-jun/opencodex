@@ -861,6 +861,9 @@ export function cooldownAccountLabel(accountId: string): string {
  */
 export function cooldownErrorMessage(err: CodexAccountCooldownError, accountSelector?: string): string {
   if (err instanceof CodexMainAccountHardLockError
+    // A credits-off refusal is a configuration policy, not a cooldown: clearing a cooldown
+    // cannot lift it, so its own wording (wait for the reset or allow credits) is the remedy.
+    || err instanceof CodexMainAccountCreditsOffError
     || err instanceof CodexReserveUnavailableError
     // A transient-hold refusal is not a quota cooldown. Its own wording is the only accurate
     // one, and the quota recovery advice below would send the operator after a cooldown that
@@ -909,6 +912,7 @@ export class CodexThreadAffinityExpiredError extends Error {
 
 export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown): boolean {
   return !(cause instanceof CodexMainAccountHardLockError)
+    && !(cause instanceof CodexMainAccountCreditsOffError)
     && !(cause instanceof CodexAccountValidationPendingError)
     && !(cause instanceof CodexReserveUnavailableError)
     && !(cause instanceof CodexCredentialGenerationConflictError)
@@ -1463,7 +1467,9 @@ export async function resolveCodexAuthContext(
       releaseTransientProbeGrant();
       if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
       else if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
-      if (cause instanceof CodexMainAccountHardLockError) throw cause;
+      // Policy refusals, including one that lands while the token refresh was in flight, are not
+      // authentication failures: they must stay reset-bound 429s and never mark a valid login.
+      if (cause instanceof CodexMainAccountHardLockError || cause instanceof CodexMainAccountCreditsOffError) throw cause;
       if (!options.signal?.aborted && shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
         markAccountNeedsReauth(accountId, writerGeneration);
       }
