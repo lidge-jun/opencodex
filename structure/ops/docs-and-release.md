@@ -188,7 +188,8 @@ installation error 3. Explicit service stop terminates the wrapper itself.
 Timestamp expansion in the scheduler wrapper stays outside parenthesized batch
 blocks so locale dates containing parentheses cannot abort prelaunch checks or
 transactional-backup recovery. Delayed expansion stays disabled to preserve
-exclamation marks in paths.
+exclamation marks in paths. Recovery logs a fixed success message without expanding
+the filesystem-derived backup directory name into a command.
 `src/service/windows-wrapper-exit.ts` defines the opt-in contract: new wrappers set
 `OCX_WINDOWS_WRAPPER_PROTOCOL=1`, and all three CLI live-owner exits return 42 in that
 service context. The wrapper translates 42 into a successful exit; legacy service

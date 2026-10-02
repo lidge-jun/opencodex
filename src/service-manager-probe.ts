@@ -613,8 +613,18 @@ function matchesGeneratedStandaloneControlFlow(body: string, port: number): bool
     scriptLines.filter((line, index) => index >= end || line === 'set "ERRORLEVEL="' || !line.startsWith('set "'));
   const actualFlow = withoutPrefixSets(lines, boundary);
   const generatedFlow = withoutPrefixSets(expected, expectedBoundary);
-  return actualFlow.length === generatedFlow.length
-    && actualFlow.every((line, index) => line === generatedFlow[index]);
+  // Read-only recognition of the exact previous generator output keeps installed
+  // standalone services identifiable across the backup-log hardening update.
+  // Never emit or execute this legacy variant; every other control line still matches.
+  const legacyFlow = generatedFlow.flatMap(line => {
+    if (line === "      goto backup_restored") return ['      set "OCX_RESTORED_BACKUP=%%B"', line];
+    if (line === '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] restored previous install from transactional-update backup') {
+      return ['>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] restored previous install from %OCX_RESTORED_BACKUP%'];
+    }
+    return [line];
+  });
+  return [generatedFlow, legacyFlow].some(expectedFlow => actualFlow.length === expectedFlow.length
+    && actualFlow.every((line, index) => line === expectedFlow[index]));
 }
 
 /** Validate the generated launch shape before interpreting omitted optional homes. */
