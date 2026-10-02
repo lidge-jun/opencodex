@@ -56,6 +56,7 @@ export function sseFieldOffset(text: string, lineStart: number, lineEnd: number,
 
 /**
  * Decode text/event-stream records across arbitrary fetch chunk boundaries.
+ * CR, LF and CRLF terminate lines; a split CRLF is one delimiter.
  *
  * The final record is dispatched at EOF even when the upstream omits the trailing blank line or
  * final newline. That matters for compatible APIs that place a terminal event in the last bytes of
@@ -77,6 +78,7 @@ export async function* decodeServerSentEvents(
   const reader = source.getReader();
   const decoder = new TextDecoder();
   let lineBuffer = "";
+  let skipLineFeed = false;
   let lineRawBytes = 0;
   let lineRetainedBytes = 0;
   let event: string | undefined;
@@ -183,8 +185,8 @@ export async function* decodeServerSentEvents(
   };
 
   const acceptLine = (): { record: ServerSentEvent | SseRecord; bytes: number } | undefined => {
-    let line = lineBuffer;
-    let retainedLineBytes = lineRetainedBytes;
+    const line = lineBuffer;
+    const retainedLineBytes = lineRetainedBytes;
     let lineOwned = true;
     const releaseLine = (): void => {
       if (!lineOwned) return;
@@ -195,20 +197,6 @@ export async function* decodeServerSentEvents(
     lineRawBytes = 0;
     lineRetainedBytes = 0;
     try {
-      if (line.endsWith("\r")) {
-        const nextLineBytes = retainedLineBytes - 1;
-        const reservation = translatorBudget.reserveTransient(nextLineBytes, scope);
-        try {
-          const nextLine = line.slice(0, -1);
-          reservation.commitRetained();
-          translatorBudget.releaseRetained(retainedLineBytes, scope);
-          line = nextLine;
-          retainedLineBytes = nextLineBytes;
-        } catch (error) {
-          reservation.release();
-          throw error;
-        }
-      }
       if (line === "") {
         releaseLine();
         return dispatch();
@@ -297,12 +285,22 @@ export async function* decodeServerSentEvents(
   ): AsyncGenerator<ServerSentEvent | SseRecord> {
     let offset = 0;
     while (offset < decoded.length) {
-      const newline = decoded.indexOf("\n", offset);
+      if (skipLineFeed) {
+        skipLineFeed = false;
+        if (decoded[offset] === "\n") {
+          offset++;
+          continue;
+        }
+      }
+      let newline = offset;
+      while (newline < decoded.length && decoded[newline] !== "\n" && decoded[newline] !== "\r") newline++;
+      if (newline === decoded.length) newline = -1;
       if (newline < 0) {
         appendLine(decoded, offset, decoded.length);
         return;
       }
       appendLine(decoded, offset, newline);
+      skipLineFeed = decoded[newline] === "\r";
       const accepted = acceptLine();
       if (accepted) {
         try {

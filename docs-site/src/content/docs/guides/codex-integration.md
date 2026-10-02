@@ -1416,3 +1416,7 @@ The process exits 0 only if all four live scenarios pass, 1 otherwise, and 2 for
 invalid arguments or missing credentials. This is a **wire diagnostic**, not an
 end-to-end Codex App/CLI interface test, live certification or instruction to enable
 the experimental feature for production work.
+
+## Streaming line endings
+
+The shared SSE decoder accepts LF, CRLF and standalone CR line endings, even when a delimiter spans network chunks. This allows compatible providers to stream events without requiring LF-only framing.
