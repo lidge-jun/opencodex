@@ -21,19 +21,26 @@ const nl = String.fromCharCode(10);
 
 test('full client history replay removes generated artifact paths before upstream dispatch', async () => {
   const release = acquireOwnedSpendHome();
-  const originalFetch = globalThis.fetch;
   const rewrite = createHostedImageDisplayRewrite();
   const requests: any[] = [];
   try {
     const message = JSON.parse(rewrite.json(JSON.stringify({ output: [item] }))).output[0];
     const displayedText = message.content[0].text;
     const path = displayedText.match(/<([^>]+)>/)[1];
-    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    // A provider-owned executor also intercepts discovery before DNS/pinned transport.
+    const fixtureFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === 'https://fixture.test/v1/models' && init?.method === 'GET') {
+        return Response.json({ object: 'list', data: [{ id: 'fixture-model' }] });
+      }
+      expect(url).toBe('https://fixture.test/v1/responses');
+      expect(init?.method).toBe('POST');
       requests.push(JSON.parse(String(init?.body)));
       return Response.json({ id: 'resp_replay_fixture', status: 'completed', output: [] });
     }) as typeof fetch;
     const config = { port: 0, defaultProvider: 'fixture', providers: { fixture: {
       adapter: 'openai-responses', baseUrl: 'https://fixture.test/v1', authMode: 'key', apiKey: 'fixture-key',
+      fetch: fixtureFetch, upstreamWebsocket: false,
     } } } as OcxConfig;
     for (const content of [message.content, displayedText]) {
       // Clients may omit the synthetic item id when serializing their full history.
@@ -53,23 +60,30 @@ test('full client history replay removes generated artifact paths before upstrea
     }
     expect(message.content[0].text).toBe(displayedText);
     expect(readFileSync(path)).toEqual(Buffer.from(item.result, 'base64'));
-  } finally { globalThis.fetch = originalFetch; rewrite.dispose?.(); release(); }
+  } finally { rewrite.dispose?.(); release(); }
 });
 
 test('remote compaction removes generated artifact paths before the upstream request', async () => {
   const release = acquireOwnedSpendHome();
-  const originalFetch = globalThis.fetch;
   const rewrite = createHostedImageDisplayRewrite();
   const requests: Array<{ url: string; body: string }> = [];
   try {
     const displayedText = JSON.parse(rewrite.json(JSON.stringify({ output: [item] }))).output[0].content[0].text;
     const path = displayedText.match(/<([^>]+)>/)[1];
-    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
-      requests.push({ url: String(url), body: String(init?.body) });
+    // Keep every allowed endpoint synthetic; unexpected calls fail without a transport fallback.
+    const fixtureFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === 'https://api.openai.com/v1/models' && init?.method === 'GET') {
+        return Response.json({ object: 'list', data: [{ id: 'gpt-5.6-luna' }] });
+      }
+      expect(url).toBe('https://api.openai.com/v1/responses/compact');
+      expect(init?.method).toBe('POST');
+      requests.push({ url, body: String(init?.body) });
       return Response.json({ output: [{ type: 'compaction', encrypted_content: 'native-summary' }] });
     }) as typeof fetch;
     const config = { ...getDefaultConfig(), defaultProvider: 'openai-apikey', providers: { 'openai-apikey': {
       adapter: 'openai-responses', baseUrl: 'https://api.openai.com/v1', authMode: 'key', apiKey: 'fixture-key',
+      fetch: fixtureFetch, upstreamWebsocket: false,
     } } } as OcxConfig;
     const result = await handleResponsesCompact(new Request('http://localhost/v1/responses/compact', {
       method: 'POST', headers: { 'content-type': 'application/json', originator: 'Codex Desktop' },
@@ -86,7 +100,7 @@ test('remote compaction removes generated artifact paths before the upstream req
     expect(requests[0]!.body).not.toContain(JSON.stringify(path).slice(1, -1));
     expect(requests[0]!.body).toContain(artifactHttpUrl(path));
     expect(requests[0]!.body).toContain('Keep the task state.');
-  } finally { globalThis.fetch = originalFetch; rewrite.dispose?.(); release(); }
+  } finally { rewrite.dispose?.(); release(); }
 });
 
 const cases: Array<{ platform: 'darwin' | 'linux' | 'win32'; format: string; client: string; cache: string }> = [];
