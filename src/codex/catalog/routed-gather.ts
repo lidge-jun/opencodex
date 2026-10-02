@@ -746,10 +746,26 @@ async function gatherRoutedModelsUncached(
     }
     return mergedWithAutoCompact;
   });
-  // Custom rows override discovered rows that encode to the same Codex-facing slug.
-  const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
-  const deduped = all.filter(m => !customKeys.has(routedSlug(m.provider, m.id)));
-  const models = [...deduped, ...customModels];
+  // Custom rows override discovered rows that encode to the same Codex-facing slug. A provider whose
+  // captured discovery declares an order (preferFirst) keeps each replacement in the discovered row's
+  // slot; every other provider keeps the historical order of discovered rows followed by custom rows.
+  const customBySlug = new Map<string, CatalogModel[]>();
+  for (const custom of customModels) {
+    const key = routedSlug(custom.provider, custom.id);
+    const bucket = customBySlug.get(key);
+    if (bucket) bucket.push(custom);
+    else customBySlug.set(key, [custom]);
+  }
+  const placedInSlot = new Set<string>();
+  const models: CatalogModel[] = all.flatMap(model => {
+    const key = routedSlug(model.provider, model.id);
+    const replacements = customBySlug.get(key);
+    if (!replacements) return [model];
+    if (!orderedProviders.has(model.provider) || placedInSlot.has(key)) return [];
+    placedInSlot.add(key);
+    return replacements;
+  });
+  models.push(...customModels.filter(custom => !placedInSlot.has(routedSlug(custom.provider, custom.id))));
   // ponytail: catalog-scale scan; index ids by provider if catalog growth makes this measurable.
   const aliasDisplayNames = new Map(activeProviders.flatMap(({ name, provider }) => {
     const providerModels = models.filter(model => model.provider === name);
