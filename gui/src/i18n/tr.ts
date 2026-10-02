@@ -2381,8 +2381,6 @@ export const tr: Record<TKey, string> = {
   "codexAuth.creditsAfterLimitAria": "{email} için kullanım limitinden sonra kredi kullan",
   "codexAuth.creditSpend": "Kredi kullan",
   "codexAuth.creditSpendAria": "Kullanım limitinden sonra ChatGPT kredisi kullan",
-  "codexAuth.creditSpendChoose": "Hesapları seç: {total} hesaptan {enabled} tanesi kredi kullanabilir",
-  "codexAuth.creditSpendAtLimit": "Limitte",
   "codexAuth.creditsOn": "Kredi kullanır",
   "codexAuth.creditsOnSucceeded": "{email} kullanım limitinden sonra kredi kullanabilir.",
   "codexAuth.creditsOffSucceeded": "{email} kullanım limitinde devre dışı kalacak, kredileri korunacak.",

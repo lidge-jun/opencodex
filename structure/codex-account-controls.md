@@ -61,10 +61,10 @@ pool account, off clears it). It has no CLI verb yet (`deferred-verb`, owner "#6
 `ocx config set creditCodexAccountIds` covers scripted use. The dashboard control is
 `gui/src/components/CodexCreditSpend.tsx`: one global switch in the Codex Auth header beside the
 "Codex credits" display switch, derived from the rows (off when none may spend, mixed when some
-may, on when all may, matching the quota auto-refresh control), and a count button that opens a
-panel below the header with one switch per account. Clicking the global switch from off or mixed
-allows every account; from on it clears them all. Cards carry no switch of their own;
-`CreditsOnBadge` marks an account allowed to spend, independent of the display switch, which
-still never changes routing. Coverage: `tests/codex-integration/codex-credits-after-limit.test.ts`,
+may, on when all may, matching the quota auto-refresh control), and one switch per account inside
+that card's "⋯" disclosure (the main card gets the same disclosure for it). Clicking the global
+switch from off or mixed allows every account; from on it clears them all. `CreditsOnBadge`
+marks an account allowed to spend, independent of the display switch, which still never changes
+routing. Coverage: `tests/codex-integration/codex-credits-after-limit.test.ts`,
 `tests/codex-integration/codex-credits-after-limit-main.test.ts` and
 `gui/tests/codex-credit-spend.test.tsx`.

@@ -2357,8 +2357,6 @@ export const fr: Record<TKey, string> = {
   "codexAuth.creditsAfterLimitAria": "Utiliser les crédits après la limite d’utilisation pour {email}",
   "codexAuth.creditSpend": "Utiliser les crédits",
   "codexAuth.creditSpendAria": "Utiliser les crédits ChatGPT après la limite d’utilisation",
-  "codexAuth.creditSpendChoose": "Choisir les comptes : {enabled} sur {total} peuvent utiliser des crédits",
-  "codexAuth.creditSpendAtLimit": "Limite atteinte",
   "codexAuth.creditsOn": "Utilise des crédits",
   "codexAuth.creditsOnSucceeded": "{email} peut utiliser des crédits après sa limite d’utilisation.",
   "codexAuth.creditsOffSucceeded": "{email} sera remplacé à sa limite d’utilisation et ses crédits seront préservés.",

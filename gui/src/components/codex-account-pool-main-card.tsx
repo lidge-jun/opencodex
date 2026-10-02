@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { IconLock, IconPause, IconPlay, IconPlus, IconRefresh, IconTicket } from "../icons";
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
-import { CreditsOnBadge } from "./CodexCreditSpend";
+import { AccountCreditsToggle, CreditsOnBadge } from "./CodexCreditSpend";
 import QuotaBars from "./QuotaBars";
 import CodexCreditsRow from "./CodexCreditsRow";
 import { useI18n } from "../i18n/shared";
@@ -47,6 +47,8 @@ export function CodexAccountPoolMainCard({
   doctorCopyOutcomeFor,
   onManageMainHardLock,
   mainReauth,
+  onToggleCreditsAfterLimit,
+  creditsAfterLimitUpdatingId = null,
   creditsVisible,
   loading = false,
 }: {
@@ -75,6 +77,9 @@ export function CodexAccountPoolMainCard({
    */
   pinnedId?: string | null;
   onOpenReset: (account: CodexAccountEntry) => void;
+  /** Writes the main login's "use credits after limit" switch, shown in its "more" disclosure. */
+  onToggleCreditsAfterLimit?: (entry: CodexAccountEntry, enabled: boolean) => void;
+  creditsAfterLimitUpdatingId?: string | null;
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
   onManageMainHardLock?: () => void;
@@ -169,6 +174,22 @@ export function CodexAccountPoolMainCard({
               saving={pauseUpdatingId === "__main__"}
             />
           </button>
+        )}
+        {/* Same disclosure as the pool cards' "more" actions; the main login only carries its
+            credits switch there. */}
+        {main?.hasCredential && onToggleCreditsAfterLimit && (
+          <details className="codex-account-more card-right">
+            <summary className="btn btn-ghost btn-sm" aria-label={`${t("codexAuth.moreActions")} — ${t("codexAuth.mainAccount")}`} title={t("codexAuth.moreActions")}>⋯</summary>
+            <div className="codex-account-more-body">
+              <AccountCreditsToggle
+                accountLabel={main.alias ?? (main.email || t("codexAuth.mainAccount"))}
+                enabled={main.creditsAfterLimit}
+                saving={creditsAfterLimitUpdatingId === "__main__"}
+                disabled={creditsAfterLimitUpdatingId !== null}
+                onChange={enabled => onToggleCreditsAfterLimit(mainSwitchEntry, enabled)}
+              />
+            </div>
+          </details>
         )}
         <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>
       </div>

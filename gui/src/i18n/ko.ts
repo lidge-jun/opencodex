@@ -1863,8 +1863,6 @@ export const ko: Record<TKey, string> = {
   "codexAuth.creditsAfterLimitAria": "{email} 계정의 한도 도달 후 크레딧 사용",
   "codexAuth.creditSpend": "크레딧 사용",
   "codexAuth.creditSpendAria": "한도 도달 후 ChatGPT 크레딧 사용",
-  "codexAuth.creditSpendChoose": "계정 선택: {total}개 중 {enabled}개가 크레딧 사용",
-  "codexAuth.creditSpendAtLimit": "한도 도달",
   "codexAuth.creditsOn": "크레딧 사용",
   "codexAuth.creditsOnSucceeded": "{email} 계정은 한도에 도달해도 크레딧으로 계속 사용됩니다.",
   "codexAuth.creditsOffSucceeded": "{email} 계정은 한도에 도달하면 전환되어 크레딧을 아낍니다.",

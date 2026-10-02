@@ -2430,8 +2430,6 @@ export const en = {
   "codexAuth.creditsAfterLimitAria": "Use credits after the usage limit for {email}",
   "codexAuth.creditSpend": "Use credits",
   "codexAuth.creditSpendAria": "Use ChatGPT credits after the usage limit",
-  "codexAuth.creditSpendChoose": "Choose accounts: {enabled} of {total} may use credits",
-  "codexAuth.creditSpendAtLimit": "At limit",
   "codexAuth.creditsOn": "Uses credits",
   "codexAuth.creditsOnSucceeded": "{email} may use credits after its usage limit.",
   "codexAuth.creditsOffSucceeded": "{email} will be switched out at its usage limit, so its credits are kept.",

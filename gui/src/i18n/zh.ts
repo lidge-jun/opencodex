@@ -1836,8 +1836,6 @@ export const zh: Record<TKey, string> = {
   "codexAuth.creditsAfterLimitAria": "{email} 达到上限后使用额度",
   "codexAuth.creditSpend": "使用额度",
   "codexAuth.creditSpendAria": "达到用量上限后使用 ChatGPT 额度",
-  "codexAuth.creditSpendChoose": "选择账户：{total} 个中有 {enabled} 个可使用额度",
-  "codexAuth.creditSpendAtLimit": "已达上限",
   "codexAuth.creditsOn": "使用额度",
   "codexAuth.creditsOnSucceeded": "{email} 达到用量上限后可使用额度。",
   "codexAuth.creditsOffSucceeded": "{email} 达到用量上限时会被切换，保留其额度。",

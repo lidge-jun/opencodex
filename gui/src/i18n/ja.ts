@@ -2252,8 +2252,6 @@ export const ja: Record<TKey, string> = {
   "codexAuth.creditsAfterLimitAria": "{email} の上限後クレジット使用",
   "codexAuth.creditSpend": "クレジット使用",
   "codexAuth.creditSpendAria": "上限後にChatGPTクレジットを使用",
-  "codexAuth.creditSpendChoose": "アカウントを選択: {total}件中{enabled}件がクレジットを使用",
-  "codexAuth.creditSpendAtLimit": "上限到達",
   "codexAuth.creditsOn": "クレジット使用",
   "codexAuth.creditsOnSucceeded": "{email} は上限後もクレジットを使用できます。",
   "codexAuth.creditsOffSucceeded": "{email} は上限に達すると切り替わり、クレジットを温存します。",

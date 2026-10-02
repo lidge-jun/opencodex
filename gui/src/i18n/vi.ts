@@ -2385,8 +2385,6 @@ export const vi: Record<TKey, string> = {
   "codexAuth.creditsAfterLimitAria": "Dùng tín dụng sau giới hạn sử dụng cho {email}",
   "codexAuth.creditSpend": "Dùng tín dụng",
   "codexAuth.creditSpendAria": "Dùng tín dụng ChatGPT sau giới hạn sử dụng",
-  "codexAuth.creditSpendChoose": "Chọn tài khoản: {enabled}/{total} được dùng tín dụng",
-  "codexAuth.creditSpendAtLimit": "Đạt giới hạn",
   "codexAuth.creditsOn": "Dùng tín dụng",
   "codexAuth.creditsOnSucceeded": "{email} có thể dùng tín dụng sau giới hạn sử dụng.",
   "codexAuth.creditsOffSucceeded": "{email} sẽ được thay thế khi đạt giới hạn, tín dụng được giữ lại.",
