@@ -1,10 +1,13 @@
 import { expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleConfigCommand } from "../../src/cli/config-command";
 import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath, repoRoot } from "../helpers/repo-root";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 test("validate and import accept a Windows UTF-8 BOM without rewriting string data", async () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-bom-"));
@@ -32,3 +35,24 @@ test("validate and import accept a Windows UTF-8 BOM without rewriting string da
     removeTreeWithRetry(root);
   }
 });
+
+test.each(["validate", "import"])("accepts a BOM on real config %s stdin", action => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-bom-stdin-"));
+  const codexHome = join(root, "codex");
+  mkdirSync(codexHome);
+  const config = { port: 10100, providers: { local: { adapter: "openai-chat", baseUrl: "https://example.test/v1", note: "kept\uFEFFinside" } }, defaultProvider: "local" };
+  try {
+    const args = [repoPath("src", "cli", "index.ts"), "config", action, "-", "--json"];
+    if (action === "import") args.push("--yes");
+    const result = spawnSync(process.execPath, args, {
+      cwd: repoRoot(), env: { ...process.env, OPENCODEX_HOME: root, CODEX_HOME: codexHome },
+      input: "\uFEFF" + JSON.stringify(config), encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).ok).toBe(true);
+    if (action === "import") {
+      expect(JSON.parse(readFileSync(join(root, "config.json"), "utf8")).providers.local.note).toBe("kept\uFEFFinside");
+    }
+  } finally { removeTreeWithRetry(root); }
+}, SPAWN_BUDGET_MS);
