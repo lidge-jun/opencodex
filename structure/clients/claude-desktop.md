@@ -204,7 +204,7 @@ decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop i
 trusted in the login keychain (`picker-trust.ts`). The picker CA (`picker-ca.ts`) carries critical
 name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its signing
 key exists only in the server process; only public certificates are written under
-`<OPENCODEX_HOME>/claude-picker/`. Every intercept start drops any legacy `ca.key`, even with the intercept or picker off; on restart the lifecycle keeps the applied
+`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). On restart the lifecycle keeps the applied
 profile row in place, and removes the prior public root only when the published certificate differs
 from this process's authority — a reused authority stays trusted, and a predecessor that cannot be
 untrusted leaves the picker disabled rather than trusted beside its replacement —
