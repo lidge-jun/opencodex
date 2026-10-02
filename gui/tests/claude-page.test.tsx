@@ -192,3 +192,67 @@ test("Settings starts stopped interception in place and re-reads status", async 
   expect(panel.querySelector("[data-claude-intercept-start-slot]")).toBeNull();
   expect(panel.textContent).toContain("Running");
 });
+
+test("Add Anthropic does not wait on OAuth provider discovery (cold mount, discovery fails)", async () => {
+  const previousFetch = globalThis.fetch;
+  let releaseDiscovery!: () => void;
+  const discovery = new Promise<void>(resolve => { releaseDiscovery = resolve; });
+  globalThis.fetch = (async (input, init) => {
+    // /api/oauth/providers loses the race with /api/config and then fails outright.
+    if (String(input).endsWith("/api/oauth/providers")) {
+      await discovery;
+      return new Response("unavailable", { status: 503 });
+    }
+    return previousFetch(input, init);
+  }) as typeof fetch;
+  win.location.hash = "claude/account";
+  const container = win.document.createElement("div"); win.document.body.append(container);
+  root = createRoot(container as unknown as HTMLElement);
+  await act(async () => { root!.render(<LanguageProvider><Claude apiBase="" /></LanguageProvider>); });
+  const add = container.querySelector(".claude-account-empty button") as HTMLButtonElement;
+  expect(add.disabled).toBe(false);
+  // Discovery is still pending: the click must start the Anthropic flow, not no-op.
+  await act(async () => { add.click(); });
+  const dialog = win.document.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("Anthropic");
+  await act(async () => { releaseDiscovery(); await discovery; });
+  await act(async () => { (dialog.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
+  const proceed = [...dialog.querySelectorAll("button")].find(button => button.textContent === "Continue with OAuth") as HTMLButtonElement;
+  await act(async () => { proceed.click(); });
+  for (let tick = 0; tick < 20 && logins.length === 0; tick++) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  }
+  expect(logins).toEqual([{ provider: "anthropic" }]);
+});
+
+test("scoped Account reads rosters, keys and quota for Anthropic only", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/config")) {
+      reads.push(url);
+      return new Response(JSON.stringify({ port: 10100, providers: {
+        anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" },
+        "google-antigravity": { adapter: "gemini", baseUrl: "https://example.test", authMode: "oauth" },
+        deepseek: { adapter: "openai", baseUrl: "https://example.test", hasApiKey: true },
+      } }), { headers: { "Content-Type": "application/json" } });
+    }
+    return previousFetch(input, init);
+  }) as typeof fetch;
+  win.location.hash = "claude/account";
+  const container = win.document.createElement("div"); win.document.body.append(container);
+  root = createRoot(container as unknown as HTMLElement);
+  await act(async () => { root!.render(<LanguageProvider><Claude apiBase="" /></LanguageProvider>); });
+  for (let tick = 0; tick < 10; tick++) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  }
+  const refresh = [...container.querySelectorAll("#claude-panel-account button")].find(button => button.textContent?.includes("Refresh quota"));
+  if (refresh) await act(async () => { (refresh as HTMLButtonElement).click(); });
+  for (let tick = 0; tick < 10; tick++) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  }
+  const rosterReads = reads.filter(url => url.includes("/api/oauth/accounts?") || url.includes("/api/providers/keys?"));
+  expect(rosterReads.some(url => url.includes("provider=anthropic"))).toBe(true);
+  expect(rosterReads.some(url => url.includes("quota=1") && url.includes("provider=anthropic"))).toBe(true);
+  expect(rosterReads.filter(url => !url.includes("provider=anthropic"))).toEqual([]);
+});

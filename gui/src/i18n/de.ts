@@ -18,7 +18,7 @@ export const de: Record<TKey, string> = {
   "claude.accountEmpty": "Fügen Sie den Anbieter Anthropic hinzu und melden Sie sich mit Ihrem Claude-Konto an. Konten, Kontingent und Einstellungen erscheinen dann hier.",
   "claude.accountEmptyTitle": "Anthropic ist noch nicht eingerichtet",
   "claude.interceptStatus": "Abfangen",
-  "claude.interceptDesc": "Leitet Erstanbieter-Traffic von Claude Code/Desktop weiter.",
+  "claude.interceptDesc": "Leitet den für Anthropic-Dienste bestimmten Traffic von Claude Code/Desktop über den lokalen Proxy.",
   "claude.interceptPort": "Abfangport",
   "claude.interceptPortDesc": "Lokaler Port des Abfang-Proxys, getrennt vom OpenCodex-Proxy-Port.",
   "claude.stateOn": "An",

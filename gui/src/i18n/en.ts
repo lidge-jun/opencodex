@@ -19,7 +19,7 @@ export const en = {
   "claude.accountEmpty": "Add the Anthropic provider and sign in with your Claude account. Its accounts, quota, and settings then appear here.",
   "claude.accountEmptyTitle": "Anthropic is not set up yet",
   "claude.interceptStatus": "Interception",
-  "claude.interceptDesc": "Routes Claude Code/Desktop first-party traffic.",
+  "claude.interceptDesc": "Routes Claude Code/Desktop traffic bound for Anthropic's services through the local proxy.",
   "claude.interceptPort": "Intercept port",
   "claude.interceptPortDesc": "Local port of the intercept proxy, separate from the OpenCodex proxy port.",
   "claude.stateOn": "On",

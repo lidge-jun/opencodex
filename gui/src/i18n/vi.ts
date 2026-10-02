@@ -19,7 +19,7 @@ export const vi: Record<TKey, string> = {
   "claude.accountEmpty": "Thêm Provider Anthropic và đăng nhập bằng tài khoản Claude. Tài khoản, hạn mức và cài đặt sẽ hiện ở đây.",
   "claude.accountEmptyTitle": "Anthropic chưa được thiết lập",
   "claude.interceptStatus": "Chặn lưu lượng",
-  "claude.interceptDesc": "Định tuyến lưu lượng chính chủ của Claude Code/Desktop.",
+  "claude.interceptDesc": "Định tuyến lưu lượng của Claude Code/Desktop gửi tới các dịch vụ của Anthropic qua proxy cục bộ.",
   "claude.interceptPort": "Cổng chặn",
   "claude.interceptPortDesc": "Cổng cục bộ của proxy chặn, tách biệt với cổng proxy OpenCodex.",
   "claude.stateOn": "Bật",

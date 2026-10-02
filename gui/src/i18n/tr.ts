@@ -18,7 +18,7 @@ export const tr: Record<TKey, string> = {
   "claude.accountEmpty": "Anthropic sağlayıcısını ekleyin ve Claude hesabınızla oturum açın. Hesapları, kotası ve ayarları burada görünür.",
   "claude.accountEmptyTitle": "Anthropic henüz kurulmadı",
   "claude.interceptStatus": "Trafik yakalama",
-  "claude.interceptDesc": "Claude Code/Desktop birinci taraf trafiğini yönlendirir.",
+  "claude.interceptDesc": "Claude Code/Desktop'ın Anthropic hizmetlerine giden trafiğini yerel proxy üzerinden yönlendirir.",
   "claude.interceptPort": "Yakalama portu",
   "claude.interceptPortDesc": "Yakalama proxy'sinin yerel portu; OpenCodex proxy portundan ayrıdır.",
   "claude.stateOn": "Açık",

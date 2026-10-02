@@ -17,7 +17,7 @@ export const ko: Record<TKey, string> = {
   "claude.accountEmpty": "Anthropic 프로바이더를 추가하고 Claude 계정으로 로그인하세요. 계정, 할당량, 설정이 여기에 표시됩니다.",
   "claude.accountEmptyTitle": "Anthropic이 아직 설정되지 않았습니다",
   "claude.interceptStatus": "트래픽 가로채기",
-  "claude.interceptDesc": "Claude Code/Desktop의 퍼스트 파티 트래픽을 라우팅합니다.",
+  "claude.interceptDesc": "Claude Code/Desktop에서 Anthropic 서비스로 가는 트래픽을 로컬 프록시로 라우팅합니다.",
   "claude.interceptPort": "인터셉트 포트",
   "claude.interceptPortDesc": "가로채기 프록시의 로컬 포트로, OpenCodex 프록시 포트와 별개입니다.",
   "claude.stateOn": "켜짐",

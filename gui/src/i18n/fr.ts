@@ -17,7 +17,7 @@ export const fr: Record<TKey, string> = {
   "claude.accountEmpty": "Ajoutez le fournisseur Anthropic et connectez-vous avec votre compte Claude. Ses comptes, son quota et ses réglages apparaîtront ici.",
   "claude.accountEmptyTitle": "Anthropic n’est pas encore configuré",
   "claude.interceptStatus": "Interception du trafic",
-  "claude.interceptDesc": "Achemine le trafic propriétaire de Claude Code/Desktop.",
+  "claude.interceptDesc": "Achemine vers le proxy local le trafic de Claude Code/Desktop destiné aux services Anthropic.",
   "claude.interceptPort": "Port d’interception",
   "claude.interceptPortDesc": "Port local du proxy d’interception, distinct du port du proxy OpenCodex.",
   "claude.stateOn": "Activé",

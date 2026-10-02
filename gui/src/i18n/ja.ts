@@ -17,7 +17,7 @@ export const ja: Record<TKey, string> = {
   "claude.accountEmpty": "Anthropic プロバイダーを追加し、Claude アカウントでログインしてください。アカウント、クォータ、設定がここに表示されます。",
   "claude.accountEmptyTitle": "Anthropic はまだ設定されていません",
   "claude.interceptStatus": "インターセプト",
-  "claude.interceptDesc": "Claude Code/Desktop のファーストパーティ通信をルーティングします。",
+  "claude.interceptDesc": "Claude Code/Desktop から Anthropic のサービスへ向かう通信をローカルプロキシ経由でルーティングします。",
   "claude.interceptPort": "インターセプトポート",
   "claude.interceptPortDesc": "インターセプトプロキシのローカルポート。OpenCodex のプロキシポートとは別です。",
   "claude.stateOn": "オン",

@@ -401,9 +401,17 @@ export default function Providers({ apiBase, scopeProvider, scopeEmpty }: {
     };
   }, [oauthStatus, codexPool.accounts, codexPool.loadState, codexActiveNeedsReauth]);
 
+  // A scoped view reads only its own provider's rosters, keys and quota enrichment. The hook
+  // derives every read (bootstrap, quota=1 enrichment, selection refresh, 30s recovery) from
+  // the config it is given, so narrowing that config is what keeps the others quiet.
+  const poolConfig = useMemo(() => {
+    if (!scopeProvider || !config) return config;
+    const scoped = config.providers[scopeProvider];
+    return { ...config, providers: scoped ? { [scopeProvider]: scoped } : {} };
+  }, [config, scopeProvider]);
   const pools = useProviderAccountPools({
     apiBase, t: t as unknown as Parameters<typeof useProviderAccountPools>[0]["t"],
-    config, oauthStatus: oauthStatusWithCodex, aliveRef,
+    config: poolConfig, oauthStatus: oauthStatusWithCodex, aliveRef,
     notify,
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
   });
@@ -661,7 +669,11 @@ export default function Providers({ apiBase, scopeProvider, scopeEmpty }: {
       ) : scopeEmpty?.({
         busy: busy === scopeProvider,
         hint: loginInfo?.provider === scopeProvider ? loginInfo : null,
-        onSignIn: () => { void onAccountLogin(scopeProvider); },
+        // Straight to the warning-aware OAuth entry, the call onAccountLogin makes for this
+        // provider once discovery lists it. /api/oauth/login validates the provider against its
+        // own static registry, so a cold mount (or a failed /api/oauth/providers read) must not
+        // leave this button waiting on discovery or silently doing nothing.
+        onSignIn: () => requestLoginOAuth(scopeProvider),
         onCancel: () => { void cancelLoginOAuth(scopeProvider); },
       })) : <ProviderWorkspaceShell
         onRemoveProvider={removeProvider}

@@ -17,7 +17,7 @@ export const ru: Record<TKey, string> = {
   "claude.accountEmpty": "Добавьте провайдера Anthropic и войдите с аккаунтом Claude. Здесь появятся его аккаунты, квота и настройки.",
   "claude.accountEmptyTitle": "Anthropic ещё не настроен",
   "claude.interceptStatus": "Перехват",
-  "claude.interceptDesc": "Маршрутизирует собственный трафик Claude Code/Desktop.",
+  "claude.interceptDesc": "Направляет трафик Claude Code/Desktop, предназначенный для сервисов Anthropic, через локальный прокси.",
   "claude.interceptPort": "Порт перехвата",
   "claude.interceptPortDesc": "Локальный порт прокси перехвата, отдельный от порта прокси OpenCodex.",
   "claude.stateOn": "Вкл.",

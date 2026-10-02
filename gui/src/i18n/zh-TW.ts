@@ -15,7 +15,7 @@ export const zhTW: Record<TKey, string> = {
   "claude.accountEmpty": "新增 Anthropic 供應商並使用 Claude 帳戶登入。其帳戶、配額與設定隨後會顯示在這裡。",
   "claude.accountEmptyTitle": "尚未設定 Anthropic",
   "claude.interceptStatus": "攔截",
-  "claude.interceptDesc": "路由 Claude Code/Desktop 的第一方流量。",
+  "claude.interceptDesc": "透過本機代理路由 Claude Code/Desktop 送往 Anthropic 服務的流量。",
   "claude.interceptPort": "攔截連接埠",
   "claude.interceptPortDesc": "攔截代理的本機埠，與 OpenCodex 代理埠不同。",
   "claude.stateOn": "開啟",
