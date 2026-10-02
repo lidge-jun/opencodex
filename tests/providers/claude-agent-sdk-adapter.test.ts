@@ -31,6 +31,8 @@ import {
   MAX_ACTIVE_HARNESS_TEARDOWNS,
   reapHarnessQuarantine,
   resetHarnessQuarantineForTests,
+  runTreeCommandWithBudget,
+  setHarnessTreeCommandForTests,
   setHarnessTreeProbeForTests,
 } from "../../src/adapters/claude-agent-sdk/harness-process";
 import { effectiveAdapterContract, getAdapterDefinition } from "../../src/adapters/registry";
@@ -993,15 +995,23 @@ describe("claude-agent-sdk owns the harness process it starts", () => {
 describe("claude-agent-sdk reports the harness teardown it could not confirm", () => {
   function supervisorFor(
     harness: ReturnType<typeof fakeHarnessChild>,
-    options: { killProcessTree?: (signal: NodeJS.Signals, pid: number) => boolean; platform?: NodeJS.Platform } = {},
+    options: {
+      killProcessTree?: (signal: NodeJS.Signals, pid: number) => boolean;
+      platform?: NodeJS.Platform;
+      /** Leave the production terminator in place instead of injecting a verdict. */
+      productionTreeKill?: boolean;
+    } = {},
   ) {
     const supervisor = createHarnessProcessSupervisor({
       onStderr: () => undefined,
       spawn: () => harness.child as unknown as ChildProcess,
       killGraceMs: 10,
       reapTimeoutMs: 20,
-      // A unit test never signals a real process group; the platform's tree call is a seam here.
-      killProcessTree: options.killProcessTree ?? (() => false),
+      // A unit test never signals a real process group; the platform's tree call is a seam here -
+      // unless the case is about the production terminator itself, which is then left in place.
+      ...(options.productionTreeKill === true
+        ? {}
+        : { killProcessTree: options.killProcessTree ?? (() => false) }),
       ...(options.platform !== undefined ? { platform: options.platform } : {}),
     });
     supervisor.spawn({ command: "claude", args: [], env: {}, signal: new AbortController().signal });
@@ -1280,6 +1290,53 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
       unresolved: [{ pid: 4711, reason: "running", signalFailed: false }],
       quarantined: 1,
     });
+  });
+
+  test("a stalled tree terminator is bounded and stays an unresolved tree", async () => {
+    // Every case above stood in for the platform's tree call with a verdict that arrives instantly.
+    // This one is the command boundary itself: the production terminator runs the runner seam, and
+    // the runner here spends its whole budget before throwing exactly as the runtime does when the
+    // ceiling kills the command. The teardown must still settle inside the bound it promises, and
+    // the tree it could not reach must stay owned rather than being read as success.
+    const budgets: number[] = [];
+    const order: string[] = [];
+    setHarnessTreeCommandForTests((_exe, _args, timeoutMs) => {
+      budgets.push(timeoutMs);
+      order.push("tree");
+      const until = Date.now() + timeoutMs;
+      while (Date.now() < until) { /* the stuck terminator, spending its whole budget */ }
+      throw new Error("ETIMEDOUT");
+    });
+    const harness = fakeHarnessChild({ terminatesOn: "SIGTERM", exitWithoutClose: true });
+    const directKill = harness.child.kill.bind(harness.child);
+    harness.child.kill = (signal?: string) => { order.push("direct"); return directKill(signal); };
+
+    const started = Date.now();
+    const outcome = await supervisorFor(harness, { platform: "win32", productionTreeKill: true }).terminate();
+    const elapsed = Date.now() - started;
+
+    // One budget per pass - TERM and KILL - each finite and inside the window it precedes.
+    expect(budgets).toEqual([10, 10]);
+    // The tree is still walked before the direct signal: `taskkill /T` needs a live root, so the
+    // ordering the ownership design rests on is not traded away for the bound.
+    expect(order).toEqual(["tree", "direct", "tree", "direct"]);
+    expect(elapsed).toBeLessThan(500);
+    expect(outcome).toEqual({
+      confirmed: false,
+      allExited: false,
+      unresolved: [{ pid: 4711, reason: "unresolved-tree", signalFailed: false }],
+      quarantined: 1,
+    });
+    expect(harnessTeardownMetrics().active).toBe(1);
+  });
+
+  test("the production command runner ends a stuck command at its budget", () => {
+    // The runner is the production boundary, not the seam: a command that never returns has to be
+    // killed at the ceiling instead of holding the event loop behind it. The stand-in for a wedged
+    // terminator is a real process that outlives the budget by orders of magnitude.
+    const started = Date.now();
+    expect(() => runTreeCommandWithBudget(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], 60)).toThrow();
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
 

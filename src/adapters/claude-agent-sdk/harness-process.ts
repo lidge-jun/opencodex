@@ -66,6 +66,39 @@ import { createAdmissionGate, type AdmissionLease, type AdmissionMetrics } from 
  */
 export type HarnessTreeKillFn = (signal: NodeJS.Signals, pid: number) => boolean;
 
+/**
+ * Run one platform tree command under a finite budget.
+ *
+ * The Windows terminator is an OS command, and a synchronous call into it without a ceiling lets a
+ * stalled one block this process's event loop for as long as it likes - the grace and reap timers
+ * that bound the teardown cannot fire while it does. The budget is what keeps the command inside the
+ * same bound as the waits around it: the runtime kills the command at the ceiling, the throw becomes
+ * the existing "the tree was not reached" verdict, and the ownership stays with the child.
+ */
+export type HarnessTreeCommandFn = (exe: string, args: readonly string[], timeoutMs: number) => void;
+
+/**
+ * Production tree command runner. Exported so the bound itself can be pinned against a real stuck
+ * command, not only through the injected seam.
+ */
+export function runTreeCommandWithBudget(exe: string, args: readonly string[], timeoutMs: number): void {
+  execFileSync(exe, [...args], {
+    stdio: "pipe",
+    windowsHide: true,
+    timeout: timeoutMs,
+    // The runtime's default would be SIGTERM; a terminator that ignores it would leave the wedged
+    // command running behind the bound it just spent. SIGKILL cannot be ignored.
+    killSignal: "SIGKILL",
+  });
+}
+
+let harnessTreeCommand: HarnessTreeCommandFn = runTreeCommandWithBudget;
+
+/** Test seam for the tree command boundary; see `runTreeCommandWithBudget`. */
+export function setHarnessTreeCommandForTests(command?: HarnessTreeCommandFn): void {
+  harnessTreeCommand = command ?? runTreeCommandWithBudget;
+}
+
 /** Injectable spawn for tests; production uses `node:child_process`, as the sibling CLI turn does. */
 export type HarnessSpawnFn = (command: string, args: readonly string[], options: NodeSpawnOptions) => ChildProcess;
 
@@ -292,6 +325,7 @@ export function resetHarnessQuarantineForTests(): void {
   for (const entry of quarantine) for (const child of entry.children) child.releaseTeardownLease();
   quarantine.length = 0;
   harnessTreeProbe = defaultTreeMemberAlive;
+  harnessTreeCommand = runTreeCommandWithBudget;
   harnessTeardownGate = createAdmissionGate("harness_teardowns", MAX_ACTIVE_HARNESS_TEARDOWNS);
 }
 
@@ -301,16 +335,20 @@ export function resetHarnessQuarantineForTests(): void {
  * POSIX gets the process group the spawn created for the harness, which is how a child of the
  * harness is reached when only the harness's own pid is known. Windows gets `taskkill /T /F`, the
  * same tree terminator the spawned-CLI turn uses, because a `.cmd` shim there would otherwise leave
- * the real CLI running. A runtime that refuses either call leaves the direct-child signal below,
- * which is why this returns a verdict instead of throwing.
+ * the real CLI running. That command runs under `commandBudgetMs`: a terminator that stalls is killed
+ * at the ceiling instead of holding the event loop, and the timeout surfaces as the same `false` a
+ * refusal returns, so the caller keeps the tree's ownership rather than reading silence as success.
+ * A runtime that refuses either call leaves the direct-child signal below, which is why this returns
+ * a verdict instead of throwing.
  */
-function defaultKillProcessTree(signal: NodeJS.Signals, pid: number): boolean {
-  if (process.platform === "win32") {
+function defaultKillProcessTree(platform: NodeJS.Platform, signal: NodeJS.Signals, pid: number, commandBudgetMs: number): boolean {
+  if (platform === "win32") {
     try {
-      execFileSync(`${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`, ["/PID", String(pid), "/T", "/F"], {
-        stdio: "pipe",
-        windowsHide: true,
-      });
+      harnessTreeCommand(
+        `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`,
+        ["/PID", String(pid), "/T", "/F"],
+        commandBudgetMs,
+      );
       return true;
     } catch {
       return false;
@@ -661,7 +699,13 @@ export function createHarnessProcessSupervisor(options: HarnessProcessSupervisor
   const killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
   const reapTimeoutMs = options.reapTimeoutMs ?? DEFAULT_REAP_TIMEOUT_MS;
   const platform = options.platform ?? process.platform;
-  const killTree = options.killProcessTree ?? defaultKillProcessTree;
+  // Every tree command has to answer inside the observation window it precedes, and the smallest of
+  // the two ceilings is the honest budget for both passes: a terminator still silent after one grace
+  // window is not going to answer, and the ladder must not wait on it longer than it waits on the
+  // child the command belongs to.
+  const treeCommandBudgetMs = Math.min(killGraceMs, reapTimeoutMs);
+  const killTree = options.killProcessTree
+    ?? ((signal: NodeJS.Signals, pid: number): boolean => defaultKillProcessTree(platform, signal, pid, treeCommandBudgetMs));
   const children = new Set<HarnessChild>();
 
   return {
