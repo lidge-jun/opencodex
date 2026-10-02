@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import {
   BOOTSTRAP_MAX_DECODED_BYTES, injectPickerModels, isPickerBootstrapRequest,
@@ -138,4 +138,75 @@ test("unknown surface ids from the body are counted in the outcome, never echoed
     outcome => { outcomes.push(outcome.kind === "unchanged" ? outcome.reason : "rewritten"); });
   expect(outcomes).toEqual(["no_code_surface(cowork,other:2)"]);
   expect(outcomes.join("")).not.toContain(secretish);
+});
+
+
+test("oversized retained fields are refused before cloning any picker rows", () => {
+  const body = { model_selector_config: [{ id: "code", models: [{
+    id: "claude-native", metadata: { retained: "x".repeat(1024 * 1024) },
+  }] }] };
+  const aliases = Array.from({ length: 32 }, (_, i) => ({ id: `ocx-${i}`, name: `Route ${i}` }));
+  const clone = spyOn(globalThis, "structuredClone");
+  try {
+    expect(injectPickerModels(body, aliases)).toBe(0);
+    expect(clone).not.toHaveBeenCalled();
+    expect(body.model_selector_config[0]!.models).toHaveLength(1);
+  } finally { clone.mockRestore(); }
+});
+
+test("a wide retained row is refused even when its individual fields are small", () => {
+  const native = { id: "claude-native", ...Object.fromEntries(
+    Array.from({ length: 10 }, (_, i) => [`field${i}`, "x".repeat(32 * 1024)]),
+  ) };
+  const body = { model_selector_config: [{ id: "code", models: [native] }] };
+  expect(injectPickerModels(body, models)).toBe(0);
+  expect(body.model_selector_config[0]!.models).toEqual([native]);
+});
+
+test("all target surfaces share one expansion budget and refusal is atomic", () => {
+  const aliases = Array.from({ length: 32 }, (_, i) => ({ id: `ocx-${i}`, name: `Route ${i}` }));
+  for (const ids of [["ccd", "code"], ["code", "code"]]) {
+    const body = { model_selector_config: ids.map(id => ({ id, models: [{
+      id: "claude-native", metadata: { retained: "x".repeat(40 * 1024) },
+    }] })) };
+    const clone = spyOn(globalThis, "structuredClone");
+    try {
+      expect(injectPickerModels(body, aliases)).toBe(0);
+      expect(clone).not.toHaveBeenCalled();
+      expect(body.model_selector_config.every(surface => surface.models.length === 1)).toBe(true);
+    } finally { clone.mockRestore(); }
+  }
+});
+
+test("compressed Desktop catalogs leave no rewritten body when the output would exceed its cap", () => {
+  const body = fixture();
+  const text = JSON.stringify({ ...body, padding: "x".repeat(BOOTSTRAP_MAX_DECODED_BYTES - 700) });
+  expect(Buffer.byteLength(text)).toBeLessThan(BOOTSTRAP_MAX_DECODED_BYTES);
+  const aliases = Array.from({ length: 32 }, (_, i) => ({ id: `ocx-${i}`, name: `Route ${i}` }));
+  expect(rewriteBootstrapBody(gzipSync(Buffer.from(text)), "gzip", aliases) === null).toBe(true);
+});
+
+
+test("small nested metadata is independently cloned on both Desktop surfaces", () => {
+  const native = { id: "claude-native", thinking: { mode: ["adaptive", "fixed"] }, capabilities: { images: true },
+    description: "x".repeat(1024 * 1024), context_window: 200_000 };
+  const body = { model_selector_config: ["ccd", "code", "ccr"].map(id => ({ id, models: [native] })) };
+  expect(injectPickerModels(body, models)).toBe(2);
+  for (const surface of body.model_selector_config.slice(0, 2)) {
+    expect(surface.models[0]).toBe(native);
+    expect(surface.models[1]!.thinking).toEqual(native.thinking);
+    expect(surface.models[1]!.thinking).not.toBe(native.thinking);
+    expect(surface.models[1]!.capabilities).toEqual(native.capabilities);
+    expect(surface.models[1]!).not.toHaveProperty("description");
+    expect(surface.models[1]!.context_window).toBe(128_000);
+  }
+  expect(body.model_selector_config[2]!.models).toEqual([native]);
+});
+
+test("UTF-8 and JSON escapes count toward retained field limits", () => {
+  for (const value of ["界".repeat(24 * 1024), "\u0001".repeat(12 * 1024), "\ud800".repeat(12 * 1024)]) {
+    const body = { model_selector_config: [{ id: "code", models: [{ id: "claude-native", metadata: value }] }] };
+    expect(injectPickerModels(body, models)).toBe(0);
+    expect(body.model_selector_config[0]!.models).toHaveLength(1);
+  }
 });

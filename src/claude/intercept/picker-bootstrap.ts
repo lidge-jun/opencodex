@@ -3,6 +3,7 @@
  * A failed or inapplicable transform leaves the upstream bytes untouched.
  */
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
+import { PICKER_MAX_OUTPUT_BYTES, PickerRewriteBudget, pickerRowBytes } from "./picker-budget";
 
 /** One opencodex model offered in Desktop's Code-tab picker. */
 export interface PickerModelEntry {
@@ -16,7 +17,7 @@ export interface PickerModelEntry {
 }
 
 export const BOOTSTRAP_MAX_ENCODED_BYTES = 4 * 1024 * 1024;
-export const BOOTSTRAP_MAX_DECODED_BYTES = 16 * 1024 * 1024;
+export const BOOTSTRAP_MAX_DECODED_BYTES = PICKER_MAX_OUTPUT_BYTES;
 const BOOTSTRAP_PATH = /^\/(?:edge-api|api)\/bootstrap(?:\/[A-Za-z0-9-]+\/app_start)?\/?$/;
 const REWRITE_REMOVED_HEADERS = new Set([
   "content-encoding", "content-length", "etag", "digest", "content-md5", "transfer-encoding",
@@ -56,11 +57,14 @@ export interface PickerInjectionOptions {
   extraStrippedKeys?: readonly string[];
 }
 
-function injectIntoSurface(
+interface SurfaceInjection { entries: unknown[]; additions: Record<string, unknown>[] }
+
+function planSurfaceInjection(
   surface: Record<string, unknown>,
   models: readonly PickerModelEntry[],
   stripped: readonly string[],
-): number | string {
+  budget: PickerRewriteBudget,
+): SurfaceInjection | string {
   if (!Array.isArray(surface.models)) return "no_models";
   const entries = surface.models as unknown[];
   const template = entries.map(record).find(entry =>
@@ -68,24 +72,28 @@ function injectIntoSurface(
     && !entry.disabled && !entry.disabled_reason && entry.section !== "deprecated");
   if (!template) return `no_template(models=${entries.length})`;
   const existing = new Set(entries.map(record).map(entry => entry?.id));
-  let added = 0;
+  // Strip by shallow projection before measuring or cloning retained metadata. Native rows stay intact.
+  const retained = { ...template };
+  for (const key of Object.keys(retained)) {
+    if (stripped.includes(key) || /version/i.test(key)
+      || ["id", "name", "section", "context_window"].includes(key)) delete retained[key];
+  }
+  pickerRowBytes(retained);
+  const additions: Record<string, unknown>[] = [];
   for (const model of models) {
     if (existing.has(model.id)) continue;
-    const copy = structuredClone(template);
+    const copy = { ...retained };
     copy.id = model.id;
     copy.name = model.name;
     copy.section = "main";
     if (model.contextWindow === undefined) delete copy.context_window;
     else copy.context_window = model.contextWindow;
-    for (const key of Object.keys(copy)) {
-      if (stripped.includes(key) || /version/i.test(key)) delete copy[key];
-    }
     if (model.description !== undefined) copy.description = model.description;
-    entries.push(copy);
+    budget.reserveRow(copy);
+    additions.push(copy);
     existing.add(model.id);
-    added++;
   }
-  return added;
+  return { entries, additions };
 }
 
 export function injectPickerModels(
@@ -110,10 +118,21 @@ export function injectPickerModels(
   }
   let added = 0;
   const skipped: string[] = [];
-  for (const surface of targets) {
-    const result = injectIntoSurface(surface, models, stripped);
-    if (typeof result === "number") added += result;
-    else skipped.push(`${String(surface.id)}:${result}`);
+  try {
+    const budget = new PickerRewriteBudget(bootstrap);
+    const plans: SurfaceInjection[] = [];
+    for (const surface of targets) {
+      const result = planSurfaceInjection(surface, models, stripped, budget);
+      if (typeof result === "string") skipped.push(`${String(surface.id)}:${result}`);
+      else { plans.push(result); added += result.additions.length; }
+    }
+    // All surfaces must fit before any deep clone or mutation; a refusal cannot publish a partial list.
+    const copies = plans.map(plan => plan.additions.map(row => structuredClone(row)));
+    for (let i = 0; i < plans.length; i++) {
+      for (const row of copies[i]!) plans[i]!.entries.push(row);
+    }
+  } catch {
+    return unchanged("rewrite_limit");
   }
   if (added === 0) return unchanged(skipped.length > 0 ? skipped.join(";") : models.length === 0 ? "no_routes" : "all_present");
   explain?.({ kind: "rewritten", added });
@@ -142,7 +161,9 @@ export function rewriteBootstrapBody(
     if (decoded.length > BOOTSTRAP_MAX_DECODED_BYTES) return unchanged("decoded_cap");
     const parsed: unknown = JSON.parse(decoded.toString("utf8"));
     if (injectPickerModels(parsed, models, explain) === 0) return null;
-    return Buffer.from(JSON.stringify(parsed), "utf8");
+    const text = JSON.stringify(parsed);
+    if (Buffer.byteLength(text) > BOOTSTRAP_MAX_DECODED_BYTES) return unchanged("rewrite_limit");
+    return Buffer.from(text, "utf8");
   } catch {
     return unchanged("decode_or_parse_failed");
   }

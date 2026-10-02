@@ -7,14 +7,14 @@ import { activeDesktop3pAlias, buildDesktop3pRegistry, resolveDesktop3pAlias } f
 import { DESKTOP_3P_REGISTRY_RETRY_MS, ensureDesktop3pRegistry } from "../../src/claude/desktop-3p-startup";
 import { reconcileClaudeFirstPartySettings } from "../../src/claude/first-party-settings";
 import {
-  cliCatalogEligible, cliCatalogKind, invalidateClaudeCodeServedCatalog,
+  cliCatalogEligible, cliCatalogKind, injectCliBootstrapOptions, invalidateClaudeCodeServedCatalog,
   rewriteCliCatalogBody, rewriteCliCatalogResponse,
 } from "../../src/claude/intercept/cli-catalog";
 import { createCliCatalogProvider } from "../../src/claude/intercept/cli-picker";
 import { CLAUDE_INTERCEPT_HOSTS, startConnectProxy } from "../../src/claude/intercept/connect-proxy";
 import { CLAUDE_INTERCEPT_UPSTREAM, startClaudeInterceptListener } from "../../src/claude/intercept/listener";
 import { createLocalInterceptCa, issueLocalInterceptLeaf } from "../../src/claude/intercept/local-ca";
-import { injectPickerModels, type PickerModelEntry } from "../../src/claude/intercept/picker-bootstrap";
+import { BOOTSTRAP_MAX_DECODED_BYTES, injectPickerModels, type PickerModelEntry } from "../../src/claude/intercept/picker-bootstrap";
 import { buildCliPickerModels, routableCliPickerModels, type PickerRouteInput } from "../../src/claude/intercept/picker-models";
 import { applyClaudeInterceptSettings, buildClaudeInterceptEnv } from "../../src/claude/intercept/settings";
 
@@ -488,4 +488,46 @@ test("writing the intercept settings and a successful first-party reconcile drop
   const failed = reconcileClaudeFirstPartySettings(config, { desktop: false, cli: false }, { claudeConfigDir: claudeDir, opencodexConfigDir: opencodexDir });
   expect(failed).toMatchObject({ ok: false, reason: "unreadable" });
   expect(existsSync(join(dir, "org-3-cc.json"))).toBe(true);
+});
+
+
+test("CLI retained metadata amplification fails open with original response bytes and headers", async () => {
+  const text = JSON.stringify({ model_selector_config: [{ id: "cc", models: [{
+    id: "claude-native", metadata: { retained: "x".repeat(1024 * 1024) },
+  }] }] });
+  const aliases = Array.from({ length: 32 }, (_, i) => ({ id: `claude-alias-${i}`, name: `Route ${i}` }));
+  const response = await rewriteCliCatalogResponse(new Response(text, {
+    headers: { etag: '"native"', "x-request-id": "catalog-test" },
+  }), "model_selector", aliases);
+  expect((await response.text()) === text).toBe(true);
+  expect(response.headers.get("etag")).toBe('"native"');
+  expect(response.headers.get("x-request-id")).toBe("catalog-test");
+});
+
+test("CLI selector and explicit bootstrap fallback share the final output cap", () => {
+  const aliases = Array.from({ length: 32 }, (_, i) => ({ id: `claude-alias-${i}`, name: `Route ${i}` }));
+  for (const [kind, body] of [["model_selector", modelSelector()], ["bootstrap", {}]] as const) {
+    const text = JSON.stringify({ ...body, padding: "x".repeat(BOOTSTRAP_MAX_DECODED_BYTES - 1000) });
+    expect(Buffer.byteLength(text)).toBeLessThan(BOOTSTRAP_MAX_DECODED_BYTES);
+    expect(rewriteCliCatalogBody(kind, text, aliases) === null).toBe(true);
+  }
+});
+
+test("CLI fallback refuses oversized row fields without changing its parsed input", () => {
+  const row = { ...ROW, description: "x".repeat(1024 * 1024) };
+  const body = { additional_model_options: [{ model: "native" }] };
+  expect(injectCliBootstrapOptions(body, [ROW, row])).toBe(1);
+  const fresh = { additional_model_options: [{ model: "native" }] };
+  expect(injectCliBootstrapOptions(fresh, [ROW, { ...row, id: "claude-oversized" }])).toBe(0);
+  expect(fresh.additional_model_options).toEqual([{ model: "native" }]);
+  expect(rewriteCliCatalogBody("bootstrap", "{}", [row]) === null).toBe(true);
+});
+
+
+test("duplicate CLI surfaces share the row expansion limit", () => {
+  const body = { model_selector_config: Array.from({ length: 3 }, () => ({ id: "cc", models: [{
+    id: "claude-native", metadata: "x".repeat(32 * 1024),
+  }] })) };
+  const aliases = Array.from({ length: 32 }, (_, i) => ({ id: `claude-alias-${i}`, name: `Route ${i}` }));
+  expect(rewriteCliCatalogBody("model_selector", JSON.stringify(body), aliases) === null).toBe(true);
 });

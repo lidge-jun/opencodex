@@ -245,6 +245,20 @@ picker proxy bind failure only disables picker mode; a picker construction or st
 every socket the start had bound before rethrowing. Nothing is logged but method, bootstrap or
 other, and status.
 
+### Picker catalog rewrite bounds
+
+`src/claude/intercept/picker-budget.ts` preflights plain JSON before copying injected rows.
+Each retained field value and key is limited to 64 KiB of serialized UTF-8, each added row to
+256 KiB, and the whole response to 4096 added rows and 2 MiB of added JSON (including separators).
+All selected surfaces, including duplicate surface ids, share that budget. The original body plus
+reserved additions must fit 16 MiB before deep clones or final serialization. The CLI's explicit
+bootstrap fallback uses the same budget, including space for a newly created options property.
+A refused rewrite leaves every original row and the upstream response unchanged; it never publishes
+a partially extended picker. Small nested capabilities/thinking metadata retain their shape,
+while presentation/version stripping, descriptions, context windows, and surface eligibility keep
+their existing rules. Regression coverage is in `tests/claude-integration/claude-picker-bootstrap.test.ts`
+and `tests/claude-integration/claude-cli-picker.test.ts`.
+
 `src/claude/desktop-picker.ts` owns every mutation while a server is running. One controller lock
 serializes `enable`, `disable`, and `transition`; the latter wraps a whole Desktop mode change so
 cleanup, mode/profile commit, and the optional picker enable cannot race. `runDesktopTransition` uses
