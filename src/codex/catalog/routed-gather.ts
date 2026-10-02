@@ -530,8 +530,11 @@ async function gatherRoutedModelsUncached(
   replaceLastComboCatalogOmissions(localOmissions);
   // Preserve declaratively ordered discovery (and cold-start seed order); other presets
   // retain their historical alphabetical order. Renamed/custom transport scoping still applies.
-  const orderedProviders = new Set(activeProviders.filter(({ name, provider }) =>
-    resolveProviderModelDiscovery(name, provider).spec?.preferFirst?.length).map(({ name }) => name));
+  // Read the captured discovery policy, never the live registry: a flight must keep the
+  // authority it was captured under even if the registry changes mid-gather.
+  const orderedProviders = new Set(activeProviders
+    .filter(({ discovery }) => (discovery.spec?.preferFirst?.length ?? 0) > 0)
+    .map(({ name }) => name));
   all.sort((a, b) => (a.provider === b.provider
     ? orderedProviders.has(a.provider) ? 0 : a.id.localeCompare(b.id)
     : a.provider.localeCompare(b.provider)));

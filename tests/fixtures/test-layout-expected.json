@@ -1296,6 +1296,7 @@
   "opencode-management-transport.test.ts": "providers",
   "opencode-zen-deepseek-reasoning.test.ts": "providers",
   "opencode-zen-rate-limit.test.ts": "providers",
+  "opengateway-provider.test.ts": "providers",
   "openrouter-provider-routing.test.ts": "providers",
   "openrouter-quota-reset-cooldown-4024.test.ts": "providers",
   "opper-provider.test.ts": "providers",

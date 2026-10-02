@@ -419,6 +419,7 @@ export function captureProviderGather(
     finalMethod: request.method,
     finalUrl: request.url,
     filter: capturedField(discovery.spec, "filter"),
+    preferFirst: capturedField(discovery.spec, "preferFirst"),
     maxResponseBytes: discovery.maxResponseBytes,
     maxModels: discovery.maxModels,
     trustedOpenAiApi,
