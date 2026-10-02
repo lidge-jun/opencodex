@@ -106,6 +106,11 @@ These optimizations do not add request queues, retry policies, or RSS-based admi
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
+Hosted Responses image display uses the allocation-free JSON byte counter to admit retained
+metadata and projected output before saving artifacts or serializing expanded JSON/SSE.
+The [Images display contract](../data-planes/images.md#hosted-responses-image-display) owns its
+item/metadata limits and lifecycle behavior; raw continuation replay stays upstream-shaped.
+
 ## Response-log inspection
 
 `src/lib/redact.ts` scans XML identifying attributes over disjoint tag spans rather than

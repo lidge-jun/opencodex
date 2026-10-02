@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { deliverPassthroughResponse, setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -97,7 +97,9 @@ for (const platform of ['darwin', 'linux', 'win32'] as const) {
   for (const cache of ['plaintext', 'envelope']) cases.push({ platform, format: 'sse', client: 'local', cache });
 }
 for (const platform of ['darwin', 'linux', 'win32'] as const) {
-  for (const format of ['sse', 'json', 'json-to-sse']) cases.push({ platform, format, client: 'local', cache: 'overflow' });
+  for (const format of ['sse', 'json', 'json-to-sse']) {
+    for (const cache of ['overflow', 'duplicate', 'metadata']) cases.push({ platform, format, client: 'local', cache });
+  }
 }
 for (const { platform, format, client, cache } of cases) {
   const local = client === 'local';
@@ -108,8 +110,12 @@ for (const { platform, format, client, cache } of cases) {
     const remembered: any[] = [];
     let resolveRemembered!: () => void;
     const didRemember = new Promise<void>(resolve => { resolveRemembered = resolve; });
+    const refused = ['overflow', 'duplicate', 'metadata'].includes(cache);
     const currentResponse = cache === 'overflow'
       ? { ...response, output: Array.from({ length: 129 }, (_, i) => ({ ...item, id: 'ig_limit_' + i, status: 'failed', result: null })) }
+      : cache === 'duplicate' ? { ...response, output: [item, { ...item, status: 'failed', result: null }] }
+      : cache === 'metadata' ? { ...response, output: [item, { ...item, id: 'ig_large', status: 'failed', result: null,
+        internal_chat_message_metadata_passthrough: { value: 'x'.repeat(256 * 1024) } }] }
       : response;
     const payload = format !== 'sse' ? JSON.stringify(currentResponse) : [
       { type: 'response.created', response: { ...response, status: 'in_progress', output: [] } },
@@ -118,7 +124,7 @@ for (const { platform, format, client, cache } of cases) {
       { type: 'response.output_item.added', output_index: 1, item: { ...finalMessage, status: 'in_progress', content: [] } },
       { type: 'response.output_item.done', output_index: 1, item: finalMessage },
       { type: 'response.completed', response: currentResponse },
-    ].map(e => 'data: ' + JSON.stringify(e) + nl + nl).join('') + 'data: [DONE]' + nl + nl;
+    ].filter(e => !refused || e.type === 'response.created' || e.type === 'response.completed').map(e => 'data: ' + JSON.stringify(e) + nl + nl).join('') + 'data: [DONE]' + nl + nl;
     const req = new Request('http://127.0.0.1:10100/v1/responses', {
       headers: client !== 'generic' ? { originator: 'Codex Desktop' } : {},
     });
@@ -146,21 +152,24 @@ for (const { platform, format, client, cache } of cases) {
           commitReasoningReplayServingRoute: () => {}, recordTerminalOutcomes: false } as any,
         native as any,
       );
-      if (cache === 'overflow' && format !== 'sse') {
+      if (refused && format !== 'sse') {
         expect(result.status).toBe(502);
         const body = await result.text();
-        expect(body).toContain('hosted image result count exceeds local display limit');
+        expect(body).toContain('hosted image result exceeds local display limits');
         expect(body).not.toContain(home.root);
+        expect(existsSync(home.path('artifacts'))).toBe(false);
+        expect(remembered[0]?.output).toEqual(currentResponse.output);
         return;
       }
       expect(result.status).toBe(200);
       expect(result.headers.get('content-type')?.includes('text/event-stream')).toBe(format !== 'json');
       const body = await result.text();
-      if (cache === 'overflow') {
+      if (refused) {
         const terminal = body.split(nl).filter(l => l.startsWith('data: {'))
           .map(l => JSON.parse(l.slice(6))).find(e => e.type === 'response.failed');
         expect(terminal).toBeDefined();
         expect(body).not.toContain(item.result);
+        expect(existsSync(home.path('artifacts'))).toBe(false);
         return;
       }
       const completed = format === 'json' ? JSON.parse(body) : body.split(nl).filter(l => l.startsWith('data: {'))

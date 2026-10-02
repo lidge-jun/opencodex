@@ -48,9 +48,16 @@ HTTP references here are for upstream context, not a claim of desktop HTTP rende
 Image data must pass the shared base64, format and byte-budget checks in
 `src/images/artifacts.ts`. Files use random names, exclusive creation and mode 0600;
 the artifact directory uses mode 0700 on creation. Per-response display state is capped
-at 128 image items, with the existing 50 MiB per-image and 100 MiB aggregate decoded
-limits. Exceeding the item cap returns HTTP 502 before streaming or a failed SSE
-terminal after streaming has started. Retention runs after the batch. Failed or invalid results produce a bounded
+at 128 image items. Each retained identity/metadata envelope is limited to 64 KiB of
+serialized UTF-8 JSON, with a 1 MiB aggregate allowance independent of image decoding.
+Metadata is preserved unchanged within those bounds, and repeated lifecycle inputs are
+validated even when display state already exists. Snapshot image identities are unique,
+including against non-image items; explicit ids and fallback indices use separate namespaces.
+Projected JSON and SSE lifecycle output is preflighted against the 32 MiB transport limit
+before artifact writes or serialization, including metadata reused from earlier events.
+The existing 50 MiB per-image and 100 MiB aggregate decoded limits still apply.
+Refused display results return HTTP 502 before streaming or a failed SSE terminal after
+streaming has started. Retention runs after the batch. Failed or invalid results produce a bounded
 display message without reflecting payloads or filesystem errors. URL results and
 partial-image previews are not downloaded or rendered by this projection.
 
