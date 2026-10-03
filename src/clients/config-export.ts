@@ -30,7 +30,7 @@ import { probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 
 export type { ConfigFormat } from "../integrations/serialize";
-export type { ManagedFragment, ManagedContribution, BuildContribution, OpencodeLaunchEnv, OpencodeCatalogModel, ExportModel, ExportContext, ExportClientId, ExportClientSpec, PiModelEntry } from "./config-export/contracts";
+export type { ManagedFragment, ManagedContribution, BuildContribution, OpencodeLaunchEnv, OpencodeCatalogModel, ExportModel, ExportContext, ExportClientId, ExportClientSpec, PiModelEntry, DroidReasoningDefaults } from "./config-export/contracts";
 export { OPENCODE_PROVIDER_ID, OPENCODE_CONFIG_SCHEMA, OPENCODE_API_KEY_ENV, OPENCODE_API_KEY_ENV_REF, KILO_API_KEY_ENV, KILO_API_KEY_ENV_REF, KILO_CONFIG_SCHEMA, HERMES_API_KEY_ENV, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV, OPENCLAW_API_KEY_ENV_REF, LOOPBACK_API_KEY_PLACEHOLDER, GAJAE_API_KEY_ENV, SCHEMA_REQUIRED_OUTPUT_BUDGET, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG } from "./config-export/constants";
 export { normalizeExportModels } from "./config-export/model-metadata";
 export type { OmpModelEntry, OmpProviderBlock, OmpGeneratedConfig } from "./config-export/omp";
@@ -51,12 +51,13 @@ export type { DshReasoningEffort, DshWireReasoningEffort, DshModelEntry, DshProv
 export type { McodeProviderBlock, McodeModelEntry, McodeGeneratedConfig } from "./config-export/mcode";
 export type { RaycastAbility, RaycastAbilityName, RaycastModelEntry, RaycastProviderEntry, RaycastGeneratedConfig } from "./config-export/raycast";
 export { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } from "./config-export/raycast";
-export { droidHomeDir, droidConfigPath, buildDroidClientConfig, summarizeDroid, buildDroidContribution } from "./config-export/droid";
+export { droidHomeDir, droidConfigPath, buildDroidClientConfig, summarizeDroid, buildDroidContribution, droidReasoningModels, droidDefaultsFromOwnedRows, validateDroidReasoningDefaults } from "./config-export/droid";
 export type { DroidModelEntry, DroidGeneratedConfig } from "./config-export/droid";
 
 import type { OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
 import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV, KILO_API_KEY_ENV } from "./config-export/constants";
-import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
+import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, inputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
+import { exportReasoningEfforts, exportDefaultReasoningEffort, legacyReasoningMetadata, type LegacyEffortVariant } from "./config-export/reasoning-metadata";
 import { buildOmpClientConfig, summarizeOmp, buildOmpContribution } from "./config-export/omp";
 import { buildDshClientConfig, summarizeDsh, buildDshContribution } from "./config-export/dsh";
 import { buildMcodeClientConfig, summarizeMcode, buildMcodeContribution } from "./config-export/mcode";
@@ -72,7 +73,7 @@ import { droidConfigPath, buildDroidClientConfig, summarizeDroid, buildDroidCont
 
 export interface OpencodeModelEntry {
   name: string;
-  limit?: { context: number; output: number };
+  limit?: { context: number; input?: number; output: number };
   /**
    * opencode's own capability fields, derived from the catalog row's declared input
    * modalities. Written only when the row declares at least one — an entry without them is
@@ -81,22 +82,30 @@ export interface OpencodeModelEntry {
    */
   attachment?: boolean;
   modalities?: { input: string[]; output: string[] };
+  tool_call?: boolean;
+  reasoning?: boolean;
+  interleaved?: { field: "reasoning_content" };
+  options?: { reasoningEffort: string };
+  variants?: Record<string, LegacyEffortVariant>;
 }
 
 /**
  * One selectable reasoning effort.
  *
- * opencode V2 applies these only from the `providers` block: a `variants` array under the
- * legacy `provider` block is parsed and then dropped, so the V1 block stays variant-free
- * rather than carrying fields that look configured but never reach a request.
+ * Native V2 variants use settings; legacy clients receive a separate options map.
  */
 export interface OpencodeModelVariant {
   id: string;
   settings: { reasoningEffort: string };
 }
 
-export interface OpencodeV2ModelEntry extends OpencodeModelEntry {
-  variants?: OpencodeModelVariant[];
+export interface OpencodeV2ModelEntry {
+  name: string;
+  limit?: { context: number; input?: number; output: number };
+  capabilities?: { tools: boolean; input?: string[]; output?: string[] };
+  compatibility?: { reasoningField: "reasoning_content" };
+  settings?: { reasoningEffort: string };
+  variants: OpencodeModelVariant[];
 }
 
 /** Endpoint and admission, spelled once and shared by both block generations. */
@@ -114,7 +123,7 @@ export interface OpencodeProviderBlock {
   models: Record<string, OpencodeModelEntry>;
 }
 
-/** opencode V2 provider block: `package` + `settings`. The only form whose variants apply. */
+/** opencode V2 provider block: `package` + `settings` and native variant arrays. */
 export interface OpencodeV2ProviderBlock {
   package: string;
   name: string;
@@ -147,16 +156,10 @@ export interface OpencodeGeneratedConfig {
 const OPENCODE_PROVIDER_NPM = "@ai-sdk/openai-compatible";
 
 /**
- * opencode V2's spelling of the same runtime. V2 resolves providers through its own
- * package table and ignores the V1 `npm` field, so a V2 block has to name this package
- * or the provider is not loaded at all.
- *
- * Verified end-to-end against opencode 0.0.0-beta-18684: `GET /api/model` resolves this
- * package for the provider and applies the per-model `variants`. opencode changes its
- * provider package table between releases, so re-verify the supported range whenever it
- * moves; a stale string breaks only the V2 block, silently.
+ * Canonical V2 runtime spelling. Current clients alias the old @opencode-ai scope,
+ * but exported documents use the documented package rather than depending on that alias.
  */
-const OPENCODE_V2_PROVIDER_PACKAGE = "@opencode-ai/ai/providers/openai-compatible";
+const OPENCODE_V2_PROVIDER_PACKAGE = "@opencode/ai/providers/openai-compatible";
 
 /** Display name for the provider block, identical in both generations. */
 const OPENCODE_PROVIDER_NAME = "OpenCodex";
@@ -672,35 +675,11 @@ function opencodeProviderConnection(baseURL: string, config: OcxConfig): Opencod
 }
 
 /**
- * Selectable reasoning efforts for one model, in canonical ladder order.
- *
- * No model-level `settings.reasoningEffort` default is emitted: the proxy already applies
- * its own configured default when a request carries no effort, and pinning one here would
- * override a default the user controls in opencodex. Variants are opt-in per selection,
- * which is the same reason we never emit `defaultModel` for MCode.
- *
- * `none` is dropped even when a ladder declares it.
- *
- * The original reason no longer holds and is recorded here so it is not repeated: the chat
- * ingress `OUTPUT_CONFIG_EFFORTS` allowlist DID omit `none`, so selecting it sent no effort
- * at all and fell back to the proxy default. That allowlist now accepts `none` (audit F7),
- * because it is the runtime's disable sentinel and dropping it let a provider default
- * re-enable thinking a caller had turned off.
- *
- * The variant stays filtered anyway, deliberately and narrowly: emitting it would change
- * what this exporter writes into a user's opencode config, and whether opencode's own
- * picker round-trips `reasoningEffort: "none"` to the wire this proxy reads has not been
- * verified here. Re-enabling it is a scoped follow-up that needs that check first, not a
- * side effect of an ingress fix. MCode and ZCode filter `none` for their own separate
- * reasons, documented at their call sites.
+ * Exact declared choices. An empty array is intentional: omitting variants lets OpenCode
+ * synthesize low/medium/high, even for a model whose upstream declares no adjustable effort.
  */
-function opencodeEffortVariants(model: OpencodeCatalogModel): OpencodeModelVariant[] | undefined {
-  if (model.reasoningEfforts === undefined) return undefined;
-  // Canonical order (none, minimal, then low..ultra) and dedupe, so the picker order does
-  // not depend on whatever order a provider listed its efforts in.
-  const efforts = canonicalizeReasoningEfforts(model.reasoningEfforts).filter(effort => effort !== "none");
-  if (efforts.length === 0) return undefined;
-  return efforts.map(effort => ({ id: effort, settings: { reasoningEffort: effort } }));
+function opencodeEffortVariants(model: OpencodeCatalogModel): OpencodeModelVariant[] {
+  return (exportReasoningEfforts(model) ?? []).map(effort => ({ id: effort, settings: { reasoningEffort: effort } }));
 }
 
 /**
@@ -712,7 +691,7 @@ function opencodeEffortVariants(model: OpencodeCatalogModel): OpencodeModelVaria
  * the pair) clamped to the context window.
  *
  * Two blocks instead of one because opencode V2 reads the `providers` map and V1 reads
- * `provider`, and only the V2 form applies `variants`. Emitting both keeps V1 installs
+ * `provider`, with native arrays versus legacy maps for variants. Emitting both keeps V1 installs
  * working: V2 merges them by provider id and model id, so a model listed in both blocks
  * appears once, with the V2 entry's name, connection, and variants.
  */
@@ -725,36 +704,37 @@ export function opencodeProviderBlocks(
   const v2Models: Record<string, OpencodeV2ModelEntry> = {};
   for (const model of expandFastExportModels(catalogModels)) {
     const key = model.namespaced;
-    const entry: OpencodeModelEntry = { name: exportModelLabel(model) };
+    const entry: OpencodeModelEntry = { name: exportModelLabel(model), ...legacyReasoningMetadata(model) };
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.limit = { context, output: outputBudgetFor(context, model) };
+      const input = inputBudgetFor(context, model);
+      if (input !== undefined) entry.limit.input = input;
     }
-    // `attachment` / `modalities` are fields of opencode's V1 model schema — the shape its
-    // published config.json defines and the one its loader reads (verified against opencode
-    // 1.18.30, src/provider/provider.ts: `model.attachment ?? …` / `model.modalities?.input`).
-    // They ride on both generations anyway: the two blocks are two spellings of one model list,
-    // and the V2 model schema (capabilities.{tools,input,output}, which opencode fills by
-    // migrating this same `modalities` field) ignores keys it does not define — its loader
-    // decodes with `onExcessProperty: "ignore"`. Same values on both, so a merge cannot make
-    // the two entries disagree.
+    // Native V2 decoders ignore legacy attachment/modalities fields. Emit each generation's
+    // actual capability shape rather than relying on migration of the other provider block.
     const capabilities = opencodeModelCapabilities(model.inputModalities);
     if (capabilities) {
       entry.attachment = capabilities.attachment;
       entry.modalities = capabilities.modalities;
     }
+    if (typeof model.supportsTools === "boolean") entry.tool_call = model.supportsTools;
     v1Models[key] = entry;
-    const variants = opencodeEffortVariants(model);
-    // Own `limit` and `modalities` objects, not shared references: the two blocks are
-    // serialized and reasoned about separately, and an in-place edit of one must never move
-    // the other.
+    const defaultEffort = exportDefaultReasoningEffort(model);
+    // V2 requires tools whenever capabilities exists. A partial object discards the entire
+    // native block, losing explicit variants. Unknown tools use the legacy modality migration
+    // rather than inventing a tools flag to make the native schema accept the declaration.
+    const v2Capabilities: OpencodeV2ModelEntry["capabilities"] = typeof model.supportsTools === "boolean" ? {
+      tools: model.supportsTools,
+      ...(capabilities ? { input: [...capabilities.modalities.input], output: [...capabilities.modalities.output] } : {}),
+    } : undefined;
     v2Models[key] = {
-      ...entry,
+      name: entry.name,
       ...(entry.limit ? { limit: { ...entry.limit } } : {}),
-      ...(entry.modalities
-        ? { modalities: { input: [...entry.modalities.input], output: [...entry.modalities.output] } }
-        : {}),
-      ...(variants ? { variants } : {}),
+      ...(v2Capabilities ? { capabilities: v2Capabilities } : {}),
+      ...(entry.interleaved ? { compatibility: { reasoningField: "reasoning_content" } } : {}),
+      ...(defaultEffort !== undefined ? { settings: { reasoningEffort: defaultEffort } } : {}),
+      variants: opencodeEffortVariants(model),
     };
   }
   return {

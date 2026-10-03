@@ -111,11 +111,14 @@ describe("main credits publication", () => {
 });
 
 describe("pool credits publication", () => {
-  test("credits-only response publishes without quota and DTO follows the switch", async () => {
+  test("credits-only response publishes without usage windows and DTO follows the switch", async () => {
     savePool();
     const ctx = poolContext();
     const result = await commitPoolQuotaResponse(Response.json({ credits: { balance: "7.125" } }), ctx);
-    expect(result.quota).toBeNull();
+    expect(result.quota?.credits).toEqual({ balance: 7.125, observedAt: expect.any(Number) });
+    for (const window of ["weeklyPercent", "monthlyPercent", "shortPercent", "customWindows"]) {
+      expect(result.quota).not.toHaveProperty(window);
+    }
     expect(ctx.poolWriter).toBeDefined();
     const cfg = config();
     expect(poolAccountDto(cfg, account, result, true, false, 0, false).credits).toBeUndefined();

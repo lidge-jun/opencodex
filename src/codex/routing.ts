@@ -1,3 +1,4 @@
+import { codexAccountUsesCreditsAfterLimit } from "./account-credit-use";
 import { clearIdleWindowSteering, pickIdleWindowAccount } from "./routing/idle-window";
 import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 import { codexQuotaHasFreshUsage } from "./quota-observation-freshness";
@@ -522,7 +523,7 @@ function pickAffinityPriorityFailback(
       || now - quota.updatedAt >= CODEX_PRIORITY_FAILBACK_REFRESH_MS
       || (quota.shortObservedAt !== undefined
         && now - quota.shortObservedAt >= CODEX_PRIORITY_FAILBACK_REFRESH_MS)) return false;
-    const usage = computeCodexUsageScore(quota, plan, now);
+    const usage = computeCodexUsageScore(quota, plan, now, codexAccountUsesCreditsAfterLimit(config, id));
     const threshold = getEffectiveCodexAutoSwitchThreshold(config, id);
     return !isUnknownUsage(usage) && usage < 100 && (threshold <= 0 || usage < threshold);
   });
@@ -575,7 +576,7 @@ function previewReusableAffinityAccount(
       const usage = computeCodexUsageScore(
         getAccountQuota(entry.accountId),
         getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions),
-      now,
+        now, codexAccountUsesCreditsAfterLimit(config, entry.accountId),
       );
       // Preview must agree with resolve: this is the second copy of the same rule, and the
       // suite asserts the two answer identically.
@@ -605,7 +606,7 @@ function resetFirstAffinityReplacement(
 ): string | null {
   const threshold = getEffectiveCodexAutoSwitchThreshold(config, entry.accountId);
   if (threshold <= 0) return null;
-  const usage = computeCodexUsageScore(getAccountQuota(entry.accountId), getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions), now);
+  const usage = computeCodexUsageScore(getAccountQuota(entry.accountId), getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions), now, codexAccountUsesCreditsAfterLimit(config, entry.accountId));
   if (!mayRebindAffinityForQuota(config, entry.accountId, usage, threshold, selectionOptions)) return null;
   const candidates = getEligiblePoolAccounts(config, entry.accountId, now, quotaScope, selectionOptions, true)
     // Headroom alone answers true for an UNMEASURED account, which is the right default for an
@@ -618,7 +619,7 @@ function resetFirstAffinityReplacement(
       return !isUnknownUsage(computeCodexUsageScore(
         getAccountQuota(id),
         getPoolAccountPlanForSelection(config, id, selectionOptions),
-        now,
+        now, codexAccountUsesCreditsAfterLimit(config, id),
       ));
     });
   return pickResetFirstCodexAccount(config, candidates, now, selectionOptions);
@@ -664,10 +665,9 @@ function pickCacheSafeQuotaReplacement(
   ).filter(id => hasCodexQuotaHeadroom(config, id, selectionOptions, now));
   const best = pickLowestUsageAmong(config, candidates, selectionOptions, now);
   if (best === null || best === boundAccountId) return null;
-  const bestUsage = computeCodexUsageScore(
-    getAccountQuota(best),
+  const bestUsage = computeCodexUsageScore(getAccountQuota(best),
     getPoolAccountPlanForSelection(config, best, selectionOptions),
-    now,
+    now, codexAccountUsesCreditsAfterLimit(config, best),
   );
   return bestUsage < boundUsage ? best : null;
 }
@@ -698,7 +698,7 @@ function reevaluateAffinityQuota(
     ? computeCodexUsageScore(
         getAccountQuota(entry.accountId),
         getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions),
-      now,
+        now, codexAccountUsesCreditsAfterLimit(config, entry.accountId),
       )
     : 0;
   // One bar, used for BOTH the rebind decision and the re-score interval. Keying the short
@@ -823,7 +823,7 @@ export function previewCodexAccountForRequest(
     const usage = computeCodexUsageScore(
       getAccountQuota(active),
       getPoolAccountPlanForSelection(config, active, selectionOptions),
-      now,
+      now, codexAccountUsesCreditsAfterLimit(config, active),
     );
     if (!isUnknownUsage(usage) && usage >= threshold) {
       active = pickLowerUsageAccount(config, active, usage, now, quotaScope, selectionOptions);

@@ -1,5 +1,5 @@
 import { getEffectiveCodexAutoSwitchThreshold } from "../account-auto-switch";
-import { isCodexAccountHeldForCredits } from "../account-credit-use";
+import { codexAccountUsesCreditsAfterLimit, isCodexAccountHeldForCredits } from "../account-credit-use";
 import { isCodexAccountPaused } from "../account-pause";
 import { codexAccountPriorityLookup, pinnedCodexAccountId } from "../account-priority";
 import { isSelectableCodexPoolAccount } from "../account-id";
@@ -293,6 +293,7 @@ export function hasCodexQuotaHeadroom(
     getAccountQuota(accountId),
     getPoolAccountPlanForSelection(config, accountId, selectionOptions),
     now,
+    codexAccountUsesCreditsAfterLimit(config, accountId),
   );
   if (isUnknownUsage(usage)) return true;
   return usage < threshold;
@@ -344,6 +345,7 @@ export function hasCodexSharedStateQuotaHeadroom(
     getAccountQuota(accountId),
     getPoolAccountPlanForSelection(config, accountId, selectionOptions),
     now,
+    codexAccountUsesCreditsAfterLimit(config, accountId),
   );
   return isUnknownUsage(usage) || usage < 100;
 }
@@ -585,6 +587,7 @@ export function pickLowerUsageAccount(
       getAccountQuota(id),
       getPoolAccountPlanForSelection(config, id, selectionOptions),
       now,
+      codexAccountUsesCreditsAfterLimit(config, id),
     );
     if (usage < bestUsage) {
       best = id;
@@ -608,6 +611,7 @@ export function pickLowestUsageAmong(
       getAccountQuota(id),
       getPoolAccountPlanForSelection(config, id, selectionOptions),
       now,
+      codexAccountUsesCreditsAfterLimit(config, id),
     );
     if (usage < bestUsage) {
       best = id;
@@ -785,6 +789,7 @@ export function applyQuotaAutoSwitch(
     quota,
     getPoolAccountPlanForSelection(config, active, selectionOptions),
     now,
+    codexAccountUsesCreditsAfterLimit(config, active),
   );
   // Unknown usage is not evidence that a user's explicit selection crossed the
   // threshold. Wait for quota priming instead of rotating among guesses.

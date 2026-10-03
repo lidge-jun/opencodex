@@ -10,7 +10,7 @@
  */
 import { createClineIO } from "./cline-io";
 import { parseClineDocument } from "./cline-document";
-import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, type ExportModel, type ManagedContribution } from "../clients/config-export";
+import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, droidDefaultsFromOwnedRows, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import type { ConfigFormat } from "../clients/config-export";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
@@ -449,6 +449,7 @@ export interface IntegrationStateInput {
   models: readonly ExportModel[];
   config: OcxConfig;
   port: number;
+  droidReasoningDefaults?: Record<string, string>;
   env?: NodeJS.ProcessEnv;
   home?: string;
   /** The whole integration state store, bound to one root. */
@@ -462,7 +463,8 @@ export function exportContextOf(input: {
   models: readonly ExportModel[];
   config: OcxConfig;
   port: number;
-}): { baseUrl: string; models: readonly ExportModel[]; config: OcxConfig } {
+  droidReasoningDefaults?: Record<string, string>;
+}): { baseUrl: string; models: readonly ExportModel[]; config: OcxConfig; droidReasoningDefaults?: Record<string, string> } {
   return {
     /*
      * Composed through the SAME helper `ocx export` uses. Interpolating the
@@ -476,7 +478,39 @@ export function exportContextOf(input: {
     baseUrl: opencodeProxyBaseUrl(input.port, input.config.hostname, input.config),
     models: input.models,
     config: input.config,
+    ...(input.droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: input.droidReasoningDefaults }),
   };
+}
+
+export function buildIntegrationContribution(
+  input: IntegrationStateInput,
+  effective: IntegrationTarget,
+  parsed: unknown,
+  record: OwnershipRecord | null,
+): ManagedContribution {
+  const context = exportContextOf(input);
+  if (input.clientId === "droid" && input.droidReasoningDefaults === undefined && record?.configPath === effective.configPath) {
+    const inherited = recordedDroidContributionMatches(parsed, record)
+      ? droidDefaultsFromOwnedRows(context, parsed, record.fragmentPaths)
+      : {};
+    if (Object.keys(inherited).length > 0) context.droidReasoningDefaults = inherited;
+  }
+  return effective.buildContribution(context);
+}
+
+function recordedDroidContributionMatches(document: unknown, record: OwnershipRecord): boolean {
+  try {
+    const fragments = record.fragmentPaths.flatMap(path => {
+      const value = readPath(document, path);
+      return value === undefined ? [] : [{ path, value }];
+    });
+    if (fragments.length !== record.fragmentPaths.length) return false;
+    const observed: ManagedContribution = { clientId: "droid", fragments };
+    return record.semanticBlockFingerprint === fingerprint(semanticContribution(observed))
+      || record.blockFingerprint === fingerprint(canonicalContribution(observed));
+  } catch {
+    return false;
+  }
 }
 
 let retriedThisProcess = false;
@@ -535,9 +569,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   try {
     // One resolution for both, so a client whose paths come from mutable state
     // cannot report one account's install beside another account's config path.
-    const context = exportContextOf(input);
-    const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home, context);
-    if (input.clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(paths.detectDir, context);
+    const paths = resolveStatePaths(input);
     installed = io.statKind(paths.detectDir) === "dir";
     if (input.clientId === "cline") io = createClineIO(io, paths.configPath, store);
     /*
@@ -608,7 +640,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   const parsed = input.clientId === "cline"
     ? parseClineDocument(loaded.before)
     : parseConfig(loaded.before, effective.format, EXPORT_CLIENTS[input.clientId].jsonc ? { jsonc: true } : undefined);
-  const contribution = effective.buildContribution(exportContextOf(input));
+  const contribution = buildIntegrationContribution(input, effective, parsed, record);
   if (input.clientId === "droid" && input.models.length > 0 && contribution.fragments.length === 0
     && (!record || record.configPath !== configPath)) {
     return { clientId: input.clientId, state: "unsafe", installed, configPath,
@@ -649,4 +681,34 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     ...(record ? { appliedAt: record.appliedAt, lastOpId: record.opId } : {}),
     ...retention,
   };
+}
+
+function resolveStatePaths(input: IntegrationStateInput): { configPath: string; detectDir: string } {
+  const context = exportContextOf(input);
+  const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home, context);
+  if (input.clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(paths.detectDir, context);
+  return paths;
+}
+
+export function readOwnedDroidReasoningDefaults(input: IntegrationStateInput): Record<string, string> {
+  if (input.clientId !== "droid") return {};
+  const store = input.store ?? createIntegrationStateStore();
+  const io = input.io ?? store.io();
+  try {
+    const paths = resolveStatePaths(input);
+    const record = store.readRecords().droid;
+    if (!record || record.clientId !== "droid" || record.configPath !== paths.configPath) return {};
+    const effective = resolveIntegrationTarget({
+      clientId: "droid", configPath: paths.configPath, io, record, env: input.env, home: input.home,
+    });
+    const loaded = loadTarget(io, effective.configPath);
+    if (!loaded.ok) return {};
+    const parsed = parseConfig(loaded.before, "json");
+    if (parsed === PARSE_FAILED) return {};
+    if (!recordedDroidContributionMatches(parsed, record)) return {};
+    return droidDefaultsFromOwnedRows(exportContextOf(input), parsed, record.fragmentPaths);
+  } catch (error) {
+    if (error instanceof ClientPathError) return {};
+    throw error;
+  }
 }

@@ -127,6 +127,8 @@ export interface ResolveJevDecisionOptions {
    * any other id names a configured `jev-decision` row (for example a self-hosted Ollama `tev1`).
    */
   decisionProvider?: string;
+  /** Request-local authorization of the concrete decision destination, before credential access. */
+  isDestinationAllowed?: (providerName: string, modelId: string) => boolean;
   /** Decision deadline; values outside 1000..120000 ms keep the four-second default. */
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -674,14 +676,20 @@ function selfHostedApiKey(name: string, apiKey: string | undefined): string | un
  * custom destination. Any other id must be an enabled `jev-decision` row whose baseUrl is a
  * `/systemone` endpoint and which names its own model; only its own key may accompany it, so no
  * TypeSafe credential can reach a self-hosted service. `undefined` means no usable decision
- * service (reported through the existing `missing_key` gate).
+ * service (reported through the existing `missing_key` gate); `null` means the request's
+ * destination scope refused it before any credential access.
  */
-function jevDecisionEndpoint(config: OcxConfig, decisionProvider: string): JevDecisionEndpoint | undefined {
+function jevDecisionEndpoint(
+  config: OcxConfig,
+  decisionProvider: string,
+  isDestinationAllowed?: ResolveJevDecisionOptions["isDestinationAllowed"],
+): JevDecisionEndpoint | undefined | null {
   const configured = Object.hasOwn(config.providers, decisionProvider)
     ? config.providers[decisionProvider]
     : undefined;
   if (configured?.disabled === true) return undefined;
   if (decisionProvider === JEV_PROVIDER_ID) {
+    if (isDestinationAllowed?.(JEV_PROVIDER_ID, JEV_MODEL) === false) return null;
     const configuredOwnsJev = configured
       && providerMatchesRegistryTransport(JEV_PROVIDER_ID, configured);
     const apiKey = (
@@ -704,6 +712,7 @@ function jevDecisionEndpoint(config: OcxConfig, decisionProvider: string): JevDe
   // `jev-latest` is TypeSafe's model name; a self-hosted host must name its own.
   const model = configured.defaultModel?.trim() || configured.models?.[0]?.trim();
   if (!model) return undefined;
+  if (isDestinationAllowed?.(decisionProvider, model) === false) return null;
   const apiKey = selfHostedApiKey(decisionProvider, configured.apiKey);
   if (apiKey === null) return undefined;
   return {
@@ -733,7 +742,8 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
   if (options.candidates.length === 0) return failed("no_choices");
   if (!candidatesFitRequestBounds(options.candidates)) return failed("invalid");
 
-  const endpoint = jevDecisionEndpoint(options.config, options.decisionProvider ?? JEV_PROVIDER_ID);
+  const endpoint = jevDecisionEndpoint(options.config, options.decisionProvider ?? JEV_PROVIDER_ID, options.isDestinationAllowed);
+  if (endpoint === null) return failed("invalid");
   if (!endpoint) return failed("missing_key");
 
   let requestBody: string;

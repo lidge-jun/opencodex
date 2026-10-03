@@ -41,7 +41,7 @@ import {
   isHostedToolUnsupportedForModel,
 } from "../../responses/hosted-tool-policy";
 import { getConfigDir } from "../paths";
-import { COMPACTION_TRIGGERS } from "./compaction-triggers";
+import { COMPACTION_TRIGGERS, validCompactionSourceModels } from "./compaction-triggers";
 
 /** Experimental macOS ChatGPT app-server shim; only a strict optional boolean is accepted. */
 export const chatgptDesktopSchema = z.object({ appServerShim: z.boolean().optional() }).strict();
@@ -53,6 +53,8 @@ export function isUsableApiKeySecret(value: unknown): value is string {
 
 export const compactionRoutingSchema = z.object({
   model: z.string().trim().min(1),
+  sourceModels: z.array(z.string()).refine(validCompactionSourceModels,
+    "sourceModels requires unique exact selectors or provider/* patterns").optional(),
   reasoningEffort: z.string().refine(value => pinnedReasoningEffortConfigError(value) === null).optional(),
   triggers: z.array(z.enum(COMPACTION_TRIGGERS)).nonempty()
     .refine(values => new Set(values).size === values.length, "triggers must not repeat a value")
@@ -327,6 +329,8 @@ export const providerConfigSchema = z.object({
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
+  preserveResponsesInputItemIds: z.boolean().optional(),
+  preserveResponsesMessageMetadata: z.boolean().optional(),
   dropResponsesReasoningItems: z.boolean().optional(),
   modelReasoningEffortsAuthoritative: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),

@@ -25,6 +25,17 @@ SSH par mot de passe et Windows restent hors du flux actuel. Une liaison peut ê
 
 Le tableau de bord ne demande pas de saisir un jeton. Il sonde d’abord l’hôte et ne peut appliquer la liaison qu’après votre confirmation explicite de l’empreinte.
 
+La fenêtre d’ajout Child rappelle que Child utilise les fournisseurs de ce Home via SSH et affiche les prérequis ci-dessus. Les alias viennent de `~/.ssh/config` sur le Home exécutant OpenCodex, pas forcément de l’ordinateur du navigateur. Si la recherche réussit sans hôte, ajoutez une entrée `Host` comme ci-dessous puis relancez la recherche. La saisie manuelle d’un alias existant reste possible ; sélectionner ou saisir un alias active le test de connexion. La fenêtre propose un lien vers ce guide.
+
+```sshconfig
+Host devbox
+  HostName devbox.example.com
+  User you
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+Si la recherche échoue, la fenêtre affiche l’échec du chargement, la raison disponible et une action pour réessayer, sans annoncer une liste vide. Un échec du test conserve sa raison et l’indication SSH nettoyée dans la fenêtre active, sans doublon derrière elle. Consultez la raison et le diagnostic SSH ci-dessous, puis réessayez. Une nouvelle recherche conserve l’alias saisi mais exige une nouvelle vérification de l’empreinte avant connexion.
+
 ## Connecter cet ordinateur comme Child
 
 Sur l’ordinateur qui doit utiliser les fournisseurs de Home :

@@ -1,3 +1,4 @@
+import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -101,9 +102,11 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   // the entire config, which would hide unrelated providers/accounts. The next
   // ordinary save persists the normalized absence.
   const syncDisabledReason = nativeSubagentSyncDisabledReason(config, rawParsed);
+  const rawForce = rawSubagentModelForce(rawParsed);
   const rawEffort = rawClaudeSubagentEffort(rawParsed);
   const normalized = normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, rawParsed), rawParsed);
   const warnings = configPlaceholderWarnings(normalized);
+  if (rawForce !== undefined && !isSubagentModelEntry(rawForce)) warnings.push("claudeCode.subagentModelForce ignored: expected a safe roster-style model id");
   if (normalized.chatgptDesktop?.appServerShim === true && process.platform !== "darwin") {
     warnings.push("chatgptDesktop.appServerShim is experimental and macOS only; ignored on this platform");
   }
@@ -653,6 +656,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   const boundaryError = blockedModelRedirectsError(value)
     ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
+    ?? (rawSubagentModelForce(value) !== undefined && !isSubagentModelEntry(rawSubagentModelForce(value)) ? "schema_invalid: claudeCode.subagentModelForce: expected a safe roster-style model id" : null)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)

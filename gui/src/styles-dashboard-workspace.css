@@ -747,3 +747,15 @@
     padding: 5px 4px;
   }
 }
+
+.source-scope-groups { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); margin-top: var(--space-3); max-height: 220px; overflow: auto; }
+.source-scope-group { border: 0; padding: 0; margin: 0; min-width: 12rem; }
+.source-scope-group legend { padding: 0; }
+.source-scope-group label { display: flex; align-items: center; gap: var(--space-2); color: var(--text); font-size: var(--text-label); padding: var(--space-0-5) 0; }
+/* Captioned controls: a visible label above each select keeps the summarizer model, the
+   trigger scope, the source scope, and the effort from reading as four unnamed pickers. */
+.dash-overview-stack .compaction-routing-controls { align-items: flex-end; }
+.compaction-field { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.compaction-sources-block { margin-top: var(--space-3); }
+.compaction-sources-block .compaction-sources-title { margin-bottom: var(--space-1-5); }
+.compaction-sources-block .source-scope-groups { margin-top: 0; }

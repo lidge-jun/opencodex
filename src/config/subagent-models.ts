@@ -75,3 +75,15 @@ export function migrateSubagentModels(config: OcxConfig): boolean {
   config.subagentModelsVersion = SUBAGENT_MODELS_VERSION;
   return true;
 }
+
+export const SAFE_AGENT_MODEL_ID = /^[a-z0-9][a-z0-9._:/@+\[\]~-]*$/i;
+
+export function isSubagentModelEntry(value: unknown): value is string {
+  return typeof value === "string" && SAFE_AGENT_MODEL_ID.test(value);
+}
+
+export function rawSubagentModelForce(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const cc = (value as Record<string, unknown>).claudeCode;
+  return cc && typeof cc === "object" && !Array.isArray(cc) ? (cc as Record<string, unknown>).subagentModelForce : undefined;
+}

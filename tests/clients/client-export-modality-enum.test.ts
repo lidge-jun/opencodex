@@ -65,6 +65,7 @@ const MIXED: ExportModel = {
   id: "meta-muse-spark-1.1",
   contextWindow: 1_048_576,
   inputModalities: ["text", "image", "audio"],
+  supportsTools: true,
 };
 
 /**
@@ -77,6 +78,7 @@ const AUDIO_ONLY: ExportModel = {
   provider: "p",
   id: "audio-only",
   inputModalities: ["audio"],
+  supportsTools: true,
 };
 
 describe("exported modalities stay inside the enum each client accepts", () => {
@@ -172,8 +174,8 @@ describe("opencode receives the capability fields its client gates attachments o
     expect(opencodeModels([MIXED])["zenmux/meta-muse-spark-1.1"]).toEqual({
       name: "meta-muse-spark-1.1 (zenmux)",
       limit: { context: 1_048_576, output: 32_000 },
-      attachment: true,
-      modalities: { input: ["text", "image", "audio"], output: ["text"] },
+      capabilities: { tools: true, input: ["text", "image", "audio"], output: ["text"] },
+      variants: [],
     });
   });
 
@@ -182,45 +184,43 @@ describe("opencode receives the capability fields its client gates attachments o
     // no reason. Faithfulness costs nothing here.
     expect(opencodeModels([AUDIO_ONLY])["p/audio-only"]).toEqual({
       name: "audio-only (p)",
-      attachment: true,
-      modalities: { input: ["audio"], output: ["text"] },
+      capabilities: { tools: true, input: ["audio"], output: ["text"] },
+      variants: [],
     });
   });
 
   test("a text-only declaration is advertised as text-only rather than omitted", () => {
-    const textOnly: ExportModel = { namespaced: "p/text", provider: "p", id: "text", inputModalities: ["text"] };
+    const textOnly: ExportModel = { namespaced: "p/text", provider: "p", id: "text", inputModalities: ["text"], supportsTools: false };
     expect(opencodeModels([textOnly])["p/text"]).toEqual({
       name: "text (p)",
-      attachment: false,
-      modalities: { input: ["text"], output: ["text"] },
+      capabilities: { tools: false, input: ["text"], output: ["text"] },
+      variants: [],
     });
   });
 
   test("a row that declares nothing carries no capability keys at all", () => {
-    // Not the same as `{ input: ["text"] }`: opencode already falls back to text-only for an
-    // entry without capabilities, and the omission keeps the pre-#4286 bytes for every model
-    // whose row says nothing.
+    // Unknown capabilities are omitted; [] suppresses invented effort choices.
     const bare: ExportModel = { namespaced: "p/bare", provider: "p", id: "bare" };
     const empty: ExportModel = { ...bare, namespaced: "p/empty", id: "empty", inputModalities: [] };
     const models = opencodeModels([bare, empty]);
-    expect(models["p/bare"]).toEqual({ name: "bare (p)" });
-    expect(models["p/empty"]).toEqual({ name: "empty (p)" });
+    expect(models["p/bare"]).toEqual({ name: "bare (p)", variants: [] });
+    expect(models["p/empty"]).toEqual({ name: "empty (p)", variants: [] });
   });
 
   test("an out-of-enum value is dropped and duplicates collapse", () => {
     const odd: ExportModel = {
-      namespaced: "p/odd", provider: "p", id: "odd", inputModalities: ["file", "image", "image"],
+      namespaced: "p/odd", provider: "p", id: "odd", inputModalities: ["file", "image", "image"], supportsTools: true,
     };
     expect(opencodeModels([odd])["p/odd"]).toEqual({
       name: "odd (p)",
-      attachment: true,
-      modalities: { input: ["image"], output: ["text"] },
+      capabilities: { tools: true, input: ["image"], output: ["text"] },
+      variants: [],
     });
   });
 
   test("a model whose only declaration is out of enum keeps its entry, without capabilities", () => {
     const foreign: ExportModel = { namespaced: "p/foreign", provider: "p", id: "foreign", inputModalities: ["file"] };
-    expect(opencodeModels([foreign])["p/foreign"]).toEqual({ name: "foreign (p)" });
+    expect(opencodeModels([foreign])["p/foreign"]).toEqual({ name: "foreign (p)", variants: [] });
   });
 
   test("no emitted entry in a whole catalog carries a value opencode rejects", () => {
@@ -235,10 +235,10 @@ describe("opencode receives the capability fields its client gates attachments o
     // The entry survives where Pi and Gajae would have dropped it; only its bad value goes.
     expect(Object.keys(models)).toContain("p/foreign");
     for (const entry of Object.values(models)) {
-      for (const value of entry.modalities?.input ?? []) {
+      for (const value of entry.capabilities?.input ?? []) {
         expect(["text", "audio", "image", "video", "pdf"]).toContain(value);
       }
-      for (const value of entry.modalities?.output ?? []) {
+      for (const value of entry.capabilities?.output ?? []) {
         expect(["text", "audio", "image", "video", "pdf"]).toContain(value);
       }
     }

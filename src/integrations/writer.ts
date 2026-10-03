@@ -18,7 +18,7 @@ import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
 import { copyPlainData } from "../lib/plain-data";
 import type { OcxConfig } from "../types";
-import { defaultIntegrationIO, loadTarget, type IntegrationIO } from "./config-io";
+import { defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { inspectKiloCandidates } from "./kilo-candidates";
 import {
   fingerprint,
@@ -43,7 +43,7 @@ import {
   type IntegrationClientId,
 } from "./registry";
 import { declaredIntegrationTarget } from "./target";
-import { exportContextOf } from "./state";
+import { buildIntegrationContribution, exportContextOf } from "./state";
 import type { IntegrationState } from "./state";
 import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
@@ -713,7 +713,11 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
   // exact bytes when the snapshot was taken. Re-deriving it from the file would
   // mean guessing which entries are ours, and a wrong guess deletes a user's.
   const restoredRecord = entry.priorRecord;
-  const fresh = rowTarget.buildContribution(exportContextOf(input));
+  const fresh = buildIntegrationContribution(
+    { ...input, droidReasoningDefaults: undefined }, rowTarget,
+    clientId === "droid" && restoredText !== null ? parseConfig(restoredText, "json") : undefined,
+    restoredRecord,
+  );
   /*
    * Does the restored record actually describe the restored bytes?
    *
@@ -812,6 +816,12 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
   if (!models.ok) {
     throw new UncopyableIntegrationInputError("the model roster could not be captured for this write");
   }
+  const droidReasoningDefaults = input.droidReasoningDefaults === undefined
+    ? undefined
+    : copyPlainData(input.droidReasoningDefaults);
+  if (droidReasoningDefaults !== undefined && !droidReasoningDefaults.ok) {
+    throw new UncopyableIntegrationInputError("Droid reasoning defaults could not be captured for this write");
+  }
   /*
    * One resolution for both paths. Aside derives them from the account id in
    * its manifest, so two independent calls could verify one account's install
@@ -828,7 +838,11 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
    * checked in one state and written from another, which is the substitution the fingerprint
    * exists to prevent. Copying both here gives the plan and the document one input.
    */
-  return { ...input, config, models: models.value, env, home, store, io, resolvedPaths };
+  return {
+    ...input, config, models: models.value,
+    ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: droidReasoningDefaults.value }),
+    env, home, store, io, resolvedPaths,
+  };
 }
 
 function tryFreezeIntegrationInput(input: IntegrationWriteInput):

@@ -244,3 +244,15 @@ Anthropic OAuth 사이드카는 opencodex의 기존 Claude Code OAuth fingerprin
 ## Codex 할당량 네트워크 진단
 
 메인 Codex 계정 행의 `quotaRefresh`는 할당량 조회 결과를 분류하는 진단값입니다. 남은 할당량이나 모델 접근 권한을 뜻하지 않으며, 캐시를 쓰거나 조회하지 않았다면 생략될 수 있습니다. 요청은 명령을 입력한 터미널이 아니라 실행 중인 프록시 서비스의 환경을 따릅니다. `proxy`를 지정하지 않으면 기존 환경을 유지하고, `"auto"`는 시작 시 Windows 또는 macOS의 정적 HTTP/HTTPS 설정을 읽습니다. macOS에서는 상속된 프록시가 있으면 읽지 않습니다. macOS에서는 유효한 `*.<domain>`을 `.<domain>`으로 바꿉니다. `*.local`은 `foo.local`과 최상위 이름 `local`을 직접 연결하지만 `xlocal`은 제외합니다. `169.254/16`, `169.254.0.0/16`, `fe80::/10`은 진단 메시지와 함께 생략하므로 링크 로컬 IP 주소는 프록시를 사용합니다. IP 주소와 `*`는 허용하지만 다른 CIDR, glob, 단순 호스트명 예외는 환경 변경 전에 탐색을 거부합니다. PAC/WPAD, SOCKS 전용 설정과 실행 중 변경은 자동으로 반영하지 않습니다. TUN에서 성공했다고 HTTP 프록시 경로도 정상이라는 뜻은 아닙니다. 명령과 상태값은 [네트워크 진단(영문)](/reference/configuration/server/#codex-quota-network-diagnostics)에서 확인하세요.
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.

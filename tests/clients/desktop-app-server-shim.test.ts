@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { rewriteAppServerLine } from "../../src/chatgpt/app-server-shim/app-server-rewrite";
+import { unlockRateLimitGate } from "../../src/chatgpt/app-server-shim/gate-rewrite";
 import { createRpcLineFilter, runStdoutFilter, runChatgptAppServerFilter } from "../../src/chatgpt/app-server-shim/filter";
 
 /**
@@ -123,6 +124,43 @@ describe("app-server line rewrite", () => {
   test("a message that only quotes a field name inside text is not modified", () => {
     const line = JSON.stringify({ method: "item/completed", params: { text: "the rateLimitReachedType field is rate_limit_reached" } });
     expect(rewriteAppServerLine(line)).toBeNull();
+  });
+});
+
+describe("gate rewrite on the web usage snapshot's spelling", () => {
+  // The rewrite reads every gate field in both spellings (rate_limit/rateLimit,
+  // limit_reached/limitReached, spend_control/spendControlReached, ...). The usage window must be
+  // read in both too, or a snake_case snapshot never shows the plain quota as the reason.
+  const snapshot = (usedPercent: number, spendReached = false) => ({
+    usage: {
+      plan_type: "pro",
+      rate_limit: {
+        allowed: false,
+        limit_reached: true,
+        primary_window: { used_percent: usedPercent, limit_window_seconds: 604800, reset_after_seconds: 205162 },
+      },
+      spend_control: { reached: spendReached },
+    },
+  });
+
+  test("a window at used_percent 100 is plain-quota evidence: the flags open, the window stays as sent", () => {
+    const value = snapshot(100);
+    expect(unlockRateLimitGate(value)).toBe(true);
+    expect(value.usage.rate_limit.allowed).toBe(true);
+    expect(value.usage.rate_limit.limit_reached).toBe(false);
+    expect(value.usage.rate_limit.primary_window).toEqual(snapshot(100).usage.rate_limit.primary_window);
+  });
+
+  test("below 100% the payload shows no quota reason, so the flags stay closed", () => {
+    const value = snapshot(42);
+    expect(unlockRateLimitGate(value)).toBe(false);
+    expect(value).toEqual(snapshot(42));
+  });
+
+  test("a reached spend control keeps the flags closed even with the window at 100%", () => {
+    const value = snapshot(100, true);
+    expect(unlockRateLimitGate(value)).toBe(false);
+    expect(value).toEqual(snapshot(100, true));
   });
 });
 

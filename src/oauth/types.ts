@@ -92,6 +92,13 @@ export interface ProviderAccount {
   paused?: boolean;
   /** Anthropic-only usage-switch override; absent inherits its pool default, zero disables it. */
   autoSwitchThresholdOverride?: number;
+  /**
+   * Why the account needs reauthentication. `verify_account` means the grant is
+   * alive but the provider blocks the account until the human verifies it
+   * (Antigravity 403 PERMISSION_DENIED) — a plain re-login without that
+   * verification will not help. Absent means an ordinary credential failure.
+   */
+  needsReauthReason?: "verify_account";
   addedAt?: number;
 }
 

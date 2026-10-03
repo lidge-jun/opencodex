@@ -359,7 +359,7 @@ JEV Combo는 키가 필요 없는 Ollama `tev1` 같은 자체 호스팅 결정 �
 <!-- sponsors:main-first-mention -->
 OpenAI (ChatGPT 로그인 또는 API 키), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (로컬 + Cloud), Cursor (experimental), OpenAI 호환 엔드포인트 전부 — 여기에 DeepSeek,
-Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
+Groq, OpenRouter, OpenGateway, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, Qoder Global과 CN (공식 PAT + CLI), SiliconFlow 등이 더 있습니다. 전체 목록은 `ocx init` 또는
 [프로바이더 문서](https://opencodex.me/ko/guides/providers/)에서 확인하세요.
 

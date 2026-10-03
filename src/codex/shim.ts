@@ -8,7 +8,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, delimiter, dirname, extname, join, posix } from "node:path";
+import { basename, delimiter, dirname, extname, join, posix, win32 } from "node:path";
 import { durableBunRuntime } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
@@ -53,12 +53,20 @@ import {
   type UnixShimProbeResult,
 } from "./shim-probe";
 import { tryAcquireShimRestoreLock } from "./shim-restore-lock";
+import {
+  isWindowsInteropDir,
+  realIsDirectory,
+  resolveStableFnmCodexPath,
+  type CodexPathScanDeps,
+} from "./shim-path-resolution";
 
 export { buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim } from "./shim-templates";
 export { isVersionManagerOwnedCodexPath } from "./shim-fingerprint";
 export { CODEX_SHIM_STATE_MAX_BYTES } from "./shim-state-file";
 export { setCodexShimProbeHookForTests, setCodexShimProbeShellForTests, setCodexShimProbeObservationMsForTests } from "./shim-probe";
 export type { CodexShimBackingForCommand } from "./shim-inspect";
+export type { CodexPathScanDeps } from "./shim-path-resolution";
+export { isWindowsInteropDir } from "./shim-path-resolution";
 export { isLocalAbsoluteInspectionPath, inspectCodexShimBackingForCommand } from "./shim-inspect";
 
 export const CODEX_SHIM_REPLACEMENT_STABLE_MS = 100;
@@ -73,6 +81,17 @@ interface InstallCodexShimInternalOptions {
   expectedReplacements?: ReadonlyMap<string, ShimPathFingerprint>;
   allowFreshInstall: boolean;
   beforeGuardedRefresh?: (wrapperPath: string, index: number) => void;
+}
+
+function discoveredCodexPath(path: string, posixPaths: boolean, realpath?: (path: string) => string): string | null {
+  const resolved = resolveStableFnmCodexPath(path, posixPaths, realpath);
+  if (resolved !== null) return resolved;
+  lastShimDiscoveryError = truncateRetainedUtf8(
+    `Found codex at ${path} inside fnm's temporary multishell path, but it did not resolve to a durable Node installation. `
+    + "Refusing to install a shim; retry after fnm selects a stable installation.",
+    MAX_DIAGNOSTIC_VALUE_BYTES,
+  );
+  return null;
 }
 
 export type CodexShimAutoRestoreResult =
@@ -115,36 +134,6 @@ function isHealthyShim(path: string, platform: NodeJS.Platform): boolean {
   }
 }
 
-/**
- * A PATH entry that reaches Windows through WSL drive interop
- * (`<automount-root>/<drive>/...`; root defaults to /mnt, configurable via
- * /etc/wsl.conf [automount] root).
- */
-export function isWindowsInteropDir(dir: string, automountRoot = "/mnt"): boolean {
-  const root = automountRoot.replace(/\/+$/, "");
-  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escaped}/[a-z](/|$)`, "i").test(dir);
-}
-
-export type CodexPathScanDeps = {
-  pathValue?: string;
-  wsl?: boolean;
-  /** Treat PATH entries as POSIX paths (WSL context). Defaults to wsl || non-win32. */
-  posixPaths?: boolean;
-  automountRoot?: string;
-  exists?: (path: string) => boolean;
-  isShimFile?: (path: string) => boolean;
-  isDirectory?: (path: string) => boolean;
-};
-
-function realIsDirectory(path: string): boolean {
-  try {
-    return lstatSync(path).isDirectory();
-  } catch {
-    return true; // unreadable -> treat as unusable
-  }
-}
-
 export function findCodexOnPath(deps: CodexPathScanDeps = {}): string | null {
   lastShimDiscoveryError = null;
   const exists = deps.exists ?? existsSync;
@@ -152,8 +141,10 @@ export function findCodexOnPath(deps: CodexPathScanDeps = {}): string | null {
   const isDir = deps.isDirectory ?? realIsDirectory;
   const wsl = deps.wsl ?? (process.platform === "linux" && isWslRuntime());
   const usePosix = deps.posixPaths ?? (wsl || process.platform !== "win32");
-  const joinPath = usePosix ? posix.join : join;
-  const pathSep = usePosix ? ":" : delimiter;
+  // The injected path flavour governs join and separator alike; host-native `join` and
+  // `delimiter` made a Windows-flavoured scan split `C:\...` on a Linux host.
+  const joinPath = usePosix ? posix.join : win32.join;
+  const pathSep = usePosix ? ":" : win32.delimiter;
   const automountRoot = deps.automountRoot ?? (wsl ? wslAutomountRoot() : "/mnt");
   // Windows npm prefixes ship codex.exe/codex.cmd next to the extensionless sh launcher.
   const interopNames = ["codex", "codex.exe", "codex.cmd", "codex.ps1"];
@@ -176,7 +167,11 @@ export function findCodexOnPath(deps: CodexPathScanDeps = {}): string | null {
     for (const name of names) {
       const path = joinPath(dir, name);
       if (!exists(path) || shimFile(path)) continue;
-      if (!isDir(path)) return path;
+      if (!isDir(path)) {
+        const resolved = discoveredCodexPath(path, usePosix, deps.realpath);
+        if (resolved !== null) return resolved;
+        return null;
+      }
     }
   }
 
@@ -195,11 +190,13 @@ function findWindowsCodexTargets(): ShimFileState[] | null {
   lastShimDiscoveryError = null;
   for (const dir of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
     const exe = join(dir, "codex.exe");
-    if (existsSync(exe) && !isShim(exe)) {
+    const stableExe = existsSync(exe) && !isShim(exe) ? discoveredCodexPath(exe, false) : exe;
+    if (stableExe === null) return null;
+    if (existsSync(stableExe) && !isShim(stableExe)) {
       try {
-        if (!lstatSync(exe).isDirectory()) {
+        if (!lstatSync(stableExe).isDirectory()) {
           lastShimDiscoveryError = truncateRetainedUtf8(
-            `Found codex.exe at ${exe}. Refusing to rename a real .exe because exact codex.exe invocations would break; ` +
+            `Found codex.exe at ${stableExe}. Refusing to rename a real .exe because exact codex.exe invocations would break; ` +
             "install a codex.cmd/codex.ps1 launcher or use `ocx service install` for autostart.",
             MAX_DIAGNOSTIC_VALUE_BYTES,
           );
@@ -216,9 +213,12 @@ function findWindowsCodexTargets(): ShimFileState[] | null {
     const targets: ShimFileState[] = [];
     for (const path of [cmd, ps1, gitBashLauncher]) {
       if (!existsSync(path) || isShim(path)) continue;
+      const stablePath = discoveredCodexPath(path, false);
+      if (stablePath === null) return null;
+      if (!existsSync(stablePath) || isShim(stablePath)) continue;
       try {
-        if (!lstatSync(path).isDirectory()) {
-          targets.push({ wrapperPath: path, originalPath: path, backupPath: backupPathFor(path) });
+        if (!lstatSync(stablePath).isDirectory()) {
+          targets.push({ wrapperPath: stablePath, originalPath: stablePath, backupPath: backupPathFor(stablePath) });
         }
       } catch { /* keep scanning */ }
     }

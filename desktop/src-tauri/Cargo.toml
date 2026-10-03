@@ -1,6 +1,6 @@
 [package]
 name = "opencodex-desktop"
-version = "2.76.0"
+version = "2.77.0"
 description = "OpenCodex desktop shell"
 authors = ["OpenCodex contributors"]
 license = "MIT"
@@ -37,6 +37,10 @@ tokio = { version = "=1.45.1", features = ["sync", "time"] }
 # session-bus probe for the StatusNotifier watcher without adding a package or a system library.
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "=0.9.12"
+
+# Already present in the lock graph; only Windows writes its quoted Run command.
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "=0.55.0"
 
 [profile.release]
 codegen-units = 1

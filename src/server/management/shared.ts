@@ -100,7 +100,7 @@ export type CostResult =
   | { kind: "value"; estimate: NonNullable<ReturnType<typeof estimateRequestCost>>; estimateReasons: CostEstimateReason[] }
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
-export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "firstOutputMs" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier" | "tierOutcome" | "routeDecision" | "cacheProvenance"> & {
+export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier" | "tierOutcome" | "routeDecision" | "cacheProvenance"> & {
   attempts?: readonly PersistedUsageAttempt[];
 };
 
@@ -129,10 +129,11 @@ export function tokPerSecondResult(entry: Pick<MetricSource, "durationMs" | "usa
 export const MIN_DECODE_WINDOW_MS = 1_000;
 
 /**
- * Estimated DECODE throughput: output tokens over the window after the first token (#4038).
+ * Estimated DECODE throughput: output tokens over the measured output window (#4038): the generation window when
+ * recorded, otherwise the window after the first token.
  *
- * Strictly additive. `tokensPerSecond`, `tokPerSecondResult`, `RequestLogEntry` and
- * `usage.jsonl` are untouched, and the end-to-end rate beside it keeps meaning exactly what it
+ * Strictly additive. `tokensPerSecond` and `tokPerSecondResult` are untouched, rows only gain the
+ * optional window pair, and the end-to-end rate beside it keeps meaning exactly what it
  * has always meant — it is documented as end-to-end, so this is a missing metric rather than a
  * miscalculated one.
  *
@@ -140,13 +141,26 @@ export const MIN_DECODE_WINDOW_MS = 1_000;
  * not the provider's own generation start, so this can never be more than an estimate no matter
  * how long the window is. Saying so in the payload is the honest half of the answer to #4040;
  * MIN_DECODE_WINDOW_MS is the other half.
+ *
+ * When the row carries the generation window (`genStartMs` / `lastOutputMs`, #6309) that window is
+ * used instead. `firstOutputMs` is the first VISIBLE delta, so on a reasoning model the post-TTFT
+ * window leaves out the reasoning phase while `outputTokens` still counts its tokens; the
+ * generation window spans both and stops at the last delta rather than at stream close.
  */
 export function decodeTokPerSecondResult(
-  entry: Pick<MetricSource, "durationMs" | "firstOutputMs" | "usageStatus" | "usage">,
+  entry: Pick<MetricSource, "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "usageStatus" | "usage">,
 ): TokPerSecondResult {
   if (!entry.usage) return { kind: "unavailable", reason: "usage_missing" };
   if (entry.usageStatus === "unsupported") return { kind: "unavailable", reason: "usage_unsupported" };
   if (entry.usage.outputTokens <= 0) return { kind: "unavailable", reason: "output_missing" };
+  const { genStartMs, lastOutputMs } = entry;
+  if (genStartMs !== undefined && lastOutputMs !== undefined && Number.isFinite(genStartMs) && Number.isFinite(lastOutputMs)) {
+    const generationMs = lastOutputMs - genStartMs;
+    if (generationMs <= 0) return { kind: "unavailable", reason: "invalid_duration" };
+    if (generationMs < MIN_DECODE_WINDOW_MS) return { kind: "unavailable", reason: "decode_window_too_short" };
+    const value = tokensPerSecond(entry.usage.outputTokens, generationMs);
+    return value === null ? { kind: "unavailable", reason: "invalid_duration" } : { kind: "value", value, estimated: true };
+  }
   // A row that predates TTFT capture, or a non-streaming turn that never recorded one, has no
   // window to measure. That is a different fact from a bad duration, so it gets its own reason.
   if (entry.firstOutputMs === undefined) return { kind: "unavailable", reason: "ttft_missing" };

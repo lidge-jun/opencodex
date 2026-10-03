@@ -426,6 +426,12 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.preserveResponsesReasoningContent === undefined && registryEntry.preserveResponsesReasoningContent !== undefined
       ? { preserveResponsesReasoningContent: registryEntry.preserveResponsesReasoningContent }
       : {}),
+    ...(provider.preserveResponsesInputItemIds === undefined && registryEntry.preserveResponsesInputItemIds !== undefined
+      ? { preserveResponsesInputItemIds: registryEntry.preserveResponsesInputItemIds }
+      : {}),
+    ...(provider.preserveResponsesMessageMetadata === undefined && registryEntry.preserveResponsesMessageMetadata !== undefined
+      ? { preserveResponsesMessageMetadata: registryEntry.preserveResponsesMessageMetadata }
+      : {}),
     ...(provider.dropResponsesReasoningItems === undefined && registryEntry.dropResponsesReasoningItems !== undefined
       ? { dropResponsesReasoningItems: registryEntry.dropResponsesReasoningItems }
       : {}),

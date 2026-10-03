@@ -10,6 +10,10 @@ MiniMax 发布两种不同的命令行产品。OpenCodex 在它们实际提供�
 
 ## MiniMax Code
 
+在 OpenCodex 的模型管理页面，MiniMax Coding Plan 两个区域的 `MiniMax-M3` 和
+`MiniMax-M3.1-Flash-Preview` 均声明支持图片输入。只有所有选定模型均支持图片输入时，
+Combo 的“图片 / 多模态”开关才可用。该开关控制图片附件，不提供视频上传能力。
+
 先按照 MiniMax 的说明安装并登录 MiniMax Code，然后启动 OpenCodex 并连接可逆的文件集成：
 
 ```bash

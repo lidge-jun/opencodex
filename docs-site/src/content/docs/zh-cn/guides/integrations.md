@@ -39,7 +39,7 @@ modelProfile:
 
 具有受支持推理强度梯度的 GJC 模型会导出 `reasoning: true`、`thinking.levels` 和 `compat.supportsReasoningEffort`，让 GJC 提供强度选择。原生 Codex 模型即使未在目录中列出梯度，也会获得标准梯度。没有已知梯度的模型会省略这些字段；`none` 不发送强度，而 `ultra` 在传输时折叠为 `max`，因此不会列为选项。刷新集成即可更新模型选项。
 
-托管 OpenCode 集成管理两个片段：`provider.opencodex`（opencode V1）和 `providers.opencodex`（opencode V2）。只有 V2 配置块包含各模型的推理强度变体，因此两者都会写入并保持同步；它们使用相同的提供商与模型 id，opencode V2 会将它们合并为一个提供商条目。Apply、Refresh、Disable 和 Restore 都作用于两个片段；其他提供商、代理、快捷键与 MCP 条目保持不变。
+托管 OpenCode 集成管理两个片段：`provider.opencodex`（opencode V1）和 `providers.opencodex`（opencode V2）。两个片段携带相同的各模型已声明推理选择与默认值：旧版块以模型 options 中的默认值加变体映射表达，V2 块以模型 settings 加原生变体数组表达，因此两者都会写入并保持同步；它们使用相同的提供商与模型 id，opencode V2 会将它们合并为一个提供商条目。Apply、Refresh、Disable 和 Restore 都作用于两个片段；其他提供商、代理、快捷键与 MCP 条目保持不变。这两个片段都基于生效的规范模型元数据构建——Kilo 导出和 `ocx opencode` 启动器也是如此。显式自定义覆盖始终优先，被清空的推理阶梯保持为空；不会为未声明阶梯或默认值的模型捏造任何值。携带权威的上下文上限时会同时携带输出上限：已知的输出值（显式或目录元数据）优先，否则使用 schema 必需的 32000 回退值（按上下文截断）；没有权威上下文上限时整个 limit 块都会省略。能力、推理阶梯、默认值和可选的输入上限只在已知时写入。V2 块的原生 capabilities 对象需要已知的 tools 值，因此工具支持未知时会整体省略而不写残缺的对象，旧版块中的模态声明保持不变。不捏造阶梯，但仍会写入控制而非选项：V2 块始终携带显式的变体数组——无声明时为空数组，因为省略会让 OpenCode 自行合成 low/medium/high；已知有固定推理但无可调阶梯的模型获得的是仅禁用的抑制而非推理强度：旧版 OpenCode 配置块和 Kilo 都会禁用客户端原本会生成的每一个阶梯 id。两者都不会添加可选的推理强度。可选变体可以覆盖已知时写入的逐模型推理默认值——包括 `none`，且仅当模型自身声明的阶梯包含它时才会提供。无论客户端选择什么，代理面向上游的固定策略仍作用于实际发出的请求。
 
 托管 DSH 支持的最低兼容版本为 **DSH 0.1.0-rc.6**。OpenCodex 只管理 `llm-pi-ai.providers.opencodex`；Apply 和 Refresh 替换该片段，Disable 只移除该片段，Restore 恢复已记录的快照。DSH 会热重载提供商变更。这些操作不会改变用户的默认模型或原生 `deepseek-official` 提供商。托管 DSH 集成目前仅支持回环地址，绝不会写入真实凭据。
 
@@ -115,7 +115,7 @@ TOML 日期和时间也会拒绝托管重写，因为合并步骤会将这些带
 
 **Kimi Code 不能保存环境变量引用，**因此其配置包含 `opencodex-loopback` 占位符而非密钥。任何客户端配置中都不会写入真实凭据。
 
-**对于 `ocx opencode`，启动器的提供商配置块优先。** 启动器通过 `OPENCODE_CONFIG_CONTENT` 注入 `provider.opencodex` 和 `providers.opencodex`，其优先级高于磁盘上的相同条目；其余 opencode 配置照常生效。直接启动 `opencode` 时，此处的开关才是关键。
+**对于 `ocx opencode`，启动器的提供商配置块优先。** 启动器通过 `OPENCODE_CONFIG_CONTENT` 注入 `provider.opencodex` 和 `providers.opencodex`，其优先级高于磁盘上的相同条目；其余 opencode 配置照常生效。这些配置块与导出使用相同的生效规范模型元数据构建，因此启动器和托管集成描述的是同一批模型、上限和推理选项。直接启动 `opencode` 时，此处的开关才是关键。
 
 ## 从终端操作
 
@@ -144,7 +144,7 @@ ocx integration client enable --client mcode
 ocx mcode
 ```
 
-连接后，`ocx sync` 和 `POST /api/sync` 会按当前模型选择、上下文窗口及推理强度级别刷新已管理的 MCode、Pi、Aside、Raycast 和 omo 目录。代理启动时会刷新已管理的 Raycast 目录。模型可见性、提供商选择或预设变化，也会刷新已连接的 Pi、Aside、Raycast 和 omo 目录。缺失、被外部编辑或不安全的配置块不会被触碰；此前归 OpenCodex 管理、但被你手动删除的配置块也不会重建。已启用的 Aside 配置文件是“仅刷新已管理配置块”规则的例外：如果账户目录存在且从未有过已管理配置块，当该位置为空时，同步可以创建首个配置块。此前连接过 Aside 会默认对所有已注册配置文件启用这一行为。同步不会创建缺失的账户目录，也不会替换手动配置块。拒绝或重叠的刷新会按客户端分别报告。启动新 Pi 会话，或完全退出并重新打开 Aside，才能加载更新后的文件。Aside 刷新要求[运行中的兼容代理](#aside-配置文件控制)。
+连接后，`ocx sync` 和 `POST /api/sync` 会按当前模型选择、上下文窗口及推理强度级别刷新已管理的 MCode、Pi、Aside、Raycast、omo、OpenCode 和 Kilo 目录。代理启动时会刷新已管理的 Raycast 目录。模型可见性、提供商选择或预设变化，也会刷新已连接的 Pi、Aside、Raycast、omo、OpenCode 和 Kilo 目录。缺失、被外部编辑或不安全的配置块不会被触碰；此前归 OpenCodex 管理、但被你手动删除的配置块也不会重建。已启用的 Aside 配置文件是“仅刷新已管理配置块”规则的例外：如果账户目录存在且从未有过已管理配置块，当该位置为空时，同步可以创建首个配置块。此前连接过 Aside 会默认对所有已注册配置文件启用这一行为。同步不会创建缺失的账户目录，也不会替换手动配置块。拒绝或重叠的刷新会按客户端分别报告。启动新的 Pi、OpenCode 或 Kilo 会话，或完全退出并重新打开 Aside，才能加载更新后的文件。Aside 刷新要求[运行中的兼容代理](#aside-配置文件控制)。
 
 如果 Models 同时显示 **“Model selection saved”** 和客户端刷新警告，说明选择已保存，但一个或多个客户端文件未能更新。警告会指出受影响的客户端，以及适用时的 Aside 配置文件，并解释拒绝原因。启动新会话前，请打开 **Integrations** 检查该客户端或配置文件。处理报告的问题后，重试 `ocx sync`；重叠操作必须先完成。如果警告包含备份路径，或指出恢复未完成，请在重试前检查恢复状态。仅有选择保存成功的提示，并不能证明客户端文件恢复完成。
 
@@ -222,9 +222,9 @@ Kilo CLI、VS Code 和 JetBrains 共用一份全局配置。此集成只在 `~/.
 
 Kilo 会合并所有这些全局文件。如果另一个候选文件也定义了 `provider.opencodex`，状态会列出冲突文件，应用和替换都会被拒绝。启用集成前，请从那些文件中移除 `provider.opencodex`。即使发生这种冲突，仍可禁用已归 OpenCodex 所有的配置块。无法读取或不安全的候选文件也会阻止写入。
 
-仅 `provider.opencodex` 属于此集成，采用 OpenCode V1 结构（`npm`、`options`、`models`）；不会输出 OpenCode V2 的 `providers` 键。`$schema`、`model`、`enabled_providers`、MCP 等键仍由用户管理。应用后，在 Kilo 中选择 `opencodex/<provider/model>`。
+仅 `provider.opencodex` 属于此集成，采用 OpenCode V1 结构（`npm`、`options`、`models`）；不会输出 OpenCode V2 的 `providers` 键。模型级的推理选择会以变体映射的形式写入 provider 配置块，与 OpenCode 导出使用相同的生效规范元数据。`$schema`、`model`、`enabled_providers`、MCP 等键仍由用户管理。应用后，在 Kilo 中选择 `opencodex/<provider/model>`。
 
-回环连接使用 `{env:OPENCODEX_KILO_API_KEY}` 作为 `options.apiKey`。非回环绑定将认证移到 `options.headers["x-opencodex-api-key"]`，且不会写入真实密钥。应用时会将整个全局文件重写为格式化 JSON，因此其他键中的注释和尾随逗号不会保留。Kilo 不参与自动目录刷新；更改路由模型选择后，请明确刷新此集成。
+回环连接使用 `{env:OPENCODEX_KILO_API_KEY}` 作为 `options.apiKey`。非回环绑定将认证移到 `options.headers["x-opencodex-api-key"]`，且不会写入真实密钥。应用时会将整个全局文件重写为格式化 JSON，因此其他键中的注释和尾随逗号不会保留。Kilo 参与自动目录刷新：`ocx sync`、`POST /api/sync` 以及可见性、提供商或预设变更，会按与其他客户端相同的仅刷新自有配置块的安全规则刷新归 OpenCodex 所有的 Kilo 配置块，新的 Kilo 会话会加载更新后的文件。
 
 ```bash
 ocx integration client enable --client kilo

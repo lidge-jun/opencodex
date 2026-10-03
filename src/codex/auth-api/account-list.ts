@@ -476,7 +476,7 @@ export async function pauseExhaustedCodexAccounts(
         }
         return {
           shouldPause: !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
-            && isCodexQuotaExhausted(mainResult.freshQuota, mainResult.info.plan),
+            && isCodexQuotaExhausted(mainResult.freshQuota, mainResult.info.plan, codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)),
           checkedAccountCount: 1,
           failedAccountCount: 0,
         };
@@ -511,7 +511,7 @@ export async function pauseExhaustedCodexAccounts(
           continue;
         }
         checkedAccountCount += 1;
-        if (!isCodexAccountPaused(config, account.id) && isCodexQuotaExhausted(quotaResult.freshQuota, plan)) {
+        if (!isCodexAccountPaused(config, account.id) && isCodexQuotaExhausted(quotaResult.freshQuota, plan, codexAccountUsesCreditsAfterLimit(config, account.id))) {
           exhaustedIds.push(account.id);
         }
       }

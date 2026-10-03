@@ -6,7 +6,12 @@ use tauri_plugin_autostart::ManagerExt;
 const MARKER: &str = "start-at-login-claimed";
 
 /// Marker file recording that the login item names the launch-origin argument.
+#[cfg(not(target_os = "windows"))]
 const ORIGIN_MARKER: &str = "start-at-login-origin-flag";
+
+// Windows must revisit registrations claimed by the earlier, unquoted writer.
+#[cfg(target_os = "windows")]
+const ORIGIN_MARKER: &str = "start-at-login-quoted-origin-flag";
 
 /// What the one-time Start at Login decision did on this launch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,7 +68,7 @@ pub fn apply_start_at_login_default(app: &AppHandle) -> StartAtLogin {
     if app.autolaunch().is_enabled().unwrap_or(false) {
         return StartAtLogin::AlreadyDecided;
     }
-    match app.autolaunch().enable() {
+    match crate::login_autostart::enable(app) {
         Ok(()) => StartAtLogin::Enabled,
         Err(_) => StartAtLogin::Unavailable,
     }
@@ -99,7 +104,7 @@ pub fn adopt_launch_origin_argument(app: &AppHandle) {
     // leave a login launch showing its window forever.
     match app.autolaunch().is_enabled() {
         Ok(true) => {
-            if app.autolaunch().enable().is_err() {
+            if crate::login_autostart::enable(app).is_err() {
                 return;
             }
         }

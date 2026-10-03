@@ -27,6 +27,7 @@ export interface AccountRow {
   masked?: string;
   active: boolean;
   needsReauth?: boolean;
+  needsReauthReason?: "verify_account";
   autoSelectable?: boolean;
   skipReason?: "paused" | "needs_reauth" | "suspended" | "cooldown" | "quota_exhausted";
   selectionExcludedReason?: "plan_excluded";
@@ -348,6 +349,7 @@ interface OAuthAccountDto {
   /** Present only for providers that support operator pause (generic OAuth pools). */
   paused?: boolean;
   autoSwitchThresholdOverride?: number | null;
+  needsReauthReason?: "verify_account";
   autoSelectable?: boolean;
   skipReason?: unknown;
   /** Always sent by the management route; explicitly `null` when the tier is unknown. */
@@ -390,6 +392,7 @@ async function fetchOAuthRows(
     needsReauth: a.needsReauth,
     ...(a.paused === true ? { paused: true } : {}),
     ...(name === "anthropic" && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
+    ...(a.needsReauthReason === "verify_account" ? { needsReauthReason: a.needsReauthReason } : {}),
     ...(name === "kiro" && typeof a.autoSelectable === "boolean"
       ? { autoSelectable: a.autoSelectable } : {}),
     ...(name === "kiro" && a.autoSelectable === false && isKiroSkipReason(a.skipReason)

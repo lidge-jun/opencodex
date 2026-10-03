@@ -56,10 +56,31 @@ Keep your chosen `modelProfile.default` to apply it when plain `gjc` starts. The
 GJC models with a supported reasoning-effort ladder export `reasoning: true`, `thinking.levels`, and `compat.supportsReasoningEffort`, so GJC can offer an effort choice. Native Codex models receive their standard ladder even when the catalog omits it. Models without a known ladder omit these fields; `none` and `ultra` are not offered because `none` sends no effort and `ultra` folds to `max` on the wire. Refresh the integration to update these model options.
 
 The managed OpenCode integration owns two fragments: `provider.opencodex` (opencode V1) and
-`providers.opencodex` (opencode V2). Only the V2 block carries the per-model reasoning-effort
-variants, so both are written and kept in sync; they name the same provider and model ids, and
-opencode V2 merges them into one provider entry. Apply, Refresh, Disable, and Restore act on both
-fragments, and your other providers, agents, keybinds, and MCP entries stay untouched.
+`providers.opencodex` (opencode V2). Both carry the same declared per-model reasoning choices and
+defaults — the legacy block spells a model's default in its options and its choices as a variant
+map, the V2 block uses the model's settings and a native variant array — so both are written and
+kept in sync; they name the same provider and model ids, and opencode V2 merges them into one
+provider entry. Apply, Refresh, Disable, and Restore act on both fragments, and your other
+providers, agents, keybinds, and MCP entries stay untouched.
+
+Both fragments are built from the effective canonical model metadata — as are the Kilo export and
+the `ocx opencode` launcher. An explicit custom override always wins, and a ladder you cleared to
+empty stays empty; a reasoning ladder or default is never invented for a model that declares none.
+An authoritative context limit is carried with an output budget beside it: a known output value —
+explicit or from catalog metadata — wins, otherwise the schema-required 32000 fallback clamped to
+the context, and without an authoritative context the whole limit block is omitted. Capabilities,
+effort ladders, defaults, and an optional input limit appear only when known; the V2 block's
+native capabilities object requires a known tools value, so when tool support is unknown it is
+omitted entirely rather than written partially, and the legacy modality declarations stand.
+"No ladder invented" still writes the controls, never choices: the V2 block always carries an
+explicit variant array — empty when nothing is declared, because omitting it would make OpenCode
+synthesize low/medium/high — and a model with known fixed reasoning but no adjustable ladder gets
+disabled-only suppression instead of an effort: the legacy OpenCode block and Kilo both disable
+every rung id the client would otherwise generate. Neither adds a selectable effort. The
+selectable variants override the per-model
+default — `none` included, offered only when the model's own declared ladder contains it. Whatever
+the client selects, the proxy's pinned upstream reasoning policy still governs the request that
+leaves it.
 
 Managed DSH support has a compatibility floor of **DSH 0.1.0-rc.6**. OpenCodex owns only
 `llm-pi-ai.providers.opencodex`; Apply and Refresh replace that fragment, Disable removes only that
@@ -299,7 +320,9 @@ into any client config.
 **For `ocx opencode`, the launcher's provider blocks win.** That launcher injects
 `provider.opencodex` and `providers.opencodex` through `OPENCODE_CONFIG_CONTENT`, which
 outranks the same entries on disk — the rest of your opencode config still applies as
-usual. The switch here is what matters when you launch `opencode` directly.
+usual. Those blocks are built from the same effective canonical model metadata as the
+exports, so the launcher and the managed integration describe the same models, limits, and
+reasoning choices. The switch here is what matters when you launch `opencode` directly.
 
 ## From the terminal
 
@@ -331,18 +354,18 @@ ocx mcode
 ```
 
 Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside,
-Raycast, and omo catalogs with the current model selection, context windows, and
+Raycast, omo, OpenCode, and Kilo catalogs with the current model selection, context windows, and
 reasoning-effort ladders. Proxy startup refreshes an owned Raycast catalog. Changes to
 model visibility, provider selection, or presets also refresh connected Pi, Aside,
-Raycast, and omo catalogs.
+Raycast, omo, OpenCode, and Kilo catalogs.
 Missing, foreign-edited, or unsafe blocks stay untouched, as do previously owned blocks
 you removed manually.
 An enabled Aside profile is an exception to the usual owned-only refresh: if its account
 directory exists and it has never had an owned block, sync may create its first block when
 that slot is empty. A prior Aside connection enables this behavior for all registered
 profiles by default. Sync does not create missing account directories or replace manual blocks.
-A refused or overlapping refresh is reported separately for each client. Start a new Pi
-session or fully quit and reopen Aside to load the updated file.
+A refused or overlapping refresh is reported separately for each client. Start a new Pi,
+OpenCode, or Kilo session or fully quit and reopen Aside to load the updated file.
 Aside refresh requires a [compatible running proxy](#aside-profile-controls).
 
 If Models reports **“Model selection saved”** together with a client-refresh warning, the
@@ -545,7 +568,8 @@ press Save:
 - The same value is written to `codex.agents.<role>.model` in `~/.omo/omo.jsonc`, which
   LazyCodex 5.1.1 and later reads. If that file does not exist it is not created. If it contains
   comments it is left untouched, because saving would remove them; the tab says so, and you can
-  set the value there by hand.
+  set the value there by hand. Symlinks and non-regular files are rejected; on macOS and Linux,
+  a FIFO is rejected without waiting for a writer. A skipped mirror does not undo the role-file save.
 
 Nothing happens until you press Save; syncing or restarting opencodex never changes a role file.
 New Codex sessions pick up the change. The same controls exist on the command line:
@@ -600,14 +624,18 @@ while another candidate conflicts or cannot be parsed; the other candidate is le
 
 The owned fragment is only `provider.opencodex` (OpenCode V1 shape: `npm`, `options`,
 `models`). Kilo's published schema has no OpenCode V2 `providers` key, so that block is
-not emitted. `$schema`, `model`, `enabled_providers`, MCP, and other keys stay
+not emitted; Kilo instead receives the per-model reasoning choices as a variant map inside
+its provider block, built from the same effective canonical metadata as the OpenCode
+export. `$schema`, `model`, `enabled_providers`, MCP, and other keys stay
 user-owned. Select `opencodex/<provider/model>` in Kilo after applying.
 
 Loopback uses `{env:OPENCODEX_KILO_API_KEY}` as `options.apiKey`. A non-loopback bind
 moves admission to `options.headers["x-opencodex-api-key"]` and never serializes a real
 key. Apply rewrites the whole global file as pretty JSON, so comments and trailing
-commas in other keys are not preserved. Kilo is not on the implicit catalog fan-out;
-refresh it explicitly after changing the routed model selection.
+commas in other keys are not preserved. Kilo is on the implicit catalog fan-out: `ocx
+sync`, `POST /api/sync`, and visibility, provider, or preset changes refresh an owned Kilo
+block under the same safe owned-only rules as every other client, and a new Kilo session
+loads the updated file.
 
 ```bash
 ocx integration client enable --client kilo
@@ -622,6 +650,32 @@ Run Droid once to create `~/.factory`, then explicitly enable this integration w
 Chat Completions endpoint. Choose a row from Droid's `/model` picker. Disable
 removes the managed rows; Undo restores the exact saved file. Other settings and
 custom models remain yours.
+
+Open **Integrations → Factory Droid** (`/#integrations/droid`) to set a reasoning
+default for each connected model. Choose from the model's supported efforts,
+review the changes, then confirm. **No default** clears that model's draft setting;
+use **Save / review changes** and confirm to apply the removal.
+Models without a declared effort list show that no default is available.
+
+The default applies only when Droid omits an effort from its request. An explicit
+request effort takes precedence over this default; existing OpenCodex pins and
+caps still apply. Droid may continue to display **Dynamic** even when OpenCodex
+applies the configured default. Requests without the Droid default header are
+unaffected; the header is a request preference, not proof of client identity.
+For combos and routing policies, each concrete target checks the preference
+against its own effort list, so an incompatible first target does not remove it
+from a compatible fallback.
+
+A saved default that the routed model no longer supports is ignored for requests.
+If the connected model's declared effort list no longer includes the saved value,
+it is omitted from the panel's defaults and removed from the managed row on refresh.
+Reviewing without editing lets OpenCodex preserve the remaining supported defaults.
+
+Refresh preserves defaults while the exact `provider/model` selector remains
+connected and declares the saved effort. Renaming a provider, model, or combo alias replaces that managed row
+and clears its default; choose a default for the renamed row again. Disable
+removes the defaults with the managed model rows, and Undo restores the saved
+rows and their defaults together.
 
 Models whose IDs or display names contain `,` or `]` are skipped because the
 managed selector cannot address them safely; export and managed settings show

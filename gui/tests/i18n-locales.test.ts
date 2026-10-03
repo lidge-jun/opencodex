@@ -27,6 +27,11 @@ describe("i18n locale contracts", () => {
     expect(DICTS.vi["lang.nativeName"]).toBe("Tiếng Việt");
   });
 
+  test("Brazilian Portuguese locale is registered", () => {
+    expect(LOCALES.find(locale => locale.code === "pt")?.htmlLang).toBe("pt-BR");
+    expect(DICTS.pt["lang.nativeName"]).toBe("Português");
+  });
+
   test("every locale has a catalog-backed display name", () => {
     for (const { code } of LOCALES) {
       const displayName = DICTS[code]["lang.nativeName"];
@@ -227,4 +232,19 @@ describe("i18n locale contracts", () => {
       }
     }
   });
+});
+
+test("Portuguese status, reference time, home navigation and Remote Link roles retain their meaning", () => {
+  expect(DICTS.pt["pws.allSystemsOk"]).toBe("Tudo funcionando normalmente");
+  expect(DICTS.pt["lab.col.asOf"]).toBe("Data de referência");
+  expect(DICTS.pt["nav.goHome"]).toBe("Ir para o painel");
+  for (const key of ["compactionRouting.comboWarning", "compactionRouting.comboWarningScoped"] as const) {
+    expect(DICTS.pt[key]).toContain("um ou mais provedores de destino podem receber a conversa");
+    expect(DICTS.pt[key]).toContain("pode repetir");
+  }
+  for (const prefix of ["link", "remoteLink"] as const) {
+    expect(DICTS.pt[`${prefix}.role.home`]).toBe("Home");
+    expect(DICTS.pt[`${prefix}.role.child`]).toBe("Child");
+  }
+  for (const value of Object.values(DICTS.pt)) expect(value).not.toMatch(/\\["']/);
 });

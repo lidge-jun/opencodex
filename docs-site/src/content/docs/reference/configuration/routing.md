@@ -182,7 +182,10 @@ only currently eligible members of `targets`; missing, failed, or invalid decisi
 eligible member, while caller cancellation remains terminal. Adding the provider or Combo never
 changes `defaultProvider` or hides direct model rows. See
 [Decision method](/guides/combos/#decision-method) for the three methods, setup, privacy bounds, and
-the one-decision-per-call contract.
+the one-decision-per-call contract. API-key provider/model scopes also apply to TypeSafe and
+self-hosted decision destinations, before their credentials or request state are read. If the key
+denies the optional decision destination, no decision request is sent; the ordinary eligible
+inference fallback still has to satisfy that key's scope.
 
 ### Self-hosted decision model (e.g. Ollama tev1)
 

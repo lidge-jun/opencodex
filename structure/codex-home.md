@@ -465,3 +465,5 @@ Upstream API-key usage follows the [physical-attempt account attribution contrac
 Stored Direct substitution follows the [credential identity contract](providers/openai-accounts.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
 
 Native-main owner claims and credential-generation backoff remain authoritative during [priority failback priming](providers/openai-accounts.md#ongoing-priority-failback); the preference grants no access through a fenced main profile.
+
+Automatic account exhaustion and recovery use the [spendable Codex credit evidence contract](providers/openai-tiers.md#spendable-codex-credits), including independent freshness, upstream refusal, and reset-ticket separation.

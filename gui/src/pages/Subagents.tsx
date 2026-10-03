@@ -1,3 +1,4 @@
+import SubagentForceControl from "../components/subagents-workspace/SubagentForceControl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readJsonOrThrow } from "../fetch-json";
 import { Notice } from "../ui";
@@ -363,6 +364,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           <button type="button" className="btn btn-ghost btn-sm" disabled={fallbackLoading} onClick={() => { setFallbackLoading(true); void loadFallback(); }}>{t("common.retry")}</button>
         </Notice>
       )}
+      <SubagentForceControl key={apiBase} apiBase={apiBase} roster={chosen} />
       <SubagentsWorkspace
         available={available}
         fallbackAvailable={fallbackAvailable ?? []}

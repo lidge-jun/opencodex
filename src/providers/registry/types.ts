@@ -30,6 +30,7 @@ export interface ResponsesTerminalRepairPolicy {
 
 export type ProviderModelDiscoveryScalar = string | number | boolean;
 
+/** Path segment `*` projects at most 256 array elements; containsAny/All match projected scalars exactly. */
 export type ProviderModelDiscoveryPredicate =
   | {
       path: readonly string[];
@@ -70,6 +71,8 @@ interface ProviderModelDiscoverySharedSpec {
   idField?: string;
   /** Declarative eligibility rules evaluated against each untrusted model row. */
   filter?: ProviderModelDiscoveryFilter;
+  /** Stable partition: admitted original rows matching ANY predicate precede other rows. Registry-only. */
+  preferFirst?: readonly ProviderModelDiscoveryPredicate[];
   /** Optional lower byte ceiling; the process-wide hard ceiling still wins. */
   maxResponseBytes?: number;
   /** Optional lower raw-row ceiling; the process-wide hard ceiling still wins. */
@@ -275,6 +278,10 @@ export interface ProviderRegistryEntry {
   modelServiceTierCapabilityBaseUrlGuard?: (baseUrl: string) => boolean;
   /** Registry default for plaintext reasoning replay; see `OcxProviderConfig.preserveResponsesReasoningContent`. Registry-only like `supportsServiceTier`. */
   preserveResponsesReasoningContent?: boolean;
+  /** Registry default for preserving input item IDs; see `OcxProviderConfig.preserveResponsesInputItemIds`. */
+  preserveResponsesInputItemIds?: boolean;
+  /** Registry default for preserving per-item chat metadata; see `OcxProviderConfig.preserveResponsesMessageMetadata`. */
+  preserveResponsesMessageMetadata?: boolean;
   /** Registry default for dropping replayed reasoning items for Responses upstreams that reject them. */
   dropResponsesReasoningItems?: boolean;
   /** Registry defaults for per-model Codex reasoning propagation; explicit user keys win during enrichment. */

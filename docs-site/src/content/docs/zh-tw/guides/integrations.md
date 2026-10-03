@@ -119,7 +119,7 @@ TOML 日期與時間值也會阻止自動重寫：合併步驟會將這些帶有
 
 **Kimi Code 無法持有環境變數參考，** 所以它的設定攜帶的是 `opencodex-loopback` 佔位符而非金鑰。絕不會有任何真實憑證被寫入任何客戶端設定。
 
-**對 `ocx opencode` 而言，launcher 的 provider 區塊勝出。** 那個 launcher 透過 `OPENCODE_CONFIG_CONTENT` 注入 `provider.opencodex`，比磁碟上相同的條目優先——你其餘的 opencode 設定仍照常套用。當你直接啟動 `opencode` 時，這裡的開關才是關鍵。
+**對 `ocx opencode` 而言，launcher 的 provider 區塊勝出。** 那個 launcher 透過 `OPENCODE_CONFIG_CONTENT` 注入 `provider.opencodex`，比磁碟上相同的條目優先——你其餘的 opencode 設定仍照常套用。launcher 寫入的區塊與匯出使用相同的生效規範模型中繼資料（已知能力與推論選項），未知值不會被捏造；僅輸出上限在未知時使用 schema 必需的 32000 後備值（按 context 截斷）。當你直接啟動 `opencode` 時，這裡的開關才是關鍵。
 
 ## 從終端機
 
@@ -150,10 +150,10 @@ ocx mcode
 ```
 
 完成一次連接後，`ocx sync` 與 `POST /api/sync` 會更新 OpenCodex 已擁有的
-MCode、Pi、Aside、Raycast 與 omo 目錄。proxy 啟動也會更新已擁有的 Raycast 目錄。
-模型可見性、provider 或 preset 變更會更新 Pi、Aside、Raycast 與 omo。若區塊已刪除、
+MCode、Pi、Aside、Raycast、omo、OpenCode 與 Kilo 目錄。proxy 啟動也會更新已擁有的 Raycast 目錄。
+模型可見性、provider 或 preset 變更會更新 Pi、Aside、Raycast、omo、OpenCode 與 Kilo。若區塊已刪除、
 遭外部修改、不安全或由你手動移除，sync 會保持原檔不動；只有在你確定要重新
-連接時才再次執行 enable。
+連接時才再次執行 enable。啟動新的 Pi、OpenCode 或 Kilo 工作階段，才能載入更新後的檔案。
 
 另一個 MiniMax 平台 CLI（`mmx`）不是檔案開關整合。其文字命令使用 MiniMax 的
 Anthropic 相容端點，因此 OpenCodex 提供憑證隔離、僅限 loopback 的 launcher：
@@ -206,7 +206,7 @@ ocx integration client restore --op <operation-id>
 
 ## Kilo
 
-Kilo 只會把 `provider.opencodex` 寫入 `~/.config/kilo` 下最先存在的全域檔（`XDG_CONFIG_HOME` 會移動該目錄；若沒有任何候選檔則建立 `kilo.jsonc`）。若另一個候選檔也定義 `provider.opencodex`，狀態會回報衝突且套用會拒絕。其他鍵保持不變。套用會重寫整個檔案，因此不會保留註解與尾隨逗號。請在 Kilo 中選擇 `opencodex/<模型>`。
+Kilo 只會把 `provider.opencodex` 寫入 `~/.config/kilo` 下最先存在的全域檔（`XDG_CONFIG_HOME` 會移動該目錄；若沒有任何候選檔則建立 `kilo.jsonc`）。若另一個候選檔也定義 `provider.opencodex`，狀態會回報衝突且套用會拒絕。其他鍵保持不變。套用會重寫整個檔案，因此不會保留註解與尾隨逗號。每個模型的推論選擇會以變體映射的形式寫入 provider 區塊，與 OpenCode 匯出使用相同的生效規範中繼資料。`ocx sync` 與 `POST /api/sync` 會重新整理 OpenCodex 擁有的 Kilo 區塊，新的 Kilo 工作階段會載入更新後的檔案。請在 Kilo 中選擇 `opencodex/<模型>`。
 
 即使其他候選檔發生衝突或無法剖析，停用仍可移除已記錄檔案中由 OpenCodex 管理的區塊；其他候選檔不會變動。
 

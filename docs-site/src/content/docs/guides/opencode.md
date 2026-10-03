@@ -17,8 +17,8 @@ ocx opencode
 
 This ensures the proxy is running and launches opencode with the generated
 `provider.opencodex` and `providers.opencodex` blocks injected for that process — the
-legacy spelling opencode V1 reads, and the V2 spelling that carries the reasoning-effort
-variants. Extra arguments pass through:
+legacy spelling opencode V1 reads, and the native V2 spelling. Both carry reasoning-effort
+variants in the format their client reads. Extra arguments pass through:
 `ocx opencode run "hello"`.
 
 Routed models appear in the picker under the `opencodex` provider:
@@ -31,32 +31,34 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ## Reasoning effort
 
 opencode exposes reasoning effort as model *variants*. opencodex writes one variant per
-declared effort for every model that advertises a ladder — `none` is skipped, because the
-chat ingress has no wire effort for it — so the effort is selectable in opencode's model
-picker instead of being pinned by the proxy.
+declared effort, including `none` when the model explicitly supports disabling reasoning.
+The selection reaches the proxy as a reasoning effort, not just a picker label. Existing
+upstream effort pins in opencodex still apply.
 
 Two provider blocks are generated for this:
 
 | Block | Read by | Carries variants |
 |---|---|---|
-| `provider.opencodex` | opencode V1 (`npm` + `options`) | no |
-| `providers.opencodex` | opencode V2 (`package` + `settings`) | yes |
+| `provider.opencodex` | opencode V1 (`npm` + `options`) | legacy options map |
+| `providers.opencodex` | opencode V2 (`package` + `settings`) | native settings array |
 
-Only the V2 spelling applies `variants`; a variant written under the legacy block is parsed
-and then dropped, which is why both blocks are emitted. They name the same provider and
-model ids, and opencode V2 merges them into a single provider entry, so no model appears
-twice in the picker. Models with no declared effort ladder carry no `variants` key at all.
+V2 uses its native variant array rather than the legacy map. The blocks name the same provider
+and model IDs and merge into one provider entry. No model appears twice. V2 always writes a
+variant array, empty when no choices are declared, to suppress automatic low/medium/high
+choices. Known fixed-depth reasoners in the legacy block disable every automatically generated
+rung for the same reason; those disabled entries are not selectable efforts.
 
-No model-level default effort is written. The proxy keeps applying its own configured
-default whenever a request carries no effort, so a default you change in opencodex stays
-in force instead of being frozen into the config.
+A known model default is exported; selecting a variant overrides that client default.
+No default is invented when the catalog declares none. The launcher regenerates these
+settings each time; refresh a managed integration or re-export a manual snapshot after
+changing the default in opencodex.
 
 ## Images and attachments
 
 opencode decides whether a model takes an image from the model entry itself, and it cannot ask
 models.dev about `opencodex` — this provider is not there. The generated blocks therefore
-carry opencode's own per-model capability fields, `attachment` and `modalities`, taken from
-the metadata the proxy reports at `GET /api/models`:
+carry per-model capability fields taken from the effective metadata the proxy reports at
+`GET /api/models`. For example, the legacy block carries `attachment` and `modalities`:
 
 ```json
 "gpt-5.6-luna": {
@@ -67,17 +69,21 @@ the metadata the proxy reports at `GET /api/models`:
 }
 ```
 
-Without those fields opencode assumes the model is text-only and refuses the paste on the
-client side, so the image never reaches the proxy. That applies to text-only models too: when
+V2 receives native `capabilities.input` and `capabilities.output` fields; known tool support
+uses `capabilities.tools`. Legacy clients read the fields in the example above. When
 the catalog reports image input for a model the vision sidecar covers, opencode lets the
 attachment through so the sidecar can describe it before the upstream call.
 
-What is written comes from the row's declared input modalities in `GET /api/models`. For a
-discovered model the catalog adds `image` itself for the sidecar case; a custom row is written
-from the modalities stored on it, so a custom entry that declares text only stays text-only
-even when the sidecar would cover it. A row that declares none — an undeclared custom model,
-for example — keeps the plain entry (`name`, plus `limit` when its context window is known),
-and opencode treats it as text-only.
+V2 requires a `tools` boolean whenever the native capabilities object exists. When tool support
+is unknown, that object is omitted; known input modalities still reach V2 through the legacy
+block's migration. This avoids inventing tool support or invalidating the provider's native settings.
+
+Unknown capabilities leave OpenCode's own fallback assumptions in place; they are not detected
+provider facts. Explicit text-only metadata prevents image requests on the client side.
+
+Custom models inherit known catalog metadata unless an explicit override is stored. A custom
+entry declaring text only stays text-only. Unknown capabilities are omitted rather than
+invented; an explicit empty reasoning ladder does not declare the model incapable of reasoning.
 
 ## Your own config is never modified
 
@@ -129,7 +135,9 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 :::
 
 Unlike the launcher's runtime block, a merged block is a static snapshot: it does not follow your
-catalog. Re-run `ocx export` after you add a provider or change model visibility.
+catalog. Re-run `ocx export` after you add a provider or change model visibility or metadata.
+Alternatively, [enable the managed integration](/guides/integrations/): `ocx sync` safely
+refreshes its already-owned blocks, leaving hand-edited or removed blocks untouched.
 
 Once merged, export the admission key before launching opencode — unless the proxy is on loopback,
 where none is needed:
@@ -186,6 +194,9 @@ Nothing to undo — no generated config file is written under `~/.opencodex`. Ru
 does not, the whole `limit` block is omitted and opencode keeps its own defaults.
 
 Output limits use the model’s known maximum from catalog or generated metadata. Only unknown limits fall back to `32000`. The output limit is always clamped to the context window, including known limits below `32000`.
+
+Known input limits are also carried and clamped to context; unknown input limits are omitted.
+CLI export, dashboard export, managed refresh and the launcher share the effective metadata.
 
 The `opencodex` provider block is regenerated on every launch, so per-model tweaks made inside it
 will not survive. Keep custom entries under a provider key of your own instead.

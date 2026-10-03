@@ -9,7 +9,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode(?!-kilo)|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -40,7 +40,8 @@
         "^context-history\\.test\\.ts$",
         "^aside-profiles-routes",
         "^update-async-routes\\.test\\.ts$",
-        "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-"
+        "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-",
+        "^subagent-model-force-api\\.test\\.ts$"
       ]
     },
     "adapters": {
@@ -77,7 +78,7 @@
     },
     "routing": {
       "match": [
-        "^(?:cl01|destination|fastwire|policy|router|router\\.test\\.ts|subagent)-"
+        "^(?:cl01|destination|fastwire|policy|router|router\\.test\\.ts|subagent(?!-model-force-api))-"
       ]
     },
     "gui": {
@@ -112,6 +113,7 @@
       "match": [
         "^aside-profile(?!s-routes)",
         "^cline-(?:client|writer)(?:-|[.])",
+        "^opencode-kilo-",
         "^(?:desktop|omp|pi|prime|remote|sync)-"
       ]
     },

@@ -25,6 +25,17 @@ description: 透過 SSH 連接 OpenCodex Home 電腦與 Child 電腦。
 
 儀表板不會要求輸入權杖。它會先探測主機，只有明確確認指紋後才能套用連結。
 
+新增 Child 視窗會說明 Child 透過 SSH 使用此 Home 的供應商，並列出上述必要條件。別名來自執行 OpenCodex 的 Home 上的 `~/.ssh/config`，不一定是顯示瀏覽器的電腦。如果探索成功但沒有主機，請新增如下 `Host` 項目後重新掃描。也可以手動輸入現有別名；選取或輸入別名後即可啟用連線測試。視窗還提供本指南的連結。
+
+```sshconfig
+Host devbox
+  HostName devbox.example.com
+  User you
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+如果探索失敗，視窗會顯示載入失敗、可用的請求原因和重試按鈕，而不是聲稱清單為空。連線測試失敗的具體原因與清理後的 SSH 提示只在作用中視窗顯示，不會在背後重複顯示。檢查原因，必要時使用下方 SSH 診斷方法，然後重試。重新掃描會保留輸入的別名，但連線前必須重新檢查指紋。
+
 ## 將這台電腦連線為 Child
 
 在要使用 Home 供應商的電腦上：

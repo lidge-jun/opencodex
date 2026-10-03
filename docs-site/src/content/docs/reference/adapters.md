@@ -137,8 +137,10 @@ configured provider key.
 The adapter preserves the incoming client's `User-Agent` as a fallback in both auth modes because
 some Responses-compatible providers use the Codex client fingerprint for compatibility behavior.
 An explicitly configured provider `User-Agent` remains authoritative regardless of header casing;
-if the caller sends none, OpenCodex does not invent one. No other caller header is widened by this
-exception.
+if the caller sends none, OpenCodex does not invent one. Additional caller metadata can be selected
+with `forwardClientHeaders`; provider `headers` win for this option, and credential or transport-owned
+names are refused. Canonical ChatGPT forward auth retains its separate fixed header allowlist.
+Only `originator`, `x-client-request-id`, `x-codex-app-version`, and `user-agent` are supported by `forwardClientHeaders`; arbitrary names are rejected on load/write and ignored at runtime.
 
 Adapter selection does not select the upstream transport. Eligible requests can use the
 [upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported

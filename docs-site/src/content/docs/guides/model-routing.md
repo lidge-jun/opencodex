@@ -143,3 +143,14 @@ Routing and catalog visibility are separate controls:
   name (e.g. `anthropic` or `groq`) is actually configured.
 
 See [Configuration](/reference/configuration/) for the provider fields these rules read.
+
+
+## Structured output on Cursor routes
+
+Cursor routes translate Responses `text.format` (`json_object` or `json_schema`) into explicit
+final-answer instructions in the system context and active request, including tool-result
+continuations. This is a prompt fallback: Cursor does not provide native constrained JSON decoding
+on this transport, and models can still return an invalid answer. The adapter does not turn prose
+into an approval decision. Auto-review callers should validate the returned JSON and use a
+structured-output-capable route when strict enforcement is required. Ordinary text requests and
+intermediate tool calls keep their existing behavior.

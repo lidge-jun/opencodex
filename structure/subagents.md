@@ -538,3 +538,11 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 The [compaction routing override](transports/responses-failover.md#compaction-routing-overrides) uses explicit request-kind and trigger metadata, independently of spawned-child markers.
 
 Ongoing priority failback keeps model-detour and independent-quota affinity isolated; preview remains read-only and no child changes an unrelated shared cursor. The routing details live in [OpenAI account operations](providers/openai-accounts.md#ongoing-priority-failback).
+
+Automatic account exhaustion and recovery use the [spendable Codex credit evidence contract](providers/openai-tiers.md#spendable-codex-credits), including independent freshness, upstream refusal, and reset-ticket separation.
+
+### Forced Claude Code subagent model
+
+`src/claude/subagent-model.ts` shares the roster alias and authoritative context-marker resolver with routed launch force. `claudeCode.subagentModelForce` is opt-in and default-off. Force availability excludes retained unavailable roster entries. Caller-added `[1m]` suffixes require finite authoritative million-token capacity or an exact advertised marked identity; exact upstream ids remain literal, while legacy roster marker handling is unchanged. The generated-agent legacy directive cannot replace a wire selector matching the configured forced alias. `src/claude/subagent-force-status.ts` performs bounded, read-only server-local version and settings-key inspection; unknown is not supported.
+
+Explicit gateway selectors outrank generated-agent `ocx-route` fallback independently of saved force state. `src/claude/inbound-model-options.ts` shares this precedence across Messages and count-tokens; bare Claude fallback and requests without directives retain their existing behavior. Native Claude force targets use reversible native aliases, restored before existing credential/model-map checks. Connected launch exposure comes from fresh authenticated gateway rows, not cached context-window keys; acquisition is independent of cache-write success.

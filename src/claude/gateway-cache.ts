@@ -73,19 +73,13 @@ export function writeGatewayModelCache(baseUrl: string, models: readonly Gateway
   }
 }
 
-/** Fetch the anthropic-flavor /v1/models from the local proxy and write the cache. */
-export async function refreshGatewayModelCacheFromProxy(
-  port: number,
-  options?: GatewayModelCacheRefreshOptions,
-): Promise<string | null>;
-export async function refreshGatewayModelCacheFromProxy(
-  target: GatewayModelTarget,
-  options?: GatewayModelCacheRefreshOptions,
-): Promise<string | null>;
-export async function refreshGatewayModelCacheFromProxy(
+export interface GatewayModelSnapshot { baseUrl: string; models: GatewayModelRow[] }
+
+/** Acquire fresh exposure independently of whether the local cache is writable. */
+export async function fetchGatewayModels(
   portOrTarget: number | GatewayModelTarget,
   options: GatewayModelCacheRefreshOptions = {},
-): Promise<string | null> {
+): Promise<GatewayModelSnapshot | null> {
   try {
     const headers = new Headers({ "anthropic-version": "2023-06-01" });
     // A wildcard/non-loopback listener requires data-plane admission even for a
@@ -114,14 +108,23 @@ export async function refreshGatewayModelCacheFromProxy(
     const body = await res.json() as { data?: unknown };
     if (!Array.isArray(body.data)) return null;
     const models: GatewayModelRow[] = body.data
-      .filter(m => typeof m.id === "string" && (m.id as string).length > 0)
+      .filter(m => m && typeof m === "object" && typeof m.id === "string" && m.id.length > 0)
       .map(m => ({
         id: m.id as string,
         display_name: typeof m.display_name === "string" ? m.display_name : undefined,
         description: typeof m.description === "string" ? m.description : undefined,
       }));
-    return writeGatewayModelCache(baseUrl, models, options.configDir);
+    return { baseUrl, models };
   } catch {
     return null;
   }
+}
+
+/** Preserve the cache-refresh API used by launchers and profile application. */
+export async function refreshGatewayModelCacheFromProxy(
+  portOrTarget: number | GatewayModelTarget,
+  options: GatewayModelCacheRefreshOptions = {},
+): Promise<string | null> {
+  const snapshot = await fetchGatewayModels(portOrTarget, options);
+  return snapshot ? writeGatewayModelCache(snapshot.baseUrl, snapshot.models, options.configDir) : null;
 }

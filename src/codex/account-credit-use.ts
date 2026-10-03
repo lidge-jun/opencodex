@@ -4,6 +4,7 @@ import { isThirtyDayOnlyCodexPlan } from "./plan";
 import {
   CODEX_EXHAUSTED_USAGE_PERCENT,
   isTerminalShortWindow,
+  hasSpendableCodexCredits,
   resetAtToMs,
   type StoredAccountQuota,
 } from "./quota-types";
@@ -14,7 +15,7 @@ import {
  * Upstream does not refuse an account that holds ChatGPT credits at 100%: it serves the request
  * and draws the balance. Selection only takes an account off on quota after a refusal, so an
  * account with credits was never moved off. Spending is opt-in: only the ids in
- * `creditCodexAccountIds` may keep serving from credits, and every other account leaves rotation
+ * `creditCodexAccountIds` may keep serving from fresh spendable credits, and every other account leaves rotation
  * at 100% and comes back after its reset. Pool accounts and the `__main__` login both carry the
  * switch; the main login is also checked where the main-account hard lock is.
  */
@@ -95,5 +96,6 @@ export function isCodexAccountHeldForCredits(
   plan: unknown,
   now: number,
 ): boolean {
-  return !codexAccountUsesCreditsAfterLimit(config, accountId) && isCodexUsageLimitReached(quota, plan, now);
+  return !(codexAccountUsesCreditsAfterLimit(config, accountId) && hasSpendableCodexCredits(quota, now))
+    && isCodexUsageLimitReached(quota, plan, now);
 }

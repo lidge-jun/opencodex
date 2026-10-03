@@ -295,7 +295,8 @@ export function applyProviderConfigHints(
     inputModalities = base.includes("image") ? [...base] : [...base, "image"];
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
-  const suppressSyntheticMax = modelRecordValue(prov.modelSuppressSyntheticMax, model.id) === true;
+  const suppressSyntheticMax = modelRecordValue(prov.modelSuppressSyntheticMax, model.id)
+    ?? (model.antigravityEffortWireModelIds !== undefined);
   const defaultReasoningEffort = staticPolicy.model.defaultReasoningEffort ?? model.defaultReasoningEffort;
   const supportsReasoningSummaries = staticPolicy.model.supportsReasoningSummaries;
   const supportsVerbosity = staticPolicy.model.supportsVerbosity;
@@ -604,7 +605,12 @@ export function modelInputModalities(
   ))) {
     return ["text", "image"];
   }
-  return undefined;
+  // OpenGateway publishes modalities as { input: [...], output: [...] }, not an array.
+  // Append this fallback after all recognized signals so existing providers keep their
+  // resolution, and retain Codex's closed enum rather than advertising output modalities.
+  const nestedInput = normalizedStringList(plainRecord(item.modalities)?.input, 8, 24)
+    ?.filter(value => value === "text" || value === "image" || value === "audio");
+  return nestedInput && nestedInput.length > 0 ? nestedInput : undefined;
 }
 
 /**
@@ -688,6 +694,9 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       // real values. Appended after the recognized fields for the same reason as the
       // llama.cpp entries above: no provider that already resolves changes behavior.
       capabilityRecord?.context_length,
+      // OpenGateway publishes a top-level context_window. Keep this last so catalogs
+      // already resolving through any recognized field retain their existing window.
+      item.context_window,
     );
   const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
   const maxOutputTokens = positiveSafeInteger(

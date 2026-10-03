@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeConfigDir, refreshGatewayModelCacheFromProxy, writeGatewayModelCache } from "../../src/claude/gateway-cache";
+import { claudeConfigDir, fetchGatewayModels, refreshGatewayModelCacheFromProxy, writeGatewayModelCache } from "../../src/claude/gateway-cache";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const dirs: string[] = [];
@@ -221,4 +221,33 @@ describe("gateway-model cache carries the picker description", () => {
       { id: "claude-ocx-p--odd", display_name: "odd (p)" },
     ]);
   });
+});
+
+
+test("fresh discovery remains usable when cache cannot be written", async () => {
+  const dir = tempDir();
+  const blocked = join(dir, "file"); writeFileSync(blocked, "not a directory");
+  let requests = 0;
+  const snapshot = await fetchGatewayModels({ baseUrl: "https://hub.example.test", admissionToken: "fixture-client" }, {
+    configDir: blocked,
+    fetchImpl: async (_url, init) => {
+      requests++;
+      expect(new Headers(init?.headers).get("x-opencodex-api-key")).toBe("fixture-client");
+      expect(new Headers(init?.headers).has("authorization")).toBe(false);
+      return Response.json({ data: [{ id: "ocx-claude-mock--model" }] });
+    },
+  });
+  expect(snapshot?.models).toEqual([{ id: "ocx-claude-mock--model" }]);
+  expect(writeGatewayModelCache(snapshot!.baseUrl, snapshot!.models, blocked)).toBeNull();
+  expect(requests).toBe(1);
+});
+
+test("failed or malformed discovery supplies no exposure and never reads stale cache", async () => {
+  const dir = tempDir();
+  writeGatewayModelCache("https://hub.example.test", [{ id: "ocx-claude-mock--stale" }], dir);
+  for (const result of [Response.json({}, { status: 401 }), Response.json({ data: "bad" }), new Response("{")]) {
+    expect(await fetchGatewayModels({ baseUrl: "https://hub.example.test", admissionToken: "fixture-client" }, {
+      configDir: dir, fetchImpl: async () => result,
+    })).toBeNull();
+  }
 });

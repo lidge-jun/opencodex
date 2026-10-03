@@ -25,6 +25,17 @@ Parolalı SSH ve Windows mevcut akışın dışındadır. Bağlantı iki tarafta
 
 Kontrol paneli belirteç girmenizi istemez. Önce ana bilgisayarı yoklar ve parmak izini açıkça onaylamadan bağlantıyı uygulamaz.
 
+Child ekleme penceresi, Child’ın bu Home’un sağlayıcılarını SSH üzerinden kullandığını ve yukarıdaki gereksinimleri açıklar. Takma adlar, tarayıcıyı gösteren bilgisayardan değil, OpenCodex’i çalıştıran Home üzerindeki `~/.ssh/config` dosyasından gelir. Tarama başarılı olup hiç ana bilgisayar bulunamazsa aşağıdaki gibi bir `Host` girdisi ekleyip yeniden tarayın. Mevcut bir takma adı elle de girebilirsiniz; seçim veya giriş bağlantı testini etkinleştirir. Pencerede bu kılavuza bağlantı bulunur.
+
+```sshconfig
+Host devbox
+  HostName devbox.example.com
+  User you
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+Tarama başarısız olursa boş liste yerine yükleme hatası, mevcut neden ve yeniden deneme eylemi gösterilir. Bağlantı testinin nedeni ve temizlenmiş SSH ipucu yalnızca etkin pencerede görünür, arkasında yinelenmez. Nedeni ve gerektiğinde aşağıdaki SSH tanılamasını kontrol edip yeniden deneyin. Yeniden tarama girilen takma adı korur ancak bağlantıdan önce parmak izinin yeniden incelenmesini gerektirir.
+
 ## Bu bilgisayarı Child olarak bağlama
 
 Home'un sağlayıcılarını kullanacak bilgisayarda:

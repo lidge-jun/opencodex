@@ -27,7 +27,8 @@ The pure gate rewrite changes known plain-quota fields only in eligible JSON-RPC
 rate-limit notifications and top-level rate-limit results. Workspace, credit,
 unknown reached-type and spend-control restrictions preserve closed gate flags.
 Both the rate-limit flags and `ordinaryUsageAllowed` open only where the subtree shows
-plain-quota evidence: a cleared plain reached type or a usage window at 100%.
+plain-quota evidence: a cleared plain reached type or a usage window at 100% (`usedPercent` in the
+RPC, `used_percent` in the web usage snapshot; every gate field is read in both spellings).
 Usage percentages, resets and window durations remain accurate. Unrelated messages
 and malformed lines remain byte-identical; changed lines are reserialized.
 A per-line rewrite exception preserves that line. A failure in the framing/rewrite
@@ -49,8 +50,14 @@ OpenAI's. It writes the mode-0755 executable through an exclusive temp file and 
 rename (never through a symbolic link), quits the bundle by id, waits for this user's
 instance to exit, then opens the same bundle path with the launcher in CODEX_CLI_PATH.
 The launcher itself exits 127 with a stderr hint when the recorded binary is gone.
-Restore relaunches without
-that override and removes the launcher only after open succeeds; when no
+Restore uses the same trust policy for the bundle and its main app executable before
+quit or open. Both relaunch paths check ancestor ownership and POSIX replacement permissions
+through the filesystem root. Ancestors must be owned by this user or root; group/other write
+is accepted only for trusted sticky ancestors or root-owned, non-world-writable containers
+whose group matches the local directory service's admin group. An unreadable admin-group lookup
+does not grant that exception. These checks do not attest ACL or mount-policy restrictions.
+Restore does not require the experimental flag or a bundled
+app-server binary. It relaunches without that override and removes the launcher only after open succeeds; when no
 `com.openai.codex` bundle is found it removes the launcher, relaunches nothing and
 exits 1. Status reports
 the experimental flag, launcher presence, and the verified bundle process's override

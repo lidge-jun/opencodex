@@ -16,7 +16,16 @@ import { spawnSync } from "node:child_process";
  * stop. Fail-open was wrong here: a listener that accepts connections but withholds
  * `/healthz`, or a probe that times out, is exactly the state where replacing package
  * files is most dangerous, and "we could not tell" is not evidence the proxy is gone.
- * Only a refused connection or a definitive non-OpenCodex answer earns `"dead"`.
+ * A refused connection or a definitive non-OpenCodex answer earns `"dead"`. So does one
+ * more observation when the dial is neither answered nor refused (a timeout, or a dropped
+ * SYN as with a listener bound to a tailnet address): the child tries one transient
+ * exclusive bind of the same host and port, and a successful bind means nothing holds the
+ * port at that instant. The fallback runs only for a literal IP address, because a name can
+ * resolve to different addresses for the dial and the bind. A failed bind (`EADDRINUSE`,
+ * `EADDRNOTAVAIL`, any error) stays
+ * `"unknown"`, a held-but-silent port included. The whole probe is bounded by the child's
+ * own `timeoutMs` plus a 1500 ms spawn ceiling, after which it is `"unknown"`. A successful
+ * bind is a statement about that moment, not a promise that the endpoint cannot restart.
  */
 export function probeProxyLiveness(port, hostname = "127.0.0.1", timeoutMs = 1500) {
   // An unusable port is not an ambiguous probe: there is nothing to ask.
@@ -38,6 +47,8 @@ export function probeProxyLiveness(port, hostname = "127.0.0.1", timeoutMs = 150
   const script = [
     "const http = require('node:http');",
     "const [host, port, timeout] = process.argv.slice(1);",
+    "let settled = false;",
+    "const settle = word => { if (!settled) { settled = true; process.stdout.write(word); } };",
     "const req = http.get({ host, port: Number(port), path: '/healthz', timeout: Number(timeout) }, res => {",
     "  let body = '';",
     "  res.setEncoding('utf8');",
@@ -56,15 +67,34 @@ export function probeProxyLiveness(port, hostname = "127.0.0.1", timeoutMs = 150
     "            && typeof parsed.uptime === 'number'));",
     "      // Only a clean 200 decides anything. Any other status means the endpoint is",
     "      // answering but not telling us what it is, which is not evidence of absence.",
-    "      if (res.statusCode !== 200) process.stdout.write('UNKNOWN');",
-    "      else process.stdout.write(isOpencodex ? 'LIVE' : 'DEAD');",
-    "    } catch { process.stdout.write('UNKNOWN'); }",
+    "      if (res.statusCode !== 200) settle('UNKNOWN');",
+    "      else settle(isOpencodex ? 'LIVE' : 'DEAD');",
+    "    } catch { settle('UNKNOWN'); }",
     "  });",
     "});",
-    "req.on('timeout', () => { process.stdout.write('UNKNOWN'); req.destroy(); });",
-    "// ECONNREFUSED is the one error that proves nothing is listening. Everything else -",
-    "// reset, unreachable host, TLS confusion - leaves the question open.",
-    "req.on('error', err => process.stdout.write(err && err.code === 'ECONNREFUSED' ? 'DEAD' : 'UNKNOWN'));",
+    // A refused connection is the clean proof that nothing is listening. Everything else -
+    // reset, unreachable host, a silent drop - leaves the question open, with one more way
+    // to close it: a port nobody listens on can be bound, a held one cannot (EADDRINUSE).
+    // A proxy bound to a Tailscale address is the case that needs this: the stack drops
+    // the SYN instead of refusing it, so the dial only ever times out.
+    "let bindStarted = false;",
+    "const bindCheck = () => {",
+    "  if (bindStarted || settled) return;",
+    "  bindStarted = true;",
+    // A name can resolve to several addresses, and the dial and the bind resolve it on
+    // their own: a live proxy on one address would not stop a bind on another. Only a
+    // literal address names the same endpoint on both sides.
+    "  if (require('node:net').isIP(host) === 0) { settle('UNKNOWN'); return; }",
+    "  const server = require('node:net').createServer();",
+    "  server.on('connection', socket => socket.destroy());",
+    "  server.once('error', () => settle('UNKNOWN'));",
+    "  server.listen({ host, port: Number(port), exclusive: true }, () => server.close(() => settle('DEAD')));",
+    "};",
+    "req.on('timeout', () => { req.destroy(); bindCheck(); });",
+    "req.on('error', err => {",
+    "  if (err && err.code === 'ECONNREFUSED') settle('DEAD');",
+    "  else bindCheck();",
+    "});",
   ].join("\n");
   try {
     const probe = spawnSync(

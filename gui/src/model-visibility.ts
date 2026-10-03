@@ -82,11 +82,13 @@ export async function putModelVisibility(
   targets: ModelVisibilityTarget[],
   enabled: boolean,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<Response> {
   return fetchImpl(`${apiBase}/api/model-visibility`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ scope, provider, targets, enabled }),
+    ...(signal ? { signal } : {}),
   });
 }
 

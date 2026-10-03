@@ -382,9 +382,6 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const messages: OcxMessage[] = [...parsed.context.messages];
   const loopT0 = Date.now();
   const allTools = parsed.context.tools ?? [];
-  // For the forced-answer pass we drop the synthetic web_search tool so the model MUST answer from the
-  // results already in `messages` (can't search again) — this guarantees a non-empty final answer.
-  const toolsNoWebSearch = allTools.filter(t => !t.webSearch);
   let searchesExecuted = 0;
   let executedSearchCount = 0;
   // Queries whose search already failed this turn — repeats are short-circuited so a model that keeps
@@ -438,8 +435,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
    * restart) before the `on429` key rotation.
    */
   const prepareIterationEvents = async function* (forceAnswer: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
-    // On the forced-answer pass the synthetic web_search tool is gone, so the model MUST answer
-    // from the results already in `messages`. A weak model can still produce a thin answer that
+    // On the forced-answer pass the model is asked to answer from the results already in
+    // `messages`. A weak model can still produce a thin answer that
     // ignores what the search found, which reads to the user as "the search did nothing". Nudge it
     // (iteration-locally — never mutate the shared `messages`) to actually use the gathered results.
     // Only when a REAL search ran (executedSearchCount, not empty-query/limit/repeat placeholders).
@@ -455,7 +452,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     const iterParsed: OcxParsedRequest = {
       ...parsed, stream: true,
       ...(recoveringEmptyAnswer ? { options: { ...parsed.options, toolChoice: "none" as const } } : {}),
-      context: { ...parsed.context, messages: iterMessages, tools: recoveringEmptyAnswer ? [] : forceAnswer ? toolsNoWebSearch : allTools },
+      context: { ...parsed.context, messages: iterMessages, tools: recoveringEmptyAnswer ? [] : allTools },
     };
     // One cumulative header deadline spans every pool-key 429 rotation in this model iteration.
     // clear() stops only its timer after final headers; the direct turn signal remains attached to
@@ -885,8 +882,13 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
 
           // Loop (search + re-ask) ONLY when the model's actionable output is purely web_search. A real
           // tool call (e.g. shell/apply_patch) means this turn is terminal for Codex — finalize so those
-          // calls reach Codex. forceAnswer also finalizes.
-          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceAnswer;
+          // calls reach Codex.
+          // The budget check happens per query inside runSearchCall, so a
+          // forced pass that emits one more web_search call is served the
+          // limit-reached result instead of failing the turn (#6464: stripping
+          // the declaration makes some models emit the raw call as visible
+          // text).
+          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall;
           if (!shouldLoop) {
             // #1001: a forced-answer pass that ends `done` must have produced
             // usable output — never a malformed tool call, and never silence.
@@ -959,6 +961,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           return;
         }
       }
+      yield { type: "error", message: "web-search loop exceeded its iteration cap" };
     } finally {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     }

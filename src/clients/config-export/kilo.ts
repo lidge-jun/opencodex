@@ -14,9 +14,11 @@ import {
   normalizeExportModels,
   opencodeModelCapabilities,
   outputBudgetFor,
+  inputBudgetFor,
   proxyAdmissionHeaders,
   singleFragment,
 } from "./model-metadata";
+import { legacyReasoningMetadata, type LegacyEffortVariant } from "./reasoning-metadata";
 
 export const KILO_CONFIG_CANDIDATES = [
   "kilo.jsonc",
@@ -28,9 +30,14 @@ export const KILO_CONFIG_CANDIDATES = [
 
 export interface KiloModelEntry {
   name: string;
-  limit?: { context: number; output: number };
+  limit?: { context: number; input?: number; output: number };
   attachment?: boolean;
   modalities?: { input: string[]; output: string[] };
+  tool_call?: boolean;
+  reasoning?: boolean;
+  interleaved?: { field: "reasoning_content" };
+  options?: { reasoningEffort: string };
+  variants?: Record<string, LegacyEffortVariant>;
 }
 
 export interface KiloProviderBlock {
@@ -77,11 +84,14 @@ function kiloProviderBlock(ctx: ExportContext): KiloProviderBlock {
   const config = ctx.config ?? OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG;
   const models: Record<string, KiloModelEntry> = {};
   for (const model of normalizeExportModels(ctx.models)) {
-    const entry: KiloModelEntry = { name: exportModelLabel(model) };
+    const entry: KiloModelEntry = { name: exportModelLabel(model), ...legacyReasoningMetadata(model) };
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.limit = { context, output: outputBudgetFor(context, model) };
+      const input = inputBudgetFor(context, model);
+      if (input !== undefined) entry.limit.input = input;
     }
+    if (typeof model.supportsTools === "boolean") entry.tool_call = model.supportsTools;
     const capabilities = opencodeModelCapabilities(model.inputModalities);
     if (capabilities) {
       entry.attachment = capabilities.attachment;

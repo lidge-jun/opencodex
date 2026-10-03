@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { fromBinary } from "@bufbuild/protobuf";
 import { cursorBlobMetrics, cursorBlobTextForEstimate, resetCursorBlobStateForTests, storeCursorBlob } from "../../../src/adapters/cursor/native-exec";
 import { CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT, encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
+import { createCursorRequest } from "../../../src/adapters/cursor/request-builder";
+import { parseRequest } from "../../../src/responses/parser";
 import { AgentClientMessageSchema } from "../../../src/adapters/cursor/gen/agent_pb";
 
 beforeEach(() => resetCursorBlobStateForTests());
@@ -73,4 +75,65 @@ test("continuation uses only the latest user scope and preserves its exact text"
   const text = msg.message.value.action.action.value.userMessage?.text;
   expect(text).toContain(`[Current user request]\n${latest}`);
   expect(text).not.toContain("Rewrite all files");
+});
+
+
+describe("Cursor structured final output", () => {
+  const schema = {
+    type: "object", additionalProperties: false,
+    properties: { outcome: { type: "string", enum: ["allow", "deny"] } },
+    required: ["outcome"],
+  };
+  /** Encode a Responses request and return its model-visible Cursor action text. */
+  function activeText(format?: Record<string, unknown>) {
+    const parsed = parseRequest({
+      model: "cursor/composer-2.5-fast",
+      input: [{ role: "user", content: "Assess this read-only action." }],
+      ...(format ? { text: { format } } : {}),
+    });
+    const request = createCursorRequest(parsed);
+    const message = fromBinary(AgentClientMessageSchema, encodeCursorRunRequest(request));
+    if (message.message.case !== "runRequest" || message.message.value.action?.action.case !== "userMessageAction") {
+      throw new Error("Expected user action");
+    }
+    return message.message.value.action.action.value.userMessage?.text ?? "";
+  }
+  test("carries the Responses JSON schema in the active Cursor wire action", () => {
+    const text = activeText({ type: "json_schema", name: "guardian", strict: true, schema });
+    expect(text).toContain("Assess this read-only action.");
+    expect(text).toContain(JSON.stringify(schema));
+    expect(text).toContain("JSON");
+    expect(text).toContain("no Markdown");
+  });
+  test("carries JSON-object output requirements without inventing a schema", () => {
+    const text = activeText({ type: "json_object" });
+    expect(text).toContain("JSON object");
+    expect(text).toContain("no Markdown");
+    expect(text).not.toContain(JSON.stringify(schema));
+  });
+  test("JSON schemas for arrays are not narrowed to object output", () => {
+    const arraySchema = { type: "array", items: { type: "string" } };
+    const text = activeText({ type: "json_schema", schema: arraySchema });
+    expect(text).toContain(JSON.stringify(arraySchema));
+    expect(text).not.toContain("JSON object");
+  });
+  test("tool-result continuations repeat the final-output contract in the active action", () => {
+    const parsed = parseRequest({
+      model: "cursor/composer-2.5-fast",
+      input: [
+        { role: "user", content: "Assess the action." },
+        { type: "function_call", call_id: "read-1", name: "read_file", arguments: "{}" },
+        { type: "function_call_output", call_id: "read-1", output: "read-only evidence" },
+      ],
+      text: { format: { type: "json_schema", schema } },
+    });
+    const message = fromBinary(AgentClientMessageSchema, encodeCursorRunRequest(createCursorRequest(parsed)));
+    if (message.message.case !== "runRequest" || message.message.value.action?.action.case !== "userMessageAction") {
+      throw new Error("Expected tool-result continuation action");
+    }
+    expect(message.message.value.action.action.value.userMessage?.text).toContain(JSON.stringify(schema));
+  });
+  test("ordinary text requests do not acquire JSON output requirements", () => {
+    expect(activeText()).not.toContain("JSON");
+  });
 });

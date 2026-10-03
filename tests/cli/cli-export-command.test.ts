@@ -249,6 +249,10 @@ describe("ocx export human output (accept criterion 2)", () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout.startsWith("{\n")).toBe(true);
+    logs.length = 0;
+    const structured = await run(["--client", "opencode", "--json"], { baseUrl: proxy.baseUrl });
+    expect(structured.code).toBe(0);
+    expect(JSON.parse(result.stdout.split("\n\n")[0]!)).toEqual(JSON.parse(structured.stdout));
     expect(result.stdout).toContain(join("opencode", "opencode.json"));
     expect(result.stdout).toContain("Merge this generated configuration into that file; do not replace it.");
     expect(result.stdout).toContain("export OPENCODEX_OPENCODE_API_KEY=");

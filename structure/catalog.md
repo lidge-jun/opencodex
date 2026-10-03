@@ -24,7 +24,7 @@ validation-pending. Import alone supplies no entitlement evidence for the model 
 
 ## Shared catalog
 
-Static policy and observed catalog evidence are separate authorities.
+Static policy and observed catalog evidence are separate authorities. Antigravity grouping and selection projection follow the [discovered effort-family contract](providers-and-adapters.md#antigravity-effort-families).
 `src/providers/resolved-model-policy.ts` resolves and freezes only registry/operator static facts,
 hard wire pins, aliases, and explicit false/empty declarations. Discovery responses, generated
 metadata, cache freshness, availability, credentials, account state, quota and health never enter
@@ -92,6 +92,8 @@ this rule, and uninstall keeps the [manifest validation and residual reporting c
 Cache invalidation reports an unchanged derived cache separately from a failed rewrite. `ocx sync-cache` treats identical bytes as a successful no-op, preserving the cache mtime and avoiding a needless app-server restart; malformed catalogs and write failures remain errors.
 
 `src/codex/catalog/model-visibility.ts` excludes disabled providers, including custom rows. `src/codex/catalog/gather-capture.ts` leaves disabled providers and every `adapter: "jev-decision"` decision-service row out of the gather flight, so a decision row's `defaultModel` or `models` never becomes a routable catalog row and its endpoint is never probed for `/models`. `src/codex/catalog/routed-gather.ts` does not inherit their configuration into custom rows. HTTP discovery, startup/explicit sync (`src/codex/catalog/retained-sync.ts`), and client exports (`src/server/management/model-rows.ts`) apply new-model policy before publication. `src/providers/new-model-policy-runtime.ts` commits authoritative arrivals and automatic disables together under the config mutation lock, without rewriting an unchanged roster. It rechecks provider inventory and cache revisions and refuses publication on failed persistence. Retained sync reconciles after catalog evidence revalidation, preserving K-to-C lock order. Exports recapture their snapshot after committing discovery; superseded gathers only project policy onto a detached copy and retain no preview. Supplied rosters and read-only previews do not reconcile. Synthetic configurations only project their own state. File-backed configs retain their load provenance when their inventory diverges from disk. Read callers can opt into a detached policy projection when drift predates discovery: management renders its disabled rows, while other shared-fetch consumers receive only its visible rows. The projection copies discovery state and disables, leaving live config, disk, and the live merge baseline untouched. Writer callers still refuse stale publication; reload or explicit adoption is required before retained sync can commit. Inventory changes during discovery, superseded cache revisions, changed config homes, and failed persistence still refuse publication. Discovery absorbs arrivals/reappearances without advancing removal grace; convergence retains removal accounting. Bootstrap, custom rows, explicit selections, and degraded discovery retain the pure policy rules. Coverage: `tests/server/server-new-model-policy-arrival.test.ts` (HTTP), `tests/codex-integration/codex-sync-new-model-policy.test.ts` (startup/sync), `tests/server/model-export-new-model-policy.test.ts` (exports/previews), and `tests/providers/new-model-policy-runtime.test.ts` (persistence/concurrency), and `tests/codex-integration/model-visibility-management-api.test.ts` (drifted read projection).
+
+Custom rows replace discovered rows that encode to the same Codex-facing slug. For a provider whose captured discovery declares an order (`preferFirst`), `src/codex/catalog/routed-gather.ts` puts the replacement in the discovered row's slot; every other provider keeps discovered rows first and custom rows after them, as before. Coverage: `tests/codex-integration/catalog-custom-ordering.test.ts`.
 
 On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's
 bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
@@ -282,6 +284,8 @@ Older proxies without `/readyz` fail closed as unreachable. `/healthz` remains t
 liveness contract.
 
 ## Entry shape
+
+Client exports consume effective model metadata without rewriting custom-model editor overrides. `src/server/management/model-row-export-metadata.ts` resolves inheritance from the gathered catalog and registry-enriched configuration; the [export contract](clients/integrations.md#owned-catalog-convergence) separates declared defaults from picker preferences and preserves cleared effort ladders.
 
 Routed entries keep Codex-required metadata such as reasoning levels, shell type, API support flags,
 base instructions, modalities, auto-compact fields, and strict parser booleans. The public slug uses
@@ -593,4 +597,4 @@ Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the 
 `src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
 gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
 `src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh
-only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do not fetch on the request path; catalog sync owns their bootstrap.
+only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do not fetch on the request path; catalog sync owns their bootstrap. Automatic account exhaustion and recovery use the [spendable Codex credit evidence contract](providers/openai-tiers.md#spendable-codex-credits), including independent freshness, upstream refusal, and reset-ticket separation.

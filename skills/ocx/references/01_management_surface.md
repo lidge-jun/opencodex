@@ -1208,6 +1208,23 @@ JSON mode: `none`.
 
 - The Aside refresh uses the live server; other catalog synchronization also performs local work.
 
+### `ocx agent subagents force`
+
+Force Claude Code subagents onto one exposed model at the next routed launch; - clears.
+
+| Method | Route |
+|---|---|
+| GET | `/api/subagent-models` |
+| PUT | `/api/subagent-models` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the saved force setting. |
+
+JSON mode: `payload`.
+
+- Requires Claude Code 2.1.257+. Plain claude, forks, inherit skills, the main model and small-fast sidecars are unaffected.
+
 ### `ocx agent request-user-input`
 
 Show or set whether default mode may ask the operator a question mid-task.
@@ -1315,6 +1332,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 73
-- of those, state-changing: 42
+- declared capabilities: 74
+- of those, state-changing: 43
 - head-resolved invocations: 2

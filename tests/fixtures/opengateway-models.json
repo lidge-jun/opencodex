@@ -1,0 +1,668 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "openai/o4-mini",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
+      "providers": [
+        {
+          "id": "azure",
+          "region": "eastus2"
+        },
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ],
+      "context_window": 200000
+    },
+    {
+      "id": "openai/o3-pro",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "responses"
+      ],
+      "providers": [
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ],
+      "context_window": 200000
+    },
+    {
+      "id": "openai/o1-preview",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "retired",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions"
+      ],
+      "providers": [
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ],
+      "context_window": 128000
+    },
+    {
+      "id": "openai/o1-mini",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "retired",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions"
+      ],
+      "providers": [
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ],
+      "context_window": 128000
+    },
+    {
+      "id": "openai/gpt-image-2.5-sunburst",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "image"
+        ]
+      },
+      "endpoints": [
+        "images_generations",
+        "images_edits"
+      ],
+      "providers": [
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-image-2.5-flare",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "image"
+        ]
+      },
+      "endpoints": [
+        "images_generations",
+        "images_edits"
+      ],
+      "providers": [
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-image-2",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "image"
+        ]
+      },
+      "endpoints": [
+        "images_generations",
+        "images_edits"
+      ],
+      "providers": [
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-image-1.5",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "image"
+        ]
+      },
+      "endpoints": [
+        "images_generations",
+        "images_edits"
+      ],
+      "providers": [
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-image-1-mini",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "image"
+        ]
+      },
+      "endpoints": [
+        "images_generations",
+        "images_edits"
+      ],
+      "providers": [
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-4.5-preview",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "retired",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions"
+      ],
+      "providers": [
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ],
+      "context_window": 128000
+    },
+    {
+      "id": "openai/gpt-3.5-turbo-1106",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "openai",
+      "status": "retired",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions"
+      ],
+      "providers": [
+        {
+          "id": "openai",
+          "region": "global"
+        }
+      ],
+      "context_window": 16385
+    },
+    {
+      "id": "anthropic/claude-opus-4-1",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "anthropic",
+      "status": "retired",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
+      "providers": [
+        {
+          "id": "anthropic",
+          "region": "global"
+        }
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 32000
+    },
+    {
+      "id": "google/gemini-3.1-flash-image-preview",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "google",
+      "status": "retired",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "image"
+        ]
+      },
+      "endpoints": [
+        "images_generations",
+        "images_edits"
+      ],
+      "providers": [
+        {
+          "id": "google-vertex",
+          "region": "global"
+        }
+      ],
+      "context_window": 65536
+    },
+    {
+      "id": "google/gemini-3.1-flash-image",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "google",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "image"
+        ]
+      },
+      "endpoints": [
+        "images_generations",
+        "images_edits"
+      ],
+      "providers": [
+        {
+          "id": "google-vertex",
+          "region": "global"
+        }
+      ],
+      "context_window": 65536
+    },
+    {
+      "id": "google/gemini-3-pro-image-preview",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "google",
+      "status": "retired",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "image"
+        ]
+      },
+      "endpoints": [
+        "images_generations",
+        "images_edits"
+      ],
+      "providers": [
+        {
+          "id": "google-vertex",
+          "region": "global"
+        }
+      ],
+      "context_window": 65536
+    },
+    {
+      "id": "google/gemini-3-pro-image",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "google",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "image"
+        ]
+      },
+      "endpoints": [
+        "images_generations",
+        "images_edits"
+      ],
+      "providers": [
+        {
+          "id": "google-vertex",
+          "region": "global"
+        }
+      ],
+      "context_window": 65536
+    },
+    {
+      "id": "google/gemini-2.5-flash-lite-preview-09-2025",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "google",
+      "status": "retired",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
+      "providers": [
+        {
+          "id": "google-vertex",
+          "region": "global"
+        }
+      ],
+      "context_window": 1048576
+    },
+    {
+      "id": "google/gemini-2.5-flash-image",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "google",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "image"
+        ]
+      },
+      "endpoints": [
+        "images_generations",
+        "images_edits"
+      ],
+      "providers": [
+        {
+          "id": "google-vertex",
+          "region": "global"
+        }
+      ],
+      "context_window": 32768
+    },
+    {
+      "id": "google/gemini-2.0-flash",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "google",
+      "status": "retired",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
+      "providers": [
+        {
+          "id": "google-vertex",
+          "region": "global"
+        }
+      ],
+      "context_window": 1048576
+    },
+    {
+      "id": "moonshotai/kimi-k2.5",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "moonshotai",
+      "status": "retired",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions"
+      ],
+      "providers": [
+        {
+          "id": "moonshotai",
+          "region": "global"
+        }
+      ]
+    },
+    {
+      "id": "deepseek/deepseek-v4.1-flash-ultrafast",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "deepseek",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions",
+        "messages",
+        "responses"
+      ],
+      "providers": [
+        {
+          "id": "sionic-ai",
+          "region": "global"
+        }
+      ],
+      "context_window": 1000000
+    },
+    {
+      "id": "z-ai/glm-5.3-ultrafast",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "z-ai",
+      "status": "deprecated",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions",
+        "messages",
+        "responses"
+      ],
+      "providers": [
+        {
+          "id": "sionic-ai",
+          "region": "global"
+        }
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 131072
+    },
+    {
+      "id": "z-ai/glm-5.3-flash-ultrafast",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "z-ai",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "endpoints": [
+        "chat_completions",
+        "messages",
+        "responses"
+      ],
+      "providers": [
+        {
+          "id": "sionic-ai",
+          "region": "global"
+        }
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 131072
+    },
+    {
+      "id": "sionic-ai/comsat-embed-ko-8b-preview",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "sionic-ai",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "embedding"
+        ]
+      },
+      "endpoints": [
+        "embeddings"
+      ],
+      "providers": [
+        {
+          "id": "sionic-ai",
+          "region": "global"
+        }
+      ]
+    },
+    {
+      "id": "typesafe/jev-1.13",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "typesafe",
+      "status": "active",
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "decision"
+        ]
+      },
+      "endpoints": [
+        "decisions"
+      ],
+      "providers": [
+        {
+          "id": "openrouter",
+          "region": "global"
+        }
+      ],
+      "context_window": 32000,
+      "max_output_tokens": 28800
+    }
+  ]
+}

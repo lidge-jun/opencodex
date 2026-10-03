@@ -1064,6 +1064,15 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["The Aside refresh uses the live server; other catalog synchronization also performs local work."],
   },
   {
+    command: ["agent", "subagents", "force"],
+    summary: "Force Claude Code subagents onto one exposed model at the next routed launch; - clears.",
+    routes: [{ method: "GET", path: "/api/subagent-models" }, { method: "PUT", path: "/api/subagent-models" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the saved force setting." }],
+    mutates: true,
+    json: "payload",
+    details: ["Requires Claude Code 2.1.257+. Plain claude, forks, inherit skills, the main model and small-fast sidecars are unaffected."],
+  },
+  {
     command: ["agent", "request-user-input"],
     summary: "Show or set whether default mode may ask the operator a question mid-task.",
     routes: [

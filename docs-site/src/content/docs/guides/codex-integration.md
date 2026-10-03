@@ -244,7 +244,9 @@ Remote and generic API clients retain the provider's hosted response format.
 Partial previews and URL-only results are not rendered by this compatibility layer.
 Artifacts use the existing retention limit, so save images you want to keep before
 older files are pruned. An invalid image or a failed local write produces a visible
-failure message instead of a broken image link.
+failure message instead of a broken image link. Display batches reject duplicate image
+identities, oversized routing metadata, and output that exceeds the display byte limit;
+these failures return HTTP 502 before streaming or a failed terminal event after it starts.
 
 ### Built-in image generation (`image_gen`)
 

@@ -295,7 +295,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 101 préréglages intégrés : 83 à clé, 14 OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 102 préréglages intégrés : 84 à clé, 14 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
@@ -358,9 +358,19 @@ promotionnels de Cline ne sont accessibles que dans l'IDE ou la CLI Cline, pas p
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
+| OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …et plus encore | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
+
+**OpenGateway** est une passerelle compatible OpenAI exploitée par Sionic AI à
+`https://apis.opengateway.ai/v1`. Son catalogue public compte environ 80 modèles actifs
+(vérifiés le 2026-10-02). Le préréglage actualise automatiquement la liste via le
+`GET /v1/models` public et conserve les modèles Chat Completions actifs (ainsi que `openai/o3-pro`, réservé à Responses et routé vers Responses). Les modèles servis
+par Sionic, `deepseek/deepseek-v4.1-flash-ultrafast` et `z-ai/glm-5.3-flash-ultrafast`,
+sont affichés en premier. Créez une clé dans le [tableau de bord OpenGateway](https://opengateway.ai/api-keys),
+puis lancez `ocx provider add opengateway` ou sélectionnez **OpenGateway** dans le tableau de bord.
+Les requêtes chat utilisent la clé Bearer configurée ; la liste publique ne valide pas cette clé.
 
 **OpenCode Zen** (`opencode-zen`) et le préréglage sans clé **OpenCode Free** utilisent tous deux
 `https://opencode.ai/zen/v1`. Sur cette passerelle, les modèles gratuits atteignent souvent une limite de

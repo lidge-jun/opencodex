@@ -218,3 +218,15 @@ Anthropic OAuth sidecar 重用 opencodex 既有的 Claude Code OAuth 指紋。�
 ## Codex 配額網路診斷
 
 主 Codex 帳戶列中的 `quotaRefresh` 描述配額查詢結果，並不代表剩餘配額或模型存取權限。讀取快取或未執行查詢時，這個欄位可能省略。查詢使用執行中代理服務的環境，而不是目前終端機的環境。未設定 `proxy` 時保留既有環境；`"auto"` 在啟動時讀取 Windows 或 macOS 靜態 HTTP/HTTPS 設定；macOS 上若有繼承代理則略過讀取。macOS 會將有效的 `*.<domain>` 轉成 `.<domain>`：`*.local` 讓 `foo.local` 與裸網域 `local` 直連，但不比對 `xlocal`。精確的 `169.254/16`、`169.254.0.0/16`、`fe80::/10` 網段會略過並顯示診斷，因此鏈路本機 IP 位址使用代理。IP 位址與 `*` 仍可使用；其他 CIDR、萬用字元形式及簡單主機名稱例外會在修改環境前拒絕自動探索。不會自動處理 PAC/WPAD、僅 SOCKS 的設定或執行中的變更。TUN 測試成功本身不能證明 HTTP 代理路徑正常。命令與狀態說明請見[英文網路診斷章節](/reference/configuration/server/#codex-quota-network-diagnostics)。
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.

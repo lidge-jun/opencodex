@@ -181,7 +181,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 101 个预设：83 个密钥预设、14 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 102 个预设：84 个密钥预设、14 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -243,9 +243,19 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
+| OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | ……以及更多 | opencode zen、Vercel AI Gateway、Venice、NanoGPT、Synthetic、Qianfan、Alibaba、Parallel、ZenMux、LiteLLM |
+
+**OpenGateway** 是 Sionic AI 运营的 OpenAI 兼容网关，base URL 为
+`https://apis.opengateway.ai/v1`。公开目录包含约 80 个活跃模型（2026-10-02 核实）。
+预设通过公开 `GET /v1/models` 自动刷新列表，仅保留活跃的 Chat Completions 模型（以及仅支持 Responses、并固定走 Responses 的 `openai/o3-pro`）。
+Sionic 提供的 `deepseek/deepseek-v4.1-flash-ultrafast` 和
+`z-ai/glm-5.3-flash-ultrafast` 排在最前。请在
+[OpenGateway 控制台](https://opengateway.ai/api-keys)创建密钥，再运行
+`ocx provider add opengateway` 或在控制台选择 **OpenGateway**。Chat 请求使用配置的
+Bearer 密钥；公开模型列表不能验证密钥有效性。
 
 MiniMax 和 MiniMax (CN) 的提供商卡片也会在配置的密钥有有效 Coding Plan 时显示用量。
 仪表盘读取 5 小时窗口，以及套餐提供时的每周窗口；这些仅用于展示，不会改变模型路由。

@@ -30,7 +30,10 @@ import { requestProxyStop } from "./stop-proxy";
 import { useCodexRestart } from "./use-codex-restart";
 import { confirmAction } from "./action-dialogs";
 import { hostOs, isDesktopShell, isExternalLink, openDesktopUpdatePage } from "./lib/desktop-shell";
+import { zoomManagedOn } from "./lib/desktop-zoom";
 import { useSidebarCollapse } from "./use-sidebar-collapse";
+import { useDesktopZoom } from "./use-desktop-zoom";
+import { DesktopZoomControl } from "./components/desktop-zoom-control";
 import { MainTopStrip, SidebarTopStrip } from "./components/app-titlebar";
 import { watchMacTitlebarMetrics, windowChromeHandlers } from "./lib/window-chrome";
 
@@ -212,6 +215,8 @@ export default function App() {
   const desktopShell = isDesktopShell();
   const { collapsed: navCollapsed, toggle: toggleNavCollapse } = useSidebarCollapse({ shortcut: desktopShell });
   const desktopMac = desktopShell && hostOs() === "macos";
+  const zoomManaged = desktopShell && zoomManagedOn(hostOs());
+  const desktopZoom = useDesktopZoom({ managed: zoomManaged });
   const appRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (desktopMac && appRef.current) return watchMacTitlebarMetrics(appRef.current);
@@ -484,6 +489,10 @@ export default function App() {
             aria-label={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`} title={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`}>
             <ThemeIcon /> <span className="mode">{t(THEME_TKEY[theme])}</span>
           </button>
+          {zoomManaged && (
+            <DesktopZoomControl percent={desktopZoom.percent} canZoomIn={desktopZoom.canZoomIn}
+              canZoomOut={desktopZoom.canZoomOut} onStep={desktopZoom.step} />
+          )}
           <div className="sidebar-action-row">
             <span className="sidebar-action-label">{t("dash.actions")}</span>
             <div className="sidebar-action-orbs">

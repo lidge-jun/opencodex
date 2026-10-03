@@ -17,6 +17,7 @@ import {
   setAllCodexAccountsCreditsAfterLimit,
   setCodexAccountCreditsAfterLimit,
 } from "../../src/codex/account-credit-use";
+import { setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota, handleCodexAuthAPI, updateAccountQuota } from "../../src/codex/auth-api";
@@ -64,6 +65,7 @@ function saveTestCredential(id: string): void {
 
 function recordWeekly(id: string, percent: number, resetAt?: number): void {
   updateAccountQuota(id, percent, resetAt);
+  setAccountQuotaFromParsed(id, { credits: { hasCredits: true, balance: 42.5, observedAt: Date.now() } });
 }
 
 async function putCredits(config: OcxConfig, body: unknown): Promise<Response> {
@@ -147,6 +149,16 @@ describe("codex credits after the usage limit", () => {
 
     expect(resolveCodexAccountForThread("bound", config)).toBe("saver");
   });
+
+  test.each([undefined, null, { hasCredits: true, balance: 42.5, observedAt: Date.now() - 300_001 }])(
+    "opt-in without fresh credit evidence cannot retain a full account: %j", credits => {
+      const config = makeConfig({ creditCodexAccountIds: ["spender"] });
+      recordWeekly("saver", 40, Date.now() + DAY_MS);
+      setAccountQuotaFromParsed("spender", { weeklyPercent: 100, weeklyResetAt: Date.now() + DAY_MS, credits });
+      expect(resolveCodexAccountForThread("no-fresh-credits", config)).toBe("saver");
+      expect(previewCodexAccountForRequest("no-fresh-credits", config)).toBe("saver");
+    },
+  );
 
   test("below 100% the default changes nothing", () => {
     const config = makeConfig();

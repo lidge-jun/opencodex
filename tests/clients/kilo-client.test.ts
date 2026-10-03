@@ -66,7 +66,8 @@ describe("kilo client config", () => {
     expect(provider.npm).toBe("@ai-sdk/openai-compatible");
     expect(provider.name).toBe("OpenCodex");
     expect(JSON.stringify(document)).not.toContain('"package"');
-    expect(JSON.stringify(provider.models)).not.toContain("variants");
+    // This fixture has no declared ladders; its models must not gain invented efforts.
+    for (const model of Object.values(provider.models)) expect(model.variants).toBeUndefined();
   });
 
   test("emits the exact documented provider shape for one routed model", () => {

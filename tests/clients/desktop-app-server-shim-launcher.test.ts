@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { OPENAI_TEAM_ID, untrustedChatgptBundleReason, type BundleTrustDeps } from "../../src/chatgpt/app-server-shim/bundle-trust";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   buildChatgptShimLauncher,
@@ -11,7 +11,7 @@ import {
   writeChatgptShimLauncher,
 } from "../../src/chatgpt/app-server-shim/launcher";
 import { selfLaunchArgv } from "../../src/lib/self-launch-argv";
-import { repoPath } from "../helpers/repo-root";
+import { helperPath, repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const bashAvailable = process.platform !== "win32"
@@ -170,5 +170,126 @@ describe("bundle trust before the launcher is written", () => {
     expect(untrustedChatgptBundleReason(root, binary, deps({ verify: 1 }))).toContain("code-signature");
     expect(untrustedChatgptBundleReason(root, binary, deps({ team: "ABCDE12345" }))).toContain("not signed by OpenAI");
     expect(untrustedChatgptBundleReason(root, "/tmp/codex", deps())).toContain("outside the bundle");
+  });
+});
+
+
+describe("restore validates the discovered app before any quit or open", () => {
+  const run = (scenario: Record<string, unknown>) => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-shim-command-"));
+    try {
+      writeFileSync(join(dir, "launcher.sh"), "preserve until restore succeeds");
+      const result = spawnSync(process.execPath, [helperPath("desktop-app-server-shim-command-child.ts"), dir, JSON.stringify(scenario)], {
+        encoding: "utf8", timeout: 10000, env: { ...process.env, CODEX_CLI_PATH: "inherited-override" },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      return { ...JSON.parse(result.stdout.trim().split("\n").at(-1)!), stderr: result.stderr } as {
+        code: number; calls: Array<{ command: string; args: string[]; override?: string }>;
+        launcherExists: boolean; root: string; shell: string; binary: string; stderr: string;
+      };
+    } finally { removeTreeWithRetry(dir); }
+  };
+  for (const trust of ["foreign-owner", "foreign-parent", "writable", "unsigned", "foreign-team", "symlink"]) {
+    test(`restore refuses ${trust} before quit or open`, () => {
+      const result = run({ trust, running: true, flag: false, missingBinary: true });
+      expect(result.code).toBe(1);
+      expect(result.launcherExists).toBe(true);
+      expect(result.stderr).toContain("Refusing to restore");
+      expect(result.calls.filter(call => ["pgrep", "ps", "/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toEqual([]);
+    });
+  }
+  test("valid restore works with the flag off and no bundled app-server", () => {
+    const result = run({ flag: false, missingBinary: true, running: true });
+    expect(result.code).toBe(0);
+    expect(result.launcherExists).toBe(false);
+    expect(result.calls.filter(call => call.command === "/usr/bin/codesign" && call.args[0] === "--verify").map(call => call.args.at(-1))).toEqual([result.root, result.shell]);
+    const quit = result.calls.findIndex(call => call.command === "/usr/bin/osascript");
+    const open = result.calls.findIndex(call => call.command === "/usr/bin/open");
+    expect(quit).toBeGreaterThan(0);
+    expect(open).toBeGreaterThan(quit);
+    expect(result.calls[open]).toEqual({ command: "/usr/bin/open", args: ["-a", result.root] });
+  });
+  test("admin-writable parents need a successful local admin-group lookup", () => {
+    const trusted = run({ adminParent: true });
+    expect(trusted.code).toBe(0);
+    expect(trusted.calls.find(call => call.command === "/usr/bin/dscl")?.args).toEqual([".", "-read", "/Groups/admin", "PrimaryGroupID"]);
+    const unknown = run({ adminParent: true, adminLookupFails: true });
+    expect(unknown.code).toBe(1);
+    expect(unknown.launcherExists).toBe(true);
+    expect(unknown.calls.some(call => call.command === "/usr/bin/open")).toBe(false);
+  });
+  test("failed open preserves the launcher", () => {
+    const result = run({ openFails: true });
+    expect(result.code).toBe(1);
+    expect(result.launcherExists).toBe(true);
+    expect(result.calls.some(call => call.command === "/usr/bin/open")).toBe(true);
+  });
+  test("no installed app still removes only the launcher and returns an error", () => {
+    const result = run({ noInstall: true });
+    expect(result.code).toBe(1);
+    expect(result.launcherExists).toBe(false);
+    expect(result.calls).toEqual([]);
+  });
+  test("status remains read-only even when bundle trust would fail", () => {
+    const result = run({ sub: "status", trust: "foreign-owner", running: true });
+    expect(result.code).toBe(0);
+    expect(result.launcherExists).toBe(true);
+    expect(result.calls.map(call => call.command)).toEqual(["pgrep", "ps"]);
+  });
+  test("launch still requires opt-in and an app-server binary", () => {
+    for (const scenario of [{ flag: false }, { flag: true, missingBinary: true }]) {
+      const result = run({ sub: "launch", ...scenario });
+      expect(result.code).toBe(1);
+      expect(result.calls).toEqual([]);
+    }
+    const result = run({ sub: "launch", flag: true });
+    expect(result.code).toBe(0);
+    expect(result.calls.filter(call => call.command === "/usr/bin/codesign" && call.args[0] === "--verify").map(call => call.args.at(-1))).toEqual([result.root, result.binary]);
+    expect(result.calls.find(call => call.command === "/usr/bin/open")?.args[2]).toBe("--env");
+  });
+});
+
+
+describe("bundle ancestor replacement boundary", () => {
+  const root = resolve("/Applications/ChatGPT.app");
+  const parentPath = dirname(root);
+  const shell = join(root, "Contents", "MacOS", "ChatGPT");
+  function check(parent: Partial<NonNullable<ReturnType<BundleTrustDeps["stat"]>>> = {}, adminGroupId: number | null = 80) {
+    const observed: string[] = [];
+    const reason = untrustedChatgptBundleReason(root, undefined, {
+      uid: 501, adminGroupId: adminGroupId ?? undefined,
+      stat(path) {
+        observed.push(path);
+        return { uid: path === shell || path.startsWith(`${root}${sep}`) || path === root ? 501 : 0,
+          gid: 80, mode: 0o755, isFile: path === shell, isDirectory: path !== shell, isSymbolicLink: false,
+          ...(path === parentPath ? parent : {}),
+        };
+      },
+      codesign: () => ({ status: 0, output: `TeamIdentifier=${OPENAI_TEAM_ID}\n` }),
+    });
+    return { reason, observed };
+  }
+  test("ordinary owned ancestry is checked through the filesystem root", () => {
+    const result = check();
+    expect(result.reason).toBeNull();
+    expect(result.observed.slice(-2)).toEqual([parentPath, dirname(parentPath)]);
+  });
+  test("root-owned admin-group installation directories retain compatibility", () => {
+    expect(check({ mode: 0o775 }).reason).toBeNull();
+    expect(check({ mode: 0o775, gid: 456 }, 456).reason).toBeNull();
+    expect(check({ mode: 0o775, gid: 20 }).reason).toContain("writable");
+    expect(check({ mode: 0o775 }, null).reason).toContain("writable");
+  });
+  test("trusted sticky parents protect an owned child; foreign owners do not", () => {
+    expect(check({ mode: 0o1777 }).reason).toBeNull();
+    expect(check({ uid: 501, mode: 0o1777 }).reason).toBeNull();
+    expect(check({ uid: 502, mode: 0o1777 }).reason).toContain("another user");
+  });
+  test("foreign-owned, writable, and symbolic-link ancestors are refused", () => {
+    expect(check({ uid: 502 }).reason).toContain("another user");
+    expect(check({ mode: 0o777 }).reason).toContain("writable");
+    expect(check({ uid: 501, mode: 0o775 }).reason).toContain("writable");
+    expect(check({ isSymbolicLink: true }).reason).toContain("ancestor directory");
   });
 });

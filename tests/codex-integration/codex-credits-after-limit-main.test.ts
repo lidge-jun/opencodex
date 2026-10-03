@@ -61,7 +61,8 @@ function config(): OcxConfig {
 function mainWeekly(percent: number, resetAt: number): void {
   const writer = captureMainQuotaWriter(accountId);
   if (!writer) throw new Error("fixture identity must be observed first");
-  setAccountQuotaFromParsed(MAIN, { weeklyPercent: percent, weeklyResetAt: resetAt }, undefined, writer);
+  setAccountQuotaFromParsed(MAIN, { weeklyPercent: percent, weeklyResetAt: resetAt,
+    credits: { hasCredits: true, balance: 42.5, observedAt: Date.now() } }, undefined, writer);
 }
 
 function addPoolAccount(cfg: OcxConfig): void {
@@ -119,6 +120,18 @@ test("a full main login allowed to use credits keeps serving", async () => {
   mainWeekly(100, Date.now() + DAY_MS);
   await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
     .resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
+});
+
+test("main credit consent without a fresh balance cannot release a full window", async () => {
+  const cfg = config();
+  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
+  mainWeekly(100, Date.now() + DAY_MS);
+  const writer = captureMainQuotaWriter(accountId)!;
+  setAccountQuotaFromParsed(MAIN, { credits: {
+    hasCredits: true, balance: 42.5, observedAt: Date.now() - 300_001,
+  } }, undefined, writer);
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+    .rejects.toBeInstanceOf(CodexMainAccountCreditsOffError);
 });
 
 test("by default a full main login is refused as a cooldown that names its reset", async () => {

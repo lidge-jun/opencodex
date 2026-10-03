@@ -196,7 +196,6 @@ export async function* runTurnWebSearchLoop(
   const { parsed, plan, abortSignal } = deps;
   const messages: OcxMessage[] = [...parsed.context.messages];
   const allTools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
-  const toolsNoWebSearch = (parsed.context.tools ?? []).filter(t => !t.webSearch);
   const failedQueries = new Set<string>();
   let searchesExecuted = 0;
   let executedSearchCount = 0;
@@ -469,9 +468,12 @@ export async function* runTurnWebSearchLoop(
       }
       const forceAnswer = searchesExecuted >= plan.maxSearches;
       // Loop only when the model's actionable output is purely web_search calls:
-      // a real tool call belongs to Codex, and a budget-exhausted turn must
-      // answer from what it already gathered.
-      const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceAnswer;
+      // a real tool call belongs to Codex. The budget check happens per query
+      // inside runSearchCall, so a forced pass that emits one more web_search
+      // call is served the limit-reached result instead of failing the turn
+      // (#6464: stripping the declaration makes some models emit the raw call
+      // as visible text).
+      const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall;
       if (!shouldLoop) {
         // A forced-answer pass that ends `done` must have produced usable output —
         // never a malformed tool call, and never silence. A truncated/refusal
@@ -497,6 +499,7 @@ export async function* runTurnWebSearchLoop(
               eventTypes: [...new Set(split.passthrough.map(event => event.type))],
             }));
             if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries === 0) {
+              if (i + 1 === HARD_CAP) break;
               emptyAnswerRetries++;
               console.warn("[web-search-runturn] empty forced answer — retrying once without tools");
               yield { type: "heartbeat" };
@@ -540,6 +543,7 @@ export async function* runTurnWebSearchLoop(
         return;
       }
 
+      if (i + 1 === HARD_CAP) break;
       const nextForceAnswer = searchesExecuted >= plan.maxSearches;
       const iterParsed: OcxParsedRequest = {
         ...parsed,
@@ -548,15 +552,14 @@ export async function* runTurnWebSearchLoop(
           messages: nextForceAnswer && executedSearchCount > 0
             ? [...messages, forcedAnswerNudge()]
             : messages,
-          tools: nextForceAnswer ? toolsNoWebSearch : allTools,
+          tools: allTools,
         },
       };
       currentParsed = iterParsed;
       source = deps.dispatch(iterParsed);
     }
 
-    // Safety net: the hard cap should be unreachable (forceAnswer ends the loop
-    // first), but never hang a client stream if an adapter misbehaves.
+    // Repeated over-budget calls terminate instead of leaving an unfinished stream.
     yield { type: "error", message: "web-search runTurn loop exceeded its iteration cap" };
   } catch (error) {
     if (!isTranslatorBudgetExceededError(error)) throw error;

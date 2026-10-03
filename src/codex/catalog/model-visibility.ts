@@ -1,4 +1,5 @@
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
+import { antigravityFamilyDisabled, collapseAntigravityPublicModels, projectAntigravitySelectedModels } from "../../providers/antigravity-effort-families";
 import { XAI_OAUTH_FAST_VARIANT_IDS } from "../../providers/xai-fast-model";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { execFileSync } from "node:child_process";
@@ -267,7 +268,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
 
 export function filterCatalogVisibleModels(
   models: CatalogModel[],
-  config: Pick<OcxConfig, "disabledModels" | "providers">,
+  config: Pick<OcxConfig, "disabledModels" | "providers" | "modelDiscovery">,
 ): CatalogModel[] {
   const disabled = new Set(config.disabledModels ?? []);
   const allowByProvider = new Map<string, Set<string>>();
@@ -289,12 +290,14 @@ export function filterCatalogVisibleModels(
     // Two catalog stages with different equivalence relations is the exact bug class
     // this change exists to remove.
     if (Array.isArray(sel) && sel.length > 0) {
-      allowByProvider.set(name, new Set(sel.map(model => slugEquivalenceKey(routedSlug(name, model)))));
+      allowByProvider.set(name, new Set(projectAntigravitySelectedModels(name, sel, models)
+        .map(model => slugEquivalenceKey(routedSlug(name, model)))));
     }
   }
-  return models.filter(m => {
+  return collapseAntigravityPublicModels(models).filter(m => {
     if (initialModelSelectionPending(config.providers[m.provider])) return false;
     if (config.providers[m.provider]?.disabled === true) return false;
+    if (antigravityFamilyDisabled(config, m, models)) return false;
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels may be stored raw (canonical) or encoded (legacy UI writes).
     for (const stored of disabled) {

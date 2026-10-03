@@ -1,3 +1,4 @@
+import { hasSpendableCodexCredits } from "./quota-types";
 import { noteMainAccountActivity } from "./main-account-external-usage";
 import { codexAccountPriorityFailbackEnabled } from "./account-priority";
 import type { PoolQuotaWriter } from "./quota-types";
@@ -102,7 +103,7 @@ import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
   const threshold = getEffectiveCodexAutoSwitchThreshold(config, MAIN_CODEX_ACCOUNT_ID);
   if (threshold <= 0) return true;
-  const usage = computeCodexUsageScore(getAccountQuota(MAIN_CODEX_ACCOUNT_ID));
+  const usage = computeCodexUsageScore(getAccountQuota(MAIN_CODEX_ACCOUNT_ID), undefined, Date.now(), codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID));
   return usage >= CODEX_UNKNOWN_USAGE_SCORE || usage < threshold;
 }
 
@@ -530,7 +531,7 @@ export class CodexMainAccountCreditsOffError extends CodexAccountCooldownError {
     super(MAIN_CODEX_ACCOUNT_ID, resetAt ?? 0);
     this.name = "CodexMainAccountCreditsOffError";
     this.resetAt = resetAt;
-    this.message = "Codex main account reached its usage limit, and spending ChatGPT credits is off for it."
+    this.message = "Codex main account reached its usage limit, and spending ChatGPT credits is off or no fresh spendable balance is available."
       + " Choose another account, wait for the limit to reset, or allow the main account under \"Use credits\" in Codex Auth.";
   }
 }
@@ -723,7 +724,8 @@ export function unwrapUpstreamRetryEvidenceError(error: unknown): unknown {
  * file, which several callers are forbidden to open, so every long window counts instead.
  */
 function mainCreditsHoldResetAt(config: Pick<OcxConfig, "creditCodexAccountIds">): number | undefined {
-  if (codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)) return undefined;
+  if (codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)
+    && hasSpendableCodexCredits(getMainPolicyQuota())) return undefined;
   return codexUsageLimitResetAt(getMainPolicyQuota(), undefined, Date.now());
 }
 

@@ -81,6 +81,18 @@ export interface IntegrationStatus {
   profileId?: number;
   enabled?: boolean;
   raycast?: RaycastInstall;
+  droidReasoning?: DroidReasoningStatus;
+}
+
+export interface DroidReasoningModel {
+  model: string;
+  label: string;
+  efforts: string[];
+}
+
+export interface DroidReasoningStatus {
+  models: DroidReasoningModel[];
+  defaults: Record<string, string>;
 }
 
 /** A candidate issue can block adding Kilo while removal still targets its recorded file. */
@@ -165,6 +177,7 @@ export interface ToggleIntegrationOptions {
   overwriteConflict?: boolean;
   profileId?: number;
   binding?: IntegrationPlanBinding;
+  droidReasoningDefaults?: Record<string, string>;
 }
 
 export interface RestoreIntegrationOptions {
@@ -465,9 +478,14 @@ export async function previewIntegrationMutation(
   operation: Exclude<IntegrationPlanOperation, "restore">,
   signal?: AbortSignal,
   profileId?: number,
+  droidReasoningDefaults?: Record<string, string>,
 ) {
   const path = profileId === undefined ? "/api/client-integrations/preview" : `${profilePath(profileId)}/preview`;
-  const requestBody = profileId === undefined ? { clientId: client, operation } : { operation };
+  const requestBody = {
+    ...(profileId === undefined ? { clientId: client } : {}),
+    operation,
+    ...(client === "droid" && droidReasoningDefaults !== undefined ? { droidReasoningDefaults } : {}),
+  };
   const plan = parseIntegrationMutationPlan(await readResponse<unknown>(await fetch(`${apiBase}${path}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody), signal,
   })));
@@ -492,14 +510,15 @@ export async function previewIntegrationRestore(
 }
 
 export async function toggleIntegration(apiBase: string, client: FileIntegrationClientId, options: ToggleIntegrationOptions) {
-  const { enabled, signal, overwriteConflict, profileId, binding } = options;
+  const { enabled, signal, overwriteConflict, profileId, binding, droidReasoningDefaults } = options;
   const expectedOperation: IntegrationPlanOperation = enabled ? (overwriteConflict ? "overwrite" : "apply") : "disable";
   let result: IntegrationToggleResult | { ok: false; message?: string; results?: unknown };
   try {
     result = await readResponse<IntegrationToggleResult | { ok: false; message?: string; results?: unknown }>(await fetch(`${apiBase}${clientPath(client, profileId)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled, ...(overwriteConflict === true ? { overwriteConflict: true } : {}), ...binding }),
+      body: JSON.stringify({ enabled, ...(overwriteConflict === true ? { overwriteConflict: true } : {}), ...binding,
+        ...(client === "droid" && droidReasoningDefaults !== undefined ? { droidReasoningDefaults } : {}) }),
       signal,
     }));
   } catch (error) {

@@ -147,7 +147,6 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/injection-model", module: "server/management/agent-settings-routes", mutates: false },
   { method: "POST", path: "/api/injection-model/suggest", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/subagent-model-fallback", module: "server/management/agent-settings-routes", mutates: false },
-  { method: "GET", path: "/api/subagent-models", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/v2", module: "server/management/agent-settings-routes", mutates: false },
   { method: "POST", path: "/api/claude-desktop/apply", module: "server/management/agent-settings-routes", mutates: true },
   { method: "POST", path: "/api/grok/apply", module: "server/management/agent-settings-routes", mutates: true },
@@ -175,8 +174,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/grok/selection", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/injection-model", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/subagent-model-fallback", module: "server/management/agent-settings-routes", mutates: true },
-  { method: "PUT", path: "/api/subagent-models", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/v2", module: "server/management/agent-settings-routes", mutates: true },
+  // server/management/subagent-model-routes
+  { method: "GET", path: "/api/subagent-models", module: "server/management/subagent-model-routes", mutates: false },
+  { method: "PUT", path: "/api/subagent-models", module: "server/management/subagent-model-routes", mutates: true },
   // server/management/codex-agent-role-routes
   { method: "GET", path: "/api/codex-agent-roles", module: "server/management/codex-agent-role-routes", mutates: false },
   { method: "POST", path: "/api/codex-agent-roles/auto-assign", module: "server/management/codex-agent-role-routes", mutates: false, mechanism: "path-constant" },

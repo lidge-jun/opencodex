@@ -9,6 +9,7 @@ import IntegrationStateBadge from "./IntegrationStateBadge";
 import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import RestoreDialog from "./RestoreDialog";
 import RaycastPlanNotice from "./RaycastPlanNotice";
+import DroidReasoningDefaultsPanel from "./DroidReasoningDefaultsPanel";
 import { RollbackHistory } from "./RollbackHistory";
 import { describeRefusal } from "./refusal-copy";
 import {
@@ -108,22 +109,32 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   droid: "integrations.tab.droid",
 };
 
-export default function FileIntegrationPage({
-  apiBase,
-  client,
-  active = true,
-  profileId,
-  profileLabel,
-}: {
+type FileIntegrationPageProps = {
   apiBase: string;
   client: FileIntegrationClientId;
   active?: boolean;
   profileId?: number;
   profileLabel?: string;
-}) {
+};
+
+export default function FileIntegrationPage(props: FileIntegrationPageProps) {
+  return <FileIntegrationControls key={JSON.stringify([props.apiBase, props.client, props.profileId])} {...props} />;
+}
+
+function FileIntegrationControls({
+  apiBase,
+  client,
+  active = true,
+  profileId,
+  profileLabel,
+}: FileIntegrationPageProps) {
   const t = useT();
   const scopeKey = profileId === undefined ? client : `${client}:${profileId}`;
   const [pending, setPending] = useState(false);
+  const [droidReasoningDraft, setDroidReasoningDraft] = useState<{
+    scopeKey: string;
+    values: Record<string, string>;
+  } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
   /* The row awaiting delete confirmation. */
@@ -133,6 +144,7 @@ export default function FileIntegrationPage({
     plan: IntegrationMutationPlan | null;
     loading: boolean;
     failure: string | null;
+    droidReasoningDefaults?: Record<string, string>;
   } | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewGenerationRef = useRef(0);
@@ -182,8 +194,21 @@ export default function FileIntegrationPage({
     void historyResource.refresh();
   };
 
-  const requestMutation = async (operation: Exclude<IntegrationPlanOperation, "restore">) => {
+  const resetDroidDraft = () => {
+    setDroidReasoningDraft(null);
+    refresh();
+  };
+
+  const requestMutation = async (
+    operation: Exclude<IntegrationPlanOperation, "restore">,
+    reasoningDefaults = client === "droid" && operation !== "disable"
+      ? (droidReasoningDraft?.scopeKey === scopeKey
+        ? droidReasoningDraft.values
+        : undefined)
+      : undefined,
+  ) => {
     if (!status || pending || plannedMutation) return;
+    const defaultsSnapshot = reasoningDefaults === undefined ? undefined : { ...reasoningDefaults };
     const controller = new AbortController();
     const generation = previewGenerationRef.current + 1;
     previewGenerationRef.current = generation;
@@ -191,10 +216,10 @@ export default function FileIntegrationPage({
     previewAbortRef.current = controller;
     setPlannedMutation({ operation, plan: null, loading: true, failure: null });
     try {
-      const plan = await previewIntegrationMutation(apiBase, client, operation, controller.signal, profileId);
+      const plan = await previewIntegrationMutation(apiBase, client, operation, controller.signal, profileId, defaultsSnapshot);
       if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
       previewAbortRef.current = null;
-      setPlannedMutation({ operation, plan, loading: false, failure: null });
+      setPlannedMutation({ operation, plan, loading: false, failure: null, droidReasoningDefaults: defaultsSnapshot });
     } catch (error) {
       if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
       previewAbortRef.current = null;
@@ -224,8 +249,12 @@ export default function FileIntegrationPage({
         overwriteConflict: plan.operation === "overwrite",
         profileId,
         binding: bindingFor(plan),
+        ...(plan.operation !== "disable" && plannedMutation?.droidReasoningDefaults !== undefined
+          ? { droidReasoningDefaults: plannedMutation.droidReasoningDefaults }
+          : {}),
       });
       setPlannedMutation(null);
+      if (client === "droid") setDroidReasoningDraft(null);
     } catch (error) {
       refresh();
       if (error instanceof IntegrationApiError && error.stalePlan) throw error;
@@ -314,6 +343,18 @@ export default function FileIntegrationPage({
         </button>
       )}
 
+      {client === "droid" && status.droidReasoning && (
+        <DroidReasoningDefaultsPanel
+          reasoning={status.droidReasoning}
+          defaults={droidReasoningDraft?.scopeKey === scopeKey
+            ? droidReasoningDraft.values
+            : status.droidReasoning.defaults}
+          disabled={pending || plannedMutation !== null}
+          onChange={values => setDroidReasoningDraft({ scopeKey, values })}
+          onReview={() => void requestMutation("apply")}
+        />
+      )}
+
       {/*
         Conflict used to be a dead end: the switch locks, the page explains why,
         and the only way forward was to open the file and edit it by hand -- which
@@ -385,7 +426,7 @@ export default function FileIntegrationPage({
           row={restoring}
           profileId={profileId}
           onClose={() => setRestoring(null)}
-          onRestored={refresh}
+          onRestored={() => { if (client === "droid") resetDroidDraft(); else refresh(); }}
           onReconcile={refresh}
         />
       )}

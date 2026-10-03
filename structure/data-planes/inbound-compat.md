@@ -81,6 +81,26 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Chat Completions inbound native path
 
+### Droid request defaults
+
+`src/server/droid-reasoning-default.ts` reads the model-scoped
+`x-opencodex-droid-default-effort` preference at Chat ingress for both native and
+translated routes. A canonical value fills `reasoning_effort` only when neither
+that property nor nested `reasoning.effort` is present. A concrete route validates
+the preference against that model's effective reasoning ladder. Combo and policy
+routes retain it as logical request intent until each concrete attempt applies the
+existing target-specific reasoning normalization, so an incompatible first target
+cannot discard it for a compatible fallback. With no configured or metadata ladder,
+the routed catalog's canonical fallback ladder applies; an explicit empty per-model
+ladder stays empty. Unsupported or invalid defaults have no effect; even an explicit
+null or invalid effort suppresses the default and retains the existing request
+semantics. Synthetic effort rows keep their selected effort. Provider headers do
+not forward this internal preference. Existing pins and caps run afterward with
+their usual authority. The [Droid integration](../clients/integrations.md#droid-reasoning-defaults)
+owns the persisted per-model values.
+
+### Route selection
+
 `POST /v1/chat/completions` sends eligible `openai-chat` routes directly to the provider's Chat
 Completions endpoint. Route selection reads the raw Chat body and the native request keeps that body
 as its wire source; a Responses projection is constructed only after the native route is declined
@@ -146,7 +166,7 @@ which also decides which role that slot carries. Regression coverage is in
 `tests/responses/chat-inbound-developer-position.test.ts`, which compares the final upstream body
 on the native Chat route, a combo route and the Responses endpoint.
 
-The direct SSE relay accepts CRLF and arbitrary transport chunk boundaries while retaining at most
+The direct SSE relay accepts CR, LF and CRLF across arbitrary transport chunk boundaries while retaining at most
 one bounded event. EOF with an unterminated event and an event above the translator limit are typed
 upstream failures, never successful partial completions. Provider-controlled structured error
 messages are redacted before either JSON or SSE reaches the client. The native path uses the same
@@ -165,7 +185,7 @@ allowance; comments, role-only frames, empty deltas, and usage alone do not. Dow
 pauses this wait budget. A stall emits a Chat error with `upstream_stall_timeout` and logs 502;
 the non-streaming endpoint returns HTTP 502 rather than a successful partial result.
 
-`src/chat/outbound.ts` collects LF/CRLF, multiline data, and split UTF-8 through the shared SSE
+`src/chat/outbound.ts` collects CR/LF/CRLF, multiline data, and split UTF-8 through the shared SSE
 block buffer and tracks appended output bytes incrementally. A caller cancellation before a native
 terminal returns 499 / `client_cancelled`; an already accepted terminal keeps its result. Reader,
 timer, turn, and translator ownership are released through the existing lifecycle.

@@ -198,7 +198,10 @@ une configuration cliente.
 
 **Pour `ocx opencode`, le bloc fournisseur du lanceur l'emporte.** Le lanceur injecte
 `provider.opencodex` par `OPENCODE_CONFIG_CONTENT`, qui est prioritaire sur la même entrée enregistrée sur
-le disque ; le reste de votre configuration opencode continue de s'appliquer normalement. Le commutateur
+le disque ; le reste de votre configuration opencode continue de s'appliquer normalement. Ces blocs sont
+construits à partir des mêmes métadonnées canoniques effectives que les exports : capacités, choix de
+raisonnement et limites connues sont repris tels quels, la limite de sortie recourant au besoin au
+repli de 32000 exigé par le schéma, borné au contexte. Le commutateur
 décrit ici est celui qui compte lorsque vous lancez directement `opencode`.
 
 ## Depuis le terminal
@@ -231,10 +234,12 @@ ocx mcode
 ```
 
 Une fois l’intégration connectée, `ocx sync` et `POST /api/sync` actualisent les catalogues MCode,
-Pi, Aside, Raycast et omo gérés. Le démarrage du proxy actualise aussi le catalogue Raycast géré.
-Les changements de visibilité, de fournisseur ou de préréglage actualisent Pi, Aside, Raycast et omo.
-Les blocs absents, modifiés par un tiers, non sûrs ou supprimés manuellement restent intacts ;
-réactivez explicitement l’intégration lorsque vous souhaitez la reconnecter.
+Pi, Aside, Raycast, omo, OpenCode et Kilo gérés. Le démarrage du proxy actualise aussi le
+catalogue Raycast géré. Les changements de visibilité, de fournisseur ou de préréglage actualisent
+Pi, Aside, Raycast, omo, OpenCode et Kilo. Les blocs absents, modifiés par un tiers, non sûrs ou
+supprimés manuellement restent intacts ; réactivez explicitement l’intégration lorsque vous
+souhaitez la reconnecter. Démarrez une nouvelle session Pi, OpenCode ou Kilo pour charger le
+fichier actualisé.
 
 Le CLI distinct de la plateforme MiniMax (`mmx`) n’est pas une intégration à commutateur de fichier. Ses
 commandes textuelles utilisent le point de terminaison compatible avec Anthropic de MiniMax ; OpenCodex
@@ -304,7 +309,7 @@ ocx integration client restore --op <operation-id>
 
 ## Kilo
 
-Kilo n’écrit que `provider.opencodex` dans le premier fichier global existant sous `~/.config/kilo` (`XDG_CONFIG_HOME` déplace ce répertoire ; `kilo.jsonc` est créé si aucun candidat n’existe). Si un autre fichier candidat définit aussi `provider.opencodex`, l’état signale un conflit et Appliquer refuse. Les autres clés restent inchangées. Appliquer réécrit tout le fichier ; commentaires et virgules finales ne sont pas conservés. Sélectionnez `opencodex/<modèle>` dans Kilo.
+Kilo n’écrit que `provider.opencodex` dans le premier fichier global existant sous `~/.config/kilo` (`XDG_CONFIG_HOME` déplace ce répertoire ; `kilo.jsonc` est créé si aucun candidat n’existe). Si un autre fichier candidat définit aussi `provider.opencodex`, l’état signale un conflit et Appliquer refuse. Les autres clés restent inchangées. Les choix de raisonnement par modèle sont écrits sous forme de carte de variantes dans le bloc fournisseur, à partir des mêmes métadonnées canoniques effectives que l’export OpenCode. `ocx sync` et `POST /api/sync` actualisent un bloc Kilo possédé par OpenCodex ; démarrez une nouvelle session Kilo pour charger le fichier actualisé. Appliquer réécrit tout le fichier ; commentaires et virgules finales ne sont pas conservés. Sélectionnez `opencodex/<modèle>` dans Kilo.
 
 Désactiver peut retirer le bloc appartenant à OpenCodex du fichier enregistré même si un autre candidat est en conflit ou ne peut pas être analysé ; cet autre fichier reste intact.
 

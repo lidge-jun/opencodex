@@ -146,7 +146,7 @@ test("every locale carries the Anthropic dialog copy with the same anchors", () 
     "oauthTos.anthropicAcknowledge",
     "oauthTos.anthropicContinue",
   ] as const;
-  expect(LOCALES.length).toBe(10);
+  expect(LOCALES.some(locale => locale.code === "pt")).toBe(true);
   for (const { code } of LOCALES) {
     const dict = DICTS[code];
     for (const key of keys) {

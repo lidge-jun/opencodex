@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { win32 } from "node:path";
 
 const CMD_META = /([()%!^"`<>&|;, *?])/g;
@@ -38,11 +38,41 @@ export function resolveNpmCommand(
 ) {
   if (platform !== "win32") return "npm";
   const exists = deps.exists ?? existsSync;
+  const realpath = deps.realpath ?? realpathSync.native;
   const cwd = deps.cwd ?? process.cwd();
   const trustedRoots = [env.APPDATA, env.LOCALAPPDATA, env.ProgramFiles, env["ProgramFiles(x86)"],
     env.USERPROFILE && win32.join(env.USERPROFILE, "scoop", "shims")]
     .filter(root => typeof root === "string" && win32.isAbsolute(root));
   const trustedEntry = entry => trustedRoots.some(root => isInside(root, entry) && !isInside(root, cwd));
+  // Scoop installs Node's npm in the app tree, not in scoop/shims. Admit only
+  // the two Node apps' current npm directories, never arbitrary Scoop apps or
+  // a launch directory inside the installation itself.
+  const scoopNodeRoots = typeof env.USERPROFILE === "string" && win32.isAbsolute(env.USERPROFILE)
+    ? ["nodejs", "nodejs-lts"].map(app => win32.join(env.USERPROFILE, "scoop", "apps", app))
+    : [];
+  const trustedScoopNodeEntry = (entry, candidate) => {
+    const app = scoopNodeRoots.find(root => {
+      const current = win32.join(root, "current");
+      return isSamePath(current, entry) || isSamePath(win32.join(current, "bin"), entry);
+    });
+    if (!app) return null;
+    try {
+      const appPath = realpath(app);
+      const currentPath = realpath(win32.join(app, "current"));
+      const entryPath = realpath(entry);
+      const candidatePath = realpath(candidate);
+      const cwdPath = realpath(cwd);
+      const persistBin = win32.join(realpath(env.USERPROFILE), "scoop", "persist", win32.basename(app), "bin");
+      const insideInstall = isInside(currentPath, entryPath);
+      const persistedBin = isSamePath(entry, win32.join(app, "current", "bin"))
+        && isSamePath(entryPath, persistBin);
+      return !isSamePath(appPath, currentPath) && isInside(appPath, currentPath)
+        && (insideInstall || persistedBin) && isInside(entryPath, candidatePath)
+        && !isInside(currentPath, cwdPath) && !isInside(entryPath, cwdPath);
+    } catch {
+      return false;
+    }
+  };
   const extensions = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
     .split(";")
     .filter(Boolean);
@@ -54,10 +84,12 @@ export function resolveNpmCommand(
   for (const entry of pathEntries) {
     if (!win32.isAbsolute(entry)) continue;
     if (isSamePath(entry, cwd)) continue;
-    if (isInside(cwd, entry) && !trustedEntry(entry)) continue;
     for (const extension of extensions) {
       const candidate = win32.join(entry, `npm${extension.toLowerCase()}`);
-      if (exists(candidate)) return win32.resolve(candidate);
+      if (!exists(candidate)) continue;
+      const scoopTrust = trustedScoopNodeEntry(entry, candidate);
+      if (scoopTrust === false || (scoopTrust === null && isInside(cwd, entry) && !trustedEntry(entry))) continue;
+      return win32.resolve(candidate);
     }
   }
   return null;

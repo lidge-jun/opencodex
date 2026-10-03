@@ -66,6 +66,11 @@ if it fails, use **Retry** to resolve the current runtime again.
 
 On macOS, closing the dashboard keeps the app running in the menu bar. Open OpenCodex again from Dock or Finder to restore the dashboard without restarting the proxy.
 
+On Windows, **Start at Login** quotes the executable path in the current-user startup
+registration, including installations under `Program Files`. Previously enabled
+registrations are updated once on launch. Startup entries you disabled in the tray
+or Task Manager remain disabled.
+
 ## Startup safety on macOS
 
 Startup safety reports **Desktop app** protection when OpenCodex's recorded ownership,
@@ -77,6 +82,16 @@ and launcher installation or repair stays disabled while that ownership remains;
 
 Normal desktop updates replace the bundled CLI with the fixed startup probe. No local
 patch needs to be preserved across an update.
+
+## Zoom
+
+On macOS and Linux, Cmd (macOS) or Ctrl (Linux) with `+`, `-` and `0`, or Ctrl with the mouse wheel,
+zooms the window between 50% and 300% in 10% steps, and `0` returns to 100%. The sidebar shows the
+same level with `-`, `+` and a reset button beside the theme and language rows. The level is
+remembered and applied again the next time the app starts. The dashboard comes from the proxy the
+app is attached to, so an app attached to an older proxy keeps the earlier behaviour (20% steps, not
+remembered, no sidebar control) until that proxy is updated. Windows uses the browser engine's own
+zoom, which is not remembered.
 
 ## Keeping the proxy running
 
