@@ -2,9 +2,9 @@
 
 The [fixed scope](000_scope.md) contains 81 first-parent landings:
 **68 + 11 + 2**. Tables preserve first-parent landing order, oldest first.
-The 68-entry inventory fills the source record's coverage gap; “otherwise
-unrecorded” refers to the six units listed below, not an assertion that no
-other document anywhere mentions these changes.
+The 68-entry inventory covers landings outside the six units listed below
+and the two release dev-opens. It does not assert that no other document
+mentions these changes.
 
 ## 68 landings recorded here
 
@@ -115,7 +115,6 @@ does not mark its remaining work complete.
 | [#6351](https://github.com/lidge-jun/opencodex/pull/6351) | [`64294638a6`](https://github.com/lidge-jun/opencodex/commit/64294638a69e25ca0c7a4e2102e2349973161f71) | chore(release): open dev at 2.76.0 before releasing 2.75.0 |
 | [#6462](https://github.com/lidge-jun/opencodex/pull/6462) | [`b4616be1e4`](https://github.com/lidge-jun/opencodex/commit/b4616be1e4db9e7178fd28cb19d4c2269abc2ba7) | chore(release): open dev at 2.77.0 before releasing 2.76.0 |
 
-The source's 69-row wave inventory included #6462. Removing that dev-open
-leaves the 68 entries above; #6351 is also counted only in the dev-open
-category. Follow-up landings such as #6412, #6413 and #6419 remain in the
+Both #6351 and #6462 are counted only in the dev-open category. Follow-up
+landings such as #6412, #6413 and #6419 remain in the
 68-entry inventory even though they relate to a separately documented unit.
