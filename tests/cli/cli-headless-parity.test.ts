@@ -475,6 +475,7 @@ function fakeRuntime(responder?: (req: Request, body: unknown) => unknown) {
       const custom = responder?.(req, body);
       if (custom instanceof Response) return custom;
       if (custom !== undefined) return Response.json(custom);
+      if (req.method === "PATCH" && url.pathname === "/api/providers") return Response.json({ success: true, name: url.searchParams.get("name"), disabled: false, hasApiKey: false, catalogRefresh: null });
       return Response.json({ ok: true });
     },
   });

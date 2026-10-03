@@ -137,8 +137,9 @@ stderr and returns 4/5/1. Do not parse stdout for an error envelope that is not 
 
 ## Saved, applied, skipped and partial
 
-- Local `provider add <name> --json` returns `needsSync: true`. It returns before the
-  human-output `--sync` path; even both flags together do not prove live apply.
+- Local `provider add <name> --json` returns `needsSync: true` unless an explicitly
+  requested `--sync` succeeds with `sync.status: "applied"` and `sync.ok: true`.
+  JSON output does not suppress sync. `sync` is omitted when not requested.
 - `models preset apply` can return `fallback: "preset-empty"`; selection is then
   unchanged. Read `models selected <provider> --json` to check the effective list.
 - Client integration results can preserve saved intent while reporting individual
@@ -149,3 +150,57 @@ stderr and returns 4/5/1. Do not parse stdout for an error envelope that is not 
 A local save or an accepted update is not proof that a client has reloaded its
 files. Do not automatically repeat a write whose apply or transport outcome is
 uncertain; read back first and preserve the reported limitations.
+
+## Provider write receipts
+
+Live add, remove, default selection, pacing and batch apply retain a validated
+public receipt. Fields vary by operation: `name`, `defaultProvider`,
+`droppedCustomModels`, `disabled`, `hasApiKey`, `xaiResponsesOptInState`,
+`dependentShadowIntercept` and `catalogRefresh` are optional. These examples are
+complete possible receipts, not a promise that every operation has each field.
+
+Saved and catalog committed (exit 0):
+
+```json
+{"success":true,"name":"example","catalogRefresh":{"status":"committed","changed":true,"degraded":false,"notices":[]}}
+```
+
+Saved but not converged (exit 1, still JSON on stdout):
+
+```json
+{"success":true,"name":"example","catalogRefresh":{"status":"skipped","reason":"busy","retryable":true}}
+```
+
+A failed catalog refresh also exits 1. `committed` can report `degraded: true`
+and notices; preserve those qualifications. `skipped` reasons `busy`, `stale`,
+`refused` and `catalog-unavailable` mean convergence remains pending. An absent,
+null or `skipped/not-requested` refresh can exit 0 without establishing a client
+sync. `retryable: true` is not authority to repeat the provider write.
+
+Local add has a different receipt: `action`, `provider`, `adapter`, `baseUrl`,
+`defaultModel`, `isDefault`, `source`, `modelSelection`, and `needsSync`. Requested
+sync adds `sync: {status, ok}`. A stopped proxy yields `sync: {"status":"not-running",
+"ok":false}`, `needsSync: true` and exit 1; the local provider is still saved.
+`failed` and `refused` also return nonzero. `skipped` or `catalog-only` with
+`ok: true` may exit 0 while retaining `needsSync: true`.
+
+## Provider editor and pacing reads
+
+`provider snapshot --json` returns exactly `{defaultProvider, providers}`: a
+redacted, validated editor document, with no receipt wrapper. Keep it unchanged
+as a batch baseline. Credentials, `headers` and GUI-only markers are not editable
+fields; raw config export is a separate human-only handoff.
+
+`provider pacing <name> --json` separates stored rules from runtime observations:
+
+```json
+{"provider":"example","rules":null,"status":{"provider":"example","enabled":false,"queued":0,"nextSlotInMs":0}}
+```
+
+`rules: null` means unconfigured, not a failed read. `status` can also include
+`inFlight`, `lastStartedAt` and `lastModelId`; it is not an editable rules object.
+HTTP errors still produce fixed prose on stderr and nonzero exit, not a JSON
+error envelope. A stale editor baseline returns exit 5; see
+[failure recovery](04_failure_semantics.md#provider-save-and-convergence-failures).
+
+Local requested sync also reports `configApplied` and `catalog: {exists,written,cacheSynced,converged}` when the backend returned a result. Its normalized `ok` requires catalog convergence for applied/catalog-only results. A successful config injection with a failed or refused catalog keeps `needsSync: true` and exits 1. An unchanged existing catalog can have `written: false` and `cacheSynced: false` while still converged; write counts alone do not establish failure. Raw backend warning strings and private paths are not emitted.

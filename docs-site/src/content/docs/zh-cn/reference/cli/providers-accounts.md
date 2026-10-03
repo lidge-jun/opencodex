@@ -15,7 +15,7 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 | 子命令 | 支持的标志 | 操作 |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | 列出已配置的提供方以及剩余的注册表条目。 `--jsonl` 为每个已配置的提供方输出一行 JSON 对象。 |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 添加一个注册表/自定义提供方。`--force` 会覆盖；`--sync` 会在有人类输出模式运行的代理上刷新配置。 |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 保存到本地。`--force` 允许覆盖；`--sync` 在 JSON 和普通输出模式下均会尝试同步。 |
 | `edit <name>` | 提供方字段标志，`--headers <json>`，`--json` | 在不替换密钥池的情况下，编辑经过校验的在线提供方字段。`--headers` 会合并自定义请求头；传入 `{}` 或 `-` 可清空。 |
 | `test <name>` | `--json` | 探测真实的上游模型端点。 |
 | `show <name>` | `--json` | 显示已屏蔽 API 密钥的配置。 |
@@ -25,6 +25,8 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 | `quota` | `--refresh`, `--json` | 读取提供方配额报告。 |
 | `presets` | `--json` | 列出仪表盘提供方预设。 |
 | `account-mode` | `pool`, `direct`, `--json` | 选择 Codex 账号的池化或直连路由。 |
+
+默认的 `add`、`remove` 和 `set-default` 修改本地配置。修改运行中的代理需加 `--live`，在线删除还需 `--yes`。`--sync --json` 同样会在保存后尝试同步；失败时保留保存结果，以非零状态退出，并返回 `needsSync: true`。`--live` 不能与 `--sync` 同用。pacing 和 snapshot/apply 操作见[英文指南](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)。
 
 ```bash
 ocx provider list --json
@@ -350,7 +352,7 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 | --- | --- | --- |
 | `list` (默认) | `--provider <name>`, `--json` | 列出已配置提供方中预置的模型。 |
 | `live` | `--provider <name>`, `--json` | 读取运行中的目录，包括运行时发现的模型。各行会标记为 `native`/`routed`、`custom`，以及 `enabled`/`disabled`。 |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 注册一个提供方目录未公布的模型。 |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 保存到本地。`--force` 允许覆盖；`--sync` 在 JSON 和普通输出模式下均会尝试同步。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 编辑自定义模型。`-` 会清空字段；`0` 会清空上下文窗口。 |
 | `remove <custom-id\|provider/modelId>` | `--yes` | 删除一个自定义模型。当 stdin 不是交互式终端时，必须提供 `--yes`。 |
 | `list-custom` | `--json` | 显示所有自定义模型，以及其他子命令所使用的 `custom-id`。 |

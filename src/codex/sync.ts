@@ -35,8 +35,8 @@ export interface CodexSyncResult {
   cacheSynced: boolean;
   /**
    * Whether the catalog owner committed a validated catalog or refused the
-   * refresh. Only a `catalog-only` result carries it; `ok` already answers the
-   * question for callers that do not care which half refused.
+   * refresh. Available on applied and catalog-only results; `ok` on applied
+   * describes config injection, so callers must also inspect catalog evidence.
    */
   refreshOutcome?: "committed" | "refused";
   message: string;
@@ -262,10 +262,12 @@ export async function syncModelsToCodex(
   let cacheSynced = false;
   let warning: string | undefined;
   let comboOmissions: ComboCatalogOmission[] = [];
+  let refreshOutcome: "committed" | "refused" | undefined;
 
   try {
     const cat = await deps.refreshCodexModelCatalog(config);
     added = cat.added;
+    refreshOutcome = cat.refreshOutcome;
     catalogExists = cat.catalogExists;
     catalogWritten = cat.catalogWritten;
     cacheSynced = cat.cacheSynced;
@@ -322,6 +324,7 @@ export async function syncModelsToCodex(
     status: "applied",
     ok: result.success,
     added,
+    ...(refreshOutcome ? { refreshOutcome } : {}),
     catalogPath,
     catalogExists,
     catalogWritten,

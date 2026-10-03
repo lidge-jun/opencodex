@@ -15,12 +15,15 @@ both `--adapter` and `--base-url`.
 | Subcommand | Supported flags | Action |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | List configured providers and the remaining registry entries; `--jsonl` emits one configured provider object per line. |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Add a registry/custom provider. `--force` overwrites; `--sync` refreshes a running proxy in human-output mode. |
-| `edit <name>` | provider field flags, `--headers <json>`, `--model-context-tier <model=default\|long_context>`, `--json` | Edit validated live provider fields without replacing key pools. Repeat `--model-context-tier` for multiple Copilot models. `--headers` merges custom request headers; pass `{}` or `-` to clear them. |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--responses-path <path>`, `--auth-mode <key\|forward\|oauth\|local>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync`, `--live` | Save locally by default; `--sync` attempts client sync in either output mode. `--live` writes through the running proxy and cannot combine with `--sync`. `--force` permits overwrite. |
+| `edit <name>` | provider field flags, `--headers <json>`, `--model-context-tier <model=default\|long_context>`, `--upstream-http-version <http1.1\|->`, `--fast <on\|off>`, `--context-window <N\|->`, `--json` | Edit validated live provider fields without replacing key pools. Repeat `--model-context-tier` for multiple Copilot models. `--headers` merges custom request headers; pass `{}` or `-` to clear them. |
 | `test <name>` | `--json` | Probe the real upstream model endpoint. |
 | `show <name>` | `--json` | Show config with API keys masked. |
-| `remove <name>` | `--json` | Remove a non-default provider; the last provider cannot be removed. |
-| `set-default <name>` | `--json` | Select an existing provider as the default. |
+| `remove <name>` | `--json`, `--live`, `--yes` | Local removal refuses the default and last provider. Live removal requires `--yes` and uses server dependency checks, default reassignment and account/custom-model cleanup. |
+| `set-default <name>` | `--json`, `--live` | Select a local default, or update the running proxy with `--live`. |
+| `pacing <name>` | `--json`, `--enabled <on\|off>`, `--rpm <number>`, `--min-interval-ms <integer>`, `--max-concurrent <integer>`, `--file <FILE\|->` | Read configured rules and runtime status; update scalars or replace rules from a file. File and scalar flags are exclusive. |
+| `snapshot` | `--json` | Read a redacted, validated public provider-editor document from the running proxy. |
+| `apply` | `--baseline <FILE\|->`, `--file <FILE\|->`, `--yes`, `--json` | Apply a reviewed editor document with a baseline comparison; removals/renames require `--yes`. |
 | `selected <name>` | `--set <ids>`, `--clear`, `--json` | Read or update the provider model allowlist. |
 | `quota` | `--refresh`, `--json` | Read provider quota reports. |
 | `resets` | `--limit <n>`, `--json` | List recently detected quota-window resets. |
@@ -66,16 +69,113 @@ keys in an agent transcript or copy them into command examples.
 
 ### Local saves and live provider state
 
-`list`, `show`, `add`, `remove`, and `set-default` use local configuration;
-`edit`, `test`, `quota`, `selected`, `presets`, and `account-mode` use management
-calls. Check `ocx ready --json` and `ocx status --json` before live work. A local
-list does not establish that an already-running proxy adopted the configuration.
+Start with offline discovery: `ocx provider --help`, then the leaf's `--help`.
+`list` and `show` read local configuration; `add`, `remove`, and `set-default`
+also use local configuration unless given `--live`. Other provider management
+operations below require a running proxy. Check `ocx ready --json` and
+`ocx status --json` before live work to confirm the intended target and version.
+A local list does not establish that the proxy adopted a saved change.
 
-`provider add <name> --json` reports `needsSync: true` and returns before the human
-`--sync` path, even when both flags are supplied. After authorized convergence,
-read `ocx inspect config --json` and `ocx models live --provider <name> --json`.
-`provider test` checks discovery connectivity; `applicable: false` is an expected
-static-catalog result, not successful inference or a failed connection.
+Local `provider add <name> --json` reports `needsSync: true`. Adding `--sync`
+actually attempts synchronization in both JSON and human output modes. Its
+receipt adds `sync: {status, ok}`; only `status: "applied"` with `ok: true` clears
+`needsSync`. No proxy (`not-running`), refused sync or failed sync returns nonzero
+while preserving the local save. Policy-skipped or catalog-only results may exit
+0 with `needsSync: true`; they are not an applied client sync.
+
+For authorized live changes:
+
+```bash
+ocx provider snapshot --json
+ocx provider add anthropic --live --json
+ocx provider set-default anthropic --live --json
+ocx provider snapshot --json
+```
+
+Live add uses the target's presets and refuses an observed existing provider
+without `--force`. The check and server upsert are not atomic: concurrent changes
+can race. Custom providers still need `--adapter` and `--base-url`. `--live`
+never falls back to a local save; combining it with `--sync` is invalid.
+Credentials belong in the supported human login or stdin flow, not CLI examples.
+
+To remove an authorized provider, use `ocx provider remove <name> --live --yes --json`.
+The server checks dependencies and applies default reassignment and account/custom-model
+cleanup. Inspect the receipt and read back the target after a write.
+
+A live receipt can be `{"success":true,"name":"example","catalogRefresh":{"status":"committed","changed":true,"degraded":false,"notices":[]}}`.
+`success` means configuration persisted; it does not by itself prove catalog
+convergence. For example, `{"success":true,"name":"example","catalogRefresh":{"status":"skipped","reason":"busy","retryable":true}}`
+returns exit 1 even though the save succeeded. Failed refresh, or skips for
+`stale`, `refused` and `catalog-unavailable`, also return nonzero. Preserve degraded
+notices. Null, absent or `not-requested` refresh can exit 0 without a client sync.
+Read back before recovery; do not repeat a persisted write to repair convergence.
+Errors use safe prose on stderr, including in JSON mode, rather than a JSON error envelope.
+
+`provider test` is separate: it checks upstream model discovery connectivity. A failed connection exits 1; success and a static catalog with no applicable discovery endpoint exit 0.
+`applicable: false` is an expected static-catalog result, not successful inference
+or a failed connection.
+
+### Transport settings and request pacing
+
+`provider edit` is already live. Use `--upstream-http-version http1.1` to pin that
+protocol, or `--upstream-http-version -` to clear it. `--fast on|off` toggles Fast;
+`--context-window N` sets a positive provider override and `--context-window -`
+clears it. Omitted settings stay unchanged; zero is not a clear operation.
+
+```bash
+ocx provider pacing anthropic --json
+ocx provider pacing anthropic --enabled on --rpm 30 --min-interval-ms 1000 --max-concurrent 2 --json
+ocx provider pacing anthropic --json
+```
+
+The read returns `{provider, rules, status}`. `rules: null` means unconfigured;
+`status` contains separate runtime queue/timing observations. Numeric flags alone
+do not enable an unconfigured block; `--enabled off` disables pacing. RPM accepts
+validated positive fractional values. Interval/concurrency require positive integers.
+
+Scalar edits preserve the observed model rules but PATCH replaces the whole
+block without CAS, so a concurrent edit can be overwritten. Use snapshot/apply
+below when baseline comparison is required. For a complete rules object, including
+model-specific rules, use `ocx provider pacing anthropic --file pacing.json --json`.
+A minimal rules file is `{"enabled":true,"requestsPerMinute":30}`. File mode
+replaces the entire block and cannot be combined with scalar flags. `--file -`
+reads piped stdin; the input limits below apply.
+
+### Snapshot, edit and apply with a baseline
+
+Keep the same intended host and CLI context across these steps. Target pinning
+lasts within one invocation; snapshots contain no target identity token.
+
+```bash
+ocx provider snapshot --json > providers.baseline.json
+cp providers.baseline.json providers.next.json
+```
+
+Edit the next file and review the diff while preserving the original baseline.
+Each document contains exactly `{defaultProvider, providers}`. Snapshot is a
+read-only redacted editor projection, not raw config export. Do not add secret,
+derived or unknown fields: credentials, any `headers` field and display markers
+(`hasApiKey`, `hasHeaders`, `xaiResponsesOptInState`, `initialModelSelection`) are
+not batch-editable. Raw configuration export may expose credentials and belongs
+in a human-operated terminal outside an agent session.
+
+```bash
+ocx provider apply --baseline providers.baseline.json --file providers.next.json --json
+ocx provider snapshot --json
+```
+
+Add `--yes` only for reviewed, authorized removals or renames. Batch PUT preserves
+untouched private values and uses the public baseline to detect conflicts. It
+does **not** perform single-provider DELETE's OAuth account cleanup. HTTP 409
+returns exit 5: take a fresh snapshot, review concurrent changes and rebuild the
+proposed edit. Do not replace the baseline or retry automatically. Unknown write
+outcomes require inspection, not a rollback assumption.
+
+Use regular UTF-8 JSON files or explicit piped `-`; at most one batch input can
+be stdin. Each input has a 4 MiB limit and a 30-second read deadline. The combined
+serialized `{baseline,next}` request must also fit 4 MiB. Interactive stdin,
+special files, conflicting flags, invalid fields and unconfirmed removals are
+refused before mutation with exit 2. Input errors never echo the submitted values.
 
 ## Authentication
 

@@ -33,7 +33,7 @@ Custom Responses providers can explicitly enable `preserveResponsesInputItemIds`
 `skills.catalog_refresh` in the proxy JSON configuration accepts `per_session` (the runtime default when absent) or `per_turn`. The former retains received skills instructions for a conversation; the latter passes through the current catalog. This is separate from Codex's `skills.include_instructions` TOML switch and does not change the live dashboard probe. See the [Responses snapshot contract](transports/responses.md#responses-httpsse).
 
 Google providers may persist `googleToolSchemaPolicy` as `compatible` or `reject-lossy`.
-`ocx provider add --google-tool-schema-policy` is one authoring path and is accepted only when the effective adapter is `google`. Omission remains absent in `config.json`; the adapter resolves it to `compatible` in memory.
+`ocx provider add --google-tool-schema-policy` is one authoring path and is accepted only when the effective adapter is `google`. Omission remains absent in `config.json`; the adapter resolves it to `compatible` in memory. Provider live lifecycle, pacing and public editor CAS are described in [CLI management](cli-management.md#provider-live-operations-and-bounded-editor-input); local auth/path additions retain canonical OpenAI validation before saving.
 
 ### OpenCodex home and live process state
 

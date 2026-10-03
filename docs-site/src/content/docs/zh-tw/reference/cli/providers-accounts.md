@@ -14,7 +14,7 @@ description: 供應商設定、憑證、配額與模型目錄指令。
 | 子指令 | 支援的旗標 | 動作 |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | 列出已設定的供應商與剩餘的 registry 項目。 `--jsonl` 為每個已設定的供應商輸出一行 JSON 物件。 |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 新增 registry／自訂供應商。`--force` 覆寫；`--sync` 在人類輸出模式下重新整理執行中的代理。 |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 儲存至本機。`--force` 允許覆寫；`--sync` 在 JSON 與一般輸出模式下都會嘗試同步。 |
 | `edit <name>` | 供應商欄位旗標, `--json` | 編輯已驗證的即時供應商欄位而不替換金鑰池。 |
 | `test <name>` | `--json` | 探測真實上游模型端點。 |
 | `show <name>` | `--json` | 顯示設定，API 金鑰已遮罩。 |
@@ -24,6 +24,8 @@ description: 供應商設定、憑證、配額與模型目錄指令。
 | `quota` | `--refresh`, `--json` | 讀取供應商配額報告。 |
 | `presets` | `--json` | 列出儀表板供應商預設。 |
 | `account-mode` | `pool`, `direct`, `--json` | 選擇池化或直接的 Codex 帳號路由。 |
+
+預設的 `add`、`remove` 與 `set-default` 修改本機設定。修改執行中的代理需加 `--live`，線上刪除還需 `--yes`。`--sync --json` 同樣會在儲存後嘗試同步；失敗時保留儲存結果，以非零狀態結束，並回傳 `needsSync: true`。`--live` 不能與 `--sync` 同用。pacing 與 snapshot/apply 操作請見[英文指南](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)。
 
 ```bash
 ocx provider list --json
@@ -331,7 +333,7 @@ Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不�
 | --- | --- | --- |
 | `list`（預設） | `--provider <name>`, `--json` | 列出已設定供應商中播種的模型。 |
 | `live` | `--provider <name>`, `--json` | 讀取執行中的目錄，包含 runtime 探索的模型。列標記為 `native`/`routed`、`custom` 與 `enabled`/`disabled`。 |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 註冊供應商目錄未廣告的模型。 |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 儲存至本機。`--force` 允許覆寫；`--sync` 在 JSON 與一般輸出模式下都會嘗試同步。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 編輯自訂模型。`-` 清除欄位；`0` 清除 context window。 |
 | `remove <custom-id\|provider/modelId>` | `--yes` | 刪除自訂模型。stdin 非互動終端時需要 `--yes`。 |
 | `list-custom` | `--json` | 顯示所有自訂模型及其 `custom-id`（其他子指令所採用）。 |

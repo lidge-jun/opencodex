@@ -28,7 +28,7 @@ afterEach(() => {
   home.remove();
 });
 
-function fake(calls: Request[], payload: unknown = { ok: true }): RuntimeApiDeps {
+function fake(calls: Request[], payload: unknown = { success: true }): RuntimeApiDeps {
   return {
     baseUrl: "http://127.0.0.1:1",
     fetchImpl: (async (input, init) => {
@@ -54,12 +54,12 @@ describe("provider/model discovery follows existing handlers", () => {
     for (const row of PROVIDER_MODEL_CAPABILITIES) {
       expect(BASE.some(base => base.command.join(" ") === row.command.join(" "))).toBe(false);
       expect(row.usage?.startsWith(`ocx ${row.command.join(" ")}`)).toBe(true);
-      expect(row.flags.some(flag => flag.name === "--live")).toBe(false);
+      expect(row.flags.some(flag => flag.name === "--live")).toBe(["provider add", "provider remove", "provider set-default"].includes(row.command.join(" ")));
     }
   });
 
   test("local provider and custom-model commands do not acquire fictitious management routes", () => {
-    for (const key of ["provider add", "provider show", "provider remove", "provider set-default", "models list", "models add", "models remove", "models list-custom"]) {
+    for (const key of ["provider show", "models list", "models add", "models remove", "models list-custom"]) {
       expect(capability(key).routes).toEqual([]);
     }
     expect(capability("models add").json).toBe("none");

@@ -207,12 +207,10 @@ describe("ocx capabilities output", () => {
  */
 const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "DELETE /api/custom-models/{id}",
-  "DELETE /api/providers",
   "DELETE /api/routing-profiles",
   "GET /api/claude-desktop",
   "GET /api/codex-auth/quota",
   "GET /api/custom-models",
-  "GET /api/providers",
   "GET /api/request-history",
   "GET /api/request-history/{id}",
   "GET /api/system/health",
@@ -224,7 +222,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "POST /api/custom-models",
   "POST /api/model-discovery/acknowledge",
   "POST /api/oauth/logout",
-  "POST /api/providers",
   "POST /api/stop",
   "POST /api/system/restart",
   "POST /api/windows-tray",

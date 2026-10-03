@@ -14,7 +14,7 @@ description: プロバイダー構成、資格情報、クォータ、および�
 |サブコマンド |サポートされているフラグ |アクション |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` |構成されたプロバイダーと残りのレジストリ エントリを一覧表示します。 `--jsonl` は設定済みプロバイダーごとに1行の JSON オブジェクトを出力します。 |
-| `add <name>` | `--adapter <adapter>`、`--base-url <url>`、`--api-key <key>`、`--default-model <model>`、`--set-default`、`--force`、`--json`、`--sync` |レジストリ/カスタムプロバイダーを追加します。 `--force` は上書きします。 `--sync` は、実行中のプロキシを人間出力モードで更新します。 |
+| `add <name>` | `--adapter <adapter>`、`--base-url <url>`、`--api-key <key>`、`--default-model <model>`、`--set-default`、`--force`、`--json`、`--sync` | ローカルに保存します。`--force` は上書きを許可し、`--sync` は JSON と通常出力の両方で同期を試みます。 |
 | `edit <name>` |プロバイダーフィールドフラグ、`--headers <json>`、`--json` |キー プールを置き換えずに、検証済みのライブ プロバイダー フィールドを編集します。`--headers` はカスタム要求ヘッダーをマージします。`{}` または `-` を渡すとクリアします。 |
 | `test <name>` | `--json` |実際の上流モデルのエンドポイントを調査します。 |
 | `show <name>` | `--json` | API キーをマスクして設定を表示します。 |
@@ -24,6 +24,8 @@ description: プロバイダー構成、資格情報、クォータ、および�
 | `quota` | `--refresh`、`--json` |プロバイダー クォータ レポートを読み取ります。 |
 | `presets` | `--json` |ダッシュボードプロバイダーのプリセットを一覧表示します。 |
 | `account-mode` | `pool`、`direct`、`--json` |プールされた Codex アカウント ルーティングまたは直接の Codex アカウント ルーティングを選択します。 |
+
+既定の `add`、`remove`、`set-default` はローカル設定を変更します。稼働中のプロキシを変更するには `--live`、ライブ削除にはさらに `--yes` が必要です。`--sync --json` も保存後に同期を試み、失敗時は保存を保持して非ゼロ終了と `needsSync: true` を返します。`--live` と `--sync` は併用できません。pacing と snapshot/apply の手順は[英語版](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)を参照してください。
 
 ```bash
 ocx provider list --json
@@ -319,7 +321,7 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 | --- | --- | --- |
 | `list` (デフォルト) | `--provider <name>`、`--json` |構成されたプロバイダーにシードされたモデルをリストします。 |
 | `live` | `--provider <name>`、`--json` |実行時に検出されたモデルを含む、実行中のカタログを読み取ります。行には、`native`/`routed`、`custom`、および `enabled`/`disabled` というフラグが付けられます。 |
-| `add <provider> <modelId>` | `--display-name <name>`、`--context-window <tokens>`、`--modalities <text,image,audio>` |プロバイダー カタログが宣伝していないモデルを登録します。 |
+| `add <provider> <modelId>` | `--display-name <name>`、`--context-window <tokens>`、`--modalities <text,image,audio>` | ローカルに保存します。`--force` は上書きを許可し、`--sync` は JSON と通常出力の両方で同期を試みます。 |
 | `edit <custom-id>` | `--model-id <id>`、`--display-name <name\|->`、`--context-window <tokens\|0>`、`--modalities <text,image,audio\|->`、`--json` |カスタムモデルを編集します。 `-` はフィールドをクリアします。 `0` はコンテキスト ウィンドウをクリアします。 |
 | `remove <custom-id\|provider/modelId>` | `--yes` |カスタムモデルを削除します。標準入力が対話型端末ではない場合は、`--yes` が必要です。 |
 | `list-custom` | `--json` |他のサブコマンドで取得される `custom-id` を持つすべてのカスタム モデルを表示します。 |

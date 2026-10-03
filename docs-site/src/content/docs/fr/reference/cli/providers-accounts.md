@@ -15,7 +15,7 @@ Gestion des fournisseurs non interactive. Les entrées de registre sont classée
 | Sous-commande | Drapeaux pris en charge | Actions |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | Répertoriez les fournisseurs configurés et les entrées de registre restantes. `--jsonl` émet un objet JSON par fournisseur configuré et par ligne. |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Ajoutez un fournisseur registry/custom. `--force` écrase ; `--sync` actualise un proxy en cours d'exécution en mode sortie humaine. |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Enregistre localement. `--force` autorise le remplacement ; `--sync` tente la synchronisation en sortie JSON comme en sortie texte. |
 | `edit <name>` | indicateurs de champ du fournisseur, `--headers <json>`, `--json` | Modifiez les champs de fournisseur en direct validés sans remplacer les pools de clés. `--headers` fusionne les en-têtes de requête personnalisés ; passez `{}` ou `-` pour les effacer. |
 | `test <name>` | `--json` | Sondez le véritable point de terminaison du modèle en amont. |
 | `show <name>` | `--json` | Afficher la configuration avec les clés API masquées. |
@@ -25,6 +25,8 @@ Gestion des fournisseurs non interactive. Les entrées de registre sont classée
 | `quota` | `--refresh`, `--json` | Lire les rapports sur les quotas des fournisseurs. |
 | `presets` | `--json` | Répertoriez les préréglages du fournisseur de tableau de bord. |
 | `account-mode` | `pool`, `direct`, `--json` | Sélectionnez le routage de compte mutualisé ou direct Codex. |
+
+Par défaut, `add`, `remove` et `set-default` modifient la configuration locale. Ajoutez `--live` pour modifier le proxy actif, et `--yes` pour une suppression en direct. `--sync --json` tente aussi la synchronisation après enregistrement ; en cas d’échec, la sauvegarde reste acquise, avec un code non nul et `needsSync: true`. `--live` et `--sync` sont incompatibles. Voir le [guide anglais](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline) pour pacing et snapshot/apply.
 
 ```bash
 ocx provider list --json
@@ -426,7 +428,7 @@ Le tableau ci-dessous décrit les opérations de catalogue prises en charge par 
 | --- | --- | --- |
 | `list` (par défaut) | `--provider <name>`, `--json` | Répertoriez les modèles prédéfinis dans les fournisseurs configurés. |
 | `live` | `--provider <name>`, `--json` | Lisez le catalogue en cours d'exécution, y compris les modèles découverts lors de l'exécution. Les lignes sont marquées `native`/`routed`, `custom` et `enabled`/`disabled`. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Enregistrez un modèle dont le catalogue du fournisseur n’annonce pas. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Enregistre localement. `--force` autorise le remplacement ; `--sync` tente la synchronisation en sortie JSON comme en sortie texte. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Modifiez un modèle personnalisé. `-` libère un champ ; `0` efface la fenêtre contextuelle. |
 | `remove <custom-id\|provider/modelId>` | `--yes` | Supprimez un modèle personnalisé. Nécessite `--yes` lorsque stdin n'est pas un terminal interactif. |
 | `list-custom` | `--json` | Affichez tous les modèles personnalisés avec le `custom-id` que prennent les autres sous-commandes. |

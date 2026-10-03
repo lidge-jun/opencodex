@@ -16,7 +16,7 @@ pool'ами и контролируют каталог моделей, кото�
 | Подкоманда | Поддерживаемые флаги | Действие |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | Показать настроенных провайдеров и оставшиеся записи registry. `--jsonl` выводит по одному JSON-объекту настроенного провайдера на строку. |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Добавить registry/custom-провайдера. `--force` перезаписывает; `--sync` обновляет живой прокси в human-output mode. |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Сохраняет локально. `--force` разрешает перезапись; `--sync` пытается синхронизировать как при JSON, так и при текстовом выводе. |
 | `edit <name>` | provider field flags, `--headers <json>`, `--json` | Изменить валидированные live-поля провайдера, не заменяя key-pool'ы. `--headers` объединяет пользовательские request-header'ы; передайте `{}` или `-`, чтобы очистить их. |
 | `test <name>` | `--json` | Пробный запрос к реальному upstream model-endpoint'у. |
 | `show <name>` | `--json` | Показать конфиг с замаскированными API-key'ами. |
@@ -26,6 +26,8 @@ pool'ами и контролируют каталог моделей, кото�
 | `quota` | `--refresh`, `--json` | Прочитать отчёты по quota провайдеров. |
 | `presets` | `--json` | Показать provider preset'ы дашборда. |
 | `account-mode` | `pool`, `direct`, `--json` | Выбрать pooled или direct routing для аккаунтов Codex. |
+
+По умолчанию `add`, `remove` и `set-default` меняют локальную конфигурацию. Для работающего прокси добавьте `--live`, а для удаления — также `--yes`. `--sync --json` тоже пытается синхронизировать после сохранения; при сбое сохранение остаётся, код выхода ненулевой и `needsSync: true`. Флаги `--live` и `--sync` несовместимы. Pacing и snapshot/apply описаны в [английской инструкции](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline).
 
 ```bash
 ocx provider list --json
@@ -383,7 +385,7 @@ ocx account main recover [--rollback --yes] [--json]
 | --- | --- | --- |
 | `list` (default) | `--provider <name>`, `--json` | Показать модели, засеянные в настроенных провайдерах. |
 | `live` | `--provider <name>`, `--json` | Прочитать работающий каталог, включая модели, обнаруженные во время выполнения. Строки помечаются как `native`/`routed`, `custom` и `enabled`/`disabled`. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Зарегистрировать модель, которую каталог провайдера сам не рекламирует. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Сохраняет локально. `--force` разрешает перезапись; `--sync` пытается синхронизировать как при JSON, так и при текстовом выводе. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Изменить custom-модель. `-` очищает поле; `0` очищает context window. |
 | `remove <custom-id\|provider/modelId>` | `--yes` | Удалить custom-модель. В неинтерактивном stdin требует `--yes`. |
 | `list-custom` | `--json` | Показать все custom-модели вместе с `custom-id`, который используют остальные подкоманды. |

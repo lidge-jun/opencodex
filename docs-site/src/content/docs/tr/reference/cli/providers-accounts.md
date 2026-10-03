@@ -17,7 +17,7 @@ bir ad hem `--adapter` hem de `--base-url` gerektirir.
 | Alt komut | Desteklenen bayraklar | Eylem |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | Yapılandırılmış sağlayıcıları ve kalan kayıt defteri girdilerini listeleyin. `--jsonl`, yapılandırılmış her sağlayıcı için satır başına bir JSON nesnesi üretir. |
-| `add <ad>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Bir kayıt defteri/özel sağlayıcı ekleyin. `--force` üzerine yazar; `--sync`, insan çıktısı modunda çalışan bir proxy'yi yeniler. |
+| `add <ad>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Yerel olarak kaydeder. `--force` üzerine yazmaya izin verir; `--sync` hem JSON hem metin çıktısında eşitlemeyi dener. |
 | `edit <ad>` | sağlayıcı alan bayrakları, `--headers <json>`, `--json` | Anahtar havuzlarını değiştirmeden doğrulanmış canlı sağlayıcı alanlarını düzenleyin. `--headers` özel istek başlıklarını birleştirir; temizlemek için `{}` veya `-` iletin. |
 | `test <ad>` | `--json` | Gerçek yukarı akış model uç noktasını araştırın. |
 | `show <ad>` | `--json` | Maskelenmiş API anahtarlarıyla yapılandırmayı gösterin. |
@@ -27,6 +27,8 @@ bir ad hem `--adapter` hem de `--base-url` gerektirir.
 | `quota` | `--refresh`, `--json` | Sağlayıcı kota raporlarını okuyun. |
 | `presets` | `--json` | Kontrol paneli sağlayıcı önayarlarını listeleyin. |
 | `account-mode` | `pool`, `direct`, `--json` | Havuzlanmış veya doğrudan Codex hesap yönlendirmesini seçin. |
+
+Varsayılan `add`, `remove` ve `set-default` yerel yapılandırmayı değiştirir. Çalışan proxy için `--live`, canlı silme için ayrıca `--yes` kullanın. `--sync --json` da kayıttan sonra eşitlemeyi dener; başarısızlıkta kayıt korunur, sıfır olmayan çıkış kodu ve `needsSync: true` döner. `--live` ile `--sync` birlikte kullanılamaz. Pacing ve snapshot/apply için [İngilizce kılavuza](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline) bakın.
 
 ```bash
 ocx provider list --json
@@ -489,7 +491,7 @@ Aşağıdaki tablo, CLI tarafından desteklenen katalog işlemlerini açıklar; 
 | --- | --- | --- |
 | `list` (varsayılan) | `--provider <ad>`, `--json` | Yapılandırılmış sağlayıcılarda beslenen modelleri listeleyin. |
 | `live` | `--provider <ad>`, `--json` | Çalışma zamanında keşfedilen modeller de dahil olmak üzere çalışan kataloğu okuyun. Satırlar `native`/`routed`, `custom` ve `enabled`/`disabled` olarak bayraklanır. |
-| `add <saglayici> <modelId>` | `--display-name <ad>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Sağlayıcı kataloğunun bildirmediği bir modeli kaydedin. |
+| `add <saglayici> <modelId>` | `--display-name <ad>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Yerel olarak kaydeder. `--force` üzerine yazmaya izin verir; `--sync` hem JSON hem metin çıktısında eşitlemeyi dener. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <ad\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Özel bir modeli düzenleyin. `-` bir alanı temizler; `0` bağlam penceresini temizler. |
 | `remove <custom-id\|provider/modelId>` | `--yes` | Özel bir modeli silin. Stdin etkileşimli bir terminal olmadığında `--yes` gerektirir. |
 | `list-custom` | `--json` | Diğer alt komutların aldığı `custom-id` ile tüm özel modelleri gösterin. |

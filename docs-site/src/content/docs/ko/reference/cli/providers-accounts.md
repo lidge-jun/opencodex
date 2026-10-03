@@ -14,7 +14,7 @@ description: 제공자 설정, 자격 증명, 할당량, 모델 카탈로그 명
 | 하위 명령 | 지원 플래그 | 동작 |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | 설정된 제공자와 남아 있는 레지스트리 항목을 나열합니다. `--jsonl`은 설정된 제공자마다 JSON 객체를 한 줄씩 출력합니다. |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 레지스트리/사용자 지정 제공자를 추가합니다. `--force`는 덮어쓰고, `--sync`는 사람이 읽는 출력 모드에서 실행 중인 프록시를 새로 고칩니다. |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 로컬에 제공자를 저장합니다. `--force`는 덮어쓰기를 허용하며, `--sync`는 JSON·일반 출력 모두에서 동기화를 시도합니다. |
 | `edit <name>` | 제공자 필드 플래그, `--headers <json>`, `--json` | 키 풀을 바꾸지 않고 검증된 실시간 제공자 필드를 수정합니다. `--headers`는 사용자 지정 요청 헤더를 병합하며, `{}` 또는 `-`로 지울 수 있습니다. |
 | `test <name>` | `--json` | 실제 상위 모델 엔드포인트를 확인합니다. |
 | `show <name>` | `--json` | API 키를 마스킹한 설정을 보여줍니다. |
@@ -24,6 +24,8 @@ description: 제공자 설정, 자격 증명, 할당량, 모델 카탈로그 명
 | `quota` | `--refresh`, `--json` | 제공자 할당량 보고서를 읽습니다. |
 | `presets` | `--json` | 대시보드 제공자 프리셋을 나열합니다. |
 | `account-mode` | `pool`, `direct`, `--json` | Codex 계정 라우팅을 풀 기반으로 할지 직접 연결로 할지 선택합니다. |
+
+기본 `add`, `remove`, `set-default`는 로컬 설정을 바꿉니다. 실행 중인 프록시를 바꾸려면 `--live`를 지정하세요. 실시간 삭제에는 `--yes`도 필요합니다. `--sync --json`도 저장 후 동기화를 실제로 시도하며, 실패하면 저장은 유지한 채 0이 아닌 코드와 `needsSync: true`를 반환합니다. `--live`와 `--sync`는 함께 쓸 수 없습니다. pacing·snapshot/apply 절차는 [영문 명령 안내](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)를 참고하세요.
 
 ```bash
 ocx provider list --json
@@ -435,7 +437,7 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 | --- | --- | --- |
 | `list` (기본값) | `--provider <name>`, `--json` | 설정된 제공자에 사전 등록된 모델을 나열합니다. |
 | `live` | `--provider <name>`, `--json` | 런타임에 발견된 모델을 포함해 실행 중인 카탈로그를 읽습니다. 행에는 `native`/`routed`, `custom`, `enabled`/`disabled` 표시가 붙습니다. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 제공자 카탈로그가 광고하지 않는 모델을 등록합니다. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 로컬에 제공자를 저장합니다. `--force`는 덮어쓰기를 허용하며, `--sync`는 JSON·일반 출력 모두에서 동기화를 시도합니다. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 사용자 지정 모델을 수정합니다. `-`는 필드를 지우고, `0`은 컨텍스트 창을 지웁니다. |
 | `remove <custom-id\|provider/modelId>` | `--yes` | 사용자 지정 모델을 삭제합니다. stdin이 대화형 터미널이 아닐 때는 `--yes`가 필요합니다. |
 | `list-custom` | `--json` | 다른 하위 명령이 사용하는 `custom-id`와 함께 모든 사용자 지정 모델을 보여줍니다. |

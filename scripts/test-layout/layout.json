@@ -2,6 +2,12 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "cli-json-input.test.ts": "cli",
+    "cli-provider-lifecycle-runtime.test.ts": "cli",
+    "cli-provider-settings.test.ts": "cli",
+    "cli-provider-batch.test.ts": "cli",
+    "cli-provider-result.test.ts": "cli",
+    "cli-provider-sync-result.test.ts": "cli",
     "cli-capability-integration-workflows.test.ts": "cli",
     "cli-capability-account-workflows.test.ts": "cli",
     "cli-capability-agent-workflows.test.ts": "cli",

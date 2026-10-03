@@ -13,7 +13,7 @@ exit contract. Its common mappings and the main exceptions are:
 | 2 | locally rejected usage in management handlers; also unsupported `doctor --json` | fix arguments |
 | 64 | usage validation in `capabilities`, `ready`, `resolve` | fix arguments; no discovery/request for invalid input |
 | 4 | HTTP 404 — the named account, provider, key, or route does not exist | no |
-| 5 | HTTP 409 — conflict; a lock is held or state moved under you | usually yes |
+| 5 | HTTP 409 — conflict; a lock is held or state moved under you | inspect first; stale baselines require review |
 | 1 | everything else: transport failure, 5xx, unexpected errors | depends on `reason` |
 
 Two consequences worth internalizing:
@@ -66,8 +66,10 @@ and repeating the call produces the same error indefinitely.
 2. Exit 4 → distinguish a missing resource from a missing declaration. For a
    resource, list first (`account list`, `provider list`, `access key list`); for
    a declaration, consult family help. Do not retry the same lookup.
-3. Exit 5 or a 503 with `Retry-After` → wait the stated interval, retry **once**. If it fails the
-   same way twice, report it instead of looping.
+3. For a read or a confirmed pre-write contention refusal, wait the stated
+   `Retry-After` interval and retry **once**. An exit 5 from provider apply requires
+   fresh review, not a timed retry. Never repeat an uncertain or persisted write
+   merely because its exit code is nonzero.
 4. Exit 1 with a credential-conflict reason → run `ocx doctor` and report. Do not retry.
 5. Exit 1 otherwise → read the message. A transport failure may be worth one retry; an unexpected
    5xx is worth reporting.
@@ -143,3 +145,34 @@ Starring the repository has no CLI verb and no failure code, because it has no C
 spends the user's GitHub identity and the server requires a dashboard session for exactly that
 reason. `ocx inspect star` reads status; if starring is wanted, ask the user.
 
+
+## Provider save and convergence failures
+
+Live provider lifecycle, pacing and batch operations can return `success: true`
+with a nonzero exit: the configuration was saved but `catalogRefresh` failed or
+was skipped as busy, stale, refused or unavailable. Preserve both facts. Read back
+with `ocx provider snapshot --json` (and pacing read for pacing changes), then
+inspect the reported convergence issue. Do not resend an add/remove/apply to
+repair catalog refresh. Null, absent or `not-requested` refresh does not mean
+client synchronization occurred, even when the command exits 0.
+
+Local add with `--sync --json` also really attempts synchronization after saving.
+No running proxy returns `sync.status: "not-running"`, `sync.ok: false`,
+`needsSync: true`, and exit 1. Refused or failed sync is nonzero too; no rollback
+is implied. Applied sync clears `needsSync`; policy-skipped and catalog-only
+outcomes leave it true. JSON is an output choice, not a dry-run flag.
+
+A stale batch baseline returns HTTP 409 / exit 5. Obtain a fresh snapshot from the
+same intended host/context, compare concurrent changes, and rebuild the next
+document for review. Do not silently replace the baseline, auto-rebase, or retry.
+Pacing scalar PATCH has no baseline check and can overwrite a concurrent edit;
+use snapshot/apply for compare-and-swap. Batch removal requires `--yes` and does
+not include single-provider DELETE's OAuth account cleanup.
+
+Invalid/oversized input, interactive stdin, missing removal confirmation and
+conflicting flags return exit 2 before mutation. Files must be regular UTF-8 JSON;
+each read has a 4 MiB cap and 30-second deadline, and the combined batch request
+also has a 4 MiB cap. Fix the input rather than retrying unchanged. Provider errors
+use fixed safe messages and never expose arbitrary nested server bodies. An
+unusable receipt or transport failure can mean the write outcome is unknown:
+inspect the target rather than claiming rollback or trying a local fallback.

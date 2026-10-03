@@ -103,7 +103,7 @@ describe("CLI help navigation", () => {
     for (const example of examples) {
       const tokens = example.trim().split(/\s+/);
       expect(tokens.slice(0, 2)).toEqual(["ocx", "provider"]);
-      expect(["list", "presets", "add", "show", "set-default", "edit", "remove"]).toContain(tokens[2]);
+      expect(["list", "presets", "add", "show", "set-default", "edit", "remove", "pacing", "snapshot"]).toContain(tokens[2]);
       expect(example).not.toMatch(/sk-[a-z]|Bearer [A-Za-z0-9]/);
     }
     expect(output).toContain("--api-key <key>");

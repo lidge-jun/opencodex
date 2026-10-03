@@ -26,7 +26,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | Chapter | Declared capabilities |
 |---|---|
 | [lifecycle](01_surface_lifecycle.md) | 12 |
-| [providers-models](01_surface_providers-models.md) | 40 |
+| [providers-models](01_surface_providers-models.md) | 43 |
 | [accounts](01_surface_accounts.md) | 36 |
 | [agents-routing](01_surface_agents-routing.md) | 38 |
 | [integrations](01_surface_integrations.md) | 33 |
@@ -478,6 +478,18 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx alias defaults`
 
 [State-changing task](01_surface_providers-models.md#ocx-alias-defaults)
+
+### `ocx provider pacing`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-pacing)
+
+### `ocx provider snapshot`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-provider-snapshot)
+
+### `ocx provider apply`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-apply)
 
 ### `ocx logout`
 
@@ -1205,6 +1217,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 289
-- of those, state-changing: 177
+- declared capabilities: 292
+- of those, state-changing: 179
 - head-resolved invocations: 2

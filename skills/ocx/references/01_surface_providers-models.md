@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 40.
+Declared capabilities: 43.
 
 ### `ocx models price`
 
@@ -143,13 +143,17 @@ JSON mode: `payload`.
 
 ### `ocx provider add`
 
-Usage: `ocx provider add <name> [--adapter <id>] [--base-url <url>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <id>] [--model <id> --text-only] [--google-tool-schema-policy <compatible|reject-lossy>] [--allow-private-network] [--set-default] [--force] [--sync] [--json]`
+Usage: `ocx provider add <name> [--adapter <id>] [--base-url <url>] [--responses-path <path>] [--auth-mode <key|forward|oauth|local>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <id>] [--model <id> --text-only] [--google-tool-schema-policy <compatible|reject-lossy>] [--allow-private-network] [--set-default] [--force] [--sync | --live] [--json]`
 
-Add or replace a provider in local configuration.
+Add a provider locally or explicitly to the running proxy.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| GET | `/api/providers` |
+| GET | `/api/provider-presets` |
+| POST | `/api/providers` |
 
 | Flag | Value | Meaning |
 |---|---|---|
@@ -164,12 +168,18 @@ Drives no management route.
 | `--allow-private-network` | boolean | Permit a private upstream network. |
 | `--set-default` | boolean | Also select this provider as default. |
 | `--force` | boolean | Replace an existing provider. |
-| `--sync` | boolean | Attempt local Codex synchronization after saving in text mode. |
-| `--json` | boolean | Emit the local save receipt. |
+| `--sync` | boolean | Local only: perform requested Codex sync, including in JSON mode; saved-but-unsynced failures remain nonzero. |
+| `--json` | boolean | Emit the operation receipt as JSON. |
+| `--live` | boolean | Use the selected running proxy; omission retains local configuration behavior. |
+| `--responses-path` | string | Relative upstream Responses path; no scheme, query or fragment. |
+| `--auth-mode` | string | Explicit key, forward, oauth or local auth mode. |
 
 JSON mode: `envelope`.
 
-- Writes local config, not the provider management API. JSON returns after saving with needsSync:true, before --sync; inspect the receipt and synchronize separately. Keep real credentials out of argv and agent transcripts.
+- Without --live, saves local configuration; --sync reports its actual disposition and needsSync, never fabricated client application. --live cannot be combined with --sync.
+- Live add reads the target roster and presets. An observed existing row requires --force; POST remains upsert, so the preflight is not atomic create-only protection.
+- Canonical OpenAI uses the target preset unchanged; transport/auth/model overrides are refused in live add. No local registry fallback when a needed target preset is missing.
+- Keep real credentials out of argv and agent transcripts; this does not authorize credential capture.
 
 ### `ocx provider show`
 
@@ -191,43 +201,52 @@ JSON mode: `envelope`.
 
 ### `ocx provider remove`
 
-Usage: `ocx provider remove <name> [--json]`
+Usage: `ocx provider remove <name> [--json]; ocx provider remove <name> --live --yes [--json]`
 
-Remove a provider from local configuration.
+Remove a local provider or explicitly delete it from the running proxy.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| DELETE | `/api/providers` |
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit the removal receipt and needsSync. |
+| `--live` | boolean | Use the selected running proxy; omission retains local configuration behavior. |
+| `--yes` | boolean | Required with --live for provider and dependent custom-model/account cleanup. |
+| `--json` | boolean | Emit the operation receipt as JSON. |
 
 JSON mode: `envelope`.
 
-- Local write, with no management HTTP call. Refuses the default, last provider, or combo dependencies; also removes that provider's custom models. Requires operator intent; the handler has no --yes flag.
+- Local removal preserves its existing refusal for the current default and has no --yes option.
+- Live removal uses one server DELETE. The server can choose a replacement default and clean custom models, context caps and OAuth accounts; dependency/last-provider refusals stay authoritative.
+- No local fallback, multi-step deletion or automatic retry. A saved result with failed catalog convergence exits nonzero without claiming rollback.
 
 ### `ocx provider set-default`
 
-Usage: `ocx provider set-default <name> [--json]`
+Usage: `ocx provider set-default <name> [--live] [--json]`
 
-Select the default provider in local configuration.
+Select the default provider locally or explicitly on the running proxy.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| PATCH | `/api/providers` |
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit the save/no-op receipt and needsSync. |
+| `--live` | boolean | Use the selected running proxy; omission retains local configuration behavior. |
+| `--json` | boolean | Emit the operation receipt as JSON. |
 
 JSON mode: `envelope`.
 
-- Local config operation; the provider must already exist. Does not claim live management convergence.
+- Omission of --live retains local save/no-op semantics. Live sends only setDefault:true; disabled/unknown providers are refused by the server. This operation does not claim client synchronization.
 
 ### `ocx provider edit`
 
-Usage: `ocx provider edit <name> [--adapter <id>] [--base-url <url>] [--default-model <id|->] [--auth-mode <key|forward|oauth|local|->] [--note <text|->] [--api-key-transport <x-api-key|bearer|->] [--headers <json|->] [--enabled <on|off>] [--live-models <on|off>] [--retain-models <id,id|->] [--model <id> --text-only] [--xai-chat <on|off>] [--allow-private-network <on|off>] [--model-context-tier <model=default|long_context>] [--json]`
+Usage: `ocx provider edit <name> [--adapter <id>] [--base-url <url>] [--default-model <id|->] [--auth-mode <key|forward|oauth|local|->] [--note <text|->] [--api-key-transport <x-api-key|bearer|->] [--headers <json|->] [--enabled <on|off>] [--live-models <on|off>] [--retain-models <id,id|->] [--model <id> --text-only] [--xai-chat <on|off>] [--allow-private-network <on|off>] [--model-context-tier <model=default|long_context>] [--upstream-http-version <http1.1|->] [--fast <on|off>] [--context-window <tokens|->] [--json]`
 
 Patch an existing provider through the running proxy.
 
@@ -255,10 +274,14 @@ State-changing: yes.
 | `--allow-private-network` | string | on or off. |
 | `--model-context-tier` | string | Repeatable github-copilot model=default or model=long_context. |
 | `--json` | boolean | Emit the management receipt. |
+| `--upstream-http-version` | string | http1.1 pins HTTP/1.1; - clears the override. |
+| `--fast` | string | on or off; false is an explicit edit. |
+| `--context-window` | string | Positive safe integer provider context limit; - clears, zero is invalid. |
 
 JSON mode: `payload`.
 
 - At least one edit is required; only supplied fields are patched. update is an existing alias. Use provider show only for local state, not as proof of the live write.
+- Management errors use safe fixed provider diagnostics; catalog failures retain the saved receipt and a nonzero exit.
 
 ### `ocx provider test`
 
@@ -844,3 +867,78 @@ State-changing: yes.
 | `--json` | boolean | Emit the alias settings receipt. |
 
 JSON mode: `payload`.
+
+### `ocx provider pacing`
+
+Usage: `ocx provider pacing <name> [--json]; ocx provider pacing <name> [--enabled <on|off>] [--rpm <number>] [--min-interval-ms <integer>] [--max-concurrent <integer>] [--json]; ocx provider pacing <name> --file <FILE|-> [--json]`
+
+Read request pacing rules/status or explicitly replace the configured block.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| GET | `/api/config` |
+| GET | `/api/provider-request-pacing` |
+| PATCH | `/api/providers` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--enabled` | string | on or off; numeric changes never implicitly enable. |
+| `--rpm` | number | Fractional requests per minute, from 1/60 to 60000. |
+| `--min-interval-ms` | number | Positive integer delay, at most 3600000. |
+| `--max-concurrent` | number | Positive integer concurrency cap. |
+| `--file` | string | Complete rules JSON, or - for bounded non-TTY stdin; exclusive with scalar flags. |
+| `--json` | boolean | Emit the operation receipt as JSON. |
+
+JSON mode: `envelope`.
+
+- Read returns {provider,rules,status}; rules:null means no configured block, not an unavailable target.
+- Scalar edits preserve model rules observed from the pinned config; PATCH replaces the block and can overwrite an intervening edit. Use snapshot/apply for public-baseline CAS.
+- File mode validates a complete non-null rules block and writes without a prior rule read. Pacing limits reject zero.
+
+### `ocx provider snapshot`
+
+Usage: `ocx provider snapshot [--json]`
+
+Read the non-secret provider editor snapshot from the running proxy.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/config` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the operation receipt as JSON. |
+
+JSON mode: `envelope`.
+
+- Emits exactly {defaultProvider,providers}, validating the canonical editor DTO after removing only GUI display markers. Unexpected secret/unknown fields fail closed.
+- Save this JSON as the baseline for apply; it is not raw config export and carries no cross-invocation target identity. Use the intended host/context.
+
+### `ocx provider apply`
+
+Usage: `ocx provider apply --baseline <FILE|-> --file <FILE|-> [--yes] [--json]`
+
+Apply a provider editor document with the server public-baseline conflict check.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/providers` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--baseline` | string | Original non-secret provider snapshot. |
+| `--file` | string | Edited next snapshot. |
+| `--yes` | boolean | Required for removals or renames within the submitted provider roster. |
+| `--json` | boolean | Emit the operation receipt as JSON. |
+
+JSON mode: `payload`.
+
+- Both documents must contain exactly defaultProvider and providers, with no credential/derived/unknown fields. At most one source may be stdin; each input and the complete serialized body are bounded to 4 MiB, with a 30-second read deadline.
+- Sends one {baseline,next} PUT. Stale baseline is exit 5; no automatic refresh, rebase, retry or local fallback.
+- Batch removal preserves the server batch contract and does not promise single-provider DELETE OAuth cleanup. Saved-but-unconverged catalog outcomes remain visible and nonzero.

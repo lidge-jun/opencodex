@@ -169,9 +169,21 @@ return the plaintext once; list does not return the full plaintext.
 An `ambiguous` footer on the list means two configured keys share an id, so per-key totals do not
 exist for them — do not attribute usage to either.
 
-## 6. Save a provider, then verify live adoption
+## 6. Save locally or change the running provider configuration
 
-Local config operations do not need a running proxy:
+Discover the installed grammar without starting a proxy:
+
+```bash
+ocx provider --help
+ocx provider add --help
+ocx provider pacing --help
+ocx provider apply --help
+```
+
+Local `list`, `show`, `add`, `remove`, and `set-default` need no running proxy.
+Registry providers are seeded by name; custom providers need `--adapter` and
+`--base-url`. Complete credential entry through the supported human login or
+stdin handoff, never by putting a key in an agent transcript.
 
 ```bash
 ocx provider list --json
@@ -179,31 +191,116 @@ ocx provider add <name> --json
 ocx provider show <name> --json
 ```
 
-Registry providers are seeded by name; custom providers also need `--adapter`
-and `--base-url`. Complete credential entry through the supported human login or
-stdin handoff, never by putting a key in an agent transcript.
+Without `--sync`, the add receipt has `needsSync: true`. When synchronization is
+requested, `ocx provider add <name> --sync --json` actually attempts it after
+saving. Inspect `sync.status`, `sync.ok`, `needsSync`, and the exit code. A stopped
+proxy yields `not-running` and exit 1 while preserving the save. Only `applied`
+with `ok: true` clears `needsSync`; policy skips and catalog-only outcomes do not.
 
-`needsSync: true` means saved, not live-applied. Adding `--sync` to this JSON
-invocation does not execute sync. After authorized synchronization and the live
-preflight, compare configured state with runtime state:
-
-```bash
-ocx inspect config --json
-ocx provider test <name> --json
-ocx models live --provider <name> --json
-```
-
-The test may contact the upstream model-discovery endpoint; it is not an inference
-success test. `applicable: false` means the provider has a static catalog, not a
-failed connection. Only promote the verified provider when requested:
+For an authorized change to the running proxy, first confirm the intended target:
 
 ```bash
-ocx provider set-default <name> --json
-ocx provider list --json
+ocx ready --json
+ocx status --json
+ocx provider snapshot --json
+ocx provider add <name> --live --json
+ocx provider set-default <name> --live --json
+ocx provider snapshot --json
 ```
 
-`set-default` saves local config; its receipt and any convergence warning must be
-reported separately. Do not equate a local list with live management state.
+These are separate operations; promote only when requested. Live add uses the
+target's presets, refuses an observed duplicate without `--force`, and does not
+fall back to local config on refusal. Its preflight is not an atomic create-only
+check: a concurrent add can race with the server's upsert. `--live --sync` is
+invalid. Live removal requires explicit deletion authority:
+
+```bash
+ocx provider remove <name> --live --yes --json
+ocx provider snapshot --json
+```
+
+The server checks dependencies, reassigns the default when needed, and performs
+its account/custom-model cleanup. Local removal still refuses the default and
+last provider. A receipt's `success: true` means persisted; inspect
+`catalogRefresh` and the exit code before reporting convergence. See
+[JSON receipts](02_json_shapes.md#provider-write-receipts).
+
+### Edit transport and pacing
+
+Existing `provider edit` is live; do not append `--live`. Its added settings are:
+
+```bash
+ocx provider edit <name> --upstream-http-version http1.1 --fast on --context-window 128000 --json
+```
+
+`--upstream-http-version -` and `--context-window -` clear their overrides;
+`--fast off` disables Fast. Omitted fields stay unchanged; zero is not a clear.
+Read configured pacing rules and separate runtime observations before editing:
+
+```bash
+ocx provider pacing <name> --json
+ocx provider pacing <name> --enabled on --rpm 30 --min-interval-ms 1000 --max-concurrent 2 --json
+ocx provider pacing <name> --json
+```
+
+`rules: null` means no rules are configured. Numeric flags alone do not enable a
+missing block. Scalars preserve the observed model rules, but the PATCH replaces
+the whole block and is **not CAS**: a concurrent edit can be overwritten. Use
+snapshot/apply below when a baseline check is needed. `--enabled off` disables
+pacing. Fractional RPM is supported within validated bounds; limits must be positive.
+
+For complete rules, including per-model rules, prepare a non-secret JSON object
+such as `{"enabled":true,"requestsPerMinute":30}` and use:
+
+```bash
+ocx provider pacing <name> --file pacing.json --json
+```
+
+The file replaces the entire pacing block and cannot be combined with scalar
+flags. `--file -` reads piped stdin. The [bounded input rules below](#snapshot-edit-apply)
+also apply to pacing.
+
+### Snapshot, edit, apply
+
+Use the same intended host and CLI context throughout. A snapshot contains no
+cross-invocation target token; target pinning only lasts within one invocation.
+Take a redacted editor snapshot and keep its baseline unchanged:
+
+```bash
+ocx provider snapshot --json > providers.baseline.json
+cp providers.baseline.json providers.next.json
+```
+
+Edit `providers.next.json`, then review its diff against the baseline. Both must
+contain exactly the public editor's `defaultProvider` and `providers`. Secret,
+derived and unknown fields are forbidden; do not add keys, tokens, any `headers`
+field (even non-secret headers), or the display markers `hasApiKey`, `hasHeaders`,
+`xaiResponsesOptInState`, and `initialModelSelection`. This read-only snapshot is
+not raw config export; raw export can disclose credentials and remains a human
+handoff outside the agent session.
+
+```bash
+ocx provider apply --baseline providers.baseline.json --file providers.next.json --json
+ocx provider snapshot --json
+```
+
+Add `--yes` only when the reviewed next document removes or renames providers
+and that deletion is authorized. Batch PUT preserves the server's public-baseline
+comparison and untouched private values; it does **not** perform single-provider
+DELETE's OAuth account cleanup. On HTTP 409 (exit 5), stop: take a fresh snapshot,
+review concurrent changes and rebuild the proposed edit. Never replace the
+baseline or retry automatically. After an uncertain write or saved-but-not-converged
+receipt, inspect current state before considering another write.
+
+Inputs must be regular UTF-8 JSON files or explicit piped `-`; at most one batch
+input may use stdin. Each input is limited to 4 MiB and a 30-second read deadline;
+the combined serialized `{baseline,next}` body must also fit 4 MiB. Interactive
+stdin, special files, conflicting sources and invalid shapes are refused before
+a write. Error messages do not echo input values.
+
+Provider discovery testing is a separate, potentially upstream operation:
+`provider test <name> --json` can contact the model-discovery endpoint, and
+`applicable: false` means a static catalog. It never proves successful inference.
 
 ## 7. Diagnose "management API is unreachable"
 
