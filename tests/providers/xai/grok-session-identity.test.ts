@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { grokConversationSessionId, withGrokSessionIdentity } from "../../../src/grok/session-identity";
@@ -9,6 +9,7 @@ import type { OcxConfig } from "../../../src/types";
 import { fakeChatGptJwt } from "../../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { repoPath } from "../../helpers/repo-root";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 
 const CONVERSATION = "01a0ffed-6c20-7492-aff0-c9219016f2fb";
@@ -123,4 +124,10 @@ describe("Grok turns reach the ChatGPT Codex backend with session_id", () => {
       expect(logCtx.conversationId).toBeTruthy();
     } finally { lease?.release(); }
   });
+});
+
+test("the /v1/responses route hands handleResponses the Grok-promoted request", () => {
+  // Pins the one-line wiring; the cases above call the helper directly.
+  const source = readFileSync(repoPath("src", "server", "index", "serve-options.ts"), "utf8");
+  expect(source).toContain("await handleResponses(withGrokSessionIdentity(req), config, logCtx, {");
 });
