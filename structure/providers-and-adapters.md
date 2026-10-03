@@ -22,8 +22,8 @@ and argument fragments charge the request's translator budget while buffered; cl
 replacement, and turn cleanup release those reservations. A new start on an occupied
 index closes the previous block only when its arguments form a complete JSON object;
 an unindexed delta or stop cannot be attributed to an indexed block, and a nonempty
-argument delta that cannot be attributed fails immediately. Turn completion
-requires every opened block to close, preserving the downstream single-open-call contract.
+argument delta that cannot be attributed fails immediately. Tool-bridge completion requires every opened block to close, preserving the downstream single-open-call contract.
+The authoritative completion signal is adapter-selected: existing shared coding-agent bridges default to `message_stop`, while Qoder selects only the final complete assistant frame's `message.stop_reason === "tool_use"` (its last sibling only). Qoder does not treat `message_stop` as its completion signal. Silence never ends the tool leg. An incomplete call fails closed with `protocol_error`; otherwise the bridge emits one `done(tool_use)` with usage and terminates the parked CLI; the external client owns execution.
 An indexless argument delta belongs to the sole open block; with multiple blocks open,
 the parser fails the turn before releasing their buffered calls.
 The capture-only bridge checks each raw tool-use start against the init handshake before
@@ -59,7 +59,14 @@ Failure prevents CLI spawn and settles the bridge's private directory; the CodeB
 also settles its prompt-file directory. Catalog and MCP-config write failures cover both owners.
 In a compiled executable, the bridge launches the private `__codebuddy-mcp` CLI entrypoint;
 source execution launches the MCP module with Bun. Both paths advertise only the request's
-isolated catalog and leave tool execution to the external client. Qoder appends the folded
+isolated catalog and leave tool execution to the external client. Qoder's selected catalog
+projection in `src/adapters/coding-agent/tool-catalog.ts` rejects empty, control-bearing, comma-bearing,
+or unpaired-surrogate name/namespace components and wire names over 512 UTF-8 bytes before staging.
+It admits at most 128 selected tools, 256 KiB per serialized definition, and 2 MiB for the serialized
+array (including brackets and separators); the comma-joined `--allowed-tools` argument is separately
+capped at 8 KiB of UTF-8, counting full `mcp__<server>__<tool>` names and commas. Invalid catalogs return a fixed local 400
+without spawning Qoder. Valid wire identities, schemas and order are unchanged; duplicate and
+ambiguous wire identities remain the Responses parser's responsibility. Qoder appends the folded
 system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or
 `QODERCN_APPEND_SYSTEM_PROMPT` child environment,
 never through command-line arguments or inherited vendor variables.
