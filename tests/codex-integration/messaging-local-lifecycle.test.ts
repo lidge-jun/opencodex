@@ -188,4 +188,45 @@ describe("command-owned child runner", () => {
       } finally { budget.dispose(); }
     }
   });
+
+  test.skipIf(process.platform === "win32")("timeout, cancellation and overflow bound detached descendant pipes", async () => {
+    for (const cause of ["timeout", "cancel", "overflow"] as const) {
+      const fixture = localMessagingFixture();
+      const controller = new AbortController();
+      const budget = new MessageBudget(3000, controller.signal);
+      const pidFile = resolve(fixture.root, "detached-pid");
+      // This fixture belongs to the test, not the runner's original process group.
+      // A finite lifetime also makes the pre-fix red run safe to complete.
+      const script = `
+        const child = Bun.spawn([process.execPath, '-e',
+          "process.on('SIGTERM',()=>{}); setTimeout(()=>process.exit(0),4000)"],
+          { detached: true, stdout: 'inherit', stderr: 'inherit' });
+        await Bun.write(process.argv[1], String(child.pid));
+        ${cause === "overflow" ? "process.stdout.write('x'.repeat(70000));" : ""}
+        setInterval(()=>{},1000);
+      `;
+      const started = performance.now();
+      const operation = runMessageProcess([process.execPath, "-e", script, pidFile], budget,
+        { timeoutMs: cause === "timeout" ? 500 : 2500 }).catch(error => error);
+      let pid: number | undefined;
+      try {
+        for (let i = 0; !existsSync(pidFile) && i < 100; i++) await Bun.sleep(5);
+        expect(existsSync(pidFile)).toBe(true);
+        pid = Number(readFileSync(pidFile, "utf8"));
+        expect(Number.isInteger(pid) && pid > 0).toBe(true);
+        if (cause === "cancel") controller.abort();
+        expect((await operation).code).toBe("process_incomplete");
+        expect(performance.now() - started).toBeLessThan(2500);
+        // The wrapper must not signal a detached group it does not own.
+        expect(() => process.kill(pid!, 0)).not.toThrow();
+      } finally {
+        budget.dispose();
+        await operation;
+        if (pid !== undefined && Number.isInteger(pid) && pid > 0) {
+          try { process.kill(pid, "SIGKILL"); } catch { /* Self-expiring fixture already exited. */ }
+        }
+        await fixture.close();
+      }
+    }
+  }, 20_000);
 });

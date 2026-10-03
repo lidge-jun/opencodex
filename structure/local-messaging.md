@@ -58,7 +58,11 @@ Cancellation, timeout or overflow terminates and joins only that helper. On Unix
 it creates an owned process group, so ordinary launcher descendants retaining
 inherited pipes are terminated too; it never signals the caller's group. Forced
 termination follows after one second, so cleanup may outlast the operation
-deadline by this bounded grace period. No recipient/daemon/proxy is stopped.
+deadline by this bounded grace period. At forced cleanup, pending output readers
+are cancelled without awaiting EOF or their cancellation hooks. A detached
+descendant can keep running outside the owned group, but cannot keep the command
+waiting on inherited pipes; its new group is never signalled. No recipient,
+daemon or proxy is stopped.
 
 ## Command-local CLI
 
@@ -141,6 +145,6 @@ body-confidentiality barrier against the same user. No request-body logging is a
 
 Native schema/help and the successful Linux fixture run bind the present evidence
 to Codex 0.160.0, not an invented minimum version or macOS compatibility claim.
-Remote authentication, enrollment, Claude, root relay, isolation and idle notices
+Remote authentication, enrollment, Claude, isolation and idle notices
 are absent. This local-only implementation is a contribution candidate, not
 architecture acceptance, independent review or permission to open a PR.
