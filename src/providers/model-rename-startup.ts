@@ -4,6 +4,7 @@ import { projectStaleContextWindows } from "./stale-context-window-migration";
 import { projectStaleModelRosters } from "./stale-model-roster-migration";
 import { projectStaleVisionClassifications } from "./stale-vision-classification-migration";
 import { projectDevinCliAuthMode } from "./devin-cli-authmode-migration";
+import { projectClaudeProviderRename } from "./claude-provider-rename-migration";
 import type { OcxConfig } from "../types";
 
 /**
@@ -14,15 +15,31 @@ import type { OcxConfig } from "../types";
  * with its own persistence, adopt, and failure handling.
  */
 export function projectStartupConfigRepairs(config: OcxConfig): ReturnType<typeof projectModelRenames> {
-  const renames = projectModelRenames(config);
+  // The provider rename runs first: every later pass keys on the provider id, and a row still
+  // filed under the retired name would be repaired against the wrong registry entry.
+  const claudeProvider = projectClaudeProviderRename(config);
+  const renames = projectModelRenames(claudeProvider.config);
   const windows = projectStaleContextWindows(renames.config);
   const vision = projectStaleVisionClassifications(windows.config);
   const rosters = projectStaleModelRosters(vision.config);
   const devinCli = projectDevinCliAuthMode(rosters.config);
   return {
     config: devinCli.config,
-    changed: renames.changed || windows.changed || vision.changed || rosters.changed || devinCli.changed,
-    warnings: [...renames.warnings, ...windows.warnings, ...vision.warnings, ...rosters.warnings, ...devinCli.warnings],
+    changed:
+      claudeProvider.changed ||
+      renames.changed ||
+      windows.changed ||
+      vision.changed ||
+      rosters.changed ||
+      devinCli.changed,
+    warnings: [
+      ...claudeProvider.warnings,
+      ...renames.warnings,
+      ...windows.warnings,
+      ...vision.warnings,
+      ...rosters.warnings,
+      ...devinCli.warnings,
+    ],
   };
 }
 

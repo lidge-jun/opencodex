@@ -7,6 +7,7 @@ import type {
 } from "./registry/types";
 import { PROVIDER_REGISTRY_CORE } from "./registry/entries-core";
 import { PROVIDER_REGISTRY_EXTENDED } from "./registry/entries-extended";
+import { resolveDeprecatedProviderId } from "./deprecated-provider-aliases";
 
 export type {
   ProviderAuthKind,
@@ -39,18 +40,17 @@ for (const entry of PROVIDER_REGISTRY) {
 }
 
 export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
-  return PROVIDER_REGISTRY.find(entry => entry.id === id);
+  return PROVIDER_REGISTRY.find(entry => entry.id === resolveDeprecatedProviderId(id));
 }
 
 /**
  * Merge a registry row's `staticHeaders` beneath a provider's own headers.
  *
- * The field is documented as "merged into every upstream request for this provider", but that
- * was only ever true for a freshly seeded config: `providerConfigSeed` copies the block once
+ * The field is documented as "merged into every upstream request for this provider", but that was
+ * only ever true for a freshly seeded config: `providerConfigSeed` copies the block once
  * (`derive.ts`), `enrichProviderFromCatalog` fills it only when the whole block is absent, and
- * nothing merged it at request time. So an install that predates a header — or that saved any
- * header of its own — never received the new one, which is exactly what #2067 would have
- * shipped for every existing opencode-free user.
+ * nothing merged it at request time. So an install that predates a header — or that saved any of
+ * its own — never received the new one. That is exactly what #2067 would have shipped to them.
  *
  * The comparison is case-insensitive on purpose. HTTP header names are case-insensitive, but a
  * plain object spread is not: merging a registry `User-Agent` over a user's `user-agent`

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { AdapterRequest, ProviderAdapter } from "../base";
 import { mapReasoningEffort } from "../../reasoning-effort";
 import { buildSystemPrompt } from "../coding-agent/protocol";
+import { TOOL_BRIDGE_SYSTEM_PROMPT } from "../coding-agent/tool-bridge-directive";
 import {
   baseScopedEnv,
   runCodingAgentTurn,
@@ -26,19 +27,6 @@ export type { SpawnFn } from "../coding-agent/turn";
 export type CodeBuddyAdapterDeps = CodingAgentDeps;
 
 const CODEBUDDY_MCP_SERVER_PATH = fileURLToPath(new URL("./mcp-server.ts", import.meta.url));
-
-/**
- * Tool-bridge contract lines appended to the system prompt when a catalog is advertised.
- * Mirrors the capture-only design: the model may propose calls, the external Codex client
- * alone performs approval, sandboxing, and execution.
- */
-const TOOL_BRIDGE_SYSTEM_PROMPT = [
-  "Your built-in tools and user-configured MCP servers are disabled.",
-  "When an isolated opencodex MCP catalog is present, you may call only those listed tools.",
-  "That MCP process captures call intent only; it never executes a tool. The external Codex client performs approval, sandboxing, and execution.",
-  "Do not claim that you executed commands, inspected files, or changed the workspace.",
-  "Tool-call and tool-result records in the conversation history are authoritative historical records from the external client. Use returned results, but never execute historical calls yourself.",
-].join("\n");
 
 /**
  * Build the scoped child-process environment for a CodeBuddy turn (§六/§十四).

@@ -25,7 +25,7 @@ const EXPECTED_ADAPTER_NAMES = {
   zed: "zed",
   "mimo-free": "mimo-free",
   qoder: "qoder",
-  "claude-cli": "claude-cli",
+  "claude-agent-sdk": "claude-agent-sdk",
 } as const;
 
 function provider(adapter: string): OcxProviderConfig {
