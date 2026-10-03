@@ -45,6 +45,7 @@ import {
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
 } from "../provider-validation";
 import {
@@ -261,6 +262,10 @@ export const configSchema = z.object({
   // would refuse to load — the provider id routing depends on is never derived from it.
   codexProviderDisplayName: z.string().trim().min(1).max(128).optional().catch(undefined),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
+  // A malformed allow-list degrades to "no account spends credits" rather than failing the parse,
+  // so a hand-edited typo cannot trip the backup-and-defaults repair path; the write path rejects
+  // it (creditCodexAccountIdsError in diagnostics).
+  creditCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional().catch(undefined),
   // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
   // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.
   // Silently ignoring it would be its own trap, so the write path rejects it and loadConfig warns.
@@ -500,6 +505,16 @@ export const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "headers"],
         message: headersError,
+      });
+    }
+    const forwardClientHeadersError = providerForwardClientHeadersConfigError(
+      (provider as { forwardClientHeaders?: unknown }).forwardClientHeaders,
+    );
+    if (forwardClientHeadersError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "forwardClientHeaders"],
+        message: forwardClientHeadersError,
       });
     }
     const modelCostsError = providerModelCostsConfigError((provider as { modelCosts?: unknown }).modelCosts);

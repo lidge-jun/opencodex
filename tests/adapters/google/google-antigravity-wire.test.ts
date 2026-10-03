@@ -193,11 +193,7 @@ describe("antigravity CCA envelope", () => {
       "future-flash-low",
       "future-flash-medium",
       "future-flash-high",
-    ]))?.map(model => model.id)).toEqual([
-      "future-flash-low",
-      "future-flash-medium",
-      "future-flash-high",
-    ]);
+    ]))?.map(model => model.id)).toEqual(["future-flash"]);
     expect(parseAntigravityAvailableModels(payload([
       "future-flash-low",
       "future-flash-high",

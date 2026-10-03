@@ -350,6 +350,72 @@ describe("DeepSeek Responses terminal repair", () => {
     expect(output).not.toContain('"type":"response.completed"');
   });
 
+  test("a delayed delimiter LF preserves terminal-less completion and upstream bytes", async () => {
+    for (const delimiter of ["\r\n\r\n", "\r\r\n", "\n\r\n"]) {
+      const input = completedMessageLifecycle().slice(0, -2) + delimiter;
+      const outputs: string[] = [];
+      for (const chunks of [[input], [input.slice(0, -1), "", "\n"]]) {
+        const source = controlledSource();
+        const budget = createTestTranslatorBudget();
+        const scheduler = new ManualScheduler();
+        const result = readAll(relayResponsesSseWithTerminalRepair(
+          source.stream, new AbortController(), POLICY, budget, scheduler,
+        ));
+        for (const chunk of chunks) source.push(chunk);
+        source.close();
+        const output = await result;
+        expect(output.startsWith(input)).toBe(true);
+        expect(terminalTypes(output)).toEqual(["response.completed"]);
+        expect(budget.snapshot().currentBytes).toBe(0);
+        expect(scheduler.pending()).toBe(0);
+        outputs.push(output);
+      }
+      expect(outputs[1]).toBe(outputs[0]);
+    }
+  });
+
+  test("delayed LF consumes only one byte and keeps ordinary suffixes tainted", async () => {
+    const prefix = completedMessageLifecycle().slice(0, -2) + "\r\n\r";
+    for (const suffix of ["", "x", "\n\n", "\ndata: unfinished"]) {
+      const source = controlledSource();
+      const budget = createTestTranslatorBudget();
+      const scheduler = new ManualScheduler();
+      const result = readAll(relayResponsesSseWithTerminalRepair(
+        source.stream, new AbortController(), POLICY, budget, scheduler,
+      ));
+      source.push(prefix);
+      source.push(suffix);
+      source.close();
+      const output = await result;
+      expect(output.startsWith(prefix + suffix)).toBe(true);
+      expect(terminalTypes(output)).toEqual([suffix ? "response.incomplete" : "response.completed"]);
+      expect(budget.snapshot().currentBytes).toBe(0);
+      expect(scheduler.pending()).toBe(0);
+    }
+  });
+
+  test("CRLF split at every byte preserves a real terminal and releases resources", async () => {
+    const input = (completedMessageLifecycle("你好") + sse({
+      type: "response.completed", response: { id: "resp_message", status: "completed" }, sequence_number: 3,
+    })).replaceAll("\n", "\r\n");
+    const bytes = encoder.encode(input);
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+        controller.close();
+      },
+    });
+    const budget = createTestTranslatorBudget();
+    const scheduler = new ManualScheduler();
+    const output = await readAll(relayResponsesSseWithTerminalRepair(
+      source, new AbortController(), POLICY, budget, scheduler,
+    ));
+    expect(output).toBe(input);
+    expect(terminalTypes(output)).toEqual(["response.completed"]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    expect(scheduler.pending()).toBe(0);
+  });
+
   test("unframed terminal-like suffixes stay tainted and cannot outrank incomplete", async () => {
     const fixtures = [
       {

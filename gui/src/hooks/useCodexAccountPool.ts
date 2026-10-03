@@ -73,6 +73,11 @@ export interface CodexAccountEntry {
   priority: number;
   /** Null inherits global threshold; 0 disables usage-driven switching for this account. */
   autoSwitchThresholdOverride: number | null;
+  /**
+   * True lets the account keep serving from ChatGPT credits once a usage window is full. Absent or
+   * false switches it out at 100% until the reset, which is the default.
+   */
+  creditsAfterLimit?: boolean;
   hasCredential: boolean;
   quota: AccountQuota | null;
   /** Display-only observation; never used for account selection. */
@@ -139,6 +144,7 @@ export interface CodexAccountPoolController {
   pauseUpdatingId: string | null;
   priorityUpdatingId: string | null;
   autoSwitchUpdatingId: string | null;
+  creditsAfterLimitUpdatingId: string | null;
   pausingExhausted: boolean;
   activeNeedsReauth: boolean;
   /**
@@ -155,6 +161,10 @@ export interface CodexAccountPoolController {
   setAccountPriority(id: string, priority: number | null): Promise<CodexAccountActionResult>;
   /** `null` restores global inheritance. Accepts the `__main__` sentinel. */
   setAccountAutoSwitchThreshold(id: string, threshold: number | null): Promise<CodexAccountActionResult>;
+  /** Accepts the `__main__` sentinel. */
+  setAccountCreditsAfterLimit(id: string, enabled: boolean): Promise<CodexAccountActionResult>;
+  /** The global switch: true allows every account, false clears them all. */
+  setAllCreditsAfterLimit(enabled: boolean): Promise<CodexAccountActionResult>;
   pauseExhaustedAccounts(): Promise<CodexAccountActionResult<{ pausedCount: number }>>;
   saveAlias(id: string, alias: string): Promise<CodexAccountActionResult>;
   removeAccount(id: string): Promise<CodexAccountActionResult<CodexAccountMutationCompletion>>;
@@ -215,6 +225,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   const [pauseUpdatingId, setPauseUpdatingId] = useState<string | null>(null);
   const [priorityUpdatingId, setPriorityUpdatingId] = useState<string | null>(null);
   const [autoSwitchUpdatingId, setAutoSwitchUpdatingId] = useState<string | null>(null);
+  const [creditsAfterLimitUpdatingId, setCreditsAfterLimitUpdatingId] = useState<string | null>(null);
   const [pausingExhausted, setPausingExhausted] = useState(false);
   const [activePinnedId, setActivePinnedId] = useState<string | null>(null);
   // A counter, not a boolean: the initial load, the 30s poll, quota-fill retries and explicit
@@ -252,6 +263,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   // another are independent writes, and a shared ref would make either reject the other.
   const priorityMutationRef = useRef<{ accountId: string } | null>(null);
   const autoSwitchMutationRef = useRef<{ accountId: string } | null>(null);
+  const creditsAfterLimitMutationRef = useRef(false);
 
   const subscribeLoadObserver = useCallback((observer: CodexAccountLoadObserver) => {
     observersRef.current!.add(observer);
@@ -636,6 +648,46 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     }
   }, [apiBase, load]);
 
+  // One writer for the per-account and the global switch: they edit the same list, so a second
+  // write while one is in flight is refused rather than raced.
+  const writeCreditsAfterLimit = useCallback(async (
+    updatingId: string,
+    body: { id: string; creditsAfterLimit: boolean } | { all: boolean },
+    apply: (account: CodexAccountEntry) => CodexAccountEntry,
+  ) => {
+    if (creditsAfterLimitMutationRef.current) return { ok: false, reason: "busy" } as const;
+    creditsAfterLimitMutationRef.current = true;
+    setCreditsAfterLimitUpdatingId(updatingId);
+    try {
+      const response = await fetch(`${apiBase}/api/codex-auth/accounts/credits`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) return { ok: false, reason: "request" } as const;
+      setAccounts(current => current.map(apply));
+      void load();
+      return { ok: true } as const;
+    } catch {
+      return { ok: false, reason: "request" } as const;
+    } finally {
+      creditsAfterLimitMutationRef.current = false;
+      setCreditsAfterLimitUpdatingId(null);
+    }
+  }, [apiBase, load]);
+
+  const setAccountCreditsAfterLimit = useCallback((id: string, enabled: boolean) => writeCreditsAfterLimit(
+    id,
+    { id, creditsAfterLimit: enabled },
+    account => (account.id === id || (id === "__main__" && account.isMain) ? { ...account, creditsAfterLimit: enabled } : account),
+  ), [writeCreditsAfterLimit]);
+
+  const setAllCreditsAfterLimit = useCallback((enabled: boolean) => writeCreditsAfterLimit(
+    "*",
+    { all: enabled },
+    account => ({ ...account, creditsAfterLimit: enabled }),
+  ), [writeCreditsAfterLimit]);
+
   const pauseExhaustedAccounts = useCallback(async () => {
     if (pauseMutationRef.current) return { ok: false, reason: "busy" } as const;
     pauseMutationRef.current = "bulk";
@@ -727,6 +779,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     pauseUpdatingId,
     priorityUpdatingId,
     autoSwitchUpdatingId,
+    creditsAfterLimitUpdatingId,
     pausingExhausted,
     activeNeedsReauth,
     activePinnedId,
@@ -735,6 +788,8 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     setAccountPaused,
     setAccountPriority,
     setAccountAutoSwitchThreshold,
+    setAccountCreditsAfterLimit,
+    setAllCreditsAfterLimit,
     pauseExhaustedAccounts,
     saveAlias,
     removeAccount,

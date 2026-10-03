@@ -8,6 +8,7 @@
 - `.nav-item`은 아이콘 17px, control text, 4px 세로 간격을 사용한다.
 - hover와 active는 같은 surface family를 쓰되 active는 semibold로 구분한다.
 - 메뉴마다 margin을 직접 추가하지 않고 `.sidebar nav`의 `gap`을 사용한다.
+- 데스크톱 레이아웃에서 `.sidebar nav`는 스크롤 영역이고 footer(언어, 테마, 줌, 프록시)는 항상 보인다. 창이 낮거나 페이지 줌으로 CSS 뷰포트가 줄어도 footer 컨트롤에 닿을 수 있어야 한다. 데스크톱 셸의 줌 컨트롤(`.zoom-control`)은 테마 행과 같은 행 높이를 쓴다.
 
 ## Buttons
 

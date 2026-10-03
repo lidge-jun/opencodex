@@ -22,6 +22,31 @@ export const TERMINAL_SHORT_WINDOW_FRESHNESS_MS = 5 * 60_000;
  */
 export const CODEX_EXHAUSTED_USAGE_PERCENT = 100;
 
+/** Credits have a separate clock: ordinary usage headers do not re-observe the balance. */
+export const CODEX_CREDITS_FRESHNESS_MS = 5 * 60_000;
+
+export interface CodexSpendableCredits {
+  hasCredits?: boolean;
+  unlimited?: boolean;
+  balance?: number;
+  overageLimitReached?: boolean;
+  allowed?: boolean;
+  observedAt: number;
+}
+
+export function hasSpendableCodexCredits(
+  quota: Pick<StoredAccountQuota, "credits"> | null,
+  now = Date.now(),
+): boolean {
+  const credits = quota?.credits;
+  if (!credits || !Number.isFinite(credits.observedAt)) return false;
+  const age = now - credits.observedAt;
+  if (age < 0 || age > CODEX_CREDITS_FRESHNESS_MS
+    || credits.allowed === false || credits.overageLimitReached === true || credits.hasCredits === false) return false;
+  return credits.unlimited === true || (credits.hasCredits === true
+    && typeof credits.balance === "number" && Number.isFinite(credits.balance) && credits.balance > 0);
+}
+
 /**
  * Above this a value is already milliseconds; at or below it, it is Unix seconds.
  *
@@ -80,6 +105,8 @@ export type StoredAccountQuota = {
   shortWindowSeconds?: number;
   customWindows?: Array<{ label: string; percent: number; resetAt?: number }>;
   resetCredits?: number;
+  /** Spendable usage credits; resetCredits are separate, manually redeemed reset tickets. */
+  credits?: CodexSpendableCredits | null;
   /** Monthly usage came from an explicitly monthly PRIMARY, not supplementary tertiary, window. */
   monthlyIsPrimaryWindow?: boolean;
   updatedAt: number;
@@ -114,7 +141,12 @@ export type WhamUsageResponse = {
     secondary_window?: WhamUsageWindow | null;
     tertiary_window?: WhamUsageWindow | null;
   };
-  credits?: unknown;
+  credits?: {
+    has_credits?: unknown;
+    unlimited?: unknown;
+    balance?: unknown;
+    overage_limit_reached?: unknown;
+  } | null;
   rate_limit_reset_credits?: { available_count: number } | null;
   additional_rate_limits?: WhamAdditionalRateLimit[] | null;
 };

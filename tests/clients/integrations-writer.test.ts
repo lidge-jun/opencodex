@@ -269,9 +269,11 @@ describe("apply", () => {
     };
     expect(doc.providers.opencodex.models["opencode-go/glm-5.3"]!.variants!.map(v => v.id))
       .toEqual(["low", "high", "max"]);
-    // The legacy block stays variant-free, and a model without a ladder gets no key at all.
-    expect(doc.provider.opencodex.models["opencode-go/glm-5.3"]).not.toHaveProperty("variants");
-    expect(doc.providers.opencodex.models["openai/gpt-5.5"]!.variants).toBeUndefined();
+    // The legacy map and native array describe the same choices; unknown ladders cannot synthesize rungs.
+    expect(doc.provider.opencodex.models["opencode-go/glm-5.3"]!.variants).toEqual({
+      low: { reasoningEffort: "low" }, high: { reasoningEffort: "high" }, max: { reasoningEffort: "max" },
+    });
+    expect(doc.providers.opencodex.models["openai/gpt-5.5"]!.variants).toEqual([]);
 
     expect(readIntegrationState(request)).toMatchObject({ state: "current" });
     expect(applyIntegration(request).ok).toBe(true);

@@ -1,4 +1,4 @@
-import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
+import { replaceSseDataPayload, splitSseBlock, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 
 const GROK_CONTROL_FRAME_TYPES: Record<string, true> = {
   "codex.rate_limits": true,
@@ -144,7 +144,7 @@ export function createGrokResponsesControlFrameBlockRewrite(): SseBlockRewrite {
     let eventName = "";
     // SSE overwrites the event type on every event field, including empty resets.
     // Like sseDataPayload, remove only one optional ASCII space after the colon.
-    for (const line of block.split(/\r?\n/)) {
+    for (const line of splitSseBlock(block).lines) {
       if (line === "event") eventName = "";
       else if (line.startsWith("event:")) {
         const value = line.slice("event:".length);

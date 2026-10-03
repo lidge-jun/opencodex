@@ -140,6 +140,37 @@ describe("dispatchCommand exit codes", () => {
     }
   });
 
+  test("sync refreshes already-owned OpenCode and Kilo after publishing the Codex catalog", async () => {
+    const syncModule = await import("../../src/codex/sync");
+    const catalogModule = await import("../../src/integrations/catalog-refresh");
+    const asideModule = await import("../../src/cli/aside-profiles");
+    const order: string[] = [];
+    const sync = spyOn(syncModule, "syncModelsToCodex").mockImplementation(async () => {
+      order.push("catalog");
+      return { status: "applied", ok: true, added: 0, catalogPath: null, catalogExists: false,
+        catalogWritten: false, cacheSynced: false, message: "fixture" };
+    });
+    const refresh = spyOn(catalogModule, "refreshOwnedCatalogIntegrations").mockImplementation(async () => {
+      order.push("refresh");
+      return [];
+    });
+    const aside = spyOn(asideModule, "refreshAsideProfilesThroughServer").mockResolvedValue([]);
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const args = ["sync"];
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, {
+        ...fakeDeps, args, loadConfig: () => ({ port: 10100, defaultProvider: "mock", providers: {} }) as OcxConfig,
+        findLiveProxy: async () => ({ pid: null, port: 10100, hostname: "127.0.0.1", source: "config" }),
+      });
+      expect(code).toBe(0);
+      expect(order).toEqual(["catalog", "refresh"]);
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "pi", "raycast", "omo", "cline", "droid", "opencode", "kilo"]);
+    } finally {
+      sync.mockRestore(); refresh.mockRestore(); aside.mockRestore(); log.mockRestore();
+    }
+  });
+
   test.each(["applied", "catalog-only", "refused"] as const)(
     "sync with no live proxy reports Aside unavailability after Codex %s without local fallback", async status => {
       const home = mkdtempSync(join(tmpdir(), "ocx-dispatch-aside-offline-"));

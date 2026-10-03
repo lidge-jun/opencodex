@@ -36,7 +36,7 @@ import {
 } from "./registry";
 import { declaredIntegrationTarget, resolveIntegrationTarget, type IntegrationTarget } from "./target";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
-import { classifyIntegration, exportContextOf, readPath, type IntegrationState, type StateReason } from "./state";
+import { buildIntegrationContribution, classifyIntegration, exportContextOf, readPath, type IntegrationState, type StateReason } from "./state";
 import { inspectKiloCandidates } from "./kilo-candidates";
 import { InvalidSelectorError } from "./merge";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
@@ -791,6 +791,8 @@ export interface IntegrationWriteInput {
   models: readonly ExportModel[];
   config: OcxConfig;
   port: number;
+  /** Explicit Droid-only defaults; omitted means retain matching owned rows. */
+  droidReasoningDefaults?: Record<string, string>;
   env?: NodeJS.ProcessEnv;
   home?: string;
   store?: IntegrationStateStore;
@@ -936,13 +938,13 @@ export function observeIntegration(
    * reads a different document there, and a write in the config file's shape
    * would be as unread as a write to the config file itself.
    */
-  const contribution = effective.buildContribution(exportContextOf(input));
   // A record proves ownership of the file it was written FOR. Matching only by
   // client id let a record for one home authorize a write to another whose
   // bytes happened to hash the same — which deleted a config we never touched.
   const record = stored && stored.clientId === clientId && stored.configPath === configPath
     ? stored
     : null;
+  const contribution = buildIntegrationContribution(input, effective, parsed, record);
   if (clientId === "droid" && input.models.length > 0 && contribution.fragments.length === 0 && !record) {
     return { failed: observationFailure("unsafe", "unsafe", "Factory Droid has no addressable models in the selected catalog") } as const;
   }

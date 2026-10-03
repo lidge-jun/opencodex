@@ -2,6 +2,8 @@ import { mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { join, posix } from "node:path";
 import { getConfigDir } from "../config";
+import { jsonUtf8Bytes } from "../lib/json-byte-size";
+import { TRANSLATOR_MAX_TURN_BYTES } from "../lib/translator-budget";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import {
   chargeImageBudget, createImageBudget, decodeValidatedImageBase64,
@@ -12,6 +14,16 @@ import { sseDataPayload, replaceSseDataPayload, type SseBlockRewrite } from "./s
 type Row = Record<string, any>;
 const object = (v: unknown): v is Row => !!v && typeof v === "object" && !Array.isArray(v);
 const originators = new Set(["codex_cli_rs", "Codex Desktop", "codex_app", "codex_work_desktop"]);
+const MAX_DISPLAY_ITEMS = 128;
+const MAX_ITEM_METADATA_BYTES = 64 * 1024;
+const MAX_RETAINED_METADATA_BYTES = 1024 * 1024;
+const displayKey = (item: Row, index: number) => typeof item.id === "string" ? "id:" + item.id : "index:" + index;
+
+function displayBytes(value: unknown, limit: number): number {
+  try { return jsonUtf8Bytes(value, limit); }
+  catch { throw new RangeError("hosted image result exceeds local display limits"); }
+}
+
 const generatedName = /^img-codex-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.(png|jpg|webp|gif)$/;
 
 /** One spelling per local path: file URL or plain, either separator, dot segments, folded case. */
@@ -71,13 +83,20 @@ export function createHostedImageDisplayRewrite(): SseBlockRewrite & { json(text
   const states = new Map<string, { message: Row; added: boolean; done: boolean }>();
   let extraSequence = 0;
   let wroteArtifact = false;
+  let retainedMetadataBytes = 0;
 
   function stateFor(item: Row, index: number) {
-    const key = typeof item.id === "string" ? item.id : "index:" + index;
+    // Validate every occurrence, including repeats whose state is already complete.
+    const metadataBytes = displayBytes({ id: item.id,
+      metadata: item.internal_chat_message_metadata_passthrough }, MAX_ITEM_METADATA_BYTES);
+    const key = displayKey(item, index);
     let state = states.get(key);
     if (state) return state;
-    // Bound metadata independently of the existing 100 MiB decoded-image budget.
-    if (states.size >= 128) throw new RangeError("hosted image result count exceeds local display limit");
+    if (states.size >= MAX_DISPLAY_ITEMS) throw new RangeError("hosted image result count exceeds local display limit");
+    if (metadataBytes > MAX_RETAINED_METADATA_BYTES - retainedMetadataBytes) {
+      throw new RangeError("hosted image result exceeds local display limits");
+    }
+    retainedMetadataBytes += metadataBytes;
     const id = "msg_ocx_img_" + createHash("sha256").update(key).digest("hex").slice(0, 32);
     state = { added: false, done: false, message: {
       // Persist image results outside the client's collapsible progress messages.
@@ -147,15 +166,51 @@ export function createHostedImageDisplayRewrite(): SseBlockRewrite & { json(text
     return events;
   }
 
-  function snapshot(response: Row, terminal: boolean, events?: Row[]): Row {
+  function projectedMessage(message: Row): Row {
+    if (message.status !== "in_progress") return message;
+    // Longest possible local filename and JSON text size, without decoding or writing an image.
+    const pathText = "![Generated image](<" + join(getArtifactsDir(), "img-codex-" + "0".repeat(36) + ".webp") + ">)";
+    const fallback = "The completed image result has no supported image data for local display.";
+    const text = displayBytes(pathText, TRANSLATOR_MAX_TURN_BYTES) > displayBytes(fallback, TRANSLATOR_MAX_TURN_BYTES)
+      ? pathText : fallback;
+    return { ...message, status: "incomplete", content: [{ type: "output_text", text, annotations: [] }] };
+  }
+
+  function lifecycleBytes(message: Row): number {
+    // At most two item copies and four text copies, plus fixed event fields, ids and numeric indices.
+    return 2 * displayBytes(message, TRANSLATOR_MAX_TURN_BYTES)
+      + 4 * displayBytes(message.content[0].text, TRANSLATOR_MAX_TURN_BYTES) + 2048;
+  }
+
+  function snapshot(response: Row, terminal: boolean, events?: Row[], envelope?: Row): Row {
     if (!Array.isArray(response.output)) return response;
-    // Reject oversized snapshots before saving artifacts that cannot be delivered.
-    const keys = new Set(states.keys());
+    // Preflight the complete snapshot before any artifact writes or expanded serialization.
+    const keys = new Set<string>();
+    const ids = new Set<string>();
     for (const [index, item] of response.output.entries()) {
       if (!object(item) || item.type !== "image_generation_call") continue;
-      keys.add(typeof item.id === "string" ? item.id : "index:" + index);
-      if (keys.size > 128) throw new RangeError("hosted image result count exceeds local display limit");
+      const key = displayKey(item, index);
+      if (keys.has(key)) throw new RangeError("duplicate hosted image identity in local display snapshot");
+      keys.add(key);
+      if (typeof item.id === "string") ids.add(item.id);
+      stateFor(item, index);
     }
+    if (keys.size === 0) return response;
+    const seen = new Set<string>();
+    for (const item of response.output) {
+      if (!object(item) || !ids.has(item.id)) continue;
+      if (seen.has(item.id)) throw new RangeError("conflicting hosted image identity in local display snapshot");
+      seen.add(item.id);
+    }
+    let extraBytes = 32; // Sequence-number growth on a rewritten SSE envelope.
+    const preview = { ...response, output: response.output.map((item: unknown, index: number) => {
+      if (!object(item) || item.type !== "image_generation_call") return item;
+      const state = stateFor(item, index);
+      const message = terminal ? projectedMessage(state.message) : state.message;
+      if (events && terminal && !state.done) extraBytes += lifecycleBytes(message);
+      return message;
+    }) };
+    displayBytes(envelope ? { ...envelope, response: preview } : preview, TRANSLATOR_MAX_TURN_BYTES - extraBytes);
     let changed = false;
     const output = response.output.map((item: unknown, index: number) => {
       if (!object(item) || item.type !== "image_generation_call") return item;
@@ -182,9 +237,14 @@ export function createHostedImageDisplayRewrite(): SseBlockRewrite & { json(text
       && (hasIndex || typeof event.item.id === "string")) {
       if (event.type === "response.output_item.added") {
         const state = stateFor(event.item, index);
+        if (!state.added) displayBytes({ ...event, item: state.message }, TRANSLATOR_MAX_TURN_BYTES - 32);
         result = state.added ? [] : [{ ...event, item: state.message }];
         state.added = true;
       } else if (event.type === "response.output_item.done") {
+        const state = stateFor(event.item, index);
+        if (!state.done && lifecycleBytes(projectedMessage(state.message)) > TRANSLATOR_MAX_TURN_BYTES) {
+          throw new RangeError("hosted image result exceeds local display limits");
+        }
         result = doneEvents(event.item, index);
       }
     } else if (typeof event.type === "string" && event.type.startsWith("response.image_generation_call.")) {
@@ -193,7 +253,7 @@ export function createHostedImageDisplayRewrite(): SseBlockRewrite & { json(text
     } else if (object(event.response)) {
       const terminal = ["response.completed", "response.incomplete", "response.failed"].includes(event.type);
       const injected: Row[] = [];
-      const response = snapshot(event.response, terminal, injected);
+      const response = snapshot(event.response, terminal, injected, event);
       if (response !== event.response) result = [...injected, { ...event, response }];
     }
     const sequence = Number.isSafeInteger(event.sequence_number) ? event.sequence_number + extraSequence : undefined;
@@ -216,6 +276,7 @@ export function createHostedImageDisplayRewrite(): SseBlockRewrite & { json(text
   };
   rewrite.dispose = () => {
     states.clear();
+    retainedMetadataBytes = 0;
     if (wroteArtifact) {
       wroteArtifact = false;
       pruneArtifacts();

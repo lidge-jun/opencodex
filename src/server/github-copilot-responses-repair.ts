@@ -14,6 +14,8 @@ import {
 } from "../lib/translator-budget";
 import {
   replaceSseDataPayload,
+  splitSseBlock,
+  sseLineEnding as blockNewline,
   sseDataPayload,
   type SseBlockRewrite,
 } from "./sse-payload-rewrite";
@@ -46,14 +48,9 @@ function byteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
-function blockNewline(block: string): "\r\n" | "\n" {
-  return block.includes("\r\n") ? "\r\n" : "\n";
-}
-
 /** Keep a named SSE block's `event:` field aligned with its JSON `type`. */
 function withEventName(block: string, eventName: string): string {
-  const newline = blockNewline(block);
-  const lines = block.split(/\r?\n/);
+  const { newline, lines } = splitSseBlock(block);
   let replaced = false;
   const rewritten = lines.flatMap((line) => {
     if (!line.startsWith("event:")) return [line];

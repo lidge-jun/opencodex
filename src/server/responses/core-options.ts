@@ -131,6 +131,8 @@ export interface HandleResponsesOptions {
    * it. Omitted means a genuine Responses inbound.
    */
   inboundWire?: InboundWire;
+  /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
+  droidDefaultEffort?: string;
   /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */
   protocolSource?: import("./core-combo-native").ComboProtocolSource;
   /** Internal transport identity for route-scoped upstream compatibility policy. */

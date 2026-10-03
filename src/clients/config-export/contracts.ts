@@ -1,6 +1,9 @@
 // Shared client export contracts.
+import { canonicalizeReasoningEfforts } from "../../reasoning-effort";
 import type { OcxConfig } from "../../types";
 import type { ConfigFormat } from "../../integrations/serialize";
+
+export const DROID_DEFAULT_EFFORT_HEADER = "x-opencodex-droid-default-effort";
 
 /**
  * One entry opencodex owns inside a client's config: the JSON path to it and
@@ -38,6 +41,12 @@ export interface OpencodeCatalogModel {
   id?: string;
   contextWindow?: number;
   maxTokens?: number;
+  /**
+   * Authoritative input ceiling, distinct from `contextWindow` (GPT-5.6 advertises 922k
+   * usable input under a 1.05M window). Carried from the catalog row so a client that has a
+   * separate input limit never treats the whole window as prompt budget.
+   */
+  maxInputTokens?: number;
   displayName?: string;
   /**
    * Declared input modalities, carried verbatim from `/api/models`. Serialized as opencode's
@@ -54,6 +63,9 @@ export interface OpencodeCatalogModel {
    * model-level setting — see {@link opencodeEffortVariants} for why.
    */
   defaultReasoningEffort?: string;
+  supportsTools?: boolean;
+  supportsReasoning?: boolean;
+  supportsReasoningSummaries?: boolean;
 }
 
 /**
@@ -73,10 +85,94 @@ export interface ExportModel {
   displayName?: string;
   contextWindow?: number;
   maxTokens?: number;
+  /** Authoritative input ceiling; optional and never guessed from the context window. */
+  maxInputTokens?: number;
   inputModalities?: string[];
   /** Optional effort ladder exported only to clients that support it. */
   reasoningEfforts?: string[];
   defaultReasoningEffort?: string;
+  supportsTools?: boolean;
+  supportsReasoning?: boolean;
+  supportsReasoningSummaries?: boolean;
+}
+
+/**
+ * Effective, override-applied export metadata for one model row: what a client export should
+ * serialize, as distinct from the raw editor representation `/api/models` also carries.
+ *
+ * Custom rows are the reason this exists. Their row fields are the operator's stored
+ * OVERRIDES (an absent field means "not overridden", an empty ladder means "no rungs"), so a
+ * serializer reading only them drops every capability the model inherits from the provider,
+ * the registry, or the gathered catalog. The management row list resolves that projection
+ * from the same canonical sources routed rows use and attaches it additively — the raw
+ * override fields stay exactly what the editor wrote.
+ */
+export interface EffectiveModelExportMetadata {
+  contextWindow?: number;
+  /** Input ceiling; distinct from `contextWindow`, carried only when a source asserts one. */
+  maxInputTokens?: number;
+  /** Output ceiling (a catalog row's `maxOutputTokens`). */
+  maxTokens?: number;
+  inputModalities?: string[];
+  /** Effective ladder; `[]` is an explicit "no rungs" declaration and survives as `[]`. */
+  reasoningEfforts?: string[];
+  /**
+   * A default some canonical source declared — never one synthesized from the ladder's
+   * preference order, and only when it is a member of the effective ladder. An empty
+   * ladder suppresses it entirely: there is no rung to default to.
+   */
+  defaultReasoningEffort?: string;
+  supportsTools?: boolean;
+  supportsReasoning?: boolean;
+  supportsReasoningSummaries?: boolean;
+}
+
+/**
+ * The per-row evidence the capability booleans are derived from. Only positive, canonical
+ * signals — no independent provider fact tables, no name-based inference.
+ */
+export interface ExportCapabilityEvidence {
+  native?: boolean;
+  reasoningEfforts?: readonly string[];
+  supportsReasoningSummaries?: boolean;
+  /** Normalized upstream capability names a catalog row carried (e.g. `"tools"`). */
+  capabilities?: readonly string[];
+  /** Provider-level parallel tool call opt-in for this model. */
+  parallelToolCalls?: boolean;
+}
+
+/**
+ * Tool support a canonical source positively asserts, or undefined when nothing is known.
+ *
+ * Mirrors the routing reader (`src/routing/capability.ts`): a catalog row without `"tools"`
+ * is UNKNOWN, never a negative — the row may simply not enumerate capabilities. `native`
+ * rows and the parallel-call opt-in are positive evidence on their own.
+ */
+export function knownToolsSupport(evidence: ExportCapabilityEvidence): boolean | undefined {
+  if (evidence.native === true) return true;
+  if (evidence.capabilities?.includes("tools") === true) return true;
+  if (evidence.parallelToolCalls === true) return true;
+  return undefined;
+}
+
+/**
+ * Reasoning support a canonical source positively asserts, or undefined when nothing is
+ * known.
+ *
+ * Never `false` from a missing or empty effort ladder: an empty ladder says "no ADJUSTABLE
+ * effort", which is not the claim "cannot reason" — a model can reason at a fixed depth with
+ * no rung to select. Known evidence is a positive reasoning rung (the catalog's own statement
+ * that the model accepts reasoning parameters) or delivered reasoning summaries. `none` is
+ * the off sentinel, not a rung: a ladder of only `none` offers an off variant and asserts
+ * nothing about whether the model reasons, so it is not positive evidence on its own.
+ */
+export function knownReasoningSupport(evidence: ExportCapabilityEvidence): boolean | undefined {
+  if (evidence.supportsReasoningSummaries === true) return true;
+  if (evidence.reasoningEfforts !== undefined
+    && canonicalizeReasoningEfforts(evidence.reasoningEfforts).some(effort => effort !== "none")) {
+    return true;
+  }
+  return undefined;
 }
 
 export interface ExportContext {
@@ -88,7 +184,11 @@ export interface ExportContext {
    * admission from `apiKey` to the `x-opencodex-api-key` header.
    */
   config?: OcxConfig;
+  droidReasoningDefaults?: DroidReasoningDefaults;
 }
+
+/** Namespaced model selector to one of that model's declared reasoning efforts. */
+export type DroidReasoningDefaults = Record<string, string>;
 
 export type ExportClientId =
   | "opencode"

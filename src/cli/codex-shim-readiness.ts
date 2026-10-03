@@ -3,6 +3,8 @@ import {
   getCodexRoutingKind,
   type CodexRoutingKind,
 } from "../codex/inject";
+import { diagnoseCodexShim, type CodexShimDiagnostic } from "../codex/shim";
+import { findFirstCodexOnPath, type CodexPathCandidate } from "../codex/shim-path-resolution";
 import { loadConfig, resolveEnvValue } from "../config";
 
 const PROXY_ENV_KEYS = [
@@ -19,6 +21,93 @@ export interface CodexShimReadinessInputs {
   externalProvider: string | null;
   processProxyEnvPresent: boolean;
   configuredProxyResolved: boolean;
+}
+
+export type CodexConnectShimStatus = "ready" | "missing" | "unhealthy" | "unverified";
+
+export interface CodexConnectShimReadiness {
+  status: CodexConnectShimStatus;
+  /** Secret-free, actionable text rendered by ocx connect. */
+  message: string;
+}
+
+export interface CodexConnectShimInspectionDeps {
+  diagnose?: () => Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary">;
+  findOnPath?: () => CodexPathCandidate | null;
+}
+
+const CODEX_TOKEN_NOTE = "The connected Codex config uses OPENCODEX_API_AUTH_TOKEN; "
+  + "without a working shim or when a PATH wrapper replaces it, Codex may fail with "
+  + '"Missing environment variable".';
+const CODEX_TOKEN_ACTION = `${CODEX_TOKEN_NOTE} Run 'ocx codex-shim install' to repair it.`;
+
+export function codexConnectShimReadiness(inputs: {
+  diagnosis: Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary">;
+  commandPath: string | null;
+  commandIsShim?: boolean;
+}): CodexConnectShimReadiness {
+  if (inputs.diagnosis.installed && !inputs.diagnosis.healthy) {
+    return {
+      status: "unhealthy",
+      message: `installed but unhealthy: ${inputs.diagnosis.summary}. ${CODEX_TOKEN_ACTION}`,
+    };
+  }
+  if (inputs.diagnosis.healthy && inputs.commandPath && !inputs.commandIsShim) {
+    // The shim is installed and healthy, so reinstalling it cannot fix this: only PATH
+    // order (or the wrapper in front of it) can.
+    return {
+      status: "missing",
+      message: `not active; PATH resolves 'codex' to ${inputs.commandPath}, not an OpenCodex shim. `
+        + `Shim state: ${inputs.diagnosis.summary}. Put the directory of the tracked shim ahead of that command on PATH, `
+        + `or remove that wrapper; re-running 'ocx codex-shim install' will not change PATH order. ${CODEX_TOKEN_NOTE}`,
+    };
+  }
+  if (inputs.diagnosis.installed && inputs.diagnosis.healthy) {
+    if (!inputs.commandPath) {
+      return {
+        status: "missing",
+        message: `installed but not active; no 'codex' executable was found on PATH. `
+          + `Shim state: ${inputs.diagnosis.summary}. Add the directory of the tracked shim to PATH. ${CODEX_TOKEN_NOTE}`,
+      };
+    }
+    return { status: "ready", message: "installed and healthy" };
+  }
+  if (inputs.commandPath) {
+    return {
+      status: "missing",
+      message: `not active; PATH resolves 'codex' to ${inputs.commandPath}, not an OpenCodex shim. ${CODEX_TOKEN_ACTION}`,
+    };
+  }
+  return {
+    status: "missing",
+    message: `not installed and no 'codex' executable was found on PATH. ${CODEX_TOKEN_ACTION}`,
+  };
+}
+
+export function inspectCodexShimForConnect(
+  deps: CodexConnectShimInspectionDeps = {},
+): CodexConnectShimReadiness {
+  let diagnosis: Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary">;
+  try {
+    diagnosis = (deps.diagnose ?? diagnoseCodexShim)();
+  } catch {
+    diagnosis = { installed: true, healthy: false, summary: "diagnostic state could not be read" };
+  }
+  let command: CodexPathCandidate | null = null;
+  try {
+    command = (deps.findOnPath ?? findFirstCodexOnPath)();
+  } catch {
+    return {
+      status: "unverified",
+      message: `PATH activation could not be verified. Shim state: ${diagnosis.summary}. `
+        + `Check PATH and retry 'ocx connect'. ${CODEX_TOKEN_NOTE}`,
+    };
+  }
+  return codexConnectShimReadiness({
+    diagnosis,
+    commandPath: command?.path ?? null,
+    commandIsShim: command?.isShim ?? false,
+  });
 }
 
 function externalProviderLabel(provider: string | null): string {

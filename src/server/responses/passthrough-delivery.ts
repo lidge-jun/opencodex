@@ -1329,7 +1329,7 @@ export async function deliverPassthroughResponse(
           clientJson = imageDisplay.json(clientJson);
         } catch (error) {
           if (error instanceof RangeError) {
-            return formatErrorResponse(502, "upstream_error", "hosted image result count exceeds local display limit");
+            return formatErrorResponse(502, "upstream_error", "hosted image result exceeds local display limits");
           }
           throw error;
         } finally { imageDisplay.dispose?.(); }

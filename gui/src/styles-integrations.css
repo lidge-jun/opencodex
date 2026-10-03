@@ -55,6 +55,19 @@
 .integration-client-head { display: flex; align-items: center; gap: 10px; }
 .integration-client-head h3 { margin: 0; }
 
+.droid-reasoning-panel { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.droid-reasoning-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.droid-reasoning-heading h4, .droid-reasoning-heading p { margin: 0; }
+.droid-reasoning-heading p { margin-top: 4px; }
+.droid-reasoning-list, .droid-reasoning-unsupported ul { list-style: none; padding: 0; margin: 0; }
+.droid-reasoning-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border-soft); }
+.droid-reasoning-model { display: grid; gap: 2px; min-width: 0; }
+.droid-reasoning-model code, .droid-reasoning-unsupported code { overflow-wrap: anywhere; }
+.droid-reasoning-unsupported { padding-top: 10px; border-top: 1px solid var(--border-soft); }
+.droid-reasoning-unsupported p { margin: 0 0 8px; color: var(--red); font-weight: var(--weight-semibold); }
+.droid-reasoning-unsupported li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 4px 0; }
+.droid-reasoning-unsupported .btn { margin-left: auto; }
+
 /* One brand mark, four surfaces. Sized from a custom property so the same three
    rules serve the 14px tab strip, the 20px overview card and the 24px client
    page header without a variant class per size. */

@@ -1,3 +1,4 @@
+import { codexAccountUsesCreditsAfterLimit } from "../account-credit-use";
 import { nextCodexUsageQueryAt, nextQuotaQueryDelay, pruneRemovedCodexPoolUsageAccounts } from "../quota-query-backoff";
 import { CODEX_PRIORITY_FAILBACK_REFRESH_MS } from "../account-priority";
 import { codexQuotaHasFreshUsage } from "../quota-observation-freshness";
@@ -58,7 +59,7 @@ export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Da
         // Defence in depth: independent scopes are already excluded at the claim site.
         // Generic WHAM must never clear Reserve even if claim selection changes.
         const recovered = (claim.scope === undefined || claim.scope === "shared")
-          && isCompleteCodexQuotaRecoverySnapshot(result.freshQuota ?? null, result.freshPlan ?? account.plan);
+          && isCompleteCodexQuotaRecoverySnapshot(result.freshQuota ?? null, result.freshPlan ?? account.plan, codexAccountUsesCreditsAfterLimit(config, claim.accountId));
         settleCodexQuotaRecoveryProbe(claim, recovered, {
           credentialGeneration: result.freshCredentialGeneration,
         }, now);

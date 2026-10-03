@@ -128,9 +128,7 @@ describe("Antigravity live model discovery", () => {
       expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "configured-project" });
       expect(live.map(model => model.id).sort()).toEqual([
         "future-agent-model",
-        "future-flash-high",
-        "future-flash-low",
-        "future-flash-medium",
+        "future-flash",
         "gemini-3.1-flash-image",
         "gemini-3.1-pro-low",
         "gemini-3.7-flash",
@@ -144,6 +142,12 @@ describe("Antigravity live model discovery", () => {
         contextWindow: 333_333,
         inputModalities: ["text"],
         reasoningEfforts: [],
+      });
+      expect(live.find(model => model.id === "future-flash")).toMatchObject({
+        reasoningEfforts: ["low", "medium", "high"],
+        antigravityEffortWireModelIds: {
+          low: "future-flash-low", medium: "future-flash-medium", high: "future-flash-high",
+        },
       });
       expect(live.map(model => model.id)).not.toContain("tab-only-model");
       expect(live.map(model => model.id)).not.toContain("non-agent-command-model");

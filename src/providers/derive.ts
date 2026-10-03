@@ -590,6 +590,8 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
     prov.supportsResponsesCustomTools = entry.supportsResponsesCustomTools;
   }
   if (prov.preserveResponsesReasoningContent === undefined && entry.preserveResponsesReasoningContent !== undefined) prov.preserveResponsesReasoningContent = entry.preserveResponsesReasoningContent;
+  if (prov.preserveResponsesInputItemIds === undefined && entry.preserveResponsesInputItemIds !== undefined) prov.preserveResponsesInputItemIds = entry.preserveResponsesInputItemIds;
+  if (prov.preserveResponsesMessageMetadata === undefined && entry.preserveResponsesMessageMetadata !== undefined) prov.preserveResponsesMessageMetadata = entry.preserveResponsesMessageMetadata;
   if (prov.dropResponsesReasoningItems === undefined && entry.dropResponsesReasoningItems !== undefined) prov.dropResponsesReasoningItems = entry.dropResponsesReasoningItems;
   applyReasoningSummaryDefaults(prov, entry.modelSupportsReasoningSummaries);
   applyServiceTierModelDefaults(prov, serviceTierModelDefaultsFor(entry, prov));

@@ -22,6 +22,7 @@ import { windowsWscript } from "../../src/service/windows-scheduler";
 import { inspectNativeCodexOwnership } from "../../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/windows-elevation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { fixturePath } from "../helpers/repo-root";
 
 let home = "";
 const cleanup: string[] = [];
@@ -476,6 +477,80 @@ describe("the Windows chain walk", () => {
       configDir: join(home, ".opencodex"),
       currentHomes: { codexHome: process.env.CODEX_HOME, opencodexHome: process.env.OPENCODEX_HOME },
     }).ownership).toBe("owned");
+  });
+
+  // Executable lines captured from the pre-#6441 generator at 10428d0120;
+  // this fixture is independent of the current generator's placeholder gate.
+  test.each(["legacy", "fixed"] as const)("a pre-placeholder standalone wrapper with %s backup logging retains ownership", logging => {
+    process.env.CODEX_HOME = "C:\\Users\\ws\\.codex";
+    process.env.OPENCODEX_HOME = "C:\\Users\\ws\\.opencodex";
+    const wrapper = writeStandaloneWrapper();
+    const current = readFileSync(wrapper, "utf8");
+    let flow = readFileSync(fixturePath("windows-standalone-pre-placeholder.cmd"), "utf8").replace(/\r?\n/g, "\r\n");
+    if (logging === "fixed") flow = flow.replace('      set "OCX_RESTORED_BACKUP=%%B"\r\n', "")
+      .replace("from %OCX_RESTORED_BACKUP%", "from transactional-update backup");
+    const prefix = current.slice(0, current.indexOf('if exist "%OCX_API_TOKEN_FILE%" ('));
+    writeFileSync(wrapper, prefix + flow);
+    const statePath = writeStandaloneState();
+    const launcher = join(home, ".opencodex", "opencodex-service-launcher.vbs");
+    const registeredXml = buildWindowsTaskXml(wrapper, launcher, undefined, "S-1-5-21-123");
+    const { runRaw } = recorder(() => ({ status: 0, stdout: registeredXml }));
+    const deps = {
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent", statePaths: [statePath],
+      configDir: join(home, ".opencodex"),
+      currentHomes: { codexHome: process.env.CODEX_HOME, opencodexHome: process.env.OPENCODEX_HOME },
+    } as const;
+    expect(inspectServiceManagerInstallation(deps).kind).toBe("present");
+    expect(inspectNativeCodexOwnership(deps).ownership).toBe("owned");
+    for (const extra of ['set "OCX_BUN_BYTES="', 'goto bun_not_ready', 'echo foreign']) {
+      writeFileSync(wrapper, prefix + flow.replace(":loop\r\n", `:loop\r\n${extra}\r\n`));
+      expect(inspectServiceManagerInstallation(deps).kind).toBe("unknown");
+    }
+  });
+
+  test("a registered standalone wrapper with exact legacy backup logging retains ownership", () => {
+    process.env.CODEX_HOME = "C:\\Users\\ws\\.codex";
+    process.env.OPENCODEX_HOME = "C:\\Users\\ws\\.opencodex";
+    const wrapper = writeStandaloneWrapper();
+    writeFileSync(wrapper, readFileSync(wrapper, "utf8")
+      .replace("      goto backup_restored", '      set "OCX_RESTORED_BACKUP=%%B"\r\n      goto backup_restored')
+      .replace("restored previous install from transactional-update backup", "restored previous install from %OCX_RESTORED_BACKUP%"));
+    const statePath = writeStandaloneState();
+    const launcher = join(home, ".opencodex", "opencodex-service-launcher.vbs");
+    const registeredXml = buildWindowsTaskXml(wrapper, launcher, undefined, "S-1-5-21-123");
+    const { runRaw } = recorder(() => ({ status: 0, stdout: registeredXml }));
+    const deps = {
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent", statePaths: [statePath],
+      configDir: join(home, ".opencodex"),
+      currentHomes: { codexHome: process.env.CODEX_HOME, opencodexHome: process.env.OPENCODEX_HOME },
+    } as const;
+    expect(inspectServiceManagerInstallation(deps).kind).toBe("present");
+    expect(inspectNativeCodexOwnership(deps).ownership).toBe("owned");
+  });
+
+  test.each([
+    ["an inserted command", (body: string) => body.replace("      goto backup_restored", "      echo foreign\r\n      goto backup_restored")],
+    ["a missing backup assignment", (body: string) => body.replace('      set "OCX_RESTORED_BACKUP=%%B"\r\n', "")],
+    ["an altered success command", (body: string) => body.replace("from %OCX_RESTORED_BACKUP%", "from %OCX_RESTORED_BACKUP% & echo foreign")],
+  ])("legacy standalone backup logging rejects %s", (_, mutate) => {
+    process.env.CODEX_HOME = "C:\\Users\\ws\\.codex";
+    process.env.OPENCODEX_HOME = "C:\\Users\\ws\\.opencodex";
+    const wrapper = writeStandaloneWrapper();
+    writeFileSync(wrapper, readFileSync(wrapper, "utf8")
+      .replace("      goto backup_restored", '      set "OCX_RESTORED_BACKUP=%%B"\r\n      goto backup_restored')
+      .replace("restored previous install from transactional-update backup", "restored previous install from %OCX_RESTORED_BACKUP%"));
+    writeFileSync(wrapper, mutate(readFileSync(wrapper, "utf8")));
+    const statePath = writeStandaloneState();
+    const launcher = join(home, ".opencodex", "opencodex-service-launcher.vbs");
+    const registeredXml = buildWindowsTaskXml(wrapper, launcher, undefined, "S-1-5-21-123");
+    const { runRaw } = recorder(() => ({ status: 0, stdout: registeredXml }));
+    const deps = {
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent", statePaths: [statePath],
+      configDir: join(home, ".opencodex"),
+      currentHomes: { codexHome: process.env.CODEX_HOME, opencodexHome: process.env.OPENCODEX_HOME },
+    } as const;
+    expect(inspectServiceManagerInstallation(deps).kind).toBe("unknown");
+    expect(inspectNativeCodexOwnership(deps).ownership).toBe("unknown");
   });
 
   test.each([

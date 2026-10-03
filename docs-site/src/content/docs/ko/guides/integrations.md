@@ -39,7 +39,7 @@ modelProfile:
 
 지원되는 추론 강도 단계가 있는 GJC 모델은 `reasoning: true`, `thinking.levels`, `compat.supportsReasoningEffort`를 내보내 GJC에서 강도를 선택할 수 있게 합니다. 네이티브 Codex 모델은 카탈로그에 단계가 없어도 표준 단계를 내보냅니다. 알려진 단계가 없는 모델은 이 필드들을 생략합니다. `none`은 강도를 보내지 않고 `ultra`는 전송 시 `max`로 바뀌므로 선택지에서 제외합니다. 모델 옵션을 갱신하려면 연동을 새로 고치세요.
 
-관리형 OpenCode 연동은 `provider.opencodex`(opencode V1)와 `providers.opencodex`(opencode V2) 두 조각을 소유합니다. 모델별 추론 강도 변형은 V2 블록에만 있으므로 둘 다 기록하고 동기화합니다. 두 블록은 같은 프로바이더와 모델 ID를 가리키고 opencode V2는 이를 프로바이더 항목 하나로 병합합니다. Apply, Refresh, Disable, Restore는 두 조각 모두에 작용하며 다른 프로바이더, 에이전트, 단축키, MCP 항목은 유지됩니다.
+관리형 OpenCode 연동은 `provider.opencodex`(opencode V1)와 `providers.opencodex`(opencode V2) 두 조각을 소유합니다. 두 블록 모두 선언된 모델별 추론 선택지와 기본값을 같은 내용으로 가집니다. 레거시 블록은 모델 options의 기본값과 변형 맵으로, V2 블록은 모델 settings와 네이티브 변형 배열로 표현하며 둘 다 기록하고 동기화합니다. 두 블록은 같은 프로바이더와 모델 ID를 가리키고 opencode V2는 이를 프로바이더 항목 하나로 병합합니다. Apply, Refresh, Disable, Restore는 두 조각 모두에 작용하며 다른 프로바이더, 에이전트, 단축키, MCP 항목은 유지됩니다. 이 모델 정의는 Kilo 내보내기와 `ocx opencode` 런처와 같은 유효 정규 모델 메타데이터에서 만들어집니다. 명시적 사용자 지정 오버라이드는 항상 우선하고 비워 둔 단계는 그대로 유지되며, 단계나 기본값을 지어내지 않습니다. 신뢰할 수 있는 컨텍스트 한도는 출력 한도와 함께 전달됩니다. 출력은 알려진 값(명시적 또는 카탈로그 메타데이터)이 우선하고, 알려지지 않았으면 스키마 필수 32000 폴백(컨텍스트로 상한)이 사용되며, 신뢰할 수 있는 컨텍스트가 없으면 limit 블록 전체가 생략됩니다. 기능, 강도 단계, 기본값, 선택적 입력 한도는 알려진 경우에만 기록됩니다. V2 블록의 네이티브 capabilities 객체에는 알려진 tools 값이 필요해서 도구 지원 여부를 알 수 없으면 일부만 쓰지 않고 객체 전체를 생략하며, 레거시 쪽 모달리티 선언은 그대로 남습니다. 단계를 지어내는 대신 제어만 기록합니다. V2 블록은 항상 명시적인 변형 배열을 가지며 선언이 없으면 비어 있는데, 생략하면 OpenCode가 low/medium/high를 합성하기 때문입니다. 고정된 추론은 알려졌지만 조절 가능한 단계가 없는 모델에는 선택 가능한 강도 대신 비활성 전용 억제가 기록됩니다. 레거시 OpenCode 블록과 Kilo 모두 클라이언트가 그냥 생성했을 각 단계 ID를 전부 비활성화합니다. 어느 쪽도 선택 가능한 강도를 추가하지 않습니다. 선택 가능한 변형(모델 자신의 단계가 `none`을 선언한 경우의 `none` 포함)은 알려진 경우에 기록되는 기본 추론 강도를 덮어쓸 수 있습니다. 클라이언트가 무엇을 선택하든 프록시의 업스트림 고정 정책은 계속 실제 요청에 적용됩니다.
 
 관리형 DSH 지원의 최저 호환 버전은 **DSH 0.1.0-rc.6**입니다. opencodex는 `llm-pi-ai.providers.opencodex`만 소유합니다. Apply와 Refresh는 해당 조각을 교체하고, Disable은 그 조각만 제거하며, Restore는 기록된 스냅샷을 되돌립니다. DSH는 프로바이더 변경을 즉시 다시 읽습니다. 이 작업은 사용자의 기본 모델이나 네이티브 `deepseek-official` 프로바이더를 바꾸지 않습니다. 관리형 DSH 연동은 현재 루프백 전용이며 실제 자격 증명을 기록하지 않습니다.
 
@@ -115,7 +115,7 @@ TOML 날짜와 시간도 관리형 재작성을 거부합니다. 병합 과정�
 
 **Kimi Code는 환경 변수 참조를 담을 수 없어** 설정에 키 대신 `opencodex-loopback` 자리표시자를 넣습니다. 어느 클라이언트 설정에도 실제 자격 증명을 기록하지 않습니다.
 
-**`ocx opencode`에서는 런처의 프로바이더 블록이 우선합니다.** 런처는 `OPENCODE_CONFIG_CONTENT`를 통해 `provider.opencodex`와 `providers.opencodex`를 주입합니다. 디스크의 같은 항목보다 우선하지만 opencode 설정의 나머지는 평소처럼 적용됩니다. 여기의 스위치는 `opencode`를 직접 실행할 때 중요합니다.
+**`ocx opencode`에서는 런처의 프로바이더 블록이 우선합니다.** 런처는 `OPENCODE_CONFIG_CONTENT`를 통해 `provider.opencodex`와 `providers.opencodex`를 주입합니다. 디스크의 같은 항목보다 우선하지만 opencode 설정의 나머지는 평소처럼 적용됩니다. 이 블록은 내보내기와 같은 유효 정규 모델 메타데이터로 구성되므로 런처와 관리형 연동이 같은 모델, 한도, 추론 선택지를 기술합니다. 여기의 스위치는 `opencode`를 직접 실행할 때 중요합니다.
 
 ## 터미널에서 사용하기
 
@@ -144,7 +144,7 @@ ocx integration client enable --client mcode
 ocx mcode
 ```
 
-연결 후 `ocx sync`와 `POST /api/sync`는 소유한 MCode, Pi, Aside, Raycast, omo 카탈로그를 현재 모델 선택, 컨텍스트 창, 추론 강도 단계로 갱신합니다. 프록시 시작 시 소유한 Raycast 카탈로그도 갱신합니다. 모델 표시 여부, 프로바이더 선택, 프리셋이 바뀌어도 연결된 Pi, Aside, Raycast, omo 카탈로그를 갱신합니다. 누락되거나 외부에서 수정되었거나 안전하지 않은 블록, 그리고 이전에 소유했지만 사용자가 직접 삭제한 블록은 그대로 둡니다. 활성화된 Aside 프로필은 일반적인 소유 블록만 갱신하는 규칙의 예외입니다. 계정 디렉터리가 있고 소유 블록이 생긴 적이 없다면 해당 슬롯이 비어 있을 때 동기화로 첫 블록을 만들 수 있습니다. 이전 Aside 연결이 있으면 이 동작이 기본적으로 등록된 모든 프로필에 적용됩니다. 동기화는 없는 계정 디렉터리를 만들거나 수동 블록을 교체하지 않습니다. 거부되거나 겹친 갱신은 클라이언트마다 따로 보고합니다. 갱신 파일을 읽으려면 새 Pi 세션을 시작하거나 Aside를 완전히 종료하고 다시 여세요. Aside 갱신에는 [호환되는 실행 중 프록시](#aside-프로필-제어)가 필요합니다.
+연결 후 `ocx sync`와 `POST /api/sync`는 소유한 MCode, Pi, Aside, Raycast, omo, OpenCode, Kilo 카탈로그를 현재 모델 선택, 컨텍스트 창, 추론 강도 단계로 갱신합니다. 프록시 시작 시 소유한 Raycast 카탈로그도 갱신합니다. 모델 표시 여부, 프로바이더 선택, 프리셋이 바뀌어도 연결된 Pi, Aside, Raycast, omo, OpenCode, Kilo 카탈로그를 갱신합니다. 누락되거나 외부에서 수정되었거나 안전하지 않은 블록, 그리고 이전에 소유했지만 사용자가 직접 삭제한 블록은 그대로 둡니다. 활성화된 Aside 프로필은 일반적인 소유 블록만 갱신하는 규칙의 예외입니다. 계정 디렉터리가 있고 소유 블록이 생긴 적이 없다면 해당 슬롯이 비어 있을 때 동기화로 첫 블록을 만들 수 있습니다. 이전 Aside 연결이 있으면 이 동작이 기본적으로 등록된 모든 프로필에 적용됩니다. 동기화는 없는 계정 디렉터리를 만들거나 수동 블록을 교체하지 않습니다. 거부되거나 겹친 갱신은 클라이언트마다 따로 보고합니다. 갱신 파일을 읽으려면 새 Pi, OpenCode, Kilo 세션을 시작하거나 Aside를 완전히 종료하고 다시 여세요. Aside 갱신에는 [호환되는 실행 중 프록시](#aside-프로필-제어)가 필요합니다.
 
 Models에 **“Model selection saved”**와 클라이언트 갱신 경고가 함께 표시되면 선택 자체는 저장되었지만 클라이언트 파일 하나 이상을 갱신하지 못한 상태입니다. 경고는 해당 클라이언트와, 필요하면 Aside 프로필을 알려주고 거부 이유를 설명합니다. 새 세션을 시작하기 전에 **Integrations**에서 해당 클라이언트나 프로필을 확인하세요. 문제를 해결한 뒤 `ocx sync`를 다시 실행합니다. 겹친 작업은 먼저 끝나야 합니다. 경고에 백업 경로가 있거나 복구가 완료되지 않았다고 나오면 재시도 전 복구 상태를 확인하세요. 선택 저장 성공만으로 클라이언트 파일 복구까지 확인된 것은 아닙니다.
 
@@ -222,9 +222,9 @@ Kilo CLI, VS Code, JetBrains는 전역 설정을 공유합니다. 이 연동은 
 
 Kilo는 이 전역 파일을 모두 병합합니다. 다른 후보 파일에도 `provider.opencodex`가 있으면 상태에 충돌 파일을 표시하고 적용과 교체를 거부합니다. 연동을 켜기 전에 해당 파일에서 `provider.opencodex`를 제거하세요. 이미 소유한 파일의 블록은 충돌 중에도 비활성화할 수 있습니다. 읽을 수 없거나 안전하지 않은 후보 파일도 쓰기를 막습니다.
 
-관리하는 부분은 OpenCode V1 형식의 `provider.opencodex`(`npm`, `options`, `models`)뿐입니다. OpenCode V2의 `providers` 키는 내보내지 않습니다. `$schema`, `model`, `enabled_providers`, MCP 등의 키는 사용자가 관리합니다. 적용한 뒤 Kilo에서 `opencodex/<provider/model>`을 선택하세요.
+관리하는 부분은 OpenCode V1 형식의 `provider.opencodex`(`npm`, `options`, `models`)뿐입니다. OpenCode V2의 `providers` 키는 내보내지 않습니다. 대신 모델별 추론 선택지는 프로바이더 블록 안의 변형 맵으로, OpenCode 내보내기와 같은 유효 정규 메타데이터에서 기록됩니다. `$schema`, `model`, `enabled_providers`, MCP 등의 키는 사용자가 관리합니다. 적용한 뒤 Kilo에서 `opencodex/<provider/model>`을 선택하세요.
 
-루프백에서는 `options.apiKey`로 `{env:OPENCODEX_KILO_API_KEY}`를 사용합니다. 루프백이 아닌 바인드에서는 인증을 `options.headers["x-opencodex-api-key"]`로 옮기며 실제 키를 저장하지 않습니다. 적용 시 전역 파일 전체를 보기 좋은 JSON으로 다시 쓰므로 다른 키의 주석과 후행 쉼표는 보존되지 않습니다. Kilo는 자동 카탈로그 갱신 대상이 아닙니다. 라우팅 모델 선택을 바꾼 뒤에는 명시적으로 갱신하세요.
+루프백에서는 `options.apiKey`로 `{env:OPENCODEX_KILO_API_KEY}`를 사용합니다. 루프백이 아닌 바인드에서는 인증을 `options.headers["x-opencodex-api-key"]`로 옮기며 실제 키를 저장하지 않습니다. 적용 시 전역 파일 전체를 보기 좋은 JSON으로 다시 쓰므로 다른 키의 주석과 후행 쉼표는 보존되지 않습니다. Kilo는 자동 카탈로그 갱신 대상입니다. `ocx sync`, `POST /api/sync`, 표시 여부·프로바이더·프리셋 변경은 다른 클라이언트와 같은 소유 블록만 갱신하는 안전한 규칙으로 소유한 Kilo 블록을 갱신하며, 새 Kilo 세션이 갱신된 파일을 읽습니다.
 
 ```bash
 ocx integration client enable --client kilo
@@ -257,5 +257,29 @@ GitHub Copilot 데스크톱 앱에서 opencodex를 OpenAI 호환 모델 프로�
 모델이 없다고 표시되면 Base URL이 `/v1/chat/completions`가 아니라 `/v1`로 끝나는지, `/v1/models`가 비어 있지 않은 `data` 배열을 반환하는지 확인하세요. opencodex가 루프백이 아닌 주소에서 수신 대기한다면 앱의 API key 입력란에 데이터 수용 키([원격 액세스](/reference/configuration/server/#remote-access)에 설명된 토큰 또는 대시보드에서 생성한 `ocx_…` 키)를 입력하세요. 앱은 이를 `Authorization: Bearer`로 전송하며, `/v1/chat/completions`는 프록시 수용 인증에만 사용하고 upstream으로 전달하지 않습니다. 자세한 내용은 [인증 매트릭스](/reference/proxy-formats/#authentication-matrix)를 확인하세요.
 
 ## Factory Droid
+
+**연동 → Factory Droid** (`/#integrations/droid`)에서 연결된 모델별 추론 기본값을
+설정할 수 있습니다. 모델이 지원하는 effort를 선택하고 변경 내용을 검토한 뒤
+확인하세요. **기본값 없음**은 해당 모델의 편집 중인 값을 지웁니다. 실제로 적용하려면
+**변경 사항 저장 / 검토**에서 확인해야 합니다. 지원 effort
+목록이 없는 모델에는 사용 가능한 기본값이 없다고 표시됩니다.
+
+이 값은 Droid 요청에 effort가 없을 때만 적용됩니다. 요청이 effort를 명시하면
+그 값을 사용하며, 기존 OpenCodex pin과 cap 정책은 계속 적용됩니다. OpenCodex가
+기본값을 적용하더라도 Droid에는 **Dynamic**으로 표시될 수 있습니다. Droid 기본값
+헤더가 없는 요청에는 영향을 주지 않습니다. 이 헤더는 요청의 선호 값이며,
+클라이언트 신원을 증명하지 않습니다.
+콤보와 라우팅 정책에서는 각 실제 대상이 자체 effort 목록으로 이 선호 값을
+확인하므로, 첫 대상이 지원하지 않아도 지원하는 다음 대상으로 전달됩니다.
+
+저장된 기본값을 라우팅된 모델이 더 이상 지원하지 않으면 요청에는 적용하지
+않습니다. 현재 모델의 effort 목록에서 빠진 값은 패널의 기본값에서도 제외되며,
+새로고침할 때 관리 행에서 제거됩니다. 편집 없이 변경 내용을 검토하면 여전히
+지원되는 기본값은 유지됩니다.
+
+새로고침은 정확히 같은 `provider/model` 선택자가 계속 연결되고 저장된 effort를 지원하는 동안 기본값을
+유지합니다. 프로바이더, 모델, 콤보 별칭의 이름을 바꾸면 관리 행이 교체되고
+기본값이 지워지므로 새 행에서 다시 선택하세요. 연동을 해제하면 관리되는 모델
+행과 기본값이 함께 제거되며, 되돌리기는 저장된 행과 기본값을 함께 복원합니다.
 
 Factory Droid는 `~/.factory/settings.json`(Windows에서는 `%USERPROFILE%\.factory\settings.json`)을 사용합니다. `ocx integration client enable --client droid`로 명시적으로 활성화한 다음 `/model`에서 사용자 지정 모델을 선택하세요. 관리되는 항목에는 키가 없으며 루프백에서만 동작합니다. 비활성화하면 관리되는 항목이 제거되고, Undo는 저장된 원본 바이트를 복원합니다. 기존 `config.json`에 OpenCodex 항목이 있거나 `settings.local.json`이 `customModels`를 덮어쓰면 활성화 전에 충돌을 해결하세요. [Factory BYOK 문서](https://docs.factory.ai/model-independence/byok)를 참고하세요.

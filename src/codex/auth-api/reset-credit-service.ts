@@ -1,3 +1,4 @@
+import { codexAccountUsesCreditsAfterLimit } from "../account-credit-use";
 import { getValidCodexToken, isCodexAccountGenerationLive, readCodexAccountRecord, CodexCredentialGenerationConflictError } from "../account-store";
 import { isCompleteCodexQuotaRecoverySnapshot } from "../quota";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
@@ -233,7 +234,7 @@ async function refreshAfterManualReset(
         && proof.credentialGeneration === auth.mainProof.credentialGeneration
         && proof.writer.identityKey === auth.mainProof.writer.identityKey
         && proof.writer.identityGeneration === auth.mainProof.writer.identityGeneration
-        && isCompleteCodexQuotaRecoverySnapshot(result.freshQuota ?? null, result.info.plan);
+        && isCompleteCodexQuotaRecoverySnapshot(result.freshQuota ?? null, result.info.plan, codexAccountUsesCreditsAfterLimit(getRuntimeConfig(config), accountId));
       for (const claim of claims) settleManualResetCooldown(getRuntimeConfig(config), claim, recovered);
       return manualResetAuthStillLive(accountId, auth) ? result.freshResetCredits : undefined;
     }
@@ -255,7 +256,7 @@ async function refreshAfterManualReset(
     const record = readCodexAccountRecord(accountId);
     const recovered = didReset && record?.credential?.chatgptAccountId === auth.chatgptAccountId
       && (result.quotaProbeAttempted?.dispatchSequence ?? 0) > afterDispatchSequence
-      && isCompleteCodexQuotaRecoverySnapshot(result.freshQuota ?? null, result.freshPlan ?? account.plan);
+      && isCompleteCodexQuotaRecoverySnapshot(result.freshQuota ?? null, result.freshPlan ?? account.plan, codexAccountUsesCreditsAfterLimit(getRuntimeConfig(config), accountId));
     for (const claim of claims) settleManualResetCooldown(getRuntimeConfig(config), claim, recovered, {
       credentialGeneration: result.freshCredentialGeneration,
       refreshLineage: result.resetRefreshLineage,

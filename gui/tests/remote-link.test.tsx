@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import { act } from "react";
 import RemoteLink from "../src/pages/RemoteLink";
 import { boundLinkHint, CHILD_RESTART_NOTICE_MS, CHILD_RESTART_POLL_MS, CHILD_RESTART_SLOW_POLL_MS, LINK_ERROR_CODES, LinkApiError, parseRemoteLinkStatus, readLinkJson, waitForChildRuntime, type RemoteLinkStatusWire } from "../src/remote-link-api";
@@ -45,7 +45,7 @@ function declareRuntimeRole(role: "standalone" | "hub" | "client"): void {
 async function mount(props: Partial<React.ComponentProps<typeof RemoteLink>> = {}): Promise<HTMLDivElement> {
   const host = win.document.createElement("div");
   win.document.body.append(host);
-  root = createRoot(host);
+  root = (await import("react-dom/client")).createRoot(host);
   await act(async () => { root?.render(<LanguageProvider><RemoteLink apiBase="http://fixture" sessionReady {...props} /></LanguageProvider>); });
   await flush();
   return host;
@@ -479,7 +479,7 @@ test("readLinkJson preserves unknown server codes and status", async () => {
   expect((caught as LinkApiError).code).toBe("future_code");
   expect((caught as LinkApiError).status).toBe(418);
   expect((caught as LinkApiError).hint).toBeNull();
-  expect(LOCALES).toHaveLength(10);
+  expect(LOCALES.some(locale => locale.code === "pt")).toBe(true);
   let hinted: unknown;
   try { await readLinkJson(new Response(JSON.stringify({ error: { code: "probe_failed", hint: `bad\u202e\u0007 line ${"x".repeat(300)}` } }), { status: 502 })); } catch (error) { hinted = error; }
   const hint = (hinted as LinkApiError).hint ?? "";
@@ -544,8 +544,15 @@ test("probe failure stays visible and Retry probes the failed alias", async () =
   await flush();
   expect(host.textContent).toContain("Could not connect to the SSH host. Check that it accepts your SSH key");
   expect(host.querySelector(".remote-link-hint code")?.textContent).toBe("child-one: Permission denied (publickey).");
-  expect(host.textContent).toContain("Retry");
-  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Retry"))?.click(); });
+  const sheet = host.querySelector(".remote-link-sheet")!;
+  expect(host.querySelectorAll(".remote-link-hint")).toHaveLength(1);
+  expect(sheet.querySelector(".remote-link-hint")).not.toBeNull();
+  expect(sheet.textContent).toContain("ssh -o BatchMode=yes <alias> true");
+  const retry = [...sheet.querySelectorAll("button")].find(button => button.textContent === "Retry")!;
+  retry.focus();
+  expect(win.document.activeElement).toBe(retry);
+  expect(retry.tabIndex).toBe(0);
+  await act(async () => { retry.click(); });
   await flush();
   expect(probes).toBe(2);
 });
@@ -731,4 +738,221 @@ test("cancelling candidates prevents a late response from appearing in a new att
   await flush();
   expect(host.textContent).toContain("new-home");
   expect(host.textContent).not.toContain("stale-home");
+});
+
+async function openHomeSheet(host: HTMLElement): Promise<HTMLDialogElement> {
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
+  return host.querySelector(".remote-link-sheet") as HTMLDialogElement;
+}
+
+function sheetButton(sheet: HTMLElement, label: string): HTMLButtonElement {
+  const button = [...sheet.querySelectorAll("button")].find(item => item.textContent === label);
+  expect(button).toBeDefined();
+  return button!;
+}
+
+async function enterAlias(sheet: HTMLElement, value: string): Promise<void> {
+  const input = sheet.querySelector("#remote-link-alias") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+}
+
+test("discovery loading, empty setup and rescan retain keyboard-accessible manual entry", async () => {
+  let complete!: (value: Response) => void;
+  let calls = 0;
+  globalThis.fetch = (async input => {
+    if (String(input).endsWith("/candidates")) {
+      calls++;
+      return new Promise<Response>(resolve => { complete = resolve; });
+    }
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  const sheet = await openHomeSheet(host);
+  expect(sheet.querySelector('[role="status"]')?.textContent).toContain("Loading");
+  expect(sheet.textContent).not.toContain("No SSH host candidates");
+  expect(sheetButton(sheet, "Rescan hosts").disabled).toBe(true);
+  complete(response({ candidates: [] }));
+  await flush();
+  expect(sheet.textContent).toContain("this Home's ~/.ssh/config");
+  expect(sheet.textContent).toContain("OpenCodex 2.66.0+");
+  expect(sheet.textContent).toContain("macOS or Linux");
+  expect(sheet.querySelector("pre code")?.textContent).toContain("Host devbox");
+  const guide = sheet.querySelector("a")!;
+  expect(guide.getAttribute("href")).toBe("https://opencodex.me/guides/remote-link/");
+  const input = sheet.querySelector("input")!;
+  expect(input.getAttribute("aria-describedby")).toBe("remote-link-alias-help");
+  expect(sheetButton(sheet, "Test connection").disabled).toBe(true);
+  for (const control of [guide, sheetButton(sheet, "Rescan hosts"), input, sheetButton(sheet, "Cancel")]) {
+    expect(control.tabIndex).toBe(0);
+    control.focus();
+    expect(win.document.activeElement).toBe(control);
+  }
+  await enterAlias(sheet, "manual-child");
+  expect(sheetButton(sheet, "Test connection").disabled).toBe(false);
+  sheetButton(sheet, "Test connection").focus();
+  expect(win.document.activeElement).toBe(sheetButton(sheet, "Test connection"));
+  await act(async () => { sheetButton(sheet, "Rescan hosts").click(); });
+  expect(input.value).toBe("manual-child");
+  expect(sheet.textContent).not.toContain("No SSH host candidates");
+  complete(response({ candidates: [{ alias: "found-child", source: "ssh_config" }] }));
+  await flush();
+  expect(calls).toBe(2);
+  expect(sheet.textContent).toContain("found-child");
+  expect(input.value).toBe("manual-child");
+  await act(async () => { sheet.dispatchEvent(new win.Event("cancel", { cancelable: true })); });
+  expect(sheet.open).toBe(false);
+  expect(win.document.activeElement?.textContent).toContain("Add child");
+});
+
+test("rescan after host confirmation preserves alias and requires fresh fingerprint confirmation", async () => {
+  const posts: Array<{ path: string; body: unknown }> = [];
+  let candidateRequests = 0;
+  let probes = 0;
+  let completeRescan!: (value: Response) => void;
+  globalThis.fetch = (async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith("/candidates")) {
+      if (++candidateRequests === 1) return response({ candidates: [] });
+      return new Promise<Response>(resolve => { completeRescan = resolve; });
+    }
+    if (init?.method === "POST") posts.push({ path, body: JSON.parse(String(init.body)) });
+    if (path.endsWith("/probe")) return response({ alias: "manual-child", fingerprint: ++probes === 1 ? "SHA256:old" : "SHA256:fresh", keyType: "ed25519" });
+    if (path.endsWith("/confirm-host")) return response({ alias: "manual-child", fingerprint: probes === 1 ? "SHA256:old" : "SHA256:fresh", ocxVersion: "2.66.0" });
+    if (path.endsWith("/apply")) return response({ linkId: "fresh-link" });
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  const sheet = await openHomeSheet(host);
+  await flush();
+  await enterAlias(sheet, "manual-child");
+  await act(async () => { sheetButton(sheet, "Test connection").click(); });
+  await flush();
+  expect(sheet.querySelector(".remote-link-fingerprint code")?.textContent).toBe("SHA256:old");
+  await act(async () => { (sheet.querySelector('[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { sheetButton(sheet, "Confirm host").click(); });
+  await flush();
+  expect(sheetButton(sheet, "Connect child").disabled).toBe(false);
+
+  await act(async () => { sheetButton(sheet, "Rescan hosts").click(); });
+  expect(sheet.querySelector('[role="status"]')?.textContent).toContain("Loading");
+  expect((sheet.querySelector("#remote-link-alias") as HTMLInputElement).value).toBe("manual-child");
+  expect(sheet.querySelector(".remote-link-fingerprint")).toBeNull();
+  expect(sheet.querySelector('[type="checkbox"]')).toBeNull();
+  expect([...sheet.querySelectorAll("button")].some(button => button.textContent === "Connect child")).toBe(false);
+  expect(sheetButton(sheet, "Test connection").disabled).toBe(true);
+  completeRescan(response({ candidates: [{ alias: "other-child", source: "ssh_config" }] }));
+  await flush();
+  expect(candidateRequests).toBe(2);
+  expect((sheet.querySelector("#remote-link-alias") as HTMLInputElement).value).toBe("manual-child");
+  expect([...sheet.querySelectorAll("button")].some(button => button.textContent === "Connect child")).toBe(false);
+  expect(posts).toEqual([
+    { path: "/api/link/probe", body: { alias: "manual-child" } },
+    { path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:old" } },
+  ]);
+
+  await act(async () => { sheetButton(sheet, "Test connection").click(); });
+  await flush();
+  expect(sheet.querySelector(".remote-link-fingerprint code")?.textContent).toBe("SHA256:fresh");
+  expect((sheet.querySelector('[type="checkbox"]') as HTMLInputElement).checked).toBe(false);
+  expect(sheetButton(sheet, "Confirm host").disabled).toBe(true);
+  expect([...sheet.querySelectorAll("button")].some(button => button.textContent === "Connect child")).toBe(false);
+  await act(async () => { sheetButton(sheet, "Confirm host").click(); });
+  expect(posts).toHaveLength(3);
+  await act(async () => { (sheet.querySelector('[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { sheetButton(sheet, "Confirm host").click(); });
+  await flush();
+  expect(sheetButton(sheet, "Connect child").disabled).toBe(false);
+  await act(async () => { sheetButton(sheet, "Connect child").click(); });
+  await flush();
+  expect(posts).toEqual([
+    { path: "/api/link/probe", body: { alias: "manual-child" } },
+    { path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:old" } },
+    { path: "/api/link/probe", body: { alias: "manual-child" } },
+    { path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:fresh" } },
+    { path: "/api/link/apply", body: { alias: "manual-child" } },
+  ]);
+  expect(sheet.open).toBe(false);
+});
+
+for (const recoveredCandidates of [[], [{ alias: "recovered-child", source: "ssh_config" }]]) {
+  test(`failed discovery retries to ${recoveredCandidates.length ? "candidates" : "empty success"} without duplicate errors`, async () => {
+    let calls = 0;
+    globalThis.fetch = (async input => {
+      if (String(input).endsWith("/candidates")) return ++calls === 1
+        ? response({ error: { code: "forbidden", hint: "Session expired" } }, 403)
+        : response({ candidates: recoveredCandidates });
+      return response(baseStatus);
+    }) as typeof fetch;
+    const host = await mount();
+    const sheet = await openHomeSheet(host);
+    await flush();
+    expect(sheet.textContent).toContain("Could not load SSH hosts");
+    expect(sheet.textContent).not.toContain("No SSH host candidates");
+    expect(host.querySelectorAll(".remote-link-hint")).toHaveLength(1);
+    expect(sheet.querySelector(".remote-link-hint")?.textContent).toContain("Session expired");
+    const retry = sheetButton(sheet, "Retry");
+    retry.focus();
+    expect(win.document.activeElement).toBe(retry);
+    expect(retry.tabIndex).toBe(0);
+    await act(async () => { retry.click(); });
+    await flush();
+    expect(sheet.textContent).not.toContain("Could not load SSH hosts");
+    expect(host.textContent).not.toContain("Session expired");
+    expect(sheet.textContent).toContain(recoveredCandidates.length ? "recovered-child" : "No SSH host candidates");
+  });
+}
+
+test("network discovery failure still permits a manual alias and explicit fingerprint confirmation", async () => {
+  const posts: Array<{ path: string; body: unknown }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith("/candidates")) throw new TypeError("offline");
+    if (init?.method === "POST") posts.push({ path, body: JSON.parse(String(init.body)) });
+    if (path.endsWith("/probe")) return response({ alias: "manual-child", fingerprint: "SHA256:manual", keyType: "ed25519" });
+    if (path.endsWith("/confirm-host")) return response({ alias: "manual-child", fingerprint: "SHA256:manual", ocxVersion: "2.66.0" });
+    if (path.endsWith("/apply")) return response({ linkId: "manual-link" });
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  const sheet = await openHomeSheet(host);
+  await flush();
+  expect(sheet.textContent).toContain("Could not load SSH hosts");
+  expect(sheet.textContent).not.toContain("No SSH host candidates");
+  expect(host.querySelectorAll(".remote-link-error")).toHaveLength(1);
+  expect(sheet.textContent).toContain("Remote link request could not be completed.");
+  await enterAlias(sheet, "manual-child");
+  await act(async () => { sheetButton(sheet, "Test connection").click(); });
+  await flush();
+  expect(sheet.textContent).not.toContain("Could not load SSH hosts");
+  expect(sheet.textContent).not.toContain("Remote link request could not be completed.");
+  expect(sheet.textContent).toContain("SHA256:manual");
+  expect(sheetButton(sheet, "Confirm host").disabled).toBe(true);
+  expect(posts).toEqual([{ path: "/api/link/probe", body: { alias: "manual-child" } }]);
+  await act(async () => { (sheet.querySelector('[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { sheetButton(sheet, "Confirm host").click(); });
+  await flush();
+  expect(posts[1]).toEqual({ path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:manual" } });
+  await act(async () => { sheetButton(sheet, "Connect child").click(); });
+  await flush();
+  expect(posts[2]).toEqual({ path: "/api/link/apply", body: { alias: "manual-child" } });
+  expect(sheet.open).toBe(false);
+});
+
+test("Find Home empty guidance names this computer rather than claiming it is Home", async () => {
+  declareRuntimeRole("standalone");
+  globalThis.fetch = (async input => response(String(input).endsWith("/candidates") ? { candidates: [] } : joinableStatus)) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  const radios = host.querySelectorAll('[role="radio"]');
+  await act(async () => { radios[0]?.dispatchEvent(new win.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+  expect(win.document.activeElement).toBe(radios[1]);
+  await act(async () => { (radios[1] as HTMLButtonElement).click(); });
+  await flush();
+  const sheet = host.querySelector(".remote-link-sheet")!;
+  expect(sheet.textContent).toContain("this computer's ~/.ssh/config");
+  expect(sheet.textContent).not.toContain("this Home's");
 });

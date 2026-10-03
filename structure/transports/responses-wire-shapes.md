@@ -60,9 +60,9 @@ string on this wire instead of the numeric `thinking_budget` the Chat wire appli
 stays unpinned. `tests/providers/alibaba-token-plan-wire-defaults.test.ts` covers the pins and the
 replay flag.
 
-xAI keeps `openai-chat` as its provider-wide compatibility wire, but Grok 4.5/4.6/4.7 subscription
-Responses requests default to native `openai-responses`. Existing namespace, hosted-search and
-reasoning-replay normalization remains in force. The reserved `xai` OAuth transport is name-pinned
+Trusted custom Responses relays may opt into `preserveResponsesInputItemIds` and `preserveResponsesMessageMetadata` for launcher replay (#6220). Ordinary destinations still strip IDs when `store: false` and private `internal_chat_message_metadata_passthrough`; xAI custom-call ID repair remains active.
+
+xAI keeps `openai-chat` provider-wide; Grok 4.5/4.6/4.7 subscription Responses default to native `openai-responses`, retaining namespace, hosted-search and reasoning-replay normalization. The reserved `xai` OAuth transport is name-pinned
 to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this
 default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
 existing wire and tier policy. The OAuth lane is service-tier classified per model
@@ -235,7 +235,6 @@ The restorable map is narrowed by `tool_choice` the same way `authorizedAliases`
 namespace layer: upstream still receives the whole aliased catalog, but a tool the caller
 disabled for the turn cannot be restored back into an executable client name.
 Arguments, user text, and schema property names are never rewritten.
-
 > Decision record: [ADR-0042](../decisions/ADR-0042-responses-http-sse.md)
 
 > Decision record: [ADR-0043](../decisions/ADR-0043-responses-http-sse.md)
@@ -248,7 +247,9 @@ Google wire compiler observes and reports compatibility narrowing; the Responses
 derive nor consume that report.
 
 `declaredToolNames` carries the request's tool catalog into both bridges, and it does two separate
-jobs that are separately controlled.
+jobs that are separately controlled. The passthrough guard reads the same CR/LF/CRLF event and
+field boundaries as Responses-to-Chat projection, including mixed and split line endings; the
+[shared SSE framing contract](byte-accounting.md#stream-buffer-accounting) owns that behavior.
 
 Normalization runs on every inbound wire. `normalizeDeclaredToolName` and `declaresCodeModeExec` in
 `src/types/tools.ts` read the same set to map a provider-invented `default.` namespace back to the
@@ -256,8 +257,7 @@ declared bare tool and to rewrite code-mode helper names into the declared `exec
 input unchanged when the set is absent, so the set reaches the bridge on every wire and enforcement
 is expressed by a separate flag rather than by withholding it.
 
-The passthrough guard resolves an emitted name through that same `normalizeDeclaredToolName`, so
-whatever it admits it must also EMIT under the resolved name. The two halves disagreed once:
+The passthrough guard resolves an emitted name through that same `normalizeDeclaredToolName`, so whatever it admits it must also EMIT under the resolved name. The two halves disagreed once:
 `normalizeDefaultNamespaceInItem` implemented only the bare-tool case (#4176), so a
 `default.`-prefixed code-mode helper was admitted as `exec` (#4412) and then relayed verbatim.
 The bounded helper vocabulary includes the goal lifecycle calls that Codex advertises inside its
@@ -522,7 +522,7 @@ instead emits one `response.incomplete` with `adapter_eof`, followed by one `[DO
 EOF candidates follow the owning repair policy: the native boundary accepts a structurally valid
 terminal tail, while an opted-in terminal repair keeps its unframed suffix tainted and emits
 `missing_terminal_event`. Pull/tee and eager relays therefore agree on terminal, sentinel, and
-request-log accounting without promoting a truncated repair candidate.
+request-log accounting without promoting a truncated repair candidate. Terminal repair reconciles one delayed LF after a consumed CR delimiter, preserving its byte without treating it as an unframed EOF suffix; additional suffix bytes remain subject to the same strict check.
 
 > Decision record: [ADR-0044](../decisions/ADR-0044-responses-http-sse.md)
 

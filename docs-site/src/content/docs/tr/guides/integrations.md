@@ -223,7 +223,10 @@ asla gerçek bir kimlik bilgisi yazılmaz.
 **`ocx opencode` için başlatıcının sağlayıcı bloğu kazanır.** Bu başlatıcı,
 `provider.opencodex`'i diskteki aynı girdiden üstün olan
 `OPENCODE_CONFIG_CONTENT` aracılığıyla enjekte eder — opencode yapılandırmanızın
-geri kalanı her zamanki gibi geçerli olmaya devam eder. Buradaki anahtar,
+geri kalanı her zamanki gibi geçerli olmaya devam eder. Başlatıcının yazdığı bloklar,
+dışa aktarımlarla aynı geçerli kanonik model meta verisinden (bilinen yetenekler ve
+akıl yürütme seçenekleri) kurulur; bilinmeyen değerler uydurulmaz, yalnızca çıkış sınırı
+bilinmiyorsa şemanın zorunlu 32000 yedeğine (bağlama göre kırpılmış) düşer. Buradaki anahtar,
 `opencode`'u doğrudan başlattığınızda önemlidir.
 
 ## Terminalden
@@ -256,11 +259,12 @@ ocx mcode
 ```
 
 Bağlandıktan sonra `ocx sync` ve `POST /api/sync`, yönetilen MCode, Pi, Aside,
-Raycast ve omo kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast
+Raycast, omo, OpenCode ve Kilo kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast
 kataloğunu yeniler. Model görünürlüğü, sağlayıcı veya ön ayar değişiklikleri Pi,
-Aside, Raycast ve omo kataloglarını günceller. Eksik, dışarıdan düzenlenmiş, güvenli olmayan
+Aside, Raycast, omo, OpenCode ve Kilo kataloglarını günceller. Eksik, dışarıdan düzenlenmiş, güvenli olmayan
 veya elle kaldırılmış bloklara dokunmaz; yeniden bağlamak istediğinizde
-entegrasyonu açıkça etkinleştirin.
+entegrasyonu açıkça etkinleştirin. Güncellenen dosyayı yüklemek için yeni bir
+Pi, OpenCode veya Kilo oturumu başlatın.
 
 Ayrı MiniMax platform CLI'si (`mmx`) bir dosya anahtarı entegrasyonu değildir.
 Metin komutları MiniMax'ın Anthropic uyumlu uç noktasını kullandığı için OpenCodex,
@@ -329,7 +333,7 @@ ocx integration client restore --op <operation-id>
 
 ## Kilo
 
-Kilo yalnızca `~/.config/kilo` altındaki ilk mevcut genel dosyada `provider.opencodex` yazar (`XDG_CONFIG_HOME` bu dizini taşır; hiçbir aday yoksa `kilo.jsonc` oluşturulur). Başka bir aday dosya da `provider.opencodex` tanımlıyorsa durum çakışma bildirir ve Uygula işlemi reddedilir. Diğer anahtarlar değişmez. Uygula dosyanın tamamını yeniden yazar; yorumlar ve sondaki virgüller korunmaz. Kilo’da `opencodex/<model>` seçin.
+Kilo yalnızca `~/.config/kilo` altındaki ilk mevcut genel dosyada `provider.opencodex` yazar (`XDG_CONFIG_HOME` bu dizini taşır; hiçbir aday yoksa `kilo.jsonc` oluşturulur). Başka bir aday dosya da `provider.opencodex` tanımlıyorsa durum çakışma bildirir ve Uygula işlemi reddedilir. Diğer anahtarlar değişmez. Modellerin akıl yürütme seçenekleri, sağlayıcı bloğu içinde bir varyant haritası olarak OpenCode dışa aktarımıyla aynı geçerli kanonik meta veriden yazılır. `ocx sync` ve `POST /api/sync` OpenCodex'e ait Kilo bloğunu yeniler; güncellenen dosyayı yeni bir Kilo oturumu yükler. Uygula dosyanın tamamını yeniden yazar; yorumlar ve sondaki virgüller korunmaz. Kilo’da `opencodex/<model>` seçin.
 
 Başka bir aday çakışsa veya ayrıştırılamasa bile Devre Dışı Bırak, kaydedilen dosyadaki OpenCodex'e ait bloğu kaldırabilir; diğer aday dosya değişmez.
 

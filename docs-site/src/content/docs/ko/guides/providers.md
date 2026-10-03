@@ -190,7 +190,7 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 101개 들어 있습니다. 키 방식 83개, OAuth 14개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 102개 들어 있습니다. 키 방식 84개, OAuth 14개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 
@@ -252,9 +252,19 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
+| OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …그 외 다수 | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
+
+**OpenGateway**는 Sionic AI가 운영하는 OpenAI 호환 게이트웨이입니다. Base URL은
+`https://apis.opengateway.ai/v1`이며 공개 카탈로그에는 활성 모델이 약 80개 있습니다
+(2026-10-02 확인). 프리셋은 공개 `GET /v1/models`에서 모델 목록을 자동 갱신하고 활성
+Chat Completions 모델(그리고 Responses 전용이라 Responses로 보내는 `openai/o3-pro`)만 가져옵니다. Sionic이 제공하는
+`deepseek/deepseek-v4.1-flash-ultrafast`와 `z-ai/glm-5.3-flash-ultrafast`를 먼저 표시합니다.
+[OpenGateway 대시보드](https://opengateway.ai/api-keys)에서 키를 발급한 뒤
+`ocx provider add opengateway`를 실행하거나 대시보드에서 **OpenGateway**를 선택하세요.
+Chat 요청은 설정한 Bearer 키를 사용하며 공개 모델 목록은 키의 유효성을 검증하지 않습니다.
 
 **OpenCode Zen**(`opencode-zen`)과 키 없는 **OpenCode Free** 프리셋은
 `https://opencode.ai/zen/v1`을 공유합니다. 그 게이트웨이의 무료 모델은 종종 분당 약 15–20회 요청의 짧은 창 속도 제한에 걸립니다(커뮤니티 측정; OpenCode는 RPM을 공개하지 않음). Zen은 `Retry-After` / `X-RateLimit-*` 헤더 없는 일반 429를 반환할 수 있습니다. 이는 키 없는 데스크톱 할당량(`opencode-free`에서 약 5시간당 Big Pickle/무료 모델 200회)과 별개입니다. Zen이 그런 429에서 `Retry-After`를 생략하면 opencodex는 클라이언트 오류에 안내를 더하고 합성 `Retry-After`를 붙입니다(업스트림 `Retry-After`가 있으면 그것이 우선). 동일 키 대기 재시도는 [`retryOn429`](/ko/reference/configuration/)로 선택합니다.

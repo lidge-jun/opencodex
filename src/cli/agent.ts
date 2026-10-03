@@ -28,6 +28,7 @@ const USAGE = `Usage:
   ocx agent injection suggest <work description> [--model <id>] [--apply] [--json]
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
+  ocx agent subagents force <model|-> [--json]
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
   ocx agent roles [status|set <role> <model>|suggest [--model <id>] [--apply]] [--json]
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->]
@@ -167,6 +168,15 @@ async function subagents(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     rejectArgs(args, USAGE);
     const result = await runtimeRequest("/api/subagent-models", {}, deps);
     printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+  if (action === "force") {
+    const model = args.shift();
+    if (!model?.trim()) throw new CliUsageError("a force model or - is required", USAGE);
+    rejectArgs(args, USAGE);
+    const force = clearable(model);
+    const result = await runtimeRequest("/api/subagent-models", { method: "PUT", body: JSON.stringify({ force }) }, deps);
+    printData(result, wantsJson, [force ? `Claude subagent force: ${force}. Applies on the next routed ocx claude launch.` : "Claude subagent force cleared."]);
     return;
   }
   let models: string[];

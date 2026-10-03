@@ -17,7 +17,7 @@ import {
   type OcxErrorPayload,
 } from "../lib/errors";
 import { mayBecomePatchEnvelope, repairFreeformToolInput } from "../responses/apply-patch-envelope";
-import { encodeCompactionSummary } from "../responses/compaction";
+import { encodeCompactionSummary, releaseCompactionCiphertextLease } from "../responses/compaction";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
 import { isTruncatedStopReason, truncationReasonFor } from "../responses/truncated-stop-reason";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "../responses/reasoning-envelope";
@@ -59,21 +59,21 @@ export function buildResponseJSON(
 ): Record<string, unknown> {
   // Default-budget safety net: a caller that omits the budget gets a bounded
   // default (disposed with the call), never the unbounded append path.
-  if (options?.translatorBudget) {
-    const body = buildResponseJSONWithBudget(events, modelId, options);
-    // A buffered turn delivers its whole answer as one body, so nothing calls the per-frame
-    // recorder on the SSE bridge. Without this the attempt would persist adapter events with
-    // zero relayed ones, which is the loss signal -- raised on every non-streaming request.
-    if (options.recordBufferedDelivery !== false) {
-      attemptDeliveryRecorder(options.translatorBudget)?.noteBufferedDelivery(body);
+  const ownsBudget = !options?.translatorBudget;
+  const budget = options?.translatorBudget ?? createTranslatorBudget();
+  try {
+    const body = buildResponseJSONWithBudget(events, modelId, { ...options, translatorBudget: budget });
+    // Buffered delivery has no per-frame recorder; retain its existing one-shot attribution.
+    if (options?.translatorBudget && options.recordBufferedDelivery !== false) {
+      attemptDeliveryRecorder(budget)?.noteBufferedDelivery(body);
     }
     return body;
-  }
-  const budget = createTranslatorBudget();
-  try {
-    return buildResponseJSONWithBudget(events, modelId, { ...options, translatorBudget: budget });
   } finally {
-    budget.dispose();
+    for (const event of events) {
+      releaseTranslatedEvent(event, budget);
+      releaseCompactionCiphertextLease(event, budget);
+    }
+    if (ownsBudget) budget.dispose();
   }
 }
 
@@ -618,7 +618,7 @@ function buildResponseJSONWithBudget(
       type: "compaction", id: `cmp_${uuid()}`,
       encrypted_content: compactionEncryptedContent ?? encodeCompactionSummary(joinChunks(batchCompaction)),
     };
-    pushOutput(item, compactionEncryptedContent ? bytesOf(compactionEncryptedContent) : batchCompaction.bytes);
+    pushOutput(item, compactionEncryptedContent ? 0 : batchCompaction.bytes);
   }
 
   const failure = errorEvent ? adapterFailureFromEvent(errorEvent) : undefined;

@@ -121,11 +121,11 @@ describe("/api/codex-agent-roles", () => {
   test("an unreadable omo.jsonc still lists the roles", async () => {
     const omoPath = join(root, "home", ".omo", "omo.jsonc");
     writeFileSync(omoPath, '{ "codex": {} }\n');
-    const nativeRead = fs.readFileSync;
-    const spy = spyOn(fs, "readFileSync").mockImplementation(((path: fs.PathOrFileDescriptor, options?: unknown) => {
+    const nativeOpen = fs.openSync;
+    const spy = spyOn(fs, "openSync").mockImplementation(((path, flags, mode) => {
       if (path === omoPath) throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-      return nativeRead(path, options as BufferEncoding);
-    }) as never);
+      return nativeOpen(path, flags, mode);
+    }) as typeof fs.openSync);
     try {
       const listed = await call("/api/codex-agent-roles");
       expect(listed.status).toBe(200);

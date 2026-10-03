@@ -1,6 +1,6 @@
 import type { TKey } from "./en";
 
-export type LabLocale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi";
+export type LabLocale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi" | "pt";
 export type LabCatalogKey = Exclude<Extract<TKey, `lab.${string}`>, `lab.production.${string}`>;
 export type LabSupplementKey =
   | "subjectKindUnknown"
@@ -514,6 +514,56 @@ const vi: Record<LabCatalogKey, string> = {
   "lab.layer.task_effectiveness": "Hiệu quả tác vụ",
 };
 
+const pt: Record<LabCatalogKey, string> = {
+  "lab.title": "Laboratório de Compatibilidade",
+  "lab.subtitle": "Matriz de vereditos de compatibilidade somente leitura, gerada a partir das evidências da projeção do laboratório.",
+  "lab.loadFailed": "Não foi possível carregar os dados do laboratório de compatibilidade",
+  "lab.projectionUnavailable": "A projeção do laboratório não está disponível. Execute primeiro os testes de conformidade ou as sondagens ao vivo.",
+  "lab.projectionIncompatible": "O esquema da projeção do laboratório é incompatível. Reconstrua a projeção.",
+  "lab.statusTitle": "Status da projeção",
+  "lab.matrixTitle": "Matriz de compatibilidade",
+  "lab.verdictsTitle": "Registros de veredito",
+  "lab.filter.layer": "Camada de evidência",
+  "lab.filter.verdict": "Veredito",
+  "lab.filter.subject": "ID do sujeito",
+  "lab.filter.all": "Todos",
+  "lab.col.subject": "Sujeito",
+  "lab.col.layer": "Camada",
+  "lab.col.suite": "Suíte",
+  "lab.col.verdict": "Veredito",
+  "lab.col.asOf": "Data de referência",
+  "lab.col.protocol": "Conformidade de protocolo",
+  "lab.col.live": "Compatibilidade da rota ao vivo",
+  "lab.col.task": "Eficácia nas tarefas",
+  "lab.empty": "Ainda não há vereditos de compatibilidade na projeção.",
+  "lab.subjectKind": "Tipo",
+  "lab.observationCount": "Observações",
+  "lab.eventCount": "Eventos",
+  "lab.verdictCount": "Vereditos",
+  "lab.subjectCount": "Sujeitos",
+  "lab.builtAt": "Gerada em",
+  "lab.loading": "Carregando evidências de compatibilidade…",
+  "lab.loadMore": "Carregar mais",
+  "lab.detailTitle": "Detalhes do veredito",
+  "lab.detailClose": "Fechar",
+  "lab.detailSubject": "Sujeito",
+  "lab.detailObservations": "Observações",
+  "lab.detailEvents": "Eventos de evidência",
+  "lab.detailArtifacts": "Metadados dos artefatos",
+  "lab.detailLoadFailed": "Não foi possível carregar os detalhes do veredito",
+  "lab.refresh": "Atualizar",
+  "lab.verdict.UNKNOWN": "Desconhecido",
+  "lab.verdict.CLAIMED": "Declarado",
+  "lab.verdict.PROBED": "Sondado",
+  "lab.verdict.VERIFIED": "Verificado",
+  "lab.verdict.DEGRADED": "Degradado",
+  "lab.verdict.BLOCKED": "Bloqueado",
+  "lab.verdict.UNSUPPORTED": "Não suportado",
+  "lab.layer.protocol_conformance": "Conformidade de protocolo",
+  "lab.layer.live_route_compatibility": "Compatibilidade da rota ao vivo",
+  "lab.layer.task_effectiveness": "Eficácia nas tarefas",
+};
+
 export const LAB_CATALOG_OVERRIDES: Record<LabLocale, Record<LabCatalogKey, string>> = {
   en,
   de,
@@ -525,6 +575,7 @@ export const LAB_CATALOG_OVERRIDES: Record<LabLocale, Record<LabCatalogKey, stri
   ja,
   tr,
   vi,
+  pt,
 };
 
 const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
@@ -647,6 +698,18 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "community.bundles": "Gói bằng chứng",
     "community.activeRecords": "Bản ghi đang hoạt động",
     "community.revokedRecords": "Bản ghi đã thu hồi",
+  },
+  pt: {
+    subjectKindUnknown: "Desconhecido",
+    "artifact.present": "Presente",
+    "artifact.corrupt": "Corrompido",
+    "artifact.purged_unavailable": "Removido / indisponível",
+    selectVerdict: "Ver veredito de {subject}",
+    "community.title": "Evidências da comunidade",
+    "community.notLocalVerdict": "Contexto somente leitura não confiável. Não incluído neste veredito local.",
+    "community.bundles": "Pacotes",
+    "community.activeRecords": "Registros ativos",
+    "community.revokedRecords": "Registros revogados",
   },
 };
 

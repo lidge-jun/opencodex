@@ -26,6 +26,7 @@ import {
   type ModelPickerOrderMode, type PickerOrderSettings, type PickerOrderSaved, type ModelPickerUsage,
 } from "../model-picker-order";
 import { startVisibilityPoll } from "../visibility-poll";
+import { useModelVisibility } from "../use-model-visibility";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import ErrorBoundary from "../components/ErrorBoundary";
@@ -48,8 +49,7 @@ import {
 } from "../models-groups";
 import {
   fetchSelectedModels,
-  modelVisible,
-  putModelVisibility,
+  modelVisible as savedModelVisible,
   clientCatalogRefreshFailures,
   type ClientCatalogRefreshFailure,
   shouldApplyLoadGeneration,
@@ -340,6 +340,18 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const catalogMutationRef = useRef(false);
   const loadGenerationRef = useRef(0);
   const loadPendingRef = useRef(false);
+  const visibility = useModelVisibility(apiBase, {
+    onQueued: () => { ++loadGenerationRef.current; setStatus(""); },
+    onBusy: value => { ++loadGenerationRef.current; loadPendingRef.current = false; catalogMutationRef.current = value; busyRef.current = value; setBusy(value); },
+    onResponse: body => {
+      const failures = clientCatalogRefreshFailures(body);
+      if (failures !== undefined) setIntegrationFailures(failures);
+    },
+    refresh: signal => load(true, signal),
+    onSettled: error => { setOk(!error); setStatus(t(error ?? "models.applied")); },
+  });
+  const modelVisible = (selected: ProviderModelMap, provider: string, id: string, native: boolean, blocked: boolean) =>
+    visibility.visible(provider, id, native, savedModelVisible(selected, provider, id, native, blocked));
   // multi_agent_v2 / ultra gate. null = endpoint unavailable (older proxy build) -> section hidden.
   const [v2, setV2] = useState<V2Status | null>(null);
   // #2465: per-provider model-preset state. Keyed by provider so one card's busy state cannot
@@ -497,6 +509,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   }, [apiBase]);
 
   const fetchCatalog = useCallback(async (signal: AbortSignal): Promise<CachedModelsPage> => {
+    const generation = loadGenerationRef.current;
     const [modelsRes, capsRes, providersRes, selectionData] = await Promise.all([
       // Every request carries the resource signal, so leaving the catalog tab cancels
       // the work rather than only discarding its result.
@@ -528,7 +541,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       contextCapValues: capsData.values ?? capsData.caps ?? {},
       contextCapValue: nextCapValue,
     } satisfies CachedModelsPage;
-    writeSessionListCache(cacheKey, next);
+    if (generation === loadGenerationRef.current) writeSessionListCache(cacheKey, next);
     return next;
   }, [apiBase, cacheKey]);
 
@@ -552,11 +565,12 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     cacheKey,
     [apiBase],
     async (signal) => {
+      const generation = loadGenerationRef.current;
       const next = await fetchCatalog(signal);
       // A manual mutation refresh may have invalidated this request while its JSON was decoding.
       // Do not let the aborted catalog repaint controls after the newer result is applied.
       if (signal.aborted) throw new Error("models request aborted");
-      applyCatalog(next);
+      if (!catalogMutationRef.current && generation === loadGenerationRef.current) applyCatalog(next);
       return next;
     },
     // Gated on the catalog tab: a 10-second poll that keeps running while the user
@@ -888,7 +902,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       model.native === true,
       disabled.has(model.namespaced),
     )).length;
-  }, [disabled, models, selectedModels]);
+  }, [disabled, models, selectedModels, visibility.overrides]);
 
   /*
    * Quiet per-tab counts. A count is omitted, never zeroed, while it is unknown: the
@@ -910,35 +924,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     targets: ModelVisibilityTarget[],
     enabled: boolean,
   ) => {
-    if (catalogMutationRef.current) return;
-    catalogMutationRef.current = true;
-    ++loadGenerationRef.current;
-    setBusy(true);
-    busyRef.current = true;
-    setStatus("");
-    let errorKey: "models.saveFailed" | "models.networkError" | null = null;
-    try {
-      const response = await putModelVisibility(apiBase, scope, provider, targets, enabled);
-      if (!response.ok) errorKey = "models.saveFailed";
-      else {
-        const failures = clientCatalogRefreshFailures(await response.json());
-        if (failures !== undefined) setIntegrationFailures(failures);
-      }
-    } catch {
-      errorKey = "models.networkError";
-    } finally {
-      const refreshed = await load(true);
-      if (errorKey) {
-        setOk(false);
-        setStatus(t(errorKey));
-      } else if (refreshed) {
-        setOk(true);
-        setStatus(t("models.applied"));
-      }
-      setBusy(false);
-      busyRef.current = false;
-      catalogMutationRef.current = false;
-    }
+    if (busyRef.current && !visibility.isRunning()) return;
+    visibility.enqueue(scope, provider, targets, enabled);
   };
 
   const toggleProviderCap = async (provider: string) => {
@@ -1589,8 +1576,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                  </>
                );
              })()}
-             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn || selectionPending} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
-            <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff || selectionPending} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
+             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={(busy && !visibility.pending) || allOn || selectionPending} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
+            <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={(busy && !visibility.pending) || allOff || selectionPending} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
             <div className="models-cap-cluster">
               {/* The label names the FUNCTION. It used to be `models.capValue` -
                   "기본 128k" - which is a value masquerading as a name: even a
@@ -1730,7 +1717,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                    }}
                  >
                    <div className="row models-model-row">
-                     <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy || m.initialSelectionPending} label={m.native ? m.id : m.namespaced} />
+                     <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={(busy && !visibility.pending) || m.initialSelectionPending} label={m.native ? m.id : m.namespaced} />
                     {m.initialSelectionPending && <span className="models-chip muted" role="status">{t("models.initialSelectionPending")}</span>}
                     {/* #1711: listed and selectable, but every usable target is out of credit.
                         Not a visibility change and not the operator's disable flag — the row is
@@ -2568,7 +2555,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           pickerMode: modelPickerOrderMode(pickerSettings?.pickerAvailable ?? [], pickerSettings?.pickerOrder ?? [], pickerSettings?.pickerOrderMode) })}>
         {controlsBlock}
       </ModelsSettingsPanel>
-      <div className="models-workspace-root" aria-busy={catalogState.refreshing || undefined}>
+      <div className="models-workspace-root" aria-busy={visibility.pending || catalogState.refreshing || undefined}>
         <aside className="models-workspace-rail" aria-label={t("nav.models")}>
           <div className="models-workspace-rail-header">
             <span className="models-workspace-rail-title">{t("models.workspace.providers")}</span>

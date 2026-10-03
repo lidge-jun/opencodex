@@ -118,6 +118,10 @@ For Antigravity, an upstream `401` can refresh the rejected account’s OAuth cr
 retry the request once. The retry uses that credential’s Cloud Code Assist project. If refresh
 fails or no usable project is available, the request returns an authentication error; use the
 reauthentication flow above. A second `401` does not start another refresh/retry cycle.
+A `403` asking to verify the account quarantines that credential as `needs-reauth(verify)`;
+when account failover is enabled, the request can retry on another eligible account. Complete
+Google's account verification, then run `ocx login google-antigravity`. Silent token refresh
+does not clear this verification requirement. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
 
 A proxy that is already running picks up the new credential without a restart: the CLI asks it to
 reload that one provider from disk, and the request carries no credential of its own. If the
@@ -794,6 +798,15 @@ all refuse the bad value rather than storing something the catalog writer would 
 Use `ocx provider add mine --adapter openai-chat --base-url https://example.com/v1 --default-model model-a --text-only` when registering a provider, or `ocx provider edit mine --model model-a --text-only` for an existing provider. Add can use `--model` or its default model; edit requires `--model`. The flag updates only that exact model's `modelCapabilities.inputModalities` to `["text"]`, preserving other models and axes.
 
 ### Cached quota history
+
+Automatic OpenAI account exhaustion checks distinguish purchased usage credits from reset
+tickets. Spending remains off by default: enable **Use credits** for that account (stored in
+`creditCodexAccountIds`). Only that opt-in together with a fresh positive spendable balance or
+unlimited credits can keep an account eligible after included usage reaches 100%; an upstream refusal or overage limit still
+blocks that evidence. Credit evidence expires after five minutes, and usage headers do not
+renew its clock. `pause-exhausted` uses this rule. Reset tickets alone never grant automatic
+headroom, and a credits-only response cannot clear a request cooldown. The default-on main-account
+hard lock remains a separate local policy and is not lifted by the credits switch.
 
 `ocx account history openai <pool-account-id> [--limit 1-200] [--json]` reads stored observations without contacting the provider. The output separates actual observation time, WHAM or response-header source, window family and usage percentage. At most 200 observations per account are retained for 30 days, with global storage bounds.
 

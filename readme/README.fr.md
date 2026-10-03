@@ -379,7 +379,7 @@ sont jamais envoyés. Détails : [modèle de décision auto-hébergé](https://o
 <!-- sponsors:main-first-mention -->
 OpenAI (connexion ChatGPT ou clé API), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (local + Cloud), Cursor (expérimental) et tous les points de terminaison compatibles OpenAI — ainsi que DeepSeek,
-Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
+Groq, OpenRouter, OpenGateway, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, Qoder Global et CN (PAT officiel + CLI), SiliconFlow, et d'autres. Liste complète : `ocx init` ou la
 [documentation des fournisseurs](https://opencodex.me/fr/guides/providers/).
 

@@ -6,6 +6,7 @@ import {
 } from "../providers/model-discovery-limits";
 import { isDeclaredReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { encodeRoutedModelId } from "../providers/slug-codec";
+import { providerForwardClientHeadersConfigError } from "../lib/provider-client-headers";
 import {
   isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
@@ -124,6 +125,8 @@ export function providerHeadersConfigError(headers: unknown): string | null {
   }
   return null;
 }
+
+export { providerForwardClientHeadersConfigError };
 
 /** Keep the configured API-key header style scoped to Anthropic-compatible key auth. */
 export function apiKeyTransportConfigError(

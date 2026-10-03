@@ -471,7 +471,7 @@ export async function readSecretBytes(
 
 export function printData(value: unknown, wantsJson: boolean, lines?: string[]): void {
   if (wantsJson || !lines) console.log(JSON.stringify(value, null, 2));
-  else for (const line of lines) console.log(line);
+  else for (const line of lines) console.log(terminalSafeText(line));
 }
 
 /**

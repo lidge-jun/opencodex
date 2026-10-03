@@ -347,6 +347,9 @@ export interface PersistedUsageEntry {
   durationMs: number;
   /** TTFT relative to the request start (WP4); unset for non-streaming/tool-only. */
   firstOutputMs?: number;
+  /** Request-relative generation window (#6309): first output item, last output delta. Written as a pair. */
+  genStartMs?: number;
+  lastOutputMs?: number;
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
@@ -506,7 +509,7 @@ const KNOWN_AFFINITY_MOVES = new Set<NonNullable<PersistedUsageEntry["affinity"]
 ]);
 const KNOWN_AFFINITY_REASONS = new Set<NonNullable<PersistedUsageEntry["affinityReason"]>>([
   "healthy", "quota_headroom", "quota_refusal", "transient", "transient_hold_expired",
-  "unusable", "paused", "plan_excluded", "cooldown", "quota_avoided", "generation",
+  "unusable", "paused", "plan_excluded", "credits_off", "cooldown", "quota_avoided", "generation",
   "expired", "model_lane",
 ]);
 const KNOWN_CONVERSATION_STATE_SCRUBS = new Set<NonNullable<PersistedUsageEntry["conversationStateScrub"]>>([
@@ -1034,6 +1037,10 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     durationMs: entry.durationMs,
     ...(isNonNegativeFiniteNumber(entry.firstOutputMs)
       ? { firstOutputMs: entry.firstOutputMs }
+      : {}),
+    ...(isNonNegativeFiniteNumber(entry.genStartMs) && isNonNegativeFiniteNumber(entry.lastOutputMs)
+      && entry.lastOutputMs >= entry.genStartMs
+      ? { genStartMs: entry.genStartMs, lastOutputMs: entry.lastOutputMs }
       : {}),
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),

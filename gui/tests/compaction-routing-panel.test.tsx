@@ -11,7 +11,7 @@ let previous: Record<string, PropertyDescriptor | undefined>;
 let win: Window;
 let root: Root | undefined;
 let container: HTMLDivElement;
-let setting: { model: string; reasoningEffort?: string; triggers?: string[] } | null;
+let setting: { model: string; reasoningEffort?: string; triggers?: string[]; sourceModels?: string[] } | null;
 let failLoad: boolean;
 let failSave: boolean;
 let combosUnavailable: boolean;
@@ -58,13 +58,13 @@ afterEach(async () => {
 });
 
 async function flush() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); }
-async function render(base = "") {
+async function render(base = "", providers: Array<{ name: string; baseUrl: string }> = [], roster = models) {
   if (!root) {
     container = win.document.createElement("div") as unknown as HTMLDivElement;
     win.document.body.appendChild(container);
     root = (await import("react-dom/client")).createRoot(container);
   }
-  await act(async () => { root!.render(<StrictMode><LanguageProvider><CompactionRoutingPanel apiBase={base} models={models} /></LanguageProvider></StrictMode>); });
+  await act(async () => { root!.render(<StrictMode><LanguageProvider><CompactionRoutingPanel apiBase={base} models={roster} providers={providers} /></LanguageProvider></StrictMode>); });
   await flush();
 }
 async function choose(id: string, label: string) {
@@ -95,6 +95,26 @@ test("saves model and optional effort, reloads, removes effort, and clears overr
   expect(container.querySelector<HTMLButtonElement>('#compaction-routing-effort')!.disabled).toBe(true);
 });
 
+test("names each control and the source grid so the summarizer and the covered sources are unmistakable", async () => {
+  await render();
+  // Visible captions, not just aria-labels: an unlabeled row of selects read as if every
+  // control picked the summarizer, and the checkbox grid read as candidate models.
+  const captions: Array<[string, string]> = [
+    ["model", "Compaction model"],
+    ["triggers", "Applies to"],
+    ["sources", "Sources"],
+    ["effort", "Reasoning effort"],
+  ];
+  for (const [id, text] of captions) {
+    const caption = [...container.querySelectorAll("label")].find(item => item.textContent === text);
+    expect(caption, "visible caption: " + text).toBeDefined();
+    expect(caption!.getAttribute("for")).toBe("compaction-routing-" + id);
+  }
+  await choose("model", "gateway/cheap");
+  await choose("sources", "Selected sources only");
+  expect(container.textContent).toContain("Reroute compaction requests whose source model matches:");
+});
+
 test("the trigger selection round-trips and discloses automatic compaction", async () => {
   await render();
   await choose("model", "gateway/cheap");
@@ -117,6 +137,149 @@ test("the trigger selection round-trips and discloses automatic compaction", asy
   await choose("model", "Use conversation model");
   expect(container.querySelector<HTMLButtonElement>('#compaction-routing-triggers')!.disabled).toBe(true);
 });
+
+test("saving an effort change preserves the configured source-model boundary", async () => {
+  setting = { model: "gateway/cheap", sourceModels: ["kimi/*", "google-antigravity/*"] };
+  await render();
+  await choose("effort", "Low");
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: {
+    model: "gateway/cheap", reasoningEffort: "low", sourceModels: ["kimi/*", "google-antigravity/*"],
+  } });
+  expect(container.textContent).toContain("kimi/*");
+});
+
+function sourceCheckbox(label: string) {
+  const row = [...container.querySelectorAll("label")].find(item => item.textContent === label);
+  return row?.querySelector("input");
+}
+
+test("the source scope checklist writes sourceModels and round-trips", async () => {
+  await render();
+  expect(container.querySelector<HTMLButtonElement>("#compaction-routing-sources")!.disabled).toBe(true);
+  await choose("model", "gateway/cheap");
+  expect(container.querySelector("#compaction-routing-sources")?.textContent).toContain("All conversation models");
+  expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+  await choose("sources", "Selected sources only");
+  // An empty selection would be rejected by the config schema, so saving stays disabled.
+  expect(saveButton().disabled).toBe(true);
+  expect(container.textContent).toContain("Select at least one source");
+  await act(async () => { sourceCheckbox("gateway/*")!.click(); });
+  await act(async () => { sourceCheckbox("combo/compact")!.click(); });
+  expect(saveButton().disabled).toBe(false);
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap", sourceModels: ["gateway/*", "combo/compact"] } });
+  await render("/reloaded");
+  expect(container.querySelector("#compaction-routing-sources")?.textContent).toContain("Selected sources only");
+  expect(sourceCheckbox("gateway/*")!.checked).toBe(true);
+  expect(sourceCheckbox("combo/compact")!.checked).toBe(true);
+  expect(sourceCheckbox("gateway/cheap")!.checked).toBe(false);
+  await act(async () => { sourceCheckbox("combo/compact")!.click(); });
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap", sourceModels: ["gateway/*"] } });
+  await choose("sources", "All conversation models");
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap" } });
+});
+
+test("saved selectors outside the catalog stay visible and can be dropped deliberately", async () => {
+  setting = { model: "gateway/cheap", sourceModels: ["kimi/*", "gateway/cheap"] };
+  await render();
+  expect(container.querySelector("#compaction-routing-sources")?.textContent).toContain("Selected sources only");
+  expect(sourceCheckbox("kimi/*")!.checked).toBe(true);
+  expect(sourceCheckbox("gateway/cheap")!.checked).toBe(true);
+  expect(saveButton().disabled).toBe(true);
+  await act(async () => { sourceCheckbox("kimi/*")!.click(); });
+  expect(saveButton().disabled).toBe(false);
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap", sourceModels: ["gateway/cheap"] } });
+});
+
+test("the disclosure names the selected sources instead of claiming every request", async () => {
+  await render();
+  await choose("model", "gateway/cheap");
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("every covered compaction request");
+  await choose("sources", "Selected sources only");
+  // Nothing is covered while the selection is empty, so no destination claim is shown.
+  expect(container.querySelector('[role="note"]')).toBeNull();
+  await act(async () => { sourceCheckbox("gateway/*")!.click(); });
+  const note = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(note).toContain("compaction requests whose source model matches gateway/*");
+  expect(note).toContain("to gateway for summarization");
+  expect(note).not.toContain("every covered compaction request");
+  await choose("model", "combo/compact");
+  const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(comboNote).toContain("compaction requests whose source model matches gateway/*");
+  expect(comboNote).toContain("combo combo/compact");
+});
+
+test("the disclosure names the provider endpoint host when the provider is known", async () => {
+  await render("", [{ name: "gateway", baseUrl: "https://gw.example.com/v1" }, { name: "openai-apikey", baseUrl: "https://api.openai.com/v1" }]);
+  await choose("model", "gateway/cheap");
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("to gateway (gw.example.com) for summarization");
+  // A scoped override keeps the endpoint next to the sources it covers.
+  await choose("sources", "Selected sources only");
+  await act(async () => { sourceCheckbox("gateway/*")!.click(); });
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("source model matches gateway/* send the full conversation contents to gateway (gw.example.com)");
+  // Combo targets carry their own endpoints, so "any of them" is checkable against the list.
+  await choose("model", "combo/compact");
+  const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(comboNote).toContain("gateway (gw.example.com)");
+  expect(comboNote).toContain("openai-apikey (api.openai.com)");
+  // A base URL that fails to parse is shown raw rather than dropped.
+  await render("/reloaded", [{ name: "gateway", baseUrl: "not a url" }]);
+  await choose("model", "gateway/cheap");
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("gateway (not a url)");
+});
+
+test("offers a provider-wide selector for a configured provider with no catalog models", async () => {
+  // A provider whose catalog is empty or unlisted can still serve provider-qualified ids, so
+  // its wildcard must come from the configured provider list, not only from catalog rows.
+  await render("", [{ name: "lonely", baseUrl: "https://lonely.example/v1" }]);
+  await choose("model", "gateway/cheap");
+  await choose("sources", "Selected sources only");
+  expect(sourceCheckbox("lonely/*")).toBeDefined();
+});
+
+test("the scoped combo disclosure covers retry to multiple targets", async () => {
+  await render();
+  await choose("model", "gateway/cheap");
+  await choose("sources", "Selected sources only");
+  await act(async () => { sourceCheckbox("gateway/*")!.click(); });
+  await choose("model", "combo/compact");
+  const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(comboNote).toContain("combo combo/compact");
+  // Combos route by their own strategy (failover, round-robin, ...), so the warning must not
+  // promise configured order or first-answer selection.
+  expect(comboNote).not.toContain("in order");
+  expect(comboNote).toContain("routing strategy");
+  expect(comboNote).toContain("retryable failure");
+  expect(comboNote).toContain("same full-conversation request");
+  expect(comboNote).toContain("one or more target providers");
+});
+
+test("Japanese scoped disclosure describes retry as a possibility", async () => {
+  win.localStorage.setItem("ocx-lang", "ja");
+  setting = { model: "combo/compact", sourceModels: ["gateway/*"] };
+  await render();
+  const note = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(note).toContain("gateway/*");
+  expect(note).toContain("別のターゲットで再試行する可能性があるため");
+  expect(note).not.toContain("別のターゲットで再試行するため");
+});
+
+for (const scoped of [false, true]) {
+  test(`Russian ${scoped ? "scoped" : "unscoped"} disclosure identifies targets as conversation recipients`, async () => {
+    win.localStorage.setItem("ocx-lang", "ru");
+    setting = { model: "combo/compact", ...(scoped ? { sourceModels: ["gateway/*"] } : {}) };
+    await render();
+    const note = container.querySelector('[role="note"]')?.textContent ?? "";
+    expect(note).toContain("combo/compact");
+    if (scoped) expect(note).toContain("gateway/*");
+    expect(note).toContain("одна или несколько целей могут получить полное содержимое разговора");
+    expect(note).not.toContain("разговор может получить");
+  });
+}
 
 test("failed save retains the draft and allows retry", async () => {
   await render();
@@ -159,9 +322,13 @@ test("discloses that the selected provider receives the full conversation", asyn
   const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";
   expect(comboNote).toContain("combo combo/compact");
   expect(comboNote).toContain("(gateway, openai-apikey)");
-  // The runtime tries one target at a time and stops at the first answer; the panel used to
-  // promise fan-out to every target, which an operator would budget latency and cost for.
-  expect(comboNote).toContain("in order and uses the first that answers");
+  // The combo selects a target by its routing strategy, and after a retryable failure it
+  // may retry the same full-conversation request on another target, so the note must disclose
+  // that one or more targets can receive the conversation without assuming fixed target order.
+  expect(comboNote).not.toContain("in order");
+  expect(comboNote).toContain("routing strategy");
+  expect(comboNote).toContain("after a retryable failure");
+  expect(comboNote).toContain("one or more target providers can receive the conversation");
   expect(comboNote).not.toContain("every target");
   await choose("model", "Use conversation model");
   expect(container.querySelector('[role="note"]')).toBeNull();
@@ -176,7 +343,7 @@ test("names the targets of a combo reached through an alias", async () => {
   expect(note).toContain(`combo ${ALIASED_COMBO.model}`);
   expect(note).toContain("(xai, gateway)");
   expect(note).not.toContain("its configured target providers");
-  expect(note).toContain("in order and uses the first that answers");
+  expect(note).toContain("one or more target providers can receive the conversation");
 });
 
 test("still calls a prefixed combo a combo when the combo list is unavailable", async () => {
@@ -197,4 +364,26 @@ test("an alias that shadows an Object member is not read as a target list", asyn
   await render();
   const note = container.querySelector('[role="note"]')?.textContent ?? "";
   expect(note).toContain("sends the full conversation contents to constructor for summarization");
+});
+
+test("large source catalogs stay bounded and filtering preserves hidden selections", async () => {
+  setting = { model: "gateway/cheap", sourceModels: ["gateway/model-399"] };
+  const roster = Array.from({ length: 400 }, (_, index) => ({
+    id: `model-${index}`, provider: "gateway", namespaced: `gateway/model-${index}`,
+  }));
+  await render("", [], roster);
+  expect(container.textContent).toContain("Showing first 300 of 400 models");
+  expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(301);
+  expect(sourceCheckbox("gateway/model-399")).toBeUndefined();
+  const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => {
+    setter.call(search, "model-399");
+    search.dispatchEvent(new win.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  expect(sourceCheckbox("gateway/model-399")?.checked).toBe(true);
+  expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
+  await act(async () => { sourceCheckbox("gateway/*")!.click(); });
+  await save();
+  expect(setting?.sourceModels).toEqual(["gateway/model-399", "gateway/*"]);
 });

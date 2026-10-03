@@ -677,7 +677,9 @@ clears the stale job.
 
 On Windows, `ocx service status` reports Task Scheduler registration separately from
 identity-verified OpenCodex proxy reachability. It does not print the localized `schtasks` table,
-so the summary remains readable across Windows code pages.
+so the summary remains readable across Windows code pages. Transactional-backup recovery
+logs a fixed success message rather than the backup directory name; backup names containing
+shell metacharacters do not become commands in that log message.
 
 On Windows, creating the Task Scheduler entry requires elevation. Recognized localized
 access-denied text keeps the existing guidance path. If that text is unreadable, the fallback
@@ -705,6 +707,16 @@ targets are left untouched to avoid breaking exact executable invocations.
 If installation is refused or the resulting shim is unhealthy, the command exits nonzero and
 the dashboard reports the failure reason. A healthy existing shim still counts as success.
 For Windows installations that expose only `codex.exe`, use `ocx service install` for autostart.
+
+For fnm-managed Codex, installation resolves the temporary multishell directory to the durable
+Node installation while preserving the launcher filename. If that directory cannot be resolved,
+installation refuses instead of wrapping a temporary path. When Codex is selected, `ocx connect`
+also reports shim readiness. This readiness check skips special-file PATH entries while preserving
+the order of regular launchers, including npm and fnm symlinks. If a different PATH wrapper hides a healthy shim, fix PATH order;
+reinstalling the same shim does not change which command your shell finds first. If the tracked shim
+is healthy but no `codex` command is found, connect reports it as inactive and asks you to add its
+directory to PATH. A failed PATH inspection reports activation as unverified instead of claiming
+that no command exists. These warnings do not change the connect command's exit status.
 
 Before an install or repair is committed, OpenCodex runs the saved launcher with `--version` while
 service startup is bypassed. It refuses the change and rolls back when the launcher resolves
@@ -839,6 +851,18 @@ Unix-only check. A failure aborts while the tray and proxy are still running. A 
 then stopped before files are replaced; an installed service is rebuilt and started automatically,
 while a foreground installation prints `ocx start` as the next step. Dashboard update records
 redact profile/cache paths and UID/GID values before they are persisted.
+When a stopped listener's literal IP address drops the liveness dial instead of refusing it
+(for example on a tailnet), the updater briefly tries binding that same address and port.
+A successful bind confirms absence at that instant; a failed bind or an inconclusive hostname
+probe still prevents the update.
+
+On Windows, Scoop's default `nodejs` and `nodejs-lts` `npm` installations can be used
+from the user home directory when their `current` junction stays inside the Node app
+directory; the default persistent `bin` directory is also supported. Running inside
+that installation (including its resolved version directory or persistent `bin`),
+project-local `npm`, `NO_JUNCTION` version-directory entries, and custom Scoop roots
+under the home remain excluded.
+
 If the install step fails, the previous version stays installed and its service is restarted; the
 terminal output names the next step, and [Update Failed on Windows](/troubleshooting/update-failed/)
 covers finishing the update and the folders a failed attempt can leave behind.

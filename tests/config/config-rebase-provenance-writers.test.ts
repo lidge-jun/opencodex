@@ -17,6 +17,7 @@ const writerContracts: Record<string, string[]> = {
   "src/providers/context-cap.ts": ["providerContextCaps"],
   "src/codex/account-priority.ts": ["codexAccountPriorities", "activeCodexAccountPinned"],
   "src/codex/account-pause.ts": ["pausedCodexAccountIds"],
+  "src/codex/account-credit-use.ts": ["creditCodexAccountIds"],
   "src/codex/desired-state.ts": ["clientIntegrations"],
   "src/providers/provider-id-rewrite.ts": ["customModels"],
   "src/cli/v2.ts": ["multiAgentMode", "keepNativeChatGptOnV1"],

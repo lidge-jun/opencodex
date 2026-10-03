@@ -29,6 +29,7 @@ import {
 import { decodeWindowsTextBytes } from "./lib/windows-text";
 import { WINSW_SERVICE_ID } from "./lib/winsw";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV } from "./lib/bun-runtime";
+import { REAL_BUN_MIN_BYTES } from "./lib/bun-binary-validator.mjs";
 import { WINDOWS_WRAPPER_PROTOCOL_ENV, WINDOWS_WRAPPER_STAY_OUT_EXIT_CODE } from "./service/windows-wrapper-exit";
 import { buildWindowsServiceScript, windowsTaskActionMatches } from "./service/windows-taskxml";
 import { inspectServiceStateEvidence, serviceStatePathsForOpenCodexHome } from "./service/state";
@@ -613,8 +614,41 @@ function matchesGeneratedStandaloneControlFlow(body: string, port: number): bool
     scriptLines.filter((line, index) => index >= end || line === 'set "ERRORLEVEL="' || !line.startsWith('set "'));
   const actualFlow = withoutPrefixSets(lines, boundary);
   const generatedFlow = withoutPrefixSets(expected, expectedBoundary);
-  return actualFlow.length === generatedFlow.length
-    && actualFlow.every((line, index) => line === generatedFlow[index]);
+  // Read-only recognition of the exact previous generator output keeps installed
+  // standalone services identifiable across the backup-log hardening update.
+  // Never emit or execute this legacy variant; every other control line still matches.
+  const legacyFlow = generatedFlow.flatMap(line => {
+    if (line === "      goto backup_restored") return ['      set "OCX_RESTORED_BACKUP=%%B"', line];
+    if (line === '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] restored previous install from transactional-update backup') {
+      return ['>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] restored previous install from %OCX_RESTORED_BACKUP%'];
+    }
+    return [line];
+  });
+  // Also recognize the exact pre-placeholder version, not a partial size-gate
+  // hybrid. Only remove these complete known blocks from trusted generator output.
+  const beforePlaceholderGate = (flow: string[]): string[] | null => {
+    const blocks = [
+      ['set "OCX_BUN_BYTES="', 'for %%F in ("%OCX_BUN%") do set "OCX_BUN_BYTES=%%~zF"',
+        'if not defined OCX_BUN_BYTES goto bun_not_ready', `if %OCX_BUN_BYTES% LSS ${REAL_BUN_MIN_BYTES} goto bun_not_ready`],
+      [":bun_not_ready",
+        '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] bundled Bun is not ready (%OCX_BUN_BYTES% bytes, npm placeholder or mid-install); waiting for its postinstall, retrying in 5s - if this persists, reinstall opencodex with bun scripts allowed',
+        "ping -n 6 127.0.0.1 >nul", "goto loop"],
+    ];
+    let earlier = flow;
+    for (const block of blocks) {
+      const at = earlier.indexOf(block[0]!);
+      if (at < 0 || !block.every((line, offset) => earlier[at + offset] === line)) return null;
+      earlier = [...earlier.slice(0, at), ...earlier.slice(at + block.length)];
+    }
+    return earlier;
+  };
+  const recognized = [generatedFlow, legacyFlow];
+  for (const flow of [...recognized]) {
+    const earlier = beforePlaceholderGate(flow);
+    if (earlier) recognized.push(earlier);
+  }
+  return recognized.some(expectedFlow => actualFlow.length === expectedFlow.length
+    && actualFlow.every((line, index) => line === expectedFlow[index]));
 }
 
 /** Validate the generated launch shape before interpreting omitted optional homes. */

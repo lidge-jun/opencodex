@@ -74,6 +74,13 @@ the web route. The native panel introduces no management endpoint or credential 
 
 ## Dashboard serving
 
+The Factory Droid integration page edits the
+[owned model defaults](clients/integrations.md#droid-reasoning-defaults). Its draft
+is included in the existing preview and confirmation request, with editing
+disabled while confirmation is open. Changing API target, client or profile discards drafts and confirmation state. The page reloads committed values after a
+successful mutation or restore. No separate settings-save endpoint bypasses the
+integration writer or its ownership checks.
+
 Account refresh actions follow the [credential refresh-lock identity contract](catalog.md#accounts-namespaces-and-pool-rotation): a held unreadable lock is distinct from one this process may release, and path-probe errors preserve the callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction. The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui` starts
 the proxy when needed and opens `http://localhost:<port>`, or `http://127.0.0.1:<management port>` when `hub.managementIngress.enabled` is true — see [the hub management dashboard address](runtime.md#hub-management-dashboard-address).
 
@@ -207,6 +214,11 @@ be treated as implemented:
 - reauthenticate subsequent frames after the handshake.
 
 ## API ownership
+
+Model rows keep stored custom overrides separate from their effective `exportMetadata` projection.
+`src/server/management/model-row-export-metadata.ts` resolves inherited limits and capabilities;
+the [client export contract](clients/integrations.md#owned-catalog-convergence) prevents picker-only
+default preferences from becoming provider defaults and preserves explicitly empty effort ladders.
 
 API-key PATCH validates the entire rename/scope patch on a detached entry before replacing live configuration. A rejected field changes neither the existing name nor either scope, including a later unrelated save.
 
@@ -389,6 +401,17 @@ it. The matching CLI is `ocx account priority <provider> <id|main> [<value>]`, r
 when the value is omitted. Ordering invariants live in
 [`openai-tiers.md`](providers/openai-tiers.md).
 
+### Models visibility write queue
+
+Models visibility switches update immediately while writes execute in click order in the background.
+Only visibility controls remain editable during that queue; preset and other settings writes retain
+their mutual exclusion. Once the queue drains, one authoritative catalog read reconciles the
+switches before saved feedback appears. Refused writes or failed reconciliation show error feedback;
+client integration refresh failures retain their separate warning. A successful empty or non-JSON write response omits optional integration details but still reconciles visibility; it is not a network failure. Stale reads cannot override newer
+intent. Changing the API target or unmounting the page aborts observations and drops unsent queued
+changes. The queue lives in `gui/src/use-model-visibility.ts`; the dashboard page contract is in
+[Dashboard surfaces](dashboard-and-usage.md).
+
 ## The client role owns no management plane
 
 A connected client machine runs `src/client/machine-listener.ts` instead of the standalone server.
@@ -561,3 +584,7 @@ keep their existing no-catalog-refresh behavior. The regression suite is
 > Decision record: [Durable provider PATCH](decisions/ADR-0104-durable-provider-patch.md)
 
 > Decision record: [Publication-aware rollback](decisions/ADR-0120-provider-patch-publication-boundary.md)
+
+Automatic account exhaustion and recovery use the [spendable Codex credit evidence contract](providers/openai-tiers.md#spendable-codex-credits), including independent freshness, upstream refusal, and reset-ticket separation.
+
+`src/server/management/subagent-model-routes.ts` owns roster/picker and optional Claude force updates. The route registry declares its GET/PUT ownership; `agent-settings-routes.ts` only lazy-loads and delegates the matching path. GET includes `force`, exposed-only `forceAvailable`, and bounded `forceStatus`; PUT accepts force alone, null clears, and omission preserves it. Force-only updates do not regenerate the roster or converge Codex catalogs. The Subagents page keeps save failures visible and disables overlapping force writes.

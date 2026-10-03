@@ -133,7 +133,7 @@ test("Usage model table renders cache breakdown and marks unavailable telemetry"
   expect([...table!.querySelectorAll("thead th")].map(cell => cell.textContent?.trim())).toEqual([
     "logs.col.model", "logs.col.provider", "usage.col.share", "usage.col.tokens",
     "usage.col.apiListPrice", "usage.col.requests", "usage.col.measured",
-    "usage.col.inputTokens", "usage.col.outputTokens", "usage.col.cacheHits",
+    "usage.col.inputTokens", "usage.col.outputTokens", "usage.col.tokPerSec", "usage.col.cacheHits",
     "usage.col.cacheWrites", "usage.col.cacheHitRate",
   ].map(key => en[key as keyof typeof en]));
   const rows = table!.querySelectorAll("tbody tr");
@@ -141,10 +141,10 @@ test("Usage model table renders cache breakdown and marks unavailable telemetry"
   const cells = (row: Element) => [...row.querySelectorAll("td")].map(cell => cell.textContent?.trim());
   // The hit-rate cell carries the rate and, when coverage is partial or absent, the same
   // sentence twice over: a `title` for a pointer and an `sr-only` span for everyone else.
-  const hitRateCell = (row: Element) => row.querySelectorAll("td")[11]!;
+  const hitRateCell = (row: Element) => row.querySelectorAll("td")[12]!;
   const hitRate = (row: Element) => hitRateCell(row).querySelector(".usage-hit-rate")?.textContent?.trim();
   const coverageNote = (row: Element) => hitRateCell(row).querySelector(".sr-only")?.textContent ?? null;
-  expect(cells(rows[0]!).slice(7, 11)).toEqual(["1000", "120", "600", "100"]);
+  expect(cells(rows[0]!).slice(7, 12)).toEqual(["1000", "120", "—", "600", "100"]);
   expect(hitRate(rows[0]!)).toBe("60%");
   // A row whose cache detail covers its whole input needs no coverage caveat.
   expect(hitRateCell(rows[0]!).getAttribute("title")).toBeNull();
@@ -152,12 +152,12 @@ test("Usage model table renders cache breakdown and marks unavailable telemetry"
   // Half this row's input never reported cache detail. The rate is still an average over the
   // half that did, so it is reported with its coverage rather than withheld.
   const partialNote = en["usage.cacheHitRate.partial"].replace("{measured}", "500").replace("{total}", "1000");
-  expect(cells(rows[1]!).slice(9, 11)).toEqual(["450", "0"]);
+  expect(cells(rows[1]!).slice(10, 12)).toEqual(["450", "0"]);
   expect(hitRate(rows[1]!)).toBe("90%");
   expect(hitRateCell(rows[1]!).getAttribute("title")).toBe(partialNote);
   expect(coverageNote(rows[1]!)).toBe(partialNote);
   // Nothing in this row reported cache detail at all, which is the one case with no basis.
-  expect(cells(rows[2]!).slice(9, 11)).toEqual(["—", "—"]);
+  expect(cells(rows[2]!).slice(10, 12)).toEqual(["—", "—"]);
   expect(hitRate(rows[2]!)).toBe("—");
   expect(hitRateCell(rows[2]!).getAttribute("title")).toBe(en["usage.cacheHitRate.unmeasured"]);
   expect(coverageNote(rows[2]!)).toBe(en["usage.cacheHitRate.unmeasured"]);
@@ -551,3 +551,44 @@ test("closing the panel retires a validation error instead of parking it out of 
   expect(requests).toHaveLength(1);
   expect(container.textContent).toContain("held-report-marker");
 });
+
+test("throughput renders in summary, Models and Providers with honest missing-sample feedback", async () => {
+  await mount();
+  const base = report(requests[0], "measured-model");
+  const measured = { throughputTokensPerSec: 20, throughputSamples: 2 };
+  const data = { ...base, summary: { ...base.summary, ...measured },
+    models: [{ ...base.models[0], ...measured }, { ...base.models[0], model: "unmeasured-model" }],
+    providers: [{ ...base.models[0], ...measured }, { ...base.models[0], provider: "anthropic" }],
+  };
+  await act(async () => { requests[0].resolve(Response.json(data)); });
+  const note = en["usage.throughput.title"].replace("{samples}", "2");
+  expect(container.querySelector(`.usage-cost-row[title]`)?.textContent).toContain("20.0");
+  for (const section of ["models", "providers"]) {
+    const rows = container.querySelectorAll(`#usage-section-${section} tbody tr`);
+    expect(rows[0]?.textContent).toContain("20.0 tok/s");
+    expect(rows[0]?.querySelector(`[title="${note}"]`)).not.toBeNull();
+    expect(rows[1]?.querySelector(`[title="${en["usage.throughput.unmeasured"]}"]`)?.textContent).toContain("—");
+  }
+});
+
+for (const invalid of [null, "20", "Infinity", NaN, Infinity, -Infinity, 0, -5]) {
+  test(`invalid throughput ${String(invalid)} is unavailable in every display`, async () => {
+    await mount();
+    const base = report(requests[0], "invalid-throughput-model");
+    const metric = { throughputTokensPerSec: invalid, throughputSamples: 2 };
+    const data = { ...base, summary: { ...base.summary, ...metric },
+      models: [{ ...base.models[0], ...metric }], providers: [{ ...base.models[0], ...metric }],
+    };
+    // A custom response keeps nonfinite values visible at the GUI boundary; JSON encodes them as null.
+    const response = Response.json(data);
+    response.json = async () => data;
+    await act(async () => { requests[0].resolve(response); });
+    const title = en["usage.throughput.unmeasured"];
+    expect(container.querySelector(`.usage-cost-row[title="${title}"] .stat-value`)?.textContent).toBe("—");
+    for (const section of ["models", "providers"]) {
+      const cell = container.querySelector(`#usage-section-${section} tbody td[title="${title}"]`);
+      expect(cell?.textContent).toBe("—");
+      expect(cell?.querySelector(".sr-only")).toBeNull();
+    }
+  });
+}

@@ -8,7 +8,7 @@ import {
   seedCodexModelEntitlementsForTests,
 } from "../../src/codex/model-entitlements";
 import { handleManagementAPI } from "../../src/server/management-api";
-import { listManagementModelRows, loadExportModels } from "../../src/server/management/model-rows";
+import { listManagementModelRows, loadExportModels, toExportModel, type ManagementModelRow } from "../../src/server/management/model-rows";
 import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_CONFIG_SCHEMA,
@@ -78,20 +78,7 @@ interface ClientConfigEnvelope {
   config: unknown;
 }
 
-interface ModelRow {
-  provider: string;
-  id: string;
-  namespaced: string;
-  disabled: boolean;
-  native?: boolean;
-  fastRowAvailable?: boolean;
-  displayName?: string;
-  displayNameSource?: "operator" | "provider" | "fallback";
-  contextWindow?: number;
-  inputModalities?: string[];
-  reasoningEfforts?: string[];
-  defaultReasoningEffort?: string;
-}
+type ModelRow = ManagementModelRow;
 
 /**
  * Static provider catalogs (`liveModels: false`) so the model list is deterministic and no
@@ -150,22 +137,6 @@ async function modelRows(config: OcxConfig): Promise<ModelRow[]> {
   return await response!.json() as ModelRow[];
 }
 
-function toExportModel(row: ModelRow): ExportModel {
-  return {
-    namespaced: row.namespaced,
-    provider: row.provider,
-    id: row.id,
-    fastRowAvailable: row.fastRowAvailable === true,
-    ...(row.native ? { native: true } : {}),
-    ...(row.displayName && row.displayNameSource !== "fallback" ? { displayName: row.displayName } : {}),
-    ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
-    ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
-    ...(row.reasoningEfforts ? { reasoningEfforts: row.reasoningEfforts } : {}),
-    ...(row.defaultReasoningEffort ? { defaultReasoningEffort: row.defaultReasoningEffort } : {}),
-  };
-}
-
-
 describe("native Anthropic image input reaches client documents", () => {
   test.each(["anthropic", "anthropic-apikey"])("all capability-aware exports advertise image input for %s", async (provider) => {
     const config = {
@@ -221,9 +192,15 @@ describe("native Anthropic image input reaches client documents", () => {
     const raycast = buildClientConfig("raycast", context) as RaycastGeneratedConfig;
     for (const model of models) {
       expect(kimi.models[`${OPENCODE_PROVIDER_ID}/${model.namespaced}`]?.capabilities).toEqual(["image_in"]);
-      for (const block of [opencode.provider, opencode.providers]) {
-        expect(block[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.modalities?.input).toEqual(["text", "image"]);
-        expect(block[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.attachment).toBe(true);
+      expect(opencode.provider[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.modalities?.input).toEqual(["text", "image"]);
+      expect(opencode.provider[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.attachment).toBe(true);
+      const nativeCapabilities = opencode.providers[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.capabilities;
+      if (typeof model.supportsTools === "boolean") {
+        expect(nativeCapabilities?.input).toEqual(["text", "image"]);
+      } else {
+        // V2 requires tools in this object. Legacy modality migration preserves attachments
+        // without inventing tool support or discarding the native variants block.
+        expect(nativeCapabilities).toBeUndefined();
       }
       expect(zcode.provider[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.modalities.input).toEqual(["text", "image"]);
       const clineModel = cline.catalog.providers[OPENCODE_PROVIDER_ID]!.models[model.namespaced];
@@ -373,14 +350,17 @@ describe("GET /api/client-config", () => {
     const models = document.provider[OPENCODE_PROVIDER_ID].models;
     // The row's declared modalities now reach opencode's own capability fields; without them
     // opencode gates attachments client-side and the image never leaves the TUI (#4286).
-    expect(models["a/m1"]).toEqual({
+    expect(models["a/m1"]).toMatchObject({
       name: "m1 (a)", limit: { context: 128_000, output: 32_000 },
       attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
+      reasoning: true, tool_call: true, interleaved: { field: "reasoning_content" },
+      variants: { none: { reasoningEffort: "none" }, minimal: { reasoningEffort: "minimal" },
+        low: { reasoningEffort: "low" }, high: { reasoningEffort: "high" } },
     });
     // m2 declares text-only in `modelInputModalities`, which is exactly what routes it through
     // the vision sidecar: the catalog advertises image so the attachment can reach the proxy.
     expect(models["a/m2"]!.modalities).toEqual({ input: ["text", "image"], output: ["text"] });
-    expect(models["b/no-context"]).toEqual({ name: "no-context (b)" });
+    expect(models["b/no-context"]).toEqual({ name: "no-context (b)", tool_call: true });
   }, 15_000);
 
   test("pi returns a models ARRAY under the same provider id", async () => {

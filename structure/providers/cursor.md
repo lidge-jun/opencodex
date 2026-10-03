@@ -52,6 +52,18 @@ In external Cursor turns using code mode or shell aliases, the bounded leading-c
 
 > Decision record: [ADR-0048](../decisions/ADR-0048-cursor-native-exec.md)
 
+## Structured final output
+
+Cursor's Connect wire has no native Responses `text.format` schema field. The adapter preserves
+`json_object` and `json_schema` in `src/adapters/cursor/types.ts` and renders the final-output
+contract through `src/adapters/cursor/structured-output.ts`. The protobuf builder includes it in
+system roots and repeats it in active user-message actions, including tool-result continuations.
+This is a prompt fallback, not constrained decoding or response-schema validation. Tool calls
+remain available before the final answer; ordinary text requests receive no JSON instruction.
+The checkpoint instruction digest includes the format, so a changed schema forces full replay.
+`tests/providers/cursor/cursor-request-compat.test.ts` checks the encoded action and
+`tests/providers/cursor/cursor-request-builder.test.ts` checks checkpoint invalidation.
+
 ## Cursor parameterized models
 
 Cursor Router's parameterized `default` model is represented in Codex by four catalog rows:

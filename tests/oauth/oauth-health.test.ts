@@ -7,12 +7,21 @@ import {
   CODEX_REAUTH_ACTION,
   collectOAuthHealthEntries,
   collectOAuthHealthEntriesForCli,
+  oauthHealthLabel,
+  oauthHealthSummary,
   projectOAuthAccountHealth,
   projectCodexAccountHealth,
   projectMainAccountPolicyHealth,
 } from "../../src/oauth/health";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
-import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../../src/oauth/store";
+import {
+  credentialGeneration,
+  getAccountSet,
+  markAccountNeedsReauth,
+  markAccountNeedsReauthIfGeneration,
+  mergeAccountCredential,
+  saveCredential,
+} from "../../src/oauth/store";
 import {
   clearAccountNeedsReauth,
   markAccountNeedsReauth as markCodexAccountNeedsReauth,
@@ -79,6 +88,14 @@ describe("projectOAuthAccountHealth", () => {
       reauthReason: "refresh_failed",
       cooldownUntilMs: Date.now() + 60_000,
     })).toEqual({ status: "reauth_required", reason: "refresh_failed" });
+  });
+
+  test("a verify_account cause projects distinctly from a dead credential", () => {
+    const health = projectOAuthAccountHealth({ needsReauth: true, reauthReason: "verify_account" });
+    expect(health).toEqual({ status: "reauth_required", reason: "verify_account" });
+    expect(oauthHealthLabel(health)).toBe("Verification required");
+    expect(oauthHealthSummary("google-antigravity", "abc", health))
+      .toContain("reauthentication required (verify account)");
   });
 
   test("active cooldown projects until ISO timestamp", () => {
@@ -237,6 +254,74 @@ describe("collectOAuthHealthEntries", () => {
       health: { status: "reauth_required", reason: "refresh_failed" },
       action: "run `ocx login kimi`",
     });
+  });
+
+  test("a verify_account mark survives the store round-trip with its own action", async () => {
+    await saveCredential("kimi", {
+      access: "kimi-access",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-verify",
+    });
+    const accountId = getAccountSet("kimi")!.activeAccountId;
+    await markAccountNeedsReauth("kimi", accountId, true, "verify_account");
+    expect(getAccountSet("kimi")!.accounts.find(a => a.id === accountId))
+      .toMatchObject({ needsReauth: true, needsReauthReason: "verify_account" });
+
+    const entry = collectOAuthHealthEntries()
+      .find(e => e.provider === "kimi" && e.accountId === accountId);
+    expect(entry).toEqual({
+      provider: "kimi",
+      accountId,
+      health: { status: "reauth_required", reason: "verify_account" },
+      action: "verify the account with the provider in a browser, then run `ocx login kimi`",
+    });
+  });
+
+  test("a stale generation never marks: late 403 cannot quarantine a fresh login", async () => {
+    await saveCredential("kimi", {
+      access: "kimi-access",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-stale",
+    });
+    const accountId = getAccountSet("kimi")!.activeAccountId;
+    const staleGeneration = credentialGeneration(getAccountSet("kimi")!.accounts
+      .find(a => a.id === accountId)!.credential);
+    // The credential rotates (refresh or re-login) before the late 403 arrives.
+    await mergeAccountCredential("kimi", accountId, {
+      access: "kimi-access-2",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-stale",
+    });
+    expect(await markAccountNeedsReauthIfGeneration("kimi", accountId, staleGeneration, undefined, "verify_account"))
+      .toBe(false);
+    const row = getAccountSet("kimi")!.accounts.find(a => a.id === accountId)!;
+    expect(row.needsReauth).toBeUndefined();
+    expect(row.needsReauthReason).toBeUndefined();
+  });
+
+  test("a silent refresh preserves a verify_account quarantine", async () => {
+    await saveCredential("kimi", {
+      access: "kimi-access",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-keep",
+    });
+    const accountId = getAccountSet("kimi")!.activeAccountId;
+    const generation = credentialGeneration(getAccountSet("kimi")!.accounts
+      .find(a => a.id === accountId)!.credential);
+    expect(await markAccountNeedsReauthIfGeneration("kimi", accountId, generation, undefined, "verify_account"))
+      .toBe(true);
+    await mergeAccountCredential("kimi", accountId, {
+      access: "kimi-access-2",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-keep",
+    });
+    expect(getAccountSet("kimi")!.accounts.find(a => a.id === accountId))
+      .toMatchObject({ needsReauth: true, needsReauthReason: "verify_account" });
   });
 
   test("Codex reauth action points at the dashboard pool, not ocx login codex", () => {

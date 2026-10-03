@@ -40,6 +40,10 @@ import {
   terminalSafeText,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import {
+  inspectCodexShimForConnect,
+  type CodexConnectShimReadiness,
+} from "./codex-shim-readiness";
 
 export interface ClientCommandDeps extends RuntimeApiDeps {
   lifecycleLockDeps?: ClientLifecycleLockDeps;
@@ -277,6 +281,19 @@ export type ConnectCompletionReport = {
   readonly failure: string | null;
 };
 
+export function codexShimReadinessLine(
+  selectedClients: readonly OcxConnectedClientId[],
+  inspect: () => CodexConnectShimReadiness = inspectCodexShimForConnect,
+): string | null {
+  if (!selectedClients.includes("codex")) return null;
+  return `Codex autostart shim: ${terminalSafeText(inspect().message)}`;
+}
+
+function printCodexShimReadiness(selectedClients: readonly OcxConnectedClientId[]): void {
+  const line = codexShimReadinessLine(selectedClients);
+  if (line) console.log(line);
+}
+
 /**
  * What `ocx connect` says once the hub and the credential are settled, and whether the command
  * still fails (#4207).
@@ -414,6 +431,7 @@ async function runHubConnect(argv: string[], deps: ClientCommandDeps): Promise<v
   const readiness = inspectInstalledCatalogReadiness(installedCatalogFileState(), deps.catalogProbeDeps ?? {});
   const report = connectCompletionReport(connection, clients, readiness);
   for (const line of report.lines) console.log(line);
+  printCodexShimReadiness(clients);
   if (report.failure) throw new Error(report.failure);
 }
 
@@ -463,6 +481,7 @@ async function runLinkConnect(argv: string[], deps: ClientCommandDeps): Promise<
   const readiness = inspectInstalledCatalogReadiness(installedCatalogFileState(), deps.catalogProbeDeps ?? {});
   const report = connectCompletionReport(connection, clients, readiness);
   for (const line of report.lines) console.log(line);
+  printCodexShimReadiness(clients);
   if (report.failure) throw new Error(report.failure);
 }
 

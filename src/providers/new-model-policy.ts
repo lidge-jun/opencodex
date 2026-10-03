@@ -1,5 +1,9 @@
 import type { OcxConfig } from "../types";
-import { routedSlug } from "./slug-codec";
+import { routedSlug, slugEquals } from "./slug-codec";
+import {
+  antigravityEffortFamilyIds, antigravityFamilyDisabled,
+  type AntigravityEffortFamilyRow,
+} from "./antigravity-effort-families";
 
 export const MODEL_REMOVAL_GRACE_FETCHES = 3;
 export const MAX_KNOWN_MODELS_PER_PROVIDER = 2_000;
@@ -115,30 +119,63 @@ export function effectiveNewModelPolicy(config: OcxConfig, provider: string): Ne
   return config.modelDiscovery?.newModelPolicy ?? "on";
 }
 
+/** Normalize policy identities only; the original rows and saved wire selections stay intact. */
+function normalizeEffortFamilies(config: OcxConfig, provider: string, rows: AntigravityEffortFamilyRow[]) {
+  const aliases = new Map<string, string>();
+  const inheritedDisables: string[] = [];
+  const bases = new Set(rows.filter(row => antigravityEffortFamilyIds(row)).map(row => row.id));
+  for (const row of rows) {
+    const ids = antigravityEffortFamilyIds(row);
+    if (!ids) continue;
+    for (const id of ids) if (!bases.has(id)) aliases.set(id, row.id);
+    if (antigravityFamilyDisabled(config, row, rows)
+      && !config.disabledModels?.some(slug => slugEquals(slug, provider, row.id))) {
+      inheritedDisables.push(routedSlug(provider, row.id));
+    }
+  }
+  const normalize = (id: string) => aliases.get(id) ?? id;
+  const normalizeIds = (ids: string[]) => [...new Set(ids.map(normalize))].sort();
+  const prior = config.modelDiscovery?.knownModels?.[provider];
+  let baseline = prior;
+  if (prior && aliases.size) {
+    const missing: Record<string, number> = {};
+    for (const [id, count] of Object.entries(prior.missing ?? {})) {
+      const key = normalize(id);
+      // A family cannot disappear sooner than its least-missing known tier.
+      missing[key] = Math.min(missing[key] ?? count, count);
+    }
+    baseline = { ...prior, ids: normalizeIds(prior.ids), removed: normalizeIds(prior.removed),
+      ...(Object.keys(missing).length ? { missing } : {}) };
+  }
+  return { discoveredIds: normalizeIds(rows.map(row => row.id)), baseline, inheritedDisables };
+}
+
 /** Apply authoritative provider rows to a mutable convergence copy; degraded providers are omitted. */
 export function reconcileSuccessfulModelDiscoveries(options: {
   config: OcxConfig;
-  models: Iterable<{ provider: string; id: string; custom?: boolean }>;
+  models: Iterable<AntigravityEffortFamilyRow>;
   authoritativeProviders: Iterable<string>;
   now: string;
   /** See {@link NewModelPolicyMode}; defaults to `converge`. */
   mode?: NewModelPolicyMode;
 }): boolean {
-  const byProvider = new Map<string, string[]>();
+  const byProvider = new Map<string, AntigravityEffortFamilyRow[]>();
   for (const model of options.models) {
-    if (model.custom) continue;
-    const ids = byProvider.get(model.provider) ?? [];
-    ids.push(model.id); byProvider.set(model.provider, ids);
+    if (model.custom || model.catalogKind === "custom-model-v1") continue;
+    const rows = byProvider.get(model.provider) ?? [];
+    rows.push(model); byProvider.set(model.provider, rows);
   }
   let changed = false;
   for (const provider of options.authoritativeProviders) {
     const configured = options.config.providers[provider];
     if (!configured || configured.liveModels === false) continue;
-    const discoveredIds = byProvider.get(provider) ?? [];
+    const { discoveredIds, baseline, inheritedDisables } = normalizeEffortFamilies(
+      options.config, provider, byProvider.get(provider) ?? [],
+    );
     const discovery = options.config.modelDiscovery ??= {};
     const known = discovery.knownModels ??= {};
     const result = applyNewModelPolicy({
-      provider, discoveredIds, baseline: known[provider],
+      provider, discoveredIds, baseline,
       policy: effectiveNewModelPolicy(options.config, provider),
       hasSelectedModels: (configured.selectedModels?.length ?? 0) > 0,
       now: options.now,
@@ -151,9 +188,10 @@ export function reconcileSuccessfulModelDiscoveries(options: {
     // Keep the previous timestamp when nothing else moved, so a steady-state roster does not
     // make the baseline look dirty on the next comparison either.
     if (!baselineChanged && priorBaseline) known[provider] = priorBaseline;
-    if (result.slugsToDisable.length) {
+    const slugsToDisable = [...result.slugsToDisable, ...inheritedDisables];
+    if (slugsToDisable.length) {
       const disabled = options.config.disabledModels ??= [];
-      for (const slug of result.slugsToDisable) {
+      for (const slug of slugsToDisable) {
         if (disabled.includes(slug)) continue;
         disabled.push(slug);
         changed = true;

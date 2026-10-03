@@ -1,4 +1,4 @@
-import type { OcxClaudeCodeConfig } from "../types";
+import type { OcxConfig, OcxClaudeCodeConfig } from "../types";
 import { isAnthropicOutputSchema, satisfiesOpenAiStrictSchema } from "../adapters/anthropic-output-schema";
 import { resolveAlias } from "./alias";
 import { stripOneMillionMarker } from "./context-windows";
@@ -153,7 +153,14 @@ export function extractOcxRouteDirective(body: unknown): string | null {
   const text = systemText(body);
   if (!text) return null;
   const match = OCX_ROUTE_RE.exec(text);
-  return match ? match[1]! : null;
+  if (!match) return null;
+  // Explicit gateway selection belongs to this invocation, not the mutable saved
+  // force setting. Bare Claude ids still need the legacy frontmatter fallback.
+  if (isRec(body) && typeof body.model === "string") {
+    const selector = stripOneMillionMarker(body.model);
+    if (resolveAlias(selector) || resolveDesktop3pAlias(selector)) return body.model;
+  }
+  return match[1]!;
 }
 
 /**

@@ -528,7 +528,16 @@ async function gatherRoutedModelsUncached(
     else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
   replaceLastComboCatalogOmissions(localOmissions);
-  all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
+  // Preserve declaratively ordered discovery (and cold-start seed order); other presets
+  // retain their historical alphabetical order. Renamed/custom transport scoping still applies.
+  // Read the captured discovery policy, never the live registry: a flight must keep the
+  // authority it was captured under even if the registry changes mid-gather.
+  const orderedProviders = new Set(activeProviders
+    .filter(({ discovery }) => (discovery.spec?.preferFirst?.length ?? 0) > 0)
+    .map(({ name }) => name));
+  all.sort((a, b) => (a.provider === b.provider
+    ? orderedProviders.has(a.provider) ? 0 : a.id.localeCompare(b.id)
+    : a.provider.localeCompare(b.provider)));
   // Provider-derived rows keyed by their Codex-facing slug: a custom override replaces the row
   // with the same slug below, so that row's provider capability metadata is the inheritance source.
   const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));
@@ -737,10 +746,26 @@ async function gatherRoutedModelsUncached(
     }
     return mergedWithAutoCompact;
   });
-  // Custom rows override discovered rows that encode to the same Codex-facing slug.
-  const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
-  const deduped = all.filter(m => !customKeys.has(routedSlug(m.provider, m.id)));
-  const models = [...deduped, ...customModels];
+  // Custom rows override discovered rows that encode to the same Codex-facing slug. A provider whose
+  // captured discovery declares an order (preferFirst) keeps each replacement in the discovered row's
+  // slot; every other provider keeps the historical order of discovered rows followed by custom rows.
+  const customBySlug = new Map<string, CatalogModel[]>();
+  for (const custom of customModels) {
+    const key = routedSlug(custom.provider, custom.id);
+    const bucket = customBySlug.get(key);
+    if (bucket) bucket.push(custom);
+    else customBySlug.set(key, [custom]);
+  }
+  const placedInSlot = new Set<string>();
+  const models: CatalogModel[] = all.flatMap(model => {
+    const key = routedSlug(model.provider, model.id);
+    const replacements = customBySlug.get(key);
+    if (!replacements) return [model];
+    if (!orderedProviders.has(model.provider) || placedInSlot.has(key)) return [];
+    placedInSlot.add(key);
+    return replacements;
+  });
+  models.push(...customModels.filter(custom => !placedInSlot.has(routedSlug(custom.provider, custom.id))));
   // ponytail: catalog-scale scan; index ids by provider if catalog growth makes this measurable.
   const aliasDisplayNames = new Map(activeProviders.flatMap(({ name, provider }) => {
     const providerModels = models.filter(model => model.provider === name);

@@ -30,8 +30,9 @@ import {
   joinSseFrameBytes,
   MAX_CLIENT_SSE_FRAME_BYTES,
   SseFrameCountLimitError,
+  sseDelimiterLengthAt,
 } from "./sse-frame-buffer";
-import { replaceSseDataPayload, sseDataPayload } from "./sse-payload-rewrite";
+import { replaceSseDataPayload, splitSseBlock, sseDataPayload } from "./sse-payload-rewrite";
 import { createBoundedResponseLogBody } from "./response-log-body";
 import { clientWireLogOf } from "./inference/client-wire";
 import { recordClientWireRequestLog } from "./inference/client-wire-log";
@@ -355,10 +356,11 @@ export function createSseTerminalOutputBoundary(
     frames: ReturnType<BoundedSseFrameBuffer["feed"]>,
   ): Uint8Array => {
     if (disposed || terminal || frames.length === 0) return EMPTY_BYTES;
-    if (maxFrames !== undefined && frames.length > maxFrames - framesSeen) {
+    const completedFrames = frames.reduce((count, frame) => count + (frame.continuation ? 0 : 1), 0);
+    if (maxFrames !== undefined && completedFrames > maxFrames - framesSeen) {
       throw new SseFrameCountLimitError(maxFrames);
     }
-    framesSeen += frames.length;
+    framesSeen += completedFrames;
     const output: Uint8Array[] = [];
     const appendOutput = (...parts: Uint8Array[]): void => {
       for (const part of parts) {
@@ -596,17 +598,7 @@ export function relaySseWithFailedTail(
   });
 }
 
-export function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
-  const match = buffer.match(/\r?\n\r?\n/);
-  if (!match || match.index === undefined) return null;
-  return {
-    block: buffer.slice(0, match.index),
-    delimiter: match[0],
-    rest: buffer.slice(match.index + match[0].length),
-  };
-}
-
-export { sseDataPayload } from "./sse-payload-rewrite";
+export { nextSseBlock, sseDataPayload } from "./sse-payload-rewrite";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -698,9 +690,8 @@ function stripCodexSafetyBufferingField(block: string, parsed: unknown): string 
 }
 
 function rewritePolicyTerminalBlock(block: string, payload: string): string {
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
   const rewritten = replaceSseDataPayload(block, payload);
-  const lines = rewritten.split(/\r?\n/);
+  const { newline, lines } = splitSseBlock(rewritten);
   let eventRewritten = false;
   const withEvent = lines.map(line => {
     if (!eventRewritten && line.startsWith("event:")) {
@@ -1156,31 +1147,6 @@ function outputBearingSseEvent(event: { type?: unknown; output_index?: unknown }
     .test(event.type);
 }
 
-function delimiterLengthAt(
-  index: number,
-  length: number,
-  byteAt: (index: number) => number,
-): number | 0 | undefined {
-  const first = byteAt(index);
-  if (first === 10) {
-    if (index + 1 >= length) return undefined;
-    const second = byteAt(index + 1);
-    if (second === 10) return 2;
-    if (second !== 13) return 0;
-    if (index + 2 >= length) return undefined;
-    return byteAt(index + 2) === 10 ? 3 : 0;
-  }
-  if (first !== 13) return 0;
-  if (index + 1 >= length) return undefined;
-  if (byteAt(index + 1) !== 10) return 0;
-  if (index + 2 >= length) return undefined;
-  const third = byteAt(index + 2);
-  if (third === 10) return 3;
-  if (third !== 13) return 0;
-  if (index + 3 >= length) return undefined;
-  return byteAt(index + 3) === 10 ? 4 : 0;
-}
-
 /**
  * Per-chunk SSE inspection state machine shared by consumeForInspection,
  * consumeForResponseLogMetadata, and the eager bounded relay (relay-eager.ts).
@@ -1202,6 +1168,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   let sawTerminal = false;
   let disposed = false;
   let delimiterTail: Uint8Array = EMPTY_BYTES;
+  let pendingLineFeed = false;
   let candidate: Uint8Array = EMPTY_BYTES;
   let candidateBytes = 0;
   let discardingOversizedFrame = false;
@@ -1228,6 +1195,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
 
   const clearFrameState = (): void => {
     delimiterTail = EMPTY_BYTES;
+    pendingLineFeed = false;
     candidate = EMPTY_BYTES;
     candidateBytes = 0;
     discardingOversizedFrame = false;
@@ -1504,15 +1472,17 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
         retainCandidateSlice(chunk.subarray(Math.max(0, start - tailLength), end - tailLength));
       }
     };
-    let index = 0;
-    let retainedThrough = 0;
+    let index = pendingLineFeed && byteAt(0) === 10 ? 1 : 0;
+    if (totalLength > 0) pendingLineFeed = false;
+    let retainedThrough = index;
     while (index < totalLength) {
-      const delimiterLength = delimiterLengthAt(index, totalLength, byteAt);
+      const delimiterLength = sseDelimiterLengthAt(index, totalLength, byteAt);
       if (delimiterLength === undefined) break;
       if (delimiterLength > 0) {
         retainRange(retainedThrough, index);
         completeCandidate();
         index += delimiterLength;
+        pendingLineFeed = index === totalLength && byteAt(index - 1) === 13;
         retainedThrough = index;
         continue;
       }

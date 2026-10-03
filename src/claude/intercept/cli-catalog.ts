@@ -17,6 +17,7 @@ import { join } from "node:path";
 import type { ClaudeFirstPartyDesired } from "../first-party-settings";
 import { classifyInterceptClient } from "./client-class";
 import { BOOTSTRAP_MAX_DECODED_BYTES, injectPickerModels, type PickerModelEntry } from "./picker-bootstrap";
+import { PickerRewriteBudget } from "./picker-budget";
 
 export type CliCatalogKind = "model_selector" | "bootstrap";
 
@@ -60,26 +61,36 @@ export function injectCliBootstrapOptions(bootstrap: unknown, models: readonly P
   if (current !== undefined && current !== null && !Array.isArray(current)) return 0;
   const options = Array.isArray(current) ? current : [];
   const existing = new Set(options.map(option => record(option)?.model));
-  let added = 0;
-  for (const model of models) {
-    if (existing.has(model.id)) continue;
-    options.push({ model: model.id, name: model.name, description: model.description ?? "" });
-    existing.add(model.id);
-    added++;
-  }
-  if (added > 0) body.additional_model_options = options;
-  return added;
+  const additions: Record<string, unknown>[] = [];
+  try {
+    const budget = new PickerRewriteBudget(body);
+    // A missing/null property needs a key and array, plus a possible separator (conservative).
+    if (!Array.isArray(current)) budget.reserveBytes(32);
+    for (const model of models) {
+      if (existing.has(model.id)) continue;
+      const row = { model: model.id, name: model.name, description: model.description ?? "" };
+      budget.reserveRow(row);
+      additions.push(row);
+      existing.add(model.id);
+    }
+  } catch { return 0; } // Fail open without mutating the original options.
+  for (const row of additions) options.push(row);
+  if (additions.length > 0) body.additional_model_options = options;
+  return additions.length;
 }
 
 /** Rewrite a decoded catalog body; `null` when nothing was added or the body is not the expected shape. */
 export function rewriteCliCatalogBody(kind: CliCatalogKind, text: string, models: readonly PickerModelEntry[]): string | null {
-  if (models.length === 0) return null;
-  let parsed: unknown;
-  try { parsed = JSON.parse(text); } catch { return null; }
-  const added = kind === "bootstrap"
-    ? injectCliBootstrapOptions(parsed, models)
-    : injectPickerModels(parsed, models, undefined, { surfaces: CLI_PICKER_SURFACE_IDS, extraStrippedKeys: CLI_EXTRA_STRIPPED_KEYS });
-  return added > 0 ? JSON.stringify(parsed) : null;
+  if (models.length === 0 || Buffer.byteLength(text) > BOOTSTRAP_MAX_DECODED_BYTES) return null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const added = kind === "bootstrap"
+      ? injectCliBootstrapOptions(parsed, models)
+      : injectPickerModels(parsed, models, undefined, { surfaces: CLI_PICKER_SURFACE_IDS, extraStrippedKeys: CLI_EXTRA_STRIPPED_KEYS });
+    if (added === 0) return null;
+    const rewritten = JSON.stringify(parsed);
+    return Buffer.byteLength(rewritten) <= BOOTSTRAP_MAX_DECODED_BYTES ? rewritten : null;
+  } catch { return null; }
 }
 
 /** Read at most `cap` bytes; null (and the stream cancelled) once the body would exceed it. */

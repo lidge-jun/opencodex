@@ -191,12 +191,18 @@ export function stripRejectedSamplingParams(
 }
 
 /**
- * When `store` is false, the upstream API does not persist response items. Any item ID
+ * When `store: false`, the upstream cannot retrieve stored turns by ID. An ID
  * forwarded in `input` is then interpreted as a reference to a stored item that does not
- * exist, producing a 404. Strip all item IDs in this case — `call_id` pairing is unaffected.
+ * exist, producing a 404. Strip all item IDs in this case unless `preserveIds` is true
+ * — `call_id` pairing is unaffected. Also repairs missing or broken xAI custom_tool_call IDs
+ * when `requireCustomCallIds` is true, regardless of `preserveIds`.
  * Matches codex-rs behavior (core/src/client.rs:918-925).
  */
-export function stripItemIdsWhenUnstored(body: unknown, requireCustomCallIds = false): unknown {
+export function stripItemIdsWhenUnstored(
+  body: unknown,
+  requireCustomCallIds = false,
+  preserveIds = false,
+): unknown {
   const repairCustomCallIds = requireCustomCallIds === true;
   if (!isPlainObject(body) || (body.store !== false && !repairCustomCallIds)) return body;
   if (!Array.isArray(body.input)) return body;
@@ -226,7 +232,7 @@ export function stripItemIdsWhenUnstored(body: unknown, requireCustomCallIds = f
         return item;
       }
     }
-    if (body.store !== false || !("id" in item)) return item;
+    if (preserveIds || body.store !== false || !("id" in item)) return item;
     changed = true;
     const next = { ...item };
     delete next.id;

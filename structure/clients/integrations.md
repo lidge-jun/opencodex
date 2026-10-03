@@ -63,6 +63,34 @@ compare and before taking a snapshot. Droid has no writer lock, so a competing
 settings file can still appear after this check and before the write.
 No Droid file is written by detection or on the proxy request path.
 
+### Droid reasoning defaults
+
+The Droid page stores a sparse model-to-effort map in its owned model rows through
+`extraHeaders.x-opencodex-droid-default-effort`. There is no separate proxy-wide
+default. The single-client status projects the owned defaults and the current
+export roster's declared effort choices into `droidReasoning`. Defaults use the
+same path and competing-settings checks as status, including pre-resolved paths;
+an ambiguous legacy model ID or managed endpoint suppresses the projected map.
+
+Preview and apply accept optional `droidReasoningDefaults`. Omission preserves
+compatible owned defaults; an empty map clears them. A supplied map is validated against the
+same roster used to build the contribution, and the contribution participates in
+the preview fingerprint and frozen mutation input. Refresh preserves defaults only
+while the exact namespaced selector remains in the roster and its current effort
+list includes the saved value. Unsupported defaults are omitted from status and
+removed from owned rows on refresh. Provider, model, and
+combo alias names are mutable selectors rather than stable identities, so renaming
+one removes the old managed row and its default; the replacement row starts without
+a default. Refresh and Save / review changes omit the map unless the user has edited it, so an
+unsupported saved value does not block unrelated refresh. Removing models uses the
+ordinary removal preview. Disable and restore remove or restore the rows and their
+defaults as one owned value.
+
+The request preference is interpreted after initial Chat route selection and before
+concrete dispatch under the
+[inbound effort contract](../data-planes/inbound-compat.md#droid-request-defaults).
+It never authenticates a client or changes admission policy.
+
 ## Cursor installed capability reads
 
 `src/integrations/cursor-effort-table.ts` reads the installed agent bundle through one regular-file
@@ -187,8 +215,8 @@ their existing visibility rules.
 
 ## Owned catalog convergence
 
-Visibility, selected-model and preset writes refresh already-owned Pi/Aside contributions after
-persisting the selection. Explicit sync refreshes MCode, Pi and Aside. The shared catalog-refresh
+Visibility, selected-model and preset writes refresh already-owned catalog contributions (including OpenCode and Kilo) after
+persisting the selection. Explicit sync also refreshes owned OpenCode and Kilo blocks. The shared catalog-refresh
 fan-out loads the filtered roster lazily once, leaves unowned clients alone, and reports each
 refusal independently. Existing coordinated writers retain all no-clobber and ownership checks.
 Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy
@@ -211,11 +239,35 @@ is available; otherwise the operator refreshes the integration or client catalog
 
 ## Model output limits
 
-OpenCode, Pi-family clients, OMP and Gajae export the explicit model `maxTokens` when valid (a catalog
+OpenCode, Kilo, Pi-family clients, OMP and Gajae export the explicit model `maxTokens` when valid (a catalog
 row's `maxOutputTokens`, carried by `toExportModel` in `src/server/management/model-rows.ts` and by
 `opencodeCatalogFromProxyRows` in `src/cli/opencode.ts`), otherwise the generated metadata limit for the provider and model ID (including provider aliases).
 Only unknown limits fall back to 32000. Every output limit is clamped to the authoritative
 context window; absent context still omits both limits. Fast rows preserve these limits.
+
+`src/clients/config-export/model-metadata.ts` carries a valid explicit input budget without a guessed fallback,
+clamping it to context. `src/clients/config-export/reasoning-metadata.ts` preserves the distinction between
+an unknown effort ladder and an explicit empty ladder, canonicalizes declared efforts (including `none`),
+and carries only an authoritative valid default. A default outside an explicit ladder is omitted rather
+than reviving a cleared capability. Exporters do not invent a medium default for reasoning models.
+
+`src/server/management/model-row-export-metadata.ts` resolves custom-row inheritance without
+backfilling the stored override fields the editor reads. Management rows attach `exportMetadata`;
+its presence makes even an absent default authoritative, so export/launcher projections cannot
+fall back to the picker's synthesized medium/low preference. Declared empty ladders survive.
+OpenCode V1 and Kilo use model `options` defaults and variant maps; OpenCode V2 uses model
+`settings` defaults and native variant arrays with `@opencode/ai/providers/openai-compatible`.
+Declared variants, including `none`, override those defaults. V2 always writes an array, empty
+when no choices are declared; legacy OpenCode and Kilo reasoners without adjustable efforts disable
+every synthesized rung. An unrelated disabled sentinel cannot remove generated IDs from their
+merged variant maps. Neither adds selectable choices. Known reasoning uses the proxy's
+`reasoning_content` compatibility field for streaming and replay. Upstream effort pinning remains
+proxy-owned and is not bypassed by client variants.
+V2 emits native capabilities only with a known tools boolean (required by its schema); unknown
+tools leave capabilities absent and known image input survives through legacy modality migration.
+`tests/clients/client-export-live-wire.test.ts` opts into real binaries through
+`OCX_TEST_OPENCODE_BIN` / `OCX_TEST_KILO_BIN`, using isolated homes and local mock upstreams;
+it verifies wire efforts, suppression, tools, reasoning replay, images and the real proxy chain.
 
 ## Model input capability exports
 
@@ -223,7 +275,8 @@ All registered integrations consume the shared catalog, including [Anthropic see
 
 | Client | Per-model output |
 | --- | --- |
-| OpenCode, Kilo | `attachment`, `modalities.input` |
+| OpenCode V1, Kilo | `attachment`, `modalities.input` |
+| OpenCode V2 | native `capabilities.input`, `capabilities.output`, and known `capabilities.tools` |
 | Pi, OMP, Prime, Aside, omo, Gajae, DSH | `input` (text/image only) |
 | ZCode | `modalities.input` (text/image only) |
 | Cline | `modalities.input`, `supportsVision` |
@@ -453,6 +506,12 @@ not an object reports `invalid`, and a file containing any `//` or block comment
 `skipped_comments`, because re-serializing JSONC would drop those comments. The management
 response carries that status and the dashboard shows it; the role TOML write described in
 [subagents](../subagents.md#per-role-model-pins) is not rolled back by a skipped mirror.
+The loader binds validation and reading to one file descriptor and rejects a path whose
+directory entry no longer identifies that opened regular file. Device and inode comparisons use
+bigint stats to preserve exact identities. On POSIX, `O_NOFOLLOW` rejects
+symlinks at open and `O_NONBLOCK` lets the regular-file check reject a FIFO without waiting
+for a writer. Windows omits those POSIX flags and retains the descriptor/path identity checks;
+those checks do not claim POSIX no-follow open semantics.
 An explicit `null` in any of those three places counts as not an object. A file that exists but
 cannot be read lists as `unreadable`, so the role table still loads, and a save reports
 `write_failed` for the mirror.
@@ -467,7 +526,7 @@ Kilo owns only `provider.opencodex` in the first existing global file among `kil
 (`XDG_CONFIG_HOME` relocates that directory); when none exists, the destination is
 `kilo.jsonc`. Parse accepts JSONC comments and trailing
 commas; serialize rewrites the whole file as pretty JSON, so comments in other keys are
-not preserved. Kilo is not on the implicit owned-catalog fan-out. Remote admission uses
+not preserved. Kilo and OpenCode participate in the implicit owned-catalog fan-out; unowned, removed or hand-edited blocks are never claimed or overwritten. Remote admission uses
 the same `{env:OPENCODEX_KILO_API_KEY}` / `x-opencodex-api-key` rule as OpenCode.
 All candidate files are inspected through the no-follow, bounded parser before status or
 any operation that adds or replaces a block. If another candidate defines
@@ -523,3 +582,5 @@ complete ownership, exact Cline paths and result fingerprints before either nati
 Native pair writes replace the named directory entries without following final symlinks. A symlink
 present at validation is refused, and one exchanged into place during a mutation is refused rather
 than redirecting OpenCodex's write outside Cline's settings directory.
+
+Routed `ocx claude` launches apply opt-in `claudeCode.subagentModelForce` via independent user-wins defaults for `CLAUDE_CODE_SUBAGENT_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`. Native launches add neither; plain Claude and persistent settings remain unchanged. Claude Code 2.1.257+ implements force, excluding forks and inherit-model skills; main and small-fast models remain separate.

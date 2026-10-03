@@ -29,6 +29,12 @@ export function outputBudgetFor(context: number, model: OpencodeCatalogModel): n
   return Math.min(limit, context);
 }
 
+/** Input limits are optional: unlike output, a missing limit needs no schema fallback. */
+export function inputBudgetFor(context: number, model: OpencodeCatalogModel): number | undefined {
+  const limit = authoritativeContextWindow(model.maxInputTokens);
+  return limit === undefined ? undefined : Math.min(limit, context);
+}
+
 /**
  * Modalities a given client's schema will actually accept.
  *
@@ -89,12 +95,12 @@ export function inputModalitiesForClient(
 const OPENCODE_INPUT_MODALITIES: ReadonlySet<string> = new Set(["text", "audio", "image", "video", "pdf"]);
 
 /**
- * opencode's per-model capability fields for one catalog row, or `undefined` when the row
+ * Legacy per-model modality fields for one catalog row, or `undefined` when the row
  * declares nothing.
  *
- * `undefined` rather than `{ input: ["text"] }`: opencode already computes an entry without
- * capabilities as text-only, and leaving the keys out keeps every model that declares
- * nothing byte-identical to what shipped before. A declared list is carried across as-is, so
+ * `undefined` rather than guessing `{ input: ["text"] }`: unknown capabilities leave the
+ * client's fallback assumptions in place. V2 translates these lists into native capability
+ * fields; legacy clients also receive the attachment flag. A declared list is carried across as-is, so
  * an audio-only row keeps `attachment: true` instead of being rewritten to text it cannot
  * read — the same call Pi's exporter makes, in the opposite direction.
  */

@@ -206,7 +206,7 @@ Inline JSON и лишние позиционные аргументы откло
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 101 встроенными пресетами: 83 на основе ключей, 14 OAuth, три локальных и
+opencodex поставляется с 102 встроенными пресетами: 84 на основе ключей, 14 OAuth, три локальных и
 один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера.
 Наиболее заметные записи:
@@ -269,9 +269,19 @@ opencodex поставляется с 101 встроенными пресета�
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
+| OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …и другие | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
+
+**OpenGateway** — OpenAI-совместимый шлюз компании Sionic AI по адресу
+`https://apis.opengateway.ai/v1`. Публичный каталог содержит около 80 активных моделей
+(проверено 2026-10-02). Пресет автоматически обновляет список через публичный
+`GET /v1/models`, оставляя активные модели Chat Completions (а также `openai/o3-pro`, доступную только через Responses и направляемую в Responses). Модели, обслуживаемые Sionic,
+`deepseek/deepseek-v4.1-flash-ultrafast` и `z-ai/glm-5.3-flash-ultrafast`, показаны первыми.
+Создайте ключ в [панели OpenGateway](https://opengateway.ai/api-keys), затем выполните
+`ocx provider add opengateway` или выберите **OpenGateway** в панели. Chat-запросы используют
+настроенный Bearer-ключ; публичный список не подтверждает действительность ключа.
 
 **OpenCode Zen** (`opencode-zen`) и бесключевой пресет **OpenCode Free** используют один
 `https://opencode.ai/zen/v1`. Бесплатные модели на этом шлюзе часто упираются в короткое окно

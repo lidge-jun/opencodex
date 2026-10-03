@@ -110,7 +110,9 @@ function statusText(row: AccountRow): string {
   // held out -- so printing only one of the two would hide exactly the confusing case (#2703).
   if (row.paused) parts.push("paused");
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
-  if (row.needsReauth && !(row.provider === "kiro" && row.skipReason === "needs_reauth")) parts.push("needs-reauth");
+  if (row.needsReauth && !(row.provider === "kiro" && row.skipReason === "needs_reauth")) {
+    parts.push(row.needsReauthReason === "verify_account" ? "needs-reauth(verify)" : "needs-reauth");
+  }
   // A paused Kiro row already says "paused"; repeating it as a skip reason adds nothing.
   if (row.provider === "kiro" && row.autoSelectable === false && !(row.paused && row.skipReason === "paused"))
     parts.push(row.skipReason ? `not-auto-selected(${row.skipReason})` : "not-auto-selected");

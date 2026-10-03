@@ -34,6 +34,9 @@ prints a proposed model and effort per role without writing anything. `--apply` 
 through the same write as `set`, skipping and naming the roles whose model and effort already match.
 See [Auto-assign](/guides/integrations/#auto-assign).
 
+Human-readable suggestion output displays terminal control characters as visible escapes.
+Use `--json` when you need the original suggestion values without presentation escaping.
+
 `ocx agent injection suggest <work>` does the same for the delegation model: it sizes the described
 work, proposes the cheapest sufficient model and an effort from the delegation picker's list, and writes
 nothing unless `--apply` is given, which saves through the same write as `injection set`. See
@@ -305,8 +308,8 @@ remain supported. Use `ocx claude config <status|set> ...` for Claude Code setti
 
 Ensure the proxy is running, then launch opencode with the generated `provider.opencodex` and
 `providers.opencodex` blocks in OpenCode's inline runtime layer (`OPENCODE_CONFIG_CONTENT`). The
-legacy block keeps V1 clients working; the V2 block is the one carrying the selectable
-reasoning-effort variants. Existing inline config is preserved and only those two keys are replaced
+legacy block keeps V1 clients working with variant maps; the V2 block carries native arrays
+for the same reasoning-effort choices and defaults. Existing inline config is preserved and only those two keys are replaced
 for this launch. Global or project `opencode.json` files may be read to warn about an existing
 override, but on-disk files are never modified. Routed models appear as
 `opencodex/<provider>/<model>`. Launching plain `opencode` later behaves exactly as before.
@@ -325,6 +328,11 @@ reference or loopback placeholder — in the selected client's native format.
 
 The proxy must be running; the command resolves its live port, reads `/api/models`, and emits only
 models Codex can currently see.
+
+OpenCode and Kilo exports preserve effective model limits, known capabilities, declared reasoning
+choices and defaults, including metadata inherited by custom rows. Explicit overrides still win;
+unknown capabilities and defaults are not invented. The OpenCode launcher uses the same metadata.
+See [client integrations](/guides/integrations/) for managed refresh and upgrade behavior.
 
 | Flag | Action |
 | --- | --- |
@@ -497,3 +505,15 @@ Human `ocx logs` output includes `id=<request-id>`. Pass that value to `ocx logs
 ## Upstream error details
 
 When an upstream error envelope contains several message fields, OpenCodex uses the first nonblank string in its established priority order. Empty or malformed fields no longer hide a valid fallback diagnostic.
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.

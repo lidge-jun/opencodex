@@ -202,6 +202,7 @@ import type { WorkflowRefusalLog } from "../workflow-refusal";
 import { readyProtocolMetadata } from "../../remote/protocol";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
+import { withGrokSessionIdentity } from "../../grok/session-identity";
 
 export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
 
@@ -1476,7 +1477,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           let response: Response;
           try {
-            response = await handleResponses(req, config, logCtx, {
+            response = await handleResponses(withGrokSessionIdentity(req), config, logCtx, {
               turnAdmissionLease,
               admission,
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),

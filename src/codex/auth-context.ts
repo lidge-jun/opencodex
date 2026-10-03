@@ -1,3 +1,4 @@
+import { hasSpendableCodexCredits } from "./quota-types";
 import { noteMainAccountActivity } from "./main-account-external-usage";
 import { codexAccountPriorityFailbackEnabled } from "./account-priority";
 import type { PoolQuotaWriter } from "./quota-types";
@@ -64,7 +65,8 @@ import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_RESERVE_MODEL } from "./cata
 import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
 import { maskAccountId } from "../lib/privacy";
 import { formatErrorResponse } from "../bridge";
-import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, parseUsageQuota, parseMainPolicyUsageQuota, setAccountQuotaFromParsed } from "./quota";
+import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, getMainPolicyQuota, parseUsageQuota, parseMainPolicyUsageQuota, setAccountQuotaFromParsed } from "./quota";
+import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "./account-credit-use";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
@@ -101,7 +103,7 @@ import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
   const threshold = getEffectiveCodexAutoSwitchThreshold(config, MAIN_CODEX_ACCOUNT_ID);
   if (threshold <= 0) return true;
-  const usage = computeCodexUsageScore(getAccountQuota(MAIN_CODEX_ACCOUNT_ID));
+  const usage = computeCodexUsageScore(getAccountQuota(MAIN_CODEX_ACCOUNT_ID), undefined, Date.now(), codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID));
   return usage >= CODEX_UNKNOWN_USAGE_SCORE || usage < threshold;
 }
 
@@ -118,7 +120,7 @@ function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
  *
  * Read-free by construction, which is what makes it usable on the fenced side. Every input is
  * config, policy, or in-memory runtime state: the pin fields, the paused list, the cached quota
- * score, and `callerMatchesObservedMain`, which compares HMAC digests against the observed
+ * score, the main policy quota the hard lock and the credits switch read, and `callerMatchesObservedMain`, which compares HMAC digests against the observed
  * credential record in `main-account-cache.ts`. Nothing here opens a file.
  *
  * `candidate` is the pin before the hard-lock question, because the caller still owes the
@@ -142,6 +144,7 @@ export function requestOwnedMainPinState(
     candidate,
     preserve: candidate && !(callerMatchesObservedMain(headers)
       && (isMainAccountHardLocked(policy)
+        || mainCreditsHoldResetAt(policy) !== undefined
         || getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope)?.cooldownUntil)),
   };
 }
@@ -520,6 +523,19 @@ export class CodexMainAccountHardLockError extends CodexAccountCooldownError {
   }
 }
 
+/** The main login may not spend credits and one of its usage windows is full (#6334). */
+export class CodexMainAccountCreditsOffError extends CodexAccountCooldownError {
+  readonly resetAt?: number;
+
+  constructor(resetAt?: number) {
+    super(MAIN_CODEX_ACCOUNT_ID, resetAt ?? 0);
+    this.name = "CodexMainAccountCreditsOffError";
+    this.resetAt = resetAt;
+    this.message = "Codex main account reached its usage limit, and spending ChatGPT credits is off or no fresh spendable balance is available."
+      + " Choose another account, wait for the limit to reset, or allow the main account under \"Use credits\" in Codex Auth.";
+  }
+}
+
 export class CodexReserveUnavailableError extends CodexAccountCooldownError {
   constructor() {
     super(MAIN_CODEX_ACCOUNT_ID, 0);
@@ -579,6 +595,7 @@ export class CodexRecoveryWithheldError extends CodexAccountCooldownError {
 
 export type CodexAuthPolicyConfig = Readonly<Pick<OcxConfig,
   "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "codexDesktopAuthless" | "runtimeRole" | "pausedCodexAccountIds"
+  | "creditCodexAccountIds"
 >>;
 
 interface CodexAuthMaterializationOptions {
@@ -701,10 +718,25 @@ export function unwrapUpstreamRetryEvidenceError(error: unknown): unknown {
   return error;
 }
 
-function assertMainAccountPolicy(config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds"> | undefined): void {
+/**
+ * When the main login's full window ends, if credits are off for it and a window is full (#6334).
+ * Same evidence the hard lock reads, and no plan lookup: the plan can live in the physical auth
+ * file, which several callers are forbidden to open, so every long window counts instead.
+ */
+function mainCreditsHoldResetAt(config: Pick<OcxConfig, "creditCodexAccountIds">): number | undefined {
+  if (codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)
+    && hasSpendableCodexCredits(getMainPolicyQuota())) return undefined;
+  return codexUsageLimitResetAt(getMainPolicyQuota(), undefined, Date.now());
+}
+
+function assertMainAccountPolicy(
+  config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "creditCodexAccountIds"> | undefined,
+): void {
   if (config) {
     const status = getMainAccountHardLockStatus(config);
     if (status.state === "blocked") throw new CodexMainAccountHardLockError(status.resetAt, status.thresholds);
+    const creditsResetAt = mainCreditsHoldResetAt(config);
+    if (creditsResetAt !== undefined) throw new CodexMainAccountCreditsOffError(creditsResetAt);
   }
   // Only an admitted request is opencodex's own use of the main account. Counting a refused one
   // would hide outside usage from the warning exactly while the lock is holding.
@@ -831,6 +863,9 @@ export function cooldownAccountLabel(accountId: string): string {
  */
 export function cooldownErrorMessage(err: CodexAccountCooldownError, accountSelector?: string): string {
   if (err instanceof CodexMainAccountHardLockError
+    // A credits-off refusal is a configuration policy, not a cooldown: clearing a cooldown
+    // cannot lift it, so its own wording (wait for the reset or allow credits) is the remedy.
+    || err instanceof CodexMainAccountCreditsOffError
     || err instanceof CodexReserveUnavailableError
     // A transient-hold refusal is not a quota cooldown. Its own wording is the only accurate
     // one, and the quota recovery advice below would send the operator after a cooldown that
@@ -879,6 +914,7 @@ export class CodexThreadAffinityExpiredError extends Error {
 
 export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown): boolean {
   return !(cause instanceof CodexMainAccountHardLockError)
+    && !(cause instanceof CodexMainAccountCreditsOffError)
     && !(cause instanceof CodexAccountValidationPendingError)
     && !(cause instanceof CodexReserveUnavailableError)
     && !(cause instanceof CodexCredentialGenerationConflictError)
@@ -1433,7 +1469,9 @@ export async function resolveCodexAuthContext(
       releaseTransientProbeGrant();
       if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
       else if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
-      if (cause instanceof CodexMainAccountHardLockError) throw cause;
+      // Policy refusals, including one that lands while the token refresh was in flight, are not
+      // authentication failures: they must stay reset-bound 429s and never mark a valid login.
+      if (cause instanceof CodexMainAccountHardLockError || cause instanceof CodexMainAccountCreditsOffError) throw cause;
       if (!options.signal?.aborted && shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
         markAccountNeedsReauth(accountId, writerGeneration);
       }

@@ -249,7 +249,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 101 個 preset：83 個 key-based、14 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 102 個 preset：84 個 key-based、14 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
@@ -310,9 +310,19 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
+| OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …以及更多 | opencode zen、Vercel AI Gateway、Venice、NanoGPT、Synthetic、Qianfan、Alibaba、Parallel、ZenMux、LiteLLM |
+
+**OpenGateway** 是 Sionic AI 營運的 OpenAI 相容閘道，base URL 為
+`https://apis.opengateway.ai/v1`。公開目錄包含約 80 個活躍模型（2026-10-02 確認）。
+preset 透過公開 `GET /v1/models` 自動更新清單，只保留活躍的 Chat Completions 模型（以及僅支援 Responses、並固定走 Responses 的 `openai/o3-pro`）。
+Sionic 提供的 `deepseek/deepseek-v4.1-flash-ultrafast` 與
+`z-ai/glm-5.3-flash-ultrafast` 排在最前。請在
+[OpenGateway 控制台](https://opengateway.ai/api-keys)建立金鑰，再執行
+`ocx provider add opengateway` 或在控制台選擇 **OpenGateway**。Chat 請求使用設定的
+Bearer 金鑰；公開模型清單無法驗證金鑰有效性。
 
 **OpenCode Zen**（`opencode-zen`）與無 key 的 **OpenCode Free** preset 共用
 `https://opencode.ai/zen/v1`。該 gateway 的免費模型常遇到短時間 burst limit，約 15–20 requests/minute

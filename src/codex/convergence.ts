@@ -1,3 +1,4 @@
+import { projectAntigravitySelectedModels } from "../providers/antigravity-effort-families";
 import { join } from "node:path";
 
 import { getConfigDir, saveConfigPreservingClaudeCode, websocketsEnabled, withExpectedConfigGenerationSync } from "../config";
@@ -347,7 +348,7 @@ function prepareCatalog(
   const selectedModelsByProvider = new Map<string, ReadonlySet<string>>(
     enabledProviders.flatMap(([name, provider]) => (
       Array.isArray(provider.selectedModels) && provider.selectedModels.length > 0
-        ? [[name, new Set(provider.selectedModels)] as const]
+        ? [[name, new Set(projectAntigravitySelectedModels(name, provider.selectedModels, routedModels))] as const]
         : []
     )),
   );

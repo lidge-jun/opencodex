@@ -15,6 +15,7 @@ import {
 } from "../../src/lib/local-management-attestation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { captureStartupChildOutput, STARTUP_OUTPUT_TAIL_CHARS } from "../helpers/startup-child-output";
 
 const originalEnv = { ...process.env };
 const roots: string[] = [];
@@ -78,6 +79,19 @@ function codexRouting(port: number | string) {
   return `model_provider = "opencodex"\n[model_providers.opencodex]\nbase_url = "http://127.0.0.1:${port}/v1"\n`;
 }
 
+const capturedChildren = new Map<ReturnType<typeof Bun.spawn>, ReturnType<typeof captureStartupChildOutput>>();
+function trackChild(child: ReturnType<typeof Bun.spawn>) {
+  children.push(child);
+  capturedChildren.set(child, captureStartupChildOutput(child.stdout, child.stderr));
+}
+function childDiagnostics(child: ReturnType<typeof Bun.spawn>): string {
+  return JSON.stringify({ pid: child.pid, exitCode: child.exitCode, ...capturedChildren.get(child)!.snapshot() });
+}
+async function finishChildOutput(child: ReturnType<typeof Bun.spawn>) {
+  await child.exited;
+  return capturedChildren.get(child)!.finish();
+}
+
 async function waitForRuntime(path: string, child: ReturnType<typeof Bun.spawn>) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
@@ -87,36 +101,35 @@ async function waitForRuntime(path: string, child: ReturnType<typeof Bun.spawn>)
         if (record.pid === child.pid) return record;
       } catch { /* publication in progress */ }
     }
-    if (child.exitCode !== null) throw new Error(`secondary exited ${child.exitCode}: ${await new Response(child.stderr).text()}`);
+    if (child.exitCode !== null) {
+      await finishChildOutput(child);
+      throw new Error(`secondary exited before runtime publication: ${childDiagnostics(child)}`);
+    }
     await Bun.sleep(20);
   }
-  throw new Error("timed out waiting for secondary runtime record");
+  throw new Error(`timed out waiting for secondary runtime record: ${childDiagnostics(child)}`);
 }
 
 async function waitForClientStartup(child: ReturnType<typeof Bun.spawn>): Promise<void> {
-  const reader = child.stdout.getReader();
-  const decoder = new TextDecoder();
-  let output = "";
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("timed out waiting for client startup")), 15_000);
-  });
-  try {
-    while (!output.includes("Client startup work complete.")) {
-      const chunk = await Promise.race([reader.read(), timeout]);
-      if (chunk.done) throw new Error(`secondary exited before client startup: ${output}`);
-      output += decoder.decode(chunk.value, { stream: true });
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (capturedChildren.get(child)!.snapshot().startupComplete) return;
+    if (child.exitCode !== null) {
+      const output = await finishChildOutput(child);
+      if (output.startupComplete) return;
+      throw new Error(`secondary exited before client startup: ${childDiagnostics(child)}`);
     }
-  } finally {
-    clearTimeout(timer);
-    reader.releaseLock();
+    await Bun.sleep(20);
   }
+  throw new Error(`timed out waiting for client startup: ${childDiagnostics(child)}`);
 }
 
 afterEach(async () => {
   resetSiblingStartForTests();
   for (const child of children) if (child.exitCode === null) child.kill("SIGTERM");
   for (const child of children.splice(0)) await child.exited;
+  for (const capture of capturedChildren.values()) await capture.finish();
+  capturedChildren.clear();
   for (const pid of detachedPids.splice(0)) {
     try { process.kill(pid, "SIGTERM"); } catch { /* already exited */ }
   }
@@ -328,7 +341,7 @@ test("a secondary start preserves shared client bytes and records the sibling ow
   const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(secondaryPort)], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
-  children.push(child);
+  trackChild(child);
   const runtime = await waitForRuntime(join(fx.ocx, "runtime-port.json"), child);
   expect(runtime.siblingOfPort).toBe(ownerPort);
   await waitForClientStartup(child);
@@ -360,9 +373,10 @@ test("a secondary ensure parent preserves shared Grok, Codex and Claude agent by
   const ensure = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "ensure"], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
-  children.push(ensure);
-  const output = await new Response(ensure.stdout).text();
-  const error = await new Response(ensure.stderr).text();
+  trackChild(ensure);
+  const captured = await finishChildOutput(ensure);
+  const output = captured.stdout.tail;
+  const error = captured.stderr.tail;
   expect(await ensure.exited).toBe(0);
   expect(output + error).toContain(`Proxy running on port ${secondaryPort}`);
   const runtime = JSON.parse(readFileSync(join(fx.ocx, "runtime-port.json"), "utf8")) as {
@@ -377,9 +391,8 @@ test("a secondary ensure parent preserves shared Grok, Codex and Claude agent by
   const again = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "ensure"], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
-  children.push(again);
-  await new Response(again.stdout).text();
-  await new Response(again.stderr).text();
+  trackChild(again);
+  await finishChildOutput(again);
   expect(await again.exited).toBe(0);
   expect([grokPath, codexPath, claudePath].map(path => readFileSync(path))).toEqual(before);
 }, 30_000);
@@ -401,7 +414,7 @@ test("a lone custom-home start still syncs Grok and prunes its own Claude roster
   const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(port)], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
-  children.push(child);
+  trackChild(child);
   const runtime = await waitForRuntime(join(fx.ocx, "runtime-port.json"), child);
   expect(runtime.siblingOfPort).toBeUndefined();
   const deadline = Date.now() + 10_000;
@@ -412,9 +425,8 @@ test("a lone custom-home start still syncs Grok and prunes its own Claude roster
   const ensure = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "ensure"], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
-  children.push(ensure);
-  await new Response(ensure.stdout).text();
-  await new Response(ensure.stderr).text();
+  trackChild(ensure);
+  await finishChildOutput(ensure);
   expect(await ensure.exited).toBe(0);
   expect(existsSync(claudePath)).toBe(false);
 }, 30_000);
@@ -642,7 +654,7 @@ async function secondaryStartPreservesBytes(
   const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(secondaryPort)], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
-  children.push(child);
+  trackChild(child);
   const runtime = await waitForRuntime(join(fx.ocx, "runtime-port.json"), child);
   expect(runtime.siblingOfPort).toBe(expectedSiblingPort);
   await waitForClientStartup(child);
@@ -719,7 +731,7 @@ test("a registry-only discovered owner vetoes shared writes end to end", async (
   const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(secondaryPort)], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
-  children.push(child);
+  trackChild(child);
   const runtime = await waitForRuntime(join(fx.ocx, "runtime-port.json"), child);
   expect(runtime.siblingOfPort).toBe(ownerPort);
   await waitForClientStartup(child);
@@ -728,3 +740,91 @@ test("a registry-only discovered owner vetoes shared writes end to end", async (
   await child.exited;
   expect([grokPath, codexPath, claudePath].map(path => readFileSync(path))).toEqual(before);
 }, 30_000);
+
+test("startup diagnostics drain both pipes before runtime publication", async () => {
+  const fx = fixture();
+  const runtimePath = join(fx.ocx, "runtime-port.json");
+  const script = `
+    import { writeFileSync } from "node:fs";
+    const write = (stream, text) => new Promise((resolve, reject) => stream.write(text, error => error ? reject(error) : resolve()));
+    await write(process.stdout, "Client startup work complete.\\n");
+    await Promise.all([process.stdout, process.stderr].map(async stream => {
+      for (let i = 0; i < 128; i++) await write(stream, "x".repeat(65536));
+    }));
+    await write(process.stdout, "stdout-tail\\n");
+    await write(process.stderr, "stderr-tail\\n");
+    writeFileSync(${JSON.stringify(runtimePath)}, JSON.stringify({ pid: process.pid, port: 1 }));
+    setInterval(() => {}, 1000);
+  `;
+  const child = Bun.spawn([process.execPath, "-e", script], {
+    cwd: fx.root, env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+  });
+  trackChild(child);
+  expect((await waitForRuntime(runtimePath, child)).pid).toBe(child.pid);
+  await waitForClientStartup(child);
+  child.kill("SIGTERM");
+  const captured = await finishChildOutput(child);
+  expect(captured.stdout.tail.length).toBeLessThanOrEqual(STARTUP_OUTPUT_TAIL_CHARS);
+  expect(captured.stderr.tail.length).toBeLessThanOrEqual(STARTUP_OUTPUT_TAIL_CHARS);
+  expect(captured.stdout.tail).toContain("stdout-tail");
+  expect(captured.stderr.tail).toContain("stderr-tail");
+  expect(captured.stdout.tail).not.toContain("Client startup work complete.");
+  expect(captured.startupComplete).toBe(true);
+}, 30_000);
+
+test("startup diagnostics include both child tails and exit state on publication failure", async () => {
+  const fx = fixture();
+  const child = Bun.spawn([process.execPath, "-e", 'console.log("before-publication"); console.error("fixture-start-failure"); process.exitCode = 2;'], {
+    cwd: fx.root, env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+  });
+  trackChild(child);
+  await child.exited;
+  let failure = "";
+  try { await waitForRuntime(join(fx.ocx, "runtime-port.json"), child); }
+  catch (error) { failure = String(error); }
+  expect(failure).toContain("before-publication");
+  expect(failure).toContain("fixture-start-failure");
+  expect(failure).toContain('"exitCode":2');
+  expect(failure).toContain(`"pid":${child.pid}`);
+  expect(failure).toContain("lastOutputAgoMs");
+});
+
+test("startup diagnostics preserve split UTF-8 and startup markers before tail eviction", async () => {
+  const bytes = new TextEncoder().encode("한글 Client startup work complete.");
+  const stdout = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+      controller.enqueue(new TextEncoder().encode("z".repeat(10000)));
+      controller.close();
+    },
+  });
+  const stderr = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const byte of new TextEncoder().encode("오류")) controller.enqueue(Uint8Array.of(byte));
+      controller.close();
+    },
+  });
+  const output = await captureStartupChildOutput(stdout, stderr).finish();
+  expect(output.startupComplete).toBe(true);
+  expect(output.stdout.tail).toBe("z".repeat(8192));
+  expect(output.stderr.tail).toBe("오류");
+  expect(output.stdout.complete && output.stderr.complete).toBe(true);
+});
+
+for (const cancellation of ["pending", "rejected"] as const) {
+  test(`startup diagnostics bound ${cancellation} pipe cancellation`, async () => {
+    let cancelled = 0;
+    const open = () => new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("partial")); },
+      cancel() {
+        cancelled++;
+        return cancellation === "pending" ? new Promise<void>(() => {}) : Promise.reject(new Error("fixture cancel failure"));
+      },
+    });
+    const output = await captureStartupChildOutput(open(), open()).finish(20);
+    expect(output.stdout.tail).toBe("partial");
+    expect(output.stderr.tail).toBe("partial");
+    expect(output.stdout.complete || output.stderr.complete).toBe(false);
+    expect(cancelled).toBe(2);
+  }, 2000);
+}

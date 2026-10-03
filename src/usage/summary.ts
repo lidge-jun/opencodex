@@ -10,7 +10,7 @@ import {
   type PersistedUsageEntry,
   type UsageStatus,
 } from "./log";
-import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, serviceTierContext, type ServiceTierContext } from "./cost";
+import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, serviceTierContext, type ServiceTierContext, tokensPerSecond } from "./cost";
 
 /**
  * Canonical range members. The warm-up loop in the management usage route
@@ -73,6 +73,18 @@ export interface UsageSummaryTotals {
   cacheSynthesizedRequests?: number;
   /** Rows with no cache detail at all. Not a miss, and not a zero. */
   cacheUnknownRequests?: number;
+  /**
+   * Aggregated output throughput (#6309): output tokens and wall-clock milliseconds summed over
+   * the attempts whose usage was measured, plus how many attempts qualified. The rate is the
+   * token sum over the duration sum — a time-weighted average, not a mean of per-request rates —
+   * so one fast tiny request cannot outweigh many slow large ones. Attempts without both a
+   * positive token count and a positive duration contribute nothing.
+   */
+  throughputOutputTokens?: number;
+  throughputDurationMs?: number;
+  throughputSamples?: number;
+  /** Derived at finalize time: throughputOutputTokens / throughputDurationMs * 1000. */
+  throughputTokensPerSec?: number;
 }
 
 export interface UsageDay {
@@ -118,6 +130,10 @@ export interface UsageModel {
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
+  /** Aggregate output throughput for this row (#6309): summed measured tokens over summed duration. */
+  throughputTokensPerSec?: number;
+  /** Attempts behind the throughput aggregate; absent when nothing was measured. */
+  throughputSamples?: number;
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
@@ -141,6 +157,12 @@ export interface UsageProvider {
   totalTokens: number;
   inputTokens?: number;
   outputTokens?: number;
+  /**
+   * Aggregate output throughput for this row (#6309): summed measured output tokens over summed
+   * wall-clock duration. Undefined when no attempt in the row reported both.
+   */
+  throughputTokensPerSec?: number;
+  throughputSamples?: number;
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
@@ -420,6 +442,8 @@ export interface UsageAttribution {
   usageStatus: UsageStatus;
   usage?: PersistedUsageEntry["usage"];
   totalTokens?: number;
+  /** Wall-clock duration of the attempt, or of the row when it has no attempts. */
+  durationMs?: number;
   /** Attempt provenance when the row has one, else the entry's; never assumed observed. */
   cacheProvenance?: CacheTelemetryProvenance;
 }
@@ -465,6 +489,7 @@ export function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[
       usageStatus: entry.usageStatus,
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
+      durationMs: entry.durationMs,
       ...(entry.cacheProvenance ? { cacheProvenance: entry.cacheProvenance } : {}),
     }];
   }
@@ -482,6 +507,7 @@ export function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[
       usageStatus: attempt.usageStatus,
       ...(attempt.usage ? { usage: attempt.usage } : {}),
       ...(attempt.totalTokens !== undefined ? { totalTokens: attempt.totalTokens } : {}),
+      durationMs: attempt.durationMs,
       ...(cacheProvenance ? { cacheProvenance } : {}),
     };
   });
@@ -611,6 +637,30 @@ function finalizeCoverage(totals: UsageSummaryTotals): void {
   totals.coverageRatio = totals.requests === 0 ? 0 : totals.measuredRequests / totals.requests;
 }
 
+/**
+ * Aggregate output throughput inputs (#6309) into the window totals. A measured attempt
+ * contributes its output tokens and duration only when both are positive, so a zero-token
+ * or zero-duration row cannot deflate or inflate the rate. Without attempts, the row-level
+ * usage and duration describe the request directly.
+ */
+function addThroughputTotals(totals: UsageSummaryTotals, entry: PersistedUsageEntry): void {
+  const samples = entry.attempts?.length
+    ? entry.attempts
+    : [{ usage: entry.usage, durationMs: entry.durationMs }];
+  for (const sample of samples) {
+    if (!sample.usage || tokensPerSecond(sample.usage.outputTokens, sample.durationMs) === null) continue;
+    totals.throughputOutputTokens = (totals.throughputOutputTokens ?? 0) + sample.usage.outputTokens;
+    totals.throughputDurationMs = (totals.throughputDurationMs ?? 0) + sample.durationMs;
+    totals.throughputSamples = (totals.throughputSamples ?? 0) + 1;
+  }
+}
+
+/** Fold the raw throughput sums into the rate the dashboard and API expose. */
+function finalizeThroughput(totals: UsageSummaryTotals): void {
+  if ((totals.throughputDurationMs ?? 0) <= 0) return;
+  totals.throughputTokensPerSec = tokensPerSecond(totals.throughputOutputTokens ?? 0, totals.throughputDurationMs!) ?? undefined;
+}
+
 function addEstimatedCost(
   totals: UsageSummaryTotals,
   entry: Pick<PersistedUsageEntry, "usageStatus" | "usage" | "attempts">,
@@ -670,6 +720,9 @@ interface UsageModelAccumulator {
   cacheObserved: boolean;
   /** Input tokens from attributions with OBSERVED cache detail; the hit-rate denominator. */
   cacheObservedInputTokens: number;
+  throughputOutputTokens: number;
+  throughputDurationMs: number;
+  throughputSamples: number;
   estimatedCostUsd?: number;
   requestCounts: UsageRequestCounts;
   requestFacts?: Map<number, number>;
@@ -820,6 +873,9 @@ function mergeTotals(target: UsageSummaryTotals, source: UsageSummaryTotals): vo
   target.cacheObservedRequests = mergeOptionalTotal(target.cacheObservedRequests, source.cacheObservedRequests);
   target.cacheSynthesizedRequests = mergeOptionalTotal(target.cacheSynthesizedRequests, source.cacheSynthesizedRequests);
   target.cacheUnknownRequests = mergeOptionalTotal(target.cacheUnknownRequests, source.cacheUnknownRequests);
+  target.throughputOutputTokens = mergeOptionalTotal(target.throughputOutputTokens, source.throughputOutputTokens);
+  target.throughputDurationMs = mergeOptionalTotal(target.throughputDurationMs, source.throughputDurationMs);
+  target.throughputSamples = mergeOptionalTotal(target.throughputSamples, source.throughputSamples);
 }
 
 /** Sum an optional total. Absent on one side means "not computed there", so it contributes nothing. */
@@ -849,6 +905,9 @@ function blankModelAccumulator(
     cacheCreationInputTokens: 0,
     cacheObserved: false,
     cacheObservedInputTokens: 0,
+    throughputOutputTokens: 0,
+    throughputDurationMs: 0,
+    throughputSamples: 0,
     requestCounts: blankRequestCounts(),
     ...(mode === "exact" ? { requestFacts: new Map() } : {}),
   };
@@ -877,6 +936,9 @@ function mergeModelAccumulator(target: UsageModelAccumulator, source: UsageModel
   target.cacheCreationInputTokens += source.cacheCreationInputTokens;
   target.cacheObserved ||= source.cacheObserved;
   target.cacheObservedInputTokens += source.cacheObservedInputTokens;
+  target.throughputOutputTokens += source.throughputOutputTokens;
+  target.throughputDurationMs += source.throughputDurationMs;
+  target.throughputSamples += source.throughputSamples;
   if (source.estimatedCostUsd !== undefined) {
     target.estimatedCostUsd = (target.estimatedCostUsd ?? 0) + source.estimatedCostUsd;
   }
@@ -1081,6 +1143,12 @@ function buildUsageModels(
       totalTokens: model.summaryTotalTokens,
       inputTokens: model.inputTokens,
       outputTokens: model.outputTokens,
+      ...(model.throughputDurationMs > 0
+        ? {
+            throughputTokensPerSec: tokensPerSecond(model.throughputOutputTokens, model.throughputDurationMs) ?? undefined,
+            throughputSamples: model.throughputSamples,
+          }
+        : {}),
       cachedInputTokens: model.cacheReadInputTokens,
       cacheReadInputTokens: model.cacheReadInputTokens,
       cacheCreationInputTokens: model.cacheCreationInputTokens,
@@ -1120,6 +1188,12 @@ function buildUsageProviders(
         totalTokens: provider.summaryTotalTokens,
         inputTokens: provider.inputTokens,
         outputTokens: provider.outputTokens,
+        ...(provider.throughputDurationMs > 0
+          ? {
+              throughputTokensPerSec: tokensPerSecond(provider.throughputOutputTokens, provider.throughputDurationMs) ?? undefined,
+              throughputSamples: provider.throughputSamples,
+            }
+          : {}),
         cachedInputTokens: provider.cacheReadInputTokens,
         cacheReadInputTokens: provider.cacheReadInputTokens,
         cacheCreationInputTokens: provider.cacheCreationInputTokens,
@@ -1298,6 +1372,11 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     if (attribution.usage) {
       breakdown.inputTokens += attribution.usage.inputTokens;
       breakdown.outputTokens += attribution.usage.outputTokens;
+      if (tokensPerSecond(attribution.usage.outputTokens, attribution.durationMs ?? 0) !== null) {
+        breakdown.throughputOutputTokens += attribution.usage.outputTokens;
+        breakdown.throughputDurationMs += attribution.durationMs!;
+        breakdown.throughputSamples += 1;
+      }
       const { read, creation, provenance } = cacheObservationFromUsage(
         attribution.usage,
         attribution.cacheProvenance,
@@ -1463,6 +1542,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     addTokens(partition.totals, entry);
     addSpendTotals(partition.totals, entry);
     addCacheProvenanceTotals(partition.totals, entry);
+    addThroughputTotals(partition.totals, entry);
     addEstimatedCost(partition.totals, entry, costInfo);
 
     const requestKey = this.mode === "exact" ? this.requestKey(entry.requestId) : null;
@@ -1556,6 +1636,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       day.modelOverlaps.push(...partition.modelOverlaps.values());
     }
     finalizeCoverage(totals);
+    finalizeThroughput(totals);
 
     const customDates = this.window ? new Set(customWindowDates(this.window)) : null;
     const dayCount = customDates?.size ?? (range === "all" ? dayCountForAllRange(oldestTimestamp, now) : fixedDays);

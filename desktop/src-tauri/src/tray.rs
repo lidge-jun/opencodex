@@ -208,7 +208,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 if enabled {
                     let _ = app.autolaunch().disable();
                 } else {
-                    let _ = app.autolaunch().enable();
+                    let _ = crate::login_autostart::enable(app);
                 }
             }
             "stop-proxy" => {

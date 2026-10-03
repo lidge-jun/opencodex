@@ -29,10 +29,16 @@ drawing anything.
 `withGlobalTauri` is on so that page can invoke without a bundler. The bootstrap commands are
 granted to the local app origin only: `capabilities/default.json` declares no `remote` entry, and
 Tauri checks the ACL for any invoke from a non-local origin. The one exception is page zoom. The main
-window enables Tauri's zoom hotkeys (Cmd or Ctrl with + / - / 0); WebView2 handles them natively, but
-on macOS and Linux Tauri injects a keydown polyfill that calls `set_webview_zoom` from whatever page
-is loaded, including the loopback dashboard. `capabilities/dashboard-zoom.json` grants that single
-command to the main window for `http://127.0.0.1:*`, and a test in `window.rs` pins its shape.
+window keeps Tauri's zoom hotkeys on (Cmd or Ctrl with + / - / 0): WebView2 handles them natively, and on
+macOS and Linux Tauri injects a keydown polyfill that calls `set_webview_zoom` from whatever page is loaded.
+A dashboard that handles zoom itself (`gui/src/lib/desktop-zoom.ts`) keeps the level in `localStorage`,
+re-applies it at start and calls the same command, and its handlers run in the capture phase and stop the
+event before the polyfill's bubble-phase listeners see it. Nothing is negotiated, because the shell cannot
+know which dashboard it shows: the runtime serves the dashboard and the installed app is the shell, so a
+declined takeover or a service that has not restarted puts them on different versions. An older dashboard
+has no handler, so the polyfill keeps working; an older shell's polyfill is pre-empted by a newer
+dashboard. `capabilities/dashboard-zoom.json` grants that single command to the main window for
+`http://127.0.0.1:*`, and a test in `window.rs` pins its shape.
 
 The main window carries an integrated title bar on macOS: the builder sets
 `TitleBarStyle::Overlay` with `hidden_title`, so the webview draws to the top of the window and
@@ -349,8 +355,12 @@ that is not running has no menu bar item, so leaving autostart off by default le
 installed app absent after a reboot. The marker in the app config directory is written
 before the login item is touched and is never removed, so a user who turns the setting
 off keeps it off; writing it afterwards would let a failed enable retry on every launch.
-The behaviour is not macOS-only — the autostart plugin implements the Linux autostart
-entry and the current-user Windows Run registration too.
+The behaviour is not macOS-only. The autostart plugin implements the macOS and Linux
+registrations and reads or disables the current-user Windows Run entry. Shell enables
+on Windows write a quoted executable path followed by `--autostart`, preserving the
+plugin's registration name and Task Manager explicit-enable semantics. A Windows-specific
+launch-origin migration marker revisits older registrations once, only when already
+enabled; entries disabled in the tray or Task Manager stay disabled.
 
 The WidgetKit extension in `app/` needs three things that Xcode's app-extension target
 would supply on its own, and SwiftPM has no such target: `@main` on

@@ -154,7 +154,7 @@ row; the only lever is the picker's Anthropic id on each request. A binding maps
 bindings overlaid (binding wins per key, `native/` targets normalized to the bare slug, global values
 left verbatim). The live config object is never copied or persisted with the merged map. Every other
 resolution rule is unchanged, so a bound id is translated rather than natively passed through, dated
-ids reach undated keys, and an `ocx-route` directive still wins. `ocx claude` sessions and the public
+ids reach undated keys, and an `ocx-route` directive still wins over a bare model id; an explicit gateway selector wins over that legacy fallback. `ocx claude` sessions and the public
 Messages listener never see bindings.
 
 `PUT /api/claude-desktop/first-party-bindings` (`{ set?, remove? }`) validates ids and routes against
@@ -204,7 +204,7 @@ decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop i
 trusted in the login keychain (`picker-trust.ts`). The picker CA (`picker-ca.ts`) carries critical
 name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its signing
 key exists only in the server process; only public certificates are written under
-`<OPENCODEX_HOME>/claude-picker/`. Every intercept start drops any legacy `ca.key`, even with the intercept or picker off; on restart the lifecycle keeps the applied
+`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). On restart the lifecycle keeps the applied
 profile row in place, and removes the prior public root only when the published certificate differs
 from this process's authority — a reused authority stays trusted, and a predecessor that cannot be
 untrusted leaves the picker disabled rather than trusted beside its replacement —
@@ -244,6 +244,20 @@ CONNECT to claude.ai that arrives before the first refresh waits at most 3 s, th
 picker proxy bind failure only disables picker mode; a picker construction or start failure closes
 every socket the start had bound before rethrowing. Nothing is logged but method, bootstrap or
 other, and status.
+
+### Picker catalog rewrite bounds
+
+`src/claude/intercept/picker-budget.ts` preflights plain JSON before copying injected rows.
+Each retained field value and key is limited to 64 KiB of serialized UTF-8, each added row to
+256 KiB, and the whole response to 4096 added rows and 2 MiB of added JSON (including separators).
+All selected surfaces, including duplicate surface ids, share that budget. The original body plus
+reserved additions must fit 16 MiB before deep clones or final serialization. The CLI's explicit
+bootstrap fallback uses the same budget, including space for a newly created options property.
+A refused rewrite leaves every original row and the upstream response unchanged; it never publishes
+a partially extended picker. Small nested capabilities/thinking metadata retain their shape,
+while presentation/version stripping, descriptions, context windows, and surface eligibility keep
+their existing rules. Regression coverage is in `tests/claude-integration/claude-picker-bootstrap.test.ts`
+and `tests/claude-integration/claude-cli-picker.test.ts`.
 
 `src/claude/desktop-picker.ts` owns every mutation while a server is running. One controller lock
 serializes `enable`, `disable`, and `transition`; the latter wraps a whole Desktop mode change so

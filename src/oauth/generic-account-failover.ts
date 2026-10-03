@@ -734,3 +734,24 @@ export function clearGenericFailoverHealth(providerName?: string): void {
     if (key.startsWith(`${providerName}\u0000`)) health.delete(key);
   }
 }
+
+/**
+ * Retire one account's superseded auth evidence after an explicit (re-)login. An
+ * auth cooldown recorded against the old grant must not hold out the fresh
+ * credential, so it leaves with the login rather than lingering until its
+ * deadline. Rate, quota, and suspension evidence is preserved: a re-login says
+ * nothing about those verdicts, and dropping them would make a throttled account
+ * eligible early. Entries bound to the still-current generation stay as well.
+ */
+export function clearGenericFailoverHealthForAccount(providerName: string, accountId: string): void {
+  const live = getAccountSet(providerName)?.accounts.find(row => row.id === accountId);
+  const current = live ? credentialGeneration(live.credential) : undefined;
+  const bare = `${providerName}\u0000${accountId}`;
+  for (const key of [...health.keys()]) {
+    if (key !== bare && !key.startsWith(`${bare}\u0000`)) continue;
+    const entry = health.get(key);
+    if (!entry || entry.cooldownSource !== "auth") continue;
+    if (current !== undefined && entry.identity === current) continue;
+    health.delete(key);
+  }
+}

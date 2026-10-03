@@ -25,6 +25,17 @@ Password SSH and Windows are outside the current flow. A link can be started fro
 
 The dashboard does not ask you to enter a token. It probes the host first, and it cannot apply the link until you explicitly confirm the fingerprint.
 
+The Add Child sheet explains that the Child uses this Home's providers over SSH and lists the prerequisites above. Host aliases come from `~/.ssh/config` on the Home running OpenCodex, not necessarily the computer displaying the browser. If discovery succeeds with no hosts, add a `Host` entry like this, then choose **Rescan hosts**. You can also enter an existing alias manually; selecting or entering an alias enables **Test connection**. The sheet links to this guide.
+
+```sshconfig
+Host devbox
+  HostName devbox.example.com
+  User you
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+If discovery fails, the sheet shows **Could not load SSH hosts**, the available request reason and **Retry**, rather than claiming the host list is empty. A connection-test failure keeps its specific reason and sanitized SSH hint in the active sheet, not duplicated behind it. Check the reason, use the SSH diagnostic in Troubleshooting below when relevant, and retry. Rescanning keeps the entered alias but requires fresh fingerprint review before connecting.
+
 ## Connect this computer as a Child
 
 On the computer that should use the Home's providers:

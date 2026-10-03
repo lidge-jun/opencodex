@@ -18,6 +18,7 @@ import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
 import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeMainQuotaCredential, observeMainQuotaIdentity } from "./main-account-cache";
 import { extractAccountIdClaims } from "../oauth/chatgpt";
 import { forgetCodexAccountPause } from "./account-pause";
+import { forgetCodexAccountCreditUse } from "./account-credit-use";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
 import { forgetCodexQuotaAutoRefreshAccount } from "./quota-auto-refresh-state";
 import { forgetCodexAccountAutoSwitchThreshold } from "./account-auto-switch";
@@ -179,6 +180,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
     runtimeConfig.codexAccounts = (runtimeConfig.codexAccounts ?? [])
       .filter(account => account.isMain || account.id !== accountId);
     forgetCodexAccountPause(runtimeConfig, accountId);
+    forgetCodexAccountCreditUse(runtimeConfig, accountId);
     forgetCodexAccountPriority(runtimeConfig, accountId);
     forgetCodexAccountAutoSwitchThreshold(runtimeConfig, accountId);
     if (runtimeConfig.codexQuotaAutoRefresh?.[accountId]) {

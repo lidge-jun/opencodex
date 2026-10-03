@@ -255,6 +255,8 @@ trust a local certificate authority in the login keychain. That authority is con
 and its subdomains. Its signing key exists only inside the running OpenCodex process, so every
 OpenCodex restart publishes a fresh authority and macOS asks you to trust it again — approve the
 prompt, or later run `ocx claude desktop picker trust`, after each restart.
+Startup also attempts to remove a legacy on-disk picker signing key before checking whether
+interception is enabled. Cleanup is best-effort and does not enable interception or block startup.
 
 On restart OpenCodex first removes the previous authority from the keychain. If that removal fails
 (for example because you decline the keychain prompt), the picker stays off for this run so two
@@ -271,7 +273,9 @@ or turn it off with `ocx claude desktop picker off`. The dashboard has the same 
 **Claude → Desktop**. After the picker profile is selected, fully quit and reopen Claude Desktop.
 
 Picker mode is part of first-party mode, so the [first-party account risk](#first-party-opt-in)
-applies to it as well.
+applies to it as well. Desktop and CLI catalog rewrites share bounded row and metadata limits:
+if adding routed models would exceed a limit, OpenCodex returns the original Anthropic catalog
+unchanged rather than publishing a partial list.
 
 ### Use opencodex models from the Desktop Code tab (first-party bindings)
 
@@ -313,8 +317,9 @@ The UI distinguishes uncertainty about whether settings still point at its proxy
   [Model picker in the CLI](#model-picker-in-the-cli). You can also bind a built-in Anthropic
   model id to a route (`ocx claude desktop bind`, above) or use `modelMap`.
 - `ANTHROPIC_SMALL_FAST_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` are chosen by the CLI before the
-  request is sent; set them in `settings.json` yourself if a sidecar or subagent should use a
-  mapped id.
+  request is sent. Plain first-party `claude` uses your `settings.json` values. Routed
+  `ocx claude` also offers the [subagent force setting](#forced-claude-code-subagent-model)
+  on the Subagents page and through the CLI.
 - `ocx claude` and first-party coexist: a session started with `ocx claude` talks to
   `ANTHROPIC_BASE_URL` (plain HTTP on loopback), which `HTTPS_PROXY` does not cover, so that
   process reaches OpenCodex directly and the proxy simply sees no traffic from it.
@@ -634,8 +639,12 @@ Proxy startup/ensure, `ocx claude`, and relevant dashboard saves sync your featu
   overwritten or pruned; your own agents are never touched.
 - Files are atomically synced per file (write + rename).
 - `enabled: false` or `injectAgents: false` prunes all verified-owned definitions.
+- Successful CLI first-party saves and persisted Desktop first-party setup also attempt best-effort
+  roster sync, including repeated setup to repair missing definitions. Refused setup and rollback
+  do not sync agents. Turning first-party off alone does not disable agent registration.
 - GUI PUT and roster changes resync immediately; every foreground or background proxy start/ensure
-  reconciles the owned files before a later Claude Code launch reads them.
+  reconciles the owned files before a later Claude Code launch reads them. Start a new Claude session
+  after registration so it loads the generated definitions.
 
 Dispatch: `subagent_type: "ocx-gpt-5-6-sol"`. 1M-capable targets carry `[1m]` automatically.
 
@@ -961,3 +970,17 @@ the confirmed obsolete token file and applying first-party mode again; never del
 ### First-party picker context markers
 
 The Desktop Code-tab picker adds `[1m]` to routed models whose authoritative context window is at least one million tokens, so Claude uses its 1M accounting instead of the smaller custom-model fallback. Labels, profile order, and provider routes stay unchanged. Unknown and sub-million windows remain unmarked, including native long-window opt-ins: the picker cannot guarantee that a Desktop or remote runner receives the matching compaction environment. The paired auto-context setup for `ocx claude` is unchanged. An existing conversation keeps its saved selector until you select the model again from the refreshed picker.
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+Explicit gateway selectors on a generated agent request take precedence over its legacy `ocx-route` fallback, even if the saved force setting changes after launch. For shell or settings overrides of generated roster agents, use an explicit gateway alias; bare Claude ids retain the older-client fallback behavior. Native aliases restore their bare model before the existing credential and model-map checks. Connected launches validate force targets against a fresh authenticated gateway catalog; failed discovery skips automatic force injection, and cached context windows alone never prove availability.

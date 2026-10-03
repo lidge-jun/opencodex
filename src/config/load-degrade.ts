@@ -1,3 +1,4 @@
+import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
@@ -592,6 +593,7 @@ export function normalizePersistedClaudeCode(claudeCode: unknown): OcxConfig["cl
     return claudeCode as OcxConfig["claudeCode"];
   }
   const normalized = { ...claudeCode } as Record<string, unknown>;
+  if (Object.hasOwn(normalized, "subagentModelForce") && !isSubagentModelEntry(normalized.subagentModelForce)) delete normalized.subagentModelForce;
   // A malformed hand edit must not arm CLI interception or discard the whole config.
   if (Object.hasOwn(normalized, "cliFirstParty") && typeof normalized.cliFirstParty !== "boolean") {
     delete normalized.cliFirstParty;
@@ -634,6 +636,8 @@ export function normalizeClaudeSubagentEffort(config: OcxConfig, _rawParsed: unk
 }
 
 export function warnDegradedClaudeSubagentEffort(rawParsed: unknown): void {
+  const force = rawSubagentModelForce(rawParsed);
+  if (force !== undefined && !isSubagentModelEntry(force)) console.warn("⚠️ config.json claudeCode.subagentModelForce is invalid — ignoring it. Other settings were preserved.");
   const rawEffort = rawClaudeSubagentEffort(rawParsed);
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
     console.warn(`⚠️  config.json claudeCode.subagentEffort is invalid (expected ${CLAUDE_SUBAGENT_EFFORTS.join(", ")}) — ignoring it. Other settings were preserved.`);

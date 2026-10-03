@@ -9,6 +9,9 @@ mod first_run;
 mod formatting;
 mod identity;
 mod logging;
+mod login_autostart;
+#[cfg(any(target_os = "windows", test))]
+mod windows_autostart_command;
 // macOS only: it exists to replace one item in a menu no other platform installs. Compiling it
 // elsewhere would leave its contents unreachable, which -D warnings rejects.
 #[cfg(target_os = "macos")]

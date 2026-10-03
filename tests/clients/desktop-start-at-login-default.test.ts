@@ -28,7 +28,7 @@ describe("start at login default", () => {
 
   test("an existing marker returns before anything is changed", () => {
     const early = firstRun.indexOf("marker.exists()");
-    const enable = firstRun.indexOf("autolaunch().enable()");
+    const enable = firstRun.indexOf("crate::login_autostart::enable(app)");
     expect(early).toBeGreaterThan(-1);
     expect(enable).toBeGreaterThan(-1);
     expect(early).toBeLessThan(enable);
@@ -37,14 +37,14 @@ describe("start at login default", () => {
 
   test("the marker is written before the login item is registered", () => {
     const write = firstRun.indexOf("fs::write(&marker");
-    const enable = firstRun.indexOf("autolaunch().enable()");
+    const enable = firstRun.indexOf("crate::login_autostart::enable(app)");
     expect(write).toBeGreaterThan(-1);
     expect(write).toBeLessThan(enable);
   });
 
   test("enabling is guarded by the current autolaunch state", () => {
     const guard = firstRun.indexOf("autolaunch().is_enabled()");
-    const enable = firstRun.indexOf("autolaunch().enable()");
+    const enable = firstRun.indexOf("crate::login_autostart::enable(app)");
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(enable);
   });
@@ -67,7 +67,7 @@ describe("start at login default", () => {
     const start = firstRun.indexOf("pub fn adopt_launch_origin_argument");
     expect(start).toBeGreaterThan(-1);
     const body = firstRun.slice(start);
-    const enable = body.indexOf("autolaunch().enable()");
+    const enable = body.indexOf("crate::login_autostart::enable(app)");
     const claim = body.indexOf("fs::write(&claimed");
     expect(enable).toBeGreaterThan(-1);
     expect(claim).toBeGreaterThan(enable);
@@ -75,4 +75,13 @@ describe("start at login default", () => {
     expect(body).toContain("Ok(true) =>");
     expect(body).not.toContain("autolaunch().disable()");
   });
+});
+
+test("Windows revisits old migration markers and every shell enable uses the quoted writer", () => {
+  const firstRun = code(FIRST_RUN);
+  expect(firstRun).toContain('const ORIGIN_MARKER: &str = "start-at-login-quoted-origin-flag"');
+  const tray = code(repoPath("desktop/src-tauri/src/tray.rs"));
+  expect(tray).toContain("crate::login_autostart::enable(app)");
+  expect(tray).not.toContain("autolaunch().enable()");
+  expect(firstRun).not.toContain("autolaunch().enable()");
 });
