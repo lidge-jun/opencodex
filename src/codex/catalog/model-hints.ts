@@ -295,7 +295,8 @@ export function applyProviderConfigHints(
     inputModalities = base.includes("image") ? [...base] : [...base, "image"];
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
-  const suppressSyntheticMax = modelRecordValue(prov.modelSuppressSyntheticMax, model.id) === true;
+  const suppressSyntheticMax = modelRecordValue(prov.modelSuppressSyntheticMax, model.id)
+    ?? (model.antigravityEffortWireModelIds !== undefined);
   const defaultReasoningEffort = staticPolicy.model.defaultReasoningEffort ?? model.defaultReasoningEffort;
   const supportsReasoningSummaries = staticPolicy.model.supportsReasoningSummaries;
   const supportsVerbosity = staticPolicy.model.supportsVerbosity;

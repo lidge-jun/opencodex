@@ -113,6 +113,8 @@ export interface CatalogModel {
   displayName?: string;
   owned_by?: string;
   reasoningEfforts?: string[];
+  /** Exact CCA family evidence, retained through the in-memory discovery cache. */
+  antigravityEffortWireModelIds?: Partial<Record<"low" | "medium" | "high", string>>;
   /** Suppress only catalog synthesis of a missing max rung; provider-declared max survives. */
   suppressSyntheticMax?: boolean;
   defaultReasoningEffort?: string;

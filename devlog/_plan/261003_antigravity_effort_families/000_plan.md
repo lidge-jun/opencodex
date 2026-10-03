@@ -6,7 +6,7 @@ New Claude 5.5 Opus and Sonnet tiers currently appear as separate models because
 - Trigger/goal: group the new Antigravity models and retain grouping during automatic refresh; publish and merge one ordinary PR into dev.
 - Non-goals: upstream API invention, authentication changes, release, deployment, running-service restart, unrelated UI changes.
 - Scope: current managed worktree; existing GitHub identity for authorized PR publication/integration. No user token/cost/wall-clock cap was set.
-- Verifiers: focused parser/wire/catalog/new-model-policy regressions, typecheck, structure/privacy/layout gates, docs build, exact-head hosted CI and merge receipt. Existing wire baseline: 61 pass, 0 fail (`bun test tests/adapters/google/google-antigravity-wire.test.ts`). Tests name source arguments directly; typecheck includes src and tests through tsconfig.
+- Verifiers: focused parser/wire/catalog/new-model-policy regressions, typecheck, structure/privacy/layout gates, docs build, exact-head hosted CI and merge receipt. Existing wire baseline: 61 pass, 0 fail (`bun test tests/adapters/google/google-antigravity-wire.test.ts`). Tests name source arguments directly; typecheck includes src through tsconfig; Bun executes the targeted test files.
 - Stop: implementation and independent review complete, relevant checks green, PR merged into dev. DONE needs these proofs; unresolved external checks remain unmet, never passed by assumption.
 - Evidence: this unit and local .codexclaw receipts. Escalate only new authority or genuine unresolved design blockers.
 
@@ -27,3 +27,11 @@ Reflection: D01/D02/D03/D05/D06 ALIGNED; D04 gap (retained suffix IDs reappearin
 Final same-architect reflection: ALIGNED for D01-D06, no remaining material design gap. Baseline additionally passed typecheck and 29 listing/policy tests. Proceed to independent A audit.
 
 A round 1: FAIL, one accepted blocker: final merge independently filters raw selectedModels. Added retained-sync and convergence consumers and final-merge regression. No other material design blocker. Same reviewer re-audit requested.
+
+## Build and verification
+
+Implemented the audited plan. A bounded worker owned the family helper/policy/tests; main integrated parser, catalog, both final-merge selection callers and management projection. Discovery tests first failed 8/8 on the original source and passed after the fix. Existing future-family expectations were updated to assert the requested grouping. OpenCodex's existing synthetic ultra orchestration level remains separate from upstream low/medium/high; no unsupported synthetic max is added to the discovered ladder by default.
+
+Focused verification: 43 isolated test files, 830 pass / 0 fail, covering all Google adapter tests, family/policy/persistence, management and final merge, layout, file-size and optional-Lab import boundaries. The initial combined-process run had 803 pass / 2 fail: new test names disagreed with seed ownership (fixed by provider-prefixed names); an unchanged gemini-web-search mock replaced the listing test's OAuth token across files (each file passes in its own process). Full local suite is disproportionate for this bounded catalog change and shared workstation; repository resource exception uses these affected regressions, with full platform coverage left to exact-head hosted CI. Local logs stay in ignored scratch.
+
+Typecheck passed. Docs build passed (561 pages and 77,923 internal links). Structure and privacy scans passed. Structure catalog was already at its 600-line budget, so the shared family contract lives in providers-and-adapters with a link from the existing catalog paragraph.

@@ -1,3 +1,4 @@
+import { projectAntigravitySelectedModels } from "../../providers/antigravity-effort-families";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { initializeConfigOwnership } from "../../lib/config-ownership";
@@ -465,7 +466,7 @@ function writeRetainedCatalogSync({
       provider.disabled !== true
         && Array.isArray(provider.selectedModels)
         && provider.selectedModels.length > 0
-        ? [[name, new Set(provider.selectedModels)] as const]
+        ? [[name, new Set(projectAntigravitySelectedModels(name, provider.selectedModels, goModels))] as const]
         : []
     )),
   );

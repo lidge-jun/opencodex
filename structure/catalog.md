@@ -24,7 +24,7 @@ validation-pending. Import alone supplies no entitlement evidence for the model 
 
 ## Shared catalog
 
-Static policy and observed catalog evidence are separate authorities.
+Static policy and observed catalog evidence are separate authorities. Antigravity grouping and selection projection follow the [discovered effort-family contract](providers-and-adapters.md#antigravity-effort-families).
 `src/providers/resolved-model-policy.ts` resolves and freezes only registry/operator static facts,
 hard wire pins, aliases, and explicit false/empty declarations. Discovery responses, generated
 metadata, cache freshness, availability, credentials, account state, quota and health never enter

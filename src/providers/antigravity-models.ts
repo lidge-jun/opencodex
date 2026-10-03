@@ -7,8 +7,8 @@ import { isModelCacheGenerationCurrent } from "../codex/model-cache";
 // CLI resolves labels against. The ids below separate CCA wire ids, collapsed picker entries,
 // and hidden compatibility aliases for saved selections. The CCA envelope's `model` field must
 // receive the wire id (for example "Gemini 3.1 Pro (High)" => gemini-pro-agent), while the
-// picker exposes collapsed known base models only when CCA returns every known tier; unknown
-// returned wire ids remain visible so they stay directly routable.
+// picker collapses complete low/medium/high families discovered by CCA, including new versions.
+// Partial families remain wire-addressable rather than advertising an invented effort ladder.
 
 // ── Wire IDs (what CCA :fetchAvailableModels returns) ──
 
@@ -121,10 +121,12 @@ function pickerModelIdForDiscoveredWireId(
   const effortMatch = /^(.*)-(low|medium|high)$/.exec(wireId);
   if (effortMatch) {
     const baseId = effortMatch[1]!;
-    if (isKnownAntigravityPickerModelId(baseId)
+    if (isValidModelDiscoveryModelId(baseId)
       && ANTIGRAVITY_DISCOVERY_EFFORTS.every(effort => available.has(`${baseId}-${effort}`))) {
       return baseId;
     }
+    // A shared display label must not collapse an incomplete family or rename its wire tier.
+    return wireId;
   }
 
   // Display labels are a LAST resort, never a first one. CCA labels a tier row
@@ -200,12 +202,13 @@ function completeDiscoveredEffortWireModelIds(
   pickerId: string,
   available: ReadonlyMap<string, Record<string, unknown>>,
 ): AntigravityEffortWireModelIds | undefined {
-  const explicitEffortMap = ANTIGRAVITY_EFFORT_WIRE_MAP[pickerId];
+  const explicitEffortMap = Object.hasOwn(ANTIGRAVITY_EFFORT_WIRE_MAP, pickerId)
+    ? ANTIGRAVITY_EFFORT_WIRE_MAP[pickerId] : undefined;
   if (explicitEffortMap && Object.values(explicitEffortMap).every(wireId => available.has(wireId))) {
     return { ...explicitEffortMap };
   }
 
-  if (!isKnownAntigravityPickerModelId(pickerId)) return undefined;
+  if (!isValidModelDiscoveryModelId(pickerId)) return undefined;
   const suffixEffortMap: AntigravityEffortWireModelIds = {};
   for (const effort of ANTIGRAVITY_DISCOVERY_EFFORTS) {
     const wireId = `${pickerId}-${effort}`;
@@ -450,7 +453,8 @@ function discoveredAntigravityEffortWireModelId(
   }
 
   const defaultEffort = ANTIGRAVITY_DEFAULT_EFFORT[modelId]
-    ?? ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId];
+    ?? ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId]
+    ?? "medium";
   if (defaultEffort && isAntigravityDiscoveryEffort(defaultEffort) && effortMap[defaultEffort]) {
     return effortMap[defaultEffort];
   }
@@ -573,20 +577,27 @@ export function parseAntigravityAvailableModels(
     if (seen.has(id)) continue;
     seen.add(id);
     const effortWireModelIds = completeDiscoveredEffortWireModelIds(id, available);
+    const tierInfo = effortWireModelIds
+      ? Object.values(effortWireModelIds).map(wire => available.get(wire)!) : [info];
+    const windows = tierInfo.map(tier => antigravityPositiveInteger(tier.maxTokens));
+    const contextWindow = windows.every((window): window is number => window !== undefined)
+      ? Math.min(...windows) : undefined;
+    const supportsImages = tierInfo.every(tier => tier.supportsImages === true) ? true
+      : tierInfo.some(tier => tier.supportsImages === false) ? false : undefined;
     out.push({
       id,
       wireModelId: wireId,
       ...(effortWireModelIds ? { effortWireModelIds } : {}),
-      ...(antigravityPositiveInteger(info.maxTokens) ? { contextWindow: antigravityPositiveInteger(info.maxTokens) } : {}),
+      ...(contextWindow ? { contextWindow } : {}),
       // Tri-state, deliberately not a ternary: `true` asserts image support,
       // `false` asserts against it, and ABSENT is unknown. Collapsing absent into
       // `["text"]` let routing read it as a confident `image: false` (#1796). The
       // strict catalog still receives its `["text"]` compatibility default
       // downstream via ensureStrictCatalogFields; only the routing-evidence
       // channel stays honest about what was never asserted.
-      ...(info.supportsImages === true
+      ...(supportsImages === true
         ? { inputModalities: ["text", "image"] as string[] }
-        : info.supportsImages === false
+        : supportsImages === false
           ? { inputModalities: ["text"] as string[] }
           : {}),
     });

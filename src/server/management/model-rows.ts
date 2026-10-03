@@ -9,6 +9,7 @@
  * Bodies are unchanged from their previous home; only `export` was added.
  */
 import type { CatalogModel } from "../../codex/catalog";
+import { antigravityFamilyDisabled } from "../../providers/antigravity-effort-families";
 import { observeModelCacheRevision } from "../../codex/model-cache";
 import {
   captureExportConfigAdmission,
@@ -458,7 +459,7 @@ export async function listManagementModelRows(
       ...m,
       ...displayName,
       namespaced,
-      disabled: [...disabled].some(stored => (
+      disabled: antigravityFamilyDisabled(config, m) || [...disabled].some(stored => (
         (!nativeAlias && stored === namespaced) || slugEquals(stored, m.provider, m.id)
       )),
       ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),

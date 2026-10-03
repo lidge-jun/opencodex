@@ -2,6 +2,9 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "antigravity-discovered-families.test.ts": "adapters/google",
+    "provider-antigravity-effort-families.test.ts": "providers",
+    "provider-antigravity-family-catalog.test.ts": "providers",
     "claude-subagent-model-force.test.ts": "claude-integration",
     "subagent-model-force-api.test.ts": "server",
     "agent-subagent-force.test.ts": "cli",

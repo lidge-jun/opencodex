@@ -551,3 +551,9 @@ public request model. [Memory phase routing](transports/responses-failover.md#me
 owns the selection rule.
 
 Preflight heartbeat retention keeps `replayUnsafe` sticky in the replayed tail, so a second preflight cannot forget earlier side effects after the original marker is evicted.
+
+## Antigravity effort families
+
+Antigravity discovery in `src/providers/antigravity-models.ts` collapses complete low/medium/high wire families without a version allowlist. Partial families retain exact wire IDs. The adapter sends the selected suffix without a second thinking level; saved suffix requests keep their tier. Existing Claude 4.6 single-wire thinking levels and Gemini irregular aliases keep their contracts. Grouped context is the minimum known across every tier; image support requires agreement, with an explicit negative taking precedence. In-memory mappings remain scoped to base URL and accepted cache generation.
+
+Antigravity catalog rows carry the observed complete effort map from `src/providers/antigravity-models.ts` through the in-memory cache. `src/providers/antigravity-effort-families.ts` uses that evidence to group public rows and project suffix allowlists into the base selection, including both final catalog merge callers. Internal retained suffix rows remain available to combo resolution. Authoritative new-model reconciliation normalizes both the prior baseline and policy input before detecting arrivals: an existing suffix family is not a new model. All-disabled tiers transfer a base disable once; a known base keeps the operator's later choice. Genuinely new families still follow new-model policy. Saved defaults, combo targets, suffix disables and provider selections remain unchanged. A discovered ladder advertises only its wire-backed efforts unless explicitly overridden; unknown single-wire models gain no invented ladder.

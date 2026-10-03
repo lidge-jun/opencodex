@@ -751,9 +751,13 @@ export async function fetchProviderModelsWithAuth(
       const live = antigravity.map(model => applyProviderConfigHints(name, prov, {
         id: model.id,
         provider: name,
-        // CCA only exposes a numeric thinking budget. Until the adapter owns an exact Codex
-        // effort-to-wire mapping for a newly discovered model, do not advertise a false ladder.
-        reasoningEfforts: [],
+        // Only an exact discovered wire map proves a new model's selectable effort ladder.
+        reasoningEfforts: Object.keys(model.effortWireModelIds ?? {}),
+        ...(model.effortWireModelIds ? {
+          antigravityEffortWireModelIds: model.effortWireModelIds,
+          suppressSyntheticMax: true,
+          defaultReasoningEffort: model.effortWireModelIds.medium ? "medium" : "high",
+        } : {}),
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
       }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias));

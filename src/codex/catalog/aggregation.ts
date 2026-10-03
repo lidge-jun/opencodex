@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { collapseAntigravityPublicModels } from "../../providers/antigravity-effort-families";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -504,6 +505,7 @@ export function resolveSlugAliasCollisions(goModels: CatalogModel[]): Set<Catalo
 }
 
 export function uniqueCatalogModelsForPublicList(goModels: CatalogModel[]): CatalogModel[] {
+  goModels = collapseAntigravityPublicModels(goModels);
   const collisionSkipped = resolveSlugAliasCollisions(goModels);
   const comboPublicSlugs = new Set(goModels
     .filter(model => model.provider === COMBO_NAMESPACE)
@@ -525,6 +527,7 @@ export function uniqueCatalogModelsForPublicList(goModels: CatalogModel[]): Cata
 }
 
 export function uniqueCatalogModelsForRawPublicList(goModels: CatalogModel[]): CatalogModel[] {
+  goModels = collapseAntigravityPublicModels(goModels);
   const publicId = (model: CatalogModel): string => model.alias ?? `${model.provider}/${model.id}`;
   const comboPublicIds = new Set(goModels
     .filter(model => model.provider === COMBO_NAMESPACE)
