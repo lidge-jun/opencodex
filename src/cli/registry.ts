@@ -9,6 +9,12 @@ export interface CliCommandEntry {
 
 export const CLI_COMMANDS: CliCommandEntry[] = [
   {
+    name: "message",
+    usage: "ocx message <sessions|send> [options]",
+    summary: "Discover loaded local Codex sessions and submit one queued peer message.",
+    details: ["Local Unix transport only; starts no daemon. queued is submission, not processing; never replay an unknown send."],
+  },
+  {
     name: "chatgpt",
     usage: "ocx chatgpt <launch|restore|status>",
     summary: "Experimental ChatGPT app-server shim (macOS only, default off).",

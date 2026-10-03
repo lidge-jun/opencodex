@@ -131,10 +131,11 @@
     {
       "path": "local-messaging.md",
       "tier": 3,
-      "title": "Local Codex Messaging Foundation",
-      "scope": "Unregistered local metadata transport, exact loaded-session discovery and command-owned lifecycle bounds.",
+      "title": "Local Codex Messaging",
+      "scope": "Command-local metadata discovery, native queued submission, peer envelopes, receipts and owned lifecycle bounds.",
       "documents": [
-        "src/messaging/"
+        "src/messaging/",
+        "src/cli/"
       ]
     },
     {

@@ -7,6 +7,10 @@ The user authorized proceeding with reasonable assumptions after no further
 maintainer reply. **No PR may be opened without the user's explicit go-ahead.**
 This is implementation progress, not upstream acceptance or review readiness.
 
+The subsequent command-local implementation and current validation are recorded
+in [040](040_command_implementation.md); remaining work below is historical to
+this foundation increment.
+
 ## Implemented boundary
 
 - Standalone local types and conservative Unix socket addressing; no network URL,
