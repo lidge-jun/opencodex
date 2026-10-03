@@ -1,9 +1,11 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("zh"),
   "nav.claude": "Claude",
   "claude.tabAccount": "账户",
   "claude.tabSettings": "设置",

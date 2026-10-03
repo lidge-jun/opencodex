@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -5,6 +6,7 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("tr"),
   "nav.claude": "Claude",
   "claude.tabAccount": "Hesap",
   "claude.tabSettings": "Ayarlar",

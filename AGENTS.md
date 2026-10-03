@@ -23,7 +23,7 @@ Bun-native TypeScript with no separate server compile step.
   through `tests/helpers/repo-root.ts` (`repoRoot()`, `repoPath()`,
   `helperPath()`, `fixturePath()`), never `import.meta.dir + "/.."`. A new
   test file lands in its domain directory and needs an entry in both
-  `layout.json` `explicit` and `tests/fixtures/test-layout-expected.json`
+  `layout.json` `explicit` and a `tests/fixtures/test-layout-expected*.json` shard
   (`tests/test-layout-tooling.test.ts` names the missing one); the regex
   seeds in `seeds.json` place a conventionally named file until then.
   History: `devlog/_fin/260905_test_modularization_and_windows/`.
@@ -268,7 +268,7 @@ fails `file-size ratchet: repository` for your branch and for every branch cut f
 Two branches can each stay under a cap alone and sum over it together; that is what
 happened in #4908, #5011 and #5018. The remedy is always a move, never a number: put the
 new case in a sibling file, byte for byte, and register it in **both**
-`scripts/test-layout/layout.json` and `tests/fixtures/test-layout-expected.json`.
+`scripts/test-layout/layout.json` and a `tests/fixtures/test-layout-expected*.json` shard.
 `d3ca5522db` is the original precedent.
 
 A moved test is not automatically the same test. One case moved out of

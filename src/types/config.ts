@@ -760,6 +760,8 @@ export interface OcxConfig {
   };
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
+  /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
+  desktopCompatibility?: { startOnProxyStart: boolean };
   /**
    * Destination model for Codex's own memory pipeline, per phase
    * (src/server/responses/memory-models.ts).

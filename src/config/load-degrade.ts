@@ -2,6 +2,7 @@ import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import {
   modelPinnedEffortsConfigError,
@@ -123,6 +124,7 @@ export function warnDegradedCompactionRouting(rawParsed: unknown, validated: Ocx
  */
 export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
+  if (desktopCompatibilityConfigError(rawParsed)) console.warn("Invalid desktopCompatibility startup preference ignored; no desktop compatibility service will start automatically.");
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);

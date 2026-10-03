@@ -198,7 +198,9 @@ export interface AuthorityOptions {
   permittedDnsNames?: readonly string[];
   /** With permittedDnsNames: also exclude every IP address (default true). */
   excludeAllIpAddresses?: boolean;
- }
+  /** Restrict this authority to TLS server authentication; legacy callers keep their existing scope. */
+  serverAuthOnly?: boolean;
+}
 
 export function createCertificateAuthority(options: AuthorityOptions): LocalInterceptCa {
   const validityDays = options.validityDays ?? CA_VALIDITY_DAYS;
@@ -218,6 +220,7 @@ export function createCertificateAuthority(options: AuthorityOptions): LocalInte
       // keyCertSign | cRLSign
       extension(OID.keyUsage, true, bitString(Uint8Array.of(0x06), 1)),
       extension(OID.subjectKeyIdentifier, false, octetString(keyIdentifier(publicKey))),
+      ...(options.serverAuthOnly ? [extension(OID.extendedKeyUsage, true, sequence(objectIdentifier(OID.serverAuth)))] : []),
       ...(options.permittedDnsNames?.length
         ? [extension(OID.nameConstraints, true, nameConstraints(options.permittedDnsNames, options.excludeAllIpAddresses !== false))]
         : []),
@@ -233,6 +236,10 @@ export function createCertificateAuthority(options: AuthorityOptions): LocalInte
 
 export function createLocalInterceptCa(): LocalInterceptCa {
   return createCertificateAuthority({ commonName: CLAUDE_INTERCEPT_CA_COMMON_NAME });
+}
+
+export function isServerAuthOnlyCertificate(certificate: X509Certificate): boolean {
+  return certificate.keyUsage?.length === 1 && certificate.keyUsage[0] === OID.serverAuth;
 }
 
 /**

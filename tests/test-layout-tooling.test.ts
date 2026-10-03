@@ -20,10 +20,21 @@ import {
   type Layout,
 } from "../scripts/test-layout/schema";
 
-// Independent oracle: the basename -> directory table from devlog 001 §2.D, committed as a
-// fixture. The layout guard shares the resolver with the mover, so a resolver defect could move
-// a file to the wrong place and bless it; this fixture is the second opinion that catches it.
-const EXPECTED = JSON.parse(readFileSync(repoPath("tests", "fixtures", "test-layout-expected.json"), "utf8")) as Record<string, string>;
+// Independent oracle: the basename -> directory table from devlog 001 §2.D, committed as fixture
+// shards. The layout guard shares the resolver with the mover, so a resolver defect could move a
+// file to the wrong place and bless it; these fixtures are the second opinion that catches it.
+const EXPECTED_FIXTURE_PARTS = [
+  "test-layout-expected.json",
+  "test-layout-expected-additional.json",
+] as const;
+const EXPECTED: Record<string, string> = {};
+for (const part of EXPECTED_FIXTURE_PARTS) {
+  const entries = JSON.parse(readFileSync(repoPath("tests", "fixtures", part), "utf8")) as Record<string, string>;
+  for (const [file, domain] of Object.entries(entries)) {
+    if (Object.hasOwn(EXPECTED, file)) throw new Error(`duplicate expected test-layout entry: ${file}`);
+    EXPECTED[file] = domain;
+  }
+}
 
 describe("rewriteSpecifier", () => {
   const forms = [

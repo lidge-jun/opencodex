@@ -1,4 +1,5 @@
 import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
+import { scheduleDesktopCompatibilityStartup } from "./index/desktop-compatibility-startup";
 import { AuxiliaryListenerBindError } from "./ports";
 import { runAdmittedBodyWork } from "./inbound-body-admission";
 import {
@@ -198,7 +199,7 @@ import { createReadinessGate, type ReadinessGate } from "./readiness";
 import { createServeOptions, type ServerIngress } from "./index/serve-options";
 import { createOptionalListenerSet, LINK_INGRESS_HOSTNAME } from "./index/optional-listeners";
 import { createPackageTreeIntegrityGuardForServer } from "./index/package-tree-guard";
-import { inspectStartupOwnership, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
+import { inspectStartupOwnership, logProxyEndpoints, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
 import { acquireSpendLedgerServerLifecycle, recordFailedStartRollback, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
 export { waitForFailedStartRollback } from "./index/spend-ledger-lifecycle";
 
@@ -638,11 +639,14 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   let unregisterQuotaAutoRefresh: (() => void) | null = null;
   let remoteWorkspaceStopping = false;
   let remoteWorkspaceShutdown: (() => Promise<void>) | undefined;
+  let desktopCompatibilityStartup: ReturnType<typeof scheduleDesktopCompatibilityStartup> | undefined;
+  let desktopCompatibilityShutdown: (() => Promise<void>) | undefined;
   const managementApiDeps: ManagementApiDeps = {
     ...deps.managementApi,
     listLowQuotaEvents: limit => backgroundLifecycle?.listLowQuotaEvents(limit) ?? [],
     remoteWorkspaceStopping: () => remoteWorkspaceStopping,
     onRemoteWorkspaceShutdown: shutdown => { remoteWorkspaceShutdown = shutdown; }, linkSupervisor: () => optionalListeners.linkSupervisor(), linkListener: () => optionalListeners,
+    onDesktopCompatibilityShutdown: shutdown => { desktopCompatibilityShutdown = shutdown; },
   };
   let workspaceRuntimeFlight: Promise<typeof import("../remote-control/workspace-runtime")> | undefined;
   const loadRemoteWorkspaceRuntime = () => {
@@ -771,6 +775,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
             : []),
           () => optionalListeners.stop(),
           async () => { await remoteWorkspaceShutdown?.(); },
+          async () => { await desktopCompatibilityStartup?.shutdown(); await desktopCompatibilityShutdown?.(); },
           async () => {
             try {
               userCostOverlayReconciler?.stop();
@@ -800,13 +805,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   boundPort = actualPort;
   setCorsOrigin(actualPort);
 
-  console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
-  console.log(`   POST /v1/responses → provider translation`);
-  console.log(`   POST /v1/chat/completions → OpenAI-compatible clients`);
-  console.log(`   GET  /healthz      → health check`);
-  console.log(`   GET  /api/*        → management API`);
-  console.log(`   GET  /             → GUI dashboard`);
-
+  logProxyEndpoints(actualPort);
   if (loopbackServer) {
     // Loud on every start, not once at enable time. An operator who inherits a config, or
     // who forgot, has to be able to see that an unauthenticated surface is live without
@@ -878,6 +877,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   }
 
   startPackageRefresh();
+  desktopCompatibilityStartup = scheduleDesktopCompatibilityStartup(config, { boundHostname: bindHost, boundPort: actualPort, loopbackPort: loopbackServer?.port ?? undefined, readiness: deps.readinessGate });
   return server;
 }
 

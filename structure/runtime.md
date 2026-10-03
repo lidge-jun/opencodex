@@ -1,6 +1,6 @@
 # Runtime
 
-The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Optional native desktop observation follows the [Codex Desktop startup gate and awaited teardown](clients/codex-desktop.md#proxy-startup-preference).
 
 ## Resolved static model policy
 
@@ -67,7 +67,7 @@ Catalog-derived reasoning-level diagnostics are escaped only at the human-output
 
 ## CLI Codex restart scope
 
-`ocx system codex-restart` requests a full Codex desktop-app restart and app-server restarts through the management endpoint. `src/cli/capabilities.ts` names that scope and warns that unsaved composer drafts, model-picker selections, and pending approval prompts may be discarded. `src/cli/system-command.ts` repeats that concrete state-loss warning both when confirmation is missing and after a confirmed human-readable request; the unconfirmed path sends no restart request. `--json` preserves the complete server result, including skipped or refused desktop outcomes. An armed test process never reaches the real desktop app. When the test preload's `OCX_TEST_HOME_GUARD=1` is set and the caller injected no `execFile`, `restartCodexDesktopApp` in `src/codex/desktop-app-restart.ts` returns the skipped reason `test_environment` before discovery or signalling, and `handleDesktopAppRestart` in `src/cli/restart-scope.ts` reports that skip. The flag, not `NODE_ENV`, decides, so a real `NODE_ENV=test ocx ...` still restarts the app; adapter tests that inject `execFile` still exercise the full path. `tests/clients/desktop-app-restart.test.ts` covers the skip.
+The explicit restart, Windows package activation and compatibility authority contracts are documented in [Codex Desktop compatibility](clients/codex-desktop.md).
 
 After a CLI catalog/cache write, advisory restart guidance compares each running Codex app-server's
 start time with the written catalog mtime. It reports only processes proven stale; a fresh or
