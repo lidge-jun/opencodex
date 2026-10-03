@@ -124,12 +124,9 @@ confirmed monthly exhaustion and process-local suspension by the live account id
 before picking a replacement. Its `kiroAutoSelection` projection also supplies the
 account-list exclusion reason; cached plan credit amounts share the same identity and
 expiry fence.
-Across generic OAuth providers, pause also excludes that account from Token Guardian's
-proactive refresh, per-account quota probes (`accountQuotaProbeSkip` in
-`src/providers/quota/account-cache.ts` returns the last reading without a request), the Meta
-Muse key-mint quota read, and xAI/Gemini web-search sidecar eligibility. The stored credential
-remains available for resume, while requests with no unpaused account fail with 403 rather than
-as a login failure.
+Across generic OAuth providers, pausing an account excludes it from Token Guardian refresh and per-account quota probes (`accountQuotaProbeSkip` in `src/providers/quota/account-cache.ts` returns the last reading without a request).
+It also excludes Meta Muse key-mint reads and xAI/Gemini search sidecars. Muse probes use `muse.oauthAccessToken` only for subscription usage, discard the returned Model API key, and leave credentials and active selection unchanged.
+Accounts without a token use passive response-stream observations. Paused credentials remain available for resume; with no unpaused account, requests fail with 403 rather than a login error.
 Devin's local-CLI forced refresh requires a stored account ID or email before it can adopt a
 changed CLI key. Identity-less imports take the terminal reauthentication path; they require
 an explicit `ocx login devin` after rotation. For bound slots, it validates the CLI tenant host

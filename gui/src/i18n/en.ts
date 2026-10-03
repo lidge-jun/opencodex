@@ -1591,7 +1591,7 @@ export const en = {
   "quota.ageHours": "{n}h",
   "quota.ageDays": "{n}d",
   "quota.observedAgo": "Observed {age} ago",
-  "quota.observedHint": "Meta reports usage only during a streaming response, so this is the last value seen, not a live reading.",
+  "quota.observedHint": "This usage was reported during a streaming response. The timestamp shows when it was observed; this is not a live reading.",
   "quota.weeklyLimit": "Weekly limit",
   "quota.monthlyLimit": "30-day limit",
   "quota.cursorFirstParty": "First-party models",

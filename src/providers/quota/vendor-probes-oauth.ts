@@ -2,10 +2,10 @@ import { markAnthropicFamilyEnumeration } from "./anthropic-family-headers";
 import { effectiveCodexAuthAccountId, fetchMainAccountInfoSnapshot, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
-import { captureOAuthAccountSelection, getAccountCredential, getAccountSet } from "../../oauth/store";
+import { captureOAuthAccountSelection, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
-import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
+import { fetchMuseKeyQuotaOutcome } from "../muse-key-quota";
 import { CLAUDE_CLI_USER_AGENT } from "../claude-cli-identity";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
@@ -14,13 +14,15 @@ import {
   type KiroUsageSnapshot,
   kiroUsageContextForAccount,
 } from "../kiro-usage";
-import { captureConfigGeneration } from "../../lib/state-store-sweeper";
+import { captureConfigGeneration, sweepExpiredOnWrite } from "../../lib/state-store-sweeper";
 import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type CodexCapacityQuota } from "../codex-capacity";
-import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
+import { ACCOUNT_QUOTA_TTL_MS, asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
 import {
   accountReportCurrent,
   TERMINAL_QUOTA_FAILURE,
+  AUTHORITATIVE_EMPTY_QUOTA,
+  LAST_GOOD_MAX_AGE_MS,
   hasQuotaRows,
   providerLabel,
   providerQuotaFromCodexQuota,
@@ -33,6 +35,10 @@ import {
 } from "./report-cache";
 import {
   accountCacheKey,
+  accountQuotaInflight,
+  accountQuotaProbeSkip,
+  explicitQuotaIdentity,
+  type AccountQuotaCacheEntry,
   accountQuotaCache,
   hydrateAccountQuotaCache,
   mayCommitAccountQuotaKey,
@@ -422,37 +428,131 @@ export async function fetchKiroQuota(provider: string): Promise<ProviderQuotaRep
   return report(provider, "kiro:usage-limits", snapshot.quota);
 }
 
-/**
- * Provider-level row probed from the key endpoint, for an account that CAN be probed.
- *
- * Written through the same account cache the passive path reads, so the measurement
- * survives a restart and the per-account rows at oauth-account-routes.ts:313 pick it up
- * with no mode change. Deliberately does not flip providerOAuthAccountQuotaMode: that
- * mode selects readPassiveProviderAccountQuotas, and the probed per-account path it would
- * switch to is gated on supportsPerAccountQuota, which has no meta-muse reader, so the
- * GUI account list would go from showing observations to showing nothing.
- */
-export async function fetchMuseKeyQuota(provider: string): Promise<ProviderQuotaReport | null> {
-  const probedAccountId = getAccountSet(provider)?.activeAccountId;
-  if (!probedAccountId) return null;
-  // A paused account is excluded from every automatic upstream use; a key mint is one.
-  if (getAccountSet(provider)?.accounts.find(account => account.id === probedAccountId)?.paused === true) return null;
-  const oauthAccessToken = getAccountCredential(provider, probedAccountId)?.muse?.oauthAccessToken;
-  // An imported or pasted credential has no account token and never will: it is
-  // capability, not provider id, that decides whether a probe is possible.
-  if (!oauthAccessToken) return null;
-  const probedAccountKey = accountCacheKey(provider, probedAccountId);
-  const writerGeneration = captureConfigGeneration();
-  const quota = await fetchMuseKeyQuotaSnapshot(probedAccountId, oauthAccessToken);
-  if (!quota) return null;
-  if (mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
-    // Hydrate before writing, for the same reason recordPassiveAccountQuota does:
-    // persistAccountQuotaCache serializes the whole in-memory map.
-    hydrateAccountQuotaCache();
-    accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
-    persistAccountQuotaCache();
+export async function fetchMuseKeyQuota(
+  provider: string,
+  forceRefresh = false,
+  providerConfig?: OcxProviderConfig,
+): Promise<ProviderQuotaProbeResult> {
+  const accountId = getAccountSet(provider)?.activeAccountId;
+  if (!accountId) return AUTHORITATIVE_EMPTY_QUOTA;
+  const entry = await fetchMuseAccountQuota(provider, accountId, forceRefresh, providerConfig);
+  const isCurrent = () => getAccountSet(provider)?.activeAccountId === accountId && entry.isCurrent?.() !== false;
+  if (!isCurrent()) return TERMINAL_QUOTA_FAILURE;
+  if (!entry.quota) return entry.quotaFailure === "access_denied" ? TERMINAL_QUOTA_FAILURE
+    : entry.quotaObserved === false && !entry.unavailable ? AUTHORITATIVE_EMPTY_QUOTA : null;
+  if (entry.quotaObserved === undefined) return null;
+  const built = report(provider, entry.quotaObserved === true
+    ? `${provider}:subscription-observation` : `${provider}:key-endpoint`, entry.quota);
+  if (built) {
+    if (entry.quotaObserved === true) built.observed = true;
+    accountReportCurrent.set(built, isCurrent);
   }
-  return report(provider, `${provider}:key-endpoint`, quota);
+  return built;
+}
+
+export async function fetchMuseAccountQuota(
+  provider: string,
+  accountId: string,
+  forceRefresh: boolean,
+  providerConfig?: OcxProviderConfig,
+): Promise<AccountQuotaCacheEntry> {
+  if (providerConfig && (providerConfig.disabled === true || providerConfig.authMode !== "oauth"))
+    return { ts: Date.now(), quota: null, unavailable: true };
+  const skipped = accountQuotaProbeSkip(provider, accountId);
+  if (skipped) return skipped;
+  hydrateAccountQuotaCache();
+  const key = accountCacheKey(provider, accountId);
+  const writerGeneration = captureConfigGeneration();
+  const cachedCandidate = accountQuotaCache.get(key);
+  // Muse quota always targets Meta's fixed mint endpoint, so bind cache ownership to
+  // the credential/login identity and registry defaults, never a request base URL.
+  const identity = explicitQuotaIdentity(provider, accountId);
+  const cached = cachedCandidate?.isCurrent?.() === false || cachedCandidate?.identity && cachedCandidate.identity !== identity ? undefined : cachedCandidate;
+  if (!cached && cachedCandidate) accountQuotaCache.delete(key);
+  const account = getAccountCredentialWithStatus(provider, accountId);
+  if (!account || !identity) return { ts: Date.now(), quota: null, unavailable: true };
+
+  const isCurrent = () => explicitQuotaIdentity(provider, accountId) === identity;
+  const canPublish = () => providerConfig?.disabled !== true && isCurrent() && getAccountCredentialWithStatus(provider, accountId)?.paused !== true;
+  const currentEntry = (entry: AccountQuotaCacheEntry): AccountQuotaCacheEntry => ({
+    ...entry,
+    ...(entry.identity === identity ? { isCurrent } : {}),
+  });
+  const token = account.credential.muse?.oauthAccessToken;
+  if (!token) return cached ? currentEntry(cached) : { ts: Date.now(), quota: null };
+
+  if (!forceRefresh && cached && cached.quotaObserved !== undefined
+    && Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS) return currentEntry(cached);
+
+  const flightKey = `${key}\u0000${identity}`;
+  const joined = accountQuotaInflight.get(flightKey);
+  if (joined) {
+    const result = await joined;
+    return result.isCurrent?.() === false ? { ts: Date.now(), quota: null, unavailable: true } : result;
+  }
+
+  const probe = (async (): Promise<AccountQuotaCacheEntry> => {
+    let outcome = await fetchMuseKeyQuotaOutcome(accountId, token, {}, undefined, identity);
+    if (!canPublish()) return { ts: Date.now(), quota: null, unavailable: true, quotaObserved: false, isCurrent };
+
+    if (outcome.kind === "throttled") {
+      if (cached) return currentEntry(cached);
+      outcome = outcome.quota ? { kind: "quota", quota: outcome.quota } : { kind: "empty" };
+    }
+
+    if (outcome.kind === "terminal") {
+      const entry: AccountQuotaCacheEntry = {
+        ts: Date.now(), quota: null, quotaObserved: false,
+        unavailable: true,
+        quotaFailure: outcome.failure,
+        quotaFailureIsCurrent: isCurrent,
+        identity,
+        isCurrent,
+      };
+      if (mayCommitAccountQuotaKey(key, writerGeneration) && canPublish()) {
+        accountQuotaCache.delete(key);
+        persistAccountQuotaCache();
+      }
+      return entry;
+    }
+
+    if (outcome.kind === "quota") {
+      const entry: AccountQuotaCacheEntry = {
+        ts: outcome.quota.updatedAt, quota: outcome.quota, quotaObserved: false, identity, isCurrent,
+      };
+      if (mayCommitAccountQuotaKey(key, writerGeneration) && canPublish()) {
+        accountQuotaCache.set(key, entry);
+        persistAccountQuotaCache();
+        sweepExpiredOnWrite(entry.ts);
+      }
+      return entry;
+    }
+
+    const latest = accountQuotaCache.get(key);
+    const lastGood = latest?.identity === identity && latest.isCurrent?.() !== false ? latest : undefined;
+    const retainQuota = lastGood?.quota && Date.now() - lastGood.quota.updatedAt < LAST_GOOD_MAX_AGE_MS
+      ? lastGood.quota : null;
+    const entry: AccountQuotaCacheEntry = {
+      ts: lastGood?.ts ?? Date.now(),
+      quota: retainQuota,
+      unavailable: true,
+      ...(outcome.kind === "transient" ? {
+        quotaFailure: outcome.failure,
+        quotaFailureIsCurrent: isCurrent,
+      } : {}),
+      ...(lastGood?.quotaObserved === undefined ? {} : { quotaObserved: lastGood.quotaObserved }),
+      identity, isCurrent,
+    };
+    if (mayCommitAccountQuotaKey(key, writerGeneration) && canPublish()) {
+      accountQuotaCache.set(key, entry);
+      persistAccountQuotaCache();
+    }
+    return entry;
+  })().finally(() => {
+    if (accountQuotaInflight.get(flightKey) === probe) accountQuotaInflight.delete(flightKey);
+  });
+  accountQuotaInflight.set(flightKey, probe);
+  return probe;
 }
 /**
  * Provider-level row for a passive provider: the ACTIVE account's last observed

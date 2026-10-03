@@ -58,7 +58,8 @@ function mergeLateQuotaRows<T extends QuotaRow>(rows: T[], enriched: T[]): T[] {
     const incoming = byId.get(row.id);
     if (!incoming || incoming.quotaMode !== row.quotaMode) return row;
     const quota = mergeQuotaRows([incoming], [row], true)[0];
-    return { ...row, quota: quota.quota, quotaPending: quota.quotaPending, quotaUnavailable: quota.quotaUnavailable, quotaFailure: quota.quotaFailure };
+    return { ...row, quota: quota.quota, quotaPending: quota.quotaPending, quotaUnavailable: quota.quotaUnavailable,
+      quotaFailure: quota.quotaFailure, quotaObserved: quota.quotaObserved ?? row.quotaObserved };
   });
 }
 
@@ -82,6 +83,7 @@ function mergeQuotaRows<T extends QuotaRow>(rows: T[], previous: T[], enriched: 
       quotaUnavailable: enriched ? row.quotaUnavailable === true : false,
       quotaFailure: enriched && row.quotaMode === "probe" && row.quotaUnavailable === true
         ? parseQuotaFailureCode(row.quotaFailure) : undefined,
+      quotaObserved: row.quotaObserved ?? prior.get(row.id)?.quotaObserved,
     };
   });
 }

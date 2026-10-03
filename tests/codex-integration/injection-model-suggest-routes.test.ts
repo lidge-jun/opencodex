@@ -94,13 +94,20 @@ async function suggest(body: unknown) {
 
 function snapshot() {
   const files: Record<string, string> = {};
-  for (const dir of ["codex", "ocx"]) {
-    for (const name of readdirSync(join(root, dir))) {
-      if (name === RUNTIME_DISCOVERY_CACHE) continue;
-      files[`${dir}/${name}`] = readFileSync(join(root, dir, name), "utf8");
+  const directories = ["codex", "ocx"];
+  const walk = (dir: string, prefix: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      const relative = `${prefix}/${entry.name}`;
+      if ((prefix === "codex" || prefix === "ocx") && entry.name === RUNTIME_DISCOVERY_CACHE) continue;
+      if (entry.isDirectory()) {
+        directories.push(relative);
+        walk(path, relative);
+      } else files[relative] = readFileSync(path, "utf8");
     }
-  }
-  return { files, config: JSON.stringify(config) };
+  };
+  for (const dir of ["codex", "ocx"]) walk(join(root, dir), dir);
+  return { files, directories: directories.sort(), config: JSON.stringify(config) };
 }
 
 describe("POST /api/injection-model/suggest", () => {

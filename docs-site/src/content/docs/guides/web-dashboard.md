@@ -208,6 +208,13 @@ observation yet, loading, failed lookup with last-known values, and measured zer
 states. **Quota check completed** means the read settled—not that a passive observation became
 new or that every upstream measurement was refreshed.
 
+For Meta Muse, a direct quota probe requires the account's Muse access token. Without that token,
+the dashboard uses subscription usage observed in response streams when available. Refresh does
+not open a browser, switch accounts, or replace the Model API key. An empty quota window does not
+render as 0%. Empty or inactive subscription responses and temporary probe failures keep the
+same login's last good value and original timestamp for up to 30 minutes, marked unavailable.
+A terminal authentication failure clears that reading.
+
 ## Model visibility
 
 The **Models** switches show final Codex visibility: a routed model is on only when its provider allowlist includes it (or no allowlist is set) and it is not disabled. Turning a model on reconciles both filters atomically; **All on** clears the provider allowlist so newly discovered models are also on.
@@ -381,7 +388,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `GET /api/models` · `PUT /api/disabled-models` | List native/routed model rows and update the shared disabled-model set. |
 | `GET /api/selected-models` · `PUT /api/model-visibility` | Read provider allowlists and atomically change the final visibility of one model or provider group. |
 | `GET /api/key-providers` · `GET /api/oauth/providers` | Read the API-key and OAuth provider catalogs. |
-| `GET /api/oauth/accounts?provider=...&quota=1` · `GET /api/providers/keys?name=...&quota=1` | Read each account or key's quota where supported, without changing the active credential. Add `refresh=1` to bypass settled quota cache; an in-flight same-credential read can be shared. Omit `quota=1` for a cheap local list with each row's `quotaMode`: `probe`, `passive`, or `unsupported`. Passive reads return existing observations without a network probe. No reading is not the same as 0% used, and quotas for multiple keys are not summed. |
+| `GET /api/oauth/accounts?provider=...&quota=1` · `GET /api/providers/keys?name=...&quota=1` | Read each account or key's quota where supported, without changing the active credential. Add `refresh=1` to bypass settled quota cache; an in-flight same-credential read can be shared. Omit `quota=1` for a cheap local list with each row's `quotaMode`: `probe`, `passive`, or `unsupported`. Passive reads return existing observations without a network probe. For Meta Muse, `probe` requires the account access token; otherwise the row is `passive` and uses response-stream observations. Its key-mint probes remain spaced at least five minutes apart per account, even with `refresh=1`. Refresh does not replace the Model API key or select another account. No reading is not the same as 0% used, and quotas for multiple keys are not summed. |
 | `POST /api/oauth/login` · `GET /api/oauth/status` | Start a provider OAuth flow and poll for completion. |
 | `GET /api/codex-auth/accounts?refresh=1` | List main and pool accounts, force quota refresh, and report main-account `hasCredential` / terminal `needsReauth` state. |
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | Select the account for the next request and configure pool routing. |

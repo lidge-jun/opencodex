@@ -2654,7 +2654,7 @@ export const zh: Record<TKey, string> = {
   "quota.ageHours": "{n} 小时",
   "quota.ageDays": "{n} 天",
   "quota.observedAgo": "{age}前获取",
-  "quota.observedHint": "Meta 仅在流式响应期间报告用量，因此这是最后一次获取的数值，而非实时读数。",
+  "quota.observedHint": "此用量是在流式响应期间报告的。显示的时间是观测时间；这不是实时读数。",
   "quota.weeklyLimit": "每周限额",
   "quota.monthlyLimit": "30 天限额",
   "quota.cursorFirstParty": "官方模型",

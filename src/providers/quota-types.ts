@@ -65,6 +65,7 @@ export type AccountQuotaMode = "probe" | "passive" | "unsupported";
 /** Additive management-row fields; cheap lists emit only quotaMode. */
 export interface AccountQuotaFields {
   quotaMode?: AccountQuotaMode;
+  quotaObserved?: boolean;
   quota?: ProviderQuota | null;
   quotaUnavailable?: boolean;
   quotaFailure?: QuotaFailureCode;

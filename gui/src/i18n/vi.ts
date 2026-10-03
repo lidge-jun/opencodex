@@ -1562,7 +1562,7 @@ export const vi: Record<TKey, string> = {
   "quota.ageHours": "{n} giờ",
   "quota.ageDays": "{n} ngày",
   "quota.observedAgo": "Ghi nhận {age} trước",
-  "quota.observedHint": "Meta chỉ báo cáo mức sử dụng trong quá trình phản hồi stream, vì vậy đây là giá trị cuối cùng ghi nhận được, không phải số liệu thời gian thực.",
+  "quota.observedHint": "Mức sử dụng này được báo cáo trong một phản hồi phát trực tuyến. Thời gian hiển thị là lúc ghi nhận; đây không phải số liệu trực tiếp.",
   "quota.weeklyLimit": "Giới hạn hàng tuần",
   "quota.monthlyLimit": "Giới hạn 30 ngày",
   "quota.cursorFirstParty": "Các model first-party",

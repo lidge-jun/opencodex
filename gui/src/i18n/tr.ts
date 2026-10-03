@@ -1577,7 +1577,7 @@ export const tr: Record<TKey, string> = {
   "quota.ageHours": "{n} sa",
   "quota.ageDays": "{n} g",
   "quota.observedAgo": "{age} önce alındı",
-  "quota.observedHint": "Meta kullanımı yalnızca akış yanıtı sırasında bildirir; bu canlı bir ölçüm değil, en son alınan değerdir.",
+  "quota.observedHint": "Bu kullanım bir akış yanıtı sırasında bildirildi. Gösterilen zaman gözlem zamanıdır; bu canlı bir ölçüm değildir.",
   "quota.weeklyLimit": "Haftalık limit",
   "quota.monthlyLimit": "30 günlük limit",
   "quota.cursorFirstParty": "Birinci taraf modeller",

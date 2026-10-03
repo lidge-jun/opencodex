@@ -34,9 +34,16 @@ Claude Code 所需的其他功能在所有平台上都可用。你可以自行�
 
 ### Meta Muse Code
 
-在 macOS 上，OpenCodex 會匯入 Muse Code CLI 在執行 `muse login` 後已儲存的 API key，因此不需要再提供第二把金鑰。
+在 macOS 上，一般登入會先嘗試匯入 `muse login` 已儲存的 API key。
+若沒有本機金鑰或使用其他平台，OpenCodex 會啟動裝置授權，不會啟動 Muse CLI。
+新增帳戶和重新授權會略過匯入。
+若裝置授權失敗且未取消，呼叫端有輸入介面時可手動輸入金鑰。
+貼上的金鑰會接受與匯入金鑰相同的格式檢查和 Model API 驗證。
+透過管理介面登入前，必須先有儀表板工作階段，才能取得憑證或提交代碼。
 
-其他平台則請你貼上金鑰。Meta 未提供原生 Windows CLI；Linux 雖有 CLI，但其憑證儲存位置尚未驗證，所以 OpenCodex 不會猜測儲存區。同一把金鑰可從 [Meta 開發者主控台](https://dev.meta.ai)取得；貼上的金鑰會接受與匯入金鑰相同的格式檢查及 Model API 即時驗證。
+若帳戶有 Muse 帳戶存取權杖，OpenCodex 會用它更新帳戶用量。
+否則，有可用的回應串流訂閱用量時會顯示該觀測值。
+更新不會開啟瀏覽器，也不會取代 Model API 金鑰。
 
 ## Windows 注意事項
 

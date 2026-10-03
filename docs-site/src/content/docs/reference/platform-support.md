@@ -59,6 +59,10 @@ offers an input surface. Pasted keys use the same format and Model API validatio
 as imported ones. Management login requires a dashboard session before either
 credential-acquisition path; see the [provider guide](/guides/providers/).
 
+Quota refresh uses the Muse account access token when one is available. Otherwise,
+OpenCodex shows subscription usage observed in response streams when available.
+Refresh does not open a browser or replace the Model API key.
+
 For Responses requests to Meta, omitted or `auto` tool selection is supported.
 Explicit `none` sends `tools: []` and removes `additional_tools` items from the
 input. Forced, named, and `allowed_tools` selections return HTTP 400 before the

@@ -1474,7 +1474,7 @@ export const ja: Record<TKey, string> = {
   "quota.ageHours": "{n}時間",
   "quota.ageDays": "{n}日",
   "quota.observedAgo": "{age}前に取得",
-  "quota.observedHint": "Meta はストリーミング応答中にのみ使用量を報告します。リアルタイムの値ではなく、最後に取得した値です。",
+  "quota.observedHint": "この使用量はストリーミング応答中に報告されました。表示された時刻が観測時刻であり、リアルタイムの値ではありません。",
   "quota.weeklyLimit": "週間上限",
   "quota.monthlyLimit": "30 日上限",
   "quota.cursorFirstParty": "ファーストパーティモデル",

@@ -907,13 +907,13 @@ OpenCodex's auth store (`~/.opencodex/auth.json`, mode 0600) like every other OA
 credential. The dashboard shows a Terms-of-Service warning before the first login and
 before any reauthentication — the same treatment Anthropic and Google Antigravity get.
 
-Meta reports subscription window usage inside streaming responses, and OpenCodex reads it
-from there. The account row shows the last observed 5-hour and weekly windows with how old
-that reading is — Meta publishes no endpoint to query them on demand, so a value is only
-refreshed by another streaming turn through this provider, and a turn that goes through
-request translation rather than passthrough reports none. An account that has not yet
-served a streaming turn simply shows no quota, which is not an error. Rate limits apply
-per team, not per key.
+Accounts without a Muse access token (`muse.oauthAccessToken`) rely on subscription usage
+observed in streaming responses. Their account rows show the last observed 5-hour and
+weekly windows with how old that reading is. Those values refresh through another streaming
+turn; a turn that uses request translation rather than passthrough reports none. A tokenless
+account that has not yet served a streaming turn shows no quota, which is not an error.
+Accounts with a Muse access token also support the direct quota probe described under
+[Rate limits](#rate-limits-in-the-providers-overview). Rate limits apply per team, not per key.
 
 For a supported setup, use `meta-model` above with your own key.
 
@@ -1390,6 +1390,15 @@ Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
 custom provider.
+
+**Meta Muse Code quota.** Accounts with a Muse access token use a direct quota probe.
+Other accounts use subscription usage observed in response streams when available.
+Refresh does not open a browser, switch the active account, or replace the Model API key.
+A missing quota window stays unknown, never 0%. Empty or inactive subscription responses and
+temporary probe failures keep the same login's last good value and original timestamp for up to
+30 minutes, marked unavailable. A terminal authentication failure clears that reading.
+Muse key-mint probes are spaced at least five minutes apart per account, even after a forced
+refresh. This display does not change Meta's billing or usage terms above.
 
 **OpenCode Go quota.** The canonical `opencode-go` preset reads
 `GET https://opencode.ai/zen/go/v1/usage` with the configured key as a Bearer token and
