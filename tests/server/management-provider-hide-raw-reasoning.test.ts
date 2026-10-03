@@ -124,3 +124,38 @@ describe("hideRawReasoning management saves", () => {
     expect(providerConfigSchema.safeParse(provider(true)).success).toBe(true);
   });
 });
+
+
+describe("Copilot model selection configuration", () => {
+  test("schema accepts modes and rejects malformed values", () => {
+    for (const mode of ["detect", "auto", "manual"] as const) {
+      expect(providerConfigSchema.parse({ ...provider(), copilotModelSelection: mode }).copilotModelSelection).toBe(mode);
+    }
+    expect(providerConfigSchema.safeParse({ ...provider(), copilotModelSelection: "student" }).success).toBe(false);
+  });
+
+  test("POST/PATCH preserve Copilot mode and manual preferences", async () => {
+    await withServer(provider(), async url => {
+      const seed = { adapter: "openai-chat", baseUrl: "https://api.githubcopilot.com", authMode: "key", liveModels: false, defaultModel: "gpt-4o", selectedModels: ["gpt-4o"], copilotModelSelection: "auto" };
+      const created = await send(url, "/api/providers", "POST", { name: "github-copilot", provider: seed });
+      expect(created.status).toBe(200);
+      expect(loadConfig().providers["github-copilot"]?.copilotModelSelection).toBe("auto");
+      const listed = await fetch(new URL("/api/providers", url));
+      const body = await listed.json() as Array<OcxProviderConfig & { name: string }>;
+      expect(body.find(row => row.name === "github-copilot")?.copilotModelSelection).toBe("auto");
+      const switched = await send(url, "/api/providers?name=github-copilot", "PATCH", { copilotModelSelection: "manual" });
+      expect(switched.status).toBe(200);
+      expect(loadConfig().providers["github-copilot"]).toMatchObject({ copilotModelSelection: "manual", defaultModel: "gpt-4o", selectedModels: ["gpt-4o"] });
+      const overwrite = await send(url, "/api/providers", "POST", { name: "github-copilot", provider: { adapter: seed.adapter, baseUrl: seed.baseUrl, authMode: seed.authMode } });
+      expect(overwrite.status).toBe(200);
+      expect(loadConfig().providers["github-copilot"]?.copilotModelSelection).toBe("manual");
+      const invalid = await send(url, "/api/providers?name=github-copilot", "PATCH", { copilotModelSelection: "student" });
+      expect(invalid.status).toBe(400);
+      const unrelated = await send(url, "/api/providers?name=relay", "PATCH", { copilotModelSelection: "auto" });
+      expect(unrelated.status).toBe(400);
+      const cleared = await send(url, "/api/providers?name=github-copilot", "PATCH", { copilotModelSelection: null });
+      expect(cleared.status).toBe(200);
+      expect(loadConfig().providers["github-copilot"]?.copilotModelSelection).toBeUndefined();
+    });
+  });
+});

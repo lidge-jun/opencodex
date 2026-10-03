@@ -33,6 +33,7 @@ export const GITHUB_COPILOT_EDITOR_HEADERS: Readonly<Record<string, string>> = {
   "Copilot-Integration-Id": "vscode-chat",
   "User-Agent": "opencodex",
   Accept: "application/json",
+  "X-GitHub-Api-Version": "2026-08-01",
 };
 
 interface DeviceAuthorizationResponse {

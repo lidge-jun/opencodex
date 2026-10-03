@@ -1,3 +1,4 @@
+import { CopilotModelSelection } from "../CopilotModelSelection";
 /**
  * ProviderSettings — adapter/baseUrl/defaultModel/authMode/note editing form
  * for the workspace Settings tab (WP091). Uses PATCH /api/providers via an
@@ -60,6 +61,7 @@ function pacingSignature(value: WorkspaceItem["requestPacing"] | undefined): str
   ]);
 }
 
+/** Edit provider settings while preserving manual choices when Copilot exposes only Auto. */
 export default function ProviderSettings({
   item, availableModels = EMPTY_MODELS, apiBase, onUpdateProvider, onDirtyChange, onRegisterSave,
 }: {
@@ -88,6 +90,7 @@ export default function ProviderSettings({
   const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(savedCursorHttpVersion);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [copilotModelSelection, setCopilotModelSelection] = useState(item.copilotModelSelection ?? "detect");
   const [accountMode, setAccountMode] = useState<"pool" | "direct">(item.codexAccountMode ?? "pool");
   const [modeSaving, setModeSaving] = useState(false);
   const [modeMsg, setModeMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -107,6 +110,7 @@ export default function ProviderSettings({
 
   /* eslint-disable react-hooks/set-state-in-effect -- intentional form reset when saved provider fields change */
   useEffect(() => {
+    setCopilotModelSelection(item.copilotModelSelection ?? "detect");
     setAdapter(item.adapter);
     setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? "");
@@ -124,7 +128,7 @@ export default function ProviderSettings({
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
+  }, [item.copilotModelSelection, item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -194,7 +198,8 @@ export default function ProviderSettings({
     ...(Object.keys(pacingModels).length > 0 ? { models: pacingModels } : {}),
   }), [pacingConcurrency, pacingDelay, pacingEnabled, pacingModels, pacingRpm]);
 
-  const dirty = adapter.trim() !== item.adapter
+  const dirty = (item.name === "github-copilot" && copilotModelSelection !== (item.copilotModelSelection ?? "detect"))
+    || adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
     || defaultModel.trim() !== (item.defaultModel ?? "")
     || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
@@ -207,6 +212,9 @@ export default function ProviderSettings({
   const formDirty = dirty || pacingDirty;
 
   useEffect(() => { onDirtyChange?.(formDirty); return () => onDirtyChange?.(false); }, [formDirty, onDirtyChange]);
+
+  const copilotAutoOnly = item.name === "github-copilot" && (copilotModelSelection === "auto"
+    || (copilotModelSelection === "detect" && availableModels.length > 0 && availableModels.every(model => model === "auto")));
 
   const modelOptions = useMemo(() => {
     const set = new Set(availableModels);
@@ -230,6 +238,7 @@ export default function ProviderSettings({
   // On fetch error, keep it editable so allowBaseUrlOverride providers are not trapped.
   const plainBaseUrlLocked = isPreset && choicesStatus !== "error";
 
+  /** Persist current drafts together; Auto-only display never rewrites saved manual model preferences. */
   const save = async (): Promise<boolean> => {
     if (!onUpdateProvider) { setMsg({ ok: false, text: t("pws.updatesUnavailable") }); return false; }
     if (modeSaving) return false;
@@ -259,6 +268,9 @@ export default function ProviderSettings({
             ...(pacingDirty ? { requestPacing: pacingDraft } : {}),
           };
       if (!pacingOnly) {
+        if (item.name === "github-copilot" && copilotModelSelection !== (item.copilotModelSelection ?? "detect")) {
+          patch.copilotModelSelection = copilotModelSelection;
+        }
         // Keep omitted legacy values omitted unless the user actually changes this toggle.
         // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
         if (liveModelDiscoverySupported && liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
@@ -323,7 +335,9 @@ export default function ProviderSettings({
     select.value = accountMode;
   };
 
+  /** Restore drafts from the persisted provider, including the Copilot selection mode. */
   const discard = () => {
+    setCopilotModelSelection(item.copilotModelSelection ?? "detect");
     setAdapter(item.adapter); setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
@@ -372,6 +386,9 @@ export default function ProviderSettings({
         <span className="pwi-settings-label"><IconLock style={{ width: 12, height: 12 }} /> {t("pws.providerId")}</span>
         <input className="input" value={item.name} readOnly disabled />
       </label>
+      {item.name === "github-copilot" && (
+        <CopilotModelSelection value={copilotModelSelection} onChange={setCopilotModelSelection} disabled={saving} />
+      )}
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("modal.adapter")}</span>
         {isPreset ? <input className="input" value={adapter} readOnly disabled /> : (
@@ -434,7 +451,9 @@ export default function ProviderSettings({
       )}
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("pws.cell.defaultModel")}</span>
-        {modelOptions.length > 0 ? (
+        {copilotAutoOnly ? (
+          <input className="input" value="auto" disabled readOnly />
+        ) : modelOptions.length > 0 ? (
           <select className="input" value={defaultModel} onChange={e => setDefaultModel(e.target.value)}>
             <option value="">{t("pws.defaultModelNone")}</option>
             {modelOptions.map(m => <option key={m} value={m}>{m}</option>)}

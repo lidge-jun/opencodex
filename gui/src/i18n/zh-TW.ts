@@ -2,6 +2,12 @@ import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  "pws.copilotSelection": "Copilot 模型選擇",
+  "pws.copilotSelectionDetect": "帳戶權限（自動偵測）",
+  "pws.copilotSelectionAuto": "Student / Free（僅 Auto）",
+  "pws.copilotSelectionManual": "其他方案（手動選擇）",
+  "pws.copilotSelectionHint": "自動偵測遵循目前登入帳戶的模型選擇權限。Auto 由 GitHub 選擇模型，並保留你的手動模型偏好供日後恢復。",
+
   "nav.claude": "Claude",
   "claude.tabAccount": "帳戶",
   "claude.tabSettings": "設定",

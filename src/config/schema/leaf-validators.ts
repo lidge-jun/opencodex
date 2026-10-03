@@ -284,6 +284,7 @@ const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
  * fields pass through (preserved for runtime extensions).
  */
 export const providerConfigSchema = z.object({
+  copilotModelSelection: z.enum(["detect", "auto", "manual"]).optional(),
   modelCapabilities: modelCapabilitiesSchema.optional(),
   modelContextTiers: z.unknown().superRefine((value, ctx) => {
     const error = contextTierRecordConfigError(value);

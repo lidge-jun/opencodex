@@ -5,6 +5,12 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  "pws.copilotSelection": "Copilot model seçimi",
+  "pws.copilotSelectionDetect": "Hesap izinleri (otomatik)",
+  "pws.copilotSelectionAuto": "Student / Free (yalnızca Auto)",
+  "pws.copilotSelectionManual": "Diğer planlar (elle seçim)",
+  "pws.copilotSelectionHint": "Otomatik mod, oturum açılan hesabın model seçimi izinlerini izler. Auto modunda modeli GitHub seçer; elle seçim tercihleri daha sonra kullanılmak üzere korunur.",
+
   "nav.claude": "Claude",
   "claude.tabAccount": "Hesap",
   "claude.tabSettings": "Ayarlar",

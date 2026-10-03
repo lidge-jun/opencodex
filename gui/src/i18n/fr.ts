@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
+  "pws.copilotSelection": "Sélection du modèle Copilot",
+  "pws.copilotSelectionDetect": "Autorisations du compte (automatique)",
+  "pws.copilotSelectionAuto": "Student / Free (Auto uniquement)",
+  "pws.copilotSelectionManual": "Autres offres (sélection manuelle)",
+  "pws.copilotSelectionHint": "Le mode automatique suit les autorisations de sélection du compte connecté. Auto laisse GitHub choisir le modèle et conserve vos préférences manuelles.",
+
   "nav.claude": "Claude",
   "claude.tabAccount": "Compte",
   "claude.tabSettings": "Paramètres",

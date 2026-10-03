@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * Russian i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ru: Record<TKey, string> = {
+  "pws.copilotSelection": "Выбор модели Copilot",
+  "pws.copilotSelectionDetect": "Разрешения аккаунта (автоматически)",
+  "pws.copilotSelectionAuto": "Student / Free (только Auto)",
+  "pws.copilotSelectionManual": "Другие планы (ручной выбор)",
+  "pws.copilotSelectionHint": "Автоматический режим учитывает разрешения текущего аккаунта. В режиме Auto модель выбирает GitHub, а настройки ручного выбора сохраняются.",
+
   "nav.claude": "Claude",
   "claude.tabAccount": "Аккаунт",
   "claude.tabSettings": "Настройки",

@@ -6,6 +6,12 @@
  * `{var}` are plain interpolations.
  */
 export const en = {
+  "pws.copilotSelection": "Copilot model selection",
+  "pws.copilotSelectionDetect": "Account permissions (automatic)",
+  "pws.copilotSelectionAuto": "Student / Free (Auto only)",
+  "pws.copilotSelectionManual": "Other plans (manual selection)",
+  "pws.copilotSelectionHint": "Automatic follows the signed-in account’s model-selection permissions. Auto lets GitHub choose the model and keeps your manual model preferences for later.",
+
   "nav.claude": "Claude",
   "claude.tabAccount": "Account",
   "claude.tabSettings": "Settings",

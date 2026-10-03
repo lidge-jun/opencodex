@@ -34,6 +34,16 @@ describe("new-model policy", () => {
     expect(r.newIds).toEqual(["d"]); expect(r.arrivals).toEqual([{ id: "d", at: now }]); expect(r.slugsToDisable).toEqual([]);
   });
 
+  test("Copilot Auto is not implicitly hidden, while upstream arrivals still obey Off", () => {
+    const baseline = { ids: ["gpt-4o"], removed: [], updatedAt: now };
+    const result = applyNewModelPolicy({ provider: "github-copilot", discoveredIds: ["auto", "gpt-4o", "new-model"], baseline, policy: "off", now });
+    expect(result.slugsToDisable).toEqual(["github-copilot/new-model"]);
+    expect(result.newIds).toEqual(["auto", "new-model"]);
+    expect(result.nextBaseline.ids).toEqual(["auto", "gpt-4o", "new-model"]);
+    const other = applyNewModelPolicy({ provider: "vendor", discoveredIds: ["auto"], baseline, policy: "off", now });
+    expect(other.slugsToDisable).toEqual(["vendor/auto"]);
+  });
+
   test("degraded providers do not poison a persisted baseline", () => {
     const config = { port: 10100, defaultProvider: "vendor", providers: { vendor: {} }, modelDiscovery: { newModelPolicy: "off" as const, knownModels: { vendor: { ids: ["a", "b"], removed: [], updatedAt: now } } } };
     expect(reconcileSuccessfulModelDiscoveries({ config, models: [{ provider: "vendor", id: "a" }], authoritativeProviders: [], now })).toBe(false);

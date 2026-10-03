@@ -9,6 +9,27 @@ A shared-quota Anthropic 429 or classified pre-output account 403 records the se
 
 The Anthropic helper sends share the same routing authority: `getAnthropicSidecarAccessToken` resolves the vision-describe and web-search sidecars' helper model through the same first-match route decision, so a routed send authenticates as the route's own account rather than whatever pool account happens to be active. A strict route with no eligible account fails the helper locally instead of silently falling back to the active outsider, matching the primary-traffic contract; callers without a pool config keep the plain stored-credential path.
 
+## GitHub Copilot Auto selection
+
+`src/providers/github-copilot-transport.ts` retains the credential-specific destination and headers.
+Provider `copilotModelSelection` defaults to `detect`; `auto` explicitly selects Auto-only behavior,
+while `manual` retains named-model selection. Detection uses account permissions rather than
+inferring a subscription from model names: boolean `model_picker_enabled` evidence with no true
+row selects Auto; missing permission evidence retains legacy named routes. Explicit `auto` mode
+routes existing named selections through Auto too. Auto-only discovery exposes `auto` without deleting
+saved manual model preferences. The public selector is `github-copilot/auto`. As a routing selector,
+it is exempt from automatic disabling by new-model policy; explicit operator disables still win.
+Before adapter construction, Auto creates an upstream session and resolves intent against the
+captured credential and API origin. The selected model determines Chat versus Responses wire
+and its session token travels only with that request. Sessions are ephemeral, are not saved in
+configuration, and are never shared across account or origin changes. Retries that change
+credentials repeat selection rather than replaying another account's session token.
+Key-pool replacement negotiation stays inside `src/server/responses/adapter-dispatch.ts`'s
+error boundary: cancellation returns 499, safe negotiation refusals retain 401/403/429 and
+validated Retry-After, and other failures return a fixed 502 after upstream abort cleanup.
+The sidecar rotation hook contains a failed replacement negotiation and retains its original
+upstream refusal, matching the existing OAuth sidecar recovery boundary.
+
 GitHub Copilot `modelContextTiers` is selected per upstream model. The Chat and Responses adapters set `contextTier` only when the canonical routed provider is `github-copilot`
 and a tier is configured. Otherwise passthrough retains caller-supplied values. The server carries provider identity
 through initial builds, retries, continuations, and sidecar builds.

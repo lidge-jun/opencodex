@@ -619,6 +619,8 @@ export interface OcxProviderConfig {
   modelContextWindows?: Record<string, number>;
   /** Per-model Copilot upstream tier; only the github-copilot route sends it. */
   modelContextTiers?: Record<string, "default" | "long_context">;
+  /** Copilot account permissions by default; auto forces server routing, manual preserves model selection. */
+  copilotModelSelection?: "detect" | "auto" | "manual";
   /** Model-specific Codex catalog input modalities, e.g. ["text"] or ["text", "image"]. */
   modelInputModalities?: Record<string, string[]>;
   modelCapabilities?: Record<string, ModelCapabilities>;

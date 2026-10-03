@@ -1,5 +1,5 @@
 import { booleanRecordConfigError } from "../../config/provider-validation";
-import type { OcxConfig } from "../../types";
+import type { OcxConfig, OcxProviderConfig } from "../../types";
 
 /** Provider-management validation shared by provider editor write paths. */
 export function providerServiceTierConfigError(name: unknown, provider: unknown): string | null {
@@ -13,11 +13,19 @@ export function providerServiceTierConfigError(name: unknown, provider: unknown)
   return error ? `provider ${name} ${error}` : null;
 }
 
+/** Reject invalid catalog overrides before management writes, including provider-specific Copilot modes. */
 export function providerCatalogCapabilityConfigError(name: unknown, provider: unknown): string | null {
   const serviceTierError = providerServiceTierConfigError(name, provider);
   if (serviceTierError) return serviceTierError;
   if (typeof name !== "string" || !provider || typeof provider !== "object" || Array.isArray(provider)) {
     return null;
+  }
+  const copilotSelection = (provider as { copilotModelSelection?: unknown }).copilotModelSelection;
+  if (copilotSelection !== undefined) {
+    if (name !== "github-copilot") return "copilotModelSelection is valid only for provider github-copilot";
+    if (copilotSelection !== "detect" && copilotSelection !== "auto" && copilotSelection !== "manual") {
+      return "copilotModelSelection must be detect, auto, or manual";
+    }
   }
   const error = booleanRecordConfigError(
     (provider as { modelSuppressSyntheticMax?: unknown }).modelSuppressSyntheticMax,
@@ -73,4 +81,14 @@ export function withProviderCatalogCapabilityDTO(dto: unknown, config: OcxConfig
     projectedProviders[name] = { ...(dtoProvider as Record<string, unknown>), modelSuppressSyntheticMax: capabilities };
   }
   return { ...root, providers: projectedProviders };
+}
+
+
+/** PATCH clear semantics are separate from the persisted enum validated on POST/config load. */
+export function applyCopilotModelSelectionPatch(name: string, next: OcxProviderConfig, mode: unknown): string | null {
+  if (name !== "github-copilot") return "copilotModelSelection is valid only for provider github-copilot";
+  if (mode === null) delete next.copilotModelSelection;
+  else if (mode === "detect" || mode === "auto" || mode === "manual") next.copilotModelSelection = mode;
+  else return "copilotModelSelection must be detect, auto, manual, or null";
+  return null;
 }

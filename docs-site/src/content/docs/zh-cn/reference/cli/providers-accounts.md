@@ -16,7 +16,7 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | 列出已配置的提供方以及剩余的注册表条目。 `--jsonl` 为每个已配置的提供方输出一行 JSON 对象。 |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 添加一个注册表/自定义提供方。`--force` 会覆盖；`--sync` 会在有人类输出模式运行的代理上刷新配置。 |
-| `edit <name>` | 提供方字段标志，`--headers <json>`，`--json` | 在不替换密钥池的情况下，编辑经过校验的在线提供方字段。`--headers` 会合并自定义请求头；传入 `{}` 或 `-` 可清空。 |
+| `edit <name>` | 提供方字段标志，`--copilot-model-selection <detect\|auto\|manual>`，`--headers <json>`，`--json` | 在不替换密钥池的情况下，编辑经过校验的在线提供方字段。`--headers` 会合并自定义请求头；传入 `{}` 或 `-` 可清空。 |
 | `test <name>` | `--json` | 探测真实的上游模型端点。 |
 | `show <name>` | `--json` | 显示已屏蔽 API 密钥的配置。 |
 | `remove <name>` | `--json` | 移除一个非默认提供方；最后一个提供方不能被移除。 |
@@ -33,6 +33,7 @@ ocx provider test ark
 ocx provider add anthropic --api-key sk-ant-... --set-default --sync
 ocx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
 ocx provider show anthropic --json
+ocx provider edit github-copilot --copilot-model-selection auto
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```

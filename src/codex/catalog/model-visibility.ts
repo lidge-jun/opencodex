@@ -266,6 +266,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   return { models: out, droppedConfiguredIds };
 }
 
+/** Apply provider and operator visibility while keeping Auto available despite stale manual allowlists. */
 export function filterCatalogVisibleModels(
   models: CatalogModel[],
   config: Pick<OcxConfig, "disabledModels" | "providers" | "modelDiscovery">,
@@ -295,8 +296,10 @@ export function filterCatalogVisibleModels(
     }
   }
   return collapseAntigravityPublicModels(models).filter(m => {
-    if (initialModelSelectionPending(config.providers[m.provider])) return false;
     if (config.providers[m.provider]?.disabled === true) return false;
+    if (m.provider === "github-copilot" && m.id === "auto")
+      return ![...disabled].some(stored => slugEquals(stored, m.provider, m.id));
+    if (initialModelSelectionPending(config.providers[m.provider])) return false;
     if (antigravityFamilyDisabled(config, m, models)) return false;
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels may be stored raw (canonical) or encoded (legacy UI writes).

@@ -6,6 +6,11 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const pt: Record<TKey, string> = {
+  "pws.copilotSelection": "Seleção de modelo do Copilot",
+  "pws.copilotSelectionDetect": "Permissões da conta (automático)",
+  "pws.copilotSelectionAuto": "Student / Free (somente Auto)",
+  "pws.copilotSelectionManual": "Outros planos (seleção manual)",
+  "pws.copilotSelectionHint": "O modo automático segue as permissões de seleção de modelo da conta conectada. Auto permite que o GitHub escolha o modelo e mantém suas preferências manuais para depois.",
   "compactionRouting.sources": "Origens",
   "compactionRouting.sourcesAll": "Todos os modelos de conversa",
   "compactionRouting.sourcesSelected": "Somente origens selecionadas",

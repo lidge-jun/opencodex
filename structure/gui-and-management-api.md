@@ -27,6 +27,8 @@ merges PATCH entries, and preserves omitted entries on full provider saves. POST
 the live tier map after destination validation under the config mutation lock, so a concurrent
 PATCH clear is not restored. The CLI uses that API for GitHub Copilot tier edits. The dashboard has no tier control yet.
 
+GitHub Copilot Settings exposes `copilotModelSelection`: Account permissions (automatic), Student / Free (Auto only), or Other plans (manual selection). Management writes validate `detect` / `auto` / `manual`, preserve omitted values, and invalidate discovery after a change. Saved manual model preferences remain intact; the effective catalog follows the [Copilot Auto contract](providers-and-adapters.md#github-copilot-auto-selection).
+
 Automatic activation retains its existing settings controls; dashboard quota queries remain independent. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 
 The companion settings contract in `src/companion/` persists menu-bar and widget display
@@ -310,6 +312,8 @@ after the save, and a non-retryable skip (no managed catalog) is a clean save. C
 | Logs | `src/server/management/logs-usage-routes.ts` — `GET /api/logs`, `GET /api/claude/inbound-debug`, and `GET /api/debug/injection-logs` join the debug streams described above. |
 
 ### OAuth login continuations
+
+`gui/src/components/use-add-provider-oauth.ts` treats post-login provider configuration as a separate completion step: a failed save retains the modal and shows a save warning without cancelling successful authentication. Its completion callback is current across polling and validates login generation after saving before notifying the parent; `gui/src/components/AddProviderModal.tsx` retains the Copilot choice by provider so another preset cannot replace it.
 
 `src/server/management/oauth-account-routes.ts` filters `GET /api/oauth/providers` by the
 same server-resolved principal predicate enforced by login start and manual continuation.

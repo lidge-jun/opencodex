@@ -538,7 +538,7 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 ## Account refusal and rotation boundaries
 
-Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: account quorum and
+Copilot Auto replacement negotiation follows the [Copilot Auto failure contract](../providers-and-adapters.md#github-copilot-auto-selection), including abort cleanup, safe status mapping and sidecar refusal preservation. Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: account quorum and
 cooldown remain in force, while generic OAuth uses the stable snapshot ceiling described below. The
 complete credential/transport/replay identity is refreshed, and usage is attributed to the serving
 account. Single-account installs do not rotate; a missing alternate credential preserves the original

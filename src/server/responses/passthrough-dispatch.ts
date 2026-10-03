@@ -191,6 +191,7 @@ export async function preparePassthroughExchange(
     | "passiveQuotaWriterGeneration"
     | "oauthDispatch"
     | "resolveSelectionAdapter"
+    | "resolveCopilotSelection"
     | "isOAuth401ReplayProvider"
     | "sentOAuthSnapshot"
     | "refreshResolvedOAuthSelection"
@@ -242,6 +243,7 @@ export async function preparePassthroughExchange(
     passiveQuotaWriterGeneration,
     oauthDispatch,
     resolveSelectionAdapter,
+    resolveCopilotSelection,
     isOAuth401ReplayProvider,
     refreshResolvedOAuthSelection,
     applyFailoverSnapshot,
@@ -1273,7 +1275,7 @@ export async function preparePassthroughExchange(
       if (route.providerName === "kiro") {
         parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
       }
-      const refreshedProvider = resolveProviderTransport(
+      let refreshedProvider = resolveProviderTransport(
         route.providerName,
         {
           ...route.provider,
@@ -1286,6 +1288,9 @@ export async function preparePassthroughExchange(
           : undefined,
       );
       route.provider = refreshedProvider;
+      try { await resolveCopilotSelection(parsed); }
+      catch (err) { return transportFailureResponse(err); }
+      refreshedProvider = route.provider;
       const refreshedAdapter = resolveSelectionAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire, route.staticPolicy),
         config.cacheRetention,

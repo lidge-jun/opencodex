@@ -42,7 +42,7 @@ const USAGE = `Usage:
       [--api-key-transport <x-api-key|bearer|->]
       [--headers <json>] [--enabled <on|off>] [--live-models <on|off>]
       [--retain-models <id,id|->] [--model <id> --text-only]
-      [--xai-chat <on|off>]
+      [--xai-chat <on|off>] [--copilot-model-selection <detect|auto|manual>]
       [--allow-private-network <on|off>] [--model-context-tier <model=default|long_context>] [--json]
   ocx provider test <name> [--json]
   ocx provider quota [--refresh] [--json]
@@ -56,6 +56,7 @@ function cleared(value: string | undefined): string | undefined {
   return value === "-" ? "" : value;
 }
 
+/** Validate provider edit flags and submit one management patch, including Copilot selection mode. */
 async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const name = args.shift()?.trim();
@@ -74,6 +75,7 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const liveModels = takeBooleanOption(args, "--live-models");
   const allowPrivateNetwork = takeBooleanOption(args, "--allow-private-network");
   const xaiChat = takeBooleanOption(args, "--xai-chat");
+  const copilotSelection = takeOption(args, "--copilot-model-selection");
   const contextTierValues: string[] = [];
   for (;;) {
     const value = takeOption(args, "--model-context-tier");
@@ -104,6 +106,13 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     const error = contextTierRecordConfigError(tiers);
     if (error) throw new CliUsageError(error, USAGE);
     patch.modelContextTiers = tiers;
+  }
+  if (copilotSelection !== undefined) {
+    if (name !== "github-copilot") throw new CliUsageError("--copilot-model-selection is valid only for provider github-copilot", USAGE);
+    if (copilotSelection !== "detect" && copilotSelection !== "auto" && copilotSelection !== "manual") {
+      throw new CliUsageError("--copilot-model-selection must be detect, auto, or manual", USAGE);
+    }
+    patch.copilotModelSelection = copilotSelection;
   }
   if (xaiChat !== undefined) {
     if (name !== "xai") throw new CliUsageError("--xai-chat is valid only for provider xai", USAGE);

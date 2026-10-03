@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  "pws.copilotSelection": "Copilot 모델 선택",
+  "pws.copilotSelectionDetect": "계정 권한 (자동)",
+  "pws.copilotSelectionAuto": "Student / Free (Auto만)",
+  "pws.copilotSelectionManual": "다른 요금제 (수동 선택)",
+  "pws.copilotSelectionHint": "자동 모드는 로그인한 계정의 모델 선택 권한을 따릅니다. Auto에서는 GitHub가 모델을 선택하며 수동 모델 설정은 나중을 위해 유지됩니다.",
+
   "nav.claude": "Claude",
   "claude.tabAccount": "계정",
   "claude.tabSettings": "기타 설정",

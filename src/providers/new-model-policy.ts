@@ -107,7 +107,11 @@ export function applyNewModelPolicy(options: {
     // A non-empty preset/custom allowlist already excludes arrivals. This explicit no-op is
     // deliberate: preset mode owns which matching flagships arrive on.
     slugsToDisable: !overflow && options.policy === "off" && !options.hasSelectedModels
-      ? newIds.map(id => routedSlug(options.provider, id)) : [],
+      // Copilot Auto is a routing selector needed by Auto-only accounts, not a new upstream
+      // model. Upgrading an existing baseline must not hide their only callable route. Explicit
+      // operator disables are still honored by visibility consumers and never removed here.
+      ? newIds.filter(id => !(options.provider === "github-copilot" && id === "auto"))
+        .map(id => routedSlug(options.provider, id)) : [],
     arrivals,
     overflow,
   };

@@ -73,6 +73,7 @@ export async function executeResponsesSidecars(
     | "anthropicSessionKey"
     | "commitResolvedOAuthSelection"
     | "resolveSelectionAdapter"
+    | "resolveCopilotSelection"
     | "oauthDispatch"
     | "noteRoutedAttemptSend"
     | "bindKeyUsageFromBridge"
@@ -93,6 +94,7 @@ export async function executeResponsesSidecars(
     anthropicSessionKey,
     commitResolvedOAuthSelection,
     resolveSelectionAdapter,
+    resolveCopilotSelection,
     oauthDispatch,
   } = transportState;
   const {
@@ -182,6 +184,7 @@ export async function executeResponsesSidecars(
     || (logCtx.activeAttempt?.deliverySummary?.semanticBytes ?? 0) > 0
     || (logCtx.activeAttempt?.deliverySummary?.sideEffectEvents ?? 0) > 0;
   const noteSidecarOutput = () => { sidecarOutputStarted = true; options.onFirstOutput?.(); };
+  /** Admit a replacement credential, or leave the loop's original refusal authoritative. */
   const rotateSidecarProviderOn429 = async (
     retryAfter: string | null,
     responseHeaders?: Headers,
@@ -214,6 +217,8 @@ export async function executeResponsesSidecars(
       }) : null;
     if (rotated) {
       route.provider = rotated;
+      try { await resolveCopilotSelection(retryParsed ?? parsed); }
+      catch { return null; } // Keep the sidecar's original refusal when replacement negotiation fails.
     } else if (
       // A POSITIVE gate, not an early return. An early `return null` here made every later arm
       // unreachable: Anthropic never has a genericFailoverAccountId (isGenericFailoverProvider

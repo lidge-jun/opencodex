@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  "pws.copilotSelection": "Copilot モデル選択",
+  "pws.copilotSelectionDetect": "アカウント権限（自動）",
+  "pws.copilotSelectionAuto": "Student / Free（Auto のみ）",
+  "pws.copilotSelectionManual": "その他のプラン（手動選択）",
+  "pws.copilotSelectionHint": "自動ではログイン中のアカウントのモデル選択権限に従います。Auto では GitHub がモデルを選び、手動のモデル設定は保持されます。",
+
   "nav.claude": "Claude",
   "claude.tabAccount": "アカウント",
   "claude.tabSettings": "設定",

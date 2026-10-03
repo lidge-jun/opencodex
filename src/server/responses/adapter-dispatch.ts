@@ -131,6 +131,8 @@ export async function prepareAdapterExchange(
     | "replayOAuthCredentialSnapshot"
     | "invalidateSameTargetRequest"
     | "resolveSelectionAdapter"
+    | "resolveCopilotSelection"
+    | "copilotRefusalResponse"
     | "anthropicRouteDecision"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
@@ -165,6 +167,8 @@ export async function prepareAdapterExchange(
     refreshResolvedOAuthSelection,
     invalidateSameTargetRequest,
     resolveSelectionAdapter,
+    resolveCopilotSelection,
+    copilotRefusalResponse,
     anthropicSessionKey,
     commitResolvedOAuthSelection,
     applyFailoverSnapshot,
@@ -194,6 +198,17 @@ export async function prepareAdapterExchange(
 
   const upstream = new AbortController();
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
+  /** Contain replacement negotiation before adapter admission and release its upstream abort link. */
+  const resolveRotatedCopilotSelection = async (): Promise<Response | undefined> => {
+    try { await resolveCopilotSelection(parsed); }
+    catch (error) {
+      cleanupUpstreamAbort();
+      upstream.abort();
+      if ((options.abortSignal ?? req.signal).aborted) return clientCancelledResponse();
+      return copilotRefusalResponse(error)
+        ?? formatErrorResponse(502, "upstream_error", "GitHub Copilot Auto negotiation failed.");
+    }
+  };
   const connectMs = config.connectTimeoutMs ?? 200_000;
   // Bridge stall budget (seconds of silence before upstream_stall_timeout); the retry backoff
   // heartbeat interval is derived from it so the watchdog is always fed during deliberate waits.
@@ -823,6 +838,8 @@ export async function prepareAdapterExchange(
         // until runtime cleanup (one per rotated key).
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         route.provider = rotated;
+        const selectionFailure = await resolveRotatedCopilotSelection();
+        if (selectionFailure) return selectionFailure;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -969,6 +986,8 @@ export async function prepareAdapterExchange(
         // until runtime cleanup (one per rotated key under a rate-limit storm).
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         route.provider = rotated;
+        const selectionFailure = await resolveRotatedCopilotSelection();
+        if (selectionFailure) return selectionFailure;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),

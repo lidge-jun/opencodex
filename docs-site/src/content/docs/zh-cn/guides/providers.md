@@ -92,7 +92,7 @@ ocx login cursor       # 独立的 Cursor PKCE 登录
 ocx login command-code # Command Code 浏览器 OAuth（或导入 ~/.commandcode/auth.json）
 ocx login orcarouter-oauth # OrcaRouter 浏览器授权 + PKCE
 ocx login devin       # Cognition/Devin：优先导入 Devin CLI 凭据，否则走 Auth0 浏览器登录
-ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot Pro/Business）
+ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot 账户）
 ocx login codex        # Codex 账号池（别名：chatgpt、openai；需要代理正在运行）
 ocx logout <provider>
 ```
@@ -476,7 +476,18 @@ GPT-5.6 Sol/Terra/Luna 会预置在提供商的回退列表中，因此即使实
 使用 Bearer **订阅令牌**（而非普通 API 密钥）进行认证。
 **Cloudflare AI Gateway** 需要将 account 和 gateway id 填入 URL。
 
-Copilot 提供混合 wire 目录：其模型（`gpt-5.3-codex`、`gpt-5.4`、
+Student 或 Free 账户请在 **Providers → GitHub Copilot → Settings → 模型选择** 中选择
+**Student / Free（仅 Auto）**。模型列表展示 `github-copilot/auto`，实际模型由 GitHub 为每次请求选择。
+默认“根据账户权限自动判断”使用账户权限信息；“其他套餐（手动选择）”保留具名模型选择。
+该设置不会扩大订阅权限；切回手动模式后会恢复已保存的手动模型偏好。
+CLI：`ocx provider edit github-copilot --copilot-model-selection auto`。
+
+Auto 使用公开的
+[VS Code Copilot Chat 实现](https://github.com/microsoft/vscode-copilot-chat/blob/7b70532a4cbdfa61c2b30fe4ccffda3d89336a4d/src/platform/endpoint/node/automodeService.ts)
+中的会话与意图选择协议。这是实验性客户端集成，尚无面向第三方的公开 API 契约；
+GitHub 可能改变协议或账户权限。Auto 每次请求使用选中模型声明的端点。
+
+具名选择时，Copilot 提供混合 wire 目录：其模型（`gpt-5.3-codex`、`gpt-5.4`、
 `gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）会拒绝面向
 agent 流量的 `/chat/completions`，因此 opencodex 默认将这些模型路由到 Responses API，而其他
 Copilot 模型仍走 chat completions。优先级为：硬 wire 固定 → 显式
