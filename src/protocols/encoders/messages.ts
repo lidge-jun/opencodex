@@ -386,7 +386,8 @@ function createAnthropicMessageWriter(
         return;
       }
       const message = typeof error.message === "string" ? error.message : "upstream request failed";
-      fail(anthropicFailedStatus(error, message), message, true);
+      fail(anthropicFailedStatus(error, message), message, true,
+        error.code === "context_length_exceeded" ? error.code : undefined);
     },
     overflow() {
       fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit");
@@ -413,7 +414,7 @@ export function encodeAnthropicMessageSse(
 /**
  * Fold an encoded Messages stream into the non-streaming client response, with the status
  * mapping the Messages ingress applied to its collected message: a translator overflow is 413,
- * a stream that ended in an error frame is 502, anything else unexpected a 502 api_error.
+ * a classified context rejection is 400; other error frames/unexpected failures stay 502.
  */
 export async function collectAnthropicMessageResponse(
   stream: ReadableStream<Uint8Array>,
@@ -444,7 +445,7 @@ export async function collectAnthropicMessageResponse(
     );
   }
   return new Response(JSON.stringify(message), {
-    status: isError ? 502 : 200,
+    status: isError ? (translatedError?.code === "context_length_exceeded" ? 400 : 502) : 200,
     headers: { "Content-Type": "application/json" },
   });
 }

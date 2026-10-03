@@ -12,12 +12,53 @@ function startsWithPath(command: readonly string[], prefix: readonly string[]): 
   return prefix.length <= command.length && prefix.every((token, index) => token === command[index]);
 }
 
+const DOCUMENTED_PATHS: readonly (readonly string[])[] = [
+  ...CAPABILITIES.filter(capability => !findCommand(capability.command[0])?.hidden).map(capability => capability.command),
+  ["models", "context"],
+];
+const MAX_DOCUMENTED_DEPTH = Math.max(...DOCUMENTED_PATHS.map(path => path.length));
+
+function canonicalEntry(entry: CliCommandEntry): CliCommandEntry {
+  return CLI_COMMANDS.find(candidate => candidate.aliases?.includes(entry.name)) ?? entry;
+}
+
+export interface HelpRecoveryCandidate {
+  names: string[];
+  path: string[];
+}
+
+/** Matching names may include aliases; destinations are always catalog-owned. */
+export function helpRecoveryCandidates(parent: readonly string[] = []): HelpRecoveryCandidate[] {
+  const candidates = new Map<string, HelpRecoveryCandidate>();
+  if (parent.length === 0) {
+    for (const entry of CLI_COMMANDS) {
+      if (entry.hidden) continue;
+      const canonical = canonicalEntry(entry);
+      if (canonical.hidden) continue;
+      const candidate = candidates.get(canonical.name) ?? { names: [], path: [canonical.name] };
+      candidate.names = [...new Set([...candidate.names, entry.name, ...(entry.aliases ?? [])])];
+      candidates.set(canonical.name, candidate);
+    }
+  } else {
+    if (parent.length >= MAX_DOCUMENTED_DEPTH) return [];
+    const entry = findCommand(parent[0]);
+    if (!entry || entry.hidden) return [];
+    const prefix = [canonicalEntry(entry).name, ...parent.slice(1)];
+    for (const documented of DOCUMENTED_PATHS) {
+      if (documented.length <= prefix.length || !startsWithPath(documented, prefix)) continue;
+      const path = documented.slice(0, prefix.length + 1);
+      candidates.set(path.join(" "), { names: [path[path.length - 1]], path });
+    }
+  }
+  return [...candidates.values()];
+}
+
 /** Static declarations describe help coverage, never the runtime's complete grammar. */
 export function resolveHelpPath(requested: readonly string[]): HelpResolution {
   const entry = requested[0] ? findCommand(requested[0]) : undefined;
   if (!entry) return { kind: "unavailable", path: [...requested] };
   // Keep exact-name alias entries for root help; nested topics use the owner.
-  const canonical = CLI_COMMANDS.find(candidate => candidate.aliases?.includes(requested[0])) ?? entry;
+  const canonical = canonicalEntry(entry);
   const declared = CAPABILITIES.filter(capability => !findCommand(capability.command[0])?.hidden);
   if (requested.length === 1) return {
     kind: "entry", entry, canonicalName: canonical.name,
@@ -32,7 +73,7 @@ export function resolveHelpPath(requested: readonly string[]): HelpResolution {
   const children = declared.filter(candidate => startsWithPath(candidate.command, path));
   if (children.length) return { kind: "prefix", path, children };
 
-  for (let length = path.length - 1; length > 1; length--) {
+  for (let length = Math.min(path.length - 1, MAX_DOCUMENTED_DEPTH); length > 1; length--) {
     const parent = path.slice(0, length);
     if ((length === 2 && parent[0] === "models" && parent[1] === "context")
       || declared.some(candidate => startsWithPath(candidate.command, parent))) {

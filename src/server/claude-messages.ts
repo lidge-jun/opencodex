@@ -1315,10 +1315,12 @@ async function handleClaudeMessagesWithBudget(
     const replayRefusal = isReplayRefusalResponse(response);
     // Re-shape the OpenAI-style error envelope into the Anthropic one, preserving status.
     let message = `upstream error (${response.status})`;
+    let contextError = false;
     try {
       const text = await response.text();
       try {
-        const parsed = JSON.parse(text) as { error?: { message?: string; type?: string } | string; message?: string };
+        const parsed = JSON.parse(text) as { error?: { message?: string; type?: string; code?: unknown } | string; message?: string };
+        contextError = typeof parsed?.error === "object" && parsed.error?.code === "context_length_exceeded";
         const nested = typeof parsed?.error === "object" && parsed.error ? parsed.error.message : undefined;
         const flat = typeof parsed?.error === "string" ? parsed.error : parsed?.message;
         message = nested || flat || (text ? `upstream error (${response.status}): ${text.slice(0, 400)}` : message);
@@ -1327,7 +1329,7 @@ async function handleClaudeMessagesWithBudget(
       }
     } catch { /* keep fallback message */ }
     const upstreamRetryAfter = response.headers.get("retry-after");
-    const retryAfter = replayRefusal
+    const retryAfter = replayRefusal || contextError
       ? undefined
       : resolveClientRetryAfter({
           status: response.status,
@@ -1347,10 +1349,10 @@ async function handleClaudeMessagesWithBudget(
     const nativeMainFence = response.status === 503
       && upstreamRetryAfter?.trim() === "1"
       && message === CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE;
-    const transient = !replayRefusal && !nativeMainFence && isTransientUpstreamStatus(response.status);
+    const transient = !replayRefusal && !nativeMainFence && !contextError && isTransientUpstreamStatus(response.status);
     const outStatus = replayRefusal
       ? REPLAY_REFUSED_STATUS
-      : nativeMainFence ? 503 : transient ? 529 : response.status;
+      : nativeMainFence ? 503 : contextError ? 400 : transient ? 529 : response.status;
     const outHeaders = new Headers({ "Content-Type": "application/json" });
     if (retryAfter) outHeaders.set("Retry-After", retryAfter);
     else if (transient) outHeaders.set("Retry-After", "2");
@@ -1359,7 +1361,7 @@ async function handleClaudeMessagesWithBudget(
       outStatus,
       message,
       undefined,
-      replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
+      replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : contextError ? "context_length_exceeded" : undefined,
     )), {
       status: outStatus,
       headers: outHeaders,
@@ -1410,7 +1412,7 @@ async function handleClaudeMessagesWithBudget(
       );
     }
     return new Response(JSON.stringify(message), {
-      status: isError ? 502 : 200,
+      status: isError ? (translatedError?.code === "context_length_exceeded" ? 400 : 502) : 200,
       headers: { "Content-Type": "application/json" },
     });
   }
@@ -1432,6 +1434,9 @@ async function handleClaudeMessagesWithBudget(
         "request_too_large",
         "translation_buffer_limit",
       );
+    }
+    if (error?.code === "context_length_exceeded") {
+      return anthropicErrorResponse(400, error.message ?? "upstream context limit exceeded", "invalid_request_error", error.code);
     }
     return anthropicErrorResponse(502, error?.message ?? "upstream request failed", "api_error");
   }

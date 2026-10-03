@@ -7,6 +7,14 @@ OAuth, not a second list in provider config. `setAccountPaused` serializes pause
 with credential and selection writes, advances the selection revision, and only publishes
 invalidation after persistence. Removing an account removes its pause; reauthentication
 preserves it. The store moves active selection to an unpaused, non-reauth row if available.
+For Anthropic, automatic fallback preserves ring order, including source-less legacy rows,
+and skips background local-CLI rows expiring within 60 seconds, including still-valid credentials.
+`src/oauth/refresh-policy.ts` shares that skew between pause fallback, routing and token refresh.
+Claude Code credential adoption follows the [bearer identity contract](#claude-credential-identity).
+A legacy row selected by pause fallback or explicitly can use its own valid bearer for quota/model
+discovery and refresh its stored token normally. Missing or invalid provenance normalizes to no
+source, which never permits CLI-disk adoption. With no permitted fallback, active-account probes
+stay closed until a usable account is selected or resumed.
 Pause does not clear cooldowns, quota, or credentials and does not cancel an already-sent turn.
 
 `src/oauth/anthropic-routing.ts` excludes paused rows from quota, round-robin, fill-first,
@@ -27,8 +35,41 @@ pause/prior-429 recovery uses `only-eligible`, and logs name the committed accou
 > Decision record: [ADR-6013](../decisions/ADR-6013-anthropic-account-pause.md)
 
 Regression coverage: `tests/adapters/anthropic/anthropic-account-pause.test.ts`,
+`tests/oauth/local-token-detect.test.ts`, `tests/oauth/oauth-refresh.test.ts`,
 `tests/adapters/anthropic/anthropic-model-routes.test.ts`, `tests/oauth/oauth-accounts-api.test.ts`,
 `tests/cli/cli-account-pool-verbs.test.ts`, and `gui/tests/provider-quota-refresh-controls.test.tsx`.
+
+## Claude credential identity
+
+`src/oauth/anthropic-identity.ts` observes only authenticated `account.uuid` from the exact
+bearer's fixed-origin profile response or the token exchange in `src/oauth/anthropic.ts`.
+Its private versioned proof binds the UUID to SHA-256 of the access bearer. Store normalization
+in `src/oauth/store.ts` drops malformed or stale proofs; account summaries omit the entire field.
+Profile observations reject redirects and use a ten-second deadline and 64 KiB body limit.
+Organization, email, generic account ID, disk location and active selection do not establish proof.
+
+`src/oauth/anthropic-continuity.ts` permits usable changed local-CLI generations with a shared
+nonempty token. A fully rotated pair instead requires matching authenticated account UUIDs.
+The old bearer may use its stored bound proof or a fresh observation; independent old/new
+observations run in parallel. Shared-refresh adoption cannot copy proof to a new access bearer.
+A provider refresh also drops proof unless its new bearer carries fresh authenticated evidence;
+conflicting authenticated UUIDs refuse persistence. Generic display metadata is not promoted to proof.
+
+The refresh owner captures login ID, token generation and identity metadata before observation.
+It rechecks them, pause/removal, CLI generation and selection revision after observation and inside
+serialized persistence. Superseding writes win. An unresolved full rotation leaves the row and
+pending intent intact, without replaying a possibly consumed refresh or setting reauthentication
+solely from the identity failure. A proven different account may use its own stored refresh only
+when no pending intent blocks it. Intent cleanup follows successful durable adoption.
+An already-expired identityless row whose old bearer no longer authenticates cannot establish
+continuity to a fully rotated pair automatically; explicit import can create a separate slot.
+
+Explicit local import observes the bearer when usable and enriches only a shared-token or
+verified-UUID slot, retaining that slot's ID and selection. It preserves unrelated identityless
+slots. If profile evidence is unavailable, import remains identityless with the same automatic
+recovery limitation. These rules do not authenticate the local host owner who can edit the store.
+
+Regression coverage: `tests/oauth/oauth-anthropic-identity.test.ts`, `tests/oauth/oauth-refresh.test.ts`.
 
 ## Model routes
 

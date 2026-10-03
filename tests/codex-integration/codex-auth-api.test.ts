@@ -478,7 +478,7 @@ describe("main quota refresh diagnostics", () => {
       expect(reads).toBe(1);
       if (invalidation === "none") {
         const expected = outcome === "http" ? { status: "http_error", httpStatus: 503 }
-          : outcome === "terminal_http" ? { status: "http_error", httpStatus: 403 }
+          : outcome === "terminal_http" ? { status: "http_error", httpStatus: 403, code: "invalid_workspace_selected" }
           : { status: outcome === "body" ? "network_error" : "ok" };
         expect(result.quotaRefresh).toEqual(expected);
       } else {

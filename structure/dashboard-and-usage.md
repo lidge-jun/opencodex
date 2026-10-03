@@ -253,7 +253,7 @@ A private per-dispatch identity generation fences the diagnostic independently o
 quota metadata. Both snapshot and account DTO publication omit externally invalidated
 attempts; the generation itself is never serialized or stored in the quota cache.
 The CLI reconstructs the object using a fixed vocabulary and bounded numeric HTTP
-status, so an unexpected management response cannot add raw upstream material.
+status, so an unexpected management response cannot add raw upstream material. An `http_error` may carry `code` only from `CODEX_TERMINAL_AUTH_CODES` (`src/codex/quota-refresh-outcome.ts`; e.g. `token_invalidated` after a plan change revokes the session), and a failed read keeps the main row's last-known plan. Reauth attribution uses current terminal-auth evidence behind the same generation fence; a transient HTTP401 diagnostic does not replace an existing refresh-failure cause.
 
 > Decision record: [ADR-0078](decisions/ADR-0078-usage-accounting.md)
 
@@ -334,7 +334,7 @@ selectors, a vendor-only inferred price is unavailable; exact provider and user 
 eligible. Missing trace evidence is not reconstructed from today's configuration. Provider-detail
 model shares use that provider's token total, not the global total. Unknown reserved `policy/`
 selectors are rejected before upstream dispatch; historical rows remain unchanged.
-Expected-price overlays are estimates, not billing reproductions: the Z.AI GLM rows (`zai`, `zhipu-bigmodel`, `zhipu-bigmodel-coding`, `zhipu-bigmodel-responses`) display the published z.ai USD list price on surfaces that actually bill by Coding Plan subscription or CNY-tiered domestic PAYG, and every such row is marked `verified-derived` so the estimate flag reaches the UI.
+Expected-price overlays are estimates, not billing reproductions: the Z.AI GLM rows (`zai`, `zhipu-bigmodel`, `zhipu-bigmodel-coding`, `zhipu-bigmodel-responses`) display the published z.ai USD list price on surfaces that actually bill by Coding Plan subscription or CNY-tiered domestic PAYG, and every such row is marked `verified-derived` so the estimate flag reaches the UI. Antigravity Claude Sonnet and Opus 5.5 base/tier overlays in `src/usage/expected-prices.ts` likewise use Anthropic reference prices with `verified-derived`, so even reported tokens retain an estimated-cost flag.
 
 The management API retains the compact accumulator plus bounded query summaries; it never retains
 normalized per-request rows after a response. File identity changes, shrinkage, same-size metadata

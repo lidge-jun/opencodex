@@ -79,6 +79,12 @@ refusal as rate-limit or quota evidence against the credential it was holding. T
 requests such as vision and web search are replayed normally, because repeating them cannot
 duplicate a turn.
 
+Native ChatGPT Responses and compact HTTP requests whose serialized JSON strings are at least
+1 MiB in UTF-8 use byte-buffer uploads to avoid Bun resetting a large string upload before response
+headers arrive. This preserves the request
+contents and does not enable automatic retries. A genuine connection reset still follows the
+replay-refusal policy above.
+
 A native Responses provider can opt into replacing that send with
 [`retryOnReset`](/reference/configuration/providers/#provider-entries-ocxproviderconfig). The same grant covers the
 case where the connection survives the header and the SSE body then dies carrying only control
@@ -156,7 +162,10 @@ only these fields when comparing network modes, rather than the full account lis
 | `internal_error` | An internal refresh step failed. |
 
 Only `http_error` includes `httpStatus`. Other statuses do not imply HTTP 0 or an
-account entitlement problem.
+account entitlement problem. An `http_error` may also include `code` when the provider
+named a reason that only a new sign-in fixes (`token_invalidated`, `invalid_refresh_token`,
+`invalid_workspace_selected`). A `token_invalidated` response indicates a revoked session;
+the row then shows `needsReauth: true` with the last-known plan.
 
 ### Which proxy path is used?
 

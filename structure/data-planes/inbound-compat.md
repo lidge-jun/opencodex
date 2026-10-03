@@ -281,6 +281,15 @@ its defaults and exclusions are owned by [Responses transport](../transports/res
 
 The provider summary default applies at Responses ingress; native Chat and Anthropic inbound preferences keep their existing handling. Raw content is never renamed to a summary. See [bridge contract](../providers/chat-compat.md).
 
+## Claude context rejection
+
+Claude Messages preserves the classified `context_length_exceeded` error through
+`src/claude/outbound.ts`, `src/protocols/encoders/messages.ts`, and
+`src/server/claude-messages.ts`. Streaming output carries one `invalid_request_error`
+terminal with that code; collected and failed-JSON responses return HTTP 400 without
+a retry hint. This mapping adds no recovery send or context pruning. Unknown upstream
+failures, replay refusal, and local translation-buffer limits retain their distinct handling.
+
 ## Claude affinity at final Go dispatch
 
 `src/server/claude-messages.ts` carries validated conversation affinity privately through

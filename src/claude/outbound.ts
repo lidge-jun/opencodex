@@ -248,6 +248,7 @@ export function anthropicIncompleteOutcome(
  */
 export function anthropicFailedStatus(error: Rec, message: string): number {
   const code = typeof error.code === "string" ? error.code : undefined;
+  if (code === "context_length_exceeded") return 400;
   return code === "translation_buffer_limit"
     ? 413
     : typeof error.status === "number"
@@ -726,6 +727,7 @@ export function responsesSseToAnthropicSse(
               status,
               message,
               true,
+              code === "context_length_exceeded" ? code : undefined,
             );
             break;
           }

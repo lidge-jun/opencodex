@@ -1,6 +1,7 @@
 import { resolveHelpPath } from "./help-catalog";
 import { MODELS_CONTEXT_DETAILS, MODELS_CONTEXT_USAGE } from "./help-models-context";
 import { renderRootHelp } from "./help-navigation";
+import { formatHelpRecovery } from "./help-recovery";
 import { packageVersion as readPackageVersion } from "../lib/package-version";
 
 /**
@@ -135,13 +136,7 @@ export function printSubcommandUsage(
       printSubcommandUsage(result.parent[0], result.parent, { write });
       return;
     }
-    if (result.parent) {
-      console.error("Detailed help unavailable for the requested topic.");
-      console.error(`See: ocx help ${result.parent.join(" ")}`);
-    } else {
-      console.error(`Unknown command: ${name ?? ""}`.trim());
-      printUsage();
-    }
+    console.error(formatHelpRecovery(result.path));
     process.exit(1);
   }
   if (result.kind === "entry") {

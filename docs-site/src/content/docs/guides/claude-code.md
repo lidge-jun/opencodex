@@ -601,6 +601,15 @@ Three config states:
 The compaction value is adjustable on the Claude page. **Warning:** raising it past a model's real
 window breaks that model — the chat errors out before the summary can fire.
 
+A model's advertised context window does not guarantee that a tool-heavy request fits the
+upstream input limit. A classified input-limit rejection reaches Claude Code as
+`invalid_request_error` with `context_length_exceeded`; a non-streaming response uses HTTP 400
+instead of a retryable 502. Reduce the current input or compact earlier. If `/compact` also
+exceeds the limit, preserve the original history and try compacting a fork with fewer enabled
+tool or MCP schemas, if your client supports that workflow. Recovery still depends on the
+reduced request fitting the upstream limit. A `[1m]` marker or larger client accounting setting
+does not raise that limit, and OpenCodex does not silently remove history or tools to make it fit.
+
 Sub-1M native Anthropic models are never auto-marked. Values you export yourself always win (the
 proxy uses YOUR value to decide which models are safe to mark). Invalid hand-edited config values
 fall back to 829,800.

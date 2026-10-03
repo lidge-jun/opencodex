@@ -353,26 +353,28 @@ export async function listCodexAuthAccountsSnapshot(
     ? mainResult.hasCredential
     : getMainAccountCredentialPresence() ?? false;
   const mainMissingCredential = mainSnapshotLive && mainResult.credentialChecked && !hasMainCredential;
+  const liveQuotaRefresh = mainSnapshotLive && mainResult.quotaRefreshGeneration !== undefined
+    && isMainAccountIdentityGenerationLive(mainResult.quotaRefreshGeneration)
+    ? mainResult.quotaRefresh : undefined;
   const mainNeedsReauth = mainMissingCredential || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   const mainHealth = projectCodexAccountHealth({
     accountId: MAIN_CODEX_ACCOUNT_ID,
     needsReauth: mainNeedsReauth,
   });
   // The main row carries the same attribution as a pool row. Reaching this point without
-  // `mainMissingCredential` means the runtime reauth flag is what set `mainNeedsReauth`, so the
-  // cause is a refresh that did not complete.
+  // A diagnostic status is not causal evidence: a live bare 401 can be transient while an
+  // earlier refresh failure still owns the quarantine. Only a current terminal probe attributes it.
   const mainReauthReason: CodexAccountReauthReason | undefined = mainMissingCredential
     ? "missing_credential"
     : mainNeedsReauth
-      ? "refresh_failed"
+      ? mainResult.terminalAuthFailure === true && liveQuotaRefresh?.status === "http_error"
+        ? "unauthorized" : "refresh_failed"
       : mainHealth.status === "reauth_required" ? mainHealth.reason : undefined;
   const main: CodexAuthAccountDto = {
     id: MAIN_CODEX_ACCOUNT_ID,
     email: projectEmail(mainInfo.email, maskEmails) ?? "Codex App login",
     plan: mainInfo.plan,
-    ...(mainSnapshotLive && mainResult.quotaRefresh && mainResult.quotaRefreshGeneration !== undefined
-      && isMainAccountIdentityGenerationLive(mainResult.quotaRefreshGeneration)
-      ? { quotaRefresh: mainResult.quotaRefresh } : {}),
+    ...(liveQuotaRefresh ? { quotaRefresh: liveQuotaRefresh } : {}),
     logLabel: "main",
     isMain: true,
     paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),

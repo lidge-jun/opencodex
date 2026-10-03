@@ -17,6 +17,7 @@ import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import type { OwnedIntegrationRefreshOutcome } from "../integrations/owned-refresh";
 import { hasHelpFlag, printSubcommandUsage, printUsage } from "./help";
+import { printUnknownCommand } from "./help-recovery";
 import {
   HUB_GATED_SKIP_MESSAGE,
   localClientSkipMessage,
@@ -1167,8 +1168,7 @@ export async function dispatchCommand(head: CliHead, deps: CliDispatchDeps): Pro
   }
   const runner = commandRunners[resolveDispatchCommand(command) ?? ""];
   if (!runner) {
-    console.error(`Unknown command: ${command}`);
-    printUsage();
+    printUnknownCommand(command);
     return 1;
   }
   return await runner(deps);

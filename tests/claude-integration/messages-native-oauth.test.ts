@@ -80,6 +80,7 @@ function credential(index: number) {
     refresh: `synthetic-anthropic-refresh-${index}`,
     expires: Date.now() + 3_600_000,
     accountId: `synthetic-account-${index}`,
+    source: "oauth" as const,
   };
 }
 

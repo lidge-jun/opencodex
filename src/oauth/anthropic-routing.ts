@@ -18,6 +18,7 @@ import { anthropicFamilyRejected, anthropicFamilyRetryAt, anthropicModelExhauste
  * Token refresh failures retain the existing store needsReauth policy.
  */
 import { anthropicRatePauseUntil, clearAnthropicRatePauses, classifyAnthropic429, anthropicRetryAfterMs, pauseAnthropicRateAdmission } from "./anthropic-rate-limit-policy";
+import { REFRESH_SKEW_MS } from "./refresh-policy";
 import { createHash } from "node:crypto";
 import { captureOAuthAccountSelection, commitOAuthAccountSelection, credentialGeneration, getAccountSet, getAccountCredential, getAccountCredentialWithStatus } from "./store";
 import type { OAuthAccessSnapshot } from "./index";
@@ -353,7 +354,6 @@ function usageScore(config: OcxConfig, accountId: string, model?: string): numbe
   }
 }
 
-const TOKEN_SKEW_MS = 60_000;
 
 /** Background `local-cli` slots with expired access are not pool-eligible (identity adoption risk). */
 function isPoolCredentialUsable(accountId: string, now: number): boolean {
@@ -361,7 +361,7 @@ function isPoolCredentialUsable(accountId: string, now: number): boolean {
   if (!cred) return false;
   if (cred.source !== "local-cli") return true;
   if (canRefreshAnthropicPoolAccount(accountId)) return true;
-  return cred.expires > now + TOKEN_SKEW_MS;
+  return cred.expires > now + REFRESH_SKEW_MS;
 }
 
 export function getEligibleAnthropicAccounts(now = Date.now(), model?: string): string[] {
@@ -1093,7 +1093,7 @@ export async function getAnthropicPoolAccessToken(accountId: string): Promise<st
     const { OAuthLoginRequiredError } = await import("./index");
     throw new OAuthLoginRequiredError(PROVIDER);
   }
-  if (stored.expires > Date.now() + TOKEN_SKEW_MS) return stored.access;
+  if (stored.expires > Date.now() + REFRESH_SKEW_MS) return stored.access;
   if (!canRefreshAnthropicPoolAccount(accountId)) {
     throw new Error("background local-cli token expired; refuse CLI-adopting refresh for pool");
   }

@@ -55,3 +55,43 @@ fixture: no repair or writes. Known root retains existing preflight behavior.
 Run new recovery tests plus prior layer focused coverage, typecheck,
 test:changed, structure/skill surface/privacy checks and docs build. A fresh
 independent reviewer checks source and terminal evidence before readiness.
+
+## P revalidation after wp2 (CLI-UX-03)
+
+Previous D:26line navigation/family/provider help passed affected checks and fresh
+review; inherited local full-suite caveat remains in011. Current base6f92cc1c98.
+
+- MODIFY help-catalog.ts: it owns a pure recovery-candidate projection using its
+  existing canonicalization/declared descendants. Root names and aliases are
+  deduplicated by canonical help destination. Nested candidates are immediate
+  documented child tokens; include the curated models/context topic separately.
+  Suggestions contain complete metadata-derived destinations, never trailing argv.
+  Bound the existing parent-prefix search by the maximum declared/curated depth,
+  not arbitrary user path length; long explicit paths still remain unavailable.
+- Matching policy: ASCII command-shaped tokens of3..64characters only; case-fold
+  for comparison; bounded edit distance with adjacent transposition. Maxdistance1
+  below6characters,2otherwise; order bydistance thenname; atmost3canonical targets.
+  Reject oversized/control-containing tokens from matching; do not truncate them
+  into apparent valid commands. Recovery paths deeper than8tokens get no matches.
+- Diagnostic policy: root echoes only a bounded command-shaped first token after
+  the existing pure `redactSecretString` confirms it contains no recognizable
+  secret; otherwise generic Unknown command. Never echo laterargv. Nested errors
+  keep generic unavailable-detail text plus metadata-derived parent/suggestions.
+  Reuse src/lib/redact.ts; do not import stateful runtime-api solely for formatting.
+- Keep successful appended-help parent fallback BEFORE recovery; preserve its
+  write sink. Unavailable explicithelp always usesstderr/exit1, regardless of sink.
+- Keep CliHead.kind and parseCliHead contract unchanged. runCli's command branch
+  rejects unknown roots before shimpreflight, explicitly allowing `internal` and
+  all findCommand roots/aliases/hiddenentries. No dispatchimport in pure modules.
+  Direct dispatch's unknownroot exit independently calls the same formatter.
+- MODIFY cli-help-paths.test.ts in addition to cli-help.test.ts: migrate rootbanner
+  expectation to empty stdout/exit1/boundedstderr; preserve operand non-disclosure,
+  context equivalence, parentfallback, provider sink andcapabilityJSON assertions.
+- New recovery tests include root/nested/distanttypos, aliasdedup, curatedtopic,
+  context-local candidates, long/control rootinput, secret-like trailingvalues,
+  unknownroot shimfixture immutability and directdispatch. Admit valid aliases,
+  hidden roots andinternal via isolated preflightspy without executing operations.
+
+Transient candidate fields are created by catalog projection and consumed by the
+recovery formatter; no persistence or API serialization. No global hasHelpFlag,
+provider-specific diagnostics, Node updater or missing-home bootstrap changes.

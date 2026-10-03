@@ -13,6 +13,8 @@ import { parseReadyArgs, type ReadyArgs } from "./ready";
 import { parseResolveArgs, type ResolveArgs } from "./resolve";
 import { parseStopApproval } from "./stop-approval";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
+import { findCommand } from "./registry";
+import { printUnknownCommand } from "./help-recovery";
 
 export interface CliHead {
   kind: "version" | "help" | "ready" | "resolve" | "command";
@@ -119,6 +121,10 @@ export async function runCli(argv: string[]): Promise<CliHead> {
       return head;
     }
     case "command":
+      if (head.command !== "internal" && !findCommand(head.command ?? "")) {
+        printUnknownCommand(head.command);
+        process.exit(1);
+      }
       if (head.command === "stop" && !parseStopApproval(head.args.slice(1)).ok) {
         console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
         process.exit(64);

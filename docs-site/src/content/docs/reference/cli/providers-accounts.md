@@ -503,6 +503,27 @@ Anthropic pause applies even when proactive pooling is disabled, including sessi
 and does not interrupt a turn already sent. Removing the account removes its pause state.
 Per-account Anthropic auto-switch thresholds are not part of this control.
 
+Anthropic's automatic pause fallback keeps account order, skips paused accounts and accounts
+requiring reauthentication, and excludes Claude Code imports expiring within 60 seconds.
+Legacy accounts without a recorded source remain eligible using only their own stored credentials
+and normal stored-token refresh; they never adopt CLI-disk credentials. A still-valid Claude Code import with more time remaining
+can be selected. Later automatic re-adoption accepts a shared, nonempty access or refresh token.
+If both tokens rotate, OpenCodex requires authenticated account UUID proof for both the stored
+and imported bearer. It saves that proof privately when available from login, refresh, or profile
+lookup; account labels, email, organization and credential-file location cannot substitute for it.
+
+When the old bearer has expired and no bound account proof was saved, automatic recovery may be
+impossible. An unavailable profile or unverified rotated pair leaves the stored account unchanged
+and does not replay a potentially consumed refresh token. Use explicit login to import the current
+Claude Code credential. Import preserves unrelated identityless slots and may create a separate
+account; select the intended account and remove obsolete slots only after checking them. A profile
+lookup failure can leave a new import identityless, with the same automatic-recovery limitation.
+
+If no permitted fallback remains, quota and live model discovery wait for a usable active account.
+You can explicitly select an existing unpaused legacy account with
+`ocx account use anthropic <account-id-or-alias>`; its own valid credential and normal stored-token
+refresh remain available even when its original credential source was not recorded.
+
 ```bash
 ocx account pause google-antigravity <account-id-or-alias>
 ocx account resume google-antigravity <account-id-or-alias>

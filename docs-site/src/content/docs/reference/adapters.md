@@ -118,6 +118,10 @@ be configured on a separately named custom or self-hosted Ollama provider with
   is refused rather than mis-sent, and remote image URLs are not fetched.
 - **Tools:** declared in Ollama's native shape, streamed tool calls are whole-call records with
   object-valued `arguments`, and tool-result replay is paired strictly by call id and tool name.
+  Codex may record assistant commentary before a pending call's results. Text/thinking with no
+  new tool calls is deferred until the batch is settled, so genuine results remain beside their
+  originating calls. A new tool-call batch still settles the preceding one; missing results retain
+  an explicit unknown-status marker, and orphan or duplicate results remain invalid.
   `tool_choice: "none"` and `auto` behave normally; **`required` or an exact named choice fails
   closed**, because Ollama's `/api/chat` has no `tool_choice` field to enforce it with.
 - **Structured output is refused on canonical Ollama Cloud.** Ollama currently documents structured
