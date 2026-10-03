@@ -1,6 +1,7 @@
 # 000 — local Codex messaging: proposed first contribution
 
 Status: preparation, not an accepted architecture or review-ready implementation.
+Foundation implementation progress is recorded in [030](030_foundation_implementation.md).
 Prepared 2026-10-03 against upstream `dev` at
 `2e3acab46e20b9bc7eace0c9301bf4330be83ac1`.
 
