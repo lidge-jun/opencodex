@@ -762,13 +762,18 @@ export async function fetchProviderModelsWithAuth(
         ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
       }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias));
       const forCache = withConfiguredRetention(live, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+      if (!isCurrentCacheGeneration()) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
+      // Save exact family routes before publishing synthetic IDs. These synchronous writes
+      // cannot interleave with a credential-generation change; failure keeps the prior cache.
       registerAntigravityDiscoveredWireModels(prov.baseUrl, antigravity, {
         provider: name,
         cacheGeneration,
       });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
       markProviderDiscoveryOk(name, live.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }

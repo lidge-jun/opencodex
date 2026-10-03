@@ -29,7 +29,8 @@ export function collapseAntigravityPublicModels<T extends AntigravityEffortFamil
     for (const id of ids) providerIds.add(id);
     hidden.set(row.provider, providerIds);
   }
-  return rows.filter(row => row.custom || row.catalogKind === "custom-model-v1" || !hidden.get(row.provider)?.has(row.id));
+  return rows.filter(row => row.custom || row.catalogKind === "custom-model-v1"
+    || antigravityEffortFamilyIds(row) !== undefined || !hidden.get(row.provider)?.has(row.id));
 }
 
 /** Project stored native/encoded selections without rewriting the user's allowlist. */
@@ -40,13 +41,14 @@ export function projectAntigravitySelectedModels(
 ): string[] {
   const projected = [...selected];
   const keys = new Set(selected.map(id => slugEquivalenceKey(routedSlug(provider, id))));
+  const bases = new Set(rows.filter(row => row.provider === provider && antigravityEffortFamilyIds(row)).map(row => row.id));
   for (const row of rows) {
     if (row.provider !== provider) continue;
     const ids = antigravityEffortFamilyIds(row);
     const baseKey = slugEquivalenceKey(routedSlug(provider, row.id));
-    if (!ids || keys.has(baseKey) || !ids.some(id => keys.has(slugEquivalenceKey(routedSlug(provider, id))))) continue;
+    if (!ids || keys.has(baseKey) || projected.includes(row.id)
+      || !ids.some(id => !bases.has(id) && keys.has(slugEquivalenceKey(routedSlug(provider, id))))) continue;
     projected.push(row.id);
-    keys.add(baseKey);
   }
   return projected;
 }
@@ -55,6 +57,7 @@ export function projectAntigravitySelectedModels(
 export function antigravityFamilyDisabled(
   config: Pick<OcxConfig, "providers" | "disabledModels" | "modelDiscovery">,
   row: AntigravityEffortFamilyRow,
+  rows: readonly AntigravityEffortFamilyRow[] = [],
 ): boolean {
   const ids = antigravityEffortFamilyIds(row);
   if (!ids) return false;
@@ -64,7 +67,9 @@ export function antigravityFamilyDisabled(
   if (!baseline) return false;
   const known = new Set([...baseline.ids, ...baseline.removed]);
   if (known.has(row.id)) return false;
-  const priorTiers = ids.filter(id => known.has(id));
+  const bases = new Set(rows.filter(candidate => candidate.provider === row.provider
+    && antigravityEffortFamilyIds(candidate)).map(candidate => candidate.id));
+  const priorTiers = ids.filter(id => known.has(id) && !bases.has(id));
   return priorTiers.length > 0
     && priorTiers.every(id => disabled.some(slug => slugEquals(slug, row.provider, id)));
 }

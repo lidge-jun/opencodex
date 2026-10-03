@@ -1,5 +1,7 @@
 import { isValidModelDiscoveryModelId, MODEL_DISCOVERY_MAX_MODELS } from "./model-discovery-limits";
-import { isModelCacheGenerationCurrent } from "../codex/model-cache";
+import { captureModelCacheGeneration, isModelCacheGenerationCurrent } from "../codex/model-cache";
+import { getConfigDir } from "../config/paths";
+import { readAntigravityWireSnapshot, writeAntigravityWireSnapshot, type AntigravitySuffixMap } from "./antigravity-wire-snapshot";
 
 // Google Antigravity (Cloud Code Assist) bundled model list.
 //
@@ -367,7 +369,7 @@ interface DiscoveredWireModelMapping {
   readonly generation?: { provider: string; cacheGeneration: string };
 }
 
-const discoveredWireModelsByBaseUrl = new Map<string, DiscoveredWireModelMapping>();
+const discoveredWireModelsByBaseUrl = new Map<string, DiscoveredWireModelMapping | null>();
 
 /**
  * Strip trailing slashes without a backtracking regex.
@@ -390,9 +392,9 @@ function antigravityBaseUrlKey(baseUrl: string | undefined): string | undefined 
     const url = new URL(trimmed);
     url.hash = "";
     url.search = "";
-    return stripTrailingSlashes(url.toString()).toLowerCase();
+    return stripTrailingSlashes(url.toString());
   } catch {
-    return trimmed.toLowerCase();
+    return trimmed;
   }
 }
 
@@ -404,13 +406,23 @@ export function registerAntigravityDiscoveredWireModels(
 ): void {
   const key = antigravityBaseUrlKey(baseUrl);
   if (!key) return;
+  if (generation) {
+    if (!isModelCacheGenerationCurrent(generation.provider, generation.cacheGeneration)) return;
+    const families: Record<string, AntigravitySuffixMap> = Object.create(null);
+    for (const model of models) {
+      if (ANTIGRAVITY_DISCOVERY_EFFORTS.every(effort => model.effortWireModelIds?.[effort] === `${model.id}-${effort}`)) {
+        families[model.id] = { low: `${model.id}-low`, medium: `${model.id}-medium`, high: `${model.id}-high` };
+      }
+    }
+    writeAntigravityWireSnapshot(key, { version: 1, provider: generation.provider, families });
+  }
   const wireModels = new Map<string, string>();
   const effortModels = new Map<string, AntigravityEffortWireModelIds>();
   for (const model of models) {
     wireModels.set(model.id, model.wireModelId);
     if (model.effortWireModelIds) effortModels.set(model.id, { ...model.effortWireModelIds });
   }
-  discoveredWireModelsByBaseUrl.set(key, {
+  discoveredWireModelsByBaseUrl.set(`${getConfigDir()}\0${key}`, {
     models: wireModels,
     effortModels,
     ...(generation ? { generation } : {}),
@@ -422,11 +434,21 @@ function discoveredAntigravityMapping(
 ): DiscoveredWireModelMapping | undefined {
   const key = antigravityBaseUrlKey(baseUrl);
   if (!key) return undefined;
-  const mapping = discoveredWireModelsByBaseUrl.get(key);
+  const scopedKey = `${getConfigDir()}\0${key}`;
+  if (!discoveredWireModelsByBaseUrl.has(scopedKey)) {
+    const saved = readAntigravityWireSnapshot(key);
+    discoveredWireModelsByBaseUrl.set(scopedKey, saved ? {
+      models: new Map(Object.entries(saved.families).map(([id, map]) => [id, map.medium])),
+      effortModels: new Map(Object.entries(saved.families)),
+      generation: { provider: saved.provider, cacheGeneration: captureModelCacheGeneration(saved.provider) },
+    } : null);
+  }
+  const mapping = discoveredWireModelsByBaseUrl.get(scopedKey);
   if (!mapping) return undefined;
   if (mapping.generation
     && !isModelCacheGenerationCurrent(mapping.generation.provider, mapping.generation.cacheGeneration)) {
-    discoveredWireModelsByBaseUrl.delete(key);
+    // Keep a tombstone: clearing account/cache authority must not reload old disk evidence.
+    discoveredWireModelsByBaseUrl.set(scopedKey, null);
     return undefined;
   }
   return mapping;

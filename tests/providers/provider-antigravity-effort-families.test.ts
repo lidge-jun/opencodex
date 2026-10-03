@@ -227,3 +227,28 @@ describe("Antigravity effort family reconciliation", () => {
     }
   });
 });
+
+test("overlapping complete family bases remain public and are not policy aliases", () => {
+  const provider = "google-antigravity";
+  const rows = ["foo", "foo-low"].map(id => ({ provider, id,
+    antigravityEffortWireModelIds: { low: `${id}-low`, medium: `${id}-medium`, high: `${id}-high` } }));
+  expect(collapseAntigravityPublicModels(rows).map(row => row.id)).toEqual(["foo", "foo-low"]);
+  const config: OcxConfig = { port: 0, defaultProvider: provider, providers: { [provider]: {} },
+    modelDiscovery: { knownModels: { [provider]: { ids: ["foo", "foo-low"], removed: [], updatedAt: now } } } };
+  expect(reconcileSuccessfulModelDiscoveries({ config, models: rows, authoritativeProviders: [provider], now })).toBe(false);
+  expect(config.modelDiscovery!.knownModels![provider]!.ids).toEqual(["foo", "foo-low"]);
+});
+
+test("overlapping families project only the original selection in either order", () => {
+  const provider = "google-antigravity";
+  const rows = ["foo", "foo-low"].map(id => ({ provider, id,
+    antigravityEffortWireModelIds: { low: `${id}-low`, medium: `${id}-medium`, high: `${id}-high` } }));
+  for (const ordered of [rows, [...rows].reverse()]) {
+    expect(projectAntigravitySelectedModels(provider, ["foo-low"], ordered)).toEqual(["foo-low"]);
+    expect(projectAntigravitySelectedModels(provider, ["foo-low-high"], ordered)).toEqual(["foo-low-high", "foo-low"]);
+    const config: OcxConfig = { port: 0, defaultProvider: provider, providers: { [provider]: {} },
+      disabledModels: [`${provider}/foo-low`],
+      modelDiscovery: { knownModels: { [provider]: { ids: ["foo-low"], removed: [], updatedAt: now } } } };
+    expect(antigravityFamilyDisabled(config, rows[0]!, ordered)).toBe(false);
+  }
+});

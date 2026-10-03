@@ -2,6 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "provider-antigravity-wire-snapshot.test.ts": "providers",
     "antigravity-discovered-families.test.ts": "adapters/google",
     "provider-antigravity-effort-families.test.ts": "providers",
     "provider-antigravity-family-catalog.test.ts": "providers",

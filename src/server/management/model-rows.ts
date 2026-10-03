@@ -459,7 +459,7 @@ export async function listManagementModelRows(
       ...m,
       ...displayName,
       namespaced,
-      disabled: antigravityFamilyDisabled(config, m) || [...disabled].some(stored => (
+      disabled: antigravityFamilyDisabled(config, m, models) || [...disabled].some(stored => (
         (!nativeAlias && stored === namespaced) || slugEquals(stored, m.provider, m.id)
       )),
       ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),

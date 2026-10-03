@@ -297,7 +297,7 @@ export function filterCatalogVisibleModels(
   return collapseAntigravityPublicModels(models).filter(m => {
     if (initialModelSelectionPending(config.providers[m.provider])) return false;
     if (config.providers[m.provider]?.disabled === true) return false;
-    if (antigravityFamilyDisabled(config, m)) return false;
+    if (antigravityFamilyDisabled(config, m, models)) return false;
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels may be stored raw (canonical) or encoded (legacy UI writes).
     for (const stored of disabled) {

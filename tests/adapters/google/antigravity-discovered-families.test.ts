@@ -1,9 +1,22 @@
-import { afterEach, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels, resolveAntigravityEffortWireModel } from "../../../src/providers/antigravity-models";
 import { captureModelCacheGeneration, clearModelCache } from "../../../src/codex/model-cache";
 import { createGoogleAdapter } from "../../../src/adapters/google";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 import type { OcxParsedRequest } from "../../../src/types";
+
+const originalHome = process.env.OPENCODEX_HOME;
+let testHome: string;
+beforeEach(() => { testHome = mkdtempSync(join(tmpdir(), "ocx-agy-family-")); process.env.OPENCODEX_HOME = testHome; });
+afterEach(() => {
+  if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = originalHome;
+  removeTreeWithRetry(testHome);
+});
 
 const baseUrl = "https://antigravity-families.example.test";
 const efforts = ["low", "medium", "high"] as const;
@@ -71,4 +84,15 @@ test("5.5 adapter sends selected wire suffix without contradictory thinkingLevel
     expect(body.model).toBe(`claude-opus-5-5-${effort}`);
     expect(body.request.generationConfig?.thinkingConfig).toBeUndefined();
   }
+});
+
+test("an evidenced overlapping base takes routing precedence over a parent tier alias", () => {
+  const first = payload("foo");
+  const second = payload("foo-low");
+  const rows = parseAntigravityAvailableModels({ models: { ...first.models, ...second.models },
+    agentModelSorts: [{ groups: [{ modelIds: [...Object.keys(second.models), ...Object.keys(first.models)] }] }] })!;
+  registerAntigravityDiscoveredWireModels(baseUrl, rows);
+  expect(rows.map(row => row.id).sort()).toEqual(["foo", "foo-low"]);
+  expect(resolveAntigravityEffortWireModel("foo-low", "high", baseUrl)).toEqual({ wireModelId: "foo-low-high" });
+  expect(resolveAntigravityEffortWireModel("foo", "low", baseUrl)).toEqual({ wireModelId: "foo-low" });
 });

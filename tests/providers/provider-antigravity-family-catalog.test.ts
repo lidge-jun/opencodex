@@ -1,4 +1,8 @@
-import { afterEach, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { buildCatalogEntries, filterCatalogVisibleModels, gatherRoutedModels, uniqueCatalogModelsForPublicList, uniqueCatalogModelsForRawPublicList } from "../../src/codex/catalog";
 import { mergeCatalogEntriesFromObservedState } from "../../src/codex/catalog/build-entries";
 import { clearModelCache } from "../../src/codex/model-cache";
@@ -7,6 +11,15 @@ import { projectAntigravitySelectedModels } from "../../src/providers/antigravit
 import { reconcileSuccessfulModelDiscoveries } from "../../src/providers/new-model-policy";
 import { listManagementModelRows } from "../../src/server/management/model-rows";
 import type { OcxConfig } from "../../src/types";
+
+const originalHome = process.env.OPENCODEX_HOME;
+let testHome: string;
+beforeEach(() => { testHome = mkdtempSync(join(tmpdir(), "ocx-agy-family-")); process.env.OPENCODEX_HOME = testHome; });
+afterEach(() => {
+  if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = originalHome;
+  removeTreeWithRetry(testHome);
+});
 
 const provider = "google-antigravity";
 const base = "claude-opus-5-5";

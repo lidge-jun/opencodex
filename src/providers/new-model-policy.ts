@@ -123,11 +123,12 @@ export function effectiveNewModelPolicy(config: OcxConfig, provider: string): Ne
 function normalizeEffortFamilies(config: OcxConfig, provider: string, rows: AntigravityEffortFamilyRow[]) {
   const aliases = new Map<string, string>();
   const inheritedDisables: string[] = [];
+  const bases = new Set(rows.filter(row => antigravityEffortFamilyIds(row)).map(row => row.id));
   for (const row of rows) {
     const ids = antigravityEffortFamilyIds(row);
     if (!ids) continue;
-    for (const id of ids) aliases.set(id, row.id);
-    if (antigravityFamilyDisabled(config, row)
+    for (const id of ids) if (!bases.has(id)) aliases.set(id, row.id);
+    if (antigravityFamilyDisabled(config, row, rows)
       && !config.disabledModels?.some(slug => slugEquals(slug, provider, row.id))) {
       inheritedDisables.push(routedSlug(provider, row.id));
     }
