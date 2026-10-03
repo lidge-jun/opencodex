@@ -7,8 +7,9 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
 const gui = resolve(import.meta.dir, "..");
-const dist = process.env.GUI_DIST ?? join(gui, "dist");
-if (!isAbsolute(dist)) throw new Error("GUI_DIST must be an absolute built GUI path.");
+const inputDist = process.env.GUI_DIST ?? join(gui, "dist");
+if (!isAbsolute(inputDist)) throw new Error("GUI_DIST must be an absolute built GUI path.");
+const dist = resolve(inputDist);
 const output = resolve(process.argv[2] ?? join(gui, ".tmp/shared-scroll-browser"));
 // Evidence must never become part of the shipped feature branch.
 if (!output.split(sep).includes(".tmp")) throw new Error("Output must be inside an ignored .tmp directory.");
