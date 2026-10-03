@@ -17,7 +17,7 @@ const ALLOWED_MODALITIES = new Set(["text", "image", "audio"]);
 export type RemoteCatalogFailureCode =
   | "url_invalid" | "insecure_http_refused" | "credential_invalid" | "request_failed"
   | "redirect_refused" | "http_error" | "body_too_large" | "body_invalid"
-  | "catalog_invalid" | "write_failed" | "lock_busy" | "lock_database" | "unsafe_path";
+  | "catalog_invalid" | "write_failed" | "lock_busy" | "lock_database" | "unsafe_path" | "foreign_owner";
 
 export class RemoteCatalogError extends Error {
   constructor(readonly code: RemoteCatalogFailureCode, message: string, readonly status?: number) {
@@ -202,7 +202,9 @@ export async function fetchRemoteCatalog(
 
 function mapSerializationFailure<T>(outcome: CatalogSerializationOutcome<T>): never {
   if (outcome.kind === "completed") throw new RemoteCatalogError("write_failed", "Remote catalog installation failed");
-  const code = outcome.reason === "busy" ? "lock_busy" : outcome.reason === "database" ? "lock_database" : "unsafe_path";
+  const code = outcome.reason === "busy" ? "lock_busy"
+    : outcome.reason === "database" ? "lock_database"
+      : outcome.reason === "foreign-owner" ? "foreign_owner" : "unsafe_path";
   throw new RemoteCatalogError(code, `Remote catalog installation unavailable (${outcome.reason})`);
 }
 
@@ -251,7 +253,7 @@ export async function pullRemoteCatalog(input: string, options: PullRemoteCatalo
       throw new RemoteCatalogError("write_failed", "Remote catalog cache synchronization failed");
     }
     return { catalogWritten: true, cacheSynced: true };
-  });
+  }, { intent: "pull", writer: "catalog-pull" });
   if (outcome.kind !== "completed") return mapSerializationFailure(outcome);
   return {
     status: outcome.value.catalogWritten ? "updated" : "unchanged",

@@ -15,6 +15,9 @@ import { resolveCodexCatalogSerializationDatabasePath, resolveEffectiveUserIdent
 import { withCatalogWriteSerialization } from "../../src/codex/catalog-write-serialization";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
+/** Every K acquisition states its intent (#6529); these tests exercise the lock, not the intent. */
+const TEST_CATALOG_WRITE = { intent: "refresh", writer: "test" } as const;
+
 const homes: string[] = [];
 afterEach(() => { while (homes.length) removeTreeWithRetry(homes.pop()!); });
 
@@ -335,7 +338,7 @@ describe("remote catalog coordinated installation", () => {
   test("lock contention is typed and preserves last-known-good files", async () => {
     const codexHome = home();
     // Materialize K, then hold BEGIN IMMEDIATE from a separate connection while pull attempts it.
-    expect(withCatalogWriteSerialization(codexHome, () => null).kind).toBe("completed");
+    expect(withCatalogWriteSerialization(codexHome, () => null, TEST_CATALOG_WRITE).kind).toBe("completed");
     const lockPath = resolveCodexCatalogSerializationDatabasePath(resolveEffectiveUserIdentity(), codexHome);
     const holder = new Database(lockPath);
     holder.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");

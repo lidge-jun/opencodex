@@ -373,6 +373,62 @@ to snapshot persistence instead of relying on the progress argument alone.
 
 > Decision record: [ADR-0015](decisions/ADR-0015-codex-home.md)
 
+## Config-backed catalog removals
+
+A refresh removes a provider's OpenCodex-authored routed rows wholesale only when config.json agrees
+the provider is gone (#6529). `src/codex/catalog/routed-removal.ts` lists the namespaces whose rows
+are in the active catalog, missing from the candidate, and not enabled by the driving config (native
+alias rows count as `combo`; foreign and account-bound rows never count). Both catalog writers —
+retained sync (`ocx start`/`ensure`/`sync`) and the convergence commit (management writes, login,
+auto-refresh) — re-read config.json under the catalog lock right before writing. When the file is
+missing, unreadable or salvaged, or still enables one of those namespaces, the write is refused and the
+active catalog and models cache keep their bytes, so a config-less process (an empty
+`OPENCODEX_HOME` reads defaults, which route nothing) cannot publish a native-only catalog into this
+home. Removals inside an enabled namespace (discovery, disabled models, deleted custom rows) and
+catalogs without routed rows are unaffected; see the [shared catalog](catalog.md#shared-catalog).
+`ocx sync` reports the refusal as one count-only warning, and `ocx restore` stays the deliberate way
+to drop routed rows. Coverage: `tests/codex-integration/codex-catalog-routed-removal.test.ts`,
+`tests/codex-integration/codex-catalog-sync-hardening.test.ts`, and
+`tests/codex-integration/codex-convergence-contract.test.ts`.
+
+## Catalog ownership, write audit and self-heal
+
+The removal rule above trusts the writing process's own config.json; these keep a process from
+another OpenCodex home out altogether and make every catalog write visible (#6529).
+
+- **One owner per Codex home.** The injection journal records the injecting `OPENCODEX_HOME`
+  (`opencodexHome`); a journal written before the field existed gets it from the next injection, and a
+  foreign injection never takes it over. `src/codex/codex-home-owner.ts` reads it read-only. K
+  (`withCatalogWriteSerialization`) refuses a writer from another existing home with
+  `unavailable/foreign-owner` before opening its database, so no catalog, backup or cache mutator runs
+  for it. A recorded home that no longer exists is stale and does not block; restore removes the
+  journal and with it the binding. `ocx sync` reports the refusal without a path. Config injection
+  itself is unchanged.
+- **Explicit intent.** Every K acquisition states `intent` (`refresh`, `cache`, `pull`, `restore`) and a
+  `writer` label. `src/codex/internal/catalog-writer.ts` applies the rules all writers share:
+  identical bytes are never rewritten (`unchanged`, no mtime change) for the catalog or the models
+  cache; a `refresh` may clear every OpenCodex routed row only while config.json is a readable file
+  (`refused/unbacked-routed-clear` otherwise, mapped to the same skip as an unbacked removal); only
+  `restore` clears them unconditionally; a `cache` permit cannot replace the catalog.
+- **Write audit.** Each catalog or cache write, and each refusal, appends one JSON line to
+  `$CODEX_HOME/opencodex-catalog-audit.jsonl` (`src/codex/catalog/write-audit.ts`): time, pid, ppid, a
+  short redacted command, the writer's redacted `OPENCODEX_HOME`, intent, writer, outcome and reason,
+  routed row counts before and after, and where the writer's config came from. No model ids or provider
+  names. Past 256 KiB it keeps the newest 400 lines. Only a non-foreign writer creates the file, and a
+  writer with a real config.json registers it in its uninstall manifest; a foreign refusal appends only
+  to an existing file. Audit failures never fail a write.
+- **Self-heal.** `src/codex/catalog-self-heal.ts` runs beside the routing healer on the owner path of
+  `handleStart` (never for a sibling). Every 30 s it stats the active catalog; on a changed file it
+  compares OpenCodex routed namespaces with the last accepted catalog. When namespaces the owner's
+  config still enables are gone and every gate is open (not a sibling, not exiting, Codex integration
+  on, no connected client, this home owns or nothing binds the Codex home), it runs the owner's catalog
+  convergence once, with all the rules above. What that publishes becomes the new baseline, so a
+  namespace the owner itself left empty is not fought. At most 6 attempts and 3 successful heals per
+  hour; a closed gate or a spent cap waits 5 minutes or for the window. The warning names a count only.
+
+Coverage: `tests/codex-integration/codex-home-owner.test.ts`, `tests/codex-integration/codex-catalog-write-audit.test.ts`,
+`tests/codex-integration/codex-catalog-self-heal.test.ts`.
+
 ## Codex-home diagnostics
 
 Desktop executable membership uses the [discovered installation root](runtime.md#codex-desktop-process-membership), independently of the Codex state directory resolved here.

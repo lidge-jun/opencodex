@@ -227,7 +227,7 @@ async function holdCatalogLock(sandbox: Sandbox): Promise<{
       writeFileSync(${JSON.stringify(ready)}, "ready");
       const waiter = new Int32Array(new SharedArrayBuffer(4));
       while (!existsSync(${JSON.stringify(release)})) Atomics.wait(waiter, 0, 0, 10);
-    });
+    }, { intent: "refresh", writer: "test" });
     if (outcome.kind !== "completed") throw new Error(JSON.stringify(outcome));
   `;
   const child = Bun.spawn([process.execPath, "--eval", script], {

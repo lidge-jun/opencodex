@@ -615,6 +615,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Loopback-only (legacy mode still forward-tags) and respects syncResumeHistory opt-out.
   let historyGuardian: ReturnType<typeof startHistoryMigrationGuardian> | undefined;
   let routingHealer: { stop(): void } | undefined; // routing-healer.ts; stopped first in syncCleanup
+  let catalogSelfHeal: { stop(): void } | undefined; // catalog-self-heal.ts; stopped with the routing healer
 
   let cleaned = false;
   let cleanupSucceeded = true;
@@ -622,6 +623,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     if (cleaned) return cleanupSucceeded;
     cleaned = true;
     try { routingHealer?.stop(); } catch { /* best-effort */ }
+    try { catalogSelfHeal?.stop(); } catch { /* best-effort */ }
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
     // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
@@ -731,6 +733,9 @@ async function handleStart(options: { block?: boolean } = {}) {
   }
   const routingHealerModule = siblingStart ? null : await import("../codex/routing-healer");
   if (routingHealerModule && !cleaned) routingHealer = routingHealerModule.startCodexRoutingHealer({ port, config }); // `cleaned` read once the import settled
+  // After the startup sync, so the first look takes the catalog this start published as its baseline.
+  const catalogSelfHealModule = siblingStart ? null : await import("../codex/catalog-self-heal");
+  if (catalogSelfHealModule && !cleaned) catalogSelfHeal = catalogSelfHealModule.startCodexCatalogSelfHeal();
   // Grok Build auto-registration: additive fenced block in ~/.grok/config.toml so an installed
   // grok CLI can pick opencodex-routed models without manual config. No-op when ~/.grok is
   // absent or the bind is non-loopback; removed again by stop/eject/uninstall/shutdown.

@@ -281,7 +281,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       // with the later startup sync and warns ONCE about stale app-servers; warning
       // here instead would read a catalog mtime the sync is about to move.
       const outcome = withCatalogWriteSerialization(startupCodexHome, permit =>
-        invalidateCodexModelsCacheWithPermit(permit, startupCodexHome));
+        invalidateCodexModelsCacheWithPermit(permit, startupCodexHome), { intent: "cache", writer: "startup-cache" });
       // A refused permit is not a write; only a completed run that returned true is.
       setStartupCacheInvalidationWrite(outcome.kind === "completed" && outcome.value === true);
     } catch { /* no readable Codex home: nothing to invalidate */ }

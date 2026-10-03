@@ -123,6 +123,7 @@ export function restoreCodexCatalog(): { removed: number; kept: number; path: st
   const outcome = withCatalogWriteSerialization(
     owningCodexHome,
     permit => restoreCodexCatalogWithPermit(permit, owningCodexHome),
+    { intent: "restore", writer: "catalog-restore" },
   );
   return outcome.kind === "completed"
     ? outcome.value

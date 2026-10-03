@@ -83,11 +83,18 @@ import {
   type CodexModelEntitlementSnapshot,
 } from "./model-entitlements";
 import { resolveAdmittedCodexModelEntitlements } from "./model-entitlement-admission";
+import {
+  routedRemovalBackedByConfigFile,
+  unbackedRoutedRemovalMessage,
+  unconfiguredRoutedRemoval,
+  type UnconfiguredRoutedRemoval,
+} from "./catalog/routed-removal";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import { providerCodexAccountMode } from "../providers/registry";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import {
+  auditRefusedCatalogReplacement,
   publishHashedCodexCatalogBackup,
   publishLegacyCodexCatalogBackup,
   replaceActiveCodexCatalog,
@@ -109,14 +116,20 @@ import type {
 export interface CatalogWriteReceipt {
   readonly keyedBackup: "written" | "preserved" | "not-requested";
   readonly legacyBackup: "written" | "preserved" | "not-requested";
-  readonly catalog: "written" | "not-written";
-  readonly cache: "written" | "not-written";
+  /** `unchanged`: the bytes on disk already matched, so nothing was rewritten. */
+  readonly catalog: "written" | "unchanged" | "not-written";
+  readonly cache: "written" | "unchanged" | "not-written";
 }
 
 export type CodexCatalogCommitResult =
   | { readonly kind: "committed"; readonly changed: boolean; readonly writes: CatalogWriteReceipt }
   | { readonly kind: "stale"; readonly reason: "generation" | "home-selection" | "source-observation" | "process-local" | "target-identity" | "candidate-consumed" | "account-entitlement" }
-  | { readonly kind: "refused"; readonly reason: "source-unreadable" | "source-ambiguous" | "target-unsafe" }
+  /**
+   * `unbacked-routed-removal`: the candidate drops routed namespaces config.json does not back, or
+   * clears every routed row while config.json is unreadable. `foreign-owner`: this Codex home is
+   * bound to another OPENCODEX_HOME (#6529).
+   */
+  | { readonly kind: "refused"; readonly reason: "source-unreadable" | "source-ambiguous" | "target-unsafe" | "unbacked-routed-removal" | "foreign-owner" }
   | { readonly kind: "failed"; readonly surface: "disk"; readonly writes: CatalogWriteReceipt };
 
 declare const catalogCandidateBrand: unique symbol;
@@ -144,6 +157,8 @@ interface CandidateState {
   readonly notices: readonly CatalogNotice[];
   readonly modelEntitlements: CodexModelEntitlementSnapshot;
   readonly discoveryConfig?: OcxConfig;
+  /** Routed namespaces this candidate empties only because the driving config lacks them. */
+  readonly routedRemoval: UnconfiguredRoutedRemoval | null;
 }
 
 const candidateStates = new WeakMap<object, CandidateState>();
@@ -542,6 +557,7 @@ export async function gatherCodexCatalogCandidate(
       notices: Object.freeze([...notices]),
       modelEntitlements,
       ...(discoveryChanged ? { discoveryConfig } : {}),
+      routedRemoval: unconfiguredRoutedRemoval(active, preparedCatalog, snapshot.config),
     });
     return { kind: "candidate", candidate };
   } catch (error) {
@@ -626,10 +642,13 @@ function fixedCommit(state: CandidateState, permit: Parameters<typeof replaceAct
     if (state.legacyBackup) {
       writes = { ...writes, legacyBackup: publishLegacyCodexCatalogBackup(permit, state.home, state.legacyBackup) };
     }
-    replaceActiveCodexCatalog(permit, state.home, state.catalog);
-    writes = { ...writes, catalog: "written" };
-    replaceCodexModelsCache(permit, state.home, state.cache);
-    writes = { ...writes, cache: "written" };
+    const catalog = replaceActiveCodexCatalog(permit, state.home, state.catalog);
+    // The funnel's backstop: every routed row would go while config.json is not a readable file.
+    // Nothing past the pristine backups was written, and the cache must not describe a catalog
+    // that was never published.
+    if (catalog.kind === "refused") return { kind: "refused", reason: "unbacked-routed-removal" };
+    writes = { ...writes, catalog: catalog.kind };
+    writes = { ...writes, cache: replaceCodexModelsCache(permit, state.home, state.cache).kind };
     return { kind: "committed", changed: state.changed, writes };
   } catch {
     return { kind: "failed", surface: "disk", writes };
@@ -649,13 +668,27 @@ export async function commitCodexCatalogCandidate(
       state.consumed = true;
       const guarded = withExpectedConfigGenerationSync(state.generation, () => {
         const invalid = revalidateCandidate(state);
-        return invalid ?? fixedCommit(state, permit);
+        if (invalid) return invalid;
+        // A refresh may empty a routed namespace only when config.json on disk agrees it is gone.
+        // Read under K, so a config that fell back to defaults during a transient read failure,
+        // or that belongs to another OPENCODEX_HOME, cannot publish a native-only catalog (#6529).
+        if (state.routedRemoval !== null && !routedRemovalBackedByConfigFile(state.routedRemoval)) {
+          console.warn(`[opencodex] ${unbackedRoutedRemovalMessage(state.routedRemoval.namespaces.length)}`);
+          auditRefusedCatalogReplacement(permit, state.home, state.catalog, "unbacked-routed-removal");
+          return { kind: "refused", reason: "unbacked-routed-removal" } as const;
+        }
+        return fixedCommit(state, permit);
       });
       if (guarded.kind === "conflict") return { kind: "stale", reason: "generation" } as const;
       if (guarded.kind === "unavailable") return { kind: "busy" } as const;
       return guarded.value;
-    });
+    }, { intent: "refresh", writer: "convergence" });
     if (acquired.kind === "completed") return acquired.value;
+    if (acquired.reason === "foreign-owner") {
+      // Not retryable: another OPENCODEX_HOME owns this Codex home until it restores (#6529).
+      state.consumed = true;
+      return { kind: "refused", reason: "foreign-owner" };
+    }
     if (acquired.reason !== "busy" || Date.now() >= deadline) return { kind: "busy" };
     await Bun.sleep(Math.min(10, Math.max(1, deadline - Date.now())));
   }

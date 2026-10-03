@@ -570,7 +570,8 @@ const commandRunners: Record<string, CommandRunner> = {
     const cacheGateSnapshot = deps.loadConfig();
     const desiredDisabled = !shouldSyncCodexOnStart(cacheGateSnapshot);
     const invalidated = withCatalogWriteSerialization(owningCodexHome, permit =>
-      invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, { allowWhenDesiredDisabled: true }));
+      invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, { allowWhenDesiredDisabled: true }),
+    { intent: "cache", writer: "sync-cache" });
     const cacheJson = cacheArgs.includes("--json");
     const jsonSafeLog = cacheJson
       ? { log: (...values: unknown[]) => console.error(...values), error: (...values: unknown[]) => console.error(...values) }

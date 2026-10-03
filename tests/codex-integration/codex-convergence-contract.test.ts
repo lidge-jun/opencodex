@@ -225,6 +225,53 @@ test("catalog-only commit never creates the native pair or routing/history artif
   expect(manifest(root).join("\n")).not.toContain("history");
 });
 
+function catalogWithRoutedArk(): string {
+  const parsed = JSON.parse(sourceCatalog()) as { models: Array<Record<string, unknown>> };
+  parsed.models.push({
+    ...parsed.models[0],
+    slug: "ark/glm-5.3",
+    display_name: "ark/glm-5.3",
+    description: "Routed via opencodex → ark (ark).",
+    priority: 50,
+  });
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+}
+
+test("a commit that empties a provider config.json still enables is refused and writes nothing (#6529)", async () => {
+  const path = join(codexHome, "opencodex-catalog.json");
+  writeFileSync(path, catalogWithRoutedArk());
+  // config.json still routes through ark; the driving config, which configures no provider, is not it.
+  saveConfig({
+    ...config(),
+    providers: { ark: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", liveModels: false, models: ["glm-5.3"] } },
+  } as OcxConfig);
+  const gathered = await candidate();
+  expect(await commitCodexCatalogCandidate(gathered, 1_000))
+    .toEqual({ kind: "refused", reason: "unbacked-routed-removal" });
+  expect(readFileSync(path, "utf8")).toBe(catalogWithRoutedArk());
+  expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
+});
+
+test("a commit that empties a provider while config.json is missing is refused (#6529)", async () => {
+  const path = join(codexHome, "opencodex-catalog.json");
+  writeFileSync(path, catalogWithRoutedArk());
+  rmSync(join(opencodexHome, "config.json"));
+  const gathered = await candidate();
+  expect(await commitCodexCatalogCandidate(gathered, 1_000))
+    .toEqual({ kind: "refused", reason: "unbacked-routed-removal" });
+  expect(readFileSync(path, "utf8")).toBe(catalogWithRoutedArk());
+});
+
+test("a commit drops a provider's routed rows once config.json agrees it is gone (#6529)", async () => {
+  const path = join(codexHome, "opencodex-catalog.json");
+  writeFileSync(path, catalogWithRoutedArk());
+  const gathered = await candidate();
+  expect((await commitCodexCatalogCandidate(gathered, 1_000)).kind).toBe("committed");
+  const slugs = (JSON.parse(readFileSync(path, "utf8")) as { models: Array<{ slug: string }> }).models.map(m => m.slug);
+  expect(slugs).toContain("gpt-5.6-sol");
+  expect(slugs).not.toContain("ark/glm-5.3");
+});
+
 test("management convergence restores omitted natives and retains a configured native alias", async () => {
   const runtime = { command: "/tmp/codex", version: "0.146.0", source: "environment" as const };
   const bundled = JSON.parse(sourceCatalog("bundled")) as { models: Array<Record<string, unknown>> };

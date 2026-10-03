@@ -28,6 +28,8 @@ import { chmodSync, lstatSync, realpathSync } from "node:fs";
 
 import { Database } from "bun:sqlite";
 
+import { appendCatalogWriteAudit } from "./catalog/write-audit";
+import { inspectCodexHomeOwner } from "./codex-home-owner";
 import {
   CodexUserIdentityRefusal,
   resolveCodexCatalogSerializationDatabasePath,
@@ -51,9 +53,27 @@ export interface CatalogWritePermit {
 
 declare const catalogWritePermitBrand: unique symbol;
 
+/**
+ * What an acquisition is for, stated by every caller (#6529). A `refresh` republishes the catalog
+ * from config and may not clear its routed rows unless config.json is a readable file; only
+ * `restore` (teardown back to native) may clear them unconditionally. A `pull` installs a catalog a
+ * hub published. A `cache` acquisition writes only Codex's models cache.
+ */
+export type CatalogWriteIntent = "refresh" | "cache" | "pull" | "restore";
+
+export interface CatalogWriteOptions {
+  readonly intent: CatalogWriteIntent;
+  /** Names the writer in the audit trail, e.g. `convergence` or `retained-sync`. */
+  readonly writer: string;
+}
+
 export type CatalogSerializationOutcome<T> =
   | { kind: "completed"; value: T }
-  | { kind: "unavailable"; reason: "busy" | "database" | "unsafe-path" };
+  /**
+   * `foreign-owner`: the Codex home's journal binds it to another OPENCODEX_HOME that still
+   * exists (#6529). Not retryable: run from that home, or restore from it first.
+   */
+  | { kind: "unavailable"; reason: "busy" | "database" | "unsafe-path" | "foreign-owner" };
 
 export class CatalogWritePermitRefusal extends Error {
   readonly code = "CODEX_CATALOG_WRITE_PERMIT_REFUSED";
@@ -69,6 +89,8 @@ interface PermitRegistration {
   readonly canonicalCodexHome: string;
   /** Identifies the acquisition, so a permit cannot outlive its transaction. */
   readonly transactionId: string;
+  readonly intent: CatalogWriteIntent;
+  readonly writer: string;
   live: boolean;
 }
 
@@ -121,6 +143,17 @@ export function assertCatalogWritePermit(
   }
 }
 
+/** The intent and writer a live permit was minted for; the writer funnel applies its rules from these. */
+export function catalogWritePermitContext(
+  permit: CatalogWritePermit,
+): { readonly intent: CatalogWriteIntent; readonly writer: string } {
+  const registration = activePermits.get(permit as unknown as object);
+  if (!registration?.live) {
+    throw new CatalogWritePermitRefusal("The catalog write permit is not live.");
+  }
+  return { intent: registration.intent, writer: registration.writer };
+}
+
 /**
  * Acquire K for one canonical CODEX_HOME and run `write` while it is held.
  *
@@ -135,7 +168,23 @@ export function assertCatalogWritePermit(
 export function withCatalogWriteSerialization<T>(
   canonicalCodexHome: string,
   write: (permit: CatalogWritePermit) => T,
+  options: CatalogWriteOptions,
 ): CatalogSerializationOutcome<T> {
+  // Checked before K is even opened: a writer from another OPENCODEX_HOME gets no permit, so no
+  // catalog, backup or cache mutator below can run for it (#6529). It still leaves a trace, but
+  // only in an audit file the owner already created.
+  const owner = inspectCodexHomeOwner(canonicalCodexHome);
+  if (owner.kind === "foreign") {
+    appendCatalogWriteAudit(canonicalCodexHome, {
+      target: options.intent === "cache" ? "cache" : "catalog",
+      outcome: "refused",
+      reason: "foreign-owner",
+      intent: options.intent,
+      writer: options.writer,
+    }, { create: false });
+    return { kind: "unavailable", reason: "foreign-owner" };
+  }
+
   let databasePath: string;
   try {
     databasePath = resolveCodexCatalogSerializationDatabasePath(
@@ -192,6 +241,8 @@ export function withCatalogWriteSerialization<T>(
     registration = {
       canonicalCodexHome,
       transactionId: `${process.pid}:${acquisitionCounter}`,
+      intent: options.intent,
+      writer: options.writer,
       live: true,
     };
     // A bare object: nothing about it is guessable or reconstructable, because

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
+import { opencodexHomeForInjection } from "./codex-home-owner";
 import { hasInjectedCodexRouting } from "./injected-marker";
 import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
 
@@ -71,6 +72,12 @@ interface Journal {
    * file we actually touched.
    */
   injectedCatalogPath?: string | null;
+  /**
+   * The OPENCODEX_HOME that injected this Codex home. The catalog permit refuses writers from any
+   * other home (#6529); see `src/codex/codex-home-owner.ts`. Absent in journals written before the
+   * binding existed, which the next injection fills in.
+   */
+  opencodexHome?: string;
   pid: number;
   owner?: JournalOwner;
   timestamp: string;
@@ -155,7 +162,8 @@ export function writeJournal(options: WriteJournalOptions = {}): void {
   // The caller's verdict only authorizes REPLACEMENT. It is weaker evidence than
   // the check above (it may describe bytes read a moment earlier), so an
   // unclassified call creates a first snapshot but never overwrites one.
-  if (existsSync(JOURNAL_PATH) && readJournal() && options.currentStateIsNative !== true) return;
+  const previous = existsSync(JOURNAL_PATH) ? readJournal() : null;
+  if (previous && options.currentStateIsNative !== true) return;
   const profile = existsSync(CODEX_PROFILE_PATH)
     ? readFileSync(CODEX_PROFILE_PATH, "utf-8")
     : null;
@@ -163,6 +171,8 @@ export function writeJournal(options: WriteJournalOptions = {}): void {
     version: 1,
     originalConfig: Buffer.from(config).toString("base64"),
     originalProfile: profile !== null ? Buffer.from(profile).toString("base64") : null,
+    // A replacement snapshot keeps the binding: a new native baseline is not a new owner (#6529).
+    opencodexHome: opencodexHomeForInjection(previous?.opencodexHome),
     pid: process.pid,
     owner: options.owner?.kind === "client"
       ? { kind: "client", apiKeyId: options.owner.apiKeyId }
@@ -204,6 +214,7 @@ export function markJournalInjectedState(
   journal.injectedRootWebSearch = ownership.injectedRootWebSearch ?? null;
   journal.replacedRootWebSearch = ownership.replacedRootWebSearch ?? null;
   journal.injectedCatalogPath = ownership.injectedCatalogPath;
+  journal.opencodexHome = opencodexHomeForInjection(journal.opencodexHome);
   atomicWriteFile(JOURNAL_PATH, JSON.stringify(journal));
 }
 
