@@ -1,6 +1,6 @@
 import { formatErrorResponse } from "../../bridge";
+import { isAccountNeedsReauth } from "../../codex/account-runtime-state";
 import {
-  CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE,
   CodexAccountCooldownError,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
@@ -30,6 +30,20 @@ export function codexModelAvailabilityErrorResponse(error: CodexModelAvailabilit
   }
   return formatErrorResponse(400, "invalid_request_error", error.message);
 }
+
+/**
+ * The refusal a revoked or downgraded ChatGPT session earns, on the request that discovers it
+ * and on every request after.
+ *
+ * "No usable account credential" is true and useless: it reads as a proxy fault and sends the
+ * operator to the provider's status page. The two things they need are that the credential was
+ * rejected by OpenAI rather than by this proxy, and the command that fixes it.
+ */
+export const CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE =
+  "Codex account needs sign-in: OpenAI rejected its credential (token invalidated — revoked "
+  + "session or plan change). Run `codex login` to sign in again.";
+
+const DEFAULT_POOL_AUTHENTICATION_MESSAGE = new CodexPoolAuthenticationError().message;
 
 export function nativeMainRefreshFailureResponse(error: unknown): Response {
   if (error instanceof MainAccountTokenRefreshError && error.reason === "reauth") {
@@ -101,7 +115,13 @@ export function mapCodexAuthContextErrorToResponse(
     return codexModelAvailabilityErrorResponse(error);
   }
   if (error instanceof CodexPoolAuthenticationError || error instanceof CodexDirectAuthenticationError) {
-    return formatErrorResponse(401, "authentication_error", error.message);
+    // An empty pool because native main was quarantined, not because none is configured: say which,
+    // so the refusal names the thing the operator has to do.
+    const quarantinedMain = error instanceof CodexPoolAuthenticationError
+      && error.message === DEFAULT_POOL_AUTHENTICATION_MESSAGE
+      && isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    return formatErrorResponse(401, "authentication_error",
+      quarantinedMain ? CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE : error.message);
   }
   if (error instanceof CodexMainSubstitutionUnavailableError) {
     return formatErrorResponse(

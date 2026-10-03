@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearAccountNeedsReauth } from "../../src/codex/auth-api";
-import { CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE } from "../../src/codex/auth-context";
+import { CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE } from "../../src/server/responses/codex-auth-error";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
@@ -579,8 +579,16 @@ describe("native main 401 refresh and replay", () => {
     // profile for the turn, which needs a real admission lease. Without one the enrichment never
     // fires and the leg resolves to `main-pool` -- which is exactly why every earlier attempt to
     // reproduce the Mini from a leaseless harness came out already fixed.
-    const comboTurn = tryAdmitTurn();
-    expect(comboTurn).not.toBeNull();
+    // A fresh turn lease per request: reading a response to completion releases its lease, and a
+    // reused inactive lease would refuse the main-profile claim before refresh or send, letting the
+    // send-count assertions below pass without exercising the quarantine at all.
+    const turns: NonNullable<ReturnType<typeof tryAdmitTurn>>[] = [];
+    const freshTurn = () => {
+      const turn = tryAdmitTurn();
+      expect(turn).not.toBeNull();
+      turns.push(turn!);
+      return turn!;
+    };
     const warnings: string[] = [];
     const warnSpy = spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
       warnings.push(args.map(String).join(" "));
@@ -591,7 +599,7 @@ describe("native main 401 refresh and replay", () => {
         messagesRequest(),
         comboConfig,
         { model: "", provider: "" } as RequestLogContext,
-        { requestId: `combo-401-${crypto.randomUUID()}`, start: Date.now(), turnAdmissionLease: comboTurn! },
+        { requestId: `combo-401-${crypto.randomUUID()}`, start: Date.now(), turnAdmissionLease: freshTurn() },
       );
       await first.text();
     } finally {
@@ -620,7 +628,7 @@ describe("native main 401 refresh and replay", () => {
       messagesRequest(),
       comboConfig,
       { model: "", provider: "" } as RequestLogContext,
-      { requestId: `combo-401-${crypto.randomUUID()}`, start: Date.now(), turnAdmissionLease: comboTurn! },
+      { requestId: `combo-401-${crypto.randomUUID()}`, start: Date.now(), turnAdmissionLease: freshTurn() },
     );
     await second.text();
     expect(second.status).toBe(200);
@@ -644,13 +652,13 @@ describe("native main 401 refresh and replay", () => {
       messagesRequest(),
       comboConfig,
       { model: "", provider: "" } as RequestLogContext,
-      { requestId: `combo-401-${crypto.randomUUID()}`, start: Date.now(), turnAdmissionLease: comboTurn! },
+      { requestId: `combo-401-${crypto.randomUUID()}`, start: Date.now(), turnAdmissionLease: freshTurn() },
     );
     await third.text();
     expect(third.status).toBe(200);
     expect(fallbackSends).toBe(3);
     expect(codexSends).toHaveLength(1);
     expect(refreshes).toEqual(["refresh-grant"]);
-    comboTurn?.release();
+    for (const turn of turns) turn.release();
   });
 });

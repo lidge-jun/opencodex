@@ -569,7 +569,8 @@ export function classifyChatgptRefreshFailure(
       errCodeExact = typeof parsed.error.code === "string" ? parsed.error.code.trim() : undefined;
       errDesc = [parsed.error.code, parsed.error.message, parsed.error_description].filter(Boolean).join(": ");
     } else {
-      errDesc = parsed.error_description || `HTTP ${status}`;
+      errDesc = typeof parsed.error_description === "string" && parsed.error_description
+        ? parsed.error_description : `HTTP ${status}`;
     }
     if (!errDesc) errDesc = `HTTP ${status}`;
   } catch { errDesc = `HTTP ${status}`; }

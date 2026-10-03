@@ -8,7 +8,7 @@ import {
 } from "../../src/codex/account-usability";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
-import { CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE } from "../../src/codex/auth-context";
+import { CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE } from "../../src/server/responses/codex-auth-error";
 import { MAIN_CODEX_ACCOUNT_ID, MainAccountTokenRefreshError } from "../../src/codex/main-account";
 import { nativeMainRefreshFailureResponse } from "../../src/server/responses/codex-auth-error";
 import type { OcxConfig } from "../../src/types";
