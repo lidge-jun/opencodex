@@ -634,8 +634,12 @@ Proxy startup/ensure, `ocx claude`, and relevant dashboard saves sync your featu
   overwritten or pruned; your own agents are never touched.
 - Files are atomically synced per file (write + rename).
 - `enabled: false` or `injectAgents: false` prunes all verified-owned definitions.
+- Successful CLI first-party saves and persisted Desktop first-party setup also attempt best-effort
+  roster sync, including repeated setup to repair missing definitions. Refused setup and rollback
+  do not sync agents. Turning first-party off alone does not disable agent registration.
 - GUI PUT and roster changes resync immediately; every foreground or background proxy start/ensure
-  reconciles the owned files before a later Claude Code launch reads them.
+  reconciles the owned files before a later Claude Code launch reads them. Start a new Claude session
+  after registration so it loads the generated definitions.
 
 Dispatch: `subagent_type: "ocx-gpt-5-6-sol"`. 1M-capable targets carry `[1m]` automatically.
 

@@ -1194,6 +1194,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           const picker = modeSaved.ok && pickerPreferenceOn(loadConfig())
             ? await ops.enableLocked({ persist: false, context: "server" })
             : await pickerStatusFor(loadConfig());
+          if (modeSaved.ok) await syncClaudeAgentDefsBestEffort();
           return jsonResponse({
             ok: true,
             mode: "first-party",
@@ -1678,6 +1679,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const finalDesired = firstPartyDesired(config, observeClaudeDesktopMode(config));
       const residual = !finalDesired.desktop && !finalDesired.cli
         && readFirstPartyProxyStatus(config, bound?.proxyPort ?? null) !== "none";
+      await syncClaudeAgentDefsBestEffort();
       return jsonResponse({ ok: true, enabled: config.claudeCode?.enabled !== false,
         cliFirstParty: body.cliFirstParty,
         warnings: [

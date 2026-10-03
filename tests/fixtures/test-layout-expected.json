@@ -360,6 +360,7 @@
   "claude-desktop-remote-hub.test.ts": "claude-integration",
   "claude-dotenv-provenance-transport.test.ts": "claude-integration",
   "claude-estimate-projection.test.ts": "claude-integration",
+  "claude-first-party-agent-sync.test.ts": "claude-integration",
   "claude-first-party-union.test.ts": "claude-integration",
   "claude-desktop-system-proxy.test.ts": "claude-integration",
   "claude-gateway-cache.test.ts": "claude-integration",
