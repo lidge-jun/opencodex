@@ -3640,6 +3640,8 @@ export const pt: Record<TKey, string> = {
   "remoteLink.error.join_in_progress": "Não foi possível concluir a solicitação de vínculo remoto.",
   "remoteLink.error.join_port_failed": "Não foi possível concluir a solicitação de vínculo remoto.",
   "remoteLink.error.join_port_mismatch": "O OpenCodex não está rodando na porta configurada, por isso não pode reiniciar como Child. Reinicie o OpenCodex na porta configurada e tente novamente.",
+  "remoteLink.joinDenied.pairing_required": "Emparelhe este computador primeiro para conectá-lo como Child. Abra o painel deste computador pelo endereço de loopback e insira um código de emparelhamento de uso único criado pelo operador.",
+  "remoteLink.joinDenied.unavailable": "Não é possível conectar como Child nesta sessão do painel. Atualize o status e verifique as configurações de emparelhamento e de runtime deste computador.",
   "remoteLink.error.join_rollback_failed": "A entrada falhou e o vínculo no Home não pôde ser removido. Tente a limpeza novamente ou execute ocx link revoke no Home.",
   "remoteLink.error.join_restart_failed": "O vínculo está pronto. Reinicie o OpenCodex neste computador para concluir a conexão como Child.",
   "remoteLink.error.join_connect_failed": "Não foi possível concluir a solicitação de vínculo remoto.",

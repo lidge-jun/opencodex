@@ -3669,6 +3669,8 @@ export const ja: Record<TKey, string> = {
   "remoteLink.error.join_restart_failed": "リンクの準備ができました。このコンピューターで OpenCodex を再起動して、子としての接続を完了してください。",
   "remoteLink.error.join_port_failed": "リモートリンク要求を完了できませんでした。",
   "remoteLink.error.join_port_mismatch": "OpenCodex が設定されたポートで動作していないため、子として再起動できません。設定されたポートで OpenCodex を再起動してから、もう一度お試しください。",
+  "remoteLink.joinDenied.pairing_required": "子として接続するには、まずこのコンピューターをペアリングしてください。このコンピューターの loopback アドレスでダッシュボードを開き、管理者が作成したワンタイムペアリングコードを入力してください。",
+  "remoteLink.joinDenied.unavailable": "このダッシュボードセッションでは、子として接続できません。状態を更新し、このコンピューターのペアリングとランタイムの設定を確認してください。",
   "remoteLink.error.join_connect_failed": "リモートリンク要求を完了できませんでした。",
   "link.noChildren": "接続された子コンピューターはありません。",
   "remoteLink.status.connecting": "接続中",

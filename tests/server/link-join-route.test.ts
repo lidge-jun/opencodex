@@ -151,16 +151,13 @@ describe("client initiated link join", () => {
     }
   });
 
-  test("admits the current loopback dashboard session of a standalone on trusted loopback ingress", async () => {
-    // Turning a Child on from its own dashboard: the local session joins, while stale sessions,
-    // untrusted ingress and other runtime roles are refused before a join starts.
+  test("requires an operator-paired dashboard session before joining", async () => {
     let joins = 0;
     const deps = { joinHome: async () => { joins += 1; return { linkId: LINK_ID, apiKeyId: API_KEY_ID }; } };
     const loopback = { principal: "gui-session" as const, issuance: "loopback" as const, deps };
-    const joined = await handleLinkRoutes(context({ ...loopback, trustedLoopback: true }), routeState());
-    expect(joined?.status).toBe(202);
-    expect(await joined?.json()).toEqual({ linkId: LINK_ID, alias: "home", restarting: true });
-    expect(joins).toBe(1);
+    const credentialless = await handleLinkRoutes(context({ ...loopback, trustedLoopback: true }), routeState());
+    expect(credentialless?.status).toBe(403);
+    expect(joins).toBe(0);
 
     for (const options of [
       { role: "standalone" as const, trustedLoopback: true, current: false },
@@ -175,11 +172,11 @@ describe("client initiated link join", () => {
     const tailscale = await handleLinkRoutes(context({ ...loopback, issuance: "tailscale-identity" }), routeState());
     expect(tailscale?.status).toBe(403);
     expect(await tailscale?.json()).toMatchObject({ error: { code: "tailscale_session_refused" } });
-    expect(joins).toBe(1);
+    expect(joins).toBe(0);
 
     const paired = await handleLinkRoutes(context({ principal: "gui-session", issuance: "pairing", paired: true, deps }), routeState());
     expect(paired?.status).toBe(202);
-    expect(joins).toBe(2);
+    expect(joins).toBe(1);
   });
 
   test("refuses a join whose restart could not bind the configured port, before any SSH", async () => {
@@ -191,7 +188,7 @@ describe("client initiated link join", () => {
     };
     for (const livePort of [CONFIG_PORT + 1, undefined]) {
       const response = await handleLinkRoutes({
-        ...context({ principal: "gui-session", issuance: "loopback", deps }),
+        ...context({ principal: "gui-session", issuance: "pairing", paired: true, deps }),
         deps: { ...deps, liveListenPort: () => livePort },
       }, routeState());
       expect(response?.status).toBe(409);

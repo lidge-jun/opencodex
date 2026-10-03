@@ -17,7 +17,7 @@ import {
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import { ConfigMutationLockError } from "../config";
 import { NativeProfileError } from "./native-profile-types";
-import { isCodexAccountUsable } from "./account-usability";
+import { codexAccountUnusableReason, isCodexAccountUsable } from "./account-usability";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import {
   MAIN_CODEX_ACCOUNT_ID,
@@ -379,9 +379,11 @@ export class CodexAuthContextError extends Error {
 }
 
 export class CodexPoolAuthenticationError extends Error {
-  constructor(message = "OpenAI account pool has no usable account credential") {
+  readonly quarantinedMain: boolean;
+  constructor(message = "OpenAI account pool has no usable account credential", options?: { quarantinedMain?: boolean }) {
     super(message);
     this.name = "CodexPoolAuthenticationError";
+    this.quarantinedMain = options?.quarantinedMain === true;
   }
 }
 
@@ -922,7 +924,7 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
     && !(cause instanceof CodexCredentialRefreshBusyError)
     && !(cause instanceof CodexCredentialRefreshStaleError)
     && !(cause instanceof MainAuthJsonChangedDuringRefreshError)
-    && !(cause instanceof MainAccountTokenRefreshError && cause.reason === "transient")
+    && !(cause instanceof MainAccountTokenRefreshError)
     && !(cause instanceof NativeProfileError && cause.retryable)
     && !(cause instanceof DOMException && cause.name === "AbortError")
     && !(cause instanceof ConfigMutationLockError);
@@ -1316,7 +1318,12 @@ export async function resolveCodexAuthContext(
             "Selected Codex account does not support this model",
           );
         }
-        throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
+        const mainReason = fixedAccountId === MAIN_CODEX_ACCOUNT_ID && !nativeMainReadsForbidden
+          && !policy.pausedCodexAccountIds?.includes(fixedAccountId)
+          ? codexAccountUnusableReason(config, fixedAccountId, selectionOptions) : undefined;
+        throw new CodexPoolAuthenticationError("Selected Codex account is unavailable", {
+          quarantinedMain: mainReason === "needs_reauth",
+        });
       }
       // Recovery or a turn drain deliberately makes physical main unobservable.
       // If no healthy pool route is available, report the temporary fence rather
@@ -1341,7 +1348,12 @@ export async function resolveCodexAuthContext(
             : "Codex accounts that support this model are currently unavailable",
         );
       }
-      throw new CodexPoolAuthenticationError();
+      throw new CodexPoolAuthenticationError(undefined, {
+        quarantinedMain: !nativeMainReadsForbidden
+          && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
+          && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
+          && codexAccountUnusableReason(config, MAIN_CODEX_ACCOUNT_ID, selectionOptions) === "needs_reauth",
+      });
     }
     accountId = selected;
     if (accountId === MAIN_CODEX_ACCOUNT_ID) assertMainAccountPolicy(policy);
@@ -1372,10 +1384,15 @@ export async function resolveCodexAuthContext(
         throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
       }
       if (isAccountNeedsReauth(accountId)) {
-        throw new CodexPoolAuthenticationError("Selected Codex account needs reauthentication");
+        throw new CodexPoolAuthenticationError("Selected Codex account needs reauthentication", {
+          quarantinedMain: accountId === MAIN_CODEX_ACCOUNT_ID && !nativeMainReadsForbidden,
+        });
       }
-      if (!isCodexAccountUsable(config, accountId, selectionOptions)) {
-        throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
+      const unusableReason = codexAccountUnusableReason(config, accountId, selectionOptions);
+      if (unusableReason !== undefined) {
+        throw new CodexPoolAuthenticationError("Selected Codex account is unavailable", {
+          quarantinedMain: accountId === MAIN_CODEX_ACCOUNT_ID && unusableReason === "needs_reauth",
+        });
       }
     }
   } catch (cause) {

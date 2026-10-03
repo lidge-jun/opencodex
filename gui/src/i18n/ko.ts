@@ -3669,6 +3669,8 @@ export const ko: Record<TKey, string> = {
   "remoteLink.error.join_restart_failed": "링크가 준비되었습니다. 이 컴퓨터에서 OpenCodex를 다시 시작해 자식 연결을 완료하세요.",
   "remoteLink.error.join_port_failed": "원격 연결 요청을 완료하지 못했습니다.",
   "remoteLink.error.join_port_mismatch": "OpenCodex가 설정된 포트에서 실행되고 있지 않아 자식으로 다시 시작할 수 없습니다. 설정된 포트에서 OpenCodex를 다시 시작한 뒤 다시 시도하세요.",
+  "remoteLink.joinDenied.pairing_required": "자식으로 연결하려면 먼저 이 컴퓨터를 페어링하세요. 루프백 주소로 이 컴퓨터의 대시보드를 열고 운영자가 생성한 일회용 페어링 코드를 입력하세요.",
+  "remoteLink.joinDenied.unavailable": "이 대시보드 세션에서는 자식으로 연결할 수 없습니다. 상태를 새로고침하고 이 컴퓨터의 페어링 및 런타임 설정을 확인하세요.",
   "remoteLink.error.join_connect_failed": "원격 연결 요청을 완료하지 못했습니다.",
   "link.noChildren": "연결된 자식 컴퓨터가 없습니다.",
   "remoteLink.status.connecting": "연결 중",

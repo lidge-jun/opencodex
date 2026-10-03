@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 import { act } from "react";
 import RemoteLink from "../src/pages/RemoteLink";
-import { boundLinkHint, CHILD_RESTART_NOTICE_MS, CHILD_RESTART_POLL_MS, CHILD_RESTART_SLOW_POLL_MS, LINK_ERROR_CODES, LinkApiError, parseRemoteLinkStatus, readLinkJson, waitForChildRuntime, type RemoteLinkStatusWire } from "../src/remote-link-api";
+import { boundLinkHint, CHILD_RESTART_NOTICE_MS, CHILD_RESTART_POLL_MS, CHILD_RESTART_SLOW_POLL_MS, LINK_ERROR_CODES, LINK_JOIN_DENIALS, LinkApiError, parseRemoteLinkStatus, readLinkJson, waitForChildRuntime, type RemoteLinkStatusWire } from "../src/remote-link-api";
 import { LanguageProvider } from "../src/i18n/provider";
 import { LOCALES } from "../src/i18n/shared";
 
@@ -74,6 +74,69 @@ test("joinAvailable is true only when the server says exactly true", () => {
   expect(parseRemoteLinkStatus({ ...baseStatus, joinAvailable: true }).joinAvailable).toBe(true);
 });
 
+test("joinDenied accepts only known causes and tolerates legacy or future status responses", () => {
+  for (const joinDenied of LINK_JOIN_DENIALS) {
+    expect(parseRemoteLinkStatus({ ...baseStatus, joinDenied }).joinDenied).toBe(joinDenied);
+  }
+  for (const joinDenied of [undefined, null, "future_gate", true, 1, {}, []]) {
+    const parsed = parseRemoteLinkStatus({ ...baseStatus, joinDenied });
+    expect(parsed.joinDenied).toBeNull();
+    expect(parsed.joinAvailable).toBe(false);
+  }
+  expect(parseRemoteLinkStatus(joinableStatus).joinAvailable).toBe(true);
+});
+
+test.each([
+  ["pairing_required", "Pair this machine first to join as a Child.", true],
+  ["standalone_required", "Child links can only be started from a standalone runtime.", false],
+  ["join_port_mismatch", "OpenCodex is not running on its configured port", false],
+  [undefined, "Joining as a Child is unavailable for this dashboard session.", false],
+  ["future_gate", "Joining as a Child is unavailable for this dashboard session.", false],
+] as const)("disabled Child explains %s without issuing a mutation", async (joinDenied, message, showPairing) => {
+  win.happyDOM.setURL("http://127.0.0.1:10100/#remote");
+  declareRuntimeRole("standalone");
+  const calls: Array<{ path: string; method: string }> = [];
+  globalThis.fetch = (async (input, init) => {
+    calls.push({ path: new URL(String(input)).pathname, method: init?.method ?? "GET" });
+    return response({ ...baseStatus, role: "standalone", joinAvailable: false, joinDenied });
+  }) as typeof fetch;
+  const host = await mount({ apiBase: win.location.origin });
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  const radios = [...host.querySelectorAll('[role="radio"]')] as HTMLButtonElement[];
+  expect(radios[1]?.getAttribute("aria-disabled")).toBe("true");
+  expect(host.textContent).toContain(message);
+  if (joinDenied !== "join_port_mismatch") expect(host.textContent).not.toContain("OpenCodex is not running on its configured port");
+  expect(host.querySelector(".connect-pairing") !== null).toBe(showPairing);
+  await act(async () => { radios[1]?.click(); });
+  for (const key of ["ArrowRight", "ArrowDown", "End"]) {
+    await act(async () => { radios[0]?.dispatchEvent(new win.KeyboardEvent("keydown", { key, bubbles: true })); });
+  }
+  expect(radios[1]?.getAttribute("aria-checked")).toBe("false");
+  expect(radios[1]?.tabIndex).toBe(-1);
+  expect(calls.every(call => call.path === "/api/link/status" && call.method === "GET")).toBe(true);
+});
+
+test("refreshing a now-paired status removes pairing guidance without automatically joining", async () => {
+  win.happyDOM.setURL("http://127.0.0.1:10100/#remote");
+  declareRuntimeRole("standalone");
+  let current: RemoteLinkStatusWire = { ...baseStatus, role: "standalone", joinDenied: "pairing_required" };
+  const calls: Array<{ path: string; method: string }> = [];
+  globalThis.fetch = (async (input, init) => {
+    calls.push({ path: new URL(String(input)).pathname, method: init?.method ?? "GET" });
+    return response(current);
+  }) as typeof fetch;
+  const host = await mount({ apiBase: win.location.origin });
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  expect(host.querySelector(".connect-pairing")).not.toBeNull();
+  current = { ...joinableStatus, joinDenied: null };
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent === "Refresh")?.click(); });
+  await flush();
+  expect(host.textContent).not.toContain("Pair this machine first");
+  expect(host.querySelector(".connect-pairing")).toBeNull();
+  expect(host.querySelectorAll('[role="radio"]')[1]?.getAttribute("aria-disabled")).toBe("false");
+  expect(calls.every(call => call.path === "/api/link/status" && call.method === "GET")).toBe(true);
+});
+
 test("session gate makes no link request", async () => {
   const calls: string[] = [];
   globalThis.fetch = (async input => { calls.push(String(input)); return response(baseStatus); }) as typeof fetch;
@@ -125,7 +188,7 @@ test("a standalone off its configured port keeps Child disabled, explains why, a
     if (path === "/api/link/confirm-host") return response({ alias: "home-one", fingerprint: "SHA256:test", ocxVersion: "2.66.0" });
     if (path === "/api/link/join") return response({ linkId: "lnk_1234567890abcdef", alias: "home-one", restarting: true }, 202);
     if (path === "/api/link/apply") return response({ linkId: "lnk_1234567890abcdef" }, 202);
-    return response({ ...baseStatus, role: "standalone", joinAvailable: false });
+    return response({ ...baseStatus, role: "standalone", joinAvailable: false, joinDenied: "join_port_mismatch" });
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });

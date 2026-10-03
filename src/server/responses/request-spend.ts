@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
-import { sharedSpendLedger, type SpendReservationLedger } from "../../lib/spend-reservation-ledger";
+import { sharedSpendLedger, type SpendReservationLedger, type SpendScopes } from "../../lib/spend-reservation-ledger";
 import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
-import { recordWorkflowRefusalEvent, workflowDenialSummary } from "../../lib/workflow-budget";
+import { recordWorkflowRefusalEvent, workflowDenialSummary, type WorkflowDenial } from "../../lib/workflow-budget";
 
 /** The terminal usage a request reported, in the only two fields the ledger books. */
 export interface TerminalSpendUsage {
@@ -81,44 +81,44 @@ export function createRequestSpendTracker(
       // short of its limit forever and refuse nothing.
       const alreadySent = options?.alreadySent === true;
       const sendId = randomUUID();
-      const decision = ledger().reserve({
+      const bookedLedger = ledger();
+      const scopes: SpendScopes = {
+        ...(rootId !== undefined ? { rootId } : {}),
+        // The existing privacy-safe log label is aliased again by the ledger.
+        ...(logCtx.accountLogLabel !== undefined ? { identityId: logCtx.accountLogLabel } : {}),
+        ...(logCtx.provider !== undefined ? { poolId: logCtx.provider } : {}),
+      };
+      const policy = bookedLedger.policy;
+      const enforced = (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
+        || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
+        || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
+      const decision = bookedLedger.reserve({
         sendId,
-        scopes: {
-          ...(rootId !== undefined ? { rootId } : {}),
-          // Already the privacy-safe label the request log uses, and the ledger aliases it
-          // again on the way to disk. A raw credential never reaches either.
-          ...(logCtx.accountLogLabel !== undefined ? { identityId: logCtx.accountLogLabel } : {}),
-          ...(logCtx.provider !== undefined ? { poolId: logCtx.provider } : {}),
-        },
+        scopes,
         inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
         outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0,
         ...(alreadySent ? { alreadySent: true } : {}),
       });
       if (!decision.reserved) {
+        // An applicable ceiling cannot authorize an unbooked send, including when tracking
+        // capacity is full. Unconfigured/nonapplicable requests remain observe-only, and a
+        // physical send reported after dispatch cannot be refused retroactively.
+        if (alreadySent || !enforced) return true;
         refusals += 1;
         const denial = decision.denial;
-        // A ceiling refuses, and so does a ledger that cannot make the reservation durable
-        // under one. That second case is the whole reason this store is on disk: admitting a
-        // send whose record a restart would forget is how an exhausted budget comes back with
-        // a fresh allowance, and the ledger raises those two denials ONLY when a limit is
-        // configured -- so an install that configured nothing is still never refused here.
-        // Capacity and a duplicate send id stay permissive: they say the ledger cannot account
-        // for this send, which is a degradation to report, not an outage to cause.
-        if (denial.reason === "reserve-not-durable" || denial.reason === "journal-corrupt") {
-          return alreadySent;
-        }
-        if (denial.reason !== "spend-limit-exceeded") return true;
-        // This send is refused, and the dispatch path that asked will report an exhausted send
-        // budget -- from there, that is all it can see. The row is where an operator actually
-        // looks, so the ceiling is named on it here: a locally assigned code wins in
-        // addFinalRequestLog, so the request that CROSSED the ceiling reads as a spend refusal
-        // rather than as the ordinary budget exhaustion it would otherwise be indistinguishable
-        // from. The event ring gets the same pair so /api/workflow-budget agrees with the row.
-        const detail = { scope: denial.scope, limit: denial.limit, projected: denial.projected };
-        const summary = workflowDenialSummary("workflow-spend-exhausted", detail);
+        const reason: WorkflowDenial = denial.reason === "duplicate-send-id"
+          ? "workflow-send-replayed"
+          : denial.reason === "reserve-not-durable" || denial.reason === "journal-corrupt"
+            ? "workflow-spend-undurable"
+            : denial.reason === "tracking-capacity-exhausted"
+              ? "workflow-tracking-exhausted"
+              : "workflow-spend-exhausted";
+        const detail = denial.reason === "spend-limit-exceeded"
+          ? { scope: denial.scope, limit: denial.limit, projected: denial.projected } : undefined;
+        const summary = workflowDenialSummary(reason, detail);
         markLocalRequestLogRefusal(logCtx, summary.code);
         logCtx.errorCode = summary.code;
-        recordWorkflowRefusalEvent(rootId, "workflow-spend-exhausted", Date.now(), detail);
+        recordWorkflowRefusalEvent(rootId, reason, Date.now(), detail);
         return false;
       }
       live.push(sendId);

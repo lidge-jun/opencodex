@@ -8,7 +8,7 @@ import {
   pickComboTarget,
   targetKey,
 } from "../../src/combos";
-import { comboFailureCooldownScope, comboFailureDecision } from "../../src/combos/failover";
+import { codexAccountModelRefusalHardStopCode, comboFailureCooldownScope, comboFailureDecision } from "../../src/combos/failover";
 import { adapterFailureFromMessage, inferHttpStatusFromAdapterMessage } from "../../src/lib/errors";
 import type { OcxConfig } from "../../src/types";
 
@@ -114,6 +114,90 @@ describe("combo failure hop/stop verdicts", () => {
     for (const code of ["model_not_found", "model_unavailable", "unsupported_model"]) {
       expect(comboFailureDecision(400, "upstream rejected the model", { code })).toBe("hop");
     }
+  });
+
+  test("a Codex model the ChatGPT plan cannot use hops instead of ending the chain", () => {
+    const body = JSON.stringify({ detail: "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account." });
+    expect(comboFailureDecision(400, body)).toBe("hop");
+    expect(comboFailureDecision(400, JSON.stringify({ detail: "The 'gpt-6-astra' model is invalid." }))).toBe("stop");
+    const refusal = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
+    expect(comboFailureDecision(400, refusal)).toBe("hop");
+    expect(comboFailureDecision(400, JSON.stringify({ error: { message: refusal } }))).toBe("hop");
+    // Quoted in an unrelated field, or embedded in other prose, it is not the refusal.
+    expect(comboFailureDecision(400, JSON.stringify({ detail: "bad input", echo: refusal }))).toBe("stop");
+    expect(comboFailureDecision(400, `Your prompt said: ${refusal}`)).toBe("stop");
+  });
+
+  test("ambiguous plan refusal stops before a conflicting model-code hop", () => {
+    const refusal = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
+    for (const error of [null, { message: "bad input" }, { code: "unsupported_model", message: "bad input" }]) {
+      const body = JSON.stringify({ detail: refusal, error });
+      expect(comboFailureDecision(400, body, { code: "unsupported_model" })).toBe("stop");
+      expect(comboFailureDecision(400, `Provider error 400: ${body}`, { code: "unsupported_model" })).toBe("stop");
+    }
+    expect(comboFailureDecision(400, refusal, { code: "origin_rejected" })).toBe("stop");
+    expect(comboFailureDecision(400, refusal, { code: "upstream_no_response" })).toBe("stop");
+    expect(comboFailureDecision(499, refusal)).toBe("stop");
+    expect(comboFailureDecision(503, refusal)).toBe("hop");
+    expect(comboFailureDecision(400, refusal, { codexModelRefusal: "other" })).toBe("stop");
+    expect(comboFailureDecision(400, JSON.stringify({ error: [{ message: refusal }] }))).toBe("stop");
+    expect(comboFailureDecision(400, JSON.stringify({ detail: refusal, extra: "x".repeat(16_384) }))).toBe("stop");
+  });
+
+  test("plan ambiguity depends on field presence across exactly two supported levels", () => {
+    const refusal = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
+    const details = [refusal, "bad input", null, undefined];
+    const errors = [{ message: refusal }, { message: "bad input" }, null, undefined];
+    for (const detailLevel of ["root", "response"]) {
+      for (const errorLevel of ["root", "response"]) {
+        for (const detail of details) {
+          for (const error of errors) {
+            const root: Record<string, unknown> = {};
+            const response: Record<string, unknown> = {};
+            (detailLevel === "root" ? root : response).detail = detail;
+            (errorLevel === "root" ? root : response).error = error;
+            root.response = response;
+            // Undefined keys disappear on the wire; null remains a present carrier.
+            const expected = detail !== undefined && error !== undefined ? "stop" : "hop";
+            expect(comboFailureDecision(400, JSON.stringify(root), { code: "unsupported_model" })).toBe(expected);
+          }
+        }
+      }
+    }
+    for (const response of [null, [], [{ error: null }], { quoted: { detail: null, error: null } },
+      { detail: refusal }, { response: { error: null } }]) {
+      expect(comboFailureDecision(400, JSON.stringify({ detail: refusal, response }))).toBe("hop");
+    }
+    expect(comboFailureDecision(400, JSON.stringify({ error: { message: refusal },
+      response: { error: null } }))).toBe("hop");
+  });
+
+  test("nested HTTP refusal selects one carrier without borrowing body metadata", () => {
+    const refusal = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
+    for (const response of [{ detail: refusal }, { error: { message: refusal } }]) {
+      const body = JSON.stringify({ response });
+      expect(comboFailureDecision(400, body)).toBe("hop");
+      expect(comboFailureDecision(400, `Provider error 400: ${body}`)).toBe("hop");
+      expect(comboFailureDecision(400, body, { codexModelRefusal: "other" })).toBe("stop");
+      expect(comboFailureDecision(400, body, { code: "origin_rejected" })).toBe("stop");
+      expect(comboFailureDecision(400, body, { code: "upstream_no_response" })).toBe("stop");
+      expect(comboFailureDecision(400, body, { code: "cyber_policy" })).toBe("stop");
+      expect(comboFailureDecision(499, body)).toBe("stop");
+      expect(comboFailureDecision(422, body)).toBe("stop");
+      expect(comboFailureDecision(400, body.slice(0, -1))).toBe("stop");
+      expect(comboFailureDecision(400, JSON.stringify({ response, padding: "x".repeat(16_384) }))).toBe("stop");
+    }
+    expect(comboFailureDecision(400, JSON.stringify({ response: { error: {
+      code: "upstream_no_response", message: refusal,
+    } } }), { code: "unsupported_model", codexModelRefusal: "other" })).toBe("hop");
+    for (const body of [
+      { detail: null, response: { detail: refusal } },
+      { detail: "bad input", response: { detail: refusal } },
+      { error: null, response: { error: { message: refusal } } },
+      { error: { message: "bad input" }, response: { error: { message: refusal } } },
+      { response: { error: { message: "bad input" } }, codexModelRefusal: "refusal" },
+      { response: { error: { message: "bad input" }, codexModelRefusal: "refusal" } },
+    ]) expect(comboFailureDecision(400, JSON.stringify(body))).toBe("stop");
   });
 
   test("402 and 425 hop instead of ending the chain", () => {
@@ -513,6 +597,34 @@ describe("response_format capability refusal, second gateway", () => {
     ]) {
       expect(comboFailureDecision(400, JSON.stringify({ error: { ...refusal, message } })))
         .toBe("stop");
+    }
+  });
+});
+
+describe("HTTP hard-code evidence excludes diagnostic types", () => {
+  test("code/type matrix inspects dedicated code fields only at either level", () => {
+    const codes: Array<[unknown, string | undefined]> = [
+      ["cyber_policy", "cyber_policy"], ["upstream_no_response", "upstream_no_response"],
+      ["origin-rejected", "origin_rejected"], ["unsupported_model", undefined], ["unknown_code", undefined],
+      ["", undefined], ["  ", undefined], [undefined, undefined], [null, undefined], [17, undefined], [{}, undefined],
+    ];
+    for (const nested of [false, true]) {
+      for (const [code, expected] of codes) {
+        for (const type of ["cyber_policy", "upstream_no_response", "upstream_reset_replay_refused", "origin_rejected", "invalid_request_error", null, undefined]) {
+          const record = { error: { code, type, message: "fixture failure" } };
+          const body = JSON.stringify(nested ? { response: record } : record);
+          expect(codexAccountModelRefusalHardStopCode(400, body)).toBe(expected);
+        }
+      }
+    }
+  });
+
+  test("a genuine code in another record still wins over a nonhard code and diagnostic type", () => {
+    const diagnostic = { error: { code: "unsupported_model", type: "cyber_policy", message: "fixture failure" } };
+    const hard = { code: "upstream_no_response" };
+    for (const body of [{ ...diagnostic, response: hard }, { ...hard, response: diagnostic }]) {
+      expect(codexAccountModelRefusalHardStopCode(400, JSON.stringify(body))).toBe("upstream_no_response");
+      expect(comboFailureDecision(400, JSON.stringify(body))).toBe("stop");
     }
   });
 });

@@ -2,8 +2,7 @@ import { readCodexAccountRecord } from "./account-store";
 import { isAccountNeedsReauth } from "./account-runtime-state";
 import {
   MAIN_CODEX_ACCOUNT_ID,
-  hasMainAccountRefreshGrant,
-  isMainAccountCredentialUsable,
+  getMainAccountCredentialStatus,
   isMainAccountTokenLive,
 } from "./main-account";
 import { hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount } from "./account-id";
@@ -14,7 +13,7 @@ import { isMainAccountHardLocked } from "./main-account-hard-lock";
 export interface CodexAccountUsabilityOptions {
   /** Route using cached runtime state only; the caller must reject selected main before auth. */
   nativeMainSelectionOnly?: boolean;
-  /** Test seam for proving whether routing attempted a physical native-token read. */
+  /** Liveness override; ownership/read fences independently control physical credential reads. */
   isMainAccountTokenLive?: typeof isMainAccountTokenLive;
   /** Confirmed account ids for an account-gated model; omitted for ordinary native models. */
   modelEligibleAccountIds?: ReadonlySet<string>;
@@ -88,15 +87,19 @@ export function codexAccountUnusableReason(
     // A legacy pool row with the sentinel makes an active `__main__` ambiguous.
     // Fail closed until the authenticated compatibility-delete path removes it.
     if (hasLegacyMainCodexPoolAccount(config.codexAccounts)) return "legacy_pool_sentinel";
-    if (isAccountNeedsReauth(accountId) && !hasMainAccountRefreshGrant()) return "needs_reauth";
-    // A selection-only caller owns the recovery/drain fence and will reject main
-    // before reservation or token materialization. Treat cached main as a routing
-    // candidate without touching the credential file so affinity is not rebound.
+    // These scopes cannot consume physical stored-main state, even indirectly through an
+    // ordinary quarantine plus hasMainAccountRefreshGrant(). Caller liveness is request-owned.
     if (options.nativeMainSelectionOnly) return undefined;
+    if (options.requestOwnedMainCredential) {
+      return options.isMainAccountTokenLive?.() === false ? "main_credential_unavailable" : undefined;
+    }
+    const credential = getMainAccountCredentialStatus();
+    if (credential.refreshGrantRejected) return "needs_reauth";
+    if (isAccountNeedsReauth(accountId) && !credential.hasRefreshGrant) return "needs_reauth";
     // Main account: a refresh grant is enough to route; materialization refreshes before I/O.
     const mainLive = options.isMainAccountTokenLive
       ? options.isMainAccountTokenLive()
-      : isMainAccountCredentialUsable();
+      : credential.usable;
     return mainLive ? undefined : "main_credential_unavailable";
   }
   const exists = (config.codexAccounts ?? [])

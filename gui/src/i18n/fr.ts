@@ -3636,6 +3636,8 @@ export const fr: Record<TKey, string> = {
   "remoteLink.error.join_restart_failed": "Le lien est prêt. Redémarrez OpenCodex sur cet ordinateur pour terminer la connexion en tant qu’Enfant.",
   "remoteLink.error.join_port_failed": "La demande de lien distant n’a pas pu aboutir.",
   "remoteLink.error.join_port_mismatch": "OpenCodex ne tourne pas sur son port configuré et ne peut donc pas redémarrer comme Enfant. Redémarrez OpenCodex sur son port configuré, puis réessayez.",
+  "remoteLink.joinDenied.pairing_required": "Associez d’abord cet ordinateur pour le connecter en tant qu’Enfant. Ouvrez son tableau de bord via son adresse de bouclage et saisissez un code d’association à usage unique créé par l’opérateur.",
+  "remoteLink.joinDenied.unavailable": "La connexion en tant qu’Enfant n’est pas disponible dans cette session du tableau de bord. Actualisez l’état et vérifiez les paramètres d’association et d’exécution de cet ordinateur.",
   "remoteLink.error.join_connect_failed": "La demande de lien distant n’a pas pu aboutir.",
   "link.noChildren": "Aucun ordinateur enfant connecté.",
   "remoteLink.status.connecting": "Connexion",

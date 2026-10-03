@@ -3633,6 +3633,8 @@ export const zhTW: Record<TKey, string> = {
   "remoteLink.error.join_restart_failed": "連線已準備就緒。請在此電腦上重新啟動 OpenCodex，以完成作為子裝置的連線。",
   "remoteLink.error.join_port_failed": "無法完成遠端連線要求。",
   "remoteLink.error.join_port_mismatch": "OpenCodex 未在其設定的連接埠上執行，因此無法以子裝置身分重新啟動。請在設定的連接埠上重新啟動 OpenCodex，然後再試一次。",
+  "remoteLink.joinDenied.pairing_required": "請先配對此電腦，再以子裝置身分連線。透過此電腦的 loopback 位址開啟儀表板，並輸入管理員建立的一次性配對碼。",
+  "remoteLink.joinDenied.unavailable": "此儀表板工作階段無法以子裝置身分連線。請重新整理狀態，並檢查此電腦的配對與執行環境設定。",
   "remoteLink.error.join_connect_failed": "無法完成遠端連線要求。",
   "link.noChildren": "沒有已連線的子裝置。",
   "remoteLink.status.connecting": "連線中",

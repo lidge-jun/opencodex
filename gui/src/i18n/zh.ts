@@ -3668,6 +3668,8 @@ export const zh: Record<TKey, string> = {
   "remoteLink.error.join_restart_failed": "连接已准备就绪。请在此电脑上重启 OpenCodex，以完成作为子设备的连接。",
   "remoteLink.error.join_port_failed": "无法完成远程连接请求。",
   "remoteLink.error.join_port_mismatch": "OpenCodex 未在其配置的端口上运行，因此无法以子设备身份重启。请在配置的端口上重启 OpenCodex，然后重试。",
+  "remoteLink.joinDenied.pairing_required": "请先配对此电脑，再以子设备身份连接。通过此电脑的 loopback 地址打开仪表盘，并输入管理员创建的一次性配对码。",
+  "remoteLink.joinDenied.unavailable": "此仪表盘会话无法以子设备身份连接。请刷新状态，并检查此电脑的配对与运行时设置。",
   "remoteLink.error.join_connect_failed": "无法完成远程连接请求。",
   "link.noChildren": "没有已连接的子设备。",
   "remoteLink.status.connecting": "连接中",

@@ -7,8 +7,8 @@ import { getAccountQuota, isCompleteCodexQuotaRecoverySnapshot } from "../quota"
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
 import { claimDueCodexQuotaRecoveryProbes, settleCodexQuotaRecoveryProbe } from "../routing";
 import { readCodexTokens } from "../auth-collision";
-import { isAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
-import { getValidMainAccountToken, MainAccountTokenRefreshError, MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
+import { isAccountNeedsReauth } from "../account-runtime-state";
+import { getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
 import { captureConfigGeneration, registerStateSweepAfterTick } from "../../lib/state-store-sweeper";
 import { observeMainQuotaCredential, getMainQuotaCredentialGeneration, captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive } from "../main-account-cache";
 import { getMainAccountHardLockStatus } from "../main-account-hard-lock";
@@ -101,18 +101,14 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
     if (getMainAccountHardLockStatus(config).state !== "blocked"
       || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
     const identityGeneration = captureMainAccountIdentityGeneration();
-    const writerGeneration = captureConfigGeneration();
     try {
       // Refresh can require an exclusive credential claim: never hold WHAM's shared
       // claim while obtaining a valid token. The runtime lease spans both operations.
       const prepared = await getValidMainAccountToken({ preserveReauth: true });
       if (!prepared) return;
       observeMainQuotaCredential(prepared.accessToken, prepared.chatgptAccountId);
-    } catch (error) {
-      if (error instanceof MainAccountTokenRefreshError && error.reason === "reauth"
-        && isMainAccountIdentityGenerationLive(identityGeneration)) {
-        markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID, writerGeneration);
-      }
+    } catch {
+      // Native refresh retains its own grant-scoped refusal; global quarantine would outlive it.
       return;
     }
     if (isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;

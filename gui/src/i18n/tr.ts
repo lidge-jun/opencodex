@@ -3670,6 +3670,8 @@ export const tr: Record<TKey, string> = {
   "remoteLink.error.join_restart_failed": "Bağlantı hazır. Çocuk olarak bağlanmayı tamamlamak için bu bilgisayarda OpenCodex'i yeniden başlatın.",
   "remoteLink.error.join_port_failed": "Uzak bağlantı isteği tamamlanamadı.",
   "remoteLink.error.join_port_mismatch": "OpenCodex yapılandırılmış bağlantı noktasında çalışmıyor, bu yüzden Çocuk olarak yeniden başlatılamıyor. OpenCodex'i yapılandırılmış bağlantı noktasında yeniden başlatın ve tekrar deneyin.",
+  "remoteLink.joinDenied.pairing_required": "Çocuk olarak bağlanmak için önce bu bilgisayarı eşleştirin. Bu bilgisayarın geri döngü (loopback) adresindeki gösterge panelini açın ve operatörün oluşturduğu tek kullanımlık eşleştirme kodunu girin.",
+  "remoteLink.joinDenied.unavailable": "Bu gösterge paneli oturumunda Çocuk olarak bağlanılamıyor. Durumu yenileyin ve bu bilgisayarın eşleştirme ve çalışma zamanı ayarlarını kontrol edin.",
   "remoteLink.error.join_connect_failed": "Uzak bağlantı isteği tamamlanamadı.",
   "link.noChildren": "Bağlı çocuk bilgisayarı yok.",
   "remoteLink.status.connecting": "Bağlanıyor",

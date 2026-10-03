@@ -1,3 +1,4 @@
+import { codexAccountModelRefusal, codexAccountModelRefusalPayload, hasConflictingCodexModelRefusalEnvelopes, type CodexAccountModelRefusal } from "../../combos/failover";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { comboFailureDecision } from "../../combos";
 import { httpStatusFromTerminalError } from "../../lib/errors";
@@ -68,6 +69,26 @@ function bareErrorStatus(payload: unknown): number | undefined {
   });
 }
 
+/** Match the selected SSE error envelope before projection drops competing fields. */
+function terminalModelRefusal(status: number, event: Record<string, unknown>): CodexAccountModelRefusal {
+  if (hasConflictingCodexModelRefusalEnvelopes(status, event)) return "ambiguous";
+  const outer = codexAccountModelRefusalPayload(status, event);
+  if (outer === "ambiguous") return outer;
+  const nested = event.response;
+  if (event.type !== "error" && nested && typeof nested === "object" && !Array.isArray(nested)) {
+    const nestedKind = codexAccountModelRefusalPayload(status, nested);
+    if (nestedKind === "ambiguous") return nestedKind;
+    const nestedError = (nested as Record<string, unknown>).error;
+    if (nestedError && typeof nestedError === "object" && !Array.isArray(nestedError)) {
+      return nestedKind;
+    }
+  }
+  if (event.type === "error" && !Object.hasOwn(event, "error") && typeof event.message === "string") {
+    return codexAccountModelRefusal(status, event.message, { allowNestedResponse: false });
+  }
+  return outer;
+}
+
 function bareErrorIsRetryable(payload: unknown): boolean {
   const status = bareErrorStatus(payload);
   if (status === undefined || !payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -84,7 +105,9 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   const message = typeof error.message === "string"
     ? error.message
     : typeof event.message === "string" ? event.message : "";
-  return comboFailureDecision(status, message, { code }) === "hop";
+  return comboFailureDecision(status, message, {
+    code, codexModelRefusal: terminalModelRefusal(status, event),
+  }) === "hop";
 }
 
 function retryableZeroOutputTerminal(payload: unknown): boolean {
@@ -226,7 +249,7 @@ function failedTerminalResponse(
 
 export type ComboStreamPreflightResult =
   | { kind: "accepted"; response: Response }
-  | { kind: "failed"; response: Response }
+  | { kind: "failed"; response: Response; codexModelRefusal?: CodexAccountModelRefusal }
   /**
    * The body errored mid-stream and `replayReadErrors` asked for the prefix back rather than
    * a rethrow. `stage` is how far the inspection actually got; whether that permits a
@@ -322,7 +345,10 @@ export async function preflightComboStreamResponse(
         || retryableTerminalPayload?.type === "error")
         && !outputCommitted && retryableTerminalPayload) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
-        return { kind: "failed", response: failedTerminalResponse(response, retryableTerminalPayload, logCtx) };
+        const failed = failedTerminalResponse(response, retryableTerminalPayload, logCtx);
+        return { kind: "failed", response: failed,
+          ...(failed.status === 400
+            ? { codexModelRefusal: terminalModelRefusal(failed.status, retryableTerminalPayload) } : {}) };
       }
       if (next.done || terminalStatus !== undefined || outputCommitted
         || bufferedBytes >= COMBO_STREAM_PREFLIGHT_MAX_BYTES

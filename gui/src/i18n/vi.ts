@@ -3605,6 +3605,8 @@ export const vi: Record<TKey, string> = {
   "remoteLink.error.join_restart_failed": "Liên kết đã sẵn sàng. Hãy khởi động lại OpenCodex trên máy tính này để hoàn tất kết nối với vai trò máy con.",
   "remoteLink.error.join_port_failed": "Không thể hoàn tất yêu cầu liên kết từ xa.",
   "remoteLink.error.join_port_mismatch": "OpenCodex không chạy trên cổng đã cấu hình nên không thể khởi động lại với vai trò máy con. Hãy khởi động lại OpenCodex trên cổng đã cấu hình rồi thử lại.",
+  "remoteLink.joinDenied.pairing_required": "Hãy ghép nối máy tính này trước để kết nối với vai trò máy con. Mở bảng điều khiển của máy tính này qua địa chỉ loopback rồi nhập mã ghép nối dùng một lần do người vận hành tạo.",
+  "remoteLink.joinDenied.unavailable": "Không thể kết nối với vai trò máy con trong phiên bảng điều khiển này. Hãy làm mới trạng thái và kiểm tra cài đặt ghép nối và runtime của máy tính này.",
   "remoteLink.error.join_connect_failed": "Không thể hoàn tất yêu cầu liên kết từ xa.",
   "link.noChildren": "Chưa có máy con nào được kết nối.",
   "remoteLink.status.connecting": "Đang kết nối",

@@ -3679,6 +3679,8 @@ export const en = {
   "remoteLink.error.join_in_progress": "Remote link request could not be completed.",
   "remoteLink.error.join_port_failed": "Remote link request could not be completed.",
   "remoteLink.error.join_port_mismatch": "OpenCodex is not running on its configured port, so it cannot restart as a Child. Restart OpenCodex on its configured port, then try again.",
+  "remoteLink.joinDenied.pairing_required": "Pair this machine first to join as a Child. Open this computer's loopback dashboard and enter an operator-created one-use pairing code.",
+  "remoteLink.joinDenied.unavailable": "Joining as a Child is unavailable for this dashboard session. Refresh the status and check this machine's pairing and runtime settings.",
   "remoteLink.error.join_rollback_failed": "Joining failed and the link on Home could not be removed. Retry the cleanup, or run ocx link revoke on Home.",
   "remoteLink.error.join_restart_failed": "The link is ready. Restart OpenCodex on this computer to finish connecting as a Child.",
   "remoteLink.error.join_connect_failed": "Remote link request could not be completed.",

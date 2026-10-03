@@ -434,7 +434,7 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`,
 `core-combo-failure.ts`, `core-combo-native.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`,
 `core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
-and small composition contracts. Existing public helper names are re-exported by `core.ts`.
+and small composition contracts, including [finite model-refusal evidence](../providers-and-adapters.md#combo-model-refusal-evidence). Existing public helper names are re-exported by `core.ts`.
 Adapter construction remains with the existing registry; `fetch-helpers.ts` remains a leaf. For Kiro OAuth with load settings, `request-transport.ts` acquires a lease on the admitted account and transfers it before a reactive replacement send; cancellation permanently fences the request holder so recovery cannot install a late lease after abort cleanup. `core.ts` and `core-lifetime.ts` release the lease on returned-body completion, error, or cancellation, outside the inner admission `finally`.
 
 Mutable values are not copied across phases. A phase exposes only the values consumed by later

@@ -3645,6 +3645,8 @@ export const de: Record<TKey, string> = {
   "remoteLink.error.join_in_progress": "Die Remote-Link-Anfrage konnte nicht abgeschlossen werden.",
   "remoteLink.error.join_port_failed": "Die Remote-Link-Anfrage konnte nicht abgeschlossen werden.",
   "remoteLink.error.join_port_mismatch": "OpenCodex läuft nicht auf seinem konfigurierten Port und kann daher nicht als Kind neu starten. Starten Sie OpenCodex auf dem konfigurierten Port neu und versuchen Sie es dann erneut.",
+  "remoteLink.joinDenied.pairing_required": "Koppeln Sie diesen Computer zuerst, um ihn als Kind zu verbinden. Öffnen Sie das Dashboard dieses Computers über seine Loopback-Adresse und geben Sie einen vom Betreiber erstellten einmaligen Kopplungscode ein.",
+  "remoteLink.joinDenied.unavailable": "Eine Verbindung als Kind ist in dieser Dashboard-Sitzung nicht verfügbar. Aktualisieren Sie den Status und prüfen Sie die Kopplungs- und Laufzeiteinstellungen dieses Computers.",
   "remoteLink.error.join_rollback_failed": "Die Verbindung ist fehlgeschlagen und der Link auf Home konnte nicht entfernt werden. Wiederholen Sie die Bereinigung oder führen Sie auf Home ocx link revoke aus.",
   "remoteLink.error.join_restart_failed": "Der Link ist bereit. Starten Sie OpenCodex auf diesem Computer neu, um die Verbindung als Child abzuschließen.",
   "remoteLink.error.join_connect_failed": "Die Remote-Link-Anfrage konnte nicht abgeschlossen werden.",
