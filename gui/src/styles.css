@@ -161,7 +161,7 @@ html { overflow-x: hidden; background: var(--bg); }
 
 body {
   margin: 0;
-  overflow-x: hidden;
+  overflow-x: clip; /* Keep vertical scrolling on the document, not a second body scrollport. */
   background: transparent;
   color: var(--text);
   font-family: var(--font-ui);
@@ -2380,6 +2380,7 @@ button.prov-account-row.active { cursor: default; }
    reused as an off-canvas drawer — 10 destinations no longer fit an always-visible
    strip or chip grid without eating half the viewport. */
 @media (max-width: 760px) {
+  html:has(.sidebar.open) { overflow-y: hidden; } /* Lock the document behind the drawer. */
   /* rows: topbar auto + main fills — without this, align-content stretch splits the
      leftover viewport height between the two rows and inflates the top bar */
   .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
