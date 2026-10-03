@@ -32,10 +32,13 @@ import {
   comboFailureCooldownScope,
   JEV_PROVIDER_ID,
   jevDecisionBackendFor,
+  jevQuotaDecisionSummary,
+  jevQuotaSignalForTarget,
   resolveJevComboDecision,
   type ComboPick,
   type JevCandidate,
   type JevDecision,
+  type JevLevelDecision,
 } from "../../combos";
 import { formatErrorResponse } from "../../bridge";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
@@ -564,13 +567,30 @@ export async function executeComboResponses(
         ? resolvedFailOpenEffort as OcxComboDefaultEffort
         : null,
     };
+    // Opt-in quota evidence: a synchronous read of cached quota rows, never a probe.
+    const quotaReadAt = Date.now();
+    const candidates = choices.map(({ candidate }) => {
+      if (combo.decisionQuotaSignals !== true) return candidate;
+      const quota = jevQuotaSignalForTarget(candidate.provider, candidate.model, quotaReadAt);
+      return quota ? { ...candidate, quota } : candidate;
+    });
+    // Level mode classifies demand only; ocx then selects from the level's candidate list.
+    const levels = combo.decisionMode === "level" ? combo.decisionLevels : undefined;
     const decisionStartedAt = Date.now();
-    let decision: JevDecision;
+    let decision: JevDecision | JevLevelDecision;
     try {
       decision = await resolveJevComboDecision({
         body,
-        candidates: choices.map(choice => choice.candidate),
+        candidates,
         fallback,
+        ...(levels
+          ? {
+            levels,
+            ...(combo.decisionLevelSelect === "route" ? { levelSelect: "route" as const } : {}),
+            ...(combo.decisionFallbackLevel ? { fallbackLevel: combo.decisionFallbackLevel } : {}),
+            quotaAware: combo.decisionQuotaSignals === true,
+          }
+          : {}),
         config,
         ...(combo.decisionProvider ? { decisionProvider: combo.decisionProvider } : {}),
         ...(combo.decisionModel
@@ -594,11 +614,27 @@ export async function executeComboResponses(
         ...fallback,
         gate: "network",
         latencyMs: Math.max(0, Date.now() - decisionStartedAt),
+        ...(levels ? { levelPath: "fail_open" as const } : {}),
       };
     }
     jevDecision = decision;
     const selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
+    // In level mode every path above, the catch included, produced a level decision.
+    const levelDecision = levels ? decision as JevLevelDecision : undefined;
+    const levelFields = levelDecision
+      ? {
+        ...(levelDecision.level ? { level: levelDecision.level } : {}), levelPath: levelDecision.levelPath,
+        ...(levelDecision.levelSelectPath ? { levelSelectPath: levelDecision.levelSelectPath, levelSelectGate: levelDecision.levelSelectGate } : {}),
+        ...(levelDecision.levelSelectQuotaSent ? { levelSelectQuotaSent: true } : {}),
+      }
+      : {};
+    // Only what the decision request carried (route) or the selection weighed (level) is logged.
+    const quotaSummary = levelDecision
+      ? levelDecision.considered && combo.decisionQuotaSignals === true
+        ? jevQuotaDecisionSummary(levelDecision.considered, selected.candidate.key)
+        : undefined
+      : decision.quotaSent ? jevQuotaDecisionSummary(candidates, selected.candidate.key) : undefined;
     logCtx.jevDecision = normalizePersistedJevDecision({
       version: 1,
       comboId,
@@ -615,6 +651,8 @@ export async function executeComboResponses(
         ? { chosenProbability: decision.chosenProbability }
         : {}),
       ...(decision.usage ? { usage: decision.usage } : {}),
+      ...(quotaSummary ? { quota: quotaSummary } : {}),
+      ...levelFields,
     });
     console.debug("[combo] JEV decision", {
       backend: decision.backend,
@@ -627,6 +665,8 @@ export async function executeComboResponses(
         ? { chosenProbability: decision.chosenProbability }
         : {}),
       ...(decision.usage ? { usage: decision.usage } : {}),
+      ...(quotaSummary ? { quota: quotaSummary } : {}),
+      ...levelFields,
     });
   }
   // One immutable combo selection trace, before any child dispatch; child

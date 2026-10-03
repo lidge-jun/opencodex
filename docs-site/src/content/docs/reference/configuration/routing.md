@@ -154,6 +154,11 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `decisionProvider?` | `string` | `"jev"` | `strategy: "jev"` only. `"jev"` (the same as omitting it, and stored as omission) is the TypeSafe decision service, valid without a provider row; any other value must name a configured provider with `adapter: "jev-decision"` whose `baseUrl` ends in `/systemone`. |
 | `decisionModel?` | `string` | unset | `strategy: "jev"` only, mutually exclusive with `decisionProvider`. An ordinary opencodex route (for example `ollama/qwen3:4b`) asked to pick one offered option as JSON. It runs with the selected provider's stored credentials, never the caller's, and cannot resolve to this combo, any JEV combo, or a `jev-decision` row. |
 | `decisionTimeoutMs?` | `number` | `4000` | `strategy: "jev"` only. Decision deadline before failing open, 1000–120000 ms. |
+| `decisionQuotaSignals?` | `boolean` | `false` | `strategy: "jev"` only. Route mode: attach each target's remaining-quota tier (from cached provider quota, never a fresh probe) to the decision request. Default level selection: rank locally; no quota is sent to classification. Within-level routing sends advisory quota. |
+| `decisionMode?` | `"route" \| "level"` | `"route"` | `strategy: "jev"` only. `"level"` asks the decision backend (any decision method) only for a demand level and selects from `decisionLevels`. Stored as omission when `"route"`. |
+| `decisionLevelSelect?` | `"order" \| "route"` | `"order"` | JEV level mode only. `route` classifies then routes permitted target/effort pairs under the same deadline, keeping the deterministic backup on failure. Stored only when `route`; `order` or management null clears it. |
+| `decisionLevels?` | `object` | — | `strategy: "jev"` only; required by `decisionMode: "level"` and kept in route mode. Keys are at least two of `trivial`, `routine`, `hard`, `deep`, `agentic_heavy`, `agentic_light`; values are `{ description?: string, candidates: { provider, model, effort? }[] }` with 1–32 candidates naming Combo targets and efforts those targets allow. |
+| `decisionFallbackLevel?` | level id | `"routine"` | `strategy: "jev"` only. Level tried when the classified level has no usable candidate; must be configured in `decisionLevels`, and is refused without them. |
 
 ```json
 {
@@ -182,7 +187,7 @@ only currently eligible members of `targets`; missing, failed, or invalid decisi
 eligible member, while caller cancellation remains terminal. Adding the provider or Combo never
 changes `defaultProvider` or hides direct model rows. See
 [Decision method](/guides/combos/#decision-method) for the three methods, setup, privacy bounds, and
-the one-decision-per-call contract.
+one logical decision per call; opt-in within-level routing has two backend calls sharing a deadline.
 
 ### Self-hosted decision model (e.g. Ollama tev1)
 
@@ -227,6 +232,62 @@ model resident (`OLLAMA_KEEP_ALIVE=-1`) and raise `decisionTimeoutMs` for slow s
 [System One-compatible server](/guides/combos/#system-one-compatible-server).
 In the dashboard, choose **System One-compatible server** in the JEV Combo's **Decision method**
 section under **Models → Combos**, then pick the row and set **Decision timeout (ms)**.
+
+### Quota-aware JEV decisions
+
+`decisionQuotaSignals: true` makes a JEV Combo quota-aware. In route mode it adds each target's
+remaining subscription quota to the decision request, so the decision backend can avoid nearly
+exhausted accounts; in default level selection the tiers stay local and rank that level's candidates. Classification never receives quota; opt-in within-level routing receives advisory quota. It reads the cached rows behind
+`ocx provider quota` synchronously (never a probe; rows older than 30 minutes count as unknown) and
+uses the worst of the 5-hour, weekly, monthly, and matching model-family windows. Under 70% used is
+`healthy`, 70% to under 90% `limited`, 90% or more `nearly_exhausted`. In route mode, self-hosted
+services and a `decisionModel` get one short clause per option (self-hosted services also an
+`instructions.quota` line); TypeSafe gets a structured `quota` object per criterion (not yet verified
+against the hosted service). Off, the request is unchanged. See
+[Quota-aware decisions](/guides/combos/#quota-aware-decisions).
+
+### Level mode
+
+`decisionMode: "level"` replaces the joint target-and-effort question with one choice question,
+`questions.level`, whose criteria are the configured level descriptions (the built-in text unless a
+level sets `description`) and whose state carries no target notes. The answer's `choice` must be one
+of the offered levels, and a `probabilities` map, when present, must cover exactly those levels. The
+proxy then selects by default, synchronously: the first candidate of that level whose target is currently
+eligible and still allows the candidate's effort; with `decisionQuotaSignals: true`, the first healthy
+or unknown-quota candidate, else the first limited one, else a nearly exhausted one. A level with no
+usable candidate tries `decisionFallbackLevel` (default `routine`), then fails open to the first
+eligible target; a failed decision fails open directly. The JEV decision record gains `level` and
+`levelPath` (`chosen`, `fallback_level`, `fail_open`). While any quota-aware JEV Combo exists (either
+mode), the running server refreshes the cached quota rows every 12 to 15 minutes in the background,
+probing every configured provider as the Providers page does. A level `description` is sent to the
+decision service with each decision; keep secrets and private paths out of it. Level mode works with every
+decision method; a `decisionModel` answers one level key as JSON `{"choice":"<level>"}`.
+
+```json
+{
+  "combos": {
+    "tev-auto": {
+      "strategy": "jev",
+      "decisionProvider": "ollama-tev1",
+      "decisionMode": "level",
+      "decisionQuotaSignals": true,
+      "targets": [
+        { "provider": "openai", "model": "gpt-6-luna", "reasoningEfforts": ["low", "max"] },
+        { "provider": "anthropic", "model": "claude-opus-5-5", "reasoningEfforts": ["low", "xhigh"] }
+      ],
+      "decisionLevels": {
+        "routine": { "candidates": [{ "provider": "openai", "model": "gpt-6-luna", "effort": "max" }] },
+        "hard": { "candidates": [{ "provider": "anthropic", "model": "claude-opus-5-5", "effort": "xhigh" }] }
+      }
+    }
+  }
+}
+```
+
+See [Level mode](/guides/combos/#level-mode).
+
+`decisionLevelSelect: "route"` (level mode only) classifies first, then lets the decision
+backend pick a target and effort inside the selected or fallback level. See [Within-level routing](/guides/combos/#within-level-routing).
 
 ## Routing policy profiles (`config.routingProfiles`)
 

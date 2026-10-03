@@ -243,6 +243,44 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         && requestedCombo.strategy === "jev"
         ? { decisionTimeoutMs: previous.decisionTimeoutMs }
         : {}),
+      // The dashboard does not edit quota signals, levels, or decision wording yet; a round-trip
+      // that omits them keeps them, while switching away from jev drops them.
+      ...(!Object.hasOwn(requestedCombo, "decisionQuotaSignals")
+        && previous?.decisionQuotaSignals !== undefined
+        && requestedCombo.strategy === "jev"
+        ? { decisionQuotaSignals: previous.decisionQuotaSignals }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "decisionPrompt")
+        && previous?.decisionPrompt !== undefined
+        && requestedCombo.strategy === "jev"
+        ? { decisionPrompt: previous.decisionPrompt }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "decisionMode")
+        && previous?.decisionMode !== undefined
+        && requestedCombo.strategy === "jev"
+        ? { decisionMode: previous.decisionMode }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "decisionLevels")
+        && previous?.decisionLevels !== undefined
+        && requestedCombo.strategy === "jev"
+        ? { decisionLevels: previous.decisionLevels }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "decisionLevelSelect")
+        && previous?.decisionLevelSelect === "route"
+        && requestedCombo.strategy === "jev"
+        && (Object.hasOwn(requestedCombo, "decisionMode") ? requestedCombo.decisionMode : previous.decisionMode) === "level"
+        && (Object.hasOwn(requestedCombo, "decisionLevels") ? requestedCombo.decisionLevels != null : previous.decisionLevels !== undefined)
+        ? { decisionLevelSelect: "route" }
+        : {}),
+      // A fallback level means nothing without levels: clearing them drops a carried fallback.
+      ...(!Object.hasOwn(requestedCombo, "decisionFallbackLevel")
+        && previous?.decisionFallbackLevel !== undefined
+        && requestedCombo.strategy === "jev"
+        && (Object.hasOwn(requestedCombo, "decisionLevels")
+          ? requestedCombo.decisionLevels !== null && requestedCombo.decisionLevels !== undefined
+          : previous.decisionLevels !== undefined)
+        ? { decisionFallbackLevel: previous.decisionFallbackLevel }
+        : {}),
     };
     const nextCombos = { ...(config.combos ?? {}) };
     if (renameFrom) delete nextCombos[renameFrom];

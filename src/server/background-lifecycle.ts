@@ -13,6 +13,7 @@ import {
   stopStorageCleanupScheduler,
 } from "../storage/policy-scheduler";
 import { startQuotaResetPoller, stopQuotaResetPoller } from "../quota/reset-poller";
+import { startJevQuotaWarmer, stopJevQuotaWarmer } from "../combos/jev-quota-warmer";
 import {
   startCatalogAutoRefresh,
   stopCatalogAutoRefresh,
@@ -84,6 +85,9 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
     // module keeps every heavy import inside its tick, so naming it statically here
     // costs a module record and nothing else.
     startCatalogAutoRefresh();
+    // Opt-in: the tick is a no-op unless a JEV combo sets decisionQuotaSignals, and the module
+    // has no static imports, so naming it here loads neither the config barrel nor quota code.
+    startJevQuotaWarmer();
     // The scheduler starts at its default cadence because resolving the operator's value
     // reads the config barrel. Fire-and-forget: startup must not await an optional
     // subsystem, and the next tick adopts the cadence anyway.
@@ -106,6 +110,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
     stopStorageCleanupScheduler();
     stopQuotaResetPoller();
     stopCatalogAutoRefresh();
+    stopJevQuotaWarmer();
     setLivePolicyOwner(null);
     throw error;
   }
@@ -119,6 +124,7 @@ function stopProcessLoops(): void {
   stopStorageCleanupScheduler();
   stopQuotaResetPoller();
   stopCatalogAutoRefresh();
+  stopJevQuotaWarmer();
   setLivePolicyOwner(null);
 }
 

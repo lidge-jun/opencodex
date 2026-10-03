@@ -52,6 +52,22 @@ scopes the recursion rules, and a disabled, model-less or non-System-One row is 
 `src/server/management/decision-discovery.ts`. Persisted decisions carry an optional `backend`, and
 the usage aggregate reports per-backend counts and latency with older rows as `unknown`.
 
+Quota signals and level mode. `src/combos/jev-quota.ts` turns the cached provider quota row
+(`getCachedProviderQuota`, never a probe; 30-minute staleness) into a per-target tier and the
+per-option clause or structured criterion; `JevCandidate.quota` is set only for
+`decisionQuotaSignals: true`, so absent quota keeps the request bytes pinned by
+`tests/fixtures/jev-route-request-golden.json`. `src/combos/jev-quota-warmer.ts` is an unref'd
+12–15 minute timer started from `src/server/background-lifecycle.ts`; it has no static imports and
+refreshes all provider reports only while a quota-aware JEV Combo exists. `src/combos/jev-level.ts`
+asks one `level` choice question (System One through `exchangeJevDecision`, or `decisionModel` for a
+JSON level key) and by default selects the first eligible candidate of that level, ranked by quota tier when
+quota-aware; `src/combos/jev-level-config.ts` validates and sparsely normalizes `decisionMode`,
+`decisionLevels`, `decisionFallbackLevel`, and `decisionLevelSelect`. `resolveJevComboDecision` enters level mode before
+the route-backend split; level request bytes are pinned by `tests/fixtures/jev-level-request-golden.json`, and the
+within-level route request (`decisionLevelSelect: "route"`) by
+`tests/fixtures/jev-level-route-request-golden.json` (`tests/routing/jev-level-route-golden.test.ts`).
+Behavior is described in [Within-level routing](../../docs-site/src/content/docs/guides/combos.md#within-level-routing).
+
 `src/combos/jev.ts` extracts bounded user-task, previous-assistant, and latest-tool-output text plus
 the tool name and boolean signals; raw image data, tool arguments, encrypted reasoning, headers, and
 the JEV credential are excluded. It owns the joint target/effort choice map, strict response

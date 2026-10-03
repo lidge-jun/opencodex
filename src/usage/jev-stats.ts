@@ -1,3 +1,13 @@
+import {
+  JEV_LEVEL_IDS,
+  JEV_LEVEL_PATHS,
+  JEV_LEVEL_SELECT_PATHS,
+  JEV_QUOTA_TIERS,
+  type JevLevelId,
+  type JevLevelPath,
+  type JevLevelSelectPath,
+  type JevQuotaTier,
+} from "../combos/jev-decision-contract";
 import type { OcxComboDefaultEffort } from "../types";
 import type { PersistedUsageEntry } from "./log";
 import { usageDisplayTotalTokens } from "./totals";
@@ -46,6 +56,21 @@ export interface PersistedJevDecisionV1 {
     outputTokens: number;
     totalTokens: number;
   };
+  /**
+   * Quota tiers a quota-aware decision sent: target counts per tier and the picked target's tier.
+   * Absent when the Combo is not quota-aware or no target had fresh quota evidence.
+   */
+  quota?: Record<JevQuotaTier, number> & { selected?: JevQuotaTier };
+  /** Level-mode decisions only: the classified demand level, when a decision was applied. */
+  level?: JevLevelId;
+  /** Level-mode decisions only: whether the classified level, the fallback level, or fail-open picked. */
+  levelPath?: JevLevelPath;
+  /** Within-level routing only: whether the routed pick applied or the order pick was kept. */
+  levelSelectPath?: JevLevelSelectPath;
+  /** Within-level routing only: the route call's gate, `apply` exactly with `route`. */
+  levelSelectGate?: JevDecisionGate;
+  /** Within-level routing only: the route call sent quota evidence. */
+  levelSelectQuotaSent?: true;
 }
 
 export interface JevStatsModelRow {
@@ -161,6 +186,30 @@ function normalizedDecisionUsage(value: unknown): PersistedJevDecisionV1["usage"
   };
 }
 
+const JEV_QUOTA_TIER_SET = new Set<string>(JEV_QUOTA_TIERS);
+const JEV_LEVEL_ID_SET = new Set<string>(JEV_LEVEL_IDS);
+const JEV_LEVEL_PATH_SET = new Set<string>(JEV_LEVEL_PATHS);
+const JEV_LEVEL_SELECT_PATH_SET = new Set<string>(JEV_LEVEL_SELECT_PATHS);
+/** A decision offers at most 64 targets; a larger count cannot come from a real decision. */
+const MAX_JEV_QUOTA_TARGETS = 64;
+
+function normalizedDecisionQuota(value: unknown): PersistedJevDecisionV1["quota"] {
+  if (!isRecord(value)) return undefined;
+  const counts = {} as Record<JevQuotaTier, number>;
+  let total = 0;
+  for (const tier of JEV_QUOTA_TIERS) {
+    const count = value[tier];
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 0) return undefined;
+    counts[tier] = count;
+    total += count;
+  }
+  if (total === 0 || total > MAX_JEV_QUOTA_TARGETS) return undefined;
+  const selected = typeof value.selected === "string" && JEV_QUOTA_TIER_SET.has(value.selected)
+    ? value.selected as JevQuotaTier
+    : undefined;
+  return { ...counts, ...(selected ? { selected } : {}) };
+}
+
 /**
  * Re-validates the privacy-bounded decision record at both write and hydration boundaries.
  * Only closed enums, bounded identifiers and finite counters survive; prompts and credentials
@@ -185,6 +234,21 @@ export function normalizePersistedJevDecision(value: unknown): PersistedJevDecis
   const backend = value.backend === "typesafe" || value.backend === "systemone" || value.backend === "model"
     ? value.backend
     : undefined;
+  const quota = normalizedDecisionQuota(value.quota);
+  const levelPath = typeof value.levelPath === "string" && JEV_LEVEL_PATH_SET.has(value.levelPath)
+    ? value.levelPath as JevLevelPath
+    : undefined;
+  // A level only means something beside the path that consumed it.
+  const level = levelPath && typeof value.level === "string" && JEV_LEVEL_ID_SET.has(value.level)
+    ? value.level as JevLevelId
+    : undefined;
+  const stageGate = typeof value.levelSelectGate === "string" && JEV_GATE_SET.has(value.levelSelectGate)
+    ? value.levelSelectGate as JevDecisionGate : undefined;
+  const selectPath = typeof value.levelSelectPath === "string" && JEV_LEVEL_SELECT_PATH_SET.has(value.levelSelectPath)
+    ? value.levelSelectPath as JevLevelSelectPath : undefined;
+  const stagePath = selectPath && stageGate && level && (levelPath === "chosen" || levelPath === "fallback_level")
+    && gate === "apply" && (selectPath === "route") === (stageGate === "apply")
+    ? selectPath : undefined;
   return {
     version: 1,
     comboId,
@@ -199,6 +263,10 @@ export function normalizePersistedJevDecision(value: unknown): PersistedJevDecis
     ...(confidence !== undefined ? { confidence } : {}),
     ...(chosenProbability !== undefined ? { chosenProbability } : {}),
     ...(usage ? { usage } : {}),
+    ...(quota ? { quota } : {}),
+    ...(level ? { level } : {}),
+    ...(levelPath ? { levelPath } : {}),
+    ...(stagePath ? { levelSelectPath: stagePath, levelSelectGate: stageGate, ...(value.levelSelectQuotaSent === true ? { levelSelectQuotaSent: true as const } : {}) } : {}),
   };
 }
 

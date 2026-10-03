@@ -90,6 +90,8 @@ export type {
   OcxComboReasoningEffortMode,
   OcxComboTarget,
   OcxComboConfig,
+  OcxComboDecisionLevel,
+  OcxComboDecisionLevelCandidate,
   OcxRoutingUnknownEvidenceMode,
   OcxRoutingProfileCandidate,
   OcxRoutingProfileRequirements,

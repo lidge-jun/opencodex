@@ -185,7 +185,7 @@ export function AddComboModal({
             <StrategySeg
               value={draft.strategy}
               disabled={busy}
-              onChange={(strategy) => setDraft((d) => ({ ...d, strategy }))}
+              onChange={(strategy) => setDraft((d) => ({ ...d, strategy, ...(strategy !== "jev" ? { decisionLevelSelect: undefined } : {}) }))}
             />
             <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
               {t(COMBO_STRATEGY_HINT_KEYS[draft.strategy])}
@@ -202,6 +202,11 @@ export function AddComboModal({
               decisionProvider={draft.decisionProvider ?? null}
               decisionModel={draft.decisionModel ?? null}
               decisionTimeoutMs={draft.decisionTimeoutMs ?? null}
+              decisionQuotaSignals={draft.decisionQuotaSignals === true}
+              decisionMode={draft.decisionMode}
+              decisionLevelSelect={draft.decisionLevelSelect}
+              decisionLevels={draft.decisionLevels}
+              decisionFallbackLevel={draft.decisionFallbackLevel}
               disabled={busy}
               onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
             />

@@ -157,13 +157,42 @@ With `--strategy jev` only, the decision method is chosen by one of two mutually
 Ollama `tev1`) as a System One-compatible server. `--decision-model <route|->` names an ordinary
 opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as JSON; it cannot be
 this combo or any JEV combo. Omitting both uses TypeSafe. `--decision-timeout <ms|->` sets the
-decision deadline (1000–120000, default 4000); `-` clears any of the three.
+decision deadline (1000–120000, default 4000); `--decision-quota <on|off|->` makes the
+combo quota-aware: in route mode each target's cached remaining-quota tier is sent with the
+decision; in level mode, default `order` selection ranks candidates locally and sends nothing, while
+within-level routing sends advisory quota. `-` clears any of
+these.
 
 `ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
 [--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an
 unsaved selection and reports the gate, backend, and latency; it may spend one decision call.
 `ocx combo discover [--query <text>]` lists configured System One rows and catalog models that look
 like decision models, with the derived endpoint.
+
+#### Level mode
+
+`--decision-mode <route|level|->` switches a JEV Combo between the joint target-and-effort decision
+(`route`, the default) and level mode, where the decision method only classifies the next call's
+demand level. `--decision-levels <json|->` sets the per-level candidate lists and
+`--decision-fallback-level <level|->` the level tried when the classified one has nothing usable
+(default `routine`). Omitting a flag keeps the stored value; `--decision-levels -` also clears a
+stored fallback level.
+
+```bash
+ocx combo set tev-auto --strategy jev --decision-provider ollama-tev1 --decision-mode level \
+  --targets openai/gpt-6-luna,anthropic/claude-opus-5-5 \
+  --decision-levels '{"routine":{"candidates":[{"provider":"openai","model":"gpt-6-luna","effort":"max"}]},"hard":{"candidates":[{"provider":"anthropic","model":"claude-opus-5-5","effort":"xhigh"}]}}'
+```
+
+`--decision-level-select <order|route|->` controls within-level selection. Both `order` and `route`
+require level mode with valid `--decision-levels`; `route` makes a second target/effort decision
+inside the usable selected or fallback level, sharing the classifier deadline. Omission preserves
+the stored selector; only `-` clears it unconditionally, and leaving level mode clears it.
+See [Within-level routing](/guides/combos/#within-level-routing).
+
+`--targets` sets no per-target `reasoningEfforts`, so any valid candidate effort is accepted on save;
+at request time a candidate whose target no longer advertises that effort is skipped. See
+[Level mode](/guides/combos/#level-mode).
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 

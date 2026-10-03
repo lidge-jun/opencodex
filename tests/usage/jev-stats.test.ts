@@ -361,3 +361,14 @@ describe("JEV decision telemetry", () => {
       .toMatchObject({ picks: 45, attempts: 45, totalTokens: 90 });
   });
 });
+
+test("hierarchical stage telemetry requires a coherent bounded bundle", () => {
+  const old = { version: 1, comboId: "auto", selected: { provider: "a", model: "m", effort: null }, gate: "apply", latencyMs: 30, level: "hard", levelPath: "chosen" };
+  const stage = { levelSelectPath: "route", levelSelectGate: "apply", levelSelectQuotaSent: true };
+  expect(normalizePersistedJevDecision({ ...old, ...stage, secret: "discard" })).toEqual({ ...old, ...stage });
+  expect(normalizePersistedJevDecision(normalizePersistedJevDecision({ ...old, ...stage }))).toEqual({ ...old, ...stage });
+  for (const bad of [{ levelSelectGate: "timeout" }, { levelSelectPath: {} }, { gate: "network" }, { level: undefined }, { levelPath: "fail_open" }]) {
+    expect(normalizePersistedJevDecision({ ...old, ...stage, ...bad })).not.toHaveProperty("levelSelectPath");
+  }
+  expect(normalizePersistedJevDecision({ ...old, ...stage, levelSelectPath: "order_fallback", levelSelectGate: "timeout", levelSelectQuotaSent: false })).toEqual({ ...old, levelSelectPath: "order_fallback", levelSelectGate: "timeout" });
+});

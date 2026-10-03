@@ -495,6 +495,137 @@ they contain the bounded decision metadata described above, not prompts or crede
 rows show decision count, applied count, and average latency for `typesafe`, `systemone`, and
 `model`; older records without a backend are grouped as `unknown`.
 
+#### Quota-aware decisions
+
+Set `"decisionQuotaSignals": true` on a JEV Combo (dashboard: **Consider remaining account quota**;
+CLI: `--decision-quota on`) to steer away from nearly exhausted accounts. In route mode the decision
+backend is told how much subscription quota each target has left; in [level mode](#level-mode) the
+tiers stay local and rank that level's candidates, and no quota text is sent. It is off by default,
+and while off the decision request is byte-for-byte what it was before.
+
+- The quota comes from the cached provider quota rows that `ocx provider quota` and the dashboard
+  **Providers** page show, read without any network call: for a ChatGPT/Codex account pool the pool
+  aggregate (or the effective account when there is no aggregate), for other OAuth providers the
+  active account, for key providers the active key. That is the provider's displayed row, not the
+  account a particular request would be routed to within a pool or key set. OpenCodex never probes
+  quota for a decision itself. While any quota-aware JEV Combo exists, the running proxy refreshes
+  those rows in the background every 12 to 15 minutes with the same refresh the Providers page
+  triggers, which probes every configured provider; the Providers page, `ocx provider quota`, and the
+  quota reset poller refresh them too.
+- Per target, the worst relevant window counts: 5-hour, weekly and monthly meters, plus a
+  model-family window (such as Anthropic's Fable weekly window) when the model belongs to that
+  family. Other custom meters and credit balances are ignored. Rows older than 30 minutes, windows
+  whose reset has passed, and targets with no data send nothing for that target.
+- Tiers: under 70% used is **healthy**, 70% to under 90% **limited**, 90% or more **nearly
+  exhausted**. In route mode, a self-hosted decision service gets one short clause at the end of each option, for
+  example `Quota limited (78% of weekly used, resets in 2h).` or `QUOTA NEARLY EXHAUSTED (98% of
+  weekly used, resets in 3d): choose only if no alternative is adequate.`, plus one
+  `instructions.quota` line when at least one target has data. Canonical TypeSafe gets the same
+  facts as a structured `quota` object (`tier`, `used_percent`, `window`, `resets_in_seconds`) on each
+  criterion; that shape has not been verified against the hosted TypeSafe service. An opencodex
+  decision model (`decisionModel`) sees the same clause in each option description.
+- In route mode the signal is advice to the decision backend only. It never makes a target ineligible (exhausted
+  targets are already skipped by the ordinary quota check), and if the extra text would push a very
+  large Combo over the 64 KiB decision request limit, the decision is sent without it.
+- The JEV decision log records only how many targets were sent in each tier and the picked target's
+  tier, never account ids or emails.
+
+#### Level mode
+
+By default a JEV Combo asks the decision model to pick a target and a reasoning effort together
+(`"decisionMode": "route"`, the same as omitting it). With `"decisionMode": "level"` the decision
+model only classifies how demanding the next call is, and OpenCodex picks the target and effort from
+a candidate list you configure for that level. The level question is much smaller than the route
+question (it names no targets), and in a labelled routing evaluation with a self-hosted `tev1:4b` it
+picked an adequate target and effort far more often than route mode, which tended to choose `low`
+effort for hard or long agentic work.
+
+There are six levels: `trivial`, `routine`, `hard`, `deep`, `agentic_heavy` and `agentic_light`.
+Configure at least two in `decisionLevels`; only configured levels are offered to the decision model,
+each with a built-in description you can replace with `description`. Every candidate names one of the
+Combo's `targets` by `provider` and `model`, and may name an `effort` that target allows (its
+`reasoningEfforts` when set). A candidate without `effort` uses the fail-open rule: `medium`, or the
+next lower effort the target supports, or its lowest supported rung if all are higher.
+
+```json
+{
+  "combos": {
+    "tev-auto": {
+      "strategy": "jev",
+      "decisionProvider": "ollama-tev1",
+      "decisionTimeoutMs": 30000,
+      "decisionMode": "level",
+      "decisionQuotaSignals": true,
+      "decisionFallbackLevel": "routine",
+      "targets": [
+        { "provider": "openai", "model": "gpt-6-luna", "reasoningEfforts": ["low", "max"] },
+        { "provider": "openai", "model": "gpt-6.1-sol", "reasoningEfforts": ["low", "xhigh"] },
+        { "provider": "openai", "model": "gpt-6-astra", "reasoningEfforts": ["low", "xhigh"] },
+        { "provider": "anthropic", "model": "claude-opus-5-5", "reasoningEfforts": ["low", "xhigh"] }
+      ],
+      "decisionLevels": {
+        "trivial": { "candidates": [
+          { "provider": "openai", "model": "gpt-6-luna", "effort": "low" },
+          { "provider": "openai", "model": "gpt-6.1-sol", "effort": "low" }
+        ] },
+        "routine": { "candidates": [
+          { "provider": "openai", "model": "gpt-6.1-sol", "effort": "low" },
+          { "provider": "anthropic", "model": "claude-opus-5-5", "effort": "low" }
+        ] },
+        "hard": { "candidates": [
+          { "provider": "openai", "model": "gpt-6.1-sol", "effort": "xhigh" },
+          { "provider": "anthropic", "model": "claude-opus-5-5", "effort": "xhigh" }
+        ] },
+        "deep": { "candidates": [
+          { "provider": "openai", "model": "gpt-6-astra", "effort": "xhigh" },
+          { "provider": "anthropic", "model": "claude-opus-5-5", "effort": "xhigh" }
+        ] }
+      }
+    }
+  }
+}
+```
+
+- **Selection (default `order`).** For the classified level, OpenCodex walks the candidates in order and skips any whose
+  target is not currently eligible (cooling down, disabled, withheld as `lastResort`, or no longer
+  advertising the effort), using the same eligibility as route mode. The first usable candidate wins,
+  and its effort replaces the request's effort exactly as in route mode.
+- **Quota-aware selection.** With `decisionQuotaSignals: true`, the same cached quota tiers decide
+  within the level: the first candidate that is healthy or has no fresh quota data, else the first
+  limited one, and a nearly exhausted candidate only when nothing else in the level is usable. No
+  quota text is sent to the classifier or in default `order` selection; opt-in within-level routing sends advisory quota. The background refresh described under
+  [Quota-aware decisions](#quota-aware-decisions) keeps the tiers fresh without the dashboard open.
+- **Fallbacks.** A decision that fails (no key, timeout, error, malformed or unknown answer) fails open
+  to the first eligible target, as in route mode. A classified level with no usable candidate tries
+  `decisionFallbackLevel` (default `routine`; it must be one of the configured levels and is refused
+  without `decisionLevels`), then fails open.
+- **Logs.** The JEV decision record adds `level` and `levelPath` (`chosen`, `fallback_level`, or
+  `fail_open`), plus the quota tier summary over the candidates that were weighed. With within-level routing it
+  also adds `levelSelectPath`, `levelSelectGate`, and `levelSelectQuotaSent`.
+- **Switching modes** keeps `decisionLevels`, so you can try level mode and go back. The dashboard's
+  **Decision mode** selector switches the mode and shows candidate lists read-only. Edit them in the
+  config file, with `ocx combo set <id> --strategy jev --decision-levels '<json>'`, or through the
+  management API. If you remove or replace a target that a level still names, saving is refused with
+  that fix; the dashboard warns about such candidates before you save and, in route mode, offers
+  **Clear stored levels**. Switching the Combo to another strategy discards its levels, and the
+  dashboard warns before that save.
+- **Level descriptions are sent** to the decision service with every level-mode decision, like target
+  notes. Keep secrets, account details, and private paths out of them.
+- **Every decision method works.** The System One question is a plain choice question with string
+  criteria, so it has the same shape for a self-hosted service and for canonical TypeSafe; it has
+  been measured only against self-hosted `tev1`. With `decisionModel`, the model receives the same
+  state and level descriptions and must answer one level key as JSON `{"choice":"<level>"}`.
+
+##### Within-level routing
+
+Set `decisionLevelSelect: "route"` with `strategy: "jev"`, `decisionMode: "level"`, and valid `decisionLevels` to classify first, then let the same decision backend choose a target **and effort** from the usable selected level. If the classified level has no usable candidate, stage two uses only the usable fallback level. It never mixes levels or exposes target-wide extra efforts. An omitted effort permits only the normal default: medium, the highest supported rung below medium, or the lowest supported rung when all are higher; a target without effort control offers `none`.
+
+Both stages share one `decisionTimeoutMs` deadline. A singleton effective option needs no second call; service option limits still apply without truncation. Timeout, invalid answers, or other stage-two failures retain the exact deterministic, quota-aware level backup. Caller cancellation remains cancellation. Target retries do not classify or route again.
+
+Quota never enters classification. With `decisionQuotaSignals`, routing receives all usable level options and advisory cached quota; the backup still prefers the healthiest existing tier. Stage telemetry adds `levelSelectPath`, `levelSelectGate`, and literal-true `levelSelectQuotaSent` only when evidence was actually sent. `level`/`levelPath` and classifier confidence stay unchanged; decision tokens and elapsed time cover both stages as one logical decision. Successful routing logs a quota summary only when its request carried quota; deterministic retention keeps the locally weighed summary.
+
+Omission defaults to `order`. Both `order` and `route` require JEV level mode with valid `decisionLevels`; storing `order` omits the field, and management `null` clears it unconditionally. A management PUT that omits it preserves it only while the effective JEV level configuration remains valid. Switching mode or strategy clears it without making it dormant. CLI `--decision-level-select order|route|-` supports partial updates; outside level mode only `-` is accepted, and it clears unconditionally. The dashboard’s **Within-level selection** control is level-only; switching away and back starts in candidate-order mode, and saving order sends an explicit null. Level lists remain read-only and the Test button remains a backend probe.
+
 ## What happens when a target fails
 
 Combo failures are divided into **hop** failures and **terminal** failures.
