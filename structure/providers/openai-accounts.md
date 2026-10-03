@@ -201,6 +201,12 @@ sidecar candidate and cannot hide a failed Codex credential with separately bill
 `src/server/audio-upstream.ts` uses the same selection for standalone transcription. Explicit
 native Direct auth remains caller-owned; proxy-key-only Direct claims stored main before
 materialization, replacing both bearer and account identity exclusively from that credential.
+Credential OWNERSHIP is decided by provenance, not by the shape of the bearer. The Claude Messages
+ingress attaches the stored native-main credential to a translated turn so forward sidecars stay
+reachable, and that credential is indistinguishable from a caller's own by inspection. It is never
+request-scoped: a translated Claude turn resolves through Pool selection like any other, so native
+main keeps its health, quarantine and refresh-and-classify handling. Only a bearer the client
+itself supplied is caller-owned and exempt from stored state.
 Both synchronous and asynchronous stored-main substitution in `src/codex/auth-context.ts` remove a caller account header before copying the stored identity; an absent stored account ID leaves no account header. Caller-owned native Direct authentication retains its existing passthrough behavior.
 `src/providers/openai-sidecar.ts` releases quota-probe ownership on every
 materialization or usability failure before transferring a resolved context to its caller.
@@ -225,6 +231,14 @@ model settings, and noncanonical `openai` rows never receive that recovery path.
 `GET /api/codex-auth/accounts?refresh=1` treats missing main credentials, HTTP 401, and allowlisted
 terminal 403 codes as `needsReauth`; generic permission failures remain non-terminal, and a
 successful main usage refresh clears the runtime mark.
+
+A refresh refusal is classified from the token endpoint's structured `error` code alone, by one
+rule shared between the stored-pool and native-main refreshes, so one dead grant cannot be terminal
+for a Pool account and transient for main. Description prose decides only when no code was sent. A
+code-confirmed refusal retires the grant by fingerprint as well as marking the account, because a
+present refresh grant otherwise overrides the quarantine; that verdict survives a reauth clear and
+is retracted only by a successful refresh or a replacement credential. Each refresh verdict is
+logged once with the endpoint status and code and no credential material.
 
 Canonical forwarding alone can apply the optional client-output safety-buffering hint filter;
 API-key and custom forward destinations preserve their metadata. See [Responses transport](../transports/responses.md).

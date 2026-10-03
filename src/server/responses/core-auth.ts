@@ -67,15 +67,32 @@ export type ResponsesAuthResolution =
  * an HMAC of exactly this Authorization header. Two copies of this rule would put preview and
  * final auth in different scopes the first time one of them changed.
  */
+/**
+ * The stored native-main credential this process injected itself, when it is the bearer the
+ * resolution will see.
+ *
+ * `handleClaudeMessages` reads `~/.codex/auth.json` and attaches it so OpenAI-backed sidecars stay
+ * reachable on a translated turn. It is OUR credential, not the caller's -- the ingress says so
+ * where it sets `nativeCallerAuth` and `callerDirectAuth` to null for exactly this reason -- and
+ * every reader of the resolution's input headers has to agree about that, or one of them conclud
+ * the request owns a credential that in fact belongs to the Pool.
+ */
+export function injectedClaudeMainBearer(
+  route: RouteResult,
+  options: HandleResponsesOptions,
+): { authorization: string; chatgptAccountId?: string } | undefined {
+  return options.stripClaudeMainAuthForNoncanonicalForward === true
+    && isCanonicalOpenAiForwardProvider(route.provider)
+    ? options.trustedClaudeMainAuth : undefined;
+}
+
 export function codexRouteCredentialDomainHeaders(
   req: Request,
   route: RouteResult,
   options: HandleResponsesOptions,
   credentialDomainWasRewritten: boolean,
 ): Headers {
-  const trustedClaudeMainForFinalRoute = options.stripClaudeMainAuthForNoncanonicalForward === true
-    && isCanonicalOpenAiForwardProvider(route.provider)
-    ? options.trustedClaudeMainAuth : undefined;
+  const trustedClaudeMainForFinalRoute = injectedClaudeMainBearer(route, options);
   if (trustedClaudeMainForFinalRoute) {
     const claudeMainHeaders = new Headers(req.headers);
     claudeMainHeaders.set("authorization", trustedClaudeMainForFinalRoute.authorization);
@@ -124,8 +141,17 @@ export function codexRouteCredentialOwnership(
     && (route.codexAccountMode !== undefined || isCanonicalOpenAiForwardProvider(route.provider));
   return {
     substituteMainCredential,
+    // A request-scoped main credential is one the CALLER owns: it exists for this request only,
+    // owns no Pool state, and must never be quarantined or refreshed on the Pool's behalf. The
+    // stored credential this process injected is the opposite of that in every respect, and
+    // `hasForwardableCodexBearer` cannot tell them apart -- it sees a Codex JWT with an account
+    // id either way. Counting ours as the caller's made the native main slot caller-owned on
+    // every translated Claude turn: `main` instead of `main-pool`, so an upstream 401 on a
+    // revoked session recorded no outcome, refreshed nothing, and retired nothing, and the next
+    // request sent the same dead token again.
     requestScopedMainCredential: route.codexAccountMode !== undefined
       && !substituteMainCredential
+      && injectedClaudeMainBearer(route, options) === undefined
       && hasForwardableCodexBearer(authInputHeaders, config),
   };
 }

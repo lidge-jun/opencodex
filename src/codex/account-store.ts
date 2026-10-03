@@ -524,6 +524,69 @@ export function tombstoneCodexAccount(id: string): number {
 const CHATGPT_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 
+/**
+ * What a failed ChatGPT token-endpoint refresh says about the refresh grant itself.
+ *
+ * `invalid_grant` is the standard OAuth code for a refresh token that is no longer usable, and
+ * upstream sends it bare with no description. Without it here the dead grant is classified
+ * "unknown", which callers treat as transient — so the account is never retired and every
+ * request repeats the same doomed refresh (#2887). Production only ever confirmed that bare
+ * code, so the siblings upstream also emits for a revoked or downgraded session are listed
+ * beside it rather than discovered one incident at a time.
+ *
+ * Matched on the exact `error` CODE, not anywhere in the combined text: a transient
+ * `server_error` whose description happens to mention invalid_grant would otherwise retire a
+ * healthy account, which is the failure this whole rule exists to remove.
+ *
+ * That rule binds the DESCRIPTION words too. "invalidated", "revoked" and "expired" read as
+ * terminal prose, but upstream puts arbitrary text there: a `server_error` whose description
+ * says "token was revoked" or "session expired" is still a 5xx blip, and retiring the account on
+ * it is exactly the false quarantine #2887 exists to prevent. So a body that carries a
+ * structured code is classified by that code ALONE. The substring fallback survives only where
+ * there is no structured code to read at all -- a description-only body, or one this parser
+ * could not decode -- because there the prose is the only signal upstream gave us.
+ *
+ * Shared by the stored-pool refresh and the native-main refresh. Native main classified the same
+ * failures by searching its own formatted message, which both missed `refresh_token_reused` and
+ * read a 5xx's terminal-sounding prose as proof -- so one dead grant could be terminal for a
+ * pool account and transient for `__main__`, and a live one could be retired.
+ */
+export function classifyChatgptRefreshFailure(
+  status: number,
+  body: string,
+): { reason: "expired" | "revoked" | "unknown"; description: string; code?: string } {
+  let errDesc: string;
+  let errCodeExact: string | undefined;
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: string | { code?: string; message?: string };
+      error_description?: string;
+    };
+    if (typeof parsed.error === "string") {
+      errCodeExact = parsed.error.trim();
+      errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ");
+    } else if (parsed.error && typeof parsed.error === "object") {
+      errCodeExact = typeof parsed.error.code === "string" ? parsed.error.code.trim() : undefined;
+      errDesc = [parsed.error.code, parsed.error.message, parsed.error_description].filter(Boolean).join(": ");
+    } else {
+      errDesc = parsed.error_description || `HTTP ${status}`;
+    }
+    if (!errDesc) errDesc = `HTTP ${status}`;
+  } catch { errDesc = `HTTP ${status}`; }
+  const structuredCode = errCodeExact ? errCodeExact : undefined;
+  const proseIsOnlySignal = structuredCode === undefined;
+  const reason = structuredCode === "invalid_grant"
+      || structuredCode === "refresh_token_invalidated"
+      || structuredCode === "token_invalidated"
+      || structuredCode === "refresh_token_reused"
+      || (proseIsOnlySignal
+        && (errDesc.includes("invalidated") || errDesc.includes("revoked"))) ? "revoked" as const
+    : structuredCode === "refresh_token_expired"
+      || (proseIsOnlySignal && errDesc.includes("expired")) ? "expired" as const
+    : "unknown" as const;
+  return { reason, description: errDesc, ...(structuredCode ? { code: structuredCode } : {}) };
+}
+
 export class TokenRefreshError extends Error {
   reason: "expired" | "revoked" | "unknown";
   constructor(reason: "expired" | "revoked" | "unknown", message: string) {
@@ -1323,50 +1386,7 @@ async function resolveCodexToken(
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
-      let errDesc: string;
-      let errCodeExact: string | undefined;
-      try {
-        const parsed = JSON.parse(errText) as {
-          error?: string | { code?: string; message?: string };
-          error_description?: string;
-        };
-        if (typeof parsed.error === "string") {
-          errCodeExact = parsed.error.trim();
-          errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ");
-        } else if (parsed.error && typeof parsed.error === "object") {
-          errCodeExact = typeof parsed.error.code === "string" ? parsed.error.code.trim() : undefined;
-          errDesc = [parsed.error.code, parsed.error.message, parsed.error_description].filter(Boolean).join(": ");
-        } else {
-          errDesc = parsed.error_description || `HTTP ${res.status}`;
-        }
-        if (!errDesc) errDesc = `HTTP ${res.status}`;
-      } catch { errDesc = `HTTP ${res.status}`; }
-      // `invalid_grant` is the standard OAuth code for a refresh token that is no longer
-      // usable, and upstream sends it bare with no description. Without it here the dead
-      // grant is classified "unknown", which callers treat as transient — so the account
-      // is never retired and every request repeats the same doomed refresh (#2887).
-      //
-      // Matched on the exact `error` CODE, not anywhere in the combined text: a transient
-      // `server_error` whose description happens to mention invalid_grant would otherwise
-      // retire a healthy account, which is the failure this whole change exists to remove.
-      //
-      // That rule binds the DESCRIPTION words too. "invalidated", "revoked" and "expired" read
-      // as terminal prose, but upstream puts arbitrary text there: a `server_error` whose
-      // description says "token was revoked" or "session expired" is still a 5xx blip, and
-      // retiring the account on it is exactly the false quarantine #2887 exists to prevent.
-      // So a body that carries a structured code is classified by that code ALONE. The
-      // substring fallback survives only where there is no structured code to read at all --
-      // a description-only body, or one this parser could not decode -- because there the
-      // prose is the only signal upstream gave us.
-      const structuredCode = errCodeExact ? errCodeExact : undefined;
-      const proseIsOnlySignal = structuredCode === undefined;
-      const reason = structuredCode === "invalid_grant"
-          || structuredCode === "refresh_token_invalidated"
-          || (proseIsOnlySignal
-            && (errDesc.includes("invalidated") || errDesc.includes("revoked"))) ? "revoked" as const
-        : structuredCode === "refresh_token_expired"
-          || (proseIsOnlySignal && errDesc.includes("expired")) ? "expired" as const
-        : "unknown" as const;
+      const { reason } = classifyChatgptRefreshFailure(res.status, errText);
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`);
     }
     const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };

@@ -26,6 +26,12 @@ export interface ConsumedComboFailure {
   classificationText: string;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
+  /**
+   * Structured upstream `error.message`, already redacted and bounded. Preferred over
+   * {@link classificationText} for anything human-facing: that field is the whole envelope, so a
+   * log line built from it prints the raw JSON body instead of the sentence inside it.
+   */
+  upstreamMessage?: string;
   /** Complete structured provider type, retained for conservative recovery classification. */
   upstreamType?: string;
   /** Valid numeric/date value used only for cooldown calculation. */

@@ -8,6 +8,7 @@ import {
 } from "../../src/codex/account-usability";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
+import { CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE } from "../../src/codex/auth-context";
 import { MAIN_CODEX_ACCOUNT_ID, MainAccountTokenRefreshError } from "../../src/codex/main-account";
 import { nativeMainRefreshFailureResponse } from "../../src/server/responses/codex-auth-error";
 import type { OcxConfig } from "../../src/types";
@@ -155,6 +156,9 @@ describe("native main refresh refusal", () => {
     const response = nativeMainRefreshFailureResponse(new MainAccountTokenRefreshError("reauth"));
     expect(response.status).toBe(401);
     const message = ((await response.json()) as { error: { message: string } }).error.message;
-    expect(message).toBe("Codex main account needs reauthentication");
+    // Names the provider as the refuser and the command that fixes it: a bare "needs
+    // reauthentication" reads as a proxy fault for the operator whose plan was downgraded.
+    expect(message).toBe(CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE);
+    expect(message).toContain("codex login");
   });
 });

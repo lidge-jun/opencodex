@@ -385,6 +385,18 @@ export class CodexPoolAuthenticationError extends Error {
   }
 }
 
+/**
+ * The refusal a revoked or downgraded ChatGPT session earns, on the request that discovers it
+ * and on every request after.
+ *
+ * "No usable account credential" is true and useless: it reads as a proxy fault and sends the
+ * operator to the provider's status page. The two things they need are that the credential was
+ * rejected by OpenAI rather than by this proxy, and the command that fixes it.
+ */
+export const CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE =
+  "Codex account needs sign-in: OpenAI rejected its credential (token invalidated — revoked "
+  + "session or plan change). Run `codex login` to sign in again.";
+
 export type CodexModelAvailabilityReason = "unsupported" | "temporarily_unavailable";
 
 /** A model/account compatibility failure is not a credential failure. */
@@ -1341,7 +1353,11 @@ export async function resolveCodexAuthContext(
             : "Codex accounts that support this model are currently unavailable",
         );
       }
-      throw new CodexPoolAuthenticationError();
+      // The pool is empty because a credential was quarantined, not because none is configured.
+      // Say which, so the refusal names the thing the operator has to do.
+      throw new CodexPoolAuthenticationError(
+        isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID) ? CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE : undefined,
+      );
     }
     accountId = selected;
     if (accountId === MAIN_CODEX_ACCOUNT_ID) assertMainAccountPolicy(policy);

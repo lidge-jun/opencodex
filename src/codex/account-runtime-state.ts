@@ -17,6 +17,28 @@ import { isCodexAccountGenerationLive } from "./account-store";
 const reauthAccounts = new Map<string, number | undefined>();
 let lastReconciledGeneration = 0;
 let liveAccountIds = new Set<string>();
+/**
+ * Fingerprint of the native-main refresh grant the token endpoint itself refused.
+ *
+ * A main quarantine is deliberately overridable by the presence of a refresh grant
+ * ({@link import("./main-account").hasMainAccountRefreshGrant}), because a bare WHAM 401 can
+ * quarantine a credential the next refresh would have fixed. A grant the token endpoint answered
+ * with `invalid_grant` can fix nothing, so it must stop vouching for the account — otherwise a
+ * revoked session is rediscovered by an upstream round trip on every single request.
+ *
+ * A fingerprint, never a token, and never the account id: a replacement credential written by
+ * login, reauth, or another process carries a different grant and makes this verdict inert.
+ */
+let deadMainRefreshGrant: string | undefined;
+
+/** `undefined` retracts the verdict: a refresh that succeeded proved the grant is alive. */
+export function setMainRefreshGrantDead(fingerprint: string | undefined): void {
+  deadMainRefreshGrant = fingerprint;
+}
+
+export function isMainRefreshGrantDead(fingerprint: string): boolean {
+  return deadMainRefreshGrant === fingerprint;
+}
 
 export function markAccountNeedsReauth(
   id: string,
@@ -67,4 +89,11 @@ export function clearAccountNeedsReauth(id: string, credentialGeneration?: numbe
     && (reauthAccounts.get(id) !== credentialGeneration
       || !isCodexAccountGenerationLive(id, credentialGeneration))) return;
   reauthAccounts.delete(id);
+  // The dead-grant verdict deliberately SURVIVES this. It is a fact about one refresh token, not
+  // about the quarantine that accompanied it, and it already self-invalidates by fingerprint when
+  // the credential is replaced. Retracting it here let the WHAM probe's explicit-refresh clear
+  // (#327) -- which `ocx account list` and an open dashboard both trigger -- hand a grant upstream
+  // had already refused back to routing, and the probe's own re-mark could not stop it: with a
+  // grant apparently alive, `hasMainAccountRefreshGrant` cancels the quarantine. Every look at the
+  // dashboard bought another upstream 401.
 }

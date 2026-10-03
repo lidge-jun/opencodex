@@ -117,6 +117,7 @@ export async function consumeComboFailure(
     ...(nonReplayable ? { nonReplayable: true } : {}),
     classificationText,
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
+    ...(upstreamMessage !== undefined ? { upstreamMessage } : {}),
     ...(upstreamType !== undefined ? { upstreamType } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),
     // The EFFECTIVE classification decides, not the raw status. An upstream that wraps a quota

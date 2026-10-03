@@ -1,5 +1,6 @@
 import { formatErrorResponse } from "../../bridge";
 import {
+  CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE,
   CodexAccountCooldownError,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
@@ -32,7 +33,9 @@ export function codexModelAvailabilityErrorResponse(error: CodexModelAvailabilit
 
 export function nativeMainRefreshFailureResponse(error: unknown): Response {
   if (error instanceof MainAccountTokenRefreshError && error.reason === "reauth") {
-    return formatErrorResponse(401, "authentication_error", "Codex main account needs reauthentication");
+    // Same sentence the quarantine produces on every later request, so the first refusal and the
+    // ones after it do not describe one dead credential two different ways.
+    return formatErrorResponse(401, "authentication_error", CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE);
   }
   if (error instanceof MainAccountTokenRefreshError
     || error instanceof MainAuthJsonChangedDuringRefreshError

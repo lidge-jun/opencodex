@@ -3,21 +3,29 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readCodexTokens } from "./auth-collision";
 import {
+  CHATGPT_CLIENT_ID,
+  CHATGPT_TOKEN_URL,
+  credsFromToken,
   decodeJwtPayload,
   extractAccountId,
-  refreshChatGPTToken,
 } from "../oauth/chatgpt";
 import type { OAuthCredentials } from "../oauth/types";
 import { extractChatgptPlanType } from "./plan";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import {
+  classifyChatgptRefreshFailure,
   refreshGrantFingerprintForToken,
   withCodexRefreshFileLock,
 } from "./account-store";
 import { atomicWriteFile, resolveWriteTarget } from "../config/atomic-write";
 import { resolveCodexHomeDir } from "./home";
 import { assertNotRealCodexHomeUnderTest } from "../lib/test-home-guard";
-import { clearAccountNeedsReauth } from "./account-runtime-state";
+import {
+  clearAccountNeedsReauth,
+  isMainRefreshGrantDead,
+  markAccountNeedsReauth,
+  setMainRefreshGrantDead,
+} from "./account-runtime-state";
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import { withNativeMainExclusiveClaim } from "./native-main-claim";
 import { resolveNativeProfileContext } from "./native-profile-store";
@@ -76,6 +84,61 @@ export class MainAccountTokenRefreshError extends Error {
       : "Codex main token refresh did not complete", options);
     this.name = "MainAccountTokenRefreshError";
   }
+}
+
+/**
+ * The native-main refresh, posted here rather than through `refreshChatGPTToken` so the token
+ * endpoint's structured `error` code survives to {@link classifyChatgptRefreshFailure}.
+ *
+ * `refreshChatGPTToken` collapses the refusal into one display string, and classifying a grant
+ * from that string is what let `refresh_token_reused` pass as transient -- the grant never
+ * retired, every request re-earning its own 401 -- while a 5xx whose description merely read
+ * "session expired" passed as proof and would have retired a live grant.
+ *
+ * Same endpoint, client id and grant type as every other ChatGPT refresh, and the success path
+ * is `credsFromToken` itself, so only the failure branch differs: it classifies by code, exactly
+ * as the stored-pool refresh does.
+ */
+async function refreshNativeMainGrant(
+  refreshToken: string,
+  options: { signal: AbortSignal },
+): Promise<OAuthCredentials> {
+  const resp = await fetch(CHATGPT_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: CHATGPT_CLIENT_ID,
+      refresh_token: refreshToken,
+    }).toString(),
+    signal: options.signal,
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    const { reason, description, code } = classifyChatgptRefreshFailure(resp.status, body);
+    const verdict = reason === "unknown" ? "transient" as const : "reauth" as const;
+    noteNativeMainRefresh(verdict, resp.status, code);
+    throw new MainAccountTokenRefreshError(verdict, {
+      cause: new Error(`ChatGPT refresh failed: ${resp.status} ${description}`),
+    });
+  }
+  noteNativeMainRefresh("ok", resp.status);
+  return credsFromToken((await resp.json()) as Record<string, unknown>);
+}
+
+/**
+ * One line per native-main refresh verdict, so a dead grant is diagnosable from service.log.
+ *
+ * A revoked session is invisible from the outside: the grant is refused, nothing is written, and
+ * the request fails with a status that looks like every other 401. Carries the token endpoint's
+ * HTTP status and its structured `error` code and nothing else -- never a token, never a body.
+ */
+function noteNativeMainRefresh(outcome: string, status?: number, code?: string): void {
+  console.warn(
+    `[codex] native main refresh: ${outcome}`
+      + (status === undefined ? "" : ` status=${status}`)
+      + ` code=${code && /^[A-Za-z0-9._-]{1,64}$/.test(code) ? code : "none"}`,
+  );
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -153,7 +216,10 @@ export function isMainAccountCredentialUsable(now = Date.now()): boolean {
 }
 
 export function hasMainAccountRefreshGrant(): boolean {
-  return !!readMainAuthJsonCredential()?.refreshToken;
+  const refreshToken = readMainAuthJsonCredential()?.refreshToken;
+  // A grant the token endpoint has already refused cannot revive the account, so it must not
+  // override the quarantine that refusal produced.
+  return !!refreshToken && !isMainRefreshGrantDead(refreshGrantFingerprintForToken(refreshToken));
 }
 
 function assertMainAuthJsonSnapshotUnchanged(expected: MainAuthJsonCredential): void {
@@ -343,13 +409,23 @@ async function resolveMainAccountToken(
   rejectedAccessToken?: string,
 ): Promise<{ accessToken: string; chatgptAccountId: string } | null> {
   const initial = readMainAuthJsonCredential();
-  if (!initial) return null;
+  // Every skip below ends a forced refresh WITHOUT asking the token endpoint anything, which from
+  // the outside is indistinguishable from a refusal: same failed request, no write, no verdict.
+  // A forced refresh is the only caller that passes `rejectedAccessToken`, so only it reports.
+  if (!initial) {
+    if (rejectedAccessToken !== undefined) noteNativeMainRefresh("skipped-no-credential");
+    return null;
+  }
   const now = Date.now();
   if (initial.accessToken !== rejectedAccessToken
     && mainAccessTokenFresh(initial.accessToken, now, MAIN_TOKEN_REFRESH_SKEW_MS)) {
+    // The stored credential is no longer the one upstream rejected: somebody else replaced it
+    // while this request was in flight, so there is nothing here to refresh or to retire.
+    if (rejectedAccessToken !== undefined) noteNativeMainRefresh("skipped-credential-replaced");
     return { accessToken: initial.accessToken!, chatgptAccountId: initial.chatgptAccountId };
   }
   if (!initial.refreshToken) {
+    if (rejectedAccessToken !== undefined) noteNativeMainRefresh("skipped-no-refresh-grant");
     return initial.accessToken !== rejectedAccessToken
       && mainAccessTokenFresh(initial.accessToken, now, 0)
       ? { accessToken: initial.accessToken!, chatgptAccountId: initial.chatgptAccountId }
@@ -392,16 +468,30 @@ async function resolveMainAccountToken(
           && mainAccessTokenFresh(locked.accessToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
           return { accessToken: locked.accessToken!, chatgptAccountId: locked.chatgptAccountId };
         }
-        const refresh = dependencies.refreshToken
-          ?? ((refreshToken: string, options: { signal: AbortSignal }) => refreshChatGPTToken(refreshToken, options));
+        const refresh = dependencies.refreshToken ?? refreshNativeMainGrant;
         let refreshed: OAuthCredentials;
         try {
           refreshed = await refresh(locked.refreshToken, { signal });
         } catch (cause) {
+          // A refusal already classified at the endpoint keeps that verdict. An injected refresh
+          // threw an ordinary Error and has only its message, so prose still decides there --
+          // and only there, where there is no structured code to read.
           const message = cause instanceof Error ? cause.message.toLowerCase() : "";
-          const reason = /invalid_grant|invalidated|revoked|expired/.test(message)
-            ? "reauth" as const
-            : "transient" as const;
+          const reason = cause instanceof MainAccountTokenRefreshError
+            ? cause.reason
+            : /invalid_grant|invalidated|revoked|expired/.test(message)
+              ? "reauth" as const
+              : "transient" as const;
+          // The shared point every request path reaches a terminal native-main verdict through:
+          // the forced refresh after an upstream 401, the pre-send refresh of an expired bearer,
+          // and the compact twin all land here. Recording the quarantine at the callers instead
+          // left the native main slot alone unrecorded -- `refreshNativeMainForwardAuth` has no
+          // `quarantine` flag for its caller to act on the way the stored-pool twin does -- so a
+          // revoked session stayed `needsReauth: false` and every request re-earned its own 401.
+          if (reason === "reauth") {
+            setMainRefreshGrantDead(lockKey);
+            markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+          }
           throw new MainAccountTokenRefreshError(reason, { cause });
         }
         // The refresh may resolve after the caller went away (an implementation that does
@@ -411,6 +501,11 @@ async function resolveMainAccountToken(
         // before its own commit above.
         if (dependencies.signal?.aborted) throw dependencies.signal.reason;
         const result = persistRefreshedMainAuthJson(locked, refreshed);
+        // Retracted even under `preserveReauth`: that option preserves a quarantine whose cause
+        // this refresh did not speak to, while a 200 from the token endpoint is direct proof
+        // about the grant itself. Unconditional because a rotation-less success keeps the same
+        // refresh token, so the fingerprint alone would not clear the verdict.
+        setMainRefreshGrantDead(undefined);
         if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
         return result;
       }),
