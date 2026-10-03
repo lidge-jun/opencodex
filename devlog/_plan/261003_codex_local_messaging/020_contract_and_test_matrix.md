@@ -1,6 +1,8 @@
 # 020 — native contract and acceptance ledger
 
-Prepared 2026-10-03. No contribution implementation or test suite has run yet.
+Preparation snapshot, 2026-10-03, before implementation or source tests.
+Subsequent foundation implementation and verification are recorded in
+[030](030_foundation_implementation.md); the remaining matrix is not all complete.
 
 ## Native evidence actually obtained
 
