@@ -315,15 +315,15 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 
 `ocx model` は `ocx models` の別名です。サブコマンドを使用しない場合、構成されたプロバイダーに静的にシードされたモデルを一覧表示します。 `--provider` は 1 つの構成済みプロバイダーをフィルターし、`--json` はモデル メタデータを返します。 `live` は実行中のカタログを読み取ります。 `add`、`edit`、`remove`、および `list-custom` は手動カタログ エントリを管理します。 `enable`、`disable`、および `provider` は可視性を制御します。 `selected` はプロバイダー許可リストを制御します。 `context` はプロバイダーのコンテキストの上限を制御します。 `shadow` はバックグラウンドのシャドウ コール インターセプトを管理します。
 
-以下の表は、CLI が対応するカタログ操作を示しています。ダッシュボードのすべての操作を網羅するものではありません。自動検出されたモデルの表示名変更は、カスタムモデルの `edit` 操作とは別です。`add`、`remove`、`list-custom` はローカル設定を使用し、カスタムモデルの変更時にプロキシが稼働していればカタログの同期を試みる場合があります。ローカルへの保存完了は、同期完了を意味しません。それ以外のモデル管理操作は稼働中のプロキシの管理 API を使用するため、呼び出す前に準備状態とバージョンを確認してください。オフラインでモデルや設定を確認するためにプロキシを起動する必要はありません。
+`add` と `remove` は既定でローカル保存し、`--live` で稼働中のプロキシを変更します。ローカル `--json` 保存時にプロキシがなければ `sync.status: "not-attempted"`、`needsSync: true`、終了コード 0 を返します。試行した同期が失敗しても保存は維持され、終了コードは非ゼロです。`list-custom` はローカル一覧です。`display-name` は raw upstream ID、`order` は picker の public ID を使います。完全な並べ替え、featured 接頭部、native 順序のリセット制約は[英語版](/reference/cli/providers-accounts/#display-names-and-picker-identities)を参照してください。
 
 |サブコマンド |サポートされているフラグ |アクション |
 | --- | --- | --- |
 | `list` (デフォルト) | `--provider <name>`、`--json` |構成されたプロバイダーにシードされたモデルをリストします。 |
 | `live` | `--provider <name>`、`--json` |実行時に検出されたモデルを含む、実行中のカタログを読み取ります。行には、`native`/`routed`、`custom`、および `enabled`/`disabled` というフラグが付けられます。 |
-| `add <provider> <modelId>` | `--display-name <name>`、`--context-window <tokens>`、`--modalities <text,image,audio>` | ローカルに保存します。`--force` は上書きを許可し、`--sync` は JSON と通常出力の両方で同期を試みます。 |
+| `add <provider> <modelId>` | `--display-name <name>`、`--context-window <tokens>`、`--modalities <text,image,audio>`, `--live`, `--json` | カスタムモデルをローカルに、または `--live` で稼働中のプロキシに登録します。 |
 | `edit <custom-id>` | `--model-id <id>`、`--display-name <name\|->`、`--context-window <tokens\|0>`、`--modalities <text,image,audio\|->`、`--json` |カスタムモデルを編集します。 `-` はフィールドをクリアします。 `0` はコンテキスト ウィンドウをクリアします。 |
-| `remove <custom-id\|provider/modelId>` | `--yes` |カスタムモデルを削除します。標準入力が対話型端末ではない場合は、`--yes` が必要です。 |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | カスタムモデルを削除します。`--live` または `--json` では `--yes` が必要です。 |
 | `list-custom` | `--json` |他のサブコマンドで取得される `custom-id` を持つすべてのカスタム モデルを表示します。 |
 | `enable <provider/model\|native-model>` | `--native`、`--json` | 1 つのモデルを Codex に表示できるようにします。 |
 | `disable <provider/model\|native-model>` | `--native`、`--json` | Codex から 1 つのモデルを非表示にします。 |

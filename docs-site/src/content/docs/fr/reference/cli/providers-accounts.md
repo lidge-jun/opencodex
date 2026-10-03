@@ -422,15 +422,15 @@ entrées de catalogue ; `enable`, `disable` et `provider` contrôlent la visibi
 liste d'autorisation des fournisseurs ; `context` contrôle les plafonds de contexte du fournisseur ; et `shadow` gère l'arrière-plan
 interception d'appel fantôme.
 
-Le tableau ci-dessous décrit les opérations de catalogue prises en charge par la CLI, sans couvrir toutes les actions du tableau de bord. Modifier le nom affiché d’un modèle découvert automatiquement est différent de l’opération `edit` sur un modèle personnalisé. `add`, `remove` et `list-custom` utilisent la configuration locale ; une modification de modèle personnalisé peut tenter de synchroniser le catalogue si le proxy est en cours d’exécution. Un enregistrement local réussi ne prouve pas que la synchronisation est terminée. Les autres opérations de gestion des modèles utilisent l’API de gestion du proxy actif : vérifiez son état de préparation et sa version avant de les appeler. Il n’est pas nécessaire de démarrer le proxy pour consulter les modèles ou la configuration hors ligne.
+`add` et `remove` enregistrent localement par défaut ; `--live` modifie le proxy actif. Sans proxy, un enregistrement local `--json` renvoie `sync.status: "not-attempted"`, `needsSync: true` et le code 0. Une synchronisation tentée mais échouée conserve la sauvegarde et renvoie un code non nul. `list-custom` reste local. `display-name` prend l’ID amont brut ; `order` prend les IDs publics du sélecteur. Voir les contraintes de permutation complète, de préfixe featured et de réinitialisation native dans le [guide anglais](/reference/cli/providers-accounts/#display-names-and-picker-identities).
 
 | Sous-commande | Drapeaux pris en charge | Actions |
 | --- | --- | --- |
 | `list` (par défaut) | `--provider <name>`, `--json` | Répertoriez les modèles prédéfinis dans les fournisseurs configurés. |
 | `live` | `--provider <name>`, `--json` | Lisez le catalogue en cours d'exécution, y compris les modèles découverts lors de l'exécution. Les lignes sont marquées `native`/`routed`, `custom` et `enabled`/`disabled`. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Enregistre localement. `--force` autorise le remplacement ; `--sync` tente la synchronisation en sortie JSON comme en sortie texte. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Enregistre un modèle personnalisé localement, ou sur le proxy actif avec `--live`. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Modifiez un modèle personnalisé. `-` libère un champ ; `0` efface la fenêtre contextuelle. |
-| `remove <custom-id\|provider/modelId>` | `--yes` | Supprimez un modèle personnalisé. Nécessite `--yes` lorsque stdin n'est pas un terminal interactif. |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | Supprime un modèle personnalisé ; `--live` ou `--json` exige `--yes`. |
 | `list-custom` | `--json` | Affichez tous les modèles personnalisés avec le `custom-id` que prennent les autres sous-commandes. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Rendre un modèle visible à Codex. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Masquez un modèle de Codex. |

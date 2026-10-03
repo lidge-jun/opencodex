@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 38.
+Declared capabilities: 42.
 
 ### `ocx agent subagents force`
 
@@ -647,7 +647,7 @@ JSON mode: `payload`.
 
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...>] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias] [--display-name <label|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--rename-from <id>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--display-name <label|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
 
 Create, update or rename a combo.
 
@@ -666,19 +666,24 @@ State-changing: yes.
 | `--effort` | string | Default effort; - clears. |
 | `--effort-mode` | string | fallback or force; - resets to fallback. |
 | `--alias` | string | Alias; - clears. |
-| `--native-alias` | boolean | Enable native-shaped alias. |
 | `--display-name` | string | Label; - clears. |
 | `--decision-provider` | string | JEV provider; - clears. |
 | `--decision-model` | string | JEV route; - clears; exclusive with provider. |
 | `--decision-timeout` | string | JEV deadline 1000-120000 ms; - clears. |
 | `--rename-from` | string | Existing combo ID to rename. |
 | `--json` | boolean | Emit structured JSON. |
+| `--native-alias` | string | Bare legacy flag means on; explicit on/off preserves presence, including false. |
+| `--targets-file` | string | Bounded ordered target JSON array, exclusive with --targets; preserves effort/profile/last-resort metadata. |
+| `--image-input` | string | auto or disabled; explicit auto clears the previous disabled choice. |
+| `--reasoning-effort-mode` | string | strict or adaptive, distinct from --effort-mode fallback/force. |
 
 JSON mode: `payload`.
 
 - create and update are aliases of set. Existing fields are read before writing; --targets replaces targets.
 - force overrides valid client effort and may increase cost and latency.
 - Only the implemented target grammar is supported; full GUI target metadata and routing-profile writes are separate tasks.
+- New file/flag conflicts refuse before transport. Partial edits preserve target metadata; explicit false/default values override server carry. Turning a native alias off may also require clearing its incompatible alias.
+- Read/merge/write uses one target and remains an upsert without revision CAS. Saved-but-incomplete catalog outcomes return nonzero with their receipt.
 
 ### `ocx combo remove`
 
@@ -784,6 +789,96 @@ State-changing: yes.
 JSON mode: `payload`.
 
 - evaluate and dry-run do not save the profile, but their POST can activate Lab and start automation already enabled by local policy. No profile create, update or delete is exposed.
+
+### `ocx route policy create`
+
+Usage: `ocx route policy create <id> --file <FILE|-> [--json]`
+
+Create a routing profile from an editable-only document.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/routing-profiles` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--file` | string | Bounded editable profile JSON; omit show DTO id/model/revision fields. |
+| `--json` | boolean | Emit the validated command result as JSON. |
+
+JSON mode: `envelope`.
+
+- The server validates provider/alias/routing relationships and may activate Lab plus automation already enabled on the target. No implicit decision/inference probe follows the save.
+- An existing ID refuses rather than becoming an update.
+- Unknown/readonly/nested unsupported file fields refuse; no raw validator issues or file contents are echoed.
+
+### `ocx route policy update`
+
+Usage: `ocx route policy update <id> --file <FILE|-> --expected-revision <revision> [--json]`
+
+Update a routing profile from an editable-only document.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/routing-profiles` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--file` | string | Bounded editable profile JSON; omit show DTO id/model/revision fields. |
+| `--expected-revision` | string | Exact nonblank revision observed by the caller; never automatically refreshed. |
+| `--json` | boolean | Emit the validated command result as JSON. |
+
+JSON mode: `envelope`.
+
+- The server validates provider/alias/routing relationships and may activate Lab plus automation already enabled on the target. No implicit decision/inference probe follows the save.
+- Stale revision is exit5 with no overwrite/retry; missing profile is exit4.
+- Unknown/readonly/nested unsupported file fields refuse; no raw validator issues or file contents are echoed.
+
+### `ocx route policy remove`
+
+Usage: `ocx route policy remove <id> --yes [--json]`
+
+Remove one exact routing profile ID.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| DELETE | `/api/routing-profiles` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--yes` | boolean | Explicitly confirm removal. |
+| `--json` | boolean | Emit the validated command result as JSON. |
+
+JSON mode: `envelope`.
+
+- Uses the internal stored ID, not a public model alias. DELETE has no revision guard. Saved/catalog outcomes remain distinct; no alternate-target retry.
+
+### `ocx combo stats`
+
+Usage: `ocx combo stats <id> [--range <7d|30d|all>] [--json]`
+
+Read JEV decision and token coverage for an exact combo ID.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/usage` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--range` | string | 7d,30d or all; default30d. |
+| `--json` | boolean | Emit the validated command result as JSON. |
+
+JSON mode: `envelope`.
+
+- Uses jev=1,comboId and range. Preserves actual counts, nullable averages, measurement coverage and incomplete/truncated history.
+- No monetary cost or comparative savings baseline exists in this DTO. This is not a decision probe and makes no model inference request.
 
 ### `ocx memory`
 

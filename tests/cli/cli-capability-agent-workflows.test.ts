@@ -123,7 +123,12 @@ describe("declared agent and routing workflows", () => {
   });
 
   test("combo set reads the collection and sends independent target/rename fields", async () => {
-    const { requests, deps } = runtime(() => ({ combos: [] }));
+    const { requests, deps } = runtime(request => {
+      if (request.method === "GET") return { combos: [] };
+      const body = request.body as { id: string; combo: Record<string, unknown> };
+      return { success: true, id: body.id, model: `combo/${body.id}`, combo: body.combo,
+        catalogRefresh: { status: "committed", changed: true, degraded: false, notices: [] } };
+    });
     expect(leaf("combo set").usage).toContain("--rename-from <id>");
     expect(await handleComboCommand(["set", "new", "--targets", "demo/a:2,demo/b", "--strategy", "round-robin", "--sticky", "3", "--rename-from", "old", "--json"], deps)).toBe(0);
     expect(requests).toEqual([

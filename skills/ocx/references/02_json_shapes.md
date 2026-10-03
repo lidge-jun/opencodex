@@ -204,3 +204,55 @@ error envelope. A stale editor baseline returns exit 5; see
 [failure recovery](04_failure_semantics.md#provider-save-and-convergence-failures).
 
 Local requested sync also reports `configApplied` and `catalog: {exists,written,cacheSynced,converged}` when the backend returned a result. Its normalized `ok` requires catalog convergence for applied/catalog-only results. A successful config injection with a failed or refused catalog keeps `needsSync: true` and exits 1. An unchanged existing catalog can have `written: false` and `cacheSynced: false` while still converged; write counts alone do not establish failure. Raw backend warning strings and private paths are not emitted.
+
+## Model and routing write results
+
+Local custom-model add/remove JSON is `{action, model, needsSync, sync}`. `action`
+is `added` or `removed`; removal retains `model.id`, `model.provider`, `model.modelId`.
+With no proxy, `sync` is `{"status":"not-attempted","ok":false}` and exit is 0
+with `needsSync: true`: synchronization is opportunistic. Attempted sync can also
+report `configApplied` and `catalog: {exists, written, cacheSynced, converged}`.
+Only complete applied sync clears `needsSync`; attempted failures/refusals are nonzero.
+
+Live custom add instead returns the stored entry (`id`, `provider`, `modelId`,
+`addedAt`, optional metadata) plus `catalogRefresh`. Live remove returns
+`{ok, id, provider, modelId, catalogRefresh}`. Display-name writes return
+`{ok, provider, modelId, displayNameOverride, displayName, displayNameSource, catalogRefresh}`;
+source is `operator`, `provider` or `fallback`. A recognized saved-but-failed-refresh
+response instead has `saved: true`, provider/modelId/override and failed
+`catalogRefresh`, with exit 1.
+
+Order status returns `pickerOrder`, `pickerOrderMode`, routed-only `pickerAvailable`
+and `chosen` when known. A bare native saved ID is retained in `pickerOrder` even
+though absent from `pickerAvailable`. Missing `chosen` means unknown featured
+state. Order writes return `{ok, pickerOrder, pickerOrderMode, applied, force,
+catalogRefresh}`. Here `applied` is the featured roster, not client synchronization.
+Reset returns an empty saved order and null mode; it does not clear featured models.
+
+Profile show is the profile itself, with `id`, public `model`, opaque `revision`,
+and editable fields. Create/update returns `{success, id, model, profile,
+catalogRefresh}`; the new revision is `profile.revision`. Remove returns
+`{success, id, catalogRefresh}`. Combo set returns `{success, id, model, combo,
+catalogRefresh}`. Neither show metadata nor the write envelope is a file input.
+
+For these new live custom/order/display/profile writes and combo set, only a
+committed, nondegraded catalog refresh returns 0. Failed, skipped or degraded
+refresh preserves the saved domain receipt but returns 1. This is stricter than
+the provider-write receipt above; do not apply one exit rule to every command.
+
+## `ocx combo stats <stored-id> --json`
+
+The response has `comboId`, `range`, `since`, optional `until`, `generatedAt`,
+`summary`, `gates`, `backends`, `models`, and snapshot/history coverage fields.
+Useful `summary` pairs are `measuredModelAttempts/modelAttempts` and
+`decisionUsageReported/decisions`. Model token totals and decision token totals
+are separate observations. `averageLatencyMs`, `averageConfidence` and
+`averageChosenProbability` may be null. Zero decisions means no recorded
+observations in that window, not a successful or free run.
+
+Preserve `usageIncomplete`/`usageIncompleteReason`, `historyTruncated`,
+`truncatedPrefixBytes`, `entriesTruncated`, `entriesDropped`,
+`snapshotWindowStart` and `snapshotWindowEnd` when reporting coverage. Per-model
+rows retain `overflow` and nullable effort buckets. Missing/invalid required
+measurements cause refusal rather than fabricated zeros. No cost or savings
+field exists in this DTO.

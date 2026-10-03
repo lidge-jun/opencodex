@@ -483,8 +483,8 @@ Only run this evaluation with authority to activate Lab on the target. The manag
 
 Dry-run evaluates saved routing evidence without an inference request; it does
 not create or edit a profile. `evaluate` is the same dry-run operation. Profile
-create/update/delete remain dashboard workflows; combo editing targets a different
-resource. A missing profile returns exit 4; a missing operand returns 2.
+create/update/delete use the explicit revision workflow below; combo editing targets
+a different resource. A missing profile returns exit 4; a missing operand returns 2.
 
 ## 13. Inspect local Lab evidence before exporting or running probes
 
@@ -513,3 +513,167 @@ import write local evidence. Automation enable/disable and manual `lab run` are
 explicit mutations and can launch quota-consuming probes. Inspect their leaf help
 and obtain task authority rather than using them to repair a failed read. Local
 policy persistence does not prove another running proxy's scheduler adopted it.
+
+## 14. Add a custom model locally or on the running proxy
+
+Inspect installed grammar offline first, then verify the live target when needed:
+
+```bash
+ocx models add --help
+ocx models order --help
+ocx ready --json
+ocx status --json
+ocx models live --json
+```
+
+Use a provider configured on that target and its raw upstream model ID. For an
+explicitly requested live addition:
+
+```bash
+ocx models add <provider> <raw-model-id> --live --display-name 'Research model' --context-window 128000 --modalities text --json
+ocx models live --json
+```
+
+Keep the returned custom `id` for later edits/removal. Live removal resolves on
+that same target and requires deletion authority:
+
+```bash
+ocx models remove <complete-stored-id> --live --yes --json
+ocx models live --json
+```
+
+A provider/model selector is also accepted when unambiguous. Do not substitute a
+display label or truncate an ID; ambiguous selectors refuse without deletion.
+There is no revision protection, alternate-ID retry or local fallback.
+
+Omitting `--live` saves local custom configuration. Local `add`/`remove --json`
+return `{action, model, needsSync, sync}` and opportunistically synchronize if a
+proxy exists. No proxy means `sync.status: "not-attempted"`, `needsSync: true`
+and exit 0; it does not undo the save or require starting a proxy. An attempted
+failed/refused/incomplete sync returns nonzero. Policy-skipped success may exit 0
+with `needsSync: true`; only complete applied sync clears it. Local JSON removal
+requires `--yes`, even on a terminal. `list-custom --json` lists local stored IDs,
+so it is not evidence of a different live target's custom registry.
+
+### Change a discovered model's label
+
+Display-name writes take provider plus **raw upstream model ID**, split at the
+first slash. Preserve further slashes. Do not pass a picker alias or guess how
+to decode an encoded public ID:
+
+```bash
+ocx models display-name <provider>/<raw-model-id> --set 'Research model' --json
+ocx models live --json
+ocx models display-name <provider>/<raw-model-id> --clear --json
+```
+
+Setting and clearing are alternative writes, not a sequence to run automatically.
+`--clear` sends null. Pricing, public identity and custom-model `edit` are separate.
+A saved label with failed refresh may print `saved: true` and exit 1; read back
+instead of treating it as rollback.
+
+### Order the picker without dropping identities
+
+```bash
+ocx models order status --json
+ocx models live --json
+```
+
+Use `pickerAvailable` public IDs for a manual full permutation, including every
+routed candidate exactly once. Keep the current featured models in their exact
+required leading order; ambiguous, missing, extra or duplicate IDs are refused.
+The placeholder below stands for the complete reviewed comma-separated list:
+
+```bash
+ocx models order set --models '<complete-public-id-permutation>' --json
+ocx models order status --json
+```
+
+The command re-reads settings and model identities immediately before writing;
+changed state yields conflict. This check is **not CAS**, so a later concurrent
+write can still race. Re-read on refusal and after success; never auto-reset to
+make an invalid order pass.
+
+As alternatives, `models order set --mode alphabetical|provider|most-used --json`
+derives a complete routed order. Preset modes do not prepend the manual featured
+prefix. Most-used reads all-time/all-surface usage and refuses incomplete history;
+unranked candidates remain present. A saved order containing bare native IDs
+blocks both manual and non-default presets. Only an explicitly requested
+`models order reset --json` or `models order set --mode default --json` clears
+saved order/mode first. Reset does not change featured selection.
+
+## 15. Create or revise a routing profile from an editable document
+
+Only proceed with authority to activate Lab and any already-enabled automation
+on the target: create/update may activate it, including upstream probes. Reads
+below do not require that activation. Discover grammar and inspect the chosen ID:
+
+```bash
+ocx route policy update --help
+ocx route policy list --json
+ocx route policy show reliable --json > profile.observed.json
+jq 'del(.id, .model, .revision) | if .alias == null then del(.alias) else . end' profile.observed.json > profile.next.json
+```
+
+The `jq` step prepares a working document; it does not write user configuration.
+Edit and review `profile.next.json`. Allowed fields are `alias`, `candidates`,
+`require`, `optimize`, `limits`, `unknownEvidence`, and `compatibility`, with only
+their supported nested fields. The show-only `id`, `model`, `revision` and a null
+alias are not writable input. Keep `profile.observed.json` unchanged.
+
+```bash
+ocx route policy update reliable --file profile.next.json --expected-revision '<exact-revision-from-observed-show>' --json
+ocx route policy show reliable --json
+```
+
+Copy the opaque revision from the original observation. Never fetch a fresh
+revision silently, change update into create, or automatically retry 409/exit 5.
+On conflict, read show again, review concurrent changes and prepare a new edit.
+For an authorized new ID, use `ocx route policy create <new-id> --file profile.next.json --json`
+without a revision. For authorized deletion use
+`ocx route policy remove <id> --yes --json`; deletion is not revision-protected.
+Files (or `--file -` piped stdin) use the 4 MiB/30-second bounded input contract.
+Server validation remains authoritative for candidates, aliases and policy semantics.
+
+## 16. Edit combo targets and inspect actual decision observations
+
+Start with `ocx combo set --help`, `ocx combo list --json` and
+`ocx combo show <stored-id> --json`. A targets file is a nonempty ordered array,
+not the complete show object. Use actual configured provider/raw model pairs;
+this is the file shape:
+
+```json
+[{"provider":"example","model":"raw/model","weight":1,"reasoningEfforts":["high"],"modelProfile":"Reasoning tasks","lastResort":false}]
+```
+
+Optional target fields are `weight`, `reasoningEfforts`, `modelProfile` and
+`lastResort`. Explicit `false` and order survive. Efforts must be a nonempty unique
+list of `low`, `medium`, `high`, `xhigh`, `max`, `ultra`; custom-model empty/none/minimal
+semantics do not apply here. File input follows the same 4 MiB/30-second limits.
+For the requested edit, use:
+
+```bash
+ocx combo set <stored-id> --targets-file targets.json --image-input auto --reasoning-effort-mode strict --json
+ocx combo show <stored-id> --json
+```
+
+`--targets-file` and `--targets` conflict. Omit both to preserve complete target
+metadata on a partial edit. Explicit `auto` and `strict` override saved disabled
+image input and adaptive reasoning; omitted settings preserve their existing
+values. `--reasoning-effort-mode strict|adaptive` is distinct from
+`--effort-mode fallback|force`, which controls the default effort. Native-alias
+accepts `on`, `off`, or legacy bare true. To remove an incompatible retained native
+alias, the requested edit must pair `--native-alias off --alias -`. Combo set is
+an upsert without CAS; re-read instead of assuming a concurrent edit was protected.
+
+Statistics are observation only and do not run a decision probe:
+
+```bash
+ocx combo stats <stored-id> --range 30d --json
+```
+
+Use the exact stored combo ID from list/show, not its public model or alias.
+Ranges are `7d`, `30d` (default), or `all`. Report measured attempts, model tokens,
+decision tokens and coverage alongside counts. Nullable averages are unavailable,
+not zero. Preserve incomplete/truncated history flags. This response contains no
+monetary cost or comparative savings baseline; do not invent either from tokens.

@@ -54,16 +54,16 @@ describe("provider/model discovery follows existing handlers", () => {
     for (const row of PROVIDER_MODEL_CAPABILITIES) {
       expect(BASE.some(base => base.command.join(" ") === row.command.join(" "))).toBe(false);
       expect(row.usage?.startsWith(`ocx ${row.command.join(" ")}`)).toBe(true);
-      expect(row.flags.some(flag => flag.name === "--live")).toBe(["provider add", "provider remove", "provider set-default"].includes(row.command.join(" ")));
+      expect(row.flags.some(flag => flag.name === "--live")).toBe(["provider add", "provider remove", "provider set-default", "models add", "models remove"].includes(row.command.join(" ")));
     }
   });
 
   test("local provider and custom-model commands do not acquire fictitious management routes", () => {
-    for (const key of ["provider show", "models list", "models add", "models remove", "models list-custom"]) {
+    for (const key of ["provider show", "models list", "models list-custom"]) {
       expect(capability(key).routes).toEqual([]);
     }
-    expect(capability("models add").json).toBe("none");
-    expect(capability("models remove").flags.map(flag => flag.name)).toEqual(["--yes"]);
+    expect(capability("models add").json).toBe("envelope");
+    expect(capability("models remove").flags.map(flag => flag.name)).toEqual(["--yes", "--live", "--json"]);
     // Compare the source's actual public usage constants, without executing local mutation/sync.
     const source = readFileSync(repoPath("src", "cli", "models.ts"), "utf8");
     const removeUsage = /const REMOVE_USAGE = "Usage: ([^"]+)"/.exec(source)?.[1];

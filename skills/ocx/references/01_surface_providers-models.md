@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 43.
+Declared capabilities: 47.
 
 ### `ocx models price`
 
@@ -407,13 +407,15 @@ JSON mode: `envelope`.
 
 ### `ocx models add`
 
-Usage: `ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities <text,image,audio>] [--reasoning-efforts <levels|->] [--default-reasoning-effort <level|->]`
+Usage: `ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities <text,image,audio>] [--reasoning-efforts <levels|->] [--default-reasoning-effort <level|->] [--live] [--json]`
 
-Add a custom model definition to local configuration.
+Add a custom model locally or explicitly on the running proxy.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| POST | `/api/custom-models` |
 
 | Flag | Value | Meaning |
 |---|---|---|
@@ -422,28 +424,37 @@ Drives no management route.
 | `--modalities` | string | Comma-separated text, image, audio. |
 | `--reasoning-efforts` | string | Comma-separated supported levels; - inherits; an empty string declares no reasoning. |
 | `--default-reasoning-effort` | string | A declared level; - inherits. |
+| `--live` | boolean | Use the selected running proxy; omission retains local custom-model behavior. |
+| `--json` | boolean | Emit the validated command result as JSON. |
 
-JSON mode: `none`.
+JSON mode: `envelope`.
 
-- Writes local customModels and attempts local Codex catalog sync if a proxy is found. No custom-model management route or JSON mode is used.
+- Without --live, saves locally and opportunistically syncs only if a proxy is available. No proxy keeps the save successful with needsSync:true; attempted failure/refusal is nonzero. JSON is one safe save/sync receipt.
+- Live add sends the same metadata to the server and returns its stored custom identity plus catalog outcome. Empty reasoning ladder differs from omitted/inherited metadata. No local fallback.
 
 ### `ocx models remove`
 
-Usage: `ocx models remove <customId|provider/modelId> [--yes]`
+Usage: `ocx models remove <customId|provider/modelId> [--yes] [--live] [--json]`
 
-Remove a custom definition from local configuration.
+Remove an exact custom model locally or on the selected proxy.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| GET | `/api/custom-models` |
+| DELETE | `/api/custom-models/{id}` |
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--yes` | boolean | Confirm deletion without an interactive prompt. |
+| `--yes` | boolean | Required for live or JSON deletion; local text mode retains its interactive confirmation. |
+| `--live` | boolean | Use the selected running proxy; omission retains local custom-model behavior. |
+| `--json` | boolean | Emit the validated command result as JSON. |
 
-JSON mode: `none`.
+JSON mode: `envelope`.
 
-- Local config deletion followed by a local Codex sync attempt. Ambiguous selectors are refused; list-custom --json exposes full IDs. Does not call DELETE /api/custom-models/{id}.
+- Live selection uses the complete target custom roster and an exact stored ID or unambiguous provider/raw selector. Display labels, ID prefixes and encoded/raw collisions never choose a deletion target.
+- One encoded stored-ID DELETE; no alternative-ID retry, local fallback or revision protection. Local JSON saves/syncs retain the same opportunistic policy as add.
 
 ### `ocx models list-custom`
 
@@ -942,3 +953,93 @@ JSON mode: `payload`.
 - Both documents must contain exactly defaultProvider and providers, with no credential/derived/unknown fields. At most one source may be stdin; each input and the complete serialized body are bounded to 4 MiB, with a 30-second read deadline.
 - Sends one {baseline,next} PUT. Stale baseline is exit 5; no automatic refresh, rebase, retry or local fallback.
 - Batch removal preserves the server batch contract and does not promise single-provider DELETE OAuth cleanup. Saved-but-unconverged catalog outcomes remain visible and nonzero.
+
+### `ocx models display-name`
+
+Usage: `ocx models display-name <provider/raw-model> (--set <text> | --clear) [--json]`
+
+Set or clear one raw upstream model display-name override.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/providers/{provider}/model-display-names` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--set` | string | Nonblank display label; exclusive with --clear. |
+| `--clear` | boolean | Send null to clear the override. |
+| `--json` | boolean | Emit the validated command result as JSON. |
+
+JSON mode: `envelope`.
+
+- Split only the first provider slash; the remaining model ID is raw upstream identity, not a guessed public alias or encoded suffix.
+- A recognized saved-but-failed catalog HTTP503 retains its safe receipt and exits1; no retry or rollback claim.
+
+### `ocx models order status`
+
+Usage: `ocx models order status [--json]`
+
+Read saved picker order, routed candidates and featured state.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/subagent-models` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the validated command result as JSON. |
+
+JSON mode: `envelope`.
+
+- Preserves native IDs in saved order. pickerAvailable is routed-only; unknown featured state is not an empty successful roster.
+
+### `ocx models order set`
+
+Usage: `ocx models order set (--models <csv> | --mode <default|alphabetical|provider|most-used>) [--json]`
+
+Replace the routed picker order with an explicit list or sort mode.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| GET | `/api/subagent-models` |
+| GET | `/api/models` |
+| GET | `/api/usage` |
+| PUT | `/api/subagent-models` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--models` | string | Complete unique routed candidate permutation, preserving the exact featured prefix; exclusive with --mode. |
+| `--mode` | string | default clears; alphabetical, provider and most-used compute complete routed orders. |
+| `--json` | boolean | Emit the validated command result as JSON. |
+
+JSON mode: `envelope`.
+
+- Manual/preset replacement refuses a native-inclusive saved order until explicit reset/default. It never edits the featured models/force fields.
+- Manual mode rechecks settings and identities before PUT and refuses observed drift; this is not server CAS. Raw/encoded ambiguities and missing identities refuse before writing.
+- Most-used reads all/all usage, uses requested model identities and refuses incomplete evidence. Presets retain unranked candidates. A saved receipt does not prove client convergence.
+
+### `ocx models order reset`
+
+Usage: `ocx models order reset [--json]`
+
+Clear saved picker ordering and its mode.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/subagent-models` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the validated command result as JSON. |
+
+JSON mode: `envelope`.
+
+- Sends only pickerOrder:null and pickerOrderMode:null. Explicitly clears native-inclusive order as well; does not change featured models or force selection.

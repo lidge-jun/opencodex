@@ -346,6 +346,10 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "List models and manage custom (manually registered) models.",
     details: [
       "List available models from static config with no subcommand (liveModels may add more at runtime).",
+      "add/remove support --live for the selected proxy; live or JSON removal requires --yes.",
+      "Local add/remove JSON reports saved state and opportunistic sync; no proxy keeps the save successful/pending.",
+      "display-name <provider/raw-model> --set <label> or --clear changes an exact upstream model label.",
+      "order status/set/reset manages routed picker order; reset native-inclusive saved order before replacement.",
       "add: register a model the provider catalog does not advertise yet.",
       "  --display-name <name>     Human label (no slashes).",
       "  --context-window <tokens> e.g. 200000.",

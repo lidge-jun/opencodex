@@ -476,6 +476,12 @@ function fakeRuntime(responder?: (req: Request, body: unknown) => unknown) {
       if (custom instanceof Response) return custom;
       if (custom !== undefined) return Response.json(custom);
       if (req.method === "PATCH" && url.pathname === "/api/providers") return Response.json({ success: true, name: url.searchParams.get("name"), disabled: false, hasApiKey: false, catalogRefresh: null });
+      if (req.method === "PUT" && url.pathname === "/api/combos") {
+        const saved = body as { id: string; combo: Record<string, unknown> };
+        const combo = Object.fromEntries(Object.entries(saved.combo).filter(([key, value]) => value !== null || key === "defaultEffort"));
+        return Response.json({ success: true, id: saved.id, model: typeof combo.alias === "string" && combo.alias.trim() ? combo.alias.trim() : `combo/${saved.id}`, combo,
+          catalogRefresh: { status: "committed", changed: true, degraded: false, notices: [] } });
+      }
       return Response.json({ ok: true });
     },
   });
@@ -953,7 +959,8 @@ describe("headless GUI parity CLI", () => {
       if (req.method === "PUT") {
         const update = body as { id: string; combo: Record<string, unknown> };
         persisted = { id: update.id, ...update.combo };
-        return { combo: persisted };
+        return { success: true, id: update.id, model: `combo/${update.id}`, combo: update.combo,
+          catalogRefresh: { status: "committed", changed: true, degraded: false, notices: [] } };
       }
       return undefined;
     });

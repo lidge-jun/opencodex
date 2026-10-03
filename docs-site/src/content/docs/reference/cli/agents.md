@@ -140,7 +140,7 @@ gate: it requires the native feature to be enabled with an explicit v2 surface
 
 ## Combo routing
 
-### `ocx combo <list|show|set|remove> ...` · `ocx route combo ...`
+### `ocx combo <list|show|set|remove|stats> ...` · `ocx route combo ...`
 
 Manage combo failover and round-robin virtual models. `ocx route combo` is the hierarchical alias;
 combos and routing profiles are distinct resources. Combo targets use
@@ -170,6 +170,60 @@ unsaved selection and reports the gate, backend, and latency; it may spend one d
 `ocx combo discover [--query <text>]` lists configured System One rows and catalog models that look
 like decision models, with the derived endpoint.
 
+For structured target metadata, inspect offline help and the current combo:
+
+```bash
+ocx combo set --help
+ocx combo list --json
+ocx combo show reliable --json
+```
+
+A `--targets-file` document is a nonempty ordered array, for example this shape
+with provider/model values replaced by actual configured candidates:
+
+```json
+[{"provider":"example","model":"raw/model","weight":1,"reasoningEfforts":["high"],"modelProfile":"Reasoning tasks","lastResort":false}]
+```
+
+Optional fields are `weight`, `reasoningEfforts`, `modelProfile` and `lastResort`.
+Efforts are a unique nonempty list of `low`, `medium`, `high`, `xhigh`, `max`, `ultra`;
+empty/none/minimal custom-model semantics do not apply. Files or explicit piped
+`-` have a 4 MiB limit and 30-second read deadline; the serialized management body
+must also fit 4 MiB. Unknown fields refuse before the write.
+
+```bash
+ocx combo set reliable --targets-file targets.json --image-input auto --reasoning-effort-mode strict --json
+ocx combo show reliable --json
+```
+
+`--targets-file` and `--targets` are mutually exclusive. Omitting both preserves
+complete target metadata for partial edits; replacement files preserve order and
+explicit `lastResort: false`. `--image-input auto|disabled` and
+`--reasoning-effort-mode strict|adaptive` preserve omission, while explicit `auto`
+and `strict` override saved disabled/adaptive values. Reasoning-effort mode is
+separate from `--effort-mode fallback|force`, which governs the default effort.
+`--native-alias on|off` preserves explicit false; the legacy bare flag means true.
+Turning it off may require the intended alias clear, `--native-alias off --alias -`,
+to avoid retaining an incompatible native alias. Set/rename is an upsert without
+CAS, so re-read after changes. The receipt is `{success, id, model, combo, catalogRefresh}`;
+skipped, failed or degraded catalog refresh returns nonzero after saving.
+
+### Observe combo decision statistics
+
+```bash
+ocx combo stats reliable --range 30d --json
+```
+
+Use the exact stored combo ID from list/show, not its public model or alias.
+Ranges are `7d`, `30d` (default), and `all`. This reads recorded JEV observations
+without running a paid decision probe. Inspect decisions, model attempts,
+measured attempts, model tokens and decision tokens separately. Keep the
+`measuredModelAttempts/modelAttempts` and `decisionUsageReported/decisions`
+coverage ratios with the totals. Nullable averages are unavailable, not zero.
+Preserve `usageIncomplete`, `historyTruncated`, `entriesTruncated`, dropped-entry
+counts and snapshot-window boundaries. Zero observations do not prove success.
+There is no monetary cost or comparative savings field in this report.
+
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 
 ## Routing profiles
@@ -186,9 +240,45 @@ Only run this evaluation with authority to activate Lab on the target. The manag
 
 Replace `reliable` with a listed ID. `evaluate` is an alias for `dry-run`; both
 send requirements to the saved profile's evaluator without an inference request.
-Creation, update and deletion remain dashboard operations. Combo writes do not
-edit routing profiles. Re-read the profile and revision when an evaluation
-surprises you; missing IDs return exit 4 and missing operands return 2.
+Creation, update and deletion use the explicit file/revision workflow below.
+Combo writes edit a separate resource. Missing profiles return exit 4 and missing
+operands return 2.
+
+### Edit a routing profile with its observed revision
+
+Create/update can activate Lab and already-enabled automation, including upstream
+probes. Only run them with that authority. List/show are observational; first
+read offline help and save the intended profile:
+
+```bash
+ocx route policy update --help
+ocx route policy show reliable --json > profile.observed.json
+jq 'del(.id, .model, .revision) | if .alias == null then del(.alias) else . end' profile.observed.json > profile.next.json
+```
+
+Edit and review the next file; keep the observed file unchanged. Input contains
+only editable `alias`, `candidates`, `require`, `optimize`, `limits`,
+`unknownEvidence`, and `compatibility` with supported nested fields. `id`, `model`,
+`revision`, unknown keys and null alias are not editable input. The server still
+validates provider, alias and policy semantics. `--file -` accepts piped stdin;
+regular UTF-8 files/stdin have the 4 MiB and 30-second bounded read contract.
+
+```bash
+ocx route policy update reliable --file profile.next.json --expected-revision '<exact-revision-from-observed-show>' --json
+ocx route policy show reliable --json
+```
+
+Use the original opaque revision explicitly. HTTP 409 / exit 5 means read show
+again, review concurrent changes and rebuild the edit. Never silently fetch a
+replacement revision, retry or convert update into create. For an authorized new
+ID use `ocx route policy create <new-id> --file profile.next.json --json` without a
+revision. Authorized removal is `ocx route policy remove <id> --yes --json` and
+has no revision guard.
+
+Create/update returns `{success, id, model, profile, catalogRefresh}` with the new
+`profile.revision`; remove returns `{success, id, catalogRefresh}`. Only committed,
+nondegraded refresh exits 0. A saved receipt with skipped/failed/degraded refresh
+exits 1: inspect before recovery instead of repeating the configuration write.
 
 ## Compatibility Lab
 

@@ -1,4 +1,12 @@
 {
+  "cli-catalog-command-result.test.ts": "cli",
+  "cli-models-local-result.test.ts": "cli",
+  "cli-models-custom-runtime.test.ts": "cli",
+  "cli-models-order.test.ts": "cli",
+  "cli-models-display-name.test.ts": "cli",
+  "cli-route-policy-write.test.ts": "cli",
+  "cli-combo-parity.test.ts": "cli",
+  "cli-combo-stats.test.ts": "cli",
   "cli-json-input.test.ts": "cli",
   "cli-provider-lifecycle-runtime.test.ts": "cli",
   "cli-provider-settings.test.ts": "cli",

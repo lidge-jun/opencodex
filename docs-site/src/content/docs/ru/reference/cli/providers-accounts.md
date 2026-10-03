@@ -379,15 +379,15 @@ ocx account main recover [--rollback --yes] [--json]
 `selected` управляет allowlist'ом провайдера; `context` — provider context cap'ами; `shadow`
 управляет intercept'ом background shadow-call'ов.
 
-В таблице ниже перечислены поддерживаемые CLI операции с каталогом, а не все действия панели управления. Изменение отображаемого имени автоматически обнаруженной модели отличается от операции `edit` для пользовательской модели. Команды `add`, `remove` и `list-custom` работают с локальной конфигурацией; при изменении пользовательской модели может выполняться попытка синхронизации каталога, если прокси запущен. Успешное локальное сохранение не означает, что синхронизация завершена. Остальные операции управления моделями используют API работающего прокси: перед вызовом проверьте его готовность и версию. Для автономного просмотра моделей и конфигурации запускать прокси не нужно.
+`add` и `remove` по умолчанию сохраняют локально; `--live` меняет работающий прокси. Без прокси локальное сохранение с `--json` возвращает `sync.status: "not-attempted"`, `needsSync: true` и код 0. Неудачная попытка синхронизации сохраняет запись и возвращает ненулевой код. `list-custom` читает локальный список. `display-name` использует исходный upstream ID, а `order` — публичные ID picker. Полная перестановка, префикс featured и сброс native-порядка описаны в [английской инструкции](/reference/cli/providers-accounts/#display-names-and-picker-identities).
 
 | Подкоманда | Поддерживаемые флаги | Действие |
 | --- | --- | --- |
 | `list` (default) | `--provider <name>`, `--json` | Показать модели, засеянные в настроенных провайдерах. |
 | `live` | `--provider <name>`, `--json` | Прочитать работающий каталог, включая модели, обнаруженные во время выполнения. Строки помечаются как `native`/`routed`, `custom` и `enabled`/`disabled`. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Сохраняет локально. `--force` разрешает перезапись; `--sync` пытается синхронизировать как при JSON, так и при текстовом выводе. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Регистрирует custom-модель локально или на работающем прокси с `--live`. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Изменить custom-модель. `-` очищает поле; `0` очищает context window. |
-| `remove <custom-id\|provider/modelId>` | `--yes` | Удалить custom-модель. В неинтерактивном stdin требует `--yes`. |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | Удаляет custom-модель; с `--live` или `--json` требуется `--yes`. |
 | `list-custom` | `--json` | Показать все custom-модели вместе с `custom-id`, который используют остальные подкоманды. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Сделать одну модель видимой для Codex. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Скрыть одну модель от Codex. |

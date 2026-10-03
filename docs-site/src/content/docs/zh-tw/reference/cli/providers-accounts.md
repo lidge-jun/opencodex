@@ -327,15 +327,15 @@ Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不�
 
 `ocx model` 是 `ocx models` 的別名。無子指令時，列出已設定供應商中靜態播種的模型。`--provider` 過濾一個已設定的供應商，而 `--json` 回傳模型中繼資料。`live` 讀取執行中的目錄；`add`、`edit`、`remove` 與 `list-custom` 管理手動目錄項目；`enable`、`disable` 與 `provider` 控制可見性；`selected` 控制供應商允許清單；`context` 控制供應商 context 上限；而 `shadow` 管理背景 shadow-call 攔截。
 
-下表說明 CLI 支援的模型目錄操作，並未涵蓋儀表板中的所有操作。修改自動探索模型的顯示名稱，與自訂模型的 `edit` 操作不同。`add`、`remove` 和 `list-custom` 使用本機設定；修改自訂模型時，如果代理伺服器正在執行，可能會嘗試同步目錄。本機儲存成功不代表同步已完成。其他模型管理操作使用執行中代理伺服器的管理 API，呼叫前應檢查就緒狀態與版本。離線檢視模型或設定不需要啟動代理伺服器。
+`add` 與 `remove` 預設儲存至本機；`--live` 修改執行中的代理。本機 `--json` 儲存時若無代理，回傳 `sync.status: "not-attempted"`、`needsSync: true`，結束碼為 0。實際嘗試的同步失敗時保留儲存結果，以非零碼結束。`list-custom` 是本機清單。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、featured 前綴與 native 順序重設限制請見[英文步驟](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
 
 | 子指令 | 支援的旗標 | 動作 |
 | --- | --- | --- |
 | `list`（預設） | `--provider <name>`, `--json` | 列出已設定供應商中播種的模型。 |
 | `live` | `--provider <name>`, `--json` | 讀取執行中的目錄，包含 runtime 探索的模型。列標記為 `native`/`routed`、`custom` 與 `enabled`/`disabled`。 |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 儲存至本機。`--force` 允許覆寫；`--sync` 在 JSON 與一般輸出模式下都會嘗試同步。 |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 在本機註冊自訂模型，或使用 `--live` 在執行中的代理上註冊。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 編輯自訂模型。`-` 清除欄位；`0` 清除 context window。 |
-| `remove <custom-id\|provider/modelId>` | `--yes` | 刪除自訂模型。stdin 非互動終端時需要 `--yes`。 |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | 刪除自訂模型；使用 `--live` 或 `--json` 時必須加 `--yes`。 |
 | `list-custom` | `--json` | 顯示所有自訂模型及其 `custom-id`（其他子指令所採用）。 |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | 使一個模型對 Codex 可見。 |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | 對 Codex 隱藏一個模型。 |

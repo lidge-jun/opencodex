@@ -431,15 +431,15 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 
 `ocx model`은 `ocx models`의 별칭입니다. 하위 명령이 없으면 설정된 제공자에 사전 등록된 모델을 나열합니다. `--provider`는 설정된 제공자 하나를 필터링하고 `--json`은 모델 메타데이터를 반환합니다. `live`는 실행 중인 카탈로그를 읽습니다. `add`, `edit`, `remove`, `list-custom`은 수동 카탈로그 항목을 관리합니다. `enable`, `disable`, `provider`는 가시성을 제어합니다. `selected`는 제공자 허용 목록을 제어합니다. `context`는 제공자 컨텍스트 한도를 제어합니다. `shadow`는 백그라운드 shadow-call 가로채기를 관리합니다.
 
-아래 표는 CLI가 지원하는 카탈로그 작업을 설명합니다. 대시보드의 모든 작업을 지원하는 것은 아닙니다. 자동으로 발견된 모델의 표시 이름 변경은 사용자 정의 모델의 `edit` 작업과 다릅니다. `add`, `remove`, `list-custom`은 로컬 구성을 사용하며, 사용자 정의 모델을 변경할 때 프록시가 실행 중이면 카탈로그 동기화를 시도할 수 있습니다. 로컬 저장이 완료되어도 동기화 완료를 뜻하지는 않습니다. 나머지 모델 관리 작업은 실행 중인 프록시의 관리 API를 사용하므로 호출 전에 준비 상태와 버전을 확인하세요. 오프라인 모델·구성 조회를 위해 프록시를 시작할 필요는 없습니다.
+`add`·`remove`는 기본적으로 로컬 저장이며 `--live`를 주면 실행 중인 프록시를 바꿉니다. 로컬 `--json` 저장은 프록시가 없으면 `sync.status: "not-attempted"`, `needsSync: true`, 종료 코드 0을 반환합니다. 실제 동기화 시도가 실패하면 저장은 유지하고 0이 아닌 코드로 끝납니다. `list-custom`은 로컬 목록입니다. 발견된 모델의 표시 이름은 raw upstream ID를 받는 `display-name`으로 바꾸고, picker 순서는 public ID를 받는 `order`로 바꿉니다. [영문 절차](/reference/cli/providers-accounts/#display-names-and-picker-identities)에서 전체 목록·featured 접두부·native 순서 초기화 제약을 확인하세요.
 
 | 하위 명령 | 지원 플래그 | 동작 |
 | --- | --- | --- |
 | `list` (기본값) | `--provider <name>`, `--json` | 설정된 제공자에 사전 등록된 모델을 나열합니다. |
 | `live` | `--provider <name>`, `--json` | 런타임에 발견된 모델을 포함해 실행 중인 카탈로그를 읽습니다. 행에는 `native`/`routed`, `custom`, `enabled`/`disabled` 표시가 붙습니다. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 로컬에 제공자를 저장합니다. `--force`는 덮어쓰기를 허용하며, `--sync`는 JSON·일반 출력 모두에서 동기화를 시도합니다. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 사용자 정의 모델을 로컬에 등록하거나 `--live`로 실행 중인 프록시에 등록합니다. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 사용자 지정 모델을 수정합니다. `-`는 필드를 지우고, `0`은 컨텍스트 창을 지웁니다. |
-| `remove <custom-id\|provider/modelId>` | `--yes` | 사용자 지정 모델을 삭제합니다. stdin이 대화형 터미널이 아닐 때는 `--yes`가 필요합니다. |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | 사용자 정의 모델을 삭제합니다. `--live` 또는 `--json`이면 `--yes`가 필요합니다. |
 | `list-custom` | `--json` | 다른 하위 명령이 사용하는 `custom-id`와 함께 모든 사용자 지정 모델을 보여줍니다. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Codex에 하나의 모델을 보이게 합니다. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Codex에서 하나의 모델을 숨깁니다. |

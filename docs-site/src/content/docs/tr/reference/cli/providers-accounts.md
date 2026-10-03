@@ -485,15 +485,15 @@ görünürlüğü kontrol eder; `selected` bir sağlayıcı izin listesini kontr
 `context` sağlayıcı bağlam sınırlarını kontrol eder; ve `shadow` arka plan gölge
 çağrı müdahalesini yönetir.
 
-Aşağıdaki tablo, CLI tarafından desteklenen katalog işlemlerini açıklar; kontrol panelindeki tüm işlemleri kapsamaz. Otomatik keşfedilen bir modelin görünen adını değiştirmek, özel bir model üzerindeki `edit` işleminden farklıdır. `add`, `remove` ve `list-custom` yerel yapılandırmayı kullanır; özel model değişiklikleri, proxy çalışıyorsa katalog eşitlemesini deneyebilir. Yerel kaydın başarılı olması, eşitlemenin tamamlandığını göstermez. Diğer model yönetimi işlemleri çalışan proxy’nin yönetim API’sini kullanır; çağrıdan önce hazır olma durumunu ve sürümünü kontrol edin. Modelleri veya yapılandırmayı çevrimdışı incelemek için proxy’yi başlatmak gerekmez.
+`add` ve `remove` varsayılan olarak yerel kaydeder; `--live` çalışan proxy’yi değiştirir. Proxy yoksa yerel `--json` kaydı `sync.status: "not-attempted"`, `needsSync: true` ve çıkış kodu 0 döndürür. Denenen eşitleme başarısız olduğunda kayıt korunur ve çıkış kodu sıfırdan farklıdır. `list-custom` yerel listedir. `display-name` ham upstream ID, `order` ise picker’ın public ID değerlerini kullanır. Tam permütasyon, featured öneki ve native sıra sıfırlama kısıtları için [İngilizce adımlara](/reference/cli/providers-accounts/#display-names-and-picker-identities) bakın.
 
 | Alt komut | Desteklenen bayraklar | Eylem |
 | --- | --- | --- |
 | `list` (varsayılan) | `--provider <ad>`, `--json` | Yapılandırılmış sağlayıcılarda beslenen modelleri listeleyin. |
 | `live` | `--provider <ad>`, `--json` | Çalışma zamanında keşfedilen modeller de dahil olmak üzere çalışan kataloğu okuyun. Satırlar `native`/`routed`, `custom` ve `enabled`/`disabled` olarak bayraklanır. |
-| `add <saglayici> <modelId>` | `--display-name <ad>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Yerel olarak kaydeder. `--force` üzerine yazmaya izin verir; `--sync` hem JSON hem metin çıktısında eşitlemeyi dener. |
+| `add <saglayici> <modelId>` | `--display-name <ad>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Özel modeli yerel olarak veya `--live` ile çalışan proxy’ye kaydeder. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <ad\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Özel bir modeli düzenleyin. `-` bir alanı temizler; `0` bağlam penceresini temizler. |
-| `remove <custom-id\|provider/modelId>` | `--yes` | Özel bir modeli silin. Stdin etkileşimli bir terminal olmadığında `--yes` gerektirir. |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | Özel modeli siler; `--live` ya da `--json` için `--yes` gerekir. |
 | `list-custom` | `--json` | Diğer alt komutların aldığı `custom-id` ile tüm özel modelleri gösterin. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Bir modeli Codex için görünür yapın. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Bir modeli Codex'ten gizleyin. |

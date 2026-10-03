@@ -67,7 +67,7 @@ and repeating the call produces the same error indefinitely.
    resource, list first (`account list`, `provider list`, `access key list`); for
    a declaration, consult family help. Do not retry the same lookup.
 3. For a read or a confirmed pre-write contention refusal, wait the stated
-   `Retry-After` interval and retry **once**. An exit 5 from provider apply requires
+   `Retry-After` interval and retry **once**. An exit 5 from provider apply or profile update requires
    fresh review, not a timed retry. Never repeat an uncertain or persisted write
    merely because its exit code is nonzero.
 4. Exit 1 with a credential-conflict reason → run `ocx doctor` and report. Do not retry.
@@ -176,3 +176,38 @@ also has a 4 MiB cap. Fix the input rather than retrying unchanged. Provider err
 use fixed safe messages and never expose arbitrary nested server bodies. An
 unusable receipt or transport failure can mean the write outcome is unknown:
 inspect the target rather than claiming rollback or trying a local fallback.
+
+## Model and routing recovery
+
+Local custom-model saves have opportunistic sync: no proxy yields
+`sync.status: "not-attempted"`, `needsSync: true` and exit 0. Do not confuse this
+with an explicitly requested provider `--sync` failing because no proxy exists.
+Attempted failed/refused/incomplete custom-model sync returns nonzero after saving;
+policy-skipped success can still exit 0 while needing sync. Local JSON removal
+requires `--yes`; live removal always requires it and never falls back locally.
+
+New live custom, picker, display-name and profile writes, plus combo set, return
+1 with the saved receipt when catalog refresh is skipped, failed or degraded.
+Display-name can recognize HTTP 503 with `saved: true` and failed refresh as this
+partial result. Inspect current state; a nonzero exit does not mean rollback.
+Other errors print fixed stderr messages, not JSON error envelopes. Unknown write
+outcomes must not trigger automatic repetition.
+
+For manual picker order, supply each routed public ID exactly once with the
+required featured prefix. Native-inclusive saved order requires an explicit
+reset/default decision before replacement; do not reset merely to suppress a
+refusal. A changed observation before PUT returns 409/exit 5. Re-read status and
+identities, review the list and resubmit only the intended edit. This recheck is
+not CAS. Most-used refuses incomplete usage rather than ranking missing data as zero.
+
+Profile update requires the original explicit revision and an editable-only
+file. A 409/exit 5 means read show again and review concurrent changes; never
+silently substitute a fresh revision, retry, or fall back to create. Create/update
+may activate Lab and enabled automation, including upstream probes, so retrying
+is not an observational operation. Deletion has no revision protection.
+
+Combo target files cannot be combined with `--targets`. An incompatible retained
+native alias can make `--native-alias off` refuse; clear that alias too only if
+that is the intended change. `set` is an upsert without CAS. Statistics with
+incomplete history can exit 0: preserve coverage limits and nullable measurements;
+never convert the report into unsupported cost or savings claims.

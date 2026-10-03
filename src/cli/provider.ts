@@ -22,6 +22,7 @@ import { modelSelectionGuidance, modelSelectionNextSteps } from "./model-selecti
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import type { RuntimeApiDeps } from "./runtime-api";
+import { projectLocalSyncResult, type LocalSyncResult } from "./local-sync-result";
 import { providerManagementConfigError } from "../server/auth-cors";
 
 export interface ProviderCommandDeps extends RuntimeApiDeps {
@@ -307,22 +308,14 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
 
   validateAndSave(config);
 
-  let sync: { status: "applied" | "catalog-only" | "skipped" | "refused" | "not-running" | "failed"; ok: boolean;
-    configApplied?: boolean; catalog?: { exists: boolean; written: boolean; cacheSynced: boolean; converged: boolean } } | undefined;
+  let sync: LocalSyncResult | undefined;
   if (wantsSync) {
     try {
       const live = await (deps.findLiveProxy ?? findLiveProxy)();
       if (!live) sync = { status: "not-running", ok: false };
       else {
         const result = await (deps.syncModels ?? syncModelsToCodex)(live.port, config, null);
-        const converged = result.catalogExists && result.refreshOutcome !== "refused";
-        sync = {
-          status: result.status,
-          ok: result.ok && (result.status === "skipped" || (result.status !== "refused" && converged)),
-          configApplied: result.status === "applied" && result.ok,
-          catalog: { exists: result.catalogExists, written: result.catalogWritten,
-            cacheSynced: result.cacheSynced, converged },
-        };
+        sync = projectLocalSyncResult(result);
       }
     } catch {
       // Dependency errors can contain keys, paths or request details. Keep a fixed outcome.

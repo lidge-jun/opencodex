@@ -26,9 +26,9 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | Chapter | Declared capabilities |
 |---|---|
 | [lifecycle](01_surface_lifecycle.md) | 12 |
-| [providers-models](01_surface_providers-models.md) | 43 |
+| [providers-models](01_surface_providers-models.md) | 47 |
 | [accounts](01_surface_accounts.md) | 36 |
-| [agents-routing](01_surface_agents-routing.md) | 38 |
+| [agents-routing](01_surface_agents-routing.md) | 42 |
 | [integrations](01_surface_integrations.md) | 33 |
 | [observe-system](01_surface_observe-system.md) | 87 |
 | [access-remote](01_surface_access-remote.md) | 22 |
@@ -491,6 +491,22 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_providers-models.md#ocx-provider-apply)
 
+### `ocx models display-name`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-display-name)
+
+### `ocx models order status`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-order-status)
+
+### `ocx models order set`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-order-set)
+
+### `ocx models order reset`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-order-reset)
+
 ### `ocx logout`
 
 [State-changing task](01_surface_accounts.md#ocx-logout)
@@ -702,6 +718,22 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx route policy evaluate`
 
 [State-changing task](01_surface_agents-routing.md#ocx-route-policy-evaluate)
+
+### `ocx route policy create`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-policy-create)
+
+### `ocx route policy update`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-policy-update)
+
+### `ocx route policy remove`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-policy-remove)
+
+### `ocx combo stats`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-combo-stats)
 
 ### `ocx grok status`
 
@@ -1217,6 +1249,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 292
-- of those, state-changing: 179
+- declared capabilities: 300
+- of those, state-changing: 185
 - head-resolved invocations: 2

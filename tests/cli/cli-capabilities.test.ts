@@ -142,7 +142,7 @@ describe("ocx capabilities output", () => {
     try { code = await runCapabilities(["--json", "--route", "/api/usage"]); } finally { cap.restore(); }
     expect(code).toBe(0);
     const parsed = JSON.parse(cap.lines.join("\n")) as { capabilities: { invocation: string }[] };
-    expect(parsed.capabilities.map(c => c.invocation)).toEqual(["ocx usage", "ocx observe usage"]);
+    expect(parsed.capabilities.map(c => c.invocation)).toEqual(["ocx usage", "ocx models order set", "ocx combo stats", "ocx observe usage"]);
   });
 
   test("an unmatched route exits non-zero instead of reporting empty success", async () => {
@@ -206,11 +206,8 @@ describe("ocx capabilities output", () => {
  * `route.exempt` needs, and the test prints the exact key to add or remove.
  */
 const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
-  "DELETE /api/custom-models/{id}",
-  "DELETE /api/routing-profiles",
   "GET /api/claude-desktop",
   "GET /api/codex-auth/quota",
-  "GET /api/custom-models",
   "GET /api/request-history",
   "GET /api/request-history/{id}",
   "GET /api/system/health",
@@ -219,7 +216,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "PATCH /api/codex-auth/pool-strategy",
   "PATCH /api/oauth/accounts/pool",
   "POST /api/codex-auth/accounts",
-  "POST /api/custom-models",
   "POST /api/model-discovery/acknowledge",
   "POST /api/oauth/logout",
   "POST /api/stop",
@@ -228,7 +224,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "PUT /api/claude-desktop",
   "PUT /api/codex-auth/failover",
   "PUT /api/disabled-models",
-  "PUT /api/routing-profiles",
   "PUT /api/v2",
 ];
 

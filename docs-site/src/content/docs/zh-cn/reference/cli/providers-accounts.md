@@ -346,15 +346,15 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 `disable` 和 `provider` 控制可见性；`selected` 控制提供方允许列表；`context` 控制提供方
 上下文上限；`shadow` 管理后台 shadow-call 拦截。
 
-下表说明 CLI 支持的模型目录操作，并不涵盖仪表盘中的所有操作。修改自动发现模型的显示名称与自定义模型的 `edit` 操作不同。`add`、`remove` 和 `list-custom` 使用本地配置；修改自定义模型时，如果代理正在运行，可能会尝试同步目录。本地保存成功并不代表同步已完成。其他模型管理操作使用运行中代理的管理 API，调用前应检查就绪状态和版本。离线查看模型或配置不需要启动代理。
+`add` 和 `remove` 默认保存到本地；`--live` 修改运行中的代理。本地 `--json` 保存时若无代理，返回 `sync.status: "not-attempted"`、`needsSync: true`，退出码为 0。实际尝试的同步失败时保留保存结果，以非零码退出。`list-custom` 是本地列表。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、featured 前缀与 native 顺序重置限制见[英文步骤](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
 
 | 子命令 | 支持的标志 | 操作 |
 | --- | --- | --- |
 | `list` (默认) | `--provider <name>`, `--json` | 列出已配置提供方中预置的模型。 |
 | `live` | `--provider <name>`, `--json` | 读取运行中的目录，包括运行时发现的模型。各行会标记为 `native`/`routed`、`custom`，以及 `enabled`/`disabled`。 |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 保存到本地。`--force` 允许覆盖；`--sync` 在 JSON 和普通输出模式下均会尝试同步。 |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 在本地注册自定义模型，或使用 `--live` 在运行中的代理上注册。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 编辑自定义模型。`-` 会清空字段；`0` 会清空上下文窗口。 |
-| `remove <custom-id\|provider/modelId>` | `--yes` | 删除一个自定义模型。当 stdin 不是交互式终端时，必须提供 `--yes`。 |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | 删除自定义模型；使用 `--live` 或 `--json` 时必须加 `--yes`。 |
 | `list-custom` | `--json` | 显示所有自定义模型，以及其他子命令所使用的 `custom-id`。 |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | 让一个模型对 Codex 可见。 |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | 对 Codex 隐藏一个模型。 |

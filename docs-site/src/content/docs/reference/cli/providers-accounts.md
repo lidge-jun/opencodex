@@ -885,12 +885,13 @@ verified official-price fallbacks. Unknown models return `null`; no price is inv
 Automatic defaults are derived on read and do not populate `modelCosts` in your config,
 so catalog updates remain effective. Use `set-price` to save provider-specific rates.
 
-The table below describes supported catalog workflows. It does not cover every dashboard
-operation: editing a discovered model's display name is not the custom-model `edit` operation.
-`add`, `remove`, and `list-custom` use local configuration; custom-model writes may attempt
-catalog convergence when a proxy is running. A local save does not prove that sync completed.
-The remaining model-management operations use the live API. Check readiness and version
-before those calls; offline model/config inspection does not require startup.
+Discover command syntax with `ocx models --help` before live work. `list-custom`
+reads local configuration; `add` and `remove` save locally unless given `--live`.
+Local custom writes opportunistically synchronize when a proxy exists. The remaining
+model-management operations use the running proxy. Check readiness and version
+before live calls; offline inspection does not require starting a proxy.
+Display-name overrides for discovered models have their own command, separate
+from custom-model `edit`.
 
 | Subcommand | Supported flags | Action |
 | --- | --- | --- |
@@ -898,9 +899,13 @@ before those calls; offline model/config inspection does not require startup.
 | `live` | `--provider <name>`, `--json` | Read the running catalog, including models discovered at runtime. Rows are flagged `native`/`routed`, `custom`, and `enabled`/`disabled`. |
 | `price <provider/model>` | `--json` | Read the saved manual override and effective price, including automatic catalog defaults. |
 | `set-price <provider/model>` | `--input <rate>`, `--output <rate>`, `--cache-read <rate>`, `--cache-write <rate>`, `--auto`, `--json` | Set display prices in USD per 1M tokens. Input/output are required when setting; omitted cache rates become zero. `--auto` removes only this model's override. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Register a model the provider catalog does not advertise. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--reasoning-efforts <levels>`, `--default-reasoning-effort <level>`, `--live`, `--json` | Register a custom model locally or, with `--live`, on the running proxy. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Edit a custom model. `-` clears a field; `0` clears the context window. |
-| `remove <custom-id\|provider/modelId>` | `--yes` | Delete a custom model. Requires `--yes` when stdin is not an interactive terminal. |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | Delete a custom model locally or on the live target. Live removal and local JSON removal require `--yes`; local text mode retains interactive confirmation. |
+| `display-name <provider/raw-model-id>` | `--set <text>` or `--clear`, `--json` | Set or clear the discovered model's display override; preserve the raw upstream ID. |
+| `order status` | `--json` | Read saved order/mode, routed candidates and known featured state. |
+| `order set` | `--models <CSV>` or `--mode <default\|alphabetical\|provider\|most-used>`, `--json` | Set a complete routed permutation or derive a preset order. |
+| `order reset` | `--json` | Clear saved order and mode, retaining featured selection. |
 | `list-custom` | `--json` | Show all custom models with the `custom-id` the other subcommands take. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Make one model visible to Codex. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Hide one model from Codex. |
@@ -933,6 +938,70 @@ otherwise look routed.
 and rejects an entire catalog containing any other value, so `add`, `edit`, and the management API
 all refuse the bad value rather than storing something the catalog writer would have to strip later
 (#759).
+
+### Live custom models and local save outcomes
+
+Use configured provider names and raw upstream model IDs. For an authorized
+live addition or deletion, inspect the intended target and read back afterward:
+
+```bash
+ocx ready --json
+ocx status --json
+ocx models add <provider> <raw-model-id> --live --display-name 'Research model' --context-window 128000 --modalities text --json
+ocx models live --json
+```
+
+Keep the returned stored `id`. Removal uses `ocx models remove <complete-stored-id> --live --yes --json`
+or an unambiguous provider/model selector from that target. Display labels and ID
+prefixes are not selectors. There is no local fallback, revision-protected deletion
+or alternate-ID retry. `models list-custom --json` is a local list, not a live
+registry read for another target.
+
+Without `--live`, add/remove JSON returns `{action, model, needsSync, sync}`.
+No proxy means `sync: {"status":"not-attempted","ok":false}`, `needsSync: true`
+and exit 0: the local save succeeded and opportunistic sync was not attempted.
+Attempted sync failures/refusals are nonzero while preserving the save. Only
+complete applied sync clears `needsSync`; policy-skipped success may exit 0 with
+it still true. JSON removal requires `--yes` even on an interactive terminal.
+
+### Display names and picker identities
+
+```bash
+ocx models display-name <provider>/<raw-model-id> --set 'Research model' --json
+ocx models live --json
+```
+
+This command splits on the first slash and retains every remaining slash in the
+raw upstream model ID. Do not substitute an encoded public picker ID or alias.
+`--clear` is the alternative to `--set` and sends null. Label overrides do not
+change pricing or public identity. A recognized saved-but-failed-refresh result
+has `saved: true` and exit 1; inspect state before another write.
+
+```bash
+ocx models order status --json
+ocx models live --json
+ocx models order set --models '<complete-public-id-permutation>' --json
+ocx models order status --json
+```
+
+Manual ordering uses the public IDs in `pickerAvailable`, every routed candidate
+exactly once, with current featured models in their exact required leading order.
+Blank, duplicate, missing, unknown and ambiguous entries refuse. The CLI re-reads
+settings and model identities immediately before the manual PUT; changed state
+returns conflict. This is an observational check, not CAS, so read back afterward.
+It never silently drops native identities or modifies featured selection.
+
+Alternatively select `--mode alphabetical`, `--mode provider`, or `--mode most-used`.
+These presets do not prepend the manual featured prefix. Most-used reads all-time,
+all-surface usage, retains unranked candidates, and refuses incomplete history.
+Both manual and non-default modes refuse saved orders containing bare native IDs.
+If clearing that saved order is intended, use `ocx models order reset --json` or
+`ocx models order set --mode default --json` first. Do not auto-reset on refusal.
+
+Live custom and order writes include `catalogRefresh`. Only committed,
+nondegraded refresh exits 0; skipped, failed or degraded refresh returns the saved
+receipt with exit 1. Order receipt `applied` is the featured roster, not client
+convergence. Unknown outcomes require inspection, not an assumption of rollback.
 
 ### Apply a preset and verify selection
 
