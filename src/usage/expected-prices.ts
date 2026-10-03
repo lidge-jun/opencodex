@@ -370,6 +370,16 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "google-antigravity", modelId: "claude-opus-4-6-thinking", cost4: CLAUDE_OPUS_46, source: `anthropic official Claude Opus 4.6 ${ANTHROPIC_PRICING}`, verifiedAt: "2026-07-23", status: "verified" },
   // Alias without the Antigravity "-thinking" suffix (if logs/UI ever surface it).
   { provider: "google-antigravity", modelId: "claude-opus-4-6", cost4: CLAUDE_OPUS_46, source: `anthropic official Claude Opus 4.6 ${ANTHROPIC_PRICING}`, verifiedAt: "2026-07-23", status: "verified" },
+  // Claude 5.5 on the 2026-10-03 CCA roster (one wire id per tier, confirmed via
+  // :fetchAvailableModels); Anthropic list price applies to every tier.
+  { provider: "google-antigravity", modelId: "claude-sonnet-5-5", cost4: CLAUDE_SONNET_55, source: `anthropic official Claude Sonnet 5.5 ${ANTHROPIC_PRICING}`, verifiedAt: "2026-10-03", status: "verified" },
+  { provider: "google-antigravity", modelId: "claude-sonnet-5-5-low", cost4: CLAUDE_SONNET_55, source: `derived: claude-sonnet-5-5 tier wire id; ${ANTHROPIC_PRICING}`, verifiedAt: "2026-10-03", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "claude-sonnet-5-5-medium", cost4: CLAUDE_SONNET_55, source: `derived: claude-sonnet-5-5 tier wire id; ${ANTHROPIC_PRICING}`, verifiedAt: "2026-10-03", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "claude-sonnet-5-5-high", cost4: CLAUDE_SONNET_55, source: `derived: claude-sonnet-5-5 tier wire id; ${ANTHROPIC_PRICING}`, verifiedAt: "2026-10-03", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "claude-opus-5-5", cost4: CLAUDE_OPUS_55, source: `anthropic official Claude Opus 5.5 ${ANTHROPIC_PRICING}`, verifiedAt: "2026-10-03", status: "verified" },
+  { provider: "google-antigravity", modelId: "claude-opus-5-5-low", cost4: CLAUDE_OPUS_55, source: `derived: claude-opus-5-5 tier wire id; ${ANTHROPIC_PRICING}`, verifiedAt: "2026-10-03", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "claude-opus-5-5-medium", cost4: CLAUDE_OPUS_55, source: `derived: claude-opus-5-5 tier wire id; ${ANTHROPIC_PRICING}`, verifiedAt: "2026-10-03", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "claude-opus-5-5-high", cost4: CLAUDE_OPUS_55, source: `derived: claude-opus-5-5 tier wire id; ${ANTHROPIC_PRICING}`, verifiedAt: "2026-10-03", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gpt-oss-120b-medium", cost4: { input: 0.03, output: 0.15, cacheRead: 0, cacheWrite: 0 }, source: "derived: gpt-oss-120b open-weights — OpenRouter advertised lowest https://openrouter.ai/openai/gpt-oss-120b/providers", verifiedAt: "2026-07-20", status: "verified-derived" },
   // Kimi / Moonshot — official price tables are now published (2026-07-20 re-check;
   // previously empty). kimi = Kimi Code OAuth surface, moonshot = CN key surface,
