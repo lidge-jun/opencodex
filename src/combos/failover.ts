@@ -670,6 +670,27 @@ function isDefiniteContextOverflow(status: number, message: string): boolean {
   return false;
 }
 
+const CODEX_ACCOUNT_MODEL_REFUSAL = /^The '[^']{1,256}' model is not supported when using Codex with a ChatGPT account\.$/;
+
+/**
+ * The refusal ChatGPT's Codex surface sends for a model the signed-in plan cannot use. Matched in
+ * the field that carries it (`detail`, or `error.message`) or as the bare message, never anywhere
+ * in a body, so an unrelated 400 that merely quotes the sentence stays terminal.
+ */
+function isCodexAccountModelRefusal(status: number, message: string): boolean {
+  if (status !== 400 || message.length > 16_384) return false;
+  let text = message.trim();
+  if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length);
+  if (CODEX_ACCOUNT_MODEL_REFUSAL.test(text)) return true;
+  let payload: unknown;
+  try { payload = JSON.parse(text); } catch { return false; }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const { detail, error } = payload as { detail?: unknown; error?: { message?: unknown } };
+  const field = typeof detail === "string" ? detail
+    : error && typeof error === "object" && typeof error.message === "string" ? error.message : undefined;
+  return field !== undefined && CODEX_ACCOUNT_MODEL_REFUSAL.test(field);
+}
+
 export function comboFailureDecision(
   status: number,
   message: string,
@@ -738,6 +759,10 @@ export function comboFailureDecision(
   if (["model_not_found", "model_unavailable", "unsupported_model"].includes(failureCode)) {
     return "hop";
   }
+  // ChatGPT's Codex surface refuses a model the signed-in account's plan cannot use (a Free
+  // account, or a model still rolling out) with a code-less 400 in exactly this form. That is
+  // about this account and model, not the request, so the next combo target may serve it.
+  if (isCodexAccountModelRefusal(status, message)) return "hop";
   // `free_rate_limited` no longer routes through `isProviderScopedQuotaCap` (it is a
   // per-request cap, not provider-wide evidence), so keep its hop verdict explicit here.
   if (failureCode === "free_rate_limited") return "hop";
