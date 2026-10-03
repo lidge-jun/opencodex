@@ -1,0 +1,56 @@
+{
+  "levels": {
+    "trivial": {
+      "candidates": [
+        {
+          "provider": "openai",
+          "model": "gpt-6-astra"
+        }
+      ]
+    },
+    "routine": {
+      "candidates": [
+        {
+          "provider": "openai",
+          "model": "gpt-6-astra"
+        }
+      ]
+    },
+    "hard": {
+      "candidates": [
+        {
+          "provider": "openai",
+          "model": "gpt-6-astra"
+        }
+      ]
+    },
+    "deep": {
+      "candidates": [
+        {
+          "provider": "openai",
+          "model": "gpt-6-astra"
+        }
+      ]
+    },
+    "agentic_heavy": {
+      "candidates": [
+        {
+          "provider": "openai",
+          "model": "gpt-6-astra"
+        }
+      ]
+    },
+    "agentic_light": {
+      "candidates": [
+        {
+          "provider": "openai",
+          "model": "gpt-6-astra"
+        }
+      ]
+    }
+  },
+  "requests": {
+    "jev": "{\"model\":\"jev-latest\",\"state\":{\"task\":\"Fix the race in the scheduler.\",\"signals\":{\"has_image\":false,\"tool_history\":true},\"step\":{\"type\":\"tool_step\",\"last_tool_output_tail\":\"2 failed, 40 passed\",\"tool_call\":{\"name\":\"shell\"}},\"previous_assistant\":\"Running the tests first.\"},\"questions\":{\"level\":{\"type\":\"choice\",\"instructions\":\"Classify how demanding the work for the next model call is. Judge from the task and any tool evidence.\",\"criteria\":{\"trivial\":\"A quick lookup, one-line answer, tiny mechanical edit, or reporting a simple tool result.\",\"routine\":\"An ordinary, well-scoped coding or writing task: one function or file, small feature, tests, config, a review of a small diff.\",\"hard\":\"A hard engineering problem: concurrency bugs, races, leaks, crashes, performance, security fixes, large refactors or migrations that must stay correct.\",\"deep\":\"Deep design or analysis with no code yet: architecture, distributed-systems protocols, proofs, threat models, long careful reports.\",\"agentic_heavy\":\"A long multi-step job in a terminal: set up, upgrade, build, run, debug and iterate many times until everything passes.\",\"agentic_light\":\"A short command run: run tests or a script once, start a server, check status, and report the output.\"}}}}",
+    "tev1-local": "{\"model\":\"tev1:4b\",\"state\":{\"task\":\"Fix the race in the scheduler.\",\"signals\":{\"has_image\":false,\"tool_history\":true},\"step\":{\"type\":\"tool_step\",\"last_tool_output_tail\":\"2 failed, 40 passed\",\"tool_call\":{\"name\":\"shell\"}},\"previous_assistant\":\"Running the tests first.\"},\"questions\":{\"level\":{\"type\":\"choice\",\"instructions\":\"Classify how demanding the work for the next model call is. Judge from the task and any tool evidence.\",\"criteria\":{\"trivial\":\"A quick lookup, one-line answer, tiny mechanical edit, or reporting a simple tool result.\",\"routine\":\"An ordinary, well-scoped coding or writing task: one function or file, small feature, tests, config, a review of a small diff.\",\"hard\":\"A hard engineering problem: concurrency bugs, races, leaks, crashes, performance, security fixes, large refactors or migrations that must stay correct.\",\"deep\":\"Deep design or analysis with no code yet: architecture, distributed-systems protocols, proofs, threat models, long careful reports.\",\"agentic_heavy\":\"A long multi-step job in a terminal: set up, upgrade, build, run, debug and iterate many times until everything passes.\",\"agentic_light\":\"A short command run: run tests or a script once, start a server, check status, and report the output.\"}}}}"
+  }
+}

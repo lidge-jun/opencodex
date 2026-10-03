@@ -430,3 +430,80 @@ test("the model method saves an opencodex route and refuses this combo's own sel
   expect(host.querySelector(".notice-err")?.textContent)
     .toBe("Choose a decision model opencodex can route. It cannot be this combo or another JEV combo.");
 });
+
+test("the quota checkbox is off by default, toggles the saved flag, and marks the overview row", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const base: ComboItem = {
+    id: "tev-auto",
+    model: "combo/tev-auto",
+    alias: null,
+    nativeAlias: false,
+    displayName: null,
+    strategy: "jev",
+    stickyLimit: 1,
+    defaultEffort: null,
+    targets: [{ provider: "openai", model: "gpt-6-astra", clientKey: "t1" }],
+  };
+  const saved: ComboItem[] = [];
+  const render = async (combo: ComboItem) => {
+    await act(async () => {
+      root!.render(
+        <LanguageProvider>
+          <ComboWorkspace
+            combos={[combo]}
+            providerQuotaStates={{}}
+            providers={providers}
+            models={models}
+            loading={false}
+            onRefresh={() => {}}
+            onSave={async (item) => { saved.push(item); return { ok: true }; }}
+            onRemove={async () => ({ ok: true })}
+            onAdd={() => {}}
+            adding={false}
+            onCloseAdd={() => {}}
+            onCreated={() => {}}
+          />
+        </LanguageProvider>,
+      );
+    });
+  };
+
+  await render(base);
+  const row = host.querySelector<HTMLButtonElement>('[data-decision-provider="jev"]')!;
+  expect(row.querySelector("[data-quota-signals]")).toBeNull();
+  expect(row.textContent).not.toContain("Quota-aware");
+  await act(async () => { row.click(); });
+  await flush();
+
+  const checkbox = host.querySelector<HTMLInputElement>("#cwi-edit-decision-quota")!;
+  expect(checkbox.type).toBe("checkbox");
+  expect(checkbox.checked).toBe(false);
+  expect(host.querySelector('label[for="cwi-edit-decision-quota"]')?.textContent).toContain("Consider remaining account quota");
+  expect(host.querySelector("#cwi-edit-decision-quota-hint")?.textContent).toContain("nearly exhausted");
+  expect(checkbox.getAttribute("aria-describedby")).toBe("cwi-edit-decision-quota-hint");
+
+  await act(async () => { checkbox.click(); });
+  expect(checkbox.checked).toBe(true);
+  await act(async () => { host.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click(); });
+  await flush();
+  expect(saved.at(-1)).toMatchObject({ decisionQuotaSignals: true });
+
+  // A stored quota-aware combo is marked in the overview.
+  await act(async () => { root!.unmount(); });
+  root = createRoot(host);
+  await render({ ...base, id: "tev-aware", decisionQuotaSignals: true });
+  const aware = host.querySelector<HTMLButtonElement>('[data-decision-provider="jev"]')!;
+  expect(aware.querySelector("[data-quota-signals]")?.textContent).toBe("Quota-aware");
+
+  // Off JEV the checkbox is gone.
+  await act(async () => { aware.click(); });
+  await flush();
+  expect(host.querySelector<HTMLInputElement>("#cwi-edit-decision-quota")!.checked).toBe(true);
+  const failover = [...host.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    .find(candidate => candidate.textContent?.trim() === "Failover")!;
+  await act(async () => { failover.click(); });
+  expect(host.querySelector("#cwi-edit-decision-quota")).toBeNull();
+});

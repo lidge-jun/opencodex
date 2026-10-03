@@ -86,3 +86,26 @@ export {
   type JevModelInvokeResult,
 } from "./jev-model-backend";
 export { resolveJevComboDecision, type ResolveJevComboDecisionOptions } from "./jev-dispatch";
+export {
+  JEV_QUOTA_SIGNAL_MAX_AGE_MS,
+  jevQuotaDecisionSummary,
+  jevQuotaSignalForTarget,
+  jevQuotaSignalFromQuota,
+  type JevQuotaDecisionSummary,
+  type JevQuotaSignal,
+} from "./jev-quota";
+export {
+  buildJevLevelQuestion,
+  parseJevLevelDecision,
+  resolveJevLevelDecision,
+  selectJevLevelCandidate,
+  type JevLevelDecision,
+  type ResolveJevLevelDecisionOptions,
+} from "./jev-level";
+export {
+  configuredJevLevelIds,
+  jevLevelConfigIssues,
+  normalizeJevLevelFields,
+  type NormalizedJevLevel,
+  type NormalizedJevLevels,
+} from "./jev-level-config";

@@ -16,7 +16,7 @@ import { Notice } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
 import { ComboJevDecisionSection } from "./combo-workspace-jev-decision";
-import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS } from "../combo-workspace-data";
+import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS, jevStaleLevelCandidates } from "../combo-workspace-data";
 import { clampedNumberInput, comboDraftErrorText } from "./combo-workspace-utils";
 import type { JevDecisionRow } from "../jev-decision-service";
 import { JevStatsPanel } from "./jev-stats-panel";
@@ -100,8 +100,9 @@ export function DetailPanel({
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const dirty = !draftEquals(draft, baseline);
+  const staleLevelCandidates = useMemo(() => jevStaleLevelCandidates(draft), [draft]);
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
-  const baselineSyncKey = JSON.stringify([baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile])]);
+  const baselineSyncKey = JSON.stringify([baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.decisionQuotaSignals, baseline.decisionMode, baseline.decisionLevelSelect, baseline.decisionPrompt, baseline.decisionLevels, baseline.decisionFallbackLevel, baseline.clearDecisionLevels, baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile])]);
   const effortMap = useMemo(() => {
     const map = new Map<string, string[] | undefined>();
     for (const model of models) {
@@ -165,7 +166,9 @@ export function DetailPanel({
       displayName,
       model: comboPublicModelId(trimmedId, alias),
       // The server keeps these only for JEV, so the saved baseline must not carry stale ones.
-      ...(draft.strategy === "jev" ? {} : { decisionProvider: null, decisionModel: null, decisionTimeoutMs: null }),
+      ...(draft.strategy === "jev"
+        ? {}
+        : { decisionProvider: null, decisionModel: null, decisionTimeoutMs: null, decisionQuotaSignals: false, decisionMode: undefined, decisionLevelSelect: undefined, decisionPrompt: undefined, decisionLevels: undefined, decisionFallbackLevel: undefined }),
     };
     const renameFrom = !isCreate && trimmedId !== baseline.id ? baseline.id : undefined;
     try {
@@ -178,7 +181,9 @@ export function DetailPanel({
         ok: true,
         text: isCreate ? t("cws.created", { model: item.model }) : t("cws.saved"),
       });
-      onSaved(item);
+      // The clear request was carried by this save; the saved baseline simply has no levels.
+      const { clearDecisionLevels: _cleared, ...savedItem } = item;
+      onSaved(savedItem);
     } finally {
       setBusy(false);
     }
@@ -336,11 +341,16 @@ export function DetailPanel({
               <StrategySeg
                 value={draft.strategy}
                 disabled={busy}
-                onChange={(strategy) => updateDraft((d) => ({ ...d, strategy }))}
+                onChange={(strategy) => updateDraft((d) => ({ ...d, strategy, ...(strategy !== "jev" ? { decisionLevelSelect: undefined } : {}) }))}
               />
               <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
                 {t(COMBO_STRATEGY_HINT_KEYS[draft.strategy])}
               </p>
+              {draft.strategy !== "jev" && (draft.decisionLevels?.length ?? 0) > 0 && (
+                <p role="alert" data-jev-levels-discard style={{ fontSize: 12, margin: "8px 0 0", color: "var(--danger, #b42318)" }}>
+                  {t("cws.jev.levelsDiscardWarning")}
+                </p>
+              )}
             </div>
             {draft.strategy === "jev" && (
               <ComboJevDecisionSection
@@ -353,6 +363,14 @@ export function DetailPanel({
                 decisionProvider={draft.decisionProvider ?? null}
                 decisionModel={draft.decisionModel ?? null}
                 decisionTimeoutMs={draft.decisionTimeoutMs ?? null}
+                decisionQuotaSignals={draft.decisionQuotaSignals === true}
+                decisionMode={draft.decisionMode}
+                decisionLevelSelect={draft.decisionLevelSelect}
+                decisionPrompt={draft.decisionPrompt}
+                decisionLevels={draft.decisionLevels}
+                decisionFallbackLevel={draft.decisionFallbackLevel}
+                staleLevelCandidates={staleLevelCandidates}
+                clearDecisionLevels={draft.clearDecisionLevels === true}
                 disabled={busy}
                 onChange={(patch) => updateDraft((d) => ({ ...d, ...patch }))}
               />

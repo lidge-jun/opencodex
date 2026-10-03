@@ -94,6 +94,30 @@ test("re-points a JEV combo decisionProvider so the migrated config still valida
   expect(comboConfigError("local", config.combos!.local!, providers)).toBeNull();
 });
 
+test("re-points JEV level-mode candidates with the targets they must name", () => {
+  const providers = {
+    [TO]: { adapter: "openai-chat" },
+    other: { adapter: "openai-chat" },
+  } as unknown as Record<string, OcxProviderConfig>;
+  const combo = {
+    strategy: "jev",
+    decisionMode: "level",
+    targets: [{ provider: FROM, model: "qwen3.7-max" }, { provider: "other", model: "m" }],
+    decisionLevels: {
+      routine: { candidates: [{ provider: FROM, model: "qwen3.7-max", effort: "low" }, { provider: "other", model: "m" }] },
+      hard: { candidates: [{ provider: FROM, model: "qwen3.7-max" }] },
+    },
+  };
+  const config = { providers, combos: { auto: combo } } as unknown as OcxConfig;
+
+  expect(rewriteProviderReferences(config, FROM, TO).changed).toBe(3);
+  const levels = config.combos!.auto!.decisionLevels!;
+  expect(levels.routine!.candidates.map(c => c.provider)).toEqual([TO, "other"]);
+  expect(levels.hard!.candidates[0]!.provider).toBe(TO);
+  // Without the level rewrite the candidates would no longer name a target and the load would fail.
+  expect(comboConfigError("auto", config.combos!.auto!, providers)).toBeNull();
+});
+
 test("re-points routingProfiles candidates, a bare provider id like combo targets", () => {
   // candidates[].provider is validated against configured providers
   // (src/routing/profile.ts), so a stale id is the same load-failing dangling

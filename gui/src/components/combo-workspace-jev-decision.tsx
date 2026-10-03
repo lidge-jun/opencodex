@@ -10,12 +10,24 @@ import {
   jevDecisionMethod,
   jevDecisionModelOptions,
 } from "../jev-decision-service";
+import type { ComboDecisionLevels, JevLevelId } from "../combo-workspace-data";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
+import { JevDecisionModeField } from "./combo-workspace-jev-levels";
+import { JevDecisionPromptFields } from "./combo-workspace-jev-prompt";
+import type { JevDecisionPrompt } from "../../../src/combos/jev-decision-contract";
 
 export type JevDecisionPatch = {
   decisionProvider?: string | null;
   decisionModel?: string | null;
   decisionTimeoutMs?: number | null;
+  decisionQuotaSignals?: boolean;
+  decisionMode?: "level";
+  decisionLevelSelect?: "route";
+  decisionLevels?: ComboDecisionLevels;
+  decisionFallbackLevel?: undefined;
+  clearDecisionLevels?: true;
+  decisionPrompt?: JevDecisionPrompt;
+  decisionLevelsEdited?: true;
 };
 
 type DecisionTestResult =
@@ -46,6 +58,14 @@ export function ComboJevDecisionSection({
   decisionProvider,
   decisionModel,
   decisionTimeoutMs,
+  decisionQuotaSignals,
+  decisionMode,
+  decisionLevelSelect,
+  decisionLevels,
+  decisionFallbackLevel,
+  decisionPrompt,
+  staleLevelCandidates,
+  clearDecisionLevels = false,
   disabled,
   onChange,
 }: {
@@ -59,6 +79,14 @@ export function ComboJevDecisionSection({
   decisionProvider: string | null;
   decisionModel: string | null;
   decisionTimeoutMs: number | null;
+  decisionQuotaSignals: boolean;
+  decisionMode?: "level";
+  decisionLevelSelect?: "route";
+  decisionLevels?: ComboDecisionLevels;
+  decisionFallbackLevel?: JevLevelId;
+  decisionPrompt?: JevDecisionPrompt;
+  staleLevelCandidates?: readonly string[];
+  clearDecisionLevels?: boolean;
   disabled?: boolean;
   onChange: (patch: JevDecisionPatch) => void;
 }) {
@@ -270,6 +298,45 @@ export function ComboJevDecisionSection({
           })}
         </p>
       </div>
+
+      <div className="cwi-field" style={{ marginTop: 8 }}>
+        <label className="cwi-jev-effort" htmlFor={`${idPrefix}-decision-quota`}>
+          <input
+            id={`${idPrefix}-decision-quota`}
+            type="checkbox"
+            checked={decisionQuotaSignals}
+            disabled={disabled}
+            aria-describedby={`${idPrefix}-decision-quota-hint`}
+            onChange={(e) => onChange({ decisionQuotaSignals: e.target.checked })}
+          />
+          {t("cws.jev.quotaSignals")}
+        </label>
+        <p id={`${idPrefix}-decision-quota-hint`} className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+          {t(decisionMode === "level" && decisionLevelSelect !== "route" ? "cws.jev.quotaSignalsLevelHint" : "cws.jev.quotaSignalsHint")}
+        </p>
+      </div>
+      <JevDecisionModeField
+        idPrefix={idPrefix}
+        decisionMode={decisionMode}
+        decisionLevelSelect={decisionLevelSelect}
+        onSelectChange={(value) => onChange({ decisionLevelSelect: value })}
+        decisionLevels={decisionLevels}
+        decisionFallbackLevel={decisionFallbackLevel}
+        comboId={comboId}
+        staleLevelCandidates={staleLevelCandidates}
+        clearRequested={clearDecisionLevels}
+        onClearLevels={() => onChange({ clearDecisionLevels: true, decisionLevels: undefined, decisionFallbackLevel: undefined, decisionLevelSelect: undefined })}
+        disabled={disabled}
+        onChange={(mode) => onChange({ decisionMode: mode, decisionLevelSelect: undefined })}
+      />
+      <JevDecisionPromptFields
+        idPrefix={idPrefix}
+        decisionMode={decisionMode}
+        decisionPrompt={decisionPrompt}
+        decisionLevels={decisionLevels}
+        disabled={disabled}
+        onChange={onChange}
+      />
 
       <div className="cwi-jev-decision-test" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
         <button

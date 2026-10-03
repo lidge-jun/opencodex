@@ -358,7 +358,9 @@ model picker and every direct route stay unchanged. Add the credential with `ocx
 JEV may select for each target. Leaving a target's effort setting untouched allows all efforts that
 model currently advertises.
 
-JEV is consulted only for `jev-auto` and only once per logical model call. Missing credentials,
+JEV is consulted only for `jev-auto`, once per logical model call by default. Opt-in within-level routing
+(`decisionLevelSelect: "route"`, level mode only) classifies first, then routes only within that level under one
+shared deadline; stage-two failure keeps the deterministic level backup. Missing credentials,
 network failures, or invalid decisions fail open to the first currently eligible target; caller
 cancellation still cancels the request. Automated tests use a mocked TypeSafe endpoint and do not
 validate a live JEV account.

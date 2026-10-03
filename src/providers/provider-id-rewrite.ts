@@ -20,7 +20,8 @@ export interface ProviderRewriteResult {
  *
  * Three shapes exist and the difference matters: routed model strings
  * (`"<provider>/<model>"`, including `combos[*].decisionModel`), bare provider ids (`customModels[].provider`,
- * `combos[*].targets[].provider`, `combos[*].decisionProvider`, `routingProfiles[*].candidates[].provider`),
+ * `combos[*].targets[].provider`, `combos[*].decisionProvider`,
+ * `combos[*].decisionLevels[*].candidates[].provider`, `routingProfiles[*].candidates[].provider`),
  * and keys that ARE provider ids or routes (`providerContextCaps`,
  * `claudeCode.desktopProfile.assignments`). A rewrite that handles only the
  * first leaves an orphaned context cap and — worse — a combo target or routing
@@ -118,6 +119,15 @@ export function rewriteProviderReferences(config: OcxConfig, from: string, to: s
     if (typeof combo.decisionProvider === "string" && combo.decisionProvider.trim() === from) {
       combo.decisionProvider = to;
       changed += 1;
+    }
+    // Level-mode candidates must name a Combo target, so they follow the targets above.
+    for (const level of Object.values(combo.decisionLevels ?? {})) {
+      for (const candidate of Array.isArray(level?.candidates) ? level.candidates : []) {
+        if (candidate?.provider === from) {
+          candidate.provider = to;
+          changed += 1;
+        }
+      }
     }
   }
 

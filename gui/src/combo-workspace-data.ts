@@ -1,3 +1,5 @@
+import { normalizeJevPromptFields } from "../../src/combos/jev-decision-contract";
+import type { JevDecisionPrompt } from "../../src/combos/jev-decision-contract";
 /**
  * Pure view-model helpers for the Combos workspace.
  * No network — transforms GET /api/combos rows into rail groups + attention.
@@ -16,8 +18,10 @@ import {
   jevDecisionMethod,
   jevDecisionModelForbidden,
 } from "./jev-decision-service";
+import { JEV_DEFAULT_FALLBACK_LEVEL, JEV_LEVEL_IDS, type JevLevelId } from "../../src/combos/jev-decision-contract";
 
 export { SUPPORTED_NATIVE_OPENAI_SLUGS };
+export type { JevLevelId };
 
 export type ComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window" | "jev";
 export type ComboEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -171,7 +175,54 @@ export interface ComboItem {
   decisionModel?: string | null;
   /** `jev` only: decision deadline in ms; null/omitted = the server default. */
   decisionTimeoutMs?: number | null;
+  /** `jev` only: send each target's remaining-quota tier with the decision; omitted = off. */
+  decisionQuotaSignals?: boolean;
+  /** `jev` only: level mode; omitted = route mode. */
+  decisionMode?: "level";
+  decisionLevelSelect?: "route";
+  decisionPrompt?: JevDecisionPrompt;
+  /** Draft-only: description edits preserve the stored candidate lists. */
+  decisionLevelsEdited?: true;
+  /** `jev` only: per-level candidate lists; only descriptions are editable in the dashboard. */
+  decisionLevels?: ComboDecisionLevels;
+  /** `jev` only: explicit level-mode fallback level; read-only, never sent back. */
+  decisionFallbackLevel?: JevLevelId;
+  /** Draft-only: remove the stored levels (and fallback level) on the next save; route mode only. */
+  clearDecisionLevels?: true;
   targets: ComboTarget[];
+}
+
+export interface ComboDecisionLevelCandidate {
+  provider: string;
+  model: string;
+  effort?: ComboEffort;
+}
+
+/** Configured levels in canonical order; a level with an override keeps its description. */
+export type ComboDecisionLevels = Array<{ id: JevLevelId; description?: string; candidates: ComboDecisionLevelCandidate[] }>;
+
+/** Read-only projection of stored `decisionLevels`; malformed entries are skipped, not repaired. */
+function normalizeDecisionLevels(raw: unknown): ComboDecisionLevels | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const levels: ComboDecisionLevels = [];
+  for (const id of JEV_LEVEL_IDS) {
+    const level = (raw as Record<string, unknown>)[id];
+    if (!level || typeof level !== "object" || !Array.isArray((level as { candidates?: unknown }).candidates)) continue;
+    const candidates: ComboDecisionLevelCandidate[] = [];
+    for (const entry of (level as { candidates: unknown[] }).candidates) {
+      if (!entry || typeof entry !== "object") continue;
+      const { provider, model, effort } = entry as Record<string, unknown>;
+      if (typeof provider !== "string" || typeof model !== "string") continue;
+      candidates.push({
+        provider,
+        model,
+        ...(typeof effort === "string" && (COMBO_EFFORTS as string[]).includes(effort) ? { effort: effort as ComboEffort } : {}),
+      });
+    }
+    const description = (level as { description?: unknown }).description;
+    levels.push({ id, ...(typeof description === "string" && description.trim() ? { description } : {}), candidates });
+  }
+  return levels.length > 0 ? levels : undefined;
 }
 
 export interface ComboSections {
@@ -300,6 +351,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
     const decisionProvider = normalizeDecisionProvider(r.decisionProvider);
     const decisionModel = normalizeAlias(r.decisionModel);
     const decisionTimeoutMs = normalizeDecisionTimeoutMs(r.decisionTimeoutMs);
+    const decisionLevels = normalizeDecisionLevels(r.decisionLevels);
     out.push({
       id,
       model: typeof r.model === "string" && r.model.trim()
@@ -317,6 +369,14 @@ export function parseComboList(payload: unknown): ComboItem[] {
       ...(decisionProvider !== null ? { decisionProvider } : {}),
       ...(decisionModel !== null ? { decisionModel } : {}),
       ...(decisionTimeoutMs !== null ? { decisionTimeoutMs } : {}),
+      ...(r.decisionQuotaSignals === true ? { decisionQuotaSignals: true } : {}),
+      ...(r.decisionMode === "level" ? { decisionMode: "level" as const } : {}),
+      ...(r.decisionMode === "level" && r.decisionLevelSelect === "route" ? { decisionLevelSelect: "route" as const } : {}),
+      ...(decisionLevels ? { decisionLevels } : {}),
+      ...normalizeJevPromptFields(r),
+      ...(typeof r.decisionFallbackLevel === "string" && (JEV_LEVEL_IDS as readonly string[]).includes(r.decisionFallbackLevel)
+        ? { decisionFallbackLevel: r.decisionFallbackLevel as JevLevelId }
+        : {}),
       targets,
     });
   }
@@ -491,6 +551,12 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
       (a.decisionProvider ?? null) !== (b.decisionProvider ?? null)
       || (a.decisionModel ?? null) !== (b.decisionModel ?? null)
       || (a.decisionTimeoutMs ?? null) !== (b.decisionTimeoutMs ?? null)
+      || (a.decisionQuotaSignals === true) !== (b.decisionQuotaSignals === true)
+      || (a.decisionMode ?? "route") !== (b.decisionMode ?? "route")
+      || a.decisionLevelSelect !== b.decisionLevelSelect
+      || JSON.stringify(normalizeJevPromptFields(a)) !== JSON.stringify(normalizeJevPromptFields(b))
+      || JSON.stringify(a.decisionLevels ?? []) !== JSON.stringify(b.decisionLevels ?? [])
+      || (a.clearDecisionLevels === true) !== (b.clearDecisionLevels === true)
     ))
   ) return false;
   if (a.targets.length !== b.targets.length) return false;
@@ -520,6 +586,12 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     decisionProvider?: string | null;
     decisionModel?: string | null;
     decisionTimeoutMs?: number | null;
+    decisionQuotaSignals?: boolean;
+    decisionMode?: "level" | null;
+    decisionLevelSelect?: "route" | null;
+    decisionPrompt?: JevDecisionPrompt | null;
+    decisionLevels?: Partial<Record<JevLevelId, { description?: string; candidates: ComboDecisionLevelCandidate[] }>> | null;
+    decisionFallbackLevel?: null;
   };
 } {
   const weighted = item.strategy === "round-robin" || item.strategy === "random";
@@ -558,6 +630,19 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
             decisionProvider: item.decisionModel?.trim() ? null : normalizeDecisionProvider(item.decisionProvider),
             decisionModel: item.decisionModel?.trim() || null,
             decisionTimeoutMs: item.decisionTimeoutMs ?? null,
+            // Explicit false turns it off; the server keeps an omitted value.
+            decisionQuotaSignals: item.decisionQuotaSignals === true,
+            // Null selects route mode. Unedited levels and fallback survive by omission.
+            decisionMode: item.decisionMode === "level" ? "level" : null,
+            decisionLevelSelect: item.decisionMode === "level" && item.decisionLevelSelect === "route" ? "route" : null,
+            decisionPrompt: normalizeJevPromptFields(item).decisionPrompt ?? null,
+            ...(item.decisionLevelsEdited && item.decisionLevels
+              ? { decisionLevels: Object.fromEntries(item.decisionLevels.map(({ id, description, candidates }) => [id, { candidates, ...(description?.trim() ? { description: description.trim() } : {}) }])) }
+              : {}),
+            // The one level edit the dashboard makes: an explicit clear, offered only in route mode.
+            ...(item.clearDecisionLevels && item.decisionMode !== "level"
+              ? { decisionLevels: null, decisionFallbackLevel: null }
+              : {}),
           }
         : {}),
     },
@@ -785,9 +870,9 @@ export function jevDecisionServiceOptions(
 
 /** Read-only decision-service facts for a JEV combo, or null for other strategies. */
 export function jevDecisionSummary(
-  item: Pick<ComboItem, "strategy" | "decisionProvider" | "decisionModel" | "decisionTimeoutMs">,
+  item: Pick<ComboItem, "strategy" | "decisionProvider" | "decisionModel" | "decisionTimeoutMs" | "decisionQuotaSignals" | "decisionMode" | "decisionLevelSelect">,
   providers: readonly { name: string; adapter?: string; baseUrl?: string }[],
-): { provider: string | null; model: string | null; baseUrl: string | null; timeoutMs: number | null } | null {
+): { provider: string | null; model: string | null; baseUrl: string | null; timeoutMs: number | null; quotaSignals: boolean; mode: "route" | "level"; levelSelect: "order" | "route" } | null {
   if (item.strategy !== "jev") return null;
   const provider = normalizeDecisionProvider(item.decisionProvider);
   const row = provider === null ? undefined : providers.find(candidate => candidate.name === provider);
@@ -796,5 +881,45 @@ export function jevDecisionSummary(
     model: item.decisionModel?.trim() || null,
     baseUrl: row?.baseUrl?.trim() || null,
     timeoutMs: item.decisionTimeoutMs ?? null,
+    quotaSignals: item.decisionQuotaSignals === true,
+    mode: item.decisionMode === "level" ? "level" : "route",
+    levelSelect: item.decisionMode === "level" && item.decisionLevelSelect === "route" ? "route" : "order",
   };
+}
+
+/** Level-mode fallback level as the server applies it: the stored one, else the default. */
+export function jevEffectiveFallbackLevel(item: Pick<ComboItem, "decisionFallbackLevel">): JevLevelId {
+  return item.decisionFallbackLevel ?? JEV_DEFAULT_FALLBACK_LEVEL;
+}
+
+/**
+ * Level candidates the server would refuse for this draft: the target is gone from `targets`, or the
+ * target's own `reasoningEfforts` no longer includes the candidate's effort. Empty unless a JEV
+ * draft still carries levels, so it is safe to call for any strategy.
+ */
+export function jevStaleLevelCandidates(
+  item: Pick<ComboItem, "strategy" | "decisionLevels" | "clearDecisionLevels" | "targets">,
+): string[] {
+  if (item.strategy !== "jev" || item.clearDecisionLevels || !item.decisionLevels) return [];
+  // Per target: its allowed efforts, or null when it names none (any effort is accepted then).
+  const targets = new Map(item.targets.map(target => [
+    `${target.provider.trim()}/${target.model.trim()}`,
+    target.reasoningEfforts === undefined ? null : new Set<ComboEffort>(target.reasoningEfforts),
+  ]));
+  const stale = new Set<string>();
+  for (const level of item.decisionLevels) {
+    for (const candidate of level.candidates) {
+      const key = `${candidate.provider}/${candidate.model}`;
+      const efforts = targets.get(key);
+      if (!targets.has(key) || (candidate.effort !== undefined && efforts && !efforts.has(candidate.effort))) {
+        stale.add(jevLevelCandidateLabel(candidate));
+      }
+    }
+  }
+  return [...stale];
+}
+
+/** One display line per level candidate: `provider/model:effort`, or without effort when unset. */
+export function jevLevelCandidateLabel(candidate: ComboDecisionLevelCandidate): string {
+  return `${candidate.provider}/${candidate.model}${candidate.effort ? `:${candidate.effort}` : ""}`;
 }

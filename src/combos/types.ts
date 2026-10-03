@@ -7,7 +7,11 @@ import {
   JEV_DECISION_TIMEOUT_MAX_MS,
   JEV_DECISION_TIMEOUT_MIN_MS,
   isSystemOneEndpoint,
+  type JevDecisionPrompt,
+  type JevLevelId,
 } from "./jev-decision-contract";
+import { jevLevelConfigIssues, normalizeJevLevelFields, type NormalizedJevLevels } from "./jev-level-config";
+import { jevPromptConfigIssues, normalizeJevPromptFields } from "./jev-prompt-config";
 
 export const COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS = 0;
 export const JEV_MAX_CANDIDATE_FIELD_CHARS = 512;
@@ -70,6 +74,18 @@ export interface NormalizedComboConfig {
   decisionModel?: string;
   /** JEV decision deadline override; absent keeps the default four-second deadline. */
   decisionTimeoutMs?: number;
+  /** JEV remaining-quota signals opt-in; present only when enabled. */
+  decisionQuotaSignals?: true;
+  /** JEV level mode; present only as `"level"` (omitted means `"route"`). */
+  decisionMode?: "level";
+  /** JEV level candidate lists, canonical level order; kept in either mode. */
+  decisionLevels?: NormalizedJevLevels;
+  /** Explicit level-mode fallback level; absent means `"routine"`. */
+  decisionFallbackLevel?: JevLevelId;
+  /** Within-level routing opt-in; absent means the default `"order"` selection. */
+  decisionLevelSelect?: "route";
+  /** JEV decision wording overrides; only fields that differ from the built-in wording. */
+  decisionPrompt?: JevDecisionPrompt;
   targets: NormalizedComboTarget[];
 }
 
@@ -347,6 +363,15 @@ export function comboConfigIssues(
       issues.push({ path: ["decisionTimeoutMs"], message: 'decisionTimeoutMs is only valid with strategy "jev"' });
     }
   }
+  if (body.decisionQuotaSignals !== undefined && body.decisionQuotaSignals !== null) {
+    if (typeof body.decisionQuotaSignals !== "boolean") {
+      issues.push({ path: ["decisionQuotaSignals"], message: "decisionQuotaSignals must be a boolean" });
+    } else if (body.strategy !== "jev") {
+      issues.push({ path: ["decisionQuotaSignals"], message: 'decisionQuotaSignals is only valid with strategy "jev"' });
+    }
+  }
+  issues.push(...jevLevelConfigIssues(body, id));
+  issues.push(...jevPromptConfigIssues(body));
 
   if (!Array.isArray(body.targets) || body.targets.length === 0) {
     issues.push({ path: ["targets"], message: "targets must be a non-empty array" });
@@ -492,6 +517,9 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     ...(decisionProvider && decisionProvider !== CANONICAL_JEV_DECISION_PROVIDER ? { decisionProvider } : {}),
     ...(decisionModel ? { decisionModel } : {}),
     ...(typeof raw.decisionTimeoutMs === "number" ? { decisionTimeoutMs: raw.decisionTimeoutMs } : {}),
+    ...(raw.decisionQuotaSignals === true ? { decisionQuotaSignals: true as const } : {}),
+    ...normalizeJevLevelFields(raw),
+    ...(raw.strategy === "jev" ? normalizeJevPromptFields(raw) : {}),
     targets: raw.targets.map(target => ({
       provider: target.provider.trim(),
       model: target.model.trim(),

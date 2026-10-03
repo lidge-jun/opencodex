@@ -129,6 +129,10 @@ describe("combo-workspace-data", () => {
         decisionProvider: null,
         decisionModel: null,
         decisionTimeoutMs: null,
+        decisionQuotaSignals: false,
+        decisionMode: null,
+        decisionLevelSelect: null,
+        decisionPrompt: null,
       },
     });
   });
