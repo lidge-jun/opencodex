@@ -7,6 +7,85 @@ import { startDesktopRelay } from "../../src/codex/desktop-compatibility/relay-l
 import { forwardProxy } from "../helpers/desktop-egress-fixture";
 import { UsageRelayController } from "../../src/codex/desktop-compatibility/usage-controller";
 import { createUsageControlledFetch } from "../../src/codex/desktop-compatibility/usage-controlled-fetch";
+import { controlledUsageSse } from "../../src/codex/desktop-compatibility/usage-sse-controller";
+
+test("oversized SSE records pass through byte-for-byte and framing resumes at the next record", async () => {
+  for (const lineEnding of ["\n", "\r", "\r\n"]) {
+    const oversized = Buffer.from(`event: usage.snapshot${lineEnding}data: {"noise":"${"x".repeat(160)}"}${lineEnding}${lineEnding}`);
+    const later = Buffer.from(`event: usage.snapshot${lineEnding}data: {"marker":"normal"}${lineEnding}${lineEnding}`);
+    const input = Buffer.concat([oversized, later]);
+    const calls: string[] = [];
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const byte of input) controller.enqueue(Uint8Array.of(byte));
+        controller.close();
+      },
+    });
+    const output = await new Response(source.pipeThrough(controlledUsageSse(async text => {
+      calls.push(text);
+      return text === '{"marker":"normal"}' ? '{"marker":"rewritten"}' : null;
+    }, 64))).arrayBuffer();
+    const bytes = Buffer.from(output);
+
+    expect(bytes.subarray(0, oversized.length)).toEqual(oversized);
+    expect(bytes.subarray(oversized.length)).toEqual(Buffer.from(
+      `event: usage.snapshot${lineEnding}data: {"marker":"rewritten"}${lineEnding}${lineEnding}`));
+    expect(calls).toEqual(['{"marker":"normal"}']);
+  }
+});
+
+test("an oversized usage record is preserved through the 200 relay and a later record is still rewritten", async () => {
+  const account = { id: "fixture-account", userId: "fixture-user", plan: "pro", structure: "personal" } as const;
+  const usage = { account_id: account.id, user_id: account.userId, plan_type: account.plan,
+    rate_limit: { allowed: false, limit_reached: true, primary_window: { used_percent: 100, reset_at: 123456 } },
+    spend_control: { reached: false }, credits: { has_credits: false, unlimited: false } };
+  const controller = new UsageRelayController(account, async () => account, async () => account, () => 1000, 100000);
+  await controller.rewriteJson(JSON.stringify(usage), { method: "GET", pathname: "/backend-api/wham/usage", status: 200 });
+  expect((await controller.activate({ scope: "account-ui-compatibility", accountWideConsent: true })).accepted).toBe(true);
+
+  const oversizedUsage = { ...usage, observation_noise: "x".repeat(262200) };
+  const oversized = Buffer.from(`event: usage.snapshot\r\ndata: ${JSON.stringify({ version: 1, stream_id: "fixture", sequence: 1, usage: oversizedUsage })}\r\n\r\n`);
+  const later = Buffer.from(`event: usage.snapshot\r\ndata: ${JSON.stringify({ version: 1, stream_id: "fixture", sequence: 2, usage })}\r\n\r\n`);
+  const corrected = Buffer.from(`event: usage.snapshot\r\ndata: ${JSON.stringify({ version: 1, stream_id: "fixture", sequence: 2,
+    usage: { ...usage, rate_limit: { ...usage.rate_limit, allowed: true, limit_reached: false } } })}\r\n\r\n`);
+  const body = Buffer.concat([oversized, later]);
+  const chunkSizes = [65533, 19, 131071, 2, 7, 16383, 1, 4093];
+  const source = new ReadableStream<Uint8Array>({
+    start(stream) {
+      let offset = 0, index = 0;
+      while (offset < body.length) {
+        const end = Math.min(body.length, offset + chunkSizes[index++ % chunkSizes.length]!);
+        stream.enqueue(body.subarray(offset, end));
+        offset = end;
+      }
+      stream.close();
+    },
+  });
+  const ca = createCertificateAuthority({ commonName: "oversized-usage-fixture", validityDays: 1 });
+  const relay = await startDesktopRelay({ leaf: issueServerLeaf(ca, "oversized-usage-fixture", ["chatgpt.com"]),
+    fetchImpl: createUsageControlledFetch(controller, (async () => new Response(source, {
+      headers: { "content-type": "text/event-stream" },
+    })) as typeof fetch) });
+  try {
+    const response = await new Promise<{ status?: number; complete: boolean; bytes: Buffer }>((resolve, reject) => {
+      const client = request({ hostname: "127.0.0.1", port: relay.port, servername: "chatgpt.com", ca: ca.certPem,
+        path: "/backend-api/wham/usage/stream", headers: { host: "chatgpt.com" } }, incoming => {
+        const chunks: Buffer[] = [];
+        incoming.on("data", chunk => chunks.push(Buffer.from(chunk)));
+        incoming.once("error", reject);
+        incoming.once("end", () => resolve({ status: incoming.statusCode, complete: incoming.complete, bytes: Buffer.concat(chunks) }));
+      });
+      client.once("error", reject);
+      client.setTimeout(10000, () => client.destroy(new Error("fixture timeout")));
+      client.end();
+    });
+    expect(response.status).toBe(200);
+    expect(response.complete).toBe(true);
+    expect(response.bytes).toEqual(Buffer.concat([oversized, corrected]));
+    expect(controller.snapshot().observation.streamSnapshots).toBe(1);
+    expect(controller.snapshot().outputs).toBe(1);
+  } finally { await relay.close(); await controller.observeOnly(); }
+});
 
 test("HTTP Host is case-insensitive while foreign hosts and ports cannot reach upstream", async () => {
   const ca = createCertificateAuthority({ commonName: "host-fixture", validityDays: 1 });

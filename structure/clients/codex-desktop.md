@@ -130,6 +130,8 @@ Pending response checks from the previous generation cannot emit a correction af
 Native identity verification also binds an opaque reader-local credential generation from a stable file-stat/content snapshot. Replacement, token rotation and A-to-B-to-A restoration invalidate pending identity checks and response correction; they require a fresh observation runtime. Neither credential hashes nor tokens appear in public status. `tests/clients/desktop-compatibility-native-identity.test.ts` exercises delayed verification and build-check races with synthetic auth files.
 Fresh identity checks, generation changes, unknown schemas and elapsed deadlines refuse
 correction. `usage-sse-controller.ts` preserves event metadata and original sequence IDs;
+records over its default 256 KiB cap pass through unchanged until the record delimiter,
+after which framing resumes for later records.
 `usage-refresh.ts` closes only usage streams bound by validated original account records.
 `usage-controlled-fetch.ts` removes stale validators from changed JSON and controlled SSE.
 Response production is reported separately from app-cache or UI confirmation.

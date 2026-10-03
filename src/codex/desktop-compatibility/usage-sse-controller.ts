@@ -32,34 +32,54 @@ async function rewriteRecord(bytes: Buffer, first: boolean, rewrite: Rewrite): P
 export function controlledUsageSse(rewrite: Rewrite, cap = 262144): TransformStream<Uint8Array, Uint8Array> {
   if (!Number.isSafeInteger(cap) || cap < 1 || cap > 1048576) throw new Error('Invalid record limit');
   const buffer = Buffer.alloc(cap);
-  let used = 0, lineBytes = 0, pendingCR = false, first = true;
+  let used = 0, lineHasBytes = false, pendingCR = false, first = true, passthrough = false;
   return new TransformStream({
     async transform(chunk, controller) {
-      const endLine = async () => {
-        if (lineBytes === 0) {
-          controller.enqueue(await rewriteRecord(buffer.subarray(0, used), first, rewrite));
-          first = false; used = 0;
-        }
-        lineBytes = 0;
+      let rawStart = passthrough ? 0 : -1;
+      const enterPassthrough = (start: number) => {
+        controller.enqueue(Buffer.from(buffer.subarray(0, used)));
+        used = 0; passthrough = true; rawStart = start;
       };
-      for (const byte of chunk) {
+      const endRecord = async (rawEnd: number) => {
+        if (passthrough) {
+          if (rawEnd > rawStart) controller.enqueue(chunk.subarray(rawStart, rawEnd));
+          passthrough = false; rawStart = -1;
+        } else {
+          controller.enqueue(await rewriteRecord(buffer.subarray(0, used), first, rewrite));
+        }
+        first = false; used = 0; lineHasBytes = false;
+      };
+      for (let i = 0; i < chunk.length; i++) {
+        const byte = chunk[i]!;
         if (pendingCR) {
           pendingCR = false;
-          if (byte !== 10) await endLine();
+          if (byte !== 10) {
+            if (!lineHasBytes) await endRecord(i);
+            lineHasBytes = false;
+          }
           else {
-            if (used === cap) throw new Error('Usage SSE record exceeds limit');
-            buffer[used++] = byte; await endLine(); continue;
+            if (!passthrough && used === cap) enterPassthrough(i);
+            if (!passthrough) buffer[used++] = byte;
+            const blankLine = !lineHasBytes;
+            lineHasBytes = false;
+            if (blankLine) await endRecord(i + 1);
+            continue;
           }
         }
-        if (used === cap) throw new Error('Usage SSE record exceeds limit');
-        buffer[used++] = byte;
+        if (!passthrough && used === cap) enterPassthrough(i);
+        if (!passthrough) buffer[used++] = byte;
         if (byte === 13) pendingCR = true;
-        else if (byte === 10) await endLine();
-        else lineBytes++;
+        else if (byte === 10) {
+          const blankLine = !lineHasBytes;
+          lineHasBytes = false;
+          if (blankLine) await endRecord(i + 1);
+        } else lineHasBytes = true;
       }
+      if (passthrough && rawStart < chunk.length) controller.enqueue(chunk.subarray(rawStart));
     },
     async flush(controller) {
-      if (pendingCR && lineBytes === 0) { controller.enqueue(await rewriteRecord(buffer.subarray(0, used), first, rewrite)); used = 0; }
+      if (passthrough) return;
+      if (pendingCR && !lineHasBytes) { controller.enqueue(await rewriteRecord(buffer.subarray(0, used), first, rewrite)); used = 0; }
       if (used > 0) controller.enqueue(Buffer.from(buffer.subarray(0, used)));
     },
   });
