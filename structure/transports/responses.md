@@ -49,7 +49,7 @@ keep-alive reuse with `Connection: close` and `keepalive: false`; exact hosts an
 match case-insensitively. `sendWithConnectionPolicy` applies the policy around the fetch that
 performs the physical send, after a dispatch override has selected or rebuilt the destination, so
 matching follows the URL sent on the wire rather than the URL supplied before credential
-revalidation.
+revalidation. At this final HTTP boundary, native ChatGPT Responses and compact JSON strings of at least 1 MiB (UTF-8) become byte buffers to avoid Bun's large-string upload resets. Content, headers, abort signals and retry policy are preserved; WebSocket selection still receives the original string. Other destinations, small strings and existing byte/stream bodies retain their representation.
 
 The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
 `route.provider.fetch` at send time, because reselection can install a different provider transport

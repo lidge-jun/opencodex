@@ -27,6 +27,11 @@ hard byte cap. Per-body limits, parsing, compression, and reader error envelopes
 `tests/usage/request-decompress.test.ts` covers exact accounting across codecs and Unicode/numeric
 normalization, UTF-8 counting without encoded copies, and release after malformed or optional empty input.
 
+The final native ChatGPT Responses HTTP send in `src/server/responses/fetch-helpers.ts` encodes JSON
+strings of at least 1 MiB as a UTF-8 buffer for Bun upload compatibility. This is a transport copy,
+not a counting allocation or retained continuation. Existing body admission limits still apply;
+the serialization observation keeps its existing lifetime, and nested dispatch reuses the buffer.
+
 ## Raised HTTP body admission
 
 `src/server/inbound-body-admission.ts` reserves the full resolved `maxInboundBodyBytes` allowance

@@ -3,11 +3,104 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createScanner, LanguageVariant, SyntaxKind } from "typescript/unstable/ast";
-import { fetchWithHeaderTimeout, storedPoolReplayDispatchNotifier } from "../../src/server/responses/fetch-helpers";
+import { fetchWithHeaderTimeout, providerFetch, sendWithConnectionPolicy, storedPoolReplayDispatchNotifier } from "../../src/server/responses/fetch-helpers";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 
 const repoRoot = resolveRepoRoot();
 const helperPath = resolve(repoRoot, "src/server/responses/fetch-helpers.ts");
+
+describe("native Codex HTTP upload representation", () => {
+  const endpoint = "https://chatgpt.com/backend-api/codex/responses";
+
+  function captureFetch() {
+    const calls: { input: Parameters<typeof fetch>[0]; init?: RequestInit }[] = [];
+    const execute = (async (input, init) => {
+      calls.push({ input, init });
+      return new Response("ok");
+    }) as typeof fetch;
+    return { calls, execute };
+  }
+
+  test("sends large Unicode JSON as identical UTF-8 bytes without changing request metadata", async () => {
+    // Fewer than 1 MiB of JS code units, but over 1 MiB on the wire.
+    const body = JSON.stringify({ input: "é🦊".repeat(200_000) });
+    const signal = new AbortController().signal;
+    const headers = { "content-type": "application/json", "x-request-test": "preserved" };
+    const init: RequestInit = { method: "POST", body, headers, signal };
+    const capture = captureFetch();
+
+    await sendWithConnectionPolicy(capture.execute, endpoint, init);
+
+    expect(capture.calls).toHaveLength(1);
+    const sent = capture.calls[0]!;
+    expect(sent.input).toBe(endpoint);
+    expect(sent.init?.body instanceof Uint8Array).toBe(true);
+    expect(Buffer.from(sent.init!.body as Uint8Array).equals(Buffer.from(body, "utf8"))).toBe(true);
+    expect(sent.init?.method).toBe("POST");
+    expect(sent.init?.signal).toBe(signal);
+    expect(Object.fromEntries(new Headers(sent.init?.headers))).toEqual(headers);
+    expect(sent.init?.redirect).toBe("manual");
+    expect(init.body).toBe(body);
+  });
+
+  test("covers compact and rebuilt destinations at the final HTTP dispatch", async () => {
+    const body = JSON.stringify({ input: "x".repeat(1024 * 1024) });
+    const capture = captureFetch();
+    const send = providerFetch({ adapter: "openai-responses", baseUrl: "https://gateway.example/v1", fetch: capture.execute }, undefined, {
+      httpOnly: true,
+      dispatchOverride: (_input, init, execute) => execute(new URL(`${endpoint}/compact`), init),
+    });
+
+    await send("https://gateway.example/v1/responses", { method: "POST", body });
+
+    expect(capture.calls).toHaveLength(1);
+    expect(String(capture.calls[0]!.input)).toBe(`${endpoint}/compact`);
+    const sent = capture.calls[0]!.init?.body;
+    expect(sent instanceof Uint8Array).toBe(true);
+    expect(Buffer.from(sent as Uint8Array).equals(Buffer.from(body, "utf8"))).toBe(true);
+  });
+
+  test("preserves small strings and already encoded bodies by identity", async () => {
+    const capture = captureFetch();
+    const bodies: BodyInit[] = ["{}", Buffer.alloc(1024 * 1024, 120), new Blob(["unchanged"]), new ReadableStream()];
+    for (const body of bodies) {
+      await sendWithConnectionPolicy(capture.execute, new Request(endpoint), { method: "POST", body });
+      expect(capture.calls.at(-1)!.init?.body).toBe(body);
+    }
+    expect(capture.calls).toHaveLength(bodies.length);
+  });
+
+  test("leaves other hosts, schemes, ports and endpoint paths unchanged", async () => {
+    const body = "x".repeat(1024 * 1024);
+    const capture = captureFetch();
+    for (const target of ["https://api.openai.com/v1/responses", "https://gateway.example/v1/responses",
+      "http://chatgpt.com/backend-api/codex/responses", "https://chatgpt.com:8443/backend-api/codex/responses",
+      "https://chatgpt.com/backend-api/codex/models", "https://chatgpt.com/backend-api/codex/responses/other"]) {
+      await sendWithConnectionPolicy(capture.execute, target, { method: "POST", body });
+      expect(capture.calls.at(-1)!.init?.body).toBe(body);
+    }
+  });
+
+  test("nested dispatch preserves the encoded buffer and propagates failure without retry", async () => {
+    const body = "x".repeat(1024 * 1024);
+    const failure = Object.assign(new TypeError("test connection reset"), { code: "ECONNRESET" });
+    let calls = 0;
+    let encoded: BodyInit | null | undefined;
+    const physical = (async (_input, init) => {
+      calls += 1;
+      expect(init?.body).toBe(encoded);
+      throw failure;
+    }) as typeof fetch;
+    const nested = ((input, init) => {
+      encoded = init?.body;
+      expect(encoded instanceof Uint8Array).toBe(true);
+      return sendWithConnectionPolicy(physical, input, init);
+    }) as typeof fetch;
+
+    await expect(sendWithConnectionPolicy(nested, endpoint, { method: "POST", body })).rejects.toBe(failure);
+    expect(calls).toBe(1);
+  });
+});
 
 interface RuntimeImportScan {
   specifiers: string[];

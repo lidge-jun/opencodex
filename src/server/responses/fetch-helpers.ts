@@ -192,8 +192,17 @@ export function sendWithConnectionPolicy(
   const egressInit = redirectedToLoopback
     ? { proxy: false as const }
     : decide ? providerEgressSendInit(egress, physicalFetch, input) : {};
+  // Bun can reset large native Codex string uploads before receiving headers while
+  // the identical UTF-8 buffer succeeds. Convert only at the final HTTP send so
+  // WebSocket selection still sees the serialized string and no retry is added.
+  const target = input instanceof Request ? input.url : String(input);
+  const body = init?.body;
+  const largeCodexBody = typeof body === "string"
+    && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
+    && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
   return physicalFetch(input, {
     ...init,
+    ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
     headers,
     redirect: "manual",
     ...(fresh ? { keepalive: false } : {}),
