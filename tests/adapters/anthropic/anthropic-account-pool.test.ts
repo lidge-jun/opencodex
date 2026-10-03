@@ -330,6 +330,14 @@ describe("anthropic account pool", () => {
     })).toBe("sess-a");
   });
 
+  test("session key skips blank ids while preserving usable id priority", () => {
+    expect(anthropicSessionKeyFromParts({ clientThreadId: " ", sessionIdHeader: " session ", threadIdHeader: "thread" })).toBe("session");
+    expect(anthropicSessionKeyFromParts({ clientThreadId: "", sessionIdHeader: "\t", threadIdHeader: " thread ", promptCacheKeyIsSharedCohort: true })).toBe("thread");
+    expect(anthropicSessionKeyFromParts({ clientThreadId: " client ", sessionIdHeader: "session", threadIdHeader: "thread" })).toBe("client");
+    expect(anthropicSessionKeyFromParts({ clientThreadId: " ", sessionIdHeader: " ", threadIdHeader: " ", promptCacheKey: " cache " })).toBe("cache");
+    expect(anthropicSessionKeyFromParts({ clientThreadId: " ", sessionIdHeader: " ", threadIdHeader: " ", promptCacheKey: "cohort", promptCacheKeyIsSharedCohort: true })).toBeNull();
+  });
+
   test("shared Desktop cache cohort alone does not create affinity key", () => {
     expect(anthropicSessionKeyFromParts({
       promptCacheKey: "shared-cohort-hash",

@@ -53,7 +53,7 @@ afterEach(async () => {
   await testWindow.happyDOM?.close?.();
 });
 
-type Settings = { enabled: boolean; autoSwitchThreshold?: number; strategy?: string; quotaWindow?: string };
+type Settings = { enabled: boolean; autoSwitchThreshold?: number; strategy?: string; quotaWindow?: string; nativeMessages?: boolean };
 
 /** GET answers with settings (or fails); PUT answers per the supplied status. */
 function stubPool(get: Settings | "fail", putStatus = 200): { puts: number } {
@@ -158,6 +158,40 @@ describe("Claude account pool conditions", () => {
     expect(host.textContent).toContain(DICTS.en["anthropicPool.loadFailed"]);
     expect(toggleOf(host).disabled).toBe(true);
     expect(host.querySelector(".anthropic-pool-card__notice")?.getAttribute("role")).toBeNull();
+  });
+
+  test("native Messages preservation defaults on and saves the server-confirmed value", async () => {
+    const calls: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        calls.push(body);
+        return Response.json({ ...body, nativeMessages: false });
+      }
+      return Response.json({ enabled: true, kind: "anthropic" });
+    }) as typeof fetch;
+    const host = await mount(2);
+    const toggle = host.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!;
+    expect(toggle.checked).toBe(true);
+    expect(host.textContent).toContain("cache hits are not guaranteed");
+    await act(async () => { toggle.click(); await flush(); });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ provider: "anthropic", nativeMessages: false });
+    expect(host.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!.checked).toBe(false);
+  });
+
+  test("native Messages toggle rolls back after a failed save and stays disabled after a failed load", async () => {
+    stubPool({ enabled: true, nativeMessages: true }, 500);
+    const host = await mount(2);
+    const toggle = host.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!;
+    expect(toggle.checked).toBe(true);
+    await act(async () => { toggle.click(); await flush(); });
+    expect(host.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!.checked).toBe(true);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(DICTS.en["anthropicPool.saveFailed"]);
+
+    stubPool("fail");
+    const failedHost = await mount(2);
+    expect(failedHost.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!.disabled).toBe(true);
   });
 });
 

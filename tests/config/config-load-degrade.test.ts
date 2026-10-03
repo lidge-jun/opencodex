@@ -453,3 +453,32 @@ test("an ambiguous credentialGroups declaration is rejected on write, never orde
   expect(valid.ok).toBe(true);
   expect(valid.ok === true && valid.config.pool?.credentialGroups).toHaveLength(1);
 });
+
+
+test("malformed native pool preferences preserve providers on file load but reject candidate writes", () => {
+  for (const nativeMessages of ["false", null, 0]) {
+    const config = {
+      ...candidate(undefined),
+      providers: { xai: { ...candidate(undefined).providers.xai, apiKey: "fixture-key-preserved" } },
+      anthropicAccountPool: { enabled: true, nativeMessages, stickyLimit: 3 },
+    };
+    writeFileSync(getConfigPath(), JSON.stringify(config), "utf8");
+    const loaded = loadConfig();
+    expect(loaded.providers.xai).toMatchObject({ note: "keep me", baseUrl: "https://api.x.ai/v1", apiKey: "fixture-key-preserved" });
+    expect(loaded.anthropicAccountPool).toMatchObject({ enabled: true, nativeMessages: false, stickyLimit: 3 });
+    expect(readConfigDiagnostics().config.providers.xai).toMatchObject({ note: "keep me" });
+    const rejected = validateConfigCandidate(config);
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error).toContain("anthropicAccountPool.nativeMessages");
+  }
+});
+
+test("malformed native pool blocks preserve unrelated providers on file load", () => {
+  for (const anthropicAccountPool of [null, "false", 0]) {
+    const config = { ...candidate(undefined), anthropicAccountPool };
+    writeFileSync(getConfigPath(), JSON.stringify(config), "utf8");
+    expect(loadConfig().providers.xai).toMatchObject({ note: "keep me", baseUrl: "https://api.x.ai/v1" });
+    expect(readConfigDiagnostics().config.providers.xai).toMatchObject({ note: "keep me" });
+    expect(validateConfigCandidate(config).ok).toBe(false);
+  }
+});

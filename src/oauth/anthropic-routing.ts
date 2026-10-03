@@ -1172,12 +1172,10 @@ export function anthropicSessionKeyFromParts(input: {
   /** When true, prompt_cache_key is a shared Desktop cohort — ignore it for affinity. */
   promptCacheKeyIsSharedCohort?: boolean;
 }): string | null {
-  const preferred = (
-    input.clientThreadId
-    ?? input.sessionIdHeader
-    ?? input.threadIdHeader
-    ?? ""
-  ).trim();
+  const preferred = input.clientThreadId?.trim()
+    || input.sessionIdHeader?.trim()
+    || input.threadIdHeader?.trim()
+    || "";
   if (preferred) {
     return preferred.length <= 128 ? preferred : createHash("sha256").update(preferred).digest("hex");
   }

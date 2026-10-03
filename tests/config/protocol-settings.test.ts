@@ -11,6 +11,8 @@ import {
   resolveApiSurfaceSettings,
   resolveProtocolSettings,
 } from "../../src/protocols/settings";
+import { configSchema } from "../../src/config/schema/config-schema";
+import { validateConfigCandidate } from "../../src/config/diagnostics";
 import type { OcxConfig } from "../../src/types";
 
 function cfg(extra: Record<string, unknown>): OcxConfig {
@@ -76,4 +78,50 @@ describe("protocol settings resolution", () => {
     expect(protocolPolicyRevision(cfg({ claudeCode: { enabled: false } }))).not.toBe(base);
     expect(base).toMatch(/^p1-[0-9a-f]{8}$/);
   });
+});
+
+
+describe("Anthropic pool native Messages preference", () => {
+  test("enabled pools default both native switches on without changing stored rollout", () => {
+    const config = cfg({ anthropicAccountPool: { enabled: true }, protocols: { rollout: { managedMessagesNative: false } } });
+    expect(resolveProtocolSettings(config).rollout).toMatchObject({ managedMessagesNative: true, managedMessagesNativeOAuth: true });
+    expect(config.protocols?.rollout?.managedMessagesNative).toBe(false);
+    expect(protocolPolicyRevision(config)).not.toBe(protocolPolicyRevision(cfg({})));
+  });
+  test("an enabled pool's explicit false selects legacy; true selects native", () => {
+    for (const nativeMessages of [false, true]) expect(resolveProtocolSettings(cfg({ anthropicAccountPool: { enabled: true, nativeMessages }, protocols: { rollout: { managedMessagesNative: true, managedMessagesNativeOAuth: true } } })).rollout).toMatchObject({ managedMessagesNative: nativeMessages, managedMessagesNativeOAuth: nativeMessages });
+  });
+  test("disabled and absent pools retain explicit protocol behavior", () => {
+    for (const pool of [undefined, { enabled: false, nativeMessages: true }, { enabled: false, nativeMessages: false }]) {
+      expect(resolveProtocolSettings(cfg({ anthropicAccountPool: pool })).rollout.managedMessagesNative).toBe(false);
+      expect(resolveProtocolSettings(cfg({ anthropicAccountPool: pool, protocols: { rollout: { managedMessagesNative: true, managedMessagesNativeOAuth: true } } })).rollout.managedMessagesNativeOAuth).toBe(true);
+    }
+  });
+});
+
+
+test("the config schema validates nativeMessages as a boolean while retaining pool fields", () => {
+  const poolSchema = configSchema.shape.anthropicAccountPool;
+  for (const nativeMessages of [true, false]) {
+    const result = poolSchema.safeParse({ enabled: true, nativeMessages, stickyLimit: 3 });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ nativeMessages, stickyLimit: 3 });
+  }
+  for (const nativeMessages of ["false", null, 0]) {
+    expect(poolSchema.parse({ enabled: true, nativeMessages, stickyLimit: 3 })).toMatchObject({ nativeMessages: false, stickyLimit: 3 });
+    const candidate = validateConfigCandidate({ anthropicAccountPool: { nativeMessages } });
+    expect(candidate.ok).toBe(false);
+    if (!candidate.ok) expect(candidate.error).toContain("anthropicAccountPool.nativeMessages");
+  }
+  for (const anthropicAccountPool of [null, "false", 0]) {
+    expect(poolSchema.parse(anthropicAccountPool)).toBeUndefined();
+    expect(validateConfigCandidate({ anthropicAccountPool }).ok).toBe(false);
+  }
+});
+
+test("policy revision records explicit native flags even when Anthropic pool defaults mask them", () => {
+  const config = { providers: {}, anthropicAccountPool: { enabled: true } } as OcxConfig;
+  const before = protocolPolicyRevision(config);
+  config.protocols = { rollout: { managedMessagesNative: true } };
+  expect(protocolPolicyRevision(config)).not.toBe(before);
 });

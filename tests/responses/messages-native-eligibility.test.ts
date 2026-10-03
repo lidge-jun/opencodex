@@ -126,3 +126,19 @@ describe("planner mirrors the native Messages rule", () => {
     expect(combo.candidates[0]).toMatchObject({ provider: "anth", nativeEligible: false, declineReasons: ["combo-or-policy-route"] });
   });
 });
+
+test("Anthropic pool defaults do not change native eligibility for another provider", () => {
+  const config = { providers: {}, anthropicAccountPool: { enabled: true } } as unknown as OcxConfig;
+  const other = { providerName: "compatible", modelId: "claude-fixture", provider: { adapter: "anthropic", authMode: "key", baseUrl: "https://compatible.example" } } as RouteResult;
+  expect(nativeMessagesDeclineReason(other, { messages: [] }, config)).toBe("rollout-disabled");
+});
+
+test("Anthropic legacy preference preserves another provider's explicit native preview and count", async () => {
+  const conf = config(ON);
+  conf.anthropicAccountPool = { enabled: true, nativeMessages: false };
+  const plan = previewProtocolPlan(conf, { model: "anth/claude-x", inbound: "messages", features: [] });
+  expect(plan.mode).toBe("native");
+  const { nativeMessagesCountBody } = await import("../../src/server/messages-native");
+  const source = { model: "anth/claude-x", messages: [{ role: "user", content: "fixture" }] };
+  expect(nativeMessagesCountBody(conf, undefined, source, {})).toMatchObject({ model: "claude-x", messages: source.messages });
+});

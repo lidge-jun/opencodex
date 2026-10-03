@@ -27,8 +27,9 @@ import {
   applyAnthropicOAuthAuth,
   resolveAnthropicMessagesUrl,
 } from "../anthropic";
-import { applyAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
+import { applyAnthropicClientIdentity, hasObservedAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
 import { bindAnthropicAccountMetadata } from "./account-metadata";
+import { shouldPreserveNativeClientPreamble } from "./native-client-preamble";
 import { allowlistAnthropicBetas } from "./beta-allowlist";
 
 /**
@@ -113,7 +114,7 @@ function isClientTool(tool: unknown): tool is Rec & { name: string } {
  * the input is not mutated. Two caller names that meet under the prefix are refused rather than
  * guessed at.
  */
-export function anthropicOAuthWireBody(body: Rec): { body: Rec; toolNames: Map<string, string> } {
+export function anthropicOAuthWireBody(body: Rec, clientIdentity?: AnthropicClientIdentity): { body: Rec; toolNames: Map<string, string> } {
   const out: Rec = { ...body };
   const toolNames = new Map<string, string>();
   const owners = new Map<string, string>();
@@ -126,7 +127,9 @@ export function anthropicOAuthWireBody(body: Rec): { body: Rec; toolNames: Map<s
     return wire;
   };
   const identity = { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION };
-  if (typeof body.system === "string" && body.system.length > 0) {
+  if (shouldPreserveNativeClientPreamble(body.system, clientIdentity)) {
+    out.system = body.system;
+  } else if (typeof body.system === "string" && body.system.length > 0) {
     out.system = [identity, { type: "text", text: body.system }];
   } else if (Array.isArray(body.system)) {
     const first = body.system[0];
@@ -146,18 +149,79 @@ export function anthropicOAuthWireBody(body: Rec): { body: Rec; toolNames: Map<s
       return { ...tool, name: wireName(tool.name) };
     });
   }
+  // Claude Code can declare a client tool in an inline tool_addition block rather than
+  // the top-level `tools` array. Collect those names before rewriting history so references
+  // that precede the definition receive the same prefix. Only the two observed typed forms
+  // are inspected; schemas and tool arguments remain opaque.
+  const inlineTypedNames = new Set<string>();
+  const collectInlineDeclarations = (blocks: unknown[]): void => {
+    for (const block of blocks) {
+      if (!isRec(block) || block.type !== "tool_addition" || !isRec(block.tool)) continue;
+      if (block.tool.type === "tool_definition" && isClientTool(block.tool.definition)) {
+        declared.add(block.tool.definition.name);
+      } else if (block.tool.type === "tool_definition" && isRec(block.tool.definition) && typeof block.tool.definition.name === "string") {
+        inlineTypedNames.add(block.tool.definition.name);
+      }
+    }
+  };
+  if (Array.isArray(body.messages)) {
+    for (const message of body.messages) {
+      if (isRec(message) && Array.isArray(message.content)) collectInlineDeclarations(message.content);
+    }
+  }
+  if ([...inlineTypedNames].some(name => declared.has(name))) throw new Error("inline typed and client tool names collide");
   const renames = (name: unknown): name is string => typeof name === "string" && declared.has(name);
   if (isRec(body.tool_choice) && body.tool_choice.type === "tool" && renames(body.tool_choice.name)) {
     out.tool_choice = { ...body.tool_choice, name: wireName(body.tool_choice.name) };
   }
-  const isRenamedUse = (block: unknown): block is Rec & { name: string } => isRec(block) && block.type === "tool_use" && renames(block.name);
+  const mapContentBlocks = (blocks: unknown[]): { blocks: unknown[]; changed: boolean } => {
+    let changed = false;
+    const mapped = blocks.map(block => {
+      if (!isRec(block)) return block;
+      if (block.type === "tool_use" && renames(block.name)) {
+        changed = true;
+        return { ...block, name: wireName(block.name) };
+      }
+      if (block.type === "tool_reference" && renames(block.tool_name)) {
+        changed = true;
+        return { ...block, tool_name: wireName(block.tool_name) };
+      }
+      if ((block.type === "tool_addition" || block.type === "tool_removal") && isRec(block.tool)) {
+        const tool = block.tool;
+        if (tool.type === "tool_reference" && renames(tool.name)) {
+          changed = true;
+          return { ...block, tool: { ...tool, name: wireName(tool.name) } };
+        }
+        if (block.type === "tool_addition" && tool.type === "tool_definition" &&
+            isClientTool(tool.definition) && renames(tool.definition.name)) {
+          changed = true;
+          return {
+            ...block,
+            tool: {
+              ...tool,
+              definition: { ...tool.definition, name: wireName(tool.definition.name) },
+            },
+          };
+        }
+      }
+      // Follow only typed inline tool containers and tool_result content; tool inputs and
+      // schemas are opaque caller data.
+      if (block.type === "tool_result" && Array.isArray(block.content)) {
+        const nested = mapContentBlocks(block.content);
+        if (nested.changed) {
+          changed = true;
+          return { ...block, content: nested.blocks };
+        }
+      }
+      return block;
+    });
+    return { blocks: mapped, changed };
+  };
   if (Array.isArray(body.messages)) {
     out.messages = body.messages.map(message => {
-      if (!isRec(message) || !Array.isArray(message.content) || !message.content.some(isRenamedUse)) return message;
-      return {
-        ...message,
-        content: message.content.map(block => isRenamedUse(block) ? { ...block, name: wireName(block.name) } : block),
-      };
+      if (!isRec(message) || !Array.isArray(message.content)) return message;
+      const content = mapContentBlocks(message.content);
+      return content.changed ? { ...message, content: content.blocks } : message;
     });
   }
   return { body: out, toolNames };
@@ -172,11 +236,12 @@ export function anthropicMessagesNativeWireBody(
   provider: Pick<OcxProviderConfig, "baseUrl" | "authMode">,
   modelId: string,
   body: Readonly<Record<string, unknown>>,
+  options: Pick<AnthropicMessagesPassthroughOptions, "clientIdentity"> = {},
 ): { wireBody: Rec; strippedOpaqueState: boolean; oauthToolNames?: Map<string, string> } {
   const allowlisted = anthropicMessagesPassthroughBody(body, modelId);
   const opaque = opaqueStateForDestination(allowlisted, credentialDomainFor(provider));
   if (provider.authMode !== "oauth") return { wireBody: opaque.body, strippedOpaqueState: opaque.stripped };
-  const oauth = anthropicOAuthWireBody(opaque.body);
+  const oauth = anthropicOAuthWireBody(opaque.body, credentialDomainFor(provider)?.firstPartyAnthropic ? options.clientIdentity : undefined);
   return { wireBody: oauth.body, strippedOpaqueState: opaque.stripped, oauthToolNames: oauth.toolNames };
 }
 
@@ -207,7 +272,7 @@ export function buildAnthropicMessagesPassthroughRequest(
       : "anthropic provider requires a non-empty apiKey (authMode: key)");
   }
   const url = resolveAnthropicMessagesUrl(provider);
-  const native = anthropicMessagesNativeWireBody(provider, modelId, body);
+  const native = anthropicMessagesNativeWireBody(provider, modelId, body, options);
   const { strippedOpaqueState, oauthToolNames } = native;
   const wireBody = oauth ? bindAnthropicAccountMetadata(native.wireBody, options.providerAccountUuid) : native.wireBody;
   const headers = anthropicBaseRequestHeaders(wireBody.stream === true);
@@ -226,7 +291,8 @@ export function buildAnthropicMessagesPassthroughRequest(
     }
   }
   if (domain?.firstPartyAnthropic) applyAnthropicClientIdentity(headers, options.clientIdentity, provider.headers);
-  const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible");
+  const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible",
+    hasObservedAnthropicClientIdentity(options.clientIdentity));
   mergeAnthropicBetaHeader(headers, betas.betas);
   return {
     url,

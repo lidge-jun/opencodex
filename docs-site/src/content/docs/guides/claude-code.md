@@ -93,6 +93,25 @@ Operational contract when enabled:
 
 See [Configuration](/reference/configuration/providers/#anthropicaccountpool-experimental).
 
+### Native Messages with account pooling
+
+Enabling the Anthropic account pool also prefers native Claude Messages for eligible direct
+Anthropic routes. In Providers → Anthropic → Account pooling, open **How account selection works** to
+change **Preserve native Claude requests**. It is on by default; turn it off to use the legacy
+translation path for pooled requests. The setting is stored as
+`anthropicAccountPool.nativeMessages` and applies when pooling is enabled. With pooling off,
+the explicit native Messages rollout settings retain their previous behavior.
+
+Native requests preserve history and cache breakpoints, with sticky account routing and bounded
+pre-output recovery. Routes needing proxy-only processing still use translation. An account
+switch may cold-start the replacement account's cache; native routing does not share a cache
+across accounts or guarantee cache hits for changing prompts. Recognized native CLI and Desktop
+Code requests retain their billing/identity preamble and supported feature beta headers. Inline
+tool declarations, references and removals use consistent OAuth names.
+
+For first-party Desktop Code, keep the desired picker model bound to its `anthropic/...` route.
+The pooling setting does not change the Desktop login, Chat-tab connection mode or account history.
+
 ## Quickstart
 
 ```bash

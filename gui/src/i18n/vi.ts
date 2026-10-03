@@ -2501,6 +2501,8 @@ export const vi: Record<TKey, string> = {
   "anthropicPool.detailsEnabling": "Khi bật nhóm, mỗi phiên ở lại tài khoản của nó khi tài khoản còn hoạt động bình thường; chiến lược đã chọn sẽ quyết định tài khoản cho phiên mới và sau khi bị từ chối.",
   "anthropicPool.detailsFailover": "Tắt nhóm không tắt chuyển đổi dự phòng: sau lỗi 429 hoặc một lần tài khoản bị từ chối đã được phân loại, yêu cầu vẫn có thể chuyển sang tài khoản khác đang đăng nhập. Hãy tạm dừng một tài khoản để loại nó ra.",
   "anthropicPool.detailsActivity": "OpenCodex không gửi yêu cầu giữ ấm (keep-warm). Theo mặc định, nó không làm mới token Claude hay kiểm tra mức sử dụng ở chế độ nền; mức sử dụng chỉ được đọc khi bảng điều khiển, ứng dụng thanh menu hoặc một lệnh ocx yêu cầu.",
+  "anthropicPool.nativeMessagesLabel": `Giữ nguyên yêu cầu Claude gốc`,
+  "anthropicPool.nativeMessagesHelp": `Khi bật pool, lịch sử Claude Code cùng dấu mốc bộ nhớ đệm sẽ được giữ trên luồng Messages gốc nếu tuyến đã chọn hỗ trợ. Các tuyến khác vẫn có thể chuyển đổi yêu cầu. Đổi tài khoản có thể khiến bộ nhớ đệm phải khởi tạo lại; không đảm bảo có cache hit và các tài khoản không dùng chung bộ nhớ đệm.`,
   "anthropicPool.detailsGuide": "Hướng dẫn nhóm tài khoản",
   "anthropicPool.needTwoAccounts": "Thêm ít nhất hai tài khoản Claude OAuth trước khi kích hoạt pool.",
   "anthropicPool.threshold": "Ngưỡng sử dụng cho session mới",

@@ -37,6 +37,7 @@ type PoolState = {
   strategy: AccountPoolStrategy;
   stickyLimit: number;
   quotaWindow: AccountPoolQuotaWindow;
+  nativeMessages: boolean;
 };
 
 /**
@@ -128,6 +129,7 @@ export default function AnthropicAccountPoolSettings({
           strategy: normalizeAccountPoolStrategy(json.strategy),
           stickyLimit: nextSticky,
           quotaWindow: normalizeAccountPoolQuotaWindow(json.quotaWindow),
+          nativeMessages: json.nativeMessages,
         });
         setDraft(String(nextThreshold));
         onThresholdChangeRef.current?.(nextThreshold);
@@ -150,6 +152,7 @@ export default function AnthropicAccountPoolSettings({
     strategy: AccountPoolStrategy;
     stickyLimit: number;
     quotaWindow: AccountPoolQuotaWindow;
+    nativeMessages: boolean;
   }) => {
     const requestApiBase = apiBase;
     saveAbortRef.current?.abort();
@@ -164,6 +167,7 @@ export default function AnthropicAccountPoolSettings({
       strategy: next.strategy,
       stickyLimit: next.stickyLimit,
       quotaWindow: next.quotaWindow,
+      nativeMessages: next.nativeMessages,
     });
     setSaving(true);
     setError(null);
@@ -176,6 +180,7 @@ export default function AnthropicAccountPoolSettings({
         strategy: next.strategy,
         stickyLimit: next.stickyLimit,
         quotaWindow: next.quotaWindow,
+        nativeMessages: next.nativeMessages,
       }, (input, init) => fetch(input, init), { signal: controller.signal });
       if (!currentRequest()) return;
       if (!json) throw new Error("save");
@@ -189,6 +194,7 @@ export default function AnthropicAccountPoolSettings({
         strategy: savedStrategy,
         stickyLimit: savedSticky,
         quotaWindow: savedWindow,
+        nativeMessages: json.nativeMessages,
       });
       setDraft(String(savedThreshold));
       onThresholdChangeRef.current?.(savedThreshold);
@@ -213,6 +219,7 @@ export default function AnthropicAccountPoolSettings({
   const strategy = state?.strategy ?? DEFAULT_ACCOUNT_POOL_STRATEGY;
   const stickyLimit = state?.stickyLimit ?? DEFAULT_ACCOUNT_POOL_STICKY_LIMIT;
   const quotaWindow = state?.quotaWindow ?? DEFAULT_ACCOUNT_POOL_QUOTA_WINDOW;
+  const nativeMessages = state?.nativeMessages ?? true;
   // The window is inert ONLY under round-robin, which never scores a usage bar at any stage.
   //
   // A 0 threshold is not inertness: it disables PROACTIVE usage-based switching, but
@@ -253,6 +260,7 @@ export default function AnthropicAccountPoolSettings({
               strategy,
               stickyLimit,
               quotaWindow,
+              nativeMessages,
             });
           }}
         >
@@ -273,6 +281,21 @@ export default function AnthropicAccountPoolSettings({
         <p>{t("anthropicPool.detailsEnabling")}</p>
         <p>{t("anthropicPool.detailsFailover")}</p>
         <p>{t("anthropicPool.detailsActivity")}</p>
+        <label className="anthropic-pool-card__native-messages">
+          <input
+            type="checkbox"
+            checked={nativeMessages}
+            disabled={loading || saving || loadError || !state}
+            aria-describedby="anthropic-pool-native-messages-help"
+            onChange={(event) => {
+              void save({ enabled, threshold, strategy, stickyLimit, quotaWindow, nativeMessages: event.target.checked });
+            }}
+          />
+          <span className="anthropic-pool-card__native-messages-copy">
+            <span className="field-label">{t("anthropicPool.nativeMessagesLabel")}</span>
+            <span id="anthropic-pool-native-messages-help" className="card-sub">{t("anthropicPool.nativeMessagesHelp")}</span>
+          </span>
+        </label>
         <p>
           <a href={ANTHROPIC_POOL_GUIDE_URL} target="_blank" rel="noreferrer">{t("anthropicPool.detailsGuide")}</a>
         </p>
@@ -306,6 +329,7 @@ export default function AnthropicAccountPoolSettings({
                     strategy,
                     stickyLimit,
                     quotaWindow,
+                    nativeMessages,
                   });
                 }
               }}
@@ -327,6 +351,7 @@ export default function AnthropicAccountPoolSettings({
                 strategy: next,
                 stickyLimit,
                 quotaWindow,
+                nativeMessages,
               });
             }}
             onStickyDraftChange={setStickyDraft}
@@ -347,6 +372,7 @@ export default function AnthropicAccountPoolSettings({
                 strategy,
                 stickyLimit: parsed,
                 quotaWindow,
+                nativeMessages,
               });
             }}
           />
@@ -371,6 +397,7 @@ export default function AnthropicAccountPoolSettings({
                   strategy,
                   stickyLimit,
                   quotaWindow: parsed,
+                  nativeMessages,
                 });
               }}
             />

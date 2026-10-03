@@ -308,8 +308,9 @@ export const configSchema = z.object({
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
   blockedModelRedirects: blockedModelRedirectsSchema.optional().catch(undefined),
-  // Preserve malformed hand edits for a local routing error; candidate writes use the shared parser.
-  anthropicAccountPool: z.unknown().optional(),
+  // Degrade malformed hand edits locally; candidate writes reject them before parsing.
+  // An invalid native preference retains the legacy route instead of enabling native by default.
+  anthropicAccountPool: z.object({ nativeMessages: z.boolean().optional().catch(false) }).passthrough().optional().catch(undefined),
   // Same degrade-don't-reject rationale as the fields above: a hand-edited
   // non-string must not trip the backup-and-defaults repair path. Unset then
   // takes the canonical sideband path (src/server/live.ts normalizeSidebandRoot).

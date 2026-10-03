@@ -29,6 +29,8 @@ export interface PoolSettings {
   stickyLimit: number;
   autoSwitchThreshold: number | null;
   quotaWindow: AccountPoolQuotaWindow | null;
+  /** Keep native Claude Code Messages on first-party Anthropic when their route permits. */
+  nativeMessages: boolean;
 }
 
 /** Fields a caller may write. Named in GUI terms; mapped to the wire below. */
@@ -39,6 +41,7 @@ export interface PoolSettingsWrite {
   /** GUI callers say "threshold"; the contract says autoSwitchThreshold. */
   threshold?: number;
   quotaWindow?: AccountPoolQuotaWindow;
+  nativeMessages?: boolean;
 }
 
 function toDto(json: unknown, provider: string, fallback?: PoolSettingsWrite): PoolSettings {
@@ -59,6 +62,11 @@ function toDto(json: unknown, provider: string, fallback?: PoolSettingsWrite): P
     quotaWindow: (raw.quotaWindow ?? fallback?.quotaWindow) === undefined || raw.quotaWindow === null
       ? null
       : normalizeAccountPoolQuotaWindow(raw.quotaWindow ?? fallback?.quotaWindow),
+    nativeMessages: typeof raw.nativeMessages === "boolean"
+      ? raw.nativeMessages
+      : typeof fallback?.nativeMessages === "boolean"
+        ? fallback.nativeMessages
+        : (raw.kind === "anthropic" || provider === "anthropic"),
   };
 }
 
@@ -79,6 +87,7 @@ export function poolSettingsRequestBody(provider: string, fields: PoolSettingsWr
     ...(fields.stickyLimit !== undefined ? { stickyLimit: fields.stickyLimit } : {}),
     ...(fields.threshold !== undefined ? { autoSwitchThreshold: fields.threshold } : {}),
     ...(fields.quotaWindow !== undefined ? { quotaWindow: fields.quotaWindow } : {}),
+    ...(provider === "anthropic" && fields.nativeMessages !== undefined ? { nativeMessages: fields.nativeMessages } : {}),
   };
 }
 

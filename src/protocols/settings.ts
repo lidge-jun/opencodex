@@ -71,19 +71,21 @@ export interface ProtocolSettings {
 }
 
 /** Resolve protocol policy with conservative defaults for every absent or malformed field. */
-export function resolveProtocolSettings(config: Pick<OcxConfig, "protocols">): Readonly<ProtocolSettings> {
+export function resolveProtocolSettings(config: Pick<OcxConfig, "protocols" | "anthropicAccountPool">, providerName?: string): Readonly<ProtocolSettings> {
   const raw: unknown = config.protocols;
   const protocols = isRec(raw) ? raw : {};
   const rollout = isRec(protocols.rollout) ? protocols.rollout : {};
   const on = (key: keyof ProtocolRolloutSettings): boolean => rollout[key] === true;
-  const managedMessagesNative = on("managedMessagesNative");
+  const poolNative = (providerName === undefined || providerName === "anthropic") && config.anthropicAccountPool?.enabled === true
+    ? config.anthropicAccountPool.nativeMessages !== false : undefined;
+  const managedMessagesNative = poolNative ?? on("managedMessagesNative");
   return Object.freeze({
     unrepresentable: protocols.unrepresentable === "reject" ? "reject" : "legacy",
     rollout: Object.freeze({
       nativeChatCombos: on("nativeChatCombos"),
       managedMessagesNative,
       // OAuth extension is meaningless without the key-auth path it extends.
-      managedMessagesNativeOAuth: managedMessagesNative && on("managedMessagesNativeOAuth"),
+      managedMessagesNativeOAuth: poolNative ?? (managedMessagesNative && on("managedMessagesNativeOAuth")),
       directEncoders: on("directEncoders"),
       shadowPlan: on("shadowPlan"),
     }),
@@ -95,9 +97,10 @@ export function resolveProtocolSettings(config: Pick<OcxConfig, "protocols">): R
  * dashboard can tell a preview computed under an older policy from a current one. Not a
  * security boundary; FNV-1a over a canonical JSON projection.
  */
-export function protocolPolicyRevision(config: Pick<OcxConfig, "apiSurfaces" | "claudeCode" | "protocols">): string {
+export function protocolPolicyRevision(config: Pick<OcxConfig, "apiSurfaces" | "claudeCode" | "protocols" | "anthropicAccountPool">): string {
   const surfaces = resolveApiSurfaceSettings(config);
   const settings = resolveProtocolSettings(config);
+  const explicitSettings = resolveProtocolSettings(config, "");
   const canonical = JSON.stringify({
     messages: [surfaces.messages.enabled, surfaces.messages.source],
     unrepresentable: settings.unrepresentable,
@@ -105,6 +108,8 @@ export function protocolPolicyRevision(config: Pick<OcxConfig, "apiSurfaces" | "
       settings.rollout.nativeChatCombos,
       settings.rollout.managedMessagesNative,
       settings.rollout.managedMessagesNativeOAuth,
+      explicitSettings.rollout.managedMessagesNative,
+      explicitSettings.rollout.managedMessagesNativeOAuth,
       settings.rollout.directEncoders,
       settings.rollout.shadowPlan,
     ],

@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCodexAuthAPI } from "../../src/codex/auth-api";
+import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -831,7 +832,7 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
     try {
       for (const [provider, kind, supported] of [
         ["openai", "codex", ["strategy", "stickyLimit", "autoSwitchThreshold"]],
-        ["anthropic", "anthropic", ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow", "routes"]],
+        ["anthropic", "anthropic", ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow", "routes", "nativeMessages"]],
         ["google-antigravity", "generic", ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold"]],
       ] as const) {
         const res = await fetch(new URL(`/api/pool/settings?provider=${provider}`, server.url));
@@ -841,7 +842,7 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
         // An unsupported field is a declared null, not an absence,
         // which is the whole difference between a consolidation and a fourth contract.
         expect(Object.keys(dto).sort()).toEqual([
-          "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "maxConcurrentPerAccount",
+          "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "maxConcurrentPerAccount", "nativeMessages",
           "provider", "quotaWindow", "routes", "stickyLimit", "strategy", "supported",
         ]);
         expect(dto.kind).toBe(kind);
@@ -933,4 +934,50 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
       await server.stop(true);
     }
   });
+  test("Anthropic native preference defaults true, persists false and rejects unsupported or malformed writes", async () => {
+    const server = startServer(0);
+    try {
+      const initial = await (await fetch(new URL("/api/pool/settings?provider=anthropic", server.url))).json();
+      expect(initial.nativeMessages).toBe(true);
+      for (const endpoint of ["/api/pool/settings", "/api/oauth/accounts/pool"]) {
+        const write = await fetch(new URL(endpoint, server.url), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", enabled: true, nativeMessages: false }) });
+        expect(write.status).toBe(200);
+        expect((await write.json()).nativeMessages).toBe(false);
+        expect(loadConfig().anthropicAccountPool?.nativeMessages).toBe(false);
+        for (const payload of [{ provider: "anthropic", nativeMessages: "false" }, { provider: "google-antigravity", nativeMessages: true }, { provider: "openai", nativeMessages: true }]) {
+          const invalid = await fetch(new URL(endpoint, server.url), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+          expect(invalid.status).toBe(400);
+          await invalid.text();
+        }
+      }
+    } finally { await server.stop(true); }
+  });
+
+  test("native preference writes rebase competing pool edits and fail closed without changing the live DTO", async () => {
+    const server = startServer(0);
+    try {
+      const configPath = join(dir, "config.json");
+      const write = async (endpoint: string, nativeMessages: boolean) => fetch(new URL(endpoint, server.url), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", nativeMessages }) });
+      for (const endpoint of ["/api/pool/settings", "/api/oauth/accounts/pool"]) {
+        setPersistedConfigMutationBeforeCommitForTests(() => {
+          const current = JSON.parse(readFileSync(configPath, "utf8"));
+          current.anthropicAccountPool = { ...current.anthropicAccountPool, stickyLimit: 7 };
+          writeFileSync(configPath, JSON.stringify(current));
+        });
+        const saved = await write(endpoint, false);
+        expect(saved.status).toBe(200);
+        await saved.text();
+        expect(loadConfig().anthropicAccountPool).toMatchObject({ nativeMessages: false, stickyLimit: 7 });
+        const validBytes = readFileSync(configPath, "utf8");
+        setPersistedConfigMutationBeforeCommitForTests(() => writeFileSync(configPath, "{fixture-invalid"));
+        const refused = await write(endpoint, true);
+        expect(refused.status).toBe(409);
+        await refused.text();
+        const live = await (await fetch(new URL("/api/pool/settings?provider=anthropic", server.url))).json();
+        expect(live.nativeMessages).toBe(false);
+        writeFileSync(configPath, validBytes);
+      }
+    } finally { setPersistedConfigMutationBeforeCommitForTests(null); await server.stop(true); }
+  });
+
 });

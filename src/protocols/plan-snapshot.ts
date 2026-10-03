@@ -138,7 +138,7 @@ function candidateFor(
     const reason = rows.effortRow ? "effort-row" : nativeChatDeclineReason(settled, chatBodyForFeatures(features), config);
     nativeEligible = reason === undefined;
     if (reason) declineReasons = [reason];
-  } else if (inbound === "messages" && resolveProtocolSettings(config).rollout.managedMessagesNative) {
+  } else if (inbound === "messages" && resolveProtocolSettings(config, settled.providerName).rollout.managedMessagesNative) {
     // The runtime rule itself. With the switch off nothing is judged, so the default preview
     // is exactly what it was before the managed native lane existed.
     // Pinned effort is judged from config and the route; blocked-skill elision and the web-search

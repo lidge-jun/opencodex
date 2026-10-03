@@ -1,4 +1,4 @@
-import { getPoolSettings, putPoolSettings, putCodexPoolStrategy } from "../src/pool-settings";
+import { getPoolSettings, putPoolSettings, putCodexPoolStrategy, poolSettingsRequestBody } from "../src/pool-settings";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
@@ -140,6 +140,20 @@ describe("account pool strategy helpers", () => {
     expect(normalizeAccountPoolStrategy("reset-first")).toBe("reset-first");
     expect(normalizeAccountPoolStrategy("weighted")).toBe(DEFAULT_ACCOUNT_POOL_STRATEGY);
     expect(normalizeAccountPoolStrategy(undefined)).toBe("quota");
+  });
+
+  test("native Messages preference defaults on for Anthropic and preserves a false 204 write", async () => {
+    const read = await getPoolSettings("", "anthropic", async () => Response.json({ kind: "anthropic" }));
+    expect(read?.nativeMessages).toBe(true);
+    let request: Record<string, unknown> | undefined;
+    const written = await putPoolSettings("", "anthropic", { nativeMessages: false }, async (_url, init) => {
+      request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(null, { status: 204 });
+    });
+    expect(request).toEqual({ provider: "anthropic", nativeMessages: false });
+    expect(written?.nativeMessages).toBe(false);
+    const codex = poolSettingsRequestBody("openai", { nativeMessages: false });
+    expect(codex).toEqual({ provider: "openai" });
   });
 
   test("normalizes sticky limits to 1–100 integers", () => {

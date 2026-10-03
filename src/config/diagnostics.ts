@@ -647,7 +647,15 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   if (memoryModels !== undefined && !memoryModelsSchema.safeParse(memoryModels).success) {
     return { ok: false, error: "schema_invalid: memoryModels: requires a nonblank model and an optional declared reasoningEffort per configured phase, and no other fields" };
   }
-  const routeValue = (rawConfigRecord(value)?.anthropicAccountPool as Record<string, unknown> | undefined)?.routes;
+  const rawAnthropicPool = rawConfigRecord(value)?.anthropicAccountPool;
+  const anthropicPool = rawConfigRecord(rawAnthropicPool);
+  if (rawAnthropicPool !== undefined && !anthropicPool) {
+    return { ok: false, error: "schema_invalid: anthropicAccountPool: must be an object" };
+  }
+  if (anthropicPool?.nativeMessages !== undefined && typeof anthropicPool.nativeMessages !== "boolean") {
+    return { ok: false, error: "schema_invalid: anthropicAccountPool.nativeMessages: must be a boolean" };
+  }
+  const routeValue = anthropicPool?.routes;
   if (routeValue !== undefined) {
     const parsed = parseAnthropicModelRoutes(routeValue);
     if (!parsed.ok) return { ok: false, error: `schema_invalid: anthropicAccountPool.routes: ${parsed.error}` };

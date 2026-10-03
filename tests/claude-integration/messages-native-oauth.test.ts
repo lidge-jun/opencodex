@@ -1,10 +1,10 @@
 import { rotateAnthropicAccountOn429 } from "../helpers/anthropic-shared-quota";
 /**
  * Anthropic OAuth on the managed native Messages lane (PF-10) against an in-process transport.
- * With `managedMessagesNative` and `managedMessagesNativeOAuth` on, an unpooled Anthropic OAuth
+ * With `managedMessagesNative` and `managedMessagesNativeOAuth` on, an Anthropic OAuth
  * route sends the caller's Messages body with the access token of the account the existing OAuth
  * selection commits at dispatch — never the caller's credential — and maps the OAuth tool-name
- * prefix back in the answer. A pooled account set stays on the bridge. Every credential here is
+ * prefix back in the answer. Pooled accounts keep the native wire with shared recovery. Every credential here is
  * synthetic, and any real network call fails the case.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -13,10 +13,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../src/oauth/anthropic";
-import { clearAnthropicAccountPoolState, forgetAnthropicFailoverQuorum, formatAnthropicProviderForLog, getAnthropicAccountHealthSnapshot,} from "../../src/oauth/anthropic-routing";
-import { getAccountSet, markAccountNeedsReauth, replaceProviderAccountSet, saveAccountCredential, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
+import { clearAnthropicAccountPoolState, resetAnthropicRoutingForManualSelection, forgetAnthropicFailoverQuorum, formatAnthropicProviderForLog, getAnthropicAccountHealthSnapshot,} from "../../src/oauth/anthropic-routing";
+import { captureOAuthAccountSelection, getAccountSet, markAccountNeedsReauth, replaceProviderAccountSet, saveAccountCredential, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { clearUpstreamHostHealth, getUpstreamHostHealth, upstreamHostHealthKey } from "../../src/codex/upstream-host-health";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
+import { nativeOAuthBindingIsCurrent, resolveNativeOAuthBinding } from "../../src/server/messages-native-oauth";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import { providerRequestPacingStatus, resetProviderRequestPacingForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -376,11 +377,10 @@ describe("managed native Messages over Anthropic OAuth", () => {
     expect(sent.map(entry => entry.headers.get("authorization"))).toEqual([`Bearer ${credential(1).access}`]);
   });
 
-  test("two usable accounts keep the bridge, which owns rotation", async () => {
+  test("two usable accounts retain the native wire lane", async () => {
     await seed(2);
     const { row } = await send(fixtureConfig(), { ...BODY, stream: false });
-    expect(row.protocolTrace).toMatchObject({ inbound: "messages", mode: "legacy-bridge" });
-    expect(row.protocolTrace?.reasonCodes).toContain("oauth-account-pool");
+    expect(row.protocolTrace).toMatchObject({ inbound: "messages", mode: "native" });
   });
 
   test("with the OAuth switch off the route stays on the bridge", async () => {
@@ -396,4 +396,259 @@ describe("managed native Messages over Anthropic OAuth", () => {
     expect(JSON.parse(text)).toMatchObject({ type: "error", error: { type: "authentication_error" } });
     expect(sent).toHaveLength(0);
   });
+});
+
+
+describe("native OAuth pooled binding", () => {
+  test("round-robin binds each session and restores its own account after another session", async () => {
+    await seed(2);
+    const config = fixtureConfig();
+    config.anthropicAccountPool = { enabled: true, strategy: "round-robin" };
+    const first = await resolveNativeOAuthBinding(config, { sessionKey: "fixture-session-a", model: "claude-sonnet-4-5" });
+    const second = await resolveNativeOAuthBinding(config, { sessionKey: "fixture-session-b", model: "claude-sonnet-4-5" });
+    expect(second.snapshot.accountId).not.toBe(first.snapshot.accountId);
+    expect(nativeOAuthBindingIsCurrent(first)).toBe(true);
+    const resumed = await resolveNativeOAuthBinding(config, { sessionKey: "fixture-session-a", model: "claude-sonnet-4-5" });
+    expect(resumed.snapshot.accountId).toBe(first.snapshot.accountId);
+    expect(nativeOAuthBindingIsCurrent(resumed)).toBe(true);
+  });
+
+  test("a recovery candidate commits its credential and rebinds the session", async () => {
+    const ids = await seed(2);
+    const config = fixtureConfig();
+    config.anthropicAccountPool = { enabled: true };
+    const first = await resolveNativeOAuthBinding(config, { sessionKey: "fixture-session", model: "claude-sonnet-4-5" });
+    const alternate = ids.find(id => id !== first.snapshot.accountId)!;
+    const recovered = await resolveNativeOAuthBinding(config, { sessionKey: "fixture-session", model: "claude-sonnet-4-5", candidateAccountId: alternate, expectedRecoverySelection: captureOAuthAccountSelection("anthropic") });
+    expect(recovered.snapshot.accountId).toBe(alternate);
+    expect((await resolveNativeOAuthBinding(config, { sessionKey: "fixture-session", model: "claude-sonnet-4-5" })).snapshot.accountId).toBe(alternate);
+  });
+});
+
+
+describe("native pooled Messages dispatch", () => {
+  test("shared quota 429 rebuilds from the source body with the replacement bearer and account UUID", async () => {
+    const ids = await seed(2);
+    const uuids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
+    for (const [index, id] of ids.entries()) await saveAccountCredential("anthropic", id, { ...credential(index), accountId: uuids[index] });
+    const config = fixtureConfig();
+    config.anthropicAccountPool = { enabled: true };
+    config.providers.anthropic!.fetch = (async (input, init) => {
+      sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+      if (sent.length === 1) return Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture quota" } }, {
+        status: 429, headers: { "anthropic-ratelimit-unified-5h-status": "rejected", "retry-after": "30" },
+      });
+      return Response.json(MESSAGE);
+    }) as typeof fetch;
+    const metadata = { user_id: JSON.stringify({ account_uuid: uuids[0], session_id: "fixture-recovery-session" }) };
+    const body = { ...BODY, stream: false, metadata, system: [{ type: "text", text: "fixture cache prefix", cache_control: { type: "ephemeral" } }] };
+    const { response, row } = await send(config, body);
+    expect(response.status).toBe(200);
+    expect(row.protocolTrace?.mode).toBe("native");
+    expect(sent).toHaveLength(2);
+    expect(sent.map(entry => entry.headers.get("authorization"))).toEqual([`Bearer ${credential(0).access}`, `Bearer ${credential(1).access}`]);
+    for (const [index, entry] of sent.entries()) {
+      expect(entry.headers.has("x-api-key")).toBe(false);
+      expect(JSON.parse((entry.body.metadata as typeof metadata).user_id).account_uuid).toBe(uuids[index]);
+      expect(entry.body.messages).toEqual(body.messages.map(message => message.role !== "assistant" ? message : { ...message, content: (message.content as Record<string, unknown>[]).map(block => block.type === "tool_use" ? { ...block, name: "custom_lookup" } : block) }));
+      expect((entry.body.system as Record<string, unknown>[])[1]).toEqual(body.system[0]);
+    }
+    expect(getAnthropicAccountHealthSnapshot(ids[0]!)).not.toBeNull();
+    expect(JSON.parse(metadata.user_id).account_uuid).toBe(uuids[0]);
+    expect(row.attempts?.[1]?.recoveryKinds).toEqual(["rate-limit-429"]);
+  });
+
+  test("account-refusal 403 rebuild is attributed as OAuth account recovery", async () => {
+    await seed(2);
+    const config = fixtureConfig();
+    config.anthropicAccountPool = { enabled: true };
+    config.providers.anthropic!.fetch = (async (input, init) => {
+      sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+      return sent.length === 1
+        ? Response.json({ type: "error", error: { type: "permission_error", message: "Your account does not have access to Claude Code" } }, { status: 403 })
+        : Response.json(MESSAGE);
+    }) as typeof fetch;
+
+    const { response, row } = await send(config, { ...BODY, stream: false });
+
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(2);
+    expect(row.attempts?.[1]?.recoveryKinds).toEqual(["oauth-account-403"]);
+  });
+
+  test("two conversations retain sticky account routing after global selection moves", async () => {
+    await seed(2);
+    const config = fixtureConfig();
+    config.anthropicAccountPool = { enabled: true, strategy: "round-robin" };
+    for (const session of ["fixture-a", "fixture-b", "fixture-a"]) {
+      expect((await send(config, { ...BODY, stream: false }, { session_id: session })).response.status).toBe(200);
+    }
+    const bearers = sent.map(entry => entry.headers.get("authorization"));
+    expect(bearers[0]).not.toBe(bearers[1]);
+    expect(bearers[2]).toBe(bearers[0]);
+  });
+
+  test("blank session_id retains affinity through the Claude Code session header", async () => {
+    await seed(2);
+    const config = fixtureConfig();
+    config.anthropicAccountPool = { enabled: true, strategy: "round-robin" };
+    for (const session of ["fallback-a", "fallback-b", "fallback-a"]) {
+      expect((await send(config, { ...BODY, stream: false }, { session_id: " ", "x-claude-code-session-id": session })).response.status).toBe(200);
+    }
+    const bearers = sent.map(entry => entry.headers.get("authorization"));
+    expect(bearers[0]).not.toBe(bearers[1]);
+    expect(bearers[2]).toBe(bearers[0]);
+  });
+
+  test("strict model routes admit only their declared account", async () => {
+    const ids = await seed(2);
+    const config = fixtureConfig();
+    config.anthropicAccountPool = { enabled: true, routes: [{ name: "fixture-route", match: "claude-sonnet-*", accounts: [ids[1]!] }] };
+    const { response, row } = await send(config, { ...BODY, stream: false });
+    expect(response.status).toBe(200);
+    expect(row.protocolTrace?.mode).toBe("native");
+    expect(sent.map(entry => entry.headers.get("authorization"))).toEqual([`Bearer ${credential(1).access}`]);
+    await expect(resolveNativeOAuthBinding(config, { model: "claude-sonnet-4-5", candidateAccountId: ids[0], expectedRecoverySelection: captureOAuthAccountSelection("anthropic") })).rejects.toThrow("OAuth account selection changed");
+  });
+
+  test("an error inside a stream after assistant output never rotates or replays", async () => {
+    await seed(2);
+    const config = fixtureConfig();
+    config.anthropicAccountPool = { enabled: true };
+    config.providers.anthropic!.fetch = (async (input, init) => {
+      sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+      const prefix = `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { ...MESSAGE, content: [] } })}\n\nevent: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "fixture output" } })}\n\n`;
+      return new Response(prefix + 'event: error\ndata: {"type":"error","error":{"type":"rate_limit_error","message":"fixture quota"}}\n\n', { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const { response, text } = await send(config, { ...BODY, stream: true });
+    expect(response.status).toBe(200);
+    expect(text).toContain("fixture output");
+    expect(text).toContain("rate_limit_error");
+    expect(sent).toHaveLength(1);
+  });
+
+  test("a concurrent manual selection wins over a stale recovery candidate", async () => {
+    const ids = await seed(3);
+    const config = fixtureConfig();
+    config.anthropicAccountPool = { enabled: true };
+    const pending = resolveNativeOAuthBinding(config, { sessionKey: "fixture-manual-race", candidateAccountId: ids[1], expectedRecoverySelection: captureOAuthAccountSelection("anthropic") });
+    await setActiveAccount("anthropic", ids[2]!);
+    resetAnthropicRoutingForManualSelection(ids[2]!);
+    const binding = await pending;
+    expect(binding.snapshot.accountId).toBe(ids[2]!);
+    expect(nativeOAuthBindingIsCurrent(binding)).toBe(true);
+  });
+});
+
+
+describe("overlapping native pool dispatch", () => {
+  test("queued conversations send their own affine bearer and body without global selection churn", async () => {
+    await seed(2);
+    const config = fixtureConfig();
+    config.anthropicAccountPool = { enabled: true, strategy: "round-robin" };
+    config.providers.anthropic!.requestPacing = { enabled: true, maxConcurrentRequests: 2 };
+    const first = await resolveNativeOAuthBinding(config, { sessionKey: "fixture-overlap-a", model: "claude-sonnet-4-5" });
+    const second = await resolveNativeOAuthBinding(config, { sessionKey: "fixture-overlap-b", model: "claude-sonnet-4-5" });
+    const slots = await Promise.all([0, 1].map(() => waitForProviderRequestSlot("anthropic", config.providers.anthropic!, "claude-sonnet-4-5")));
+    const bodyA = { ...BODY, stream: false, messages: [{ role: "user", content: "fixture conversation a" }] };
+    const bodyB = { ...BODY, stream: false, messages: [{ role: "user", content: "fixture conversation b" }] };
+    const pending = [send(config, bodyA, { session_id: "fixture-overlap-a" }), send(config, bodyB, { session_id: "fixture-overlap-b" })];
+    let revision: string | undefined;
+    try {
+      for (let i = 0; i < 100 && providerRequestPacingStatus("anthropic", config.providers.anthropic!).queued < 2; i++) await new Promise(resolve => setTimeout(resolve, 5));
+      expect(providerRequestPacingStatus("anthropic", config.providers.anthropic!).queued).toBe(2);
+      revision = captureOAuthAccountSelection("anthropic")?.revision;
+    } finally { slots.forEach(slot => slot.release()); }
+    const results = await Promise.all(pending);
+    expect(results.map(result => result.response.status)).toEqual([200, 200]);
+    expect(sent).toHaveLength(2);
+    for (const [body, binding] of [[bodyA, first], [bodyB, second]] as const) {
+      const entry = sent.find(entry => JSON.stringify(entry.body.messages) === JSON.stringify(body.messages));
+      expect(entry).toBeDefined();
+      expect(entry!.headers.get("authorization")).toBe(`Bearer ${binding.snapshot.accessToken}`);
+    }
+    expect(captureOAuthAccountSelection("anthropic")?.revision).toBe(revision);
+  });
+});
+
+
+test("manual selection before recovery resolution defeats a pre-wait candidate", async () => {
+  const ids = await seed(2);
+  const config = fixtureConfig();
+  config.anthropicAccountPool = { enabled: true };
+  const expectedRecoverySelection = captureOAuthAccountSelection("anthropic");
+  await setActiveAccount("anthropic", ids[1]!);
+  resetAnthropicRoutingForManualSelection(ids[1]!);
+  const binding = await resolveNativeOAuthBinding(config, {
+    sessionKey: "fixture-before-resolve", candidateAccountId: ids[0], expectedRecoverySelection,
+  });
+  expect(binding.snapshot.accountId).toBe(ids[1]!);
+  expect(nativeOAuthBindingIsCurrent(binding)).toBe(true);
+});
+
+
+test("manual override revokes pooled affinity while unbound bindings retain the global fence", async () => {
+  const ids = await seed(2);
+  const config = fixtureConfig();
+  config.anthropicAccountPool = { enabled: true };
+  const bound = await resolveNativeOAuthBinding(config, { sessionKey: "fixture-manual-invalidation" });
+  const unbound = await resolveNativeOAuthBinding(config);
+  const alternate = ids.find(id => id !== bound.snapshot.accountId)!;
+  await setActiveAccount("anthropic", alternate);
+  resetAnthropicRoutingForManualSelection(alternate);
+  expect(nativeOAuthBindingIsCurrent(bound)).toBe(false);
+  expect(nativeOAuthBindingIsCurrent(unbound)).toBe(false);
+  expect((await resolveNativeOAuthBinding(config, { sessionKey: "fixture-manual-invalidation" })).snapshot.accountId).toBe(alternate);
+});
+
+test("manual switch while native throttle waits must win", async () => {
+  const ids = await seed(2);
+  const config = fixtureConfig();
+  config.anthropicAccountPool = { enabled: true };
+  config.providers.anthropic!.fetch = (async (input, init) => {
+    sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+    if (sent.length === 1) {
+      setTimeout(async () => {
+        await setActiveAccount("anthropic", ids[1]!);
+        resetAnthropicRoutingForManualSelection(ids[1]!);
+      }, 20);
+      return Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture throttle" } }, { status: 429, headers: { "retry-after": "0.3" } });
+    }
+    return Response.json(MESSAGE);
+  }) as typeof fetch;
+  const { response } = await send(config, { ...BODY, stream: false }, { session_id: "review-manual-race" });
+  expect(response.status).toBe(200);
+  expect(sent).toHaveLength(2);
+  expect(sent[1]!.headers.get("authorization")).toBe(`Bearer ${credential(1).access}`);
+});
+
+
+test("two bound conversations can send together", async () => {
+  await seed(2);
+  const config = fixtureConfig();
+  config.anthropicAccountPool = { enabled: true, strategy: "round-robin" };
+  await send(config, { ...BODY, stream: false }, { session_id: "review-concurrent-a" });
+  await send(config, { ...BODY, stream: false }, { session_id: "review-concurrent-b" });
+  const statuses = await Promise.all(Array.from({ length: 10 }, (_, i) => send(config, { ...BODY, stream: false }, { session_id: i % 2 ? "review-concurrent-b" : "review-concurrent-a" })));
+  expect(statuses.map(s => s.response.status)).toEqual(Array(10).fill(200));
+});
+
+
+test("manual switch before native response headers must win", async () => {
+  const ids = await seed(2);
+  const config = fixtureConfig();
+  config.anthropicAccountPool = { enabled: true };
+  config.providers.anthropic!.fetch = (async (input, init) => {
+    sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+    if (sent.length === 1) {
+      await setActiveAccount("anthropic", ids[1]!);
+      resetAnthropicRoutingForManualSelection(ids[1]!);
+      return Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture throttle" } }, { status: 429, headers: { "retry-after": "0.1" } });
+    }
+    return Response.json(MESSAGE);
+  }) as typeof fetch;
+  const { response } = await send(config, { ...BODY, stream: false }, { session_id: "review-headers-manual-race" });
+  expect(response.status).toBe(200);
+  expect(sent).toHaveLength(2);
+  expect(sent[1]!.headers.get("authorization")).toBe(`Bearer ${credential(1).access}`);
 });

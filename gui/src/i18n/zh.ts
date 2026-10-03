@@ -1954,6 +1954,8 @@ export const zh: Record<TKey, string> = {
   "anthropicPool.detailsEnabling": "开启账户池后，会话在其账户正常时会一直使用该账户；新会话和拒绝后使用哪个账户由所选策略决定。",
   "anthropicPool.detailsFailover": "关闭账户池不会关闭故障转移：收到 429 或被识别为账户拒绝的响应后，请求仍可能转到另一个已登录账户。若要排除某个账户，请将其暂停。",
   "anthropicPool.detailsActivity": "OpenCodex 不发送保活（keep-warm）请求。默认情况下，它不会在后台刷新 Claude 令牌或查询用量；只有仪表盘、菜单栏应用或 ocx 命令请求时才会读取用量。",
+  "anthropicPool.nativeMessagesLabel": `保留 Claude 原生请求`,
+  "anthropicPool.nativeMessagesHelp": `启用账号池后，如果所选路由支持，Claude Code 历史记录和缓存标记会保留在原生 Messages 路径上。其他路由仍可能转换请求。切换账号可能需要重新建立缓存；不保证命中缓存，账号之间也不共享缓存。`,
   "anthropicPool.detailsGuide": "账户池指南",
   "anthropicPool.needTwoAccounts": "启用账户池前请至少添加两个 Claude OAuth 账户。",
   "anthropicPool.threshold": "新会话用量阈值",

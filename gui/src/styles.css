@@ -1927,6 +1927,15 @@ dialog.modal-overlay::backdrop {
 .anthropic-pool-card__details { margin: 8px 16px 12px; font-size: var(--text-label); line-height: var(--leading-body); color: var(--muted); }
 .anthropic-pool-card__details > summary { cursor: pointer; width: fit-content; color: var(--text); }
 .anthropic-pool-card__details > p { margin: 6px 0 0; max-width: var(--prose-measure); text-wrap: pretty; }
+.anthropic-pool-card__native-messages {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  cursor: pointer;
+}
+.anthropic-pool-card__native-messages > input { margin: 2px 0 0; }
+.anthropic-pool-card__native-messages-copy { display: grid; gap: var(--space-1); max-width: var(--prose-measure); }
 .anthropic-pool-card__field {
   display: block;
   margin-top: 12px;
