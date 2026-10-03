@@ -63,6 +63,31 @@ on this worktree.
 
 ## Remaining readiness gates
 
+### Final upstream refresh
+
+Upstream advanced during the first validation pass. The completed contribution
+was preserved and rebased cleanly onto
+`358b8ffd4c7f95237dadee1e9a5b4fedb671f4f4` (the newly integrated Claude OAuth
+identity change). No messaging source conflict or runtime seam change occurred;
+both test-layout maps retain the upstream identity regression registration.
+
+On this refreshed source tree:
+
+- `bun scripts/test.ts --changed=dev`, with the same pinned native binary:
+  **1039 passed, 1 Windows-specific skip, 0 failed**, 51 files, 83.4 seconds.
+- Explicit layout/tooling, structure, file-size and generated-surface regressions:
+  **94 passed, 0 failed**.
+- `node_modules/.bin/tsc --noEmit`: passed.
+- Documentation build: passed again, including search indexing and 78880 internal
+  links across 569 pages (51.1 seconds).
+
+Ignored logs remain in the worktree's `.tmp/` as
+`local-messaging-changed-final.log`, `local-messaging-source-guards-final.log` and
+`local-messaging-docs-build-final.log`. These are local validation receipts, not
+hosted CI or live-delivery evidence. No additional source edits followed this pass.
+
+### Outstanding
+
 The bounded implementation slice is complete, but no independent/security review
 or hosted CI is claimed. The full default suite is deferred until review readiness,
 as required by the nested source instructions; the changed suite and named
