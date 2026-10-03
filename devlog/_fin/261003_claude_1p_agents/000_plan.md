@@ -22,8 +22,12 @@ First-party setup can report success without regenerating the selected OpenCodex
 
 ## Delivery
 
-One ordinary PR to dev. Main owns branch/commits/CI/merge. Inherited worker owns runtime and tests; main owns documentation and independent review coordination. No new dependencies. Full-suite default applies unless shared-host contention makes a documented focused-suite exception necessary.
+One ordinary PR to dev. Main owns branch/commits/CI/merge. Inherited worker owns runtime and tests; main owns documentation and independent review coordination. No new dependencies. The user subsequently prohibited all local testing. Final acceptance is exact-head hosted CI plus source-only review; no further local tests, builds, typechecks or QA are permitted.
 
 Baseline verifier evidence: `bun run test -- tests/claude-integration/claude-management-api.test.ts tests/claude-integration/claude-desktop-first-party.test.ts tests/claude-integration/claude-agents-inject.test.ts tests/claude-integration/claude-agent-startup-sync.test.ts` exited 0 (123 pass, 0 fail). Each explicit argument observes an owning route/generator/startup surface. Initial wrapper failure was the unexecuted pinned Bun dependency postinstall after ignore-scripts; running its checked-in dependency installer restored the wrapper. No lockfile changed.
 
 Independent A review: inherited reviewer 01a0fffb-254e-7563-8a0f-77ab1d70ca03 returned PASS with no blockers. Explicit security scope covered management admission, refusal/rollback exits and helper ownership gates. No auth or credential format changes are planned.
+
+## Verification correction
+
+The user prohibited local tests during C. The in-progress full suite was terminated (exit 143), not counted as passing. Local checks reported above predate this correction and are historical only. Remaining verification and final acceptance use GitHub Actions against the PR head. The implementation remains the audited two-call reconciliation fix.

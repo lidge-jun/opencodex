@@ -17,7 +17,7 @@
 6. Existing generator/startup tests must continue proving enabled:false and sibling-ownership gates.
 7. Successful Desktop first-party apply with persisted mode: roster generated; persistence failure never adds a new registration side effect.
 
-Run the new focused test plus existing claude-management-api, claude-desktop-first-party, claude-agents-inject and claude-agent-startup-sync suites. Typecheck, structure:check, privacy:scan and documentation build must pass. Baseline GUI tests (20 pass) were investigation evidence only, not proof of this fix. No GUI change planned, so screenshot requirement is inapplicable.
+Verification is now hosted-only by explicit user correction. GitHub CI must execute the new focused test through its registered domain and the applicable existing suites, typecheck, structure/privacy gates and documentation build. Do not execute these locally. Baseline GUI tests (20 pass) were investigation evidence only, not proof of this fix. No GUI change planned, so screenshot requirement is inapplicable.
 
 ## Security review scope
 
