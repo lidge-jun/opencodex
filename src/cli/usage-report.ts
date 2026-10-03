@@ -63,6 +63,7 @@ interface UsageReportInput {
 
 const MAX_MODEL_ROWS = 10;
 
+/** Render scalar report values with terminal control characters escaped. */
 function terminalText(value: unknown): string {
   const text = typeof value === "string" ? value
     : value === null || value === undefined ? ""
@@ -75,6 +76,7 @@ function terminalText(value: unknown): string {
   });
 }
 
+/** Format a finite count, distinguishing missing readings from invalid values. */
 function count(value: number | undefined): string {
   if (value === undefined || value === null) return "0";
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("en-US") : "—";
@@ -90,6 +92,7 @@ function usd(value: number | undefined): string {
   return `~$${value.toFixed(4)}`;
 }
 
+/** Align a terminal-safe text table without changing the underlying report rows. */
 function table(header: string[], rows: string[][]): string[] {
   if (rows.length === 0) return [];
   header = header.map(terminalText);

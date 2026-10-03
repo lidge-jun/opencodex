@@ -1,9 +1,21 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { handleObserveCommand } from "../../src/cli/observe";
+import { repoPath, repoRoot } from "../helpers/repo-root";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const report = { range: "30d", summary: { requests: 12, totalTokens: 120 },
   models: Array.from({ length: 12 }, (_, i) => ({ model: "model-" + String(i).padStart(2, "0"), provider: "local", requests: 1, totalTokens: 10 })) };
 describe("usage human model limit", () => {
+  test.each([["usage", "--help"], ["help", "usage"], ["help"]].map(args => ({ args })))("documents --top in real CLI help %j", ({ args }) => {
+    const result = spawnSync(process.execPath, [repoPath("src", "cli", "index.ts"), ...args], {
+      cwd: repoRoot(), env: process.env, encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toMatch(/ocx usage [^\n]*\[--top <1-1000>\]/);
+  }, SPAWN_BUDGET_MS);
   test.each([[[], 10], [["--top", "1"], 1], [["--top", "2"], 2], [["--top", "12"], 12], [["--top", "1000"], 12]] as [string[], number][])("applies %j locally", async (flags, expected) => {
     const out = spyOn(console, "log").mockImplementation(() => {});
     let url = "";
