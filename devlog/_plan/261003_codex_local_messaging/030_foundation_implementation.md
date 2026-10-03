@@ -80,7 +80,7 @@ Include uncertain-send/no-replay, no acknowledgement loops and no guessed reply
 routes in the focused regressions. Replace the foundation's zero-incoming-import
 guard with a command-local activation guard when CLI wiring actually exists.
 
-Remote, Claude, root relay, skill management, permissions/delegation, dashboard,
+Remote, Claude, skill management, permissions/delegation, dashboard,
 isolation and idle notices remain outside this contribution. Retain the deployed
 `feat/claude-messaging` branch/head unchanged. Independent/security review and
 the contributor readiness gates remain outstanding; PR authorization remains

@@ -25,6 +25,6 @@ submission. Never retry or resume a session to deliver a message.
 Consequences: only loaded local sessions are addressed; Windows and untested
 versions fail explicitly. Other native versions need separately recorded contract
 tests before admission. Same-user processes can inspect native message argv.
-Remote, dashboard, Claude, root relay, idle notices, permission semantics and
+Remote, dashboard, Claude, idle notices, permission semantics and
 managed skill installation remain separate proposals. PR publication requires
 the user's go-ahead; independent review remains a separate readiness gate.

@@ -30,7 +30,7 @@ Included:
 Excluded:
 
 - Remote hosts, enrollment, SSH, bearer-token management, topology and dashboard.
-- Claude transport, root relay, permissions/delegation machinery and idle triggers.
+- Claude transport, permissions/delegation machinery and idle triggers.
 - Persistent directories/caches, isolation policy, managed skills and daemon startup.
 - Resuming or creating sessions, steering/interruption, processing acknowledgements,
   delivery monitoring, retries and message-body logging.
@@ -52,7 +52,7 @@ ocx message send --name <exact-name> --stdin --json
 ocx message send --thread <UUID> --kind response --in-reply-to <UUID> --stdin --json
 ```
 
-Send accepts exactly one selector. Reject remote, Claude and root options before
+Send accepts exactly one selector. Reject remote, Claude and unsupported options before
 transport or child-process work. Initial transport scope is Linux/macOS Unix
 sockets; Windows reports unsupported explicitly. macOS parity remains untested.
 No guessed home, arbitrary remote URL or socket from message-body text.

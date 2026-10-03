@@ -74,5 +74,5 @@ error schema without a send status. Invalid usage exits 64 on stderr before I/O.
 The application message UUID correlates peer envelopes, not native queue IDs or
 processing receipts. Queueing is not steering and can wait for a busy turn to end.
 OpenCodex performs no automatic replay, follow-up probing, persistence or delivery
-monitoring. No remote hosts, bearer management, SSH, Claude messaging, root relay,
+monitoring. No remote hosts, bearer management, SSH, Claude messaging,
 dashboard, isolation or idle-notification controls are part of this surface.

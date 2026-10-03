@@ -17,6 +17,8 @@ export async function runMessageProcess(argv: readonly string[], budget: Message
   catch { throw new LocalMessagingError("process_not_started", "Codex helper could not be started; no submission was attempted."); }
   let incomplete = false;
   let force: ReturnType<typeof setTimeout> | undefined;
+  let termination: Promise<void> | undefined;
+  const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
   const killOwned = (signal: NodeJS.Signals) => {
     try {
       // A launcher may fork native Codex and leave its inherited pipes open.
@@ -27,14 +29,24 @@ export async function runMessageProcess(argv: readonly string[], budget: Message
   };
   const terminate = () => {
     incomplete = true;
+    if (termination) return;
     killOwned("SIGTERM");
-    force ??= setTimeout(() => killOwned("SIGKILL"), 1000);
+    termination = new Promise(resolve => {
+      force = setTimeout(() => {
+        killOwned("SIGKILL");
+        // An escaped descendant can retain pipes after the owned group exits.
+        // Do not signal its new group or wait for EOF/cancellation to finish.
+        for (const reader of readers) void reader.cancel().catch(() => {});
+        resolve();
+      }, 1000);
+    });
   };
   budget.signal.addEventListener("abort", terminate, { once: true });
   const timer = setTimeout(terminate, timeoutMs);
   if (budget.signal.aborted) terminate();
   const read = async (stream: ReadableStream<Uint8Array>, capture: boolean): Promise<string> => {
     const reader = stream.getReader();
+    readers.add(reader);
     const chunks: Uint8Array[] = [];
     let length = 0;
     try {
@@ -42,11 +54,13 @@ export async function runMessageProcess(argv: readonly string[], budget: Message
         const chunk = await reader.read();
         if (chunk.done) break;
         length += chunk.value.length;
-        if (length > 64 * 1024) { terminate(); await reader.cancel(); break; }
+        if (length > 64 * 1024) {
+          terminate(); void reader.cancel().catch(() => {}); break;
+        }
         if (capture) chunks.push(chunk.value);
       }
       return Buffer.concat(chunks).toString("utf8");
-    } finally { reader.releaseLock(); }
+    } finally { readers.delete(reader); reader.releaseLock(); }
   };
   const output = read(child.stdout, true);
   const errors = read(child.stderr, false);
@@ -58,6 +72,8 @@ export async function runMessageProcess(argv: readonly string[], budget: Message
     return { exitCode, stdout };
   } catch {
     terminate();
+    // Keep the forced group cleanup even when the launcher exited on SIGTERM.
+    await termination;
     await child.exited;
     await Promise.allSettled([output, errors]);
     throw new LocalMessagingError("process_incomplete", "Codex helper did not complete; submission may be uncertain.");

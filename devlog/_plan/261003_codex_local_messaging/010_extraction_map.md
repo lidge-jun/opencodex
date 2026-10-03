@@ -15,7 +15,7 @@ modules already exist on the destination branch.
 | `src/messaging/rpc.ts` | Initialize/initialized, metadata reads, pagination, pending requests | Extract; add whole-operation deadline, bounded metadata concurrency and strict response validation |
 | `src/messaging/process.ts` | No-shell child runner, output bounds, termination/join | Extract; retain abort/timeout cleanup and sanitized failures |
 | `src/messaging/send.ts` | Exact resolution, native queue invocation, uncertain receipt | Rewrite local-only; remove store, bridge, enrollment, Claude, isolation and remote authentication dependencies |
-| `src/messaging/sender.ts` | `CODEX_THREAD_ID` plus metadata-only name | Rewrite Codex-only; no machine store, permission attribution or root/Claude process inference |
+| `src/messaging/sender.ts` | `CODEX_THREAD_ID` plus metadata-only name | Rewrite Codex-only; no machine store, permission attribution or cross-harness process inference |
 | `src/messaging/envelope.ts` | Message kinds, IDs, reply/correlation | Rewrite compact local routing; no machine identity or managed response skill |
 | `src/messaging/types.ts` | UUID validation, local receipt/thread/error types | Extract only local types, not mesh/peer/policy state |
 | `src/cli/message.ts`, `src/cli/message-args.ts` | Command dispatch and argument parsing | Rewrite minimal local commands; do not retain unavailable feature flags |

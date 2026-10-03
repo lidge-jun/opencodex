@@ -24,7 +24,7 @@ queue, remote host, issue comment or PR was changed.
 - CLI registration/help/capability data, generated operating surface, owning
   structure documentation, provisional ADR and public CLI reference are updated.
 
-Remote auth/topology/SSH, dashboard, Claude/root relay, permissions/delegation,
+Remote auth/topology/SSH, dashboard, Claude, permissions/delegation,
 isolation, managed skill installation and idle notices remain absent.
 
 ## Validation receipts
