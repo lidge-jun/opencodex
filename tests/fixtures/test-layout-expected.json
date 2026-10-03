@@ -447,6 +447,8 @@
   "cli-head.test.ts": "cli",
   "cli-headless-parity.test.ts": "cli",
   "cli-help.test.ts": "cli",
+  "cli-help-paths.test.ts": "cli",
+  "cli-help-navigation.test.ts": "cli",
   "cli-integer-options.test.ts": "cli",
   "cli-init-port.test.ts": "cli",
   "cli-json-contract.test.ts": "cli",

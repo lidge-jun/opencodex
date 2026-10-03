@@ -128,11 +128,12 @@ export function reobserveRestartReplacement(
   deadlineAt: number,
   observe: (end: number) => Promise<ProxyRestartDiscovery>,
 ): Promise<ProxyRestartDiscovery> {
-  const windowMs = Math.min(5_000, deadlineAt - Date.now());
+  const now = Date.now();
+  const windowMs = Math.min(5_000, deadlineAt - now);
   if (windowMs < 1_500) return Promise.resolve({
     status: "uncertain", error: new Error("restart_reobserve_window_exhausted"),
   });
-  const end = Date.now() + windowMs;
+  const end = now + windowMs;
   return pollReplacementDeparture(() => observe(end), previous, () => Date.now() + 750 < end, () => Bun.sleep(250));
 }
 
