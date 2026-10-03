@@ -8,6 +8,7 @@
     "compaction-event-ownership.test.ts": "responses",
     "zed-retained-budget.test.ts": "providers",
     "jev-decision-scope.test.ts": "server",
+    "codex-main-token-invalidated.test.ts": "codex-integration",
     "codex-shim-path-readiness.test.ts": "codex-integration",
     "codex-shim-fnm.test.ts": "codex-integration",
     "claude-intercept-cleanup.test.ts": "claude-integration",

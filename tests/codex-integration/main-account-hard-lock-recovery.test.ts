@@ -547,7 +547,7 @@ describe("main hard-lock background recovery", () => {
             } else {
               expect(getMainAccountInfoCache()).toBeNull();
               expect(isAccountNeedsReauth(MAIN)).toBe(true);
-              expect(snapshot.quotaRefresh).toEqual({ status: "http_error", httpStatus: status });
+              expect(snapshot.quotaRefresh).toEqual({ status: "http_error", httpStatus: status, code: "invalid_workspace_selected" });
             }
           } else {
             expect(getMainAccountInfoCache()).toEqual(cached);
@@ -610,7 +610,7 @@ describe("main hard-lock background recovery", () => {
             expect(reads).toBe(1);
             expect(getMainAccountInfoCache()).toBeNull();
             expect(isAccountNeedsReauth(MAIN)).toBe(true);
-            expect(result.quotaRefresh).toEqual({ status: "http_error", httpStatus: status });
+            expect(result.quotaRefresh).toEqual({ status: "http_error", httpStatus: status, code: "invalid_workspace_selected" });
           } else {
             expect(getMainAccountInfoCache()).toEqual(info);
             expect(getMainPolicyQuota()).toEqual(policy);

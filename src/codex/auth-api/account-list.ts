@@ -359,12 +359,13 @@ export async function listCodexAuthAccountsSnapshot(
     needsReauth: mainNeedsReauth,
   });
   // The main row carries the same attribution as a pool row. Reaching this point without
-  // `mainMissingCredential` means the runtime reauth flag is what set `mainNeedsReauth`, so the
-  // cause is a refresh that did not complete.
+  // `mainMissingCredential` means the runtime reauth flag is what set `mainNeedsReauth`: a usage
+  // read this call rejected with 401 names that cause, anything else is a refresh that did not complete.
   const mainReauthReason: CodexAccountReauthReason | undefined = mainMissingCredential
     ? "missing_credential"
     : mainNeedsReauth
-      ? "refresh_failed"
+      ? mainResult.quotaRefresh?.status === "http_error" && mainResult.quotaRefresh.httpStatus === 401
+        ? "unauthorized" : "refresh_failed"
       : mainHealth.status === "reauth_required" ? mainHealth.reason : undefined;
   const main: CodexAuthAccountDto = {
     id: MAIN_CODEX_ACCOUNT_ID,

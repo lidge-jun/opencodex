@@ -156,7 +156,10 @@ only these fields when comparing network modes, rather than the full account lis
 | `internal_error` | An internal refresh step failed. |
 
 Only `http_error` includes `httpStatus`. Other statuses do not imply HTTP 0 or an
-account entitlement problem.
+account entitlement problem. An `http_error` may also include `code` when the provider
+named a reason that only a new sign-in fixes (`token_invalidated`, `invalid_refresh_token`,
+`invalid_workspace_selected`). `token_invalidated` is what ChatGPT returns after a plan
+change revokes the session; the row then shows `needsReauth: true` with the last-known plan.
 
 ### Which proxy path is used?
 

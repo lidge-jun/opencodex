@@ -253,7 +253,7 @@ A private per-dispatch identity generation fences the diagnostic independently o
 quota metadata. Both snapshot and account DTO publication omit externally invalidated
 attempts; the generation itself is never serialized or stored in the quota cache.
 The CLI reconstructs the object using a fixed vocabulary and bounded numeric HTTP
-status, so an unexpected management response cannot add raw upstream material.
+status, so an unexpected management response cannot add raw upstream material. An `http_error` may carry `code` only from `CODEX_TERMINAL_AUTH_CODES` (`src/codex/quota-refresh-outcome.ts`; e.g. `token_invalidated` after a plan change revokes the session), and a failed read keeps the main row's last-known plan.
 
 > Decision record: [ADR-0078](decisions/ADR-0078-usage-accounting.md)
 
