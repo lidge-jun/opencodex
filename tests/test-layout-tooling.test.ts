@@ -20,12 +20,23 @@ import {
   type Layout,
 } from "../scripts/test-layout/schema";
 
-// Independent oracle: the basename -> directory table from devlog 001 §2.D, committed as a
-// fixture. The layout guard shares the resolver with the mover, so a resolver defect could move
-// a file to the wrong place and bless it; this fixture is the second opinion that catches it.
-const EXPECTED = JSON.parse(readFileSync(repoPath("tests", "fixtures", "test-layout-expected.json"), "utf8")) as Record<string, string>;
+// Independent oracle: the basename -> directory table from devlog 001 §2.D, committed as sorted
+// fixture chunks. Keeping the CLI chunk separate leaves room under the file-size ratchet. The
+// layout guard shares the resolver with the mover, so this remains a second opinion.
+const EXPECTED_PARTS = [
+  JSON.parse(readFileSync(repoPath("tests", "fixtures", "test-layout-expected.json"), "utf8")) as Record<string, string>,
+  JSON.parse(readFileSync(repoPath("tests", "fixtures", "test-layout-expected-cli.json"), "utf8")) as Record<string, string>,
+];
+const EXPECTED = Object.assign({}, ...EXPECTED_PARTS) as Record<string, string>;
+const DUPLICATE_EXPECTED_NAMES = EXPECTED_PARTS.flatMap((part, index) =>
+  Object.keys(part).filter((name) => EXPECTED_PARTS.slice(0, index).some((previous) => name in previous))
+);
 
 describe("rewriteSpecifier", () => {
+  test("expected-domain fixture chunks do not overlap", () => {
+    expect(DUPLICATE_EXPECTED_NAMES).toEqual([]);
+  });
+
   const forms = [
     (s: string) => `import { x } from "${s}";`,
     (s: string) => `import "${s}";`,
