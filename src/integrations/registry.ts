@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { assertDroidSettingsUnambiguous } from "./droid-settings";
 import { readPath } from "./merge";
 import type { OwnershipRecord } from "./ownership";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ClientPathError,
   buildDroidContribution,
@@ -52,6 +52,10 @@ import {
   zcodeProviderStorePath,
   buildZcodeStoreContribution,
   zcodeStoreSchemaEstablished,
+  dshProfilePatchPath,
+  dshProfilePatchEstablished,
+  buildDshProfilePatchContribution,
+  DSH_PROFILE_PROVIDER_PATH,
   type BuildContribution,
   type ConfigFormat,
   kiloConfigPath,
@@ -96,6 +100,14 @@ export interface IntegrationClientSpec {
     format: ConfigFormat;
     establishes: (parsed: unknown) => boolean;
     buildContribution: BuildContribution;
+    /** Patch only this leaf of the store, as `sourcePreservingYaml` does for the config file. */
+    sourcePreservingYaml?: { path: readonly string[] };
+    /**
+     * The file whose `<file>.lock` sibling the client's own writer holds while
+     * it rewrites the store. Taken after the config file's lock, whenever the
+     * store's directory exists.
+     */
+    lockFile?: (storePath: string) => string;
   };
   /** Patch only this block-map YAML leaf; never re-render the shared file. */
   sourcePreservingYaml?: { path: readonly string[] };
@@ -297,6 +309,19 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     detectDir: (env = process.env, home = homedir()) => dshHomeDir(env, home),
     sourcePreservingYaml: { path: ["llm-pi-ai", "providers", "opencodex"] },
     writerLock: { suffix: ".lock" },
+    /*
+     * DSH 0.1.7+ imports `settings.yaml` once into the first profile that boots
+     * and renames it; what it reads afterwards is the Desktop profile's patch.
+     */
+    currentStore: {
+      path: (env = process.env, home = homedir()) => dshProfilePatchPath(env, home),
+      format: "yaml",
+      establishes: dshProfilePatchEstablished,
+      buildContribution: buildDshProfilePatchContribution,
+      sourcePreservingYaml: { path: DSH_PROFILE_PROVIDER_PATH },
+      // DSH's config editor serializes profile edits on the profile manifest's lock.
+      lockFile: store => join(dirname(store), "package.json"),
+    },
   },
   mcode: {
     id: "mcode",

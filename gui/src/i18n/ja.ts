@@ -2156,7 +2156,7 @@ export const ja: Record<TKey, string> = {
   "integrations.semantics.openclaw": "実行中のゲートウェイにすぐ適用されます。",
   "integrations.semantics.kimi": "再起動するか /reload を実行すると適用されます（v2 はファイルを監視します）。",
   "integrations.semantics.gajae": "新しいセッション、または /model を開いたときに適用されます。",
-  "integrations.semantics.dsh": "OpenCodex が管理するのは $DSH_HOME/settings.yaml 内の llm-pi-ai.providers.opencodex だけです。DSH はこのプロバイダーをホットリロードし、既定のモデルと deepseek-official は変更しません。現在はループバック専用で、実際の認証情報は書き込みません。",
+  "integrations.semantics.dsh": "OpenCodex が管理するのは $DSH_HOME/profiles/desktop/cordis.patch.yml（DSH 0.1.7 以降が読む Desktop プロファイル。存在しない間は $DSH_HOME/settings.yaml）の llm-pi-ai 行にある opencodex プロバイダーだけです。DSH はこのプロバイダーをホットリロードし、既定のモデルと deepseek-official は変更しません。現在はループバック専用で、実際の認証情報は書き込みません。",
   "integrations.semantics.mcode": "custom_provider.opencodex のみを管理します。既定モデルと MiniMax ログインは変更しません。",
   "integrations.semantics.zcode": "~/.zcode/v2/config.json の provider.opencodex のみを管理します。Z.ai ログインと他のプロバイダーは変更しません。変更後は ZCode を再起動してください。",
   "integrations.semantics.prime": "Prime Agent の models.json 内の providers.opencodex のみを管理します。場所は ~/.prime/agent ですが、PRIME_AGENT_CODING_AGENT_DIR が設定されている場合はそちらが優先されます。他のプロバイダーとモデルオーバーライドは変更しません。新しいセッションから適用されます。",

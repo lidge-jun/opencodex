@@ -129,7 +129,7 @@ const CLIENT_MANAGED_PATHS = {
   openclaw: [["models", "providers", OPENCODE_PROVIDER_ID]],
   kimi: [["providers", OPENCODE_PROVIDER_ID], ["models", DYNAMIC_SEGMENT]],
   gajae: [["providers", OPENCODE_PROVIDER_ID]],
-  dsh: [["llm-pi-ai", "providers", OPENCODE_PROVIDER_ID]],
+  dsh: [["llm-pi-ai", "providers", OPENCODE_PROVIDER_ID], ["[id=llm-pi-ai]", "config", "providers", OPENCODE_PROVIDER_ID]],
   mcode: [["custom_provider", OPENCODE_PROVIDER_ID]],
   zcode: [
     ["provider", OPENCODE_PROVIDER_ID],
@@ -954,7 +954,7 @@ export function observeIntegration(
   // ownership here and disable would delete fragments it never wrote.
   const classified = classifyIntegration({
     fileText: before, fileIsRegular: true, parsed, record, contribution, configPath, clientId,
-    format: effective.format,
+    format: effective.format, sourcePreservingYaml: effective.sourcePreservingYaml !== null,
   });
   if (clientId === "droid" && record && (classified.state === "current" || classified.state === "stale")) {
     try { assertDroidRecordedSettingsUnambiguous(detectDir, parsed, record); }

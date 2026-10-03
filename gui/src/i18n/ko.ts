@@ -1767,7 +1767,7 @@ export const ko: Record<TKey, string> = {
   "integrations.semantics.openclaw": "실행 중인 게이트웨이에 즉시 반영됩니다.",
   "integrations.semantics.kimi": "재시작 또는 /reload 시 적용됩니다 (v2는 파일 변경을 감지합니다).",
   "integrations.semantics.gajae": "새 세션 또는 /model을 열 때 적용됩니다.",
-  "integrations.semantics.dsh": "OpenCodex는 $DSH_HOME/settings.yaml의 llm-pi-ai.providers.opencodex만 관리합니다. DSH는 이 provider를 hot reload하며 기본 model과 deepseek-official은 변경하지 않습니다. 현재 loopback 전용이며 실제 credential을 기록하지 않습니다.",
+  "integrations.semantics.dsh": "OpenCodex는 $DSH_HOME/profiles/desktop/cordis.patch.yml(DSH 0.1.7+가 읽는 Desktop profile, 이 profile이 없으면 $DSH_HOME/settings.yaml)의 llm-pi-ai 행에 있는 opencodex provider만 관리합니다. DSH는 이 provider를 hot reload하며 기본 model과 deepseek-official은 변경하지 않습니다. 현재 loopback 전용이며 실제 credential을 기록하지 않습니다.",
   "integrations.semantics.mcode": "custom_provider.opencodex만 관리하며 기본 모델과 MiniMax 로그인은 변경하지 않습니다.",
   "integrations.semantics.zcode": "~/.zcode/v2/config.json의 provider.opencodex만 관리하며 Z.ai 로그인과 다른 프로바이더는 변경하지 않습니다. 변경 후 ZCode를 재시작하세요.",
   "integrations.semantics.prime": "Prime Agent의 models.json에서 providers.opencodex만 관리합니다. 위치는 ~/.prime/agent이며 PRIME_AGENT_CODING_AGENT_DIR가 설정되면 그쪽이 우선합니다. 다른 프로바이더와 모델 오버라이드는 변경하지 않습니다. 새 세션부터 적용됩니다.",

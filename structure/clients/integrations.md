@@ -424,6 +424,19 @@ notice appears only when the client reads some other file than the one the state
 Deleting the client's store to re-trigger its own import is not implemented and must not be. It
 discards every provider the client keeps there.
 
+DSH is the second instance: from 0.1.7 it imports `$DSH_HOME/settings.yaml` once into the first
+profile that boots, renames it, and hot reloads provider routes from the `llm-pi-ai` row of a profile
+patch. The store is the Desktop profile's `profiles/desktop/cordis.patch.yml`; the home patch is no
+alternative, because a home row replaces the profile row's whole `config` and the user's routes
+with it. That document is a top-level list of loader rows, so the managed path starts with the
+selector `[id=llm-pi-ai]`: `merge.ts` keeps a sequence root, the source patcher edits that one entry
+as the block map it holds and puts its `- ` and two-space indent back byte for byte, and DSH's empty
+`[]` is the only flow form adopted (and what a disable that empties the list writes back). A row we
+created and pruned down to its selector field is our residue and is removed with it.
+`IntegrationTarget` carries its own `sourcePreservingYaml`, so the legacy file and the store are each
+patched along their own path, and a coordinated write also holds DSH's config-editor lock, the
+profile's `package.json.lock`, after `settings.yaml.lock` whenever the profile directory exists.
+
 ## Verification
 
 Behavior changes require real writer tests against a temporary home and state store. At minimum,

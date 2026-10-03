@@ -37,6 +37,12 @@ export interface IntegrationTarget {
   /** The contribution shape that file's reader understands. */
   readonly buildContribution: BuildContribution;
   /**
+   * The one YAML leaf patched in place in that file, or null when the writer
+   * re-renders the document. A client's config file and its store have
+   * different shapes, so this belongs to the target rather than the client.
+   */
+  readonly sourcePreservingYaml: { readonly path: readonly string[] } | null;
+  /**
    * Set when a write to the file above would not reach the client.
    *
    * `why` is carried rather than re-derived because the cases have different
@@ -74,6 +80,7 @@ function configFileTarget(
     configPath,
     format: exportSpec.format,
     buildContribution: exportSpec.buildContribution,
+    sourcePreservingYaml: INTEGRATION_CLIENTS[clientId].sourcePreservingYaml ?? null,
     ineffective,
   };
 }
@@ -87,6 +94,7 @@ function storeTarget(
     configPath,
     format: declared.format,
     buildContribution: declared.buildContribution,
+    sourcePreservingYaml: declared.sourcePreservingYaml ?? null,
     ineffective,
   };
 }

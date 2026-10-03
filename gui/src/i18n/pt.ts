@@ -2308,7 +2308,7 @@ export const pt: Record<TKey, string> = {
   "integrations.semantics.openclaw": "Vale imediatamente para um gateway em execução.",
   "integrations.semantics.kimi": "Reinicie ou execute /reload para aplicar (a v2 observa o arquivo).",
   "integrations.semantics.gajae": "Vale para uma nova sessão ou ao abrir /model.",
-  "integrations.semantics.dsh": "O OpenCodex gerencia apenas llm-pi-ai.providers.opencodex em $DSH_HOME/settings.yaml. O DSH recarrega esse provedor a quente; seu modelo padrão e o deepseek-official permanecem inalterados. Atualmente somente loopback; nenhuma credencial real é gravada.",
+  "integrations.semantics.dsh": "O OpenCodex gerencia apenas o provedor opencodex da linha llm-pi-ai em $DSH_HOME/profiles/desktop/cordis.patch.yml, o perfil Desktop que o DSH 0.1.7+ lê ($DSH_HOME/settings.yaml enquanto esse perfil não existir). O DSH recarrega esse provedor a quente; seu modelo padrão e o deepseek-official permanecem inalterados. Atualmente somente loopback; nenhuma credencial real é gravada.",
   "integrations.semantics.mcode": "Gerencia apenas custom_provider.opencodex. Seu modelo padrão e o login do MiniMax permanecem inalterados.",
   "integrations.semantics.zcode": "Gerencia apenas provider.opencodex em ~/.zcode/v2/config.json. Seu login do Z.ai e os outros provedores permanecem inalterados. Reinicie o ZCode após as alterações.",
   "integrations.semantics.prime": "Gerencia apenas providers.opencodex no models.json do Prime Agent — ~/.prime/agent, a menos que PRIME_AGENT_CODING_AGENT_DIR o redirecione. Seus outros provedores e substituições de modelo permanecem inalterados. Vale para novas sessões.",

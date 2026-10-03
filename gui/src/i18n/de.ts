@@ -1723,7 +1723,7 @@ export const de: Record<TKey, string> = {
   "integrations.semantics.openclaw": "Wird sofort auf ein laufendes Gateway angewendet.",
   "integrations.semantics.kimi": "Zum Anwenden neu starten oder /reload ausführen (v2 überwacht die Datei).",
   "integrations.semantics.gajae": "Gilt für eine neue Sitzung oder beim Öffnen von /model.",
-  "integrations.semantics.dsh": "OpenCodex verwaltet nur llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH lädt diesen Anbieter im laufenden Betrieb neu; Ihr Standardmodell und deepseek-official bleiben unverändert. Derzeit nur über Loopback; es werden keine echten Zugangsdaten geschrieben.",
+  "integrations.semantics.dsh": "OpenCodex verwaltet nur den Anbieter opencodex in der llm-pi-ai-Zeile von $DSH_HOME/profiles/desktop/cordis.patch.yml, dem Desktop-Profil, das DSH ab 0.1.7 liest ($DSH_HOME/settings.yaml, solange dieses Profil fehlt). DSH lädt diesen Anbieter im laufenden Betrieb neu; Ihr Standardmodell und deepseek-official bleiben unverändert. Derzeit nur über Loopback; es werden keine echten Zugangsdaten geschrieben.",
   "integrations.semantics.mcode": "Verwaltet nur custom_provider.opencodex. Standardmodell und MiniMax-Anmeldung bleiben unverändert.",
   "integrations.semantics.zcode": "Verwaltet nur provider.opencodex in ~/.zcode/v2/config.json. Z.ai-Anmeldung und andere Provider bleiben unverändert. ZCode nach Änderungen neu starten.",
   "integrations.semantics.prime": "Verwaltet nur providers.opencodex in der models.json von Prime Agent — ~/.prime/agent, sofern PRIME_AGENT_CODING_AGENT_DIR sie nicht umleitet. Andere Provider und Modell-Overrides bleiben unverändert. Gilt für neue Sitzungen.",

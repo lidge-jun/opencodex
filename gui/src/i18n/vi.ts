@@ -2289,7 +2289,7 @@ export const vi: Record<TKey, string> = {
   "integrations.semantics.openclaw": "Áp dụng ngay cho gateway đang chạy.",
   "integrations.semantics.kimi": "Khởi động lại hoặc chạy /reload để áp dụng (v2 theo dõi file).",
   "integrations.semantics.gajae": "Áp dụng cho session mới hoặc khi mở /model.",
-  "integrations.semantics.dsh": "OpenCodex chỉ quản lý llm-pi-ai.providers.opencodex trong $DSH_HOME/settings.yaml. DSH sẽ hot reload provider này; model mặc định của bạn và deepseek-official không thay đổi. Hiện chỉ hỗ trợ loopback; không ghi credential thật nào.",
+  "integrations.semantics.dsh": "OpenCodex chỉ quản lý provider opencodex trong dòng llm-pi-ai của $DSH_HOME/profiles/desktop/cordis.patch.yml, profile Desktop mà DSH 0.1.7+ đọc ($DSH_HOME/settings.yaml khi profile đó chưa tồn tại). DSH sẽ hot reload provider này; model mặc định của bạn và deepseek-official không thay đổi. Hiện chỉ hỗ trợ loopback; không ghi credential thật nào.",
   "integrations.semantics.mcode": "Chỉ quản lý custom_provider.opencodex. Model mặc định của bạn và đăng nhập MiniMax không thay đổi.",
   "integrations.semantics.zcode": "Chỉ quản lý provider.opencodex trong ~/.zcode/v2/config.json. Đăng nhập Z.ai của bạn và các provider khác không thay đổi. Khởi động lại ZCode sau khi thay đổi.",
   "integrations.semantics.prime": "Chỉ quản lý providers.opencodex trong models.json của Prime Agent — ~/.prime/agent trừ khi PRIME_AGENT_CODING_AGENT_DIR điều hướng nó. Các provider khác và ngoại lệ model của bạn không thay đổi. Áp dụng cho các session mới.",

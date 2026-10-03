@@ -15,7 +15,7 @@ file, and removes it again. Seventeen clients work this way, each with a switch:
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | on restart, or `/reload` | loopback placeholder |
 | gjc | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |non-secret loopback placeholder |
-| DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (default `~/.dsh/settings.yaml`) | YAML | hot reload | non-secret loopback bearer placeholder |
+| DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml` (default `~/.dsh/profiles/desktop/cordis.patch.yml`); `$DSH_HOME/settings.yaml` until DSH Desktop creates that profile | YAML | hot reload | non-secret loopback bearer placeholder |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | new sessions, or after opening the model picker | loopback placeholder |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | new sessions | loopback placeholder |
 | ZCode | `~/.zcode/v2/config.json` | JSON | on restart | loopback placeholder |

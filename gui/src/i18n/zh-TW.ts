@@ -3136,7 +3136,7 @@ export const zhTW: Record<TKey, string> = {
   "integrations.semantics.openclaw": "立即套用到正在執行的閘道。",
   "integrations.semantics.kimi": "重新啟動或執行 /reload 以套用（v2 會監視該檔案）。",
   "integrations.semantics.gajae": "在新工作階段中或開啟 /model 時生效。",
-  "integrations.semantics.dsh": "OpenCodex 只管理 $DSH_HOME/settings.yaml 中的 llm-pi-ai.providers.opencodex。DSH 會熱重載該 provider；你的預設模型與 deepseek-official 維持不變。目前僅支援 loopback，且不會寫入真實憑證。",
+  "integrations.semantics.dsh": "OpenCodex 只管理 $DSH_HOME/profiles/desktop/cordis.patch.yml（DSH 0.1.7 起讀取的 Desktop profile；該 profile 不存在時為 $DSH_HOME/settings.yaml）中 llm-pi-ai 這一列的 opencodex provider。DSH 會熱重載該 provider；你的預設模型與 deepseek-official 維持不變。目前僅支援 loopback，且不會寫入真實憑證。",
   "integrations.semantics.mcode": "僅管理 custom_provider.opencodex，不會變更預設模型或 MiniMax 登入狀態。",
   "integrations.semantics.zcode": "僅管理 ~/.zcode/v2/config.json 中的 provider.opencodex，不會變更 Z.ai 登入狀態或其他供應商。變更後請重新啟動 ZCode。",
   "integrations.semantics.prime": "僅管理 Prime Agent 的 models.json 中的 providers.opencodex；預設位於 ~/.prime/agent，若設定 PRIME_AGENT_CODING_AGENT_DIR 則以其為準。不會變更其他供應商或模型覆寫設定。對新工作階段生效。",

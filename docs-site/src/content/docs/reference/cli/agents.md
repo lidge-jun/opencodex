@@ -374,6 +374,9 @@ client applies its own defaults for those).
 The managed DSH export requires DSH 0.1.0-rc.6 or newer and owns only
 `llm-pi-ai.providers.opencodex`. DSH hot reloads that provider; the user's default model and
 `deepseek-official` remain untouched. This export is loopback-only and carries no real credential.
+DSH 0.1.7 and newer import `settings.yaml` once into the first profile that boots and then rename
+it, so the dashboard integration writes the same provider into the `llm-pi-ai` row of the Desktop
+profile's `$DSH_HOME/profiles/desktop/cordis.patch.yml` once that profile exists.
 
 opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. The generated Pi and OMP exports do
 not require an environment variable: each carries the literal `opencodex-loopback` placeholder.

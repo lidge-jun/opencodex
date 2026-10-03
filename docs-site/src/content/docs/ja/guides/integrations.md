@@ -14,7 +14,7 @@ description: ダッシュボードから opencodex を OpenCode、Pi、OMP、Her
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | 稼働中のゲートウェイに直ちに反映 | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | 再起動時または `/reload` 実行時 | ループバック用プレースホルダー |
 | gjc | `~/.gjc/agent/models.yml` | YAML | 新しいセッションまたは `/model` を開いたとき | 秘密情報ではないループバック用プレースホルダー |
-| DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml`（デフォルトは `~/.dsh/settings.yaml`） | YAML | ホットリロード時 | 秘密情報ではないループバック用ベアラープレースホルダー |
+| DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml`（デフォルトは `~/.dsh/profiles/desktop/cordis.patch.yml`）。DSH Desktop がこのプロファイルを作成するまでは `$DSH_HOME/settings.yaml` | YAML | ホットリロード時 | 秘密情報ではないループバック用ベアラープレースホルダー |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | 新しいセッションまたはモデル選択画面を開いた後 | ループバック用プレースホルダー |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | 新しいセッション | ループバック用プレースホルダー |
 | ZCode | `~/.zcode/v2/config.json` | JSON | 再起動時 | ループバック用プレースホルダー |
