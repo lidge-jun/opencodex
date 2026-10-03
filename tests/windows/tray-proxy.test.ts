@@ -501,6 +501,27 @@ describe("tray proxy coordinator", () => {
     expect(rounds).toBe(2);
   });
 
+  test("the reserve deadline does not advance between clock reads", async () => {
+    const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
+    const next: ProxyRestartLive = { pid: 20, port: 10100, source: "runtime" };
+    let observedEnd = 0;
+    const pending = (() => {
+      const originalNow = Date.now;
+      let tick = 1_000;
+      try {
+        Date.now = () => tick++;
+        return reobserveRestartReplacement(previous, 6_000, async end => {
+          observedEnd = end;
+          return { status: "live", live: next };
+        });
+      } finally {
+        Date.now = originalNow;
+      }
+    })();
+    expect(await pending).toEqual({ status: "live", live: next });
+    expect(observedEnd).toBe(6_000);
+  });
+
   test("the production reserve binding observes a replacement after uncertainty", async () => {
     const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
     const next: ProxyRestartLive = { pid: 20, port: 10100, source: "runtime" };

@@ -16,7 +16,7 @@ import {
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import { readIntegrationState, readPath } from "../../src/integrations/state";
 import { applyIntegration, disableIntegration, restoreIntegration } from "../../src/integrations/writer";
-import { printSubcommandUsage, printUsage } from "../../src/cli/help";
+import { printSubcommandUsage, printFullUsage } from "../../src/cli/help";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -856,7 +856,7 @@ describe("the store's own root stays tidy", () => {
 });
 
 describe("the CLI names every client it supports", () => {
-  test("export help and the top-level list are not stuck on opencode and Pi", () => {
+  test("export help and the full command reference name every supported client", () => {
     /*
      * The command has accepted several clients since WP1, but its help said two.
      * A user reading it concluded the feature did not support their client —
@@ -871,7 +871,7 @@ describe("the CLI names every client it supports", () => {
     console.log = (...args: unknown[]) => { captured.push(args.join(" ")); };
     try {
       printSubcommandUsage("export");
-      printUsage();
+      printFullUsage();
     } finally {
       console.log = originalLog;
     }

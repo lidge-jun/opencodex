@@ -14,6 +14,7 @@ import {
   type RuntimeApiDeps,
 } from "./runtime-api";
 import { isModelsRuntimeSubcommand } from "./models-runtime-subcommands";
+import { MODELS_CONTEXT_USAGE } from "./help-models-context";
 import { isValidProviderName } from "../config/provider-name";
 import { isValidModelDiscoveryModelId } from "../providers/model-discovery-limits";
 import { redactSecretString } from "../lib/redact";
@@ -42,7 +43,7 @@ const USAGE = `Usage:
   ocx models preset apply <provider> [--all] [--json]
   ocx models new-policy [on|off] [--provider <name>] [--json]
   ocx models new-arrivals [--json]
-  ocx models context <status|value <tokens> [--set-all]|provider <name> on [--value <tokens>]|provider <name> off|all <on|off>> [--json]
+${MODELS_CONTEXT_USAGE}
   ocx models shadow <status|set> [model|-] [--enabled <on|off>] [--json]
 
 Prices are USD per 1M tokens. Omitted cache rates default to 0.
