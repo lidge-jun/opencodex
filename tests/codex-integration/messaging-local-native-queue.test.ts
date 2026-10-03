@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { MessageBudget } from "../../src/messaging/budget";
 import { runMessageProcess } from "../../src/messaging/process";
+import { sendLocalMessage } from "../../src/messaging/send";
 import { LOCAL_TARGET, localMessagingFixture, NO_REPLY } from "../helpers/messaging-local";
 
 // Explicit opt-in only. No daemon, install, live home, bearer or API request.
@@ -45,3 +46,22 @@ test.skipIf(!native || process.platform === "win32")("native queue acknowledgeme
     expect(fixture.failures).toEqual([]);
   } finally { budget.dispose(); await fixture.close(); }
 }, 5000);
+
+test.skipIf(!native || process.platform === "win32")("complete local send workflow preserves native queue correlation and unknown receipts", async () => {
+  for (const lost of [false, true]) {
+    const fixture = localMessagingFixture(call => lost && call.method === "thread/queue/add" ? NO_REPLY : undefined);
+    const budget = new MessageBudget(lost ? 2000 : 30_000);
+    try {
+      const receipt = await sendLocalMessage({ thread: LOCAL_TARGET, kind: "notification", body: "Native workflow fixture body." },
+        { home: fixture.codexHome, runtime: () => ({ argv: args => [native!, ...args], path: process.env.PATH }) }, budget);
+      expect(receipt.status).toBe(lost ? "unknown" : "queued");
+      const submissions = fixture.calls.filter(call => call.method === "thread/queue/add");
+      expect(submissions).toHaveLength(1);
+      expect(submissions[0]!.params.threadId).toBe(LOCAL_TARGET);
+      const input = submissions[0]!.params.input as { text: string }[];
+      expect(input[0]!.text).toContain(receipt.messageId);
+      expect(input[0]!.text).toContain('"replyExpected":false');
+      expect(fixture.failures).toEqual([]);
+    } finally { budget.dispose(); await fixture.close(); }
+  }
+}, 35_000);

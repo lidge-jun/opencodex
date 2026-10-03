@@ -20,7 +20,7 @@ test("transport rejects remote URLs and unsupported platforms without opening a 
 });
 
 test("importing the unactivated subsystem allocates no listener, timer, child or socket", async () => {
-  const modules = ["types", "budget", "socket", "rpc", "discovery", "process"].map(name => repoPath("src", "messaging", `${name}.ts`));
+  const modules = ["types", "budget", "socket", "rpc", "discovery", "process", "envelope", "input", "native", "send"].map(name => repoPath("src", "messaging", `${name}.ts`));
   const script = `
     const forbidden = () => { throw new Error("unexpected messaging resource allocation"); };
     globalThis.setTimeout = forbidden;
@@ -34,15 +34,23 @@ test("importing the unactivated subsystem allocates no listener, timer, child or
   expect(errors).toBe(""); expect(output).toBe(""); expect(exitCode).toBe(0);
 });
 
-test("no ordinary source entry imports the inactive messaging foundation", async () => {
+test("messaging activation is command-local, never on an ordinary proxy startup path", async () => {
   // Native parser inventory, not graph completeness: catches static/dynamic literal imports.
-  // Command-local imports will replace this zero-incoming-edge assertion at CLI integration.
+  const allowed = new Set(["src/cli/message-args.ts", "src/cli/message-command.ts"]);
   const transpiler = new Bun.Transpiler({ loader: "ts" });
   for await (const path of new Bun.Glob("src/**/*.{ts,mts}").scan({ cwd: repoPath() })) {
     if (path.startsWith("src/messaging/") || /\.d\.(?:ts|mts)$/.test(path)) continue;
     const imports = transpiler.scanImports(readFileSync(repoPath(path), "utf8").replace(/^#![^\n]*\n/, ""));
-    expect(imports.filter(entry => /(?:^|\/)messaging(?:\/|$)/.test(entry.path)), path).toEqual([]);
+    const incoming = imports.filter(entry => /(?:^|\/)messaging(?:\/|$)/.test(entry.path));
+    if (!allowed.has(path)) expect(incoming, path).toEqual([]);
+    for (const entry of imports.filter(entry => /(?:^|\/)message-(?:command|args|runtime)$/.test(entry.path))) {
+      expect(["src/cli/dispatch.ts", "src/cli/message-command.ts"], path).toContain(path);
+      if (path === "src/cli/dispatch.ts") {
+        expect(entry.path).toBe("./message-command"); expect(entry.kind).toBe("dynamic-import");
+      }
+    }
   }
+  expect(readFileSync(repoPath("src/cli/dispatch.ts"), "utf8")).toContain('message: async deps => (await import("./message-command")).runMessageCommand(deps.args.slice(1))');
 });
 
 describe.skipIf(process.platform === "win32")("local RPC lifecycle", () => {

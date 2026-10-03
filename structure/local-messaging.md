@@ -1,9 +1,9 @@
 # Local Codex messaging foundation
 
-`src/messaging/` contains a command-owned, currently unregistered foundation for
-local Codex discovery and native queue interoperability. There is no CLI command,
-management API, startup hook, enabled setting, listener, persistent store or skill
-installation in this foundation. Ordinary source entries do not import it.
+`src/messaging/` contains command-owned local Codex discovery and queued peer
+submission. `src/cli/message-command.ts` activates it only for `ocx message`.
+There is no management API, startup hook, enabled setting, listener, persistent
+store or skill installation. Ordinary proxy startup does not activate messaging.
 
 > Decision record: [ADR-6478](decisions/ADR-6478-local-messaging-foundation.md)
 
@@ -60,10 +60,61 @@ inherited pipes are terminated too; it never signals the caller's group. Forced
 termination follows after one second, so cleanup may outlast the operation
 deadline by this bounded grace period. No recipient/daemon/proxy is stopped.
 
-Submission receipts, sender envelopes and the public command do not yet exist.
-The child runner's successful exit alone must not be interpreted as recipient
-processing. The native queue test exercises acknowledgement against an isolated
-fixture, not end-to-end delivery to an actual agent.
+## Command-local CLI
+
+> Decision record: [ADR-6479](decisions/ADR-6479-local-messaging-command.md)
+
+`src/cli/dispatch.ts` dynamically imports the command runner for the message verb.
+`src/cli/message-args.ts` rejects malformed, duplicate and remote/Claude options
+before any command resource or runtime selection. `src/cli/codex-shim-autorestore.ts`
+skips repair for the whole namespace. Registry, capability and help declarations
+describe sessions/send; no management route is claimed.
+
+`src/cli/message-runtime.ts` reuses effective Codex-home resolution and existing
+runtime selection without persistence or synchronous version probes. It selects
+once, with no post-failure runtime fallback. It uses the shared platform-safe
+invocation builder. Unsupported platforms are rejected before a helper runs.
+
+`src/messaging/native.ts` creates one temporary credential-free helper home and
+sets shim probe/bypass flags for all native invocations. It invokes version and
+queue help, requiring the contract-tested 0.160.0 version and tested queue/Unix
+flags. It removes only its owned temporary root on completion. Native queue
+addresses the selected existing control socket explicitly, so the helper cannot
+fall back to starting a daemon in that temporary home. No install or repair occurs.
+
+One maximum 30-second budget covers stdin, home selection, discovery, preflight,
+revalidation and submission. `src/messaging/input.ts` incrementally reads at most
+16 KiB of UTF-8 stdin, rejecting invalid bytes, empty text and NUL. The final
+envelope is bounded at 32 KiB. SIGINT/SIGTERM cancel only command-owned work.
+
+## Envelope and receipt semantics
+
+`src/messaging/envelope.ts` assembles the caller-generated UUID, kind, response
+correlation and reply guidance. A response requires a request UUID; notifications and responses
+do not request acknowledgements. Routing never comes from the body or a name.
+Sender context comes from a valid loaded CODEX_THREAD_ID and current metadata,
+not a user-supplied announcement or authenticated authority. A missing sender
+remains unknown with no invented reply command; an invalid/unloaded claimed
+sender fails before submission. No delegation or permission-management surface
+is added. The envelope identifies peer content as neither approval nor escalation.
+
+`src/messaging/send.ts` resolves complete loaded membership and rechecks the exact
+destination ID after native preflight. An unload blocks sending without resume.
+It invokes native queue once, with the wrapper envelope as message text:
+
+- `not_sent`: validation/discovery/preflight/revalidation fails, or the submission
+  helper is provably not started. There is no automatic retry.
+- `queued`: native queue exits successfully, acknowledging submission, not
+  recipient processing or steering.
+- `unknown`: after submission-helper spawn, a nonzero, incomplete, cancelled,
+  timed-out or lost result cannot establish whether submission occurred. Do not
+  replay or probe by sending another message.
+
+Receipts contain bounded metadata and application message correlation, never
+the body or helper output. Native clientUserMessageId is separate native queue
+correlation, not an OpenCodex processing receipt. Native queue's required message
+argv is visible to processes permitted to inspect the helper; this is not a
+body-confidentiality barrier against the same user. No request-body logging is added.
 
 ## Verification boundaries
 
@@ -71,12 +122,18 @@ fixture, not end-to-end delivery to an actual agent.
   loaded-only lookup, exact matching, incomplete/malformed responses and bounded
   metadata concurrency.
 - `tests/codex-integration/messaging-local-lifecycle.test.ts` exercises no import
-  allocations, no incoming literal imports, cancellation/close, frame/output
+  allocations, command-local literal imports, cancellation/close, frame/output
   limits and subprocess teardown. The parser inventory is not an exhaustive
   dynamic dependency graph or proof about arbitrary computed imports.
 - `tests/codex-integration/messaging-local-native-queue.test.ts` uses an explicitly
   supplied Codex 0.160.0 binary and isolated Unix fixture. Without the explicit
   opt-in it skips, which is not passing interoperability evidence.
+- `tests/codex-integration/messaging-local-send.test.ts` exercises unsupported
+  capability, stale target, isolated helper environments and no-replay receipts.
+- `tests/codex-integration/messaging-local-envelope.test.ts` covers metadata-only
+  routes, unknown sender, bounded input, kind/correlation and no ack loops.
+- `tests/codex-integration/messaging-local-cli.test.ts` exercises the actual CLI
+  against isolated native stubs, pure syntax rejection and non-persisting selection.
 - `tests/helpers/messaging-local.ts` rejects unexpected/lifecycle RPCs and joins
   fixture work before removing the scratch home. Its uniquely owned short Unix
   root carries the repository stale-root marker, avoiding overlong sockets under
@@ -85,5 +142,5 @@ fixture, not end-to-end delivery to an actual agent.
 Native schema/help and the successful Linux fixture run bind the present evidence
 to Codex 0.160.0, not an invented minimum version or macOS compatibility claim.
 Remote authentication, enrollment, Claude, root relay, isolation and idle notices
-are absent. Implementation beyond the foundation remains scoped by
-`devlog/_plan/261003_codex_local_messaging/` and is not architecture acceptance.
+are absent. This local-only implementation is a contribution candidate, not
+architecture acceptance, independent review or permission to open a PR.
