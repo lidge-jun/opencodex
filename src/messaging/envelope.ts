@@ -5,6 +5,7 @@ export interface MessageOptions { kind: MessageKind; inReplyTo?: string }
 export const MAX_BODY_BYTES = 16 * 1024;
 export const MAX_ENVELOPE_BYTES = 32 * 1024;
 
+/** Reject invalid kind/correlation pairs and empty, oversized or NUL-containing peer text. */
 export function validateMessage(options: MessageOptions, body: string): void {
   if (!["request", "response", "notification"].includes(options.kind)
     || (options.inReplyTo !== undefined && !isThreadId(options.inReplyTo))

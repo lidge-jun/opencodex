@@ -15,6 +15,7 @@ const DEFAULT_DEPS: CodexShimAutoRestoreCliDeps = {
   readConfig: readConfigDiagnostics,
 };
 
+/** Identify command namespaces whose execution must not trigger automatic shim repair. */
 export function skipsCodexShimAutoRestore(command: string | undefined, args: string[]): boolean {
   if (command === "uninstall" || command === "remove") return true;
   if (command === "status" || command === "doctor") return true;

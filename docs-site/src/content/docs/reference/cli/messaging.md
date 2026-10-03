@@ -42,6 +42,9 @@ The wrapper generates a message UUID and attaches sender ID/name from a loaded
 `CODEX_THREAD_ID` and daemon metadata. This context is **not authenticated peer
 authority** and never grants user approval or escalation. An invalid/unloaded
 claimed sender fails; absent context stays unknown, without guessing a reply route.
+Peer messages are queued as text, not permission approvals or configuration
+overrides. The receiving agent's harness enforces its permissions; envelope
+guidance is not a technical authorization boundary or a guarantee of model behavior.
 
 The default kind is `request`. Answer by using the generated `replyCommand` in
 the envelope, or explicitly correlate a response:
@@ -74,5 +77,9 @@ error schema without a send status. Invalid usage exits 64 on stderr before I/O.
 The application message UUID correlates peer envelopes, not native queue IDs or
 processing receipts. Queueing is not steering and can wait for a busy turn to end.
 OpenCodex performs no automatic replay, follow-up probing, persistence or delivery
-monitoring. No remote hosts, bearer management, SSH, Claude messaging,
+monitoring. The final loaded-target check and queue submission are not atomic:
+if a target unloads afterwards and native queue rejects it, the receipt remains
+`unknown`. OpenCodex does not resume it or retry the message.
+
+No remote hosts, bearer management, SSH, Claude messaging,
 dashboard, isolation or idle-notification controls are part of this surface.

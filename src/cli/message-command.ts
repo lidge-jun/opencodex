@@ -4,6 +4,7 @@ import { localSessions, messageFailure, sendLocalMessage } from "../messaging/se
 import { parseMessageArgs } from "./message-args";
 import { terminalSafeText } from "./runtime-api";
 
+/** Run one local messaging operation after pure syntax validation, then release owned resources. */
 export async function runMessageCommand(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
   const args = parseMessageArgs(argv);
   if (!args) {

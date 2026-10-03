@@ -41,6 +41,7 @@ export async function discoverLoaded(client: LocalMetadataClient, budget: Messag
   return threads;
 }
 
+/** Resolve one exact ID or unique exact name from a complete discovery result; never guess a route. */
 export function resolveLoaded(threads: readonly LocalThread[], selector: { thread?: string; name?: string }): LocalThread {
   if ((selector.thread !== undefined) === (selector.name !== undefined)
     || (selector.thread !== undefined && !isThreadId(selector.thread))

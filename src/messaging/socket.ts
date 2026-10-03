@@ -15,6 +15,7 @@ export function localDaemonEndpoint(codexHome: string, platform = process.platfo
   return { url: `ws+unix://${path}:/`, nativeUrl: `unix://${path}` };
 }
 
+/** Open only a bounded canonical Bun Unix WebSocket address; network transports are rejected. */
 export function localSocket(url: string): LocalSocket {
   if (!/^ws\+unix:\/\/\/[^:?#%\\\x00-\x1f]+:\/$/.test(url) || Buffer.byteLength(url.slice(10, -2)) > 103) {
     throw new LocalMessagingError("unsupported_socket", "Messaging accepts only the local Unix control socket.");

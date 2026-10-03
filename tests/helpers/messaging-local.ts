@@ -9,6 +9,13 @@ export const LOCAL_OTHER = "00000000-0000-4000-8000-000000000003";
 export const NO_REPLY = Symbol("no-reply");
 export interface LocalCall { method: string; params: Record<string, unknown> }
 
+/** Explicit RPC rejection for native-client failure tests, distinct from fixture-handler failure. */
+export class LocalFixtureRpcError {
+  /** Supply an isolated fixture error; native output must never expose it in wrapper receipts. */
+  constructor(readonly code: number, readonly message: string) {}
+}
+
+/** Return schema-valid native thread metadata with private fields the wrapper must omit. */
 export function localFixtureThread(id = LOCAL_TARGET, name: string | null = "recipient") {
   return { id, name, status: { type: "idle" }, cwd: "/fixture", turns: [], preview: "must not be exposed",
     modelProvider: "openai", createdAt: 1, updatedAt: 1, source: "cli", path: null, cliVersion: "fixture", ephemeral: false };
@@ -59,7 +66,8 @@ export function localMessagingFixture(handler?: (call: LocalCall) => unknown | P
             else if (call.method === "thread/read") result = { thread: localFixtureThread(String(call.params.threadId)) };
             else result = { queuedSubmission: { id: "fixture-submission", input: call.params.input, clientUserMessageId: call.params.clientUserMessageId } };
           }
-          if (!closing && ws.readyState === 1) ws.send(JSON.stringify({ id: raw.id, result }));
+          if (!closing && ws.readyState === 1) ws.send(JSON.stringify(result instanceof LocalFixtureRpcError
+            ? { id: raw.id, error: { code: result.code, message: result.message } } : { id: raw.id, result }));
         })().catch(() => { failures.push("fixture_handler_failure"); });
         tasks.add(task);
         void task.finally(() => tasks.delete(task));

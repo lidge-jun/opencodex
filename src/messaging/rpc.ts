@@ -16,6 +16,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
   private closed = false;
   private readonly abort: () => void;
 
+  /** Bind connection failure and operation cancellation to all pending metadata requests. */
   private constructor(private readonly socket: LocalSocket, private readonly budget: MessageBudget,
     private readonly rpcTimeoutMs: number) {
     this.abort = () => this.close(budget.signal.reason);
@@ -25,6 +26,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
     if (budget.signal.aborted) this.abort();
   }
 
+  /** Connect and initialize an existing local daemon within budget; never start or repair one. */
   static async connect(url: string, budget: MessageBudget, rpcTimeoutMs = 10_000): Promise<LocalMessageRpc> {
     budget.throwIfEnded();
     if (!Number.isInteger(rpcTimeoutMs) || rpcTimeoutMs <= 0 || rpcTimeoutMs > 10_000) {
@@ -63,6 +65,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
     } catch (error) { rpc.close(); throw error; }
   }
 
+  /** Read up to 50 loaded UUIDs, rejecting malformed IDs and unbounded pagination cursors. */
   async loadedPage(cursor?: string): Promise<{ data: string[]; nextCursor: string | null }> {
     const raw = await this.request("thread/loaded/list", { limit: 50, ...(cursor ? { cursor } : {}) });
     if (!isRecord(raw) || !Array.isArray(raw.data) || raw.data.length > 50 || !raw.data.every(isThreadId)
@@ -73,6 +76,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
     return { data: raw.data, nextCursor: typeof raw.nextCursor === "string" ? raw.nextCursor : null };
   }
 
+  /** Validate one exact thread and project ID/name/status only, without requesting turns. */
   async readThread(id: string): Promise<LocalThread> {
     if (!isThreadId(id)) throw new LocalMessagingError("invalid_selector", "A valid Codex thread ID is required.");
     const raw = await this.request("thread/read", { threadId: id, includeTurns: false });
@@ -85,6 +89,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
     return { id, name: typeof thread.name === "string" ? thread.name : null, status: thread.status.type as LocalThread["status"] };
   }
 
+  /** Idempotently reject pending work, remove handlers and terminate only this connection. */
   close(error: Error = new LocalMessagingError("daemon_unavailable", "Local Codex connection closed.")): void {
     if (this.closed) return;
     this.closed = true;
@@ -95,12 +100,14 @@ export class LocalMessageRpc implements LocalMetadataClient {
     this.socket.terminate();
   }
 
+  /** Fail closed on malformed metadata without including the daemon's response in the error. */
   private invalidMetadata(): LocalMessagingError {
     const error = new LocalMessagingError("invalid_metadata", "Codex returned invalid local session metadata.");
     this.close(error);
     return error;
   }
 
+  /** Issue one whitelisted metadata RPC with bounded concurrency and timeout. */
   private request(method: Method, params: Record<string, unknown>): Promise<unknown> {
     this.budget.throwIfEnded();
     if (this.closed) throw new LocalMessagingError("daemon_unavailable", "Local Codex connection is closed.");
@@ -114,6 +121,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
     });
   }
 
+  /** Settle matching bounded RPC frames; ignore notifications and sanitize remote errors. */
   private receive(data: unknown): void {
     try {
       if (typeof data !== "string" || Buffer.byteLength(data) > 1024 * 1024) throw new Error();

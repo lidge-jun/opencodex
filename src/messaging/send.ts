@@ -18,11 +18,13 @@ export interface MessageReceipt {
   error?: { code: string; message: string };
 }
 
+/** Expose caller-safe messaging errors without serializing arbitrary helper output. */
 export function messageFailure(error: unknown) {
   return error instanceof LocalMessagingError ? { code: error.code, message: error.message }
     : { code: "messaging_failed", message: "Local messaging failed; private helper output is not included." };
 }
 
+/** Return a complete loaded-session snapshot and close the command-owned RPC connection. */
 export async function localSessions(home: string, budget: MessageBudget): Promise<LocalThread[]> {
   const rpc = await LocalMessageRpc.connect(localDaemonEndpoint(home).url, budget);
   try { return await discoverLoaded(rpc, budget); } finally { rpc.close(); }
