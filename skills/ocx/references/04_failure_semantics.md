@@ -4,12 +4,14 @@ What each exit code means, which failures are worth retrying, and which mean sto
 
 ## Exit codes
 
-Set in one place (`runCliAction`), so every verb agrees:
+`runCliAction` maps many management failures; the whole CLI does not share one
+exit contract. Its common mappings and the main exceptions are:
 
 | Code | Cause | Retry? |
 |---|---|---|
 | 0 | success | — |
-| 2 | usage error: bad, missing, or unknown arguments | no; nothing was sent |
+| 2 | locally rejected usage in management handlers; also unsupported `doctor --json` | fix arguments |
+| 64 | usage validation in `capabilities`, `ready`, `resolve` | fix arguments; no discovery/request for invalid input |
 | 4 | HTTP 404 — the named account, provider, key, or route does not exist | no |
 | 5 | HTTP 409 — conflict; a lock is held or state moved under you | usually yes |
 | 1 | everything else: transport failure, 5xx, unexpected errors | depends on `reason` |
@@ -18,10 +20,12 @@ Two consequences worth internalizing:
 
 **Exit 0 means no error was reported, not that a mutation happened.** Preview verbs
 (`storage cleanup` without `--yes`) exit 0 after a read-only preview. Parse `--json` (or the
-human summary) to see whether anything was written. A command that failed will not exit 0.
+human summary) to see whether anything was written. Read saved/applied/skipped
+fields and warnings as well; a successful save can leave live convergence pending.
 
-**Exit 2 means nothing was sent.** A usage error is rejected locally, before any request. Retrying
-the same arguments produces the same result; fix the arguments.
+**A local usage refusal is not a transport failure.** Fix the arguments rather than
+retrying unchanged. Unknown root commands and unavailable explicit help topics use
+exit 1; a capability route miss uses 4 even when an undeclared handler exists.
 
 ## Distinguishing "not running" from "failing"
 
@@ -29,9 +33,11 @@ the same arguments produces the same result; fix the arguments.
 ocx ready --json
 ```
 
-`ready` is the discriminator. If it fails or reports `ready: false`, nothing else will work and the
-answer is to start or wait for the proxy. If `ready` is true and one specific verb fails, the
-problem is that route or its arguments — not the proxy.
+Use readiness before live management. `pending` permits a bounded wait; `failed`
+and `unreachable` need diagnosis. Offline help, local config and local Lab reads
+still work without a proxy: do not start one just to perform those tasks. A ready
+proxy can still refuse a route, serve an older version, or be the wrong role.
+Check `status --json` and its `versionSkew` and target information.
 
 A transport failure exits 1 and names the underlying cause (connection refused, DNS, TLS). Those
 used to be indistinguishable; they are now reported separately, so read the message.
@@ -56,9 +62,10 @@ and repeating the call produces the same error indefinitely.
 
 ## A retry policy that does not spin
 
-1. Exit 2 → fix arguments. Never retry unchanged.
-2. Exit 4 → the target does not exist. List first (`account list`, `provider list`, `access key
-   list`) rather than retrying.
+1. Exit 2 or 64 → fix arguments. Never retry unchanged.
+2. Exit 4 → distinguish a missing resource from a missing declaration. For a
+   resource, list first (`account list`, `provider list`, `access key list`); for
+   a declaration, consult family help. Do not retry the same lookup.
 3. Exit 5 or a 503 with `Retry-After` → wait the stated interval, retry **once**. If it fails the
    same way twice, report it instead of looping.
 4. Exit 1 with a credential-conflict reason → run `ocx doctor` and report. Do not retry.

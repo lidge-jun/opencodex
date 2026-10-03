@@ -129,12 +129,15 @@ les valeurs par défaut du débogage sont `OPENCODEX_USAGE_DEBUG=1`.
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-Gérez les clés d'admission OpenCodex et examinez les points de terminaison et les modèles externes. `ocx api-key
-<list|create|remove> ...` est un alias de `ocx access key`.
+Consultez la liste des clés API d’accès à OpenCodex, les points de terminaison externes et les modèles. `ocx api-key` est un alias de la famille de commandes `ocx access key`.
+
+La création d’une clé et le lancement d’une rotation renvoient un secret en clair, affiché une seule fois, aussi bien en texte qu’en JSON. Les agents doivent confier ces étapes à une personne utilisant directement un terminal en dehors de la session de l’agent. Ne demandez jamais la clé dans la conversation : demandez uniquement la confirmation de la configuration et du test de connexion, ainsi que les identifiants non secrets de la clé et de la rotation.
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+La confirmation du fonctionnement de la nouvelle clé n’autorise pas la révocation de l’ancienne. Pour finaliser la rotation ou supprimer l’ancienne clé, obtenez une autorisation explicite distincte pour révoquer cette clé. Consultez à nouveau la liste après l’opération autorisée. Ne contournez pas cette procédure par un appel direct à l’API.
 
 ## Intégrations client
 

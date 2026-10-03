@@ -4,6 +4,21 @@ The remote hub lets one machine hold the models and credentials while other mach
 and browsers use them. Four questions come up constantly, and three of them have
 answers that are easy to guess wrong.
 
+## Discover locally, manage the intended machine
+
+`ocx help connect`, `ocx help hub` and the
+[access/remote chapter](01_surface_access-remote.md) are offline discovery.
+`ocx connect status --json` reports the local connection. Before live management,
+run readiness and version checks on the machine serving the management API.
+A connected client's machine listener does not serve ordinary management routes;
+the CLI refuses that target rather than automatically forwarding the operation.
+Run management commands on the hub or use its dashboard (which supports relay).
+Local config and local Lab commands still refer to this machine's files.
+
+Read connection status again after an authorized connect, rotation or disconnect.
+A saved connection, completed catalog transfer, client-file rewrite and healthy
+remote service are separate observations; retain partial/refused outcomes.
+
 ## One port, and what runs on it
 
 A hub's data plane is one port. Remote machines dial `hostname:port` with their own

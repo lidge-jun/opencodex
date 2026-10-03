@@ -628,8 +628,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "lab",
-    usage: "ocx lab <status|verdicts|subjects|subject|observations|events|event|artifacts|artifact|catalog> [options] [--json]",
-    summary: "Read-only Compatibility Lab projection inspection (local SQLite; no daemon).",
+    usage: "ocx lab <status|verdicts|subjects|subject|observations|events|event|artifacts|artifact|catalog|production-signals|public|automation|run> [options] [--json]",
+    summary: "Inspect local Compatibility Lab evidence and explicitly control automation.",
     details: [
       "status                Projection availability, schema versions, and row counts.",
       "verdicts              Paginated derived compatibility verdicts with filters.",
@@ -638,6 +638,10 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "events                Event history; event <id> returns one safe typed event.",
       "artifacts             Artifact metadata only (no content download).",
       "catalog               Packaged protocol/live scenario catalog metadata.",
+      "production-signals    Local passive routing evidence for a subject.",
+      "public                Preview/export local evidence; verify/import a bundle.",
+      "automation            Read status/runs or explicitly enable/disable local policy.",
+      "run                   Explicit manual scenario; live probes can consume quota.",
       "Reads never rebuild the projection, trigger probes, or require the proxy.",
     ],
   },

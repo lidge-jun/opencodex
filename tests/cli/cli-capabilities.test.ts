@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { capabilityDataBoundary } from "../helpers/cli-capability-data";
 import {
   CAPABILITIES,
   HEAD_CAPABILITIES,
@@ -22,16 +21,9 @@ function captureStdout(): { lines: string[]; restore: () => void } {
   return { lines, restore: () => { console.log = original; } };
 }
 
-describe("capability table is a leaf data module", () => {
-  test("capabilities.ts imports nothing from src/cli", () => {
-    // Each command module declares `const USAGE` at top level, evaluated at import time.
-    // A cycle back into this table resolves to `undefined` under ESM instead of throwing,
-    // which would silently empty the usage text that rejectArgs hands CliUsageError --
-    // a degraded failure in the exact surface these issues are about.
-    const src = readFileSync(join(repoRoot, "src/cli/capabilities.ts"), "utf8");
-    const relative = src.match(/from\s+["']\.[^"']*["']/g) ?? [];
-    expect(relative).toEqual([]);
-    expect(/\bimport\s*\(/.test(src)).toBe(false);
+describe("capability table is a checked data graph", () => {
+  test("capability discovery has only the allowed transitive data/type edges", () => {
+    expect(capabilityDataBoundary(join(repoRoot, "src/cli"))).toEqual([]);
   });
 
   test("every capability renders a non-empty invocation and summary", () => {
@@ -150,7 +142,7 @@ describe("ocx capabilities output", () => {
     try { code = await runCapabilities(["--json", "--route", "/api/usage"]); } finally { cap.restore(); }
     expect(code).toBe(0);
     const parsed = JSON.parse(cap.lines.join("\n")) as { capabilities: { invocation: string }[] };
-    expect(parsed.capabilities.map(c => c.invocation)).toEqual(["ocx usage"]);
+    expect(parsed.capabilities.map(c => c.invocation)).toEqual(["ocx usage", "ocx observe usage"]);
   });
 
   test("an unmatched route exits non-zero instead of reporting empty success", async () => {
@@ -214,132 +206,32 @@ describe("ocx capabilities output", () => {
  * `route.exempt` needs, and the test prints the exact key to add or remove.
  */
 const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
-  "DELETE /api/codex-auth/accounts",
-  "DELETE /api/combos",
   "DELETE /api/custom-models/{id}",
-  "DELETE /api/keys",
-  "DELETE /api/oauth/accounts",
   "DELETE /api/providers",
-  "DELETE /api/providers/keys",
   "DELETE /api/routing-profiles",
-  "GET /api/aliases",
   "GET /api/claude-desktop",
-  "GET /api/claude/inbound-debug",
-  "GET /api/client-integrations",
-  "GET /api/client-integrations/journal",
-  "GET /api/client-integrations/{clientId}",
-  "GET /api/codex-auth/login-status",
   "GET /api/codex-auth/quota",
-  "GET /api/codex-auth/reset-credits",
-  "GET /api/combos",
   "GET /api/custom-models",
-  "GET /api/debug",
-  "GET /api/debug/injection-logs",
-  "GET /api/debug/logs",
-  "GET /api/debug/usage-logs",
-  "GET /api/diagnostics/project-config",
-  "GET /api/effort-caps",
-  "GET /api/grok",
-  "GET /api/keys",
-  "GET /api/model-discovery",
-  "GET /api/model-presets",
-  "GET /api/models",
-  "GET /api/native-main-profiles",
-  "GET /api/native-main-profiles/doctor",
-  "GET /api/oauth/providers",
-  "GET /api/provider-context-caps",
-  "GET /api/provider-presets",
   "GET /api/providers",
-  "GET /api/providers/keys",
   "GET /api/request-history",
   "GET /api/request-history/{id}",
-  "GET /api/request-history/{id}/route-decision",
-  "GET /api/routing-profiles",
-  "GET /api/selected-models",
-  "GET /api/settings",
-  "GET /api/shadow-call-settings",
-  "GET /api/sidecar-settings",
-  "GET /api/startup-health",
-  "GET /api/storage/codex-logs",
-  "GET /api/subagent-model-fallback",
   "GET /api/system/health",
-  "GET /api/system/memory",
   "GET /api/system/windows-replace-retries",
   "GET /api/update/badge",
-  "GET /api/update/check",
-  "GET /api/update/status",
-  "GET /api/v2",
   "PATCH /api/codex-auth/pool-strategy",
-  "PATCH /api/keys",
   "PATCH /api/oauth/accounts/pool",
-  "PATCH /api/providers",
-  "POST /api/claude-desktop/apply",
-  "POST /api/client-integrations/restore",
   "POST /api/codex-auth/accounts",
-  "POST /api/codex-auth/accounts/clear-cooldown",
-  "POST /api/codex-auth/login",
-  "POST /api/codex-auth/login/cancel",
-  "POST /api/codex-auth/login/code",
-  "POST /api/codex-auth/reset-credits/consume",
   "POST /api/custom-models",
-  "POST /api/grok/apply",
-  "POST /api/keys",
   "POST /api/model-discovery/acknowledge",
-  "POST /api/native-main-profiles/recover",
-  "POST /api/native-main-profiles/register",
-  "POST /api/native-main-profiles/stage",
-  "POST /api/native-main-profiles/stage/cancel",
-  "POST /api/native-main-profiles/stage/finish",
-  "POST /api/native-main-profiles/stage/heartbeat",
-  "POST /api/native-main-profiles/switch",
-  "POST /api/oauth/accounts/clear-cooldown",
-  "POST /api/oauth/accounts/import",
-  "POST /api/oauth/login/cancel",
-  "POST /api/oauth/login/code",
   "POST /api/oauth/logout",
   "POST /api/providers",
-  "POST /api/providers/keys",
-  "POST /api/providers/test",
-  "POST /api/routing-profiles/dry-run",
-  "POST /api/startup-action",
   "POST /api/stop",
-  "POST /api/storage/codex-logs/compact",
-  "POST /api/storage/codex-logs/protect",
-  "POST /api/storage/codex-logs/repair",
-  "POST /api/storage/codex-logs/unprotect",
-  "POST /api/sync",
   "POST /api/system/restart",
-  "POST /api/update/run",
   "POST /api/windows-tray",
   "PUT /api/claude-desktop",
-  "PUT /api/client-integrations/{clientId}",
-  "PUT /api/codex-auth/accounts/alias",
-  "PUT /api/codex-auth/accounts/priority",
-  "PUT /api/codex-auth/active",
   "PUT /api/codex-auth/failover",
-  "PUT /api/combos",
-  "PUT /api/custom-models/{id}",
-  "PUT /api/debug",
-  "PUT /api/default-aliases",
   "PUT /api/disabled-models",
-  "PUT /api/effort-caps",
-  "PUT /api/grok/selection",
-  "PUT /api/model-discovery",
-  "PUT /api/model-presets",
-  "PUT /api/model-visibility",
-  "PUT /api/oauth/accounts/active",
-  "PUT /api/oauth/accounts/alias",
-  "PUT /api/provider-context-caps",
-  "PUT /api/providers/keys/active",
-  "PUT /api/providers/keys/alias",
-  "PUT /api/providers/{provider}/alias",
-  "PUT /api/providers/{provider}/model-aliases",
   "PUT /api/routing-profiles",
-  "PUT /api/selected-models",
-  "PUT /api/settings",
-  "PUT /api/shadow-call-settings",
-  "PUT /api/sidecar-settings",
-  "PUT /api/subagent-model-fallback",
   "PUT /api/v2",
 ];
 

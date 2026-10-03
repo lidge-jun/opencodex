@@ -483,12 +483,7 @@ görünürlüğü kontrol eder; `selected` bir sağlayıcı izin listesini kontr
 `context` sağlayıcı bağlam sınırlarını kontrol eder; ve `shadow` arka plan gölge
 çağrı müdahalesini yönetir.
 
-Kontrol panelinin sunduğu model başına her işlem burada mevcuttur, bu nedenle
-başsız bir kurulum bir kataloğu yönetmek için asla GUI'ye ihtiyaç duymaz. `add`,
-`remove` ve `list-custom` yapılandırma dosyasına karşı çalışır ve bir katalog
-senkronizasyonu aracılığıyla çalışan bir proxy'ye uygulanır; geri kalanı canlı
-yönetim API'si ile konuşur ve proxy'nin çalışmasını gerektirir (`ocx start` veya
-kurulu bir servis).
+Aşağıdaki tablo, CLI tarafından desteklenen katalog işlemlerini açıklar; kontrol panelindeki tüm işlemleri kapsamaz. Otomatik keşfedilen bir modelin görünen adını değiştirmek, özel bir model üzerindeki `edit` işleminden farklıdır. `add`, `remove` ve `list-custom` yerel yapılandırmayı kullanır; özel model değişiklikleri, proxy çalışıyorsa katalog eşitlemesini deneyebilir. Yerel kaydın başarılı olması, eşitlemenin tamamlandığını göstermez. Diğer model yönetimi işlemleri çalışan proxy’nin yönetim API’sini kullanır; çağrıdan önce hazır olma durumunu ve sürümünü kontrol edin. Modelleri veya yapılandırmayı çevrimdışı incelemek için proxy’yi başlatmak gerekmez.
 
 | Alt komut | Desteklenen bayraklar | Eylem |
 | --- | --- | --- |

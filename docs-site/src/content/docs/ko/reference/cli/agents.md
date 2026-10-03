@@ -122,12 +122,15 @@ scope를 지정하지 않으면 `ocx debug`는 사용량을 출력하고, 프록
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-OpenCodex admission API key를 관리하고 외부 endpoint와 model을 검사합니다. `ocx api-key
-<list|create|remove> ...`는 `ocx access key`의 별칭입니다.
+OpenCodex 접속용 API 키 목록, 외부 엔드포인트와 모델을 조회합니다. `ocx api-key`는 `ocx access key` 명령 계열의 별칭입니다.
+
+키 생성과 교체 시작은 일반 텍스트와 JSON 출력 모두에서 일회성 평문 자격 증명을 반환합니다. 에이전트는 이 단계를 에이전트 세션 밖에서 사람이 직접 조작하는 터미널에 맡겨야 합니다. 키 자체를 채팅으로 요청하지 말고, 설정·연결 확인 결과와 비밀이 아닌 키·교체 ID만 전달받으세요.
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+새 키의 설정과 연결 확인은 기존 키 폐기 승인이 아닙니다. 교체를 확정하거나 기존 키를 삭제하려면 해당 키 폐기에 대한 별도의 명시적 승인이 필요합니다. 승인된 작업 후에는 목록을 다시 조회하세요. 직접 API를 호출해 이 절차를 우회하지 마세요.
 
 ## 클라이언트 통합
 

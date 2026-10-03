@@ -96,12 +96,15 @@ ocx debug usage logs [-f|--follow]
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-管理 OpenCodex 許可 API 金鑰並檢查外部端點與模型。`ocx api-key
-<list|create|remove> ...` 是 `ocx access key` 的別名。
+檢視 OpenCodex 存取用 API 金鑰清單、外部端點與模型。`ocx api-key` 是 `ocx access key` 指令群組的別名。
+
+建立金鑰與開始輪替時，無論使用文字或 JSON 輸出，都會傳回僅顯示一次的明文憑證。代理應將這些步驟交由人在代理工作階段之外直接操作的終端機完成。不要索取金鑰本身，也不要請使用者貼到聊天中；只接收設定與連線驗證的確認，以及非機密的金鑰 ID 和輪替 ID。
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+確認新金鑰已設定並通過連線驗證，不等於核准撤銷舊金鑰。確認輪替或刪除舊金鑰前，必須另行取得撤銷該金鑰的明確授權。執行獲准的操作後，請再次檢視清單。不要透過直接呼叫 API 繞過此流程。
 
 ## 客戶端整合
 

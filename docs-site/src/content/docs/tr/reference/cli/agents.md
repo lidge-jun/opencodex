@@ -144,13 +144,15 @@ varsayılan olarak `OCX_DEBUG=1`'den gelir (eski `OCX_DEBUG_FRAMES=1` de
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-OpenCodex kabul API anahtarlarını yönetin ve harici uç noktaları ile modelleri
-inceleyin. `ocx api-key <list|create|remove> ...`, `ocx access key`'in bir takma
-adıdır.
+OpenCodex erişim API anahtarlarının listesini, harici uç noktaları ve modelleri inceleyin. `ocx api-key`, `ocx access key` komut ailesinin takma adıdır.
+
+Anahtar oluşturma ve anahtar yenilemeyi başlatma işlemleri, hem metin hem de JSON çıktısında yalnızca bir kez gösterilen açık metin kimlik bilgisi döndürür. Ajanlar bu adımları, ajan oturumu dışında bir insanın doğrudan kullandığı terminale bırakmalıdır. Anahtarın kendisini sohbette istemeyin; yalnızca yapılandırmanın ve bağlantı testinin tamamlandığına dair onayı ve gizli olmayan anahtar ile yenileme kimliklerini alın.
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+Yeni anahtarın yapılandırılıp doğrulanması, eski anahtarı iptal etme izni değildir. Yenilemeyi kesinleştirmek veya eski anahtarı silmek için o anahtarın iptaline yönelik ayrıca açık izin gerekir. İzin verilen işlemden sonra listeyi yeniden kontrol edin. Doğrudan API çağrılarıyla bu süreci aşmaya çalışmayın.
 
 ## İstemci entegrasyonları
 

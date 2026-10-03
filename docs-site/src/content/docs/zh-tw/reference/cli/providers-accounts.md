@@ -325,7 +325,7 @@ Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不�
 
 `ocx model` 是 `ocx models` 的別名。無子指令時，列出已設定供應商中靜態播種的模型。`--provider` 過濾一個已設定的供應商，而 `--json` 回傳模型中繼資料。`live` 讀取執行中的目錄；`add`、`edit`、`remove` 與 `list-custom` 管理手動目錄項目；`enable`、`disable` 與 `provider` 控制可見性；`selected` 控制供應商允許清單；`context` 控制供應商 context 上限；而 `shadow` 管理背景 shadow-call 攔截。
 
-儀表板提供的每個 per-model 操作在此皆可用，因此無頭安裝永不需要 GUI 來管理目錄。`add`、`remove` 與 `list-custom` 針對設定檔運作並透過目錄同步套用於執行中的代理；其餘與即時管理 API 通訊並需要代理正在執行（`ocx start` 或已安裝的服務）。
+下表說明 CLI 支援的模型目錄操作，並未涵蓋儀表板中的所有操作。修改自動探索模型的顯示名稱，與自訂模型的 `edit` 操作不同。`add`、`remove` 和 `list-custom` 使用本機設定；修改自訂模型時，如果代理伺服器正在執行，可能會嘗試同步目錄。本機儲存成功不代表同步已完成。其他模型管理操作使用執行中代理伺服器的管理 API，呼叫前應檢查就緒狀態與版本。離線檢視模型或設定不需要啟動代理伺服器。
 
 | 子指令 | 支援的旗標 | 動作 |
 | --- | --- | --- |

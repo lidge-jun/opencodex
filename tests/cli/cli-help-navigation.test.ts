@@ -148,6 +148,6 @@ describe("CLI help navigation", () => {
       fallbackToParent: true, write: value => { lines.push(value); },
     }));
     expect(stdout).toBe("");
-    expect(lines.join("\n")).toContain("ocx models context <status|value");
+    expect(lines.join("\n")).toContain("ocx models context provider <provider> <on|off>");
   });
 });

@@ -1,21 +1,23 @@
 # Recipes
 
-The original sequences below were run against a live proxy; the Aside profile sequence was
-verified through an isolated live management handler and the production CLI. Every command named here exists; where the
-obvious-sounding command does *not* exist, that is called out rather than left as a trap.
-
-Preflight for all of them:
+Choose a task first with offline root, family and leaf help, then read its generated
+chapter. For live management sequences, check the target before the first call:
 
 ```bash
-ocx ready --json     # {"ready":true,"status":"ready","pid":…,"port":…}
-ocx status --json    # confirm proxy.running and no version skew
+ocx ready --json
+ocx status --json
 ```
+
+Inspect readiness and `versionSkew.relation`. Local configuration and local Lab
+inspection do not require starting the proxy. Each example uses only that leaf's
+supported output flags; mutation examples require authority for that task.
 
 ## 1. Audit the account pool and pause an exhausted account
 
 ```bash
 ocx account list openai --json --quota
 ocx account pause openai <account-id> --json
+ocx account list openai --json
 ```
 
 Read `accounts[]`; each row carries `id`, `paused`, `selected`, and — only under `--quota` — the
@@ -43,6 +45,8 @@ not the same as "not exhausted".
 ocx account strategy openai --json          # read
 ocx account strategy openai round-robin --json
 ocx account sticky openai 5 --json
+ocx account strategy openai --json
+ocx account sticky openai --json
 ```
 
 A bare invocation reads and never writes. The response echoes the **applied** value, not the one
@@ -165,21 +169,41 @@ return the plaintext once; list does not return the full plaintext.
 An `ambiguous` footer on the list means two configured keys share an id, so per-key totals do not
 exist for them — do not attribute usage to either.
 
-## 6. Add a provider, test it, make it default
+## 6. Save a provider, then verify live adoption
+
+Local config operations do not need a running proxy:
 
 ```bash
 ocx provider list --json
-ocx provider list --jsonl                   # one configured provider per line
-ocx provider add <name> --json                # registry providers auto-configure by name
-ocx provider test <name> --json
-ocx provider set-default <name> --json
+ocx provider add <name> --json
+ocx provider show <name> --json
 ```
 
-The promote verb is `set-default`, not `default`. A custom provider not in the registry also needs
-`--adapter` and `--base-url` on `add`.
+Registry providers are seeded by name; custom providers also need `--adapter`
+and `--base-url`. Complete credential entry through the supported human login or
+stdin handoff, never by putting a key in an agent transcript.
 
-Test before promoting: `provider test` reports reachability and the selected model, and a provider
-that answers `list` is not necessarily one that answers a request.
+`needsSync: true` means saved, not live-applied. Adding `--sync` to this JSON
+invocation does not execute sync. After authorized synchronization and the live
+preflight, compare configured state with runtime state:
+
+```bash
+ocx inspect config --json
+ocx provider test <name> --json
+ocx models live --provider <name> --json
+```
+
+The test may contact the upstream model-discovery endpoint; it is not an inference
+success test. `applicable: false` means the provider has a static catalog, not a
+failed connection. Only promote the verified provider when requested:
+
+```bash
+ocx provider set-default <name> --json
+ocx provider list --json
+```
+
+`set-default` saves local config; its receipt and any convergence warning must be
+reported separately. Do not equate a local list with live management state.
 
 ## 7. Diagnose "management API is unreachable"
 
@@ -189,8 +213,9 @@ ocx status --json    # is it the build you think, on the port you think?
 ocx doctor           # what is structurally wrong (human; `--json` is refused with exit 2)
 ```
 
-In that order. `ready` false with `doctor` clean usually means it is still starting; `ready` true
-with a transport error on a specific verb means the route is failing, not the proxy.
+`ready` false distinguishes `pending`, `failed` and `unreachable`; only pending
+suggests waiting for startup. A ready process still may be the wrong role or
+version for a specific management operation. Diagnose that target before retrying.
 
 `doctor` has no `--json` mode. It rejects the flag with exit 2 rather than printing prose to a
 caller that asked for JSON, so parse `ready --json` and `status --json` for machine-readable
@@ -313,3 +338,81 @@ Read `profiles[]` to find numeric profile IDs. No profile selector means a bulk 
 explicit selector affects only that registered profile. Sync intent and actual file state
 are distinct, so inspect each result after a partial bulk operation. The CLI returns nonzero
 for a partial refusal. Never use the overwrite or drift flags merely to suppress a refusal.
+
+## 11. Choose a model preset and inspect new arrivals
+
+These are live management operations. Start with the saved preset and selection:
+
+```bash
+ocx models preset show --provider anthropic --json
+ocx models selected anthropic --json
+```
+
+When asked to select the curated roster:
+
+```bash
+ocx models preset apply anthropic --json
+ocx models selected anthropic --json
+```
+
+`fallback: "preset-empty"` preserves the existing selection; do not report an
+empty preset as a successful narrowing. `preset apply <provider> --all` clears
+the allowlist. The dashboard's disabled custom preset is not another CLI mode.
+
+Read the discovery policy before changing it. This example disables automatic
+exposure of newly discovered models for one provider, then reads it back:
+
+```bash
+ocx models new-policy --provider anthropic --json
+ocx models new-policy off --provider anthropic --json
+ocx models new-policy --provider anthropic --json
+ocx models new-arrivals --json
+```
+
+The provider read may report `inherit`; omission of `--provider` selects global
+policy. Recent arrivals show recorded discovery state, not a fresh upstream probe.
+
+## 12. Inspect and dry-run an existing routing profile
+
+Use an ID returned by the list (here `reliable` is an example saved ID):
+
+```bash
+ocx route policy list --json
+ocx route policy show reliable --json
+ocx route policy dry-run reliable --model-context 128000 --tools --image --structured-output --json
+```
+
+Only run this evaluation with authority to activate Lab on the target. The management POST can activate Lab and start automation that is already enabled there, including upstream probes. Use list/show for observation without that activation effect.
+
+Dry-run evaluates saved routing evidence without an inference request; it does
+not create or edit a profile. `evaluate` is the same dry-run operation. Profile
+create/update/delete remain dashboard workflows; combo editing targets a different
+resource. A missing profile returns exit 4; a missing operand returns 2.
+
+## 13. Inspect local Lab evidence before exporting or running probes
+
+No live management preflight is needed for these local reads:
+
+```bash
+ocx lab status --json
+ocx lab catalog --json
+ocx lab automation status --json
+ocx lab automation runs --limit 10 --json
+ocx lab public community --json
+```
+
+Use `lab subjects`, `lab subject <id>`, `lab observations --subject <id>`,
+`lab event <id>` and `lab artifact <digest>` to follow evidence lineage. These
+read the local projection, not a connected hub's database.
+
+For a requested evidence transfer, preview selected events before export:
+
+```bash
+ocx lab public preview --event <event-id> --json
+```
+
+The public family also supports export, file verification and import; export and
+import write local evidence. Automation enable/disable and manual `lab run` are
+explicit mutations and can launch quota-consuming probes. Inspect their leaf help
+and obtain task authority rather than using them to repair a failed read. Local
+policy persistence does not prove another running proxy's scheduler adopted it.

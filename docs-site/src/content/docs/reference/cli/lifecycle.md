@@ -5,6 +5,23 @@ description: Setup, start, stop, service, diagnostics, sync, and update commands
 
 These commands install, run, inspect, repair, and update the local opencodex proxy and its Codex integration.
 
+## Discover before starting services
+
+`ocx help`, `ocx help <family>` and `ocx help <family> <leaf>` are offline.
+Use `ocx help --all` when the compact root is insufficient. Help, local config
+validation and local Lab inspection do not require starting a proxy.
+
+Before a live management workflow, run `ocx ready --json` and `ocx status --json`.
+Readiness distinguishes `pending`, `failed` and `unreachable`; only `ready: true`
+confirms readiness. Check the target and `versionSkew.relation`: `unknown` is not
+proof of matching versions. A version mismatch calls for resolving the intended
+installation, not repeatedly trying a newer flag against an older server.
+
+Output and exit conventions are command-specific. `ready` and `resolve` reject
+invalid arguments with 64, while `doctor --json` is unsupported and exits 2.
+A successful local save or accepted restart request does not prove convergence;
+read the command receipt and re-check status after the requested operation.
+
 ## Setup
 
 ### `ocx init` · `ocx setup`

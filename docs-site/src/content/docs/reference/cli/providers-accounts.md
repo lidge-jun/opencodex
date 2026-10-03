@@ -31,7 +31,7 @@ both `--adapter` and `--base-url`.
 ocx provider list --json
 ocx provider list --jsonl        # one configured provider object per line
 ocx provider test ark
-ocx provider add anthropic --api-key sk-ant-... --set-default --sync
+ocx provider add anthropic --set-default --sync
 ocx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
 ocx provider show anthropic --json
 ocx provider edit github-copilot --model-context-tier gpt-5.6-luna=long_context
@@ -60,8 +60,22 @@ boundary is yours to respect. Two reasons it matters:
 - Header values are persisted in `config.json` in cleartext, unlike API keys,
   which have their own storage and masking path.
 
-Use `--api-key` or an OAuth login for anything secret.
+Use the supported credential login or stdin flow for secret entry. Do not place
+keys in an agent transcript or copy them into command examples.
 :::
+
+### Local saves and live provider state
+
+`list`, `show`, `add`, `remove`, and `set-default` use local configuration;
+`edit`, `test`, `quota`, `selected`, `presets`, and `account-mode` use management
+calls. Check `ocx ready --json` and `ocx status --json` before live work. A local
+list does not establish that an already-running proxy adopted the configuration.
+
+`provider add <name> --json` reports `needsSync: true` and returns before the human
+`--sync` path, even when both flags are supplied. After authorized convergence,
+read `ocx inspect config --json` and `ocx models live --provider <name> --json`.
+`provider test` checks discovery connectivity; `applicable: false` is an expected
+static-catalog result, not successful inference or a failed connection.
 
 ## Authentication
 
@@ -771,10 +785,12 @@ verified official-price fallbacks. Unknown models return `null`; no price is inv
 Automatic defaults are derived on read and do not populate `modelCosts` in your config,
 so catalog updates remain effective. Use `set-price` to save provider-specific rates.
 
-Every per-model operation the dashboard offers is available here, so a headless install never needs
-the GUI to manage a catalog. `add`, `remove`, and `list-custom` work against the config file and apply
-to a running proxy through a catalog sync; the rest talk to the live management API and require the
-proxy to be running (`ocx start`, or an installed service).
+The table below describes supported catalog workflows. It does not cover every dashboard
+operation: editing a discovered model's display name is not the custom-model `edit` operation.
+`add`, `remove`, and `list-custom` use local configuration; custom-model writes may attempt
+catalog convergence when a proxy is running. A local save does not prove that sync completed.
+The remaining model-management operations use the live API. Check readiness and version
+before those calls; offline model/config inspection does not require startup.
 
 | Subcommand | Supported flags | Action |
 | --- | --- | --- |
@@ -790,6 +806,10 @@ proxy to be running (`ocx start`, or an installed service).
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Hide one model from Codex. |
 | `provider <name> <on\|off>` | `--json` | Enable or disable every model of one provider in a single write. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Read or replace the provider model allowlist. `--clear` removes the allowlist so every model is offered. |
+| `preset show` | `--provider <name>`, `--json` | Read shipped preset versions and the applied mode, optionally for one provider. |
+| `preset apply <provider>` | `--all`, `--json` | Apply the curated preset; `--all` clears the allowlist. A zero-match preset leaves selection unchanged and reports `fallback: "preset-empty"`. |
+| `new-policy [on\|off]` | `--provider <name>`, `--json` | Read or change exposure policy for newly discovered models; omission of provider selects global policy. A provider read can report `inherit`. |
+| `new-arrivals` | `--json` | Read recorded recent discoveries by provider; does not force a new upstream discovery. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | Read or set the context-window cap, globally or per provider. `value <tokens> --set-all` also re-points every routed provider (like the dashboard toggle); without it the value only becomes the default. `provider ... on --value <tokens>` sets an explicit cap for that provider only (`--value` is valid with `on` only). |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Read or set the replacement model for Codex's background helper calls. `-` clears the model. `status` also reports `sourceModels`, the helper slugs the proxy intercepts (default: `gpt-6-luna`, `gpt-5.6-luna`; clients through 0.144.x used `gpt-5.4-mini`, which an explicit `sourceModels` override can restore). |
 
@@ -813,6 +833,23 @@ otherwise look routed.
 and rejects an entire catalog containing any other value, so `add`, `edit`, and the management API
 all refuse the bad value rather than storing something the catalog writer would have to strip later
 (#759).
+
+### Apply a preset and verify selection
+
+```bash
+ocx models preset show --provider anthropic --json
+ocx models preset apply anthropic --json
+ocx models selected anthropic --json
+ocx models new-policy --provider anthropic --json
+ocx models new-policy off --provider anthropic --json
+ocx models new-policy --provider anthropic --json
+ocx models new-arrivals --json
+```
+
+The writes require intent to change selection or discovery policy. Read back the
+selection and policy; a saved preset fallback can leave the previous selection
+intact. `preset apply <provider> --all` is the supported all-models mode; the
+dashboard's disabled custom preset does not add another selectable mode.
 
 ### Mark one model text-only
 

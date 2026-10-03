@@ -92,6 +92,8 @@ for the request surfaces where caps apply.
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
+These are local controls with human output; do not append `--json`. Re-read
+`ocx v2 status` after a change and distinguish stored settings from new-session behavior.
 
 | Subcommand | Action |
 | --- | --- |
@@ -141,7 +143,7 @@ gate: it requires the native feature to be enabled with an explicit v2 surface
 ### `ocx combo <list|show|set|remove> ...` · `ocx route combo ...`
 
 Manage combo failover and round-robin virtual models. `ocx route combo` is the hierarchical alias;
-combo is currently the supported routing resource. Targets use
+combos and routing profiles are distinct resources. Combo targets use
 `provider/model[:weight],provider/model[:weight]`.
 
 ```bash
@@ -169,6 +171,50 @@ unsaved selection and reports the gate, backend, and latency; it may spend one d
 like decision models, with the derived endpoint.
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
+
+## Routing profiles
+
+Existing profiles support inspection and evaluation through the live API:
+
+```bash
+ocx route policy list --json
+ocx route policy show reliable --json
+ocx route policy dry-run reliable --model-context 128000 --tools --image --structured-output --json
+```
+
+Only run this evaluation with authority to activate Lab on the target. The management POST can activate Lab and start automation that is already enabled there, including upstream probes. Use list/show for observation without that activation effect.
+
+Replace `reliable` with a listed ID. `evaluate` is an alias for `dry-run`; both
+send requirements to the saved profile's evaluator without an inference request.
+Creation, update and deletion remain dashboard operations. Combo writes do not
+edit routing profiles. Re-read the profile and revision when an evaluation
+surprises you; missing IDs return exit 4 and missing operands return 2.
+
+## Compatibility Lab
+
+Lab is local inspection **and** explicit evidence/automation management. Reads
+use the local projection and do not require a running management API:
+
+```bash
+ocx lab status --json
+ocx lab catalog --json
+ocx lab subjects --limit 10 --json
+ocx lab automation status --json
+ocx lab automation runs --limit 10 --json
+ocx lab public community --json
+```
+
+`subject`, `observations`, `event`, `artifact`, and `production-signals` follow
+local evidence lineage. The public family offers preview/export by repeated
+`--event <id>`, verification/import through `--file <bundle.json>`, and community
+context. Export and import write local evidence. Verification can print its
+result and still exit nonzero when the bundle is not cryptographically valid.
+
+Automation enable/disable changes local policy; manual `lab run` selects a layer
+and scenario and may spend upstream quota. Read `ocx help lab` and the relevant
+leaf before these authorized operations. A saved local policy does not prove
+that a separately running proxy's scheduler adopted it. Full automation policy
+editing and run cancellation are not exposed by these CLI controls.
 
 ## Observability and debug
 
@@ -233,12 +279,23 @@ debug defaults from `OPENCODEX_USAGE_DEBUG=1`.
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-Manage OpenCodex admission API keys and inspect external endpoints and models. `ocx api-key
-<list|create|remove> ...` is an alias of `ocx access key`.
+Inspect admission keys, external endpoints and models with the access family.
+`ocx api-key` aliases the access-key family. Creation and rotation-start return a
+one-time plaintext credential in text and JSON output. Agents must leave those
+steps to a human-operated terminal outside the agent session; request only
+confirmation and non-secret key/rotation IDs, never the credential.
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+After the human configures and verifies the replacement, committing its rotation
+or removing the old key requires separate explicit revocation authority. Safe
+non-secret follow-ups are `ocx access key rotate commit <id> <rotation-id> --json`
+and `ocx access key rotate abort <id> <rotation-id> --json`, with authority for
+the chosen action. Re-list afterward. Missing pending state alone does not prove
+commit: expiry or abort can also clear it. Do not route around consent by issuing
+the secret-returning management request directly.
 
 ### `ocx api <protocols|explain|policy> ...`
 

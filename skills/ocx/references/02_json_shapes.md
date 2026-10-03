@@ -1,9 +1,9 @@
 # JSON shapes
 
-What the `--json` envelopes look like, and which field to read. Field names here were taken from
-live responses, not from the source.
+Selected response shapes and fields to inspect. These are command-specific examples,
+not a universal schema; check the installed leaf help and the actual receipt.
 
-## Two envelope styles
+## Output modes
 
 `ocx capabilities --json` reports which style each verb uses, as `json: "payload"` or
 `json: "envelope"`.
@@ -14,7 +14,9 @@ live responses, not from the source.
   fields the verb operated on.
 - **none** — the verb has no `--json` mode.
 
-`--json` is accepted in any argv position.
+Output flags are parsed by each command, not globally. Preserve the documented
+operand order; do not add `--json` to a leaf marked `none`. `doctor` rejects it
+with exit 2; `v2` remains human-output only.
 
 ## `ocx ready --json`
 
@@ -22,13 +24,15 @@ live responses, not from the source.
 {"ready":true,"status":"ready","pid":1443,"port":10100}
 ```
 
-The cheapest liveness check. `ready: false` with no error usually means still starting.
+A readiness probe, not a start command. `ready: false` can mean `pending`,
+`failed` or `unreachable`; only `pending` describes startup still in progress.
 
 ## `ocx status --json`
 
 Carries `schemaVersion`, then `proxy.running`, `proxy.pid`, `proxy.health.ok`, and a `dashboard`
 section. This is also where a version skew between your binary and the running proxy shows up —
-check it before trusting flags you just read about.
+check `versionSkew.relation` before trusting flags you just read about.
+`match` confirms version equality; `unknown` is not a match.
 
 ## `ocx logs --jsonl`
 
@@ -117,7 +121,8 @@ one with 409. The CLI handles that for you — it always previews first.
 
 ## Error shape
 
-A management error prints up to three lines and returns a non-zero code:
+A management error normally prints a message and optional reason/hint on stderr
+and returns a non-zero code; recovery details can add further lines:
 
 ```
 Error: <message>
@@ -125,6 +130,22 @@ reason: <machine-readable reason>
 hint: <what to do>
 ```
 
-Branch on `reason` in those stderr lines, never on the message prose. `--json` does **not** wrap
-API failures in `{error:{type,code,message}}`; `runCliAction` still prints the three-liner on
+Use `reason` when present, but it is optional; retain the exit code and stderr
+when absent. Nested server error objects do not have a universal CLI decoder. `--json` does **not** wrap
+API failures in `{error:{type,code,message}}`; `runCliAction` still prints prose on
 stderr and returns 4/5/1. Do not parse stdout for an error envelope that is not there.
+
+## Saved, applied, skipped and partial
+
+- Local `provider add <name> --json` returns `needsSync: true`. It returns before the
+  human-output `--sync` path; even both flags together do not prove live apply.
+- `models preset apply` can return `fallback: "preset-empty"`; selection is then
+  unchanged. Read `models selected <provider> --json` to check the effective list.
+- Client integration results can preserve saved intent while reporting individual
+  refused profiles. Inspect each profile and re-read status; partial is not full success.
+- `account pause-exhausted` includes `failedAccountCount`. Failed quota reads do
+  not establish that those accounts still have capacity.
+
+A local save or an accepted update is not proof that a client has reloaded its
+files. Do not automatically repeat a write whose apply or transport outcome is
+uncertain; read back first and preserve the reported limitations.
