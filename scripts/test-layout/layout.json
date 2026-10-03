@@ -2,6 +2,13 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "cli-account-policy.test.ts": "cli",
+    "cli-account-login-options.test.ts": "cli",
+    "cli-logout-runtime.test.ts": "cli",
+    "cli-agent-settings.test.ts": "cli",
+    "cli-v2-runtime.test.ts": "cli",
+    "cli-agent-runtime-settings.test.ts": "cli",
+    "cli-system-settings-parity.test.ts": "cli",
     "cli-catalog-command-result.test.ts": "cli",
     "cli-models-local-result.test.ts": "cli",
     "cli-models-custom-runtime.test.ts": "cli",

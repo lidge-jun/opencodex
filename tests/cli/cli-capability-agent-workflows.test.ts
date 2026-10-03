@@ -155,13 +155,13 @@ describe("declared agent and routing workflows", () => {
     expect(requests).toEqual([{ path: "/api/routing-profiles/dry-run", method: "POST", body: { profile: "fixture", evidence: { contextWindow: 32000, toolsRequired: true, imageInputRequired: true, structuredOutputRequired: true } } }]);
   });
 
-  test("local v2 mode-hint clears through the real helper without claiming JSON or HTTP", async () => {
+  test("v2 mode-hint retains local default while advertising explicit live JSON", async () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(home, "codex"));
     writeFileSync(join(home, "codex", "config.toml"), '[features.multi_agent_v2]\nmulti_agent_mode_hint_text = "old"\n');
     const capability = leaf("v2 mode-hint");
-    expect(capability.routes).toEqual([]); expect(capability.json).toBe("none");
-    expect(capability.usage).toBe("ocx v2 mode-hint <text|--clear>");
+    expect(capability.routes).toEqual([{ method: "PUT", path: "/api/v2" }]); expect(capability.json).toBe("envelope");
+    expect(capability.usage).toContain("-- <literal-text>");
     expect(await cmdV2(["mode-hint", "--clear"])).toBe(0);
     expect(readFileSync(join(home, "codex", "config.toml"), "utf8")).not.toContain("multi_agent_mode_hint_text");
     expect(await cmdV2(["mode-hint", "   "])).toBe(1);
@@ -170,7 +170,7 @@ describe("declared agent and routing workflows", () => {
   test("v2 invalid thread/mode operands refuse without invoking tools or synchronization", async () => {
     let sideEffects = 0;
     for (const [key, args] of [["v2 threads", ["threads", "0"]], ["v2 mode", ["mode", "invalid"]], ["v2 keep-native-v1", ["keep-native-v1", "invalid"]]] as const) {
-      expect(leaf(key).json).toBe("none"); expect(leaf(key).routes).toEqual([]);
+      expect(leaf(key).json).toBe("envelope"); expect(leaf(key).routes).toEqual([{ method: "PUT", path: "/api/v2" }]);
       expect(await cmdV2([...args], { execFile: () => { sideEffects++; }, sync: async () => { sideEffects++; } })).toBe(1);
     }
     expect(sideEffects).toBe(0);

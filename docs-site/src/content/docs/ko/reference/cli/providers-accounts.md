@@ -344,7 +344,7 @@ Codex pool 계정 하나의 선택 순서를 읽거나 설정합니다. **값이
 
 ### `ocx account login|reauth|code|cancel ...`
 
-헤드리스 셸에서 브라우저 기반 또는 수동 코드 계정 인증을 실행합니다. 제공자별 명령 형태는 `ocx account --help`를 보십시오. Codex account login이 저장되었지만 catalog refresh가 보류 중이면 성공으로 종료하고 human output의 stderr에 고정된 `ocx sync` 안내를 표시합니다. `--json`은 안내를 섞지 않고 완료 state의 `catalogRefreshPending: true`를 유지합니다.
+헤드리스 셸에서 브라우저나 수동 코드로 계정을 인증합니다. 제공자별 문법은 `ocx account --help`에서 확인하세요. Codex 로그인이 저장돼도 검증이나 모델 카탈로그 갱신이 남아 있으면 일반 출력과 `--json` 모두 종료 코드 1을 반환합니다. 저장된 로그인은 유지되므로 보류 상태만 보고 인증을 다시 시작하지 마세요. 일반 출력은 카탈로그 갱신이 보류됐을 때 stderr에 `ocx sync` 안내를 표시합니다. `--json`은 안내 문구 없이 상태와 보류 플래그를 stdout에 출력합니다.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 

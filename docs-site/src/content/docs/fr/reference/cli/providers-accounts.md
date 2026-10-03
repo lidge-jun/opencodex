@@ -292,11 +292,7 @@ identifiant de compte inconnu, ou une valeur en dehors de l'ensemble accepté ex
 
 ### `ocx account login|reauth|code|cancel ...`
 
-Exécutez l’authentification de compte basée sur un navigateur ou par code manuel à partir d’un shell sans tête. Utiliser
-`ocx account --help` pour la forme de commande spécifique au fournisseur. Si une connexion au compte Codex est enregistrée mais
-l'actualisation de son catalogue de modèles reste en attente, la sortie humaine se termine toujours avec succès et les impressions sont corrigées
-`ocx sync` conseils de récupération sur stderr. `--json` garde la sortie standard analysable et transporte
-`catalogRefreshPending: true` dans l'état de connexion terminé sans avertissement humain.
+Exécutez l’authentification du compte dans un navigateur ou avec un code manuel depuis un shell sans interface graphique. Consultez `ocx account --help` pour la syntaxe propre au fournisseur. Si la connexion Codex est enregistrée mais que sa validation ou l’actualisation du catalogue reste en attente, les modes texte et `--json` se terminent avec le code 1. La connexion enregistrée reste visible : ne recommencez pas l’authentification pour cette seule raison. En mode texte, un catalogue en attente entraîne une indication `ocx sync` sur stderr. Avec `--json`, stdout reste analysable et conserve les indicateurs d’attente, sans avertissement textuel.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 

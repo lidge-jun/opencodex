@@ -17,7 +17,7 @@ export async function runCatalogAction(
     if (error instanceof CliUsageError) {
       // New domain parsers use static messages instead of raw JSON/validator exceptions.
       console.error(`Error: ${terminalSafeText(error.message)}`);
-      if (error.usage) console.error(terminalSafeText(error.usage));
+      if (error.usage) for (const line of error.usage.split("\n")) console.error(terminalSafeText(line));
       return 2;
     }
     if (error instanceof RuntimeApiError) {

@@ -677,3 +677,189 @@ Ranges are `7d`, `30d` (default), or `all`. Report measured attempts, model toke
 decision tokens and coverage alongside counts. Nullable averages are unavailable,
 not zero. Preserve incomplete/truncated history flags. This response contains no
 monetary cost or comparative savings baseline; do not invent either from tokens.
+
+## 17. Inspect pool policy before changing account scope
+
+Discover syntax offline, then confirm the intended live target:
+
+```bash
+ocx account pool --help
+ocx account quota-activation --help
+ocx ready --json
+ocx status --json
+ocx account pool openai --json
+ocx account pool anthropic --json
+```
+
+The target's `supported` list decides which fields can be written. Preserve null,
+`enabledEffective`, and optional `inert`: null is not false, stored policy is not
+proof of an available account, and threshold zero is not the pool enable switch.
+OpenAI has no pool `--enabled` or `--quota-window` writer. `reset-first` strategy
+is OpenAI-only; `least-loaded` is Kiro-only. Anthropic pool windows are
+`five-hour`, `weekly`, `max-utilization`. For a requested supported policy edit:
+
+```bash
+ocx account pool anthropic --threshold 80 --quota-window five-hour --json
+ocx account pool anthropic --json
+```
+
+Only supplied fields change. For one OpenAI account use an explicit selector:
+
+```bash
+ocx account auto-switch openai status --account <id-or-alias-or-main> --json
+ocx account auto-switch openai inherit --account <id-or-alias-or-main> --json
+ocx account auto-switch openai status --account <id-or-alias-or-main> --json
+```
+
+`inherit` writes null, `on` writes 80, `off` writes 0, and `threshold N` accepts
+0–100. Without `--account`, the existing auto-switch command changes pool scope.
+Read override and effective threshold separately; never infer a missing threshold
+as 80 or resolve an ambiguous alias by guessing.
+
+Paid-credit policy requires explicit intent to allow or disallow spending after
+the included limit. `account credits openai <id> on|off --json` targets one account;
+`account credits openai --all on|off --json` targets all current selectable accounts
+plus main when enabling, and clears the policy list when disabling. These selectors
+are exclusive. `showCodexCredits` is only a display preference and never supplies
+that intent. Do not enable credits as login/quota recovery. Read back the roster
+with `ocx account list openai --json` and retain the actual returned IDs.
+
+Quota activation is another policy, not grant redemption. For an authorized edit:
+
+```bash
+ocx account quota-activation openai <id-or-alias-or-main> --window fiveHour off --json
+ocx account list openai --json
+```
+
+Its window spelling is `fiveHour` or `weekly`, unlike Anthropic pool `five-hour`.
+Enabling may schedule quota refresh; unavailable enablement can return 409 while
+disabling remains allowed. The receipt's `available` is observed availability,
+not a claim that a refresh already completed.
+
+```bash
+ocx account anthropic-reset-grants --json
+```
+
+An optional exact Anthropic account ID selects the read; this is not the Codex
+alias/main resolver. The GET may contact upstream status, but never consumes a
+grant or resumes `pendingOperation`. Preserve unavailable versus empty grants,
+nullable dates/reasons and journal state. Spending remains a human GUI handoff.
+
+## 18. Choose login options for the actual flow
+
+Use `ocx account login --help` for grammar. Ordinary fresh provider OAuth accepts
+`--add-account on|off`; omission preserves `addAccount: !reauth`. Off permits the
+existing import preference and does not delete an account. Either explicit value
+is rejected for reauth and Codex login. `--open-browser on|off` is supported for
+browser-capable flows, including Codex browser login; it is rejected with Codex
+`--device` and native device-only `kimi`, `nous`, `github-copilot`. Native Kiro
+`--method` rejects both new options because that add-only flow owns browser/device
+handling. Keep existing unflagged defaults.
+
+The operator completes browser/device verification. A returned device grant is
+not a browser-launch success. Keep `flowId`, account ID and human verification
+code separate, and preserve pending/expired/cancelled or validation-pending state.
+Do not restart login automatically, capture credentials, or perform verification
+for the operator. `--no-wait --json` is a public handoff, not completed login.
+
+Live OAuth logout is `ocx logout <public-oauth-provider> --live --json`; use only
+when logout on that target is requested. It does not sign out Codex/native-main,
+remove one selected account, or fall back to local credential deletion on failure.
+No-live logout retains local removed/not-found behavior (exit 0/4). Re-read the
+appropriate account roster instead of inventing a live `removed` result.
+
+## 19. Replace memory or compaction overrides deliberately
+
+```bash
+ocx agent memory-models --help
+ocx agent memory-models show --json
+ocx agent compaction-routing show --json
+```
+
+Each set replaces its entire block. A memory file contains only `extract` and/or
+`consolidation`, each with `model` and optional `reasoningEffort`. Scalars are:
+
+```bash
+ocx agent memory-models set --extract-model <route> --extract-effort high --consolidation-model <route> --json
+ocx agent memory-models show --json
+```
+
+Omitted phases use their existing/default route; they do not stop. Effort requires
+a model for the same phase. Alternatively `--file memory.json` accepts the block
+itself, including explicit `{}` for no overrides. `clear` sends null; `{}` and
+null remain distinct saved values, neither disables the memory pipeline. File
+mode and scalar flags conflict; the 4 MiB/30-second input limits apply.
+
+```bash
+ocx agent compaction-routing set --model <route> --effort high --triggers manual,auto --sources '<exact-source>,<provider>/*' --json
+ocx agent compaction-routing show --json
+```
+
+Use exact unique source selectors or provider/* patterns, not guessed aliases.
+Omitted triggers use the server default and omitted sources mean all source models;
+they do not retain an old custom scope. File mode uses `model`, optional
+`reasoningEffort`, `triggers`, `sourceModels`. `clear` sends null and restores normal
+compaction routing, not disabled compaction. A saved setting needs no synthetic
+model call. Inspect `catalogRefreshPending`; true or unverified status is nonzero.
+
+## 20. Change runtime settings and v2 with explicit targets
+
+```bash
+ocx system settings --json
+ocx agent injection status --json
+ocx agent sidecar status --json
+```
+
+System boolean options are `--show-codex-credits`, `--account-picker`,
+`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, each on/off.
+Credit display does not authorize paid use, and system Ultra Fast is separate
+from provider Fast. New-option writes report only observed task fields;
+Ultra Fast requires the command's same-target GET read-back. Pending catalog,
+unverified read-back or deferred/refused native apply must be reported as such.
+
+For requested injection/sidecar edits, with read-back:
+
+```bash
+ocx agent injection set --sync-codex-defaults off --json
+ocx agent injection status --json
+ocx agent sidecar web --stream-routed-output on --json
+ocx agent sidecar vision --timeout-ms 30000 --json
+ocx agent sidecar status --json
+```
+
+Injection preserves omitted model/effort/prompt/guidance; `-` clears the first
+three. The returned default-sync value is normalized state, not a catalog receipt.
+Web reasoning is supported. `--max-descriptions` and `--timeout-ms` are vision-only;
+`--stream-routed-output` is web-only. Timeout is 1–2147483647 milliseconds. Partial
+sidecar writes preserve siblings. Its `codexWebSearch` report distinguishes saved
+settings from native apply; ownership refusal is not repaired by blind retry.
+
+```bash
+ocx v2 --help
+ocx v2 status --json
+ocx v2 status --live --json
+```
+
+No-live operates on local native/config state; `--live` uses the selected proxy
+with no local fallback. Both support JSON. For an authorized live mode change:
+
+```bash
+ocx v2 mode v1 --live --json
+ocx v2 status --live --json
+```
+
+Only an explicitly requested live `mode` may include
+`--acknowledge-surface-advisory`; never add it automatically. Other verbs and local
+mode reject it. To save literal reserved hint text, quote one operand after `--`:
+
+```bash
+ocx v2 mode-hint --live --json -- '--clear'
+```
+
+That saves the text `--clear`; without the terminator `mode-hint --clear` clears
+the override. Controls occur before `--`; the suffix is one raw nonblank operand.
+Local mode/keep-native and changed on/off still attempt real sync even without a
+discovered port. Threads/hints and unchanged on/off add no sync. Local JSON reports
+`changed`, observed `state`, and `sync`; void/malformed sync evidence is
+`unverified`, exits 1, and does not erase an already-landed change. Live writes
+retain full catalog disposition; read back after partial/unknown outcomes.

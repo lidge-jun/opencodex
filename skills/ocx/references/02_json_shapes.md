@@ -16,7 +16,7 @@ not a universal schema; check the installed leaf help and the actual receipt.
 
 Output flags are parsed by each command, not globally. Preserve the documented
 operand order; do not add `--json` to a leaf marked `none`. `doctor` rejects it
-with exit 2; `v2` remains human-output only.
+with exit 2. `v2` supports `--json` for both local and explicit `--live` targets.
 
 ## `ocx ready --json`
 
@@ -256,3 +256,67 @@ Preserve `usageIncomplete`/`usageIncompleteReason`, `historyTruncated`,
 rows retain `overflow` and nullable effort buckets. Missing/invalid required
 measurements cause refusal rather than fabricated zeros. No cost or savings
 field exists in this DTO.
+
+## Account policy receipts
+
+`account pool P --json` returns `provider`, `kind`, `supported`, `enabled`,
+`enabledEffective`, `strategy`, `stickyLimit`, `autoSwitchThreshold`, `quotaWindow`,
+`maxConcurrentPerAccount`, `routes`, and optional `routesError`/`inert`. Preserve
+nullable stored fields; `enabledEffective` is the effective boolean. `supported`
+lists writable fields, not a guarantee of account availability. `inert: true`
+must not be presented as active pooling.
+
+Per-account OpenAI threshold reads/writes return `{ok, id,
+autoSwitchThresholdOverride, autoSwitchThreshold}`. Null override means inheritance;
+the effective value is separately observed. Credits for one return
+`{ok, id, creditsAfterLimit}`; all returns `{ok, all, ids}` using the actual applied
+IDs. Quota activation returns `{ok, id, window, enabled, available}`, with window
+`fiveHour` or `weekly`; this is not a completed-refresh or reset-consumption receipt.
+
+Anthropic reset-grants returns `accountId`, `eligible`, nullable `ineligibleReason`,
+`atLimit`, `grants`, nullable `nextGrantId`, `weeklyResetsAt`, `cooldownUntil`,
+`pendingOperation`, and `journalAvailable`. Grants preserve counts, nullable dates,
+`clears`, `paused`, `usableNow`, `useRequiresLimit` and observed `percentUsed`.
+Pending operation contains operation/grant IDs and timing; it is never an instruction
+to resume spending. Empty grants and unavailable status differ.
+
+Login start/status returns the flow's public URL/device instructions and safe state;
+fields vary by flow. `flowId`, account identity and device code are different.
+`browserLaunch` is `started`, `failed` or `skipped` when reported. Preserve
+`validationPending` and `catalogRefreshPending`; `--no-wait` does not mean done.
+Live OAuth logout returns `{schemaVersion:1, success:true, provider, live:true}`.
+Local logout instead uses `{schemaVersion:1, ok, provider, removed}`, with
+`reason:"not_found"` and exit 4 when absent. Never invent `removed` for live logout.
+
+## Settings and v2 receipts
+
+Memory/compaction reads are `{memoryModels: blockOrNull}` or
+`{compactionRouting: blockOrNull}`. Writes add `catalogRefreshPending`: false exits
+0 without proving every client applied, true exits 1 after saving. Missing/malformed
+pending evidence becomes null plus `verification:"unverified"` and exit 1.
+An empty memory block stays `{}`; clear stays null. Neither stops the pipeline.
+
+New-option system writes return `{ok:true, settings: observedFields,
+catalogRefreshPending}` plus relevant `desktop` stored/effective/apply facts when
+requested. Unverified read-back adds `verification:"unverified"` and
+`unverifiedFields`; Ultra Fast is read back because PUT does not return it. Never
+replace missing evidence with the requested value. Pending or native apply refusal
+can also make the saved result nonzero.
+
+Injection default-sync writes return `{ok, multiAgentGuidanceEnabled,
+syncCodexSubagentDefaults, model, effort, prompt}` with actual normalized values.
+New sidecar-option writes return `{ok, webSearch|vision, codexWebSearch}`; the selected
+section contains validated public fields only. `codexWebSearch` is `{applied:true}`
+or `{applied:false, reason, retryable}`. An unverified new field is marked as such;
+deferred/refused apply differs from saved settings. Read sidecar status for complete
+observed settings, including supported web reasoning.
+
+Local v2 JSON is `{ok, target:"local", action, changed, state, sync}`. `changed`
+can be null when unknown; `state` can be null after read-back failure. Status,
+threads, hints and unchanged toggles can have `sync.status:"not-attempted"` without
+failure. Attempted sync includes safe config/catalog evidence; an unusable result
+is `{status:"unverified",ok:false}` and exits 1. It never fabricates server receipts.
+Live status has `target:"live"` plus validated v2 state, surface advisory and hint
+recommendation. Live writes add `ok:true` and full `catalogRefresh`; committed,
+nondegraded convergence is required for exit 0. These are distinct from settings'
+boolean pending flag.

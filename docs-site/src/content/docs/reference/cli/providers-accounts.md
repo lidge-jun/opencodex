@@ -251,9 +251,80 @@ live process keeps serving the previous one. The CLI says so and asks you to res
 
 ### `ocx logout <provider>`
 
-Remove the stored OAuth credential for a provider.
+Remove the stored OAuth credential locally by default. `--json` reports
+`{schemaVersion:1, ok, provider, removed}`; missing credentials return
+`reason: "not_found"` and exit 4, while removal returns exit 0.
+
+For a requested logout on the running proxy, `ocx logout <provider> --live --json`
+accepts public OAuth providers and returns
+`{schemaVersion:1, success:true, provider, live:true}`. It does not sign out
+Codex/native-main or remove one selected account. It never deletes local credentials
+before the live request or falls back to local deletion after failure.
 
 ## Accounts and key pools
+
+### Pool policy, account thresholds and paid-credit intent
+
+Read offline help, then the selected target's policy before changing it:
+
+```bash
+ocx account pool --help
+ocx account pool openai --json
+ocx account pool anthropic --json
+```
+
+These are live management reads. The response includes `provider`, `kind`,
+`supported`, nullable stored policy, `enabledEffective` and optional `inert`.
+Only fields named by `supported` may be written; null is not false, and an inert
+policy is not active pooling. Threshold zero and `enabled:false` are independent.
+Use `--enabled on|off`, `--threshold 0..100`, `--strategy`, `--sticky 1..100`, and
+`--quota-window` only where supported. OpenAI does not support pool enabled/window
+writes; `reset-first` is OpenAI-only, `least-loaded` Kiro-only, and Anthropic windows
+are `five-hour`, `weekly`, `max-utilization`. Omitted fields stay unchanged.
+Read DTO fields such as routes or per-account concurrency do not imply a setter
+in this command; use only the listed CLI options.
+
+```bash
+ocx account pool anthropic --threshold 80 --quota-window five-hour --json
+ocx account pool anthropic --json
+ocx account auto-switch openai status --account <id-or-alias-or-main> --json
+```
+
+An explicit `--account` selects the OpenAI per-account threshold. Actions are
+`status`, `on` (80), `off` (0), `inherit` (null), or `threshold N` (0–100).
+Without `--account`, the existing auto-switch command remains pool-scoped.
+The result is `{ok, id, autoSwitchThresholdOverride, autoSwitchThreshold}`;
+read the nullable override and observed effective value separately.
+
+Paid-credit use after included quota is a distinct policy requiring explicit
+spending intent. `ocx account credits openai <id-or-alias-or-main> on|off --json`
+targets one account. `ocx account credits openai --all on|off --json` is exclusive
+with that selector: on records current selectable IDs plus main, off clears the
+list. Receipts are `{ok, id, creditsAfterLimit}` or `{ok, all, ids}`; retain the
+actual returned IDs and read back `ocx account list openai --json`. Showing credit
+balances with `--show-codex-credits` does not enable this policy. Do not enable
+credits to recover from a failed login or quota read.
+
+### Quota activation and reset-grant observations
+
+```bash
+ocx account quota-activation openai <id-or-alias-or-main> --window fiveHour off --json
+ocx account list openai --json
+ocx account anthropic-reset-grants --json
+```
+
+Quota activation accepts `fiveHour` or `weekly`, deliberately different from
+Anthropic pool `five-hour`. It writes one account/window toggle; enabling can
+schedule quota refresh. `{ok, id, window, enabled, available}` reports policy and
+observed availability, not completed refresh. Unavailable enablement may return
+409; disabling is still allowed. It never consumes a reset grant.
+
+Anthropic reset-grants accepts an optional exact Anthropic account ID, not a
+Codex alias/main selector; omission uses the existing active/fallback choice.
+The GET may contact the upstream status service. It reports eligibility/reason,
+grant counts, nullable dates, cooldown, pending operation and journal availability.
+Empty grants are not the same as unavailable status. It never consumes a grant
+or resumes a pending spend. Consumption remains a human GUI operation.
 
 ### Main-account quota protection
 
@@ -719,9 +790,28 @@ unknown account id, or a value outside the accepted set exits 1. `--json` return
 
 Run browser-based or manual-code account authentication from a headless shell. Use
 `ocx account --help` for the provider-specific command shape. If a Codex account login is saved but
-its model-catalog refresh remains pending, human output still exits successfully and prints fixed
-`ocx sync` recovery guidance on stderr. `--json` keeps stdout parseable and carries
-`catalogRefreshPending: true` in the completed login state without the human warning.
+its validation or model-catalog refresh remains pending, both human and JSON modes exit 1.
+The saved login remains visible; do not restart authentication just because follow-up work is pending.
+Human output prints fixed `ocx sync` recovery guidance on stderr for a pending catalog.
+`--json` keeps stdout parseable and preserves the pending flags without the human warning.
+
+The new login options are flow-specific:
+
+| Flow | `--open-browser on\|off` | `--add-account on\|off` |
+| --- | --- | --- |
+| Fresh ordinary provider OAuth | Supported for browser-capable providers | Supported; omitted defaults to adding an account |
+| Ordinary provider reauth | Browser-capable flows only | Rejected; omission retains reauth behavior |
+| Codex browser login | Supported | Rejected |
+| Codex device, or native device-only kimi/nous/github-copilot | Rejected | Rejected for Codex; ordinary OAuth rules for other providers |
+| Native Kiro `--method` | Rejected | Rejected; this flow is add-only |
+
+Explicit add-account off permits the existing import preference; it does not
+remove an account. Omission preserves previous CLI defaults. The operator must
+complete browser/device verification. Keep `flowId`, account ID and verification
+code separate; a returned device grant is not a successful browser launch.
+`--no-wait --json` reports the handoff, not completed login. Preserve pending,
+expired, cancelled, validation-pending and catalog-pending state; never silently
+restart a flow, capture credentials or complete verification for the operator.
 
 `ocx account login openai --device` runs OpenAI's device-code login instead of the browser
 callback. Use it when the proxy host has no browser, or when nothing can reach its
@@ -729,7 +819,7 @@ callback. Use it when the proxy host has no browser, or when nothing can reach i
 
 ```bash
 ocx account login openai --device --no-wait --json
-# { "flow": "...", "url": "https://auth.openai.com/codex/device", "deviceCode": "ABCD-EFGH" }
+# Read the returned flowId, URL and deviceCode; the operator completes verification.
 ```
 
 Open that URL on any other machine, enter the short code, and the login completes. Without

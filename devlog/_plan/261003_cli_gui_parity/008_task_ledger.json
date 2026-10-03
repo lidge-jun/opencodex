@@ -3,183 +3,2670 @@
   "candidateRows": 178,
   "scopeNote": "176 initial rows plus two confirmed embedded settings groups; aliases are retained and excluded from unique eligible denominator, not silently dropped.",
   "rows": [
-    {"id":"set-P01","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-P01 — Inspect configured providers, presets, authentication availability","existingCli":"provider list/show/presets; inspect config; account list/current; status --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P02","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp3","evidence":["032_provider_verification.md","src/cli/provider-lifecycle-runtime.ts","src/cli/provider-settings.ts","src/cli/provider-batch.ts","tests/cli/cli-provider-sync-result.test.ts"],"task":"set-P02 — Add a preset/custom provider; enable canonical OpenAI account provider","existingCli":"provider add P [--adapter A --base-url U --api-key ... --default-model M --allow-private-network --force --set-default --sync]; provider edit openai --enabled on","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P03","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp3","evidence":["032_provider_verification.md","src/cli/provider-lifecycle-runtime.ts","src/cli/provider-settings.ts","src/cli/provider-batch.ts","tests/cli/cli-provider-sync-result.test.ts"],"task":"set-P03 — Edit provider transport, discovery, default model, note, network permission","existingCli":"provider edit/update P --adapter A --base-url U --default-model M\\|- --auth-mode MODE\\|- --note TEXT\\|- --api-key-transport MODE\\|- --enabled on\\|off --live-models on\\|off --allow-private-network on\\|off","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P04","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp3","evidence":["032_provider_verification.md","src/cli/provider-lifecycle-runtime.ts","src/cli/provider-settings.ts","src/cli/provider-batch.ts","tests/cli/cli-provider-sync-result.test.ts"],"task":"set-P04 — Configure and inspect request pacing","existingCli":"inspect pacing --name P --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P05","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp3","evidence":["032_provider_verification.md","src/cli/provider-lifecycle-runtime.ts","src/cli/provider-settings.ts","src/cli/provider-batch.ts","tests/cli/cli-provider-sync-result.test.ts"],"task":"set-P05 — Enable/disable, choose default, remove provider","existingCli":"provider edit P --enabled on\\|off; provider set-default P; provider remove P","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P06","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-P06 — Change OpenAI account mode","existingCli":"provider account-mode pool\\|direct --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P07","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp3","evidence":["032_provider_verification.md","src/cli/provider-lifecycle-runtime.ts","src/cli/provider-settings.ts","src/cli/provider-batch.ts","tests/cli/cli-provider-sync-result.test.ts"],"task":"set-P07 — Atomically edit provider JSON","existingCli":"config import exists but is not provider-editor CAS parity","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P08","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-P08 — Check provider connectivity","existingCli":"provider test P --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P09","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-P09 — Inspect provider quota/capacity/usage","existingCli":"provider quota [--refresh] --json; account list P --quota [--refresh] --json; usage --range 30d --surface codex\\|all --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P10","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-P10 — OAuth login, add another account, reauthenticate, submit callback, cancel, logout","existingCli":"account login P [--reauth --id I] [--no-wait]; account reauth/code/cancel; login P (local); logout P --json (local)","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P11","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-P11 — Kiro native device login","existingCli":"account login kiro --method builder-id\\|google\\|github [--no-wait] --json; account cancel kiro --flow F --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P12","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-P12 — Manage OAuth account roster","existingCli":"account list/current/use P I; account alias P I TEXT\\|-; account pause/resume P I; account remove P I --yes; all support --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P13","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-P13 — Import Antigravity accounts","existingCli":"account import google-antigravity --format cockpit-tools --file F\\|--stdin --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P14","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-P14 — Manage API-key pool","existingCli":"account list/use P I; account add-key P [--label L] (stdin); account alias P I TEXT\\|-; account remove P I --yes --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P15","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-P15 — Set account-pool strategy and thresholds","existingCli":"account strategy P STRATEGY; account sticky P N; account auto-switch P on\\|off\\|threshold N\\|status; account routes anthropic ...","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P16","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-P16 — Set per-Anthropic-account auto-switch override","existingCli":"account auto-switch anthropic status\\|on\\|off\\|inherit\\|threshold N --account I --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P17","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp3","evidence":["032_provider_verification.md","src/cli/provider-lifecycle-runtime.ts","src/cli/provider-settings.ts","src/cli/provider-batch.ts","tests/cli/cli-provider-sync-result.test.ts"],"task":"set-P17 — Control xAI Responses opt-in and model Fast variants","existingCli":"provider edit xai --xai-chat on\\|off --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P18","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-P18 — Inspect/redeem Grok reset coupons","existingCli":"account grok-reset-coupons [I] [--consume --yes --token-id T --operation-id UUID] --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P19","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-P19 — Inspect/redeem Anthropic reset grants","existingCli":"No Anthropic grant read command in account-auth dispatcher; Grok/Codex reset commands target different contracts","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-P20","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-P20 — Choose whether OAuth launches browser on proxy host","existingCli":"account login currently omits openBrowser; GUI local preference feeds request field","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A01","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-A01 — Inspect/refresh account readiness, quotas and active selection","existingCli":"account list openai --quota [--refresh] --json; account current openai --json; account refresh openai --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A02","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-A02 — Add/re-authenticate pool account with browser or device flow","existingCli":"account login openai --id I --reauth --device --no-wait --json; account code/cancel openai --flow F","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A03","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-A03 — Reauthenticate native main in place","existingCli":"account main reauth --device [--no-wait] --json; account main reauth status\\|cancel --flow F --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A04","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-A04 — Select active account, rename, remove","existingCli":"account current/use/clear openai; account alias openai I TEXT\\|-; account remove openai I --yes --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A05","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-A05 — Pause/resume, pause exhausted accounts, set priority","existingCli":"account pause/resume openai I; account pause-exhausted openai; account priority openai I N\\|first\\|earlier\\|normal\\|later\\|last\\|reset --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A06","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-A06 — Set per-account auto-switch threshold","existingCli":"account auto-switch openai on\\|off\\|threshold N\\|status is pool-wide only","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A07","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-A07 — Permit paid credits after quota exhaustion","existingCli":"Only generic config fallback; no account-auth/extended credits policy handler","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A08","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-A08 — Inspect/redeem Codex reset credits","existingCli":"account reset-credits I\\|main [--consume --yes --operation-id UUID] --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A09","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-A09 — Configure quota-window activation and credit display","existingCli":"system settings --json reads settings; account refresh handles immediate refresh only","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A10","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-A10 — Native-main profile inventory, register, switch/recover","existingCli":"account main list\\|doctor\\|register LABEL\\|switch I --yes\\|recover [--rollback --yes] --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A11","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-A11 — Account-picker setting and main hard lock","existingCli":"system settings --json reads values","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A12","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-A12 — Read prompt layer stack and effective prompt text","existingCli":"inspect codex-prompt --json; inspect codex-prompt --text (mutually exclusive)","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A13","domain":"settings","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"set-A13 — Toggle/edit/order custom prompt layers and base variants","existingCli":"inspect codex-prompt is read-only","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A14","domain":"settings","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"set-A14 — Adopt existing prompt configuration or repair prompt drift","existingCli":"inspect codex-prompt can expose drift","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A15","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-A15 — Enable default-mode request-user-input","existingCli":"agent request-user-input [on\\|off] --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-A16","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-A16 — Toggle Ultra Fast tier","existingCli":"system settings --json reads ultraFastTier","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M01","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-M01 — Inspect catalog, exposed selection, context limits and provider metadata","existingCli":"models live --provider P --json; models selected P; models context status; models preset show; models new-policy; alias list; inspect config/catalog","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M02","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-M02 — Show/hide selected models or all models of one provider","existingCli":"models enable\\|disable P/M [--native] --json; models provider P on\\|off --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M03","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-M03 — Choose curated/provider model preset and default policy for newly discovered models","existingCli":"models preset show [--provider P]; models preset apply P [--all]; models new-policy on\\|off [--provider P]; models new-arrivals --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M04","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-M04 — Edit provider/model aliases and default alias policy","existingCli":"alias list; alias set P\\|P/M ALIAS; alias rm P\\|P/M; alias defaults on\\|off [--provider P] --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M05","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp4","evidence":["042_models_verification.md","src/cli/models-custom-runtime.ts","src/cli/models-order.ts","src/cli/route-policy-write.ts","tests/cli/cli-combo-parity.test.ts"],"task":"set-M05 — Edit/reset model display label and cost override","existingCli":"models price P/M; models set-price P/M --input N --output N [--cache-read N --cache-write N] or --auto; custom models edit --display-name only","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M06","domain":"settings","baseline":"UNKNOWN","status":"complete","unit":"wp4","evidence":["042_models_verification.md","src/cli/models-custom-runtime.ts","src/cli/models-order.ts","src/cli/route-policy-write.ts","tests/cli/cli-combo-parity.test.ts"],"task":"set-M06 — Create/edit/delete custom model definitions","existingCli":"models add P M --display-name --context-window --modalities --reasoning-efforts --default-reasoning-effort; models list-custom --json; models edit ID ...; models remove ID\\|P/M --yes","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M07","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-M07 — Override/restore discovered-model capability metadata","existingCli":"models set P/M --context-window N\\|0\\|- --modalities CSV\\|- --reasoning-efforts CSV\\|\"\"\\|- --default-reasoning-effort LEVEL\\|-; --reset --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M08","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp3","evidence":["032_provider_verification.md","src/cli/provider-lifecycle-runtime.ts","src/cli/provider-settings.ts","src/cli/provider-batch.ts","tests/cli/cli-provider-sync-result.test.ts"],"task":"set-M08 — Override provider/per-model advertised context window","existingCli":"models set P/M --context-window N\\|0\\|- covers per-model override","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M09","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-M09 — Configure context caps: per-provider, global default, apply/remove all","existingCli":"models context status; models context value N [--set-all]; models context provider P on\\|off [--value N]; models context all on\\|off --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M10","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp4","evidence":["042_models_verification.md","src/cli/models-custom-runtime.ts","src/cli/models-order.ts","src/cli/route-policy-write.ts","tests/cli/cli-combo-parity.test.ts"],"task":"set-M10 — Configure picker order manually or by ranking policy","existingCli":"agent subagents status shows picker fields; agent subagents set writes featured models only","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M11","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-M11 — Show generated Fast catalog rows","existingCli":"system settings --json reads fastRows","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M12","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-M12 — Configure shadow-call interception target","existingCli":"models shadow status; models shadow set M\\|- --enabled on\\|off --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-M13","domain":"settings","baseline":"UNKNOWN","status":"pending","unit":"wp5","evidence":[],"task":"set-M13 — Configure multi-agent surface and per-session thread limit","existingCli":"v2 status; v2 mode v1\\|default\\|v2; v2 keep-native-v1 on\\|off; v2 threads N (local, prose output)","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-C01","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-C01 — Inspect combos, target inventory, quota and catalog exposure","existingCli":"combo list/show I; models live; inspect config; provider quota --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-C02","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp4","evidence":["042_models_verification.md","src/cli/models-custom-runtime.ts","src/cli/models-order.ts","src/cli/route-policy-write.ts","tests/cli/cli-combo-parity.test.ts"],"task":"set-C02 — Create/edit/rename/remove combo and target policy","existingCli":"combo set\\|create\\|update I --targets P/M[:W],... --strategy S --sticky N\\|- --effort E\\|- --alias A\\|- --native-alias --display-name TEXT\\|- --decision-provider P\\|- --decision-model M\\|- --decision-timeout N\\|- --rename-from OLD; remove I --yes","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-C03","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-C03 — Probe selected JEV decision backend","existingCli":"combo test [--combo I] [--decision-provider P\\|--decision-model M] [--decision-timeout N] --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-C04","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-C04 — Explain a saved combo's protocol behavior","existingCli":"api protocols --json; api explain --model combo/I --inbound responses\\|chat\\|messages --feature F[,F] ... --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-C05","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp4","evidence":["042_models_verification.md","src/cli/models-custom-runtime.ts","src/cli/models-order.ts","src/cli/route-policy-write.ts","tests/cli/cli-combo-parity.test.ts"],"task":"set-C05 — Inspect JEV combo decision outcomes, tokens and evidence coverage","existingCli":"usage --range ... --model combo/I exists but returns ordinary usage","sourceInventory":"004_settings_coverage.md","disposition":"Source revalidation found no monetary cost/savings baseline in the GUI DTO. CLI preserves actual decision/token/coverage/nullable/incomplete statistics without inventing savings."},
-    {"id":"set-R01","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-R01 — Inspect routing profiles, candidates, scoring and compatibility suite choices","existingCli":"route policy list/show I --json; inspect routing-analytics --json; models live; lab catalog --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-R02","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"complete","unit":"wp4","evidence":["042_models_verification.md","src/cli/models-custom-runtime.ts","src/cli/models-order.ts","src/cli/route-policy-write.ts","tests/cli/cli-combo-parity.test.ts"],"task":"set-R02 — Create/update/remove routing profile","existingCli":"route policy only list/show/dry-run/evaluate","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-R03","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-R03 — Dry-run a saved route against requirements","existingCli":"route policy dry-run\\|evaluate I --model-context N --tools --image --structured-output --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-S01","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-S01 — Choose/reorder featured subagent roster","existingCli":"agent subagents\\|roster status\\|set CSV\\|clear --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-S02","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-S02 — Force subagent model and configure fallback chain","existingCli":"agent subagents force M\\|-; agent fallback status\\|set [CSV] [--poll-ms 5000..600000]\\|clear --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-S03","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"set-S03 — Configure delegation guidance/default model/effort and synchronize defaults","existingCli":"agent injection\\|guidance set --model M\\|- --effort E\\|- --guidance on\\|off; status --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-S04","domain":"settings","baseline":"UNKNOWN","status":"pending","unit":"wp5","evidence":[],"task":"set-S04 — Set delegation mode and editable proactive hint","existingCli":"v2 mode v1\\|default\\|v2; v2 mode-hint TEXT; v2 mode-hint --clear; v2 status (local)","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-S05","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-S05 — Ask for delegation model recommendation, then separately apply","existingCli":"agent injection suggest WORK [--model SIZING_MODEL] [--apply] --json; agent injection set --model M --effort E","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-K01","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-K01 — Inspect/filter/paginate compatibility verdicts and subjects","existingCli":"lab status; lab verdicts --subject --layer --suite --verdict --limit --cursor; lab subjects --limit --cursor --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-K02","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-K02 — Inspect one verdict's evidence lineage and production context","existingCli":"lab subject I; observations --subject I --layer L --suite T --limit --cursor; event I; artifact D; production-signals --subject I --limit --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-K03","domain":"settings","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-K03 — Filter protocol pairs and view community trust context","existingCli":"lab subject I --json; lab public community --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-K04","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-K04 — Inspect provider upstream wire/protocol and conversion plan","existingCli":"api protocols [--provider P] --json; api explain --model M --inbound PROTOCOL [--feature F] --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"set-K05","domain":"settings","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"set-K05 — Control protocol exposure/rollout","existingCli":"api policy --messages on\\|off --unrepresentable legacy\\|reject --rollout SWITCH=on\\|off ... --json","sourceInventory":"004_settings_coverage.md"},
-    {"id":"ops-D01","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp7","evidence":[],"task":"ops-D01 — Read live health/version/uptime and provider overview; `gui/src/pages/dashboard-core-poll.ts:275`","existingCli":"status --json; health --json; system status --json","sourceInventory":"005_operations_coverage.md","disposition":"Included task; target/contract resolved in operational crux decision."},
-    {"id":"ops-D02","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D02 — Read model catalog and 30d usage; `gui/src/pages/dashboard-core-poll.ts:135`, `:142`","existingCli":"models live --json; usage --range 30d --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D03","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D03 — Read runtime/client preferences; `gui/src/pages/dashboard-core-poll.ts:218`","existingCli":"system settings --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D04","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D04 — Set Codex autostart; `gui/src/pages/use-dashboard-data.ts:753`, `:777`","existingCli":"system settings --auto-start on/off --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D05","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D05 — Set Desktop authless / client compaction; `gui/src/pages/use-dashboard-data.ts:768`, `:778`","existingCli":"system settings --desktop-authless on/off --client-compaction on/off --json; then system sync --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D06","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D06 — Sync client catalogs/configuration; `gui/src/pages/use-dashboard-data.ts:790`, `:796`","existingCli":"system sync --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D07","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D07 — Read project-config warnings; `gui/src/pages/dashboard-core-poll.ts:126`","existingCli":"system diagnostics --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D08","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D08 — Read startup protection; `gui/src/pages/dashboard-core-poll.ts:104`; `gui/src/pages/Startup.tsx:140`","existingCli":"system startup health/status --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D09","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D09 — Read memory/storage pressure and active turns; `gui/src/components/MemoryObservabilityCard.tsx:243`","existingCli":"observe memory --json; memory --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D10","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D10 — Drain and restart proxy; `gui/src/components/MemoryObservabilityCard.tsx:359`","existingCli":"restart","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D11","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D11 — Check latest/preview package update; `gui/src/pages/use-dashboard-data.ts:824`","existingCli":"system update check --channel latest/preview --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D12","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D12 — Run package update, optionally restart; `gui/src/pages/use-dashboard-data.ts:909`","existingCli":"system update run --channel latest/preview --restart on/off --yes --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D13","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D13 — Observe update job; `gui/src/pages/use-dashboard-data.ts:493`","existingCli":"system update status JOB-ID --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D14","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-D14 — Desktop-shell update navigation; `gui/src/pages/use-dashboard-data.ts:6` (openDesktopUpdatePage dependency), `gui/src/pages/dashboard-overview-sections.tsx:220`","existingCli":"Desktop update UI panel","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D15","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"ops-D15 — Web search sidecar off/on/model/stream; `gui/src/pages/dashboard-overview-sections.tsx:585`, `:606`; save `gui/src/pages/use-dashboard-data.ts:563`","existingCli":"agent sidecar web --model ID --backend BACKEND --enabled on/off --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D16","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp5","evidence":[],"task":"ops-D16 — Vision sidecar off/on/model/reasoning/limits/timeout; `gui/src/pages/dashboard-overview-sections.tsx:467`, `:480`, `:628`, `:648`","existingCli":"agent sidecar vision --model ID --backend BACKEND --reasoning LEVEL --max-descriptions N --enabled on/off --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D17","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-D17 — Shadow-call interception toggle/model; `gui/src/pages/dashboard-overview-sections.tsx:716`, `:728`; save `gui/src/pages/use-dashboard-data.ts:610`","existingCli":"models shadow status --json; models shadow set MODEL --enabled on/off --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-D18","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp8","evidence":[],"task":"ops-D18 — Multi-agent mode/advisory, injection/guidance/defaults, effort caps; `gui/src/pages/use-dashboard-data.ts:640`, `:679`, `:727`; `gui/src/pages/dashboard-overview-sections.tsx:78`, `:103`","existingCli":"v2; agent injection/effort/subagents/roles","sourceInventory":"005_operations_coverage.md","aliasOf":["set-M13","set-S03","set-S04","set-S01","set-S02","set-S06","set-S07"]},
-    {"id":"ops-S01","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-S01 — Install service / repair service / install shim; `gui/src/pages/Startup.tsx:290`, `:294`","existingCli":"service install; service repair; codex-shim install; system startup install-service/install-shim --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-S02","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-S02 — Windows tray status; `gui/src/pages/Startup.tsx:176`","existingCli":"tray status --json; inspect windows-tray --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-S03","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-S03 — Windows tray install/start/stop/uninstall; `gui/src/pages/Startup.tsx:268`","existingCli":"tray install/start/stop/uninstall --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-S04","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-S04 — Connected-machine shim status/install/repair/uninstall; `gui/src/pages/Startup.tsx:97`, `:104`","existingCli":"codex-shim status/install/uninstall","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-S05","domain":"operations","baseline":"UNKNOWN","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-S05 — Read connected-machine selected clients / sync them; `gui/src/pages/Integrations.tsx:62`, `:72`","existingCli":"sync on connected machine","sourceInventory":"005_operations_coverage.md","disposition":"Existing status selectedClients and syncConnectedClient are the same GUI task; discovery proof."},
-    {"id":"ops-C01","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-C01 — Read Claude Code effective state/model choices; `gui/src/pages/ClaudeCode.tsx:88`","existingCli":"claude config status --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C02","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-C02 — Enable/disable Claude connection immediately; `gui/src/pages/ClaudeCode.tsx:166`; `gui/src/pages/use-claude-connection.ts:2`","existingCli":"integration native claude on/off --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C03","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-C03 — Enable/disable CLI first-party proxy environment; `gui/src/pages/ClaudeCode.tsx:178`","existingCli":"claude config set --first-party on/off --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C04","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-C04 — Save Code behavior/auth/env/model mappings/helpers; `gui/src/pages/ClaudeCode.tsx:217`","existingCli":"claude config set --enabled --auth-mode --system-env --fast-mode --auto-context --compact-window --inject-agents --small-fast-model --model-map --web-model --web-backend --vision-model --vision-backend","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C05","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-C05 — Start configured Claude intercept; `gui/src/components/ClaudeInterceptStart.tsx:18`","existingCli":"claude intercept start --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C06","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp6","evidence":[],"task":"ops-C06 — Read Desktop editable profile/catalog and applied health; `gui/src/pages/ClaudeDesktop.tsx:270`, `:354`","existingCli":"claude desktop status --json; claude desktop show --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C07","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp6","evidence":[],"task":"ops-C07 — Edit Desktop assignment family/alias/default and save; `gui/src/pages/ClaudeDesktop.tsx:24`, `:418`, `:806`, `:826`","existingCli":"claude desktop move ROUTE FAMILY [--default]; default FAMILY ROUTE-or-none; import FILE","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C08","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-C08 — Save then apply Desktop first-party/gateway; `gui/src/pages/ClaudeDesktop.tsx:433`","existingCli":"claude desktop apply --first-party; apply --gateway","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C09","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-C09 — Bind/unbind native picker ID to route; `gui/src/components/ClaudeFirstPartyBindings.tsx:59`","existingCli":"claude desktop bind PICKER-ID ROUTE; unbind PICKER-ID","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C10","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-C10 — Enable/disable Desktop picker proxy; `gui/src/components/ClaudeDesktopPicker.tsx:97`","existingCli":"claude desktop picker status/on/off","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C11","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-C11 — Export Desktop profile JSON; `gui/src/pages/ClaudeDesktop.tsx:468`","existingCli":"claude desktop export PATH-or-dash","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-C12","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp6","evidence":[],"task":"ops-C12 — Import Desktop profile JSON; `gui/src/pages/ClaudeDesktop.tsx:480`","existingCli":"claude desktop import FILE [--apply]","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-G01","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-G01 — Read Grok fence/catalog/status; `gui/src/pages/Grok.tsx:81`","existingCli":"grok status/show --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-G02","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-G02 — Save included/excluded Grok model selection; `gui/src/pages/Grok.tsx:151`","existingCli":"grok set/include/exclude CSV --json; grok clear --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-G03","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-G03 — Save and apply Grok fence; `gui/src/pages/Grok.tsx:171`","existingCli":"grok set CSV --json; then grok apply --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I01","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-I01 — List native integration desired/observed state; `gui/src/pages/integrations/native-api.ts:144`; overview `IntegrationsOverview.tsx:605`","existingCli":"integration native list --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I02","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-I02 — Toggle native Grok / Codex / Claude Desktop; `gui/src/pages/integrations/native-api.ts:155`; overview `IntegrationsOverview.tsx:604`","existingCli":"integration native grok/codex/claude-desktop on/off --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I03","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-I03 — List file-client state / inspect one; `gui/src/pages/integrations/integration-api.ts:435`, `:441`","existingCli":"integration client status/list/show [--client ID] --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I04","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp6","evidence":[],"task":"ops-I04 — Preview apply / overwrite / disable; `gui/src/pages/integrations/FileIntegrationPage.tsx:219`; `integration-api.ts:475`","existingCli":"Existing apply/disable at I05","sourceInventory":"005_operations_coverage.md","disposition":"Included preview task; interactive-preview exemption is not a consent prohibition."},
-    {"id":"ops-I05","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-I05 — Apply / overwrite conflicting config / disable owned block; `gui/src/pages/integrations/FileIntegrationPage.tsx:251`; `integration-api.ts:512`","existingCli":"integration client enable/disable --client ID [--overwrite-conflict] --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I06","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp6","evidence":[],"task":"ops-I06 — Set/clear per-model Droid reasoning defaults; `gui/src/pages/integrations/DroidReasoningDefaultsPanel.tsx:27`, `:38`","existingCli":"integration client enable --client droid","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I07","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-I07 — Read rollback journal; `gui/src/pages/integrations/integration-api.ts:454`","existingCli":"integration client history/journal [--client ID] --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I08","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp6","evidence":[],"task":"ops-I08 — Preview rollback, including drift-confirmed retry; `gui/src/pages/integrations/RestoreDialog.tsx:143`; `integration-api.ts:496`","existingCli":"integration client restore --op ID [--confirm-drift]","sourceInventory":"005_operations_coverage.md","disposition":"Included preview task; interactive-preview exemption is not a consent prohibition."},
-    {"id":"ops-I09","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-I09 — Restore rollback snapshot; `gui/src/pages/integrations/RestoreDialog.tsx:191`; `integration-api.ts:543`","existingCli":"integration client restore --op ID [--confirm-drift] --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I10","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp6","evidence":[],"task":"ops-I10 — Retire older rollback entry/snapshot; `gui/src/pages/integrations/FileIntegrationPage.tsx:446`; overview `IntegrationsOverview.tsx:851`; `integration-api.ts:571`","existingCli":"history and restore only","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I11","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-I11 — Disable all eligible file integrations; `gui/src/pages/integrations/IntegrationsOverview.tsx:443`, `:460`, `:512`","existingCli":"Repeat integration client disable --client ID for explicit set","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I12","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-I12 — List Aside profiles / read one / toggle selected profile; `gui/src/pages/integrations/AsideProfilesPage.tsx:54`, `:89`, `:116`; `integration-api.ts:424`","existingCli":"integration client status/enable/disable --client aside --profile N --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I13","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp6","evidence":[],"task":"ops-I13 — Aside profile rollback list/preview/restore/retire; `gui/src/pages/integrations/integration-api.ts:465`, `:503`, `:550`, `:585`","existingCli":"history --client aside --profile N; restore --client aside --profile N --op ID [--confirm-drift]","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I14","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp6","evidence":[],"task":"ops-I14 — Refresh all server-selected Aside profiles; `gui/src/pages/integrations/aside-profile-api.ts:38`","existingCli":"sync reaches refreshAsideProfilesThroughServer","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I15","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp6","evidence":[],"task":"ops-I15 — Inspect Cursor installed builds/gateway/last-seen state; `gui/src/pages/integrations/CursorIntegrationPage.tsx:113`; `cursor-api.ts:34`","existingCli":"integration native list/on/off; Cursor advertised only","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-I16","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp6","evidence":[],"task":"ops-I16 — Check advertised Cursor local installer; `gui/src/pages/integrations/CursorIntegrationPage.tsx:81`; `cursor-api.ts:59`","existingCli":"No Cursor installer-read command","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O01","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-O01 — Read debug flags/env/runtime overrides; `gui/src/pages/Debug.tsx:48`","existingCli":"observe debug --json; debug SCOPE status","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O02","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-O02 — Toggle provider/usage/injection/Claude inbound capture; `gui/src/pages/Debug.tsx:180`, `:210`","existingCli":"debug provider/usage/injection/claude on/off","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O03","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-O03 — Reset all capture overrides to env; `gui/src/pages/Debug.tsx:213`","existingCli":"debug provider reset; debug usage reset; debug injection reset; debug claude reset","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O04","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp7","evidence":[],"task":"ops-O04 — Read/follow provider, usage, injection debug buffers; `gui/src/pages/Debug.tsx:97`, `:115`","existingCli":"debug provider logs -f; debug usage logs -f; observe injection --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O05","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-O05 — Read Claude inbound metadata captures; `gui/src/pages/Debug.tsx:65`","existingCli":"observe claude-inbound --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O06","domain":"operations","baseline":"COMPLETE","status":"pending","unit":"wp7","evidence":[],"task":"ops-O06 — Read/retry/incrementally poll request log; `gui/src/pages/Logs.tsx:614`","existingCli":"logs --limit 2000 --json; logs --follow --jsonl","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O07","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-O07 — Filter log snapshot by surface/model/provider/status/time/speed/interception/conversation/protocol; `gui/src/pages/Logs.tsx:728`; `gui/src/pages/logs-filter.ts:16`, `:103`","existingCli":"logs has provider/model/status/conversation/account filters","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O08","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp7","evidence":[],"task":"ops-O08 — Read usage by preset/custom window, surface and local-machine attribution; `gui/src/pages/Usage.tsx:1110`","existingCli":"usage --range --surface --since --until --provider --model --json","sourceInventory":"005_operations_coverage.md","disposition":"Included task; target/contract resolved in operational crux decision."},
-    {"id":"ops-O09","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-O09 — Model text search, expand rows, tab and chart display; `gui/src/pages/Usage.tsx:1093`; chart components","existingCli":"No CLI task needed","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O10","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-O10 — Read companion preferences/presence; `gui/src/pages/usage-companion-panel.tsx:215`; Tray `gui/src/pages/Tray.tsx:100`","existingCli":"companion show --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O11","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-O11 — Persist companion model/provider visibility and chart/menu appearance; `gui/src/pages/usage-companion-panel.tsx:302`, `:503`","existingCli":"companion set KEY=VALUE ... --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O12","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-O12 — Restore companion defaults (including corrupt-state recovery); `gui/src/pages/usage-companion-panel.tsx:350`","existingCli":"companion reset --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O13","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp7","evidence":[],"task":"ops-O13 — Read usage timeline for companion/chart/tray; `gui/src/pages/usage-companion-panel.tsx:257`; `gui/src/pages/Tray.tsx:118`","existingCli":"companion show/set/reset only","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O14","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-O14 — Open companion view in system browser; `gui/src/pages/usage-companion-panel.tsx:367`","existingCli":"No standalone operator equivalent required","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-O15","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp8","evidence":[],"task":"ops-O15 — Tray refresh totals/accounts/quota; `gui/src/pages/Tray.tsx:79`, `:86`, `:104`; `gui/src/pages/tray-data.ts:27`","existingCli":"usage/companion show plus account read families","sourceInventory":"005_operations_coverage.md","aliasOf":["set-A01","set-P09","set-P12","set-P14","ops-O08","ops-O10","ops-O13"]},
-    {"id":"ops-O16","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp8","evidence":[],"task":"ops-O16 — Tray switch current account/key; `gui/src/pages/Tray.tsx:39`; `gui/src/pages/tray-data.ts:36`","existingCli":"Account selection families in inventory-cli.md","sourceInventory":"005_operations_coverage.md","aliasOf":["set-A04","set-P12","set-P14"]},
-    {"id":"ops-T01","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-T01 — Inspect storage sizes/categories/Log Guard state; `gui/src/pages/Storage.tsx:1358`","existingCli":"storage report --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-T02","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-T02 — Preview oldest archived-session cleanup percentage; `gui/src/pages/Storage.tsx:177`","existingCli":"storage cleanup --percent N --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-T03","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-T03 — Quarantine / permanently delete previewed archives; `gui/src/pages/Storage.tsx:201`","existingCli":"storage cleanup --percent N --mode quarantine/permanent --yes --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-T04","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-T04 — List quarantine batches; `gui/src/pages/Storage.tsx:392`","existingCli":"storage trash list --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-T05","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-T05 — Restore a quarantine batch; `gui/src/pages/Storage.tsx:431`","existingCli":"storage trash restore ENTRY-ID --yes --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-T06","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-T06 — Read policy/job; `gui/src/pages/Storage.tsx:672`, `:865`","existingCli":"storage policy show --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-T07","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp6","evidence":[],"task":"ops-T07 — Enable/disable recurring cleanup / save threshold, target, schedule, mode; `gui/src/pages/Storage.tsx:709`, `:738`","existingCli":"storage policy set --enabled --percent --mode --schedule --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-T08","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-T08 — Run cleanup policy now; `gui/src/pages/Storage.tsx:790`, `:809`","existingCli":"storage policy set EXISTING-FIELDS; policy run --yes --json; policy show --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-T09","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-T09 — Inspect log protection fresh; `gui/src/components/storage-workspace/StorageWorkspace.tsx:515`","existingCli":"storage codex-logs status --json; observe storage codex-logs status --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-T10","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-T10 — Protect logs compat / quiet; `gui/src/components/storage-workspace/StorageWorkspace.tsx:251`, `:261`, `:460`","existingCli":"storage codex-logs protect --mode compat/quiet --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-T11","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-T11 — Remove log protection / repair protection / compact logs; `gui/src/components/storage-workspace/StorageWorkspace.tsx:440`, `:463`","existingCli":"storage codex-logs unprotect/repair/compact --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-K01","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-K01 — List access keys/usage/pending rotations, endpoints, auth matrix, API/audio surfaces; `gui/src/pages/ApiKeys.tsx:155`","existingCli":"access key list --json; access endpoints --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-K02","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-K02 — Create key with name; `gui/src/pages/ApiKeys.tsx:268`","existingCli":"access key create NAME --json","sourceInventory":"005_operations_coverage.md","disposition":"Existing human-only secret-returning operation; indexed as a family handoff with safe list/get/rotation follow-ups. No agent execution recipe or consent bypass."},
-    {"id":"ops-K03","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp7","evidence":[],"task":"ops-K03 — Rename key; `gui/src/pages/ApiKeys.tsx:327`","existingCli":"access key set edits scopes only","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-K04","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-K04 — Revoke key; `gui/src/pages/ApiKeys.tsx:302`","existingCli":"access key remove ID --yes --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-K05","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-K05 — Start rotation; `gui/src/pages/ApiKeys.tsx:349`","existingCli":"access key rotate ID --json","sourceInventory":"005_operations_coverage.md","disposition":"Existing human-only secret-returning operation; indexed as a family handoff with safe list/get/rotation follow-ups. No agent execution recipe or consent bypass."},
-    {"id":"ops-K06","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-K06 — Commit rotation / abort rotation; `gui/src/pages/ApiKeys.tsx:371`","existingCli":"access key rotate commit ID ROTATION-ID --json; rotate abort ID ROTATION-ID --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-K07","domain":"operations","baseline":"DISCOVERY_ONLY","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-K07 — Read public external-model catalog; `gui/src/pages/ApiKeys.tsx:192`","existingCli":"access models --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-K08","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp7","evidence":[],"task":"ops-K08 — Test newly created key on Responses / Chat / Messages for selected model; `gui/src/pages/ApiKeys.tsx:443`, `:456`","existingCli":"access test MODEL --protocol responses/chat/messages --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-K09","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-K09 — Read generated client configuration / copy snippet; `gui/src/components/apikeys-workspace/ClientConfigRow.tsx:53`","existingCli":"inspect client-config --client ID --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-K10","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-K10 — Toggle public Messages API; `gui/src/pages/api-surface-cards.tsx:52`","existingCli":"api policy --messages on/off --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-K11","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-K11 — Preview model's protocol path/features; `gui/src/components/protocols/ProtocolPlanPanel.tsx` → `gui/src/protocol-api.ts:91`","existingCli":"api explain --model ID --inbound responses/chat/messages --feature FEATURE [repeated] --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-K12","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp7","evidence":[],"task":"ops-K12 — Dictation file upload and cancel; `gui/src/components/apikeys-workspace/AudioApiPanel.tsx:2`; `gui/src/audio-api-client.ts:13`","existingCli":"No scoped audio CLI identified in supplied CLI inventory","sourceInventory":"005_operations_coverage.md","disposition":"Included task; target/contract resolved in operational crux decision."},
-    {"id":"ops-K13","domain":"operations","baseline":"UNKNOWN","status":"pending","unit":"wp7","evidence":[],"task":"ops-K13 — Live voice connect/disconnect probe; `gui/src/audio-api-client.ts:88`","existingCli":"No scoped live-audio probe identified in supplied CLI inventory","sourceInventory":"005_operations_coverage.md","disposition":"Included task; target/contract resolved in operational crux decision."},
-    {"id":"ops-K14","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-K14 — Download generated client configuration; `gui/src/components/apikeys-workspace/ClientConfigPanel.tsx:78`","existingCli":"export --client ID --out PATH [--force] [--json]","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-R01","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp6","evidence":[],"task":"ops-R01 — Hub devices/runtime availability/session status; `gui/src/pages/RemoteWorkspace.tsx:93`","existingCli":"remote-workspace status is executor-local","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-R02","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-R02 — Create device enrollment code; `gui/src/pages/RemoteWorkspace.tsx:172`","existingCli":"remote-workspace pair consumes enrollment code","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-R03","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-R03 — Start hub model session on selected remote root; `gui/src/pages/RemoteWorkspace.tsx:184`","existingCli":"No CLI proposed","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-R04","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-R04 — Submit prompt to bound session; `gui/src/pages/RemoteWorkspace.tsx:208`","existingCli":"No CLI proposed","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-R05","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-R05 — Stop session; `gui/src/pages/RemoteWorkspace.tsx:243`","existingCli":"No CLI proposed","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-R06","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-R06 — Revoke device and stop its sessions; `gui/src/pages/RemoteWorkspace.tsx:256`","existingCli":"No CLI proposed","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-R07","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp6","evidence":[],"task":"ops-R07 — Read individual Hub runtimes/sessions endpoints","existingCli":"No Hub runtime/session list command","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-L01","domain":"operations","baseline":"COMPLETE","status":"complete","unit":"wp2","evidence":["022_discovery_verification.md","src/cli/capabilities.ts","skills/ocx/references/01_management_surface.md"],"task":"ops-L01 — Read link topology/status; `gui/src/pages/RemoteLink.tsx:186`","existingCli":"link status --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-L02","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-L02 — Discover/rescan SSH aliases; `gui/src/pages/RemoteLink.tsx:262`","existingCli":"No CLI proposed","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-L03","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-L03 — Probe host key; `gui/src/pages/RemoteLink.tsx:282`","existingCli":"No CLI proposed","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-L04","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-L04 — Accept shown fingerprint and validate remote OCX; `gui/src/pages/RemoteLink.tsx:298`","existingCli":"No CLI proposed","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-L05","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-L05 — Home adds child; `gui/src/pages/RemoteLink.tsx:313`","existingCli":"link issue is existing lower-level admin primitive","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-L06","domain":"operations","baseline":"EXCLUDED","status":"pending","unit":"wp8","evidence":[],"task":"ops-L06 — Standalone child joins Home and restarts; `gui/src/pages/RemoteLink.tsx:333`","existingCli":"No CLI proposed","sourceInventory":"005_operations_coverage.md"},
-    {"id":"ops-L07","domain":"operations","baseline":"IMPLEMENTATION_GAP","status":"pending","unit":"wp6","evidence":[],"task":"ops-L07 — Disconnect link / force-remove after remote cleanup failure; `gui/src/pages/RemoteLink.tsx:371`, `:422`","existingCli":"link revoke --link-id ID --json","sourceInventory":"005_operations_coverage.md"},
-    {"id":"set-S06","task":"Memory extraction and consolidation model settings","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","existingCli":"No dedicated live block writer","sourceInventory":"gui/src/pages/dashboard-overview-panels.tsx:24; gui/src/components/MemoryModelsPanel.tsx:111","evidence":[],"unit":"wp5"},
-    {"id":"set-S07","task":"Compaction route model, effort, triggers and source scope","domain":"settings","baseline":"IMPLEMENTATION_GAP","status":"pending","existingCli":"No dedicated live block writer","sourceInventory":"gui/src/pages/dashboard-overview-panels.tsx:23; gui/src/components/CompactionRoutingPanel.tsx:180","evidence":[],"unit":"wp5"}
+    {
+      "id": "set-P01",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-P01 — Inspect configured providers, presets, authentication availability",
+      "existingCli": "provider list/show/presets; inspect config; account list/current; status --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P02",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp3",
+      "evidence": [
+        "032_provider_verification.md",
+        "src/cli/provider-lifecycle-runtime.ts",
+        "src/cli/provider-settings.ts",
+        "src/cli/provider-batch.ts",
+        "tests/cli/cli-provider-sync-result.test.ts"
+      ],
+      "task": "set-P02 — Add a preset/custom provider; enable canonical OpenAI account provider",
+      "existingCli": "provider add P [--adapter A --base-url U --api-key ... --default-model M --allow-private-network --force --set-default --sync]; provider edit openai --enabled on",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P03",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp3",
+      "evidence": [
+        "032_provider_verification.md",
+        "src/cli/provider-lifecycle-runtime.ts",
+        "src/cli/provider-settings.ts",
+        "src/cli/provider-batch.ts",
+        "tests/cli/cli-provider-sync-result.test.ts"
+      ],
+      "task": "set-P03 — Edit provider transport, discovery, default model, note, network permission",
+      "existingCli": "provider edit/update P --adapter A --base-url U --default-model M\\|- --auth-mode MODE\\|- --note TEXT\\|- --api-key-transport MODE\\|- --enabled on\\|off --live-models on\\|off --allow-private-network on\\|off",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P04",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp3",
+      "evidence": [
+        "032_provider_verification.md",
+        "src/cli/provider-lifecycle-runtime.ts",
+        "src/cli/provider-settings.ts",
+        "src/cli/provider-batch.ts",
+        "tests/cli/cli-provider-sync-result.test.ts"
+      ],
+      "task": "set-P04 — Configure and inspect request pacing",
+      "existingCli": "inspect pacing --name P --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P05",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp3",
+      "evidence": [
+        "032_provider_verification.md",
+        "src/cli/provider-lifecycle-runtime.ts",
+        "src/cli/provider-settings.ts",
+        "src/cli/provider-batch.ts",
+        "tests/cli/cli-provider-sync-result.test.ts"
+      ],
+      "task": "set-P05 — Enable/disable, choose default, remove provider",
+      "existingCli": "provider edit P --enabled on\\|off; provider set-default P; provider remove P",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P06",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-P06 — Change OpenAI account mode",
+      "existingCli": "provider account-mode pool\\|direct --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P07",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp3",
+      "evidence": [
+        "032_provider_verification.md",
+        "src/cli/provider-lifecycle-runtime.ts",
+        "src/cli/provider-settings.ts",
+        "src/cli/provider-batch.ts",
+        "tests/cli/cli-provider-sync-result.test.ts"
+      ],
+      "task": "set-P07 — Atomically edit provider JSON",
+      "existingCli": "config import exists but is not provider-editor CAS parity",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P08",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-P08 — Check provider connectivity",
+      "existingCli": "provider test P --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P09",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-P09 — Inspect provider quota/capacity/usage",
+      "existingCli": "provider quota [--refresh] --json; account list P --quota [--refresh] --json; usage --range 30d --surface codex\\|all --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P10",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-P10 — OAuth login, add another account, reauthenticate, submit callback, cancel, logout",
+      "existingCli": "account login P [--reauth --id I] [--no-wait]; account reauth/code/cancel; login P (local); logout P --json (local)",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P11",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-P11 — Kiro native device login",
+      "existingCli": "account login kiro --method builder-id\\|google\\|github [--no-wait] --json; account cancel kiro --flow F --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P12",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-P12 — Manage OAuth account roster",
+      "existingCli": "account list/current/use P I; account alias P I TEXT\\|-; account pause/resume P I; account remove P I --yes; all support --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P13",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-P13 — Import Antigravity accounts",
+      "existingCli": "account import google-antigravity --format cockpit-tools --file F\\|--stdin --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P14",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-P14 — Manage API-key pool",
+      "existingCli": "account list/use P I; account add-key P [--label L] (stdin); account alias P I TEXT\\|-; account remove P I --yes --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P15",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-P15 — Set account-pool strategy and thresholds",
+      "existingCli": "account strategy P STRATEGY; account sticky P N; account auto-switch P on\\|off\\|threshold N\\|status; account routes anthropic ...",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P16",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-P16 — Set per-Anthropic-account auto-switch override",
+      "existingCli": "account auto-switch anthropic status\\|on\\|off\\|inherit\\|threshold N --account I --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P17",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp3",
+      "evidence": [
+        "032_provider_verification.md",
+        "src/cli/provider-lifecycle-runtime.ts",
+        "src/cli/provider-settings.ts",
+        "src/cli/provider-batch.ts",
+        "tests/cli/cli-provider-sync-result.test.ts"
+      ],
+      "task": "set-P17 — Control xAI Responses opt-in and model Fast variants",
+      "existingCli": "provider edit xai --xai-chat on\\|off --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P18",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-P18 — Inspect/redeem Grok reset coupons",
+      "existingCli": "account grok-reset-coupons [I] [--consume --yes --token-id T --operation-id UUID] --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P19",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-P19 — Inspect/redeem Anthropic reset grants",
+      "existingCli": "No Anthropic grant read command in account-auth dispatcher; Grok/Codex reset commands target different contracts",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-P20",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-P20 — Choose whether OAuth launches browser on proxy host",
+      "existingCli": "account login currently omits openBrowser; GUI local preference feeds request field",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A01",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-A01 — Inspect/refresh account readiness, quotas and active selection",
+      "existingCli": "account list openai --quota [--refresh] --json; account current openai --json; account refresh openai --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A02",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-A02 — Add/re-authenticate pool account with browser or device flow",
+      "existingCli": "account login openai --id I --reauth --device --no-wait --json; account code/cancel openai --flow F",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A03",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-A03 — Reauthenticate native main in place",
+      "existingCli": "account main reauth --device [--no-wait] --json; account main reauth status\\|cancel --flow F --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A04",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-A04 — Select active account, rename, remove",
+      "existingCli": "account current/use/clear openai; account alias openai I TEXT\\|-; account remove openai I --yes --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A05",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-A05 — Pause/resume, pause exhausted accounts, set priority",
+      "existingCli": "account pause/resume openai I; account pause-exhausted openai; account priority openai I N\\|first\\|earlier\\|normal\\|later\\|last\\|reset --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A06",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-A06 — Set per-account auto-switch threshold",
+      "existingCli": "account auto-switch openai on\\|off\\|threshold N\\|status is pool-wide only",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A07",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-A07 — Permit paid credits after quota exhaustion",
+      "existingCli": "Only generic config fallback; no account-auth/extended credits policy handler",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A08",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-A08 — Inspect/redeem Codex reset credits",
+      "existingCli": "account reset-credits I\\|main [--consume --yes --operation-id UUID] --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A09",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-A09 — Configure quota-window activation and credit display",
+      "existingCli": "system settings --json reads settings; account refresh handles immediate refresh only",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A10",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-A10 — Native-main profile inventory, register, switch/recover",
+      "existingCli": "account main list\\|doctor\\|register LABEL\\|switch I --yes\\|recover [--rollback --yes] --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A11",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-A11 — Account-picker setting and main hard lock",
+      "existingCli": "system settings --json reads values",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A12",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-A12 — Read prompt layer stack and effective prompt text",
+      "existingCli": "inspect codex-prompt --json; inspect codex-prompt --text (mutually exclusive)",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A13",
+      "domain": "settings",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "set-A13 — Toggle/edit/order custom prompt layers and base variants",
+      "existingCli": "inspect codex-prompt is read-only",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A14",
+      "domain": "settings",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "set-A14 — Adopt existing prompt configuration or repair prompt drift",
+      "existingCli": "inspect codex-prompt can expose drift",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A15",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-A15 — Enable default-mode request-user-input",
+      "existingCli": "agent request-user-input [on\\|off] --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-A16",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-A16 — Toggle Ultra Fast tier",
+      "existingCli": "system settings --json reads ultraFastTier",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M01",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-M01 — Inspect catalog, exposed selection, context limits and provider metadata",
+      "existingCli": "models live --provider P --json; models selected P; models context status; models preset show; models new-policy; alias list; inspect config/catalog",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M02",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-M02 — Show/hide selected models or all models of one provider",
+      "existingCli": "models enable\\|disable P/M [--native] --json; models provider P on\\|off --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M03",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-M03 — Choose curated/provider model preset and default policy for newly discovered models",
+      "existingCli": "models preset show [--provider P]; models preset apply P [--all]; models new-policy on\\|off [--provider P]; models new-arrivals --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M04",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-M04 — Edit provider/model aliases and default alias policy",
+      "existingCli": "alias list; alias set P\\|P/M ALIAS; alias rm P\\|P/M; alias defaults on\\|off [--provider P] --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M05",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp4",
+      "evidence": [
+        "042_models_verification.md",
+        "src/cli/models-custom-runtime.ts",
+        "src/cli/models-order.ts",
+        "src/cli/route-policy-write.ts",
+        "tests/cli/cli-combo-parity.test.ts"
+      ],
+      "task": "set-M05 — Edit/reset model display label and cost override",
+      "existingCli": "models price P/M; models set-price P/M --input N --output N [--cache-read N --cache-write N] or --auto; custom models edit --display-name only",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M06",
+      "domain": "settings",
+      "baseline": "UNKNOWN",
+      "status": "complete",
+      "unit": "wp4",
+      "evidence": [
+        "042_models_verification.md",
+        "src/cli/models-custom-runtime.ts",
+        "src/cli/models-order.ts",
+        "src/cli/route-policy-write.ts",
+        "tests/cli/cli-combo-parity.test.ts"
+      ],
+      "task": "set-M06 — Create/edit/delete custom model definitions",
+      "existingCli": "models add P M --display-name --context-window --modalities --reasoning-efforts --default-reasoning-effort; models list-custom --json; models edit ID ...; models remove ID\\|P/M --yes",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M07",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-M07 — Override/restore discovered-model capability metadata",
+      "existingCli": "models set P/M --context-window N\\|0\\|- --modalities CSV\\|- --reasoning-efforts CSV\\|\"\"\\|- --default-reasoning-effort LEVEL\\|-; --reset --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M08",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp3",
+      "evidence": [
+        "032_provider_verification.md",
+        "src/cli/provider-lifecycle-runtime.ts",
+        "src/cli/provider-settings.ts",
+        "src/cli/provider-batch.ts",
+        "tests/cli/cli-provider-sync-result.test.ts"
+      ],
+      "task": "set-M08 — Override provider/per-model advertised context window",
+      "existingCli": "models set P/M --context-window N\\|0\\|- covers per-model override",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M09",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-M09 — Configure context caps: per-provider, global default, apply/remove all",
+      "existingCli": "models context status; models context value N [--set-all]; models context provider P on\\|off [--value N]; models context all on\\|off --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M10",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp4",
+      "evidence": [
+        "042_models_verification.md",
+        "src/cli/models-custom-runtime.ts",
+        "src/cli/models-order.ts",
+        "src/cli/route-policy-write.ts",
+        "tests/cli/cli-combo-parity.test.ts"
+      ],
+      "task": "set-M10 — Configure picker order manually or by ranking policy",
+      "existingCli": "agent subagents status shows picker fields; agent subagents set writes featured models only",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M11",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-M11 — Show generated Fast catalog rows",
+      "existingCli": "system settings --json reads fastRows",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M12",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-M12 — Configure shadow-call interception target",
+      "existingCli": "models shadow status; models shadow set M\\|- --enabled on\\|off --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-M13",
+      "domain": "settings",
+      "baseline": "UNKNOWN",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-M13 — Configure multi-agent surface and per-session thread limit",
+      "existingCli": "v2 status; v2 mode v1\\|default\\|v2; v2 keep-native-v1 on\\|off; v2 threads N (local, prose output)",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-C01",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-C01 — Inspect combos, target inventory, quota and catalog exposure",
+      "existingCli": "combo list/show I; models live; inspect config; provider quota --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-C02",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp4",
+      "evidence": [
+        "042_models_verification.md",
+        "src/cli/models-custom-runtime.ts",
+        "src/cli/models-order.ts",
+        "src/cli/route-policy-write.ts",
+        "tests/cli/cli-combo-parity.test.ts"
+      ],
+      "task": "set-C02 — Create/edit/rename/remove combo and target policy",
+      "existingCli": "combo set\\|create\\|update I --targets P/M[:W],... --strategy S --sticky N\\|- --effort E\\|- --alias A\\|- --native-alias --display-name TEXT\\|- --decision-provider P\\|- --decision-model M\\|- --decision-timeout N\\|- --rename-from OLD; remove I --yes",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-C03",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-C03 — Probe selected JEV decision backend",
+      "existingCli": "combo test [--combo I] [--decision-provider P\\|--decision-model M] [--decision-timeout N] --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-C04",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-C04 — Explain a saved combo's protocol behavior",
+      "existingCli": "api protocols --json; api explain --model combo/I --inbound responses\\|chat\\|messages --feature F[,F] ... --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-C05",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp4",
+      "evidence": [
+        "042_models_verification.md",
+        "src/cli/models-custom-runtime.ts",
+        "src/cli/models-order.ts",
+        "src/cli/route-policy-write.ts",
+        "tests/cli/cli-combo-parity.test.ts"
+      ],
+      "task": "set-C05 — Inspect JEV combo decision outcomes, tokens and evidence coverage",
+      "existingCli": "usage --range ... --model combo/I exists but returns ordinary usage",
+      "sourceInventory": "004_settings_coverage.md",
+      "disposition": "Source revalidation found no monetary cost/savings baseline in the GUI DTO. CLI preserves actual decision/token/coverage/nullable/incomplete statistics without inventing savings."
+    },
+    {
+      "id": "set-R01",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-R01 — Inspect routing profiles, candidates, scoring and compatibility suite choices",
+      "existingCli": "route policy list/show I --json; inspect routing-analytics --json; models live; lab catalog --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-R02",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp4",
+      "evidence": [
+        "042_models_verification.md",
+        "src/cli/models-custom-runtime.ts",
+        "src/cli/models-order.ts",
+        "src/cli/route-policy-write.ts",
+        "tests/cli/cli-combo-parity.test.ts"
+      ],
+      "task": "set-R02 — Create/update/remove routing profile",
+      "existingCli": "route policy only list/show/dry-run/evaluate",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-R03",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-R03 — Dry-run a saved route against requirements",
+      "existingCli": "route policy dry-run\\|evaluate I --model-context N --tools --image --structured-output --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-S01",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-S01 — Choose/reorder featured subagent roster",
+      "existingCli": "agent subagents\\|roster status\\|set CSV\\|clear --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-S02",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-S02 — Force subagent model and configure fallback chain",
+      "existingCli": "agent subagents force M\\|-; agent fallback status\\|set [CSV] [--poll-ms 5000..600000]\\|clear --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-S03",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-S03 — Configure delegation guidance/default model/effort and synchronize defaults",
+      "existingCli": "agent injection\\|guidance set --model M\\|- --effort E\\|- --guidance on\\|off; status --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-S04",
+      "domain": "settings",
+      "baseline": "UNKNOWN",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "set-S04 — Set delegation mode and editable proactive hint",
+      "existingCli": "v2 mode v1\\|default\\|v2; v2 mode-hint TEXT; v2 mode-hint --clear; v2 status (local)",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-S05",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-S05 — Ask for delegation model recommendation, then separately apply",
+      "existingCli": "agent injection suggest WORK [--model SIZING_MODEL] [--apply] --json; agent injection set --model M --effort E",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-K01",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-K01 — Inspect/filter/paginate compatibility verdicts and subjects",
+      "existingCli": "lab status; lab verdicts --subject --layer --suite --verdict --limit --cursor; lab subjects --limit --cursor --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-K02",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-K02 — Inspect one verdict's evidence lineage and production context",
+      "existingCli": "lab subject I; observations --subject I --layer L --suite T --limit --cursor; event I; artifact D; production-signals --subject I --limit --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-K03",
+      "domain": "settings",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-K03 — Filter protocol pairs and view community trust context",
+      "existingCli": "lab subject I --json; lab public community --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-K04",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-K04 — Inspect provider upstream wire/protocol and conversion plan",
+      "existingCli": "api protocols [--provider P] --json; api explain --model M --inbound PROTOCOL [--feature F] --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "set-K05",
+      "domain": "settings",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "set-K05 — Control protocol exposure/rollout",
+      "existingCli": "api policy --messages on\\|off --unrepresentable legacy\\|reject --rollout SWITCH=on\\|off ... --json",
+      "sourceInventory": "004_settings_coverage.md"
+    },
+    {
+      "id": "ops-D01",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp7",
+      "evidence": [],
+      "task": "ops-D01 — Read live health/version/uptime and provider overview; `gui/src/pages/dashboard-core-poll.ts:275`",
+      "existingCli": "status --json; health --json; system status --json",
+      "sourceInventory": "005_operations_coverage.md",
+      "disposition": "Included task; target/contract resolved in operational crux decision."
+    },
+    {
+      "id": "ops-D02",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D02 — Read model catalog and 30d usage; `gui/src/pages/dashboard-core-poll.ts:135`, `:142`",
+      "existingCli": "models live --json; usage --range 30d --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D03",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D03 — Read runtime/client preferences; `gui/src/pages/dashboard-core-poll.ts:218`",
+      "existingCli": "system settings --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D04",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D04 — Set Codex autostart; `gui/src/pages/use-dashboard-data.ts:753`, `:777`",
+      "existingCli": "system settings --auto-start on/off --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D05",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D05 — Set Desktop authless / client compaction; `gui/src/pages/use-dashboard-data.ts:768`, `:778`",
+      "existingCli": "system settings --desktop-authless on/off --client-compaction on/off --json; then system sync --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D06",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D06 — Sync client catalogs/configuration; `gui/src/pages/use-dashboard-data.ts:790`, `:796`",
+      "existingCli": "system sync --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D07",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D07 — Read project-config warnings; `gui/src/pages/dashboard-core-poll.ts:126`",
+      "existingCli": "system diagnostics --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D08",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D08 — Read startup protection; `gui/src/pages/dashboard-core-poll.ts:104`; `gui/src/pages/Startup.tsx:140`",
+      "existingCli": "system startup health/status --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D09",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D09 — Read memory/storage pressure and active turns; `gui/src/components/MemoryObservabilityCard.tsx:243`",
+      "existingCli": "observe memory --json; memory --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D10",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D10 — Drain and restart proxy; `gui/src/components/MemoryObservabilityCard.tsx:359`",
+      "existingCli": "restart",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D11",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D11 — Check latest/preview package update; `gui/src/pages/use-dashboard-data.ts:824`",
+      "existingCli": "system update check --channel latest/preview --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D12",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D12 — Run package update, optionally restart; `gui/src/pages/use-dashboard-data.ts:909`",
+      "existingCli": "system update run --channel latest/preview --restart on/off --yes --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D13",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D13 — Observe update job; `gui/src/pages/use-dashboard-data.ts:493`",
+      "existingCli": "system update status JOB-ID --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D14",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-D14 — Desktop-shell update navigation; `gui/src/pages/use-dashboard-data.ts:6` (openDesktopUpdatePage dependency), `gui/src/pages/dashboard-overview-sections.tsx:220`",
+      "existingCli": "Desktop update UI panel",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D15",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "ops-D15 — Web search sidecar off/on/model/stream; `gui/src/pages/dashboard-overview-sections.tsx:585`, `:606`; save `gui/src/pages/use-dashboard-data.ts:563`",
+      "existingCli": "agent sidecar web --model ID --backend BACKEND --enabled on/off --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D16",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "unit": "wp5",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "task": "ops-D16 — Vision sidecar off/on/model/reasoning/limits/timeout; `gui/src/pages/dashboard-overview-sections.tsx:467`, `:480`, `:628`, `:648`",
+      "existingCli": "agent sidecar vision --model ID --backend BACKEND --reasoning LEVEL --max-descriptions N --enabled on/off --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D17",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-D17 — Shadow-call interception toggle/model; `gui/src/pages/dashboard-overview-sections.tsx:716`, `:728`; save `gui/src/pages/use-dashboard-data.ts:610`",
+      "existingCli": "models shadow status --json; models shadow set MODEL --enabled on/off --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-D18",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-D18 — Multi-agent mode/advisory, injection/guidance/defaults, effort caps; `gui/src/pages/use-dashboard-data.ts:640`, `:679`, `:727`; `gui/src/pages/dashboard-overview-sections.tsx:78`, `:103`",
+      "existingCli": "v2; agent injection/effort/subagents/roles",
+      "sourceInventory": "005_operations_coverage.md",
+      "aliasOf": [
+        "set-M13",
+        "set-S03",
+        "set-S04",
+        "set-S01",
+        "set-S02",
+        "set-S06",
+        "set-S07"
+      ]
+    },
+    {
+      "id": "ops-S01",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-S01 — Install service / repair service / install shim; `gui/src/pages/Startup.tsx:290`, `:294`",
+      "existingCli": "service install; service repair; codex-shim install; system startup install-service/install-shim --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-S02",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-S02 — Windows tray status; `gui/src/pages/Startup.tsx:176`",
+      "existingCli": "tray status --json; inspect windows-tray --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-S03",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-S03 — Windows tray install/start/stop/uninstall; `gui/src/pages/Startup.tsx:268`",
+      "existingCli": "tray install/start/stop/uninstall --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-S04",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-S04 — Connected-machine shim status/install/repair/uninstall; `gui/src/pages/Startup.tsx:97`, `:104`",
+      "existingCli": "codex-shim status/install/uninstall",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-S05",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-S05 — Read connected-machine selected clients / sync them; `gui/src/pages/Integrations.tsx:62`, `:72`",
+      "existingCli": "sync on connected machine",
+      "sourceInventory": "005_operations_coverage.md",
+      "disposition": "Existing status selectedClients and syncConnectedClient are the same GUI task; discovery proof."
+    },
+    {
+      "id": "ops-C01",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-C01 — Read Claude Code effective state/model choices; `gui/src/pages/ClaudeCode.tsx:88`",
+      "existingCli": "claude config status --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C02",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-C02 — Enable/disable Claude connection immediately; `gui/src/pages/ClaudeCode.tsx:166`; `gui/src/pages/use-claude-connection.ts:2`",
+      "existingCli": "integration native claude on/off --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C03",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-C03 — Enable/disable CLI first-party proxy environment; `gui/src/pages/ClaudeCode.tsx:178`",
+      "existingCli": "claude config set --first-party on/off --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C04",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-C04 — Save Code behavior/auth/env/model mappings/helpers; `gui/src/pages/ClaudeCode.tsx:217`",
+      "existingCli": "claude config set --enabled --auth-mode --system-env --fast-mode --auto-context --compact-window --inject-agents --small-fast-model --model-map --web-model --web-backend --vision-model --vision-backend",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C05",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-C05 — Start configured Claude intercept; `gui/src/components/ClaudeInterceptStart.tsx:18`",
+      "existingCli": "claude intercept start --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C06",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-C06 — Read Desktop editable profile/catalog and applied health; `gui/src/pages/ClaudeDesktop.tsx:270`, `:354`",
+      "existingCli": "claude desktop status --json; claude desktop show --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C07",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-C07 — Edit Desktop assignment family/alias/default and save; `gui/src/pages/ClaudeDesktop.tsx:24`, `:418`, `:806`, `:826`",
+      "existingCli": "claude desktop move ROUTE FAMILY [--default]; default FAMILY ROUTE-or-none; import FILE",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C08",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-C08 — Save then apply Desktop first-party/gateway; `gui/src/pages/ClaudeDesktop.tsx:433`",
+      "existingCli": "claude desktop apply --first-party; apply --gateway",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C09",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-C09 — Bind/unbind native picker ID to route; `gui/src/components/ClaudeFirstPartyBindings.tsx:59`",
+      "existingCli": "claude desktop bind PICKER-ID ROUTE; unbind PICKER-ID",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C10",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-C10 — Enable/disable Desktop picker proxy; `gui/src/components/ClaudeDesktopPicker.tsx:97`",
+      "existingCli": "claude desktop picker status/on/off",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C11",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-C11 — Export Desktop profile JSON; `gui/src/pages/ClaudeDesktop.tsx:468`",
+      "existingCli": "claude desktop export PATH-or-dash",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-C12",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-C12 — Import Desktop profile JSON; `gui/src/pages/ClaudeDesktop.tsx:480`",
+      "existingCli": "claude desktop import FILE [--apply]",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-G01",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-G01 — Read Grok fence/catalog/status; `gui/src/pages/Grok.tsx:81`",
+      "existingCli": "grok status/show --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-G02",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-G02 — Save included/excluded Grok model selection; `gui/src/pages/Grok.tsx:151`",
+      "existingCli": "grok set/include/exclude CSV --json; grok clear --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-G03",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-G03 — Save and apply Grok fence; `gui/src/pages/Grok.tsx:171`",
+      "existingCli": "grok set CSV --json; then grok apply --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I01",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-I01 — List native integration desired/observed state; `gui/src/pages/integrations/native-api.ts:144`; overview `IntegrationsOverview.tsx:605`",
+      "existingCli": "integration native list --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I02",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-I02 — Toggle native Grok / Codex / Claude Desktop; `gui/src/pages/integrations/native-api.ts:155`; overview `IntegrationsOverview.tsx:604`",
+      "existingCli": "integration native grok/codex/claude-desktop on/off --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I03",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-I03 — List file-client state / inspect one; `gui/src/pages/integrations/integration-api.ts:435`, `:441`",
+      "existingCli": "integration client status/list/show [--client ID] --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I04",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-I04 — Preview apply / overwrite / disable; `gui/src/pages/integrations/FileIntegrationPage.tsx:219`; `integration-api.ts:475`",
+      "existingCli": "Existing apply/disable at I05",
+      "sourceInventory": "005_operations_coverage.md",
+      "disposition": "Included preview task; interactive-preview exemption is not a consent prohibition."
+    },
+    {
+      "id": "ops-I05",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-I05 — Apply / overwrite conflicting config / disable owned block; `gui/src/pages/integrations/FileIntegrationPage.tsx:251`; `integration-api.ts:512`",
+      "existingCli": "integration client enable/disable --client ID [--overwrite-conflict] --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I06",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-I06 — Set/clear per-model Droid reasoning defaults; `gui/src/pages/integrations/DroidReasoningDefaultsPanel.tsx:27`, `:38`",
+      "existingCli": "integration client enable --client droid",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I07",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-I07 — Read rollback journal; `gui/src/pages/integrations/integration-api.ts:454`",
+      "existingCli": "integration client history/journal [--client ID] --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I08",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-I08 — Preview rollback, including drift-confirmed retry; `gui/src/pages/integrations/RestoreDialog.tsx:143`; `integration-api.ts:496`",
+      "existingCli": "integration client restore --op ID [--confirm-drift]",
+      "sourceInventory": "005_operations_coverage.md",
+      "disposition": "Included preview task; interactive-preview exemption is not a consent prohibition."
+    },
+    {
+      "id": "ops-I09",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-I09 — Restore rollback snapshot; `gui/src/pages/integrations/RestoreDialog.tsx:191`; `integration-api.ts:543`",
+      "existingCli": "integration client restore --op ID [--confirm-drift] --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I10",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-I10 — Retire older rollback entry/snapshot; `gui/src/pages/integrations/FileIntegrationPage.tsx:446`; overview `IntegrationsOverview.tsx:851`; `integration-api.ts:571`",
+      "existingCli": "history and restore only",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I11",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-I11 — Disable all eligible file integrations; `gui/src/pages/integrations/IntegrationsOverview.tsx:443`, `:460`, `:512`",
+      "existingCli": "Repeat integration client disable --client ID for explicit set",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I12",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-I12 — List Aside profiles / read one / toggle selected profile; `gui/src/pages/integrations/AsideProfilesPage.tsx:54`, `:89`, `:116`; `integration-api.ts:424`",
+      "existingCli": "integration client status/enable/disable --client aside --profile N --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I13",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-I13 — Aside profile rollback list/preview/restore/retire; `gui/src/pages/integrations/integration-api.ts:465`, `:503`, `:550`, `:585`",
+      "existingCli": "history --client aside --profile N; restore --client aside --profile N --op ID [--confirm-drift]",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I14",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-I14 — Refresh all server-selected Aside profiles; `gui/src/pages/integrations/aside-profile-api.ts:38`",
+      "existingCli": "sync reaches refreshAsideProfilesThroughServer",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I15",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-I15 — Inspect Cursor installed builds/gateway/last-seen state; `gui/src/pages/integrations/CursorIntegrationPage.tsx:113`; `cursor-api.ts:34`",
+      "existingCli": "integration native list/on/off; Cursor advertised only",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-I16",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-I16 — Check advertised Cursor local installer; `gui/src/pages/integrations/CursorIntegrationPage.tsx:81`; `cursor-api.ts:59`",
+      "existingCli": "No Cursor installer-read command",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O01",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-O01 — Read debug flags/env/runtime overrides; `gui/src/pages/Debug.tsx:48`",
+      "existingCli": "observe debug --json; debug SCOPE status",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O02",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-O02 — Toggle provider/usage/injection/Claude inbound capture; `gui/src/pages/Debug.tsx:180`, `:210`",
+      "existingCli": "debug provider/usage/injection/claude on/off",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O03",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-O03 — Reset all capture overrides to env; `gui/src/pages/Debug.tsx:213`",
+      "existingCli": "debug provider reset; debug usage reset; debug injection reset; debug claude reset",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O04",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp7",
+      "evidence": [],
+      "task": "ops-O04 — Read/follow provider, usage, injection debug buffers; `gui/src/pages/Debug.tsx:97`, `:115`",
+      "existingCli": "debug provider logs -f; debug usage logs -f; observe injection --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O05",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-O05 — Read Claude inbound metadata captures; `gui/src/pages/Debug.tsx:65`",
+      "existingCli": "observe claude-inbound --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O06",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "pending",
+      "unit": "wp7",
+      "evidence": [],
+      "task": "ops-O06 — Read/retry/incrementally poll request log; `gui/src/pages/Logs.tsx:614`",
+      "existingCli": "logs --limit 2000 --json; logs --follow --jsonl",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O07",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-O07 — Filter log snapshot by surface/model/provider/status/time/speed/interception/conversation/protocol; `gui/src/pages/Logs.tsx:728`; `gui/src/pages/logs-filter.ts:16`, `:103`",
+      "existingCli": "logs has provider/model/status/conversation/account filters",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O08",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp7",
+      "evidence": [],
+      "task": "ops-O08 — Read usage by preset/custom window, surface and local-machine attribution; `gui/src/pages/Usage.tsx:1110`",
+      "existingCli": "usage --range --surface --since --until --provider --model --json",
+      "sourceInventory": "005_operations_coverage.md",
+      "disposition": "Included task; target/contract resolved in operational crux decision."
+    },
+    {
+      "id": "ops-O09",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-O09 — Model text search, expand rows, tab and chart display; `gui/src/pages/Usage.tsx:1093`; chart components",
+      "existingCli": "No CLI task needed",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O10",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-O10 — Read companion preferences/presence; `gui/src/pages/usage-companion-panel.tsx:215`; Tray `gui/src/pages/Tray.tsx:100`",
+      "existingCli": "companion show --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O11",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-O11 — Persist companion model/provider visibility and chart/menu appearance; `gui/src/pages/usage-companion-panel.tsx:302`, `:503`",
+      "existingCli": "companion set KEY=VALUE ... --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O12",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-O12 — Restore companion defaults (including corrupt-state recovery); `gui/src/pages/usage-companion-panel.tsx:350`",
+      "existingCli": "companion reset --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O13",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp7",
+      "evidence": [],
+      "task": "ops-O13 — Read usage timeline for companion/chart/tray; `gui/src/pages/usage-companion-panel.tsx:257`; `gui/src/pages/Tray.tsx:118`",
+      "existingCli": "companion show/set/reset only",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O14",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-O14 — Open companion view in system browser; `gui/src/pages/usage-companion-panel.tsx:367`",
+      "existingCli": "No standalone operator equivalent required",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-O15",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-O15 — Tray refresh totals/accounts/quota; `gui/src/pages/Tray.tsx:79`, `:86`, `:104`; `gui/src/pages/tray-data.ts:27`",
+      "existingCli": "usage/companion show plus account read families",
+      "sourceInventory": "005_operations_coverage.md",
+      "aliasOf": [
+        "set-A01",
+        "set-P09",
+        "set-P12",
+        "set-P14",
+        "ops-O08",
+        "ops-O10",
+        "ops-O13"
+      ]
+    },
+    {
+      "id": "ops-O16",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-O16 — Tray switch current account/key; `gui/src/pages/Tray.tsx:39`; `gui/src/pages/tray-data.ts:36`",
+      "existingCli": "Account selection families in inventory-cli.md",
+      "sourceInventory": "005_operations_coverage.md",
+      "aliasOf": [
+        "set-A04",
+        "set-P12",
+        "set-P14"
+      ]
+    },
+    {
+      "id": "ops-T01",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-T01 — Inspect storage sizes/categories/Log Guard state; `gui/src/pages/Storage.tsx:1358`",
+      "existingCli": "storage report --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-T02",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-T02 — Preview oldest archived-session cleanup percentage; `gui/src/pages/Storage.tsx:177`",
+      "existingCli": "storage cleanup --percent N --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-T03",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-T03 — Quarantine / permanently delete previewed archives; `gui/src/pages/Storage.tsx:201`",
+      "existingCli": "storage cleanup --percent N --mode quarantine/permanent --yes --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-T04",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-T04 — List quarantine batches; `gui/src/pages/Storage.tsx:392`",
+      "existingCli": "storage trash list --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-T05",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-T05 — Restore a quarantine batch; `gui/src/pages/Storage.tsx:431`",
+      "existingCli": "storage trash restore ENTRY-ID --yes --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-T06",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-T06 — Read policy/job; `gui/src/pages/Storage.tsx:672`, `:865`",
+      "existingCli": "storage policy show --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-T07",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-T07 — Enable/disable recurring cleanup / save threshold, target, schedule, mode; `gui/src/pages/Storage.tsx:709`, `:738`",
+      "existingCli": "storage policy set --enabled --percent --mode --schedule --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-T08",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-T08 — Run cleanup policy now; `gui/src/pages/Storage.tsx:790`, `:809`",
+      "existingCli": "storage policy set EXISTING-FIELDS; policy run --yes --json; policy show --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-T09",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-T09 — Inspect log protection fresh; `gui/src/components/storage-workspace/StorageWorkspace.tsx:515`",
+      "existingCli": "storage codex-logs status --json; observe storage codex-logs status --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-T10",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-T10 — Protect logs compat / quiet; `gui/src/components/storage-workspace/StorageWorkspace.tsx:251`, `:261`, `:460`",
+      "existingCli": "storage codex-logs protect --mode compat/quiet --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-T11",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-T11 — Remove log protection / repair protection / compact logs; `gui/src/components/storage-workspace/StorageWorkspace.tsx:440`, `:463`",
+      "existingCli": "storage codex-logs unprotect/repair/compact --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-K01",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-K01 — List access keys/usage/pending rotations, endpoints, auth matrix, API/audio surfaces; `gui/src/pages/ApiKeys.tsx:155`",
+      "existingCli": "access key list --json; access endpoints --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-K02",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-K02 — Create key with name; `gui/src/pages/ApiKeys.tsx:268`",
+      "existingCli": "access key create NAME --json",
+      "sourceInventory": "005_operations_coverage.md",
+      "disposition": "Existing human-only secret-returning operation; indexed as a family handoff with safe list/get/rotation follow-ups. No agent execution recipe or consent bypass."
+    },
+    {
+      "id": "ops-K03",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp7",
+      "evidence": [],
+      "task": "ops-K03 — Rename key; `gui/src/pages/ApiKeys.tsx:327`",
+      "existingCli": "access key set edits scopes only",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-K04",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-K04 — Revoke key; `gui/src/pages/ApiKeys.tsx:302`",
+      "existingCli": "access key remove ID --yes --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-K05",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-K05 — Start rotation; `gui/src/pages/ApiKeys.tsx:349`",
+      "existingCli": "access key rotate ID --json",
+      "sourceInventory": "005_operations_coverage.md",
+      "disposition": "Existing human-only secret-returning operation; indexed as a family handoff with safe list/get/rotation follow-ups. No agent execution recipe or consent bypass."
+    },
+    {
+      "id": "ops-K06",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-K06 — Commit rotation / abort rotation; `gui/src/pages/ApiKeys.tsx:371`",
+      "existingCli": "access key rotate commit ID ROTATION-ID --json; rotate abort ID ROTATION-ID --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-K07",
+      "domain": "operations",
+      "baseline": "DISCOVERY_ONLY",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-K07 — Read public external-model catalog; `gui/src/pages/ApiKeys.tsx:192`",
+      "existingCli": "access models --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-K08",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp7",
+      "evidence": [],
+      "task": "ops-K08 — Test newly created key on Responses / Chat / Messages for selected model; `gui/src/pages/ApiKeys.tsx:443`, `:456`",
+      "existingCli": "access test MODEL --protocol responses/chat/messages --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-K09",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-K09 — Read generated client configuration / copy snippet; `gui/src/components/apikeys-workspace/ClientConfigRow.tsx:53`",
+      "existingCli": "inspect client-config --client ID --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-K10",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-K10 — Toggle public Messages API; `gui/src/pages/api-surface-cards.tsx:52`",
+      "existingCli": "api policy --messages on/off --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-K11",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-K11 — Preview model's protocol path/features; `gui/src/components/protocols/ProtocolPlanPanel.tsx` → `gui/src/protocol-api.ts:91`",
+      "existingCli": "api explain --model ID --inbound responses/chat/messages --feature FEATURE [repeated] --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-K12",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp7",
+      "evidence": [],
+      "task": "ops-K12 — Dictation file upload and cancel; `gui/src/components/apikeys-workspace/AudioApiPanel.tsx:2`; `gui/src/audio-api-client.ts:13`",
+      "existingCli": "No scoped audio CLI identified in supplied CLI inventory",
+      "sourceInventory": "005_operations_coverage.md",
+      "disposition": "Included task; target/contract resolved in operational crux decision."
+    },
+    {
+      "id": "ops-K13",
+      "domain": "operations",
+      "baseline": "UNKNOWN",
+      "status": "pending",
+      "unit": "wp7",
+      "evidence": [],
+      "task": "ops-K13 — Live voice connect/disconnect probe; `gui/src/audio-api-client.ts:88`",
+      "existingCli": "No scoped live-audio probe identified in supplied CLI inventory",
+      "sourceInventory": "005_operations_coverage.md",
+      "disposition": "Included task; target/contract resolved in operational crux decision."
+    },
+    {
+      "id": "ops-K14",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-K14 — Download generated client configuration; `gui/src/components/apikeys-workspace/ClientConfigPanel.tsx:78`",
+      "existingCli": "export --client ID --out PATH [--force] [--json]",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-R01",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-R01 — Hub devices/runtime availability/session status; `gui/src/pages/RemoteWorkspace.tsx:93`",
+      "existingCli": "remote-workspace status is executor-local",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-R02",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-R02 — Create device enrollment code; `gui/src/pages/RemoteWorkspace.tsx:172`",
+      "existingCli": "remote-workspace pair consumes enrollment code",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-R03",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-R03 — Start hub model session on selected remote root; `gui/src/pages/RemoteWorkspace.tsx:184`",
+      "existingCli": "No CLI proposed",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-R04",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-R04 — Submit prompt to bound session; `gui/src/pages/RemoteWorkspace.tsx:208`",
+      "existingCli": "No CLI proposed",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-R05",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-R05 — Stop session; `gui/src/pages/RemoteWorkspace.tsx:243`",
+      "existingCli": "No CLI proposed",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-R06",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-R06 — Revoke device and stop its sessions; `gui/src/pages/RemoteWorkspace.tsx:256`",
+      "existingCli": "No CLI proposed",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-R07",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-R07 — Read individual Hub runtimes/sessions endpoints",
+      "existingCli": "No Hub runtime/session list command",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-L01",
+      "domain": "operations",
+      "baseline": "COMPLETE",
+      "status": "complete",
+      "unit": "wp2",
+      "evidence": [
+        "022_discovery_verification.md",
+        "src/cli/capabilities.ts",
+        "skills/ocx/references/01_management_surface.md"
+      ],
+      "task": "ops-L01 — Read link topology/status; `gui/src/pages/RemoteLink.tsx:186`",
+      "existingCli": "link status --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-L02",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-L02 — Discover/rescan SSH aliases; `gui/src/pages/RemoteLink.tsx:262`",
+      "existingCli": "No CLI proposed",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-L03",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-L03 — Probe host key; `gui/src/pages/RemoteLink.tsx:282`",
+      "existingCli": "No CLI proposed",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-L04",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-L04 — Accept shown fingerprint and validate remote OCX; `gui/src/pages/RemoteLink.tsx:298`",
+      "existingCli": "No CLI proposed",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-L05",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-L05 — Home adds child; `gui/src/pages/RemoteLink.tsx:313`",
+      "existingCli": "link issue is existing lower-level admin primitive",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-L06",
+      "domain": "operations",
+      "baseline": "EXCLUDED",
+      "status": "pending",
+      "unit": "wp8",
+      "evidence": [],
+      "task": "ops-L06 — Standalone child joins Home and restarts; `gui/src/pages/RemoteLink.tsx:333`",
+      "existingCli": "No CLI proposed",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "ops-L07",
+      "domain": "operations",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "pending",
+      "unit": "wp6",
+      "evidence": [],
+      "task": "ops-L07 — Disconnect link / force-remove after remote cleanup failure; `gui/src/pages/RemoteLink.tsx:371`, `:422`",
+      "existingCli": "link revoke --link-id ID --json",
+      "sourceInventory": "005_operations_coverage.md"
+    },
+    {
+      "id": "set-S06",
+      "task": "Memory extraction and consolidation model settings",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "existingCli": "No dedicated live block writer",
+      "sourceInventory": "gui/src/pages/dashboard-overview-panels.tsx:24; gui/src/components/MemoryModelsPanel.tsx:111",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "unit": "wp5"
+    },
+    {
+      "id": "set-S07",
+      "task": "Compaction route model, effort, triggers and source scope",
+      "domain": "settings",
+      "baseline": "IMPLEMENTATION_GAP",
+      "status": "complete",
+      "existingCli": "No dedicated live block writer",
+      "sourceInventory": "gui/src/pages/dashboard-overview-panels.tsx:23; gui/src/components/CompactionRoutingPanel.tsx:180",
+      "evidence": [
+        "052_accounts_verification.md",
+        "src/cli/account-policy.ts",
+        "src/cli/account-auth.ts",
+        "src/cli/agent-settings.ts",
+        "src/cli/agent-runtime-settings.ts",
+        "src/cli/system-settings-parity.ts",
+        "src/cli/v2-runtime.ts",
+        "tests/cli/cli-account-policy.test.ts",
+        "tests/cli/cli-v2-runtime.test.ts"
+      ],
+      "unit": "wp5"
+    }
   ]
 }

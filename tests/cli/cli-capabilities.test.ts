@@ -217,14 +217,12 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "PATCH /api/oauth/accounts/pool",
   "POST /api/codex-auth/accounts",
   "POST /api/model-discovery/acknowledge",
-  "POST /api/oauth/logout",
   "POST /api/stop",
   "POST /api/system/restart",
   "POST /api/windows-tray",
   "PUT /api/claude-desktop",
   "PUT /api/codex-auth/failover",
   "PUT /api/disabled-models",
-  "PUT /api/v2",
 ];
 
 describe("capability/route parity is bidirectional", () => {

@@ -397,6 +397,27 @@ not fabricate official-client metadata. Doctor never mutates credentials or appl
 
 ## Catalog sync
 
+### Read saved state separately from synchronization
+
+Model, provider, settings and v2 receipts have different completion contracts.
+Local custom-model changes opportunistically sync: no proxy means a successful
+save, `needsSync:true`, `sync.status:"not-attempted"` and exit 0. An explicit local
+provider `--sync` without a proxy instead returns nonzero after saving.
+
+Settings writes use `catalogRefreshPending`, while live v2/catalog writes use a
+full `catalogRefresh` disposition. Local v2 mode/keep-native and changed on/off
+still attempt their established sync even when no port was discovered. JSON
+reports actual changed state and sync evidence; unverified/failed sync is nonzero.
+Threads/hints and unchanged on/off do not introduce a new sync attempt.
+
+Inspect the same target with `ocx v2 status --json` or `ocx v2 status --live --json`,
+and use `ocx system settings --json` for settings read-back. A saved-but-pending or
+unknown outcome does not prove rollback and is not permission to replay a write.
+See [v2 outcomes](/reference/cli/agents/#explicit-v2-target-and-outcome) and
+[account policy](/reference/cli/providers-accounts/#pool-policy-account-thresholds-and-paid-credit-intent)
+for target, scope and spending boundaries. A reset-grant status read can contact
+upstream status but never consumes or resumes a grant.
+
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.

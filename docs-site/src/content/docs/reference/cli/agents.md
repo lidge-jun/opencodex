@@ -7,7 +7,7 @@ These commands control agent policy and routing, inspect the live proxy, and con
 
 ## Agent policy
 
-### `ocx agent <status|injection|effort|subagents|fallback|roles|sidecar> ...`
+### `ocx agent <status|injection|effort|subagents|fallback|roles|sidecar|memory-models|compaction-routing> ...`
 
 Manage the headless multi-agent roster, effort caps, prompt injection, fallback, and sidecar settings.
 Use `status` for the current policy. See [Sub-agent surfaces](/guides/sub-agent-surface/) for how
@@ -68,6 +68,71 @@ otherwise) and points at `ocx sync` when it could not happen; a save that leaves
 where it was has nothing to report and prints no `Codex config:` line. The flag works for
 `vision` too.
 
+### Injection defaults and sidecar runtime settings
+
+```bash
+ocx agent injection status --json
+ocx agent injection set --sync-codex-defaults off --json
+ocx agent injection status --json
+ocx agent sidecar web --stream-routed-output on --json
+ocx agent sidecar vision --timeout-ms 30000 --json
+ocx agent sidecar status --json
+```
+
+Run writes only for the requested change. Injection `--sync-codex-defaults on|off`
+updates `syncCodexSubagentDefaults`; omitted model/effort/prompt/guidance stay intact,
+and `-` clears model/effort/prompt. The receipt has actual normalized
+`model`, `effort`, `prompt`, `multiAgentGuidanceEnabled` and
+`syncCodexSubagentDefaults`, not a fabricated catalog result.
+
+Web `--reasoning` remains supported. `--max-descriptions` and `--timeout-ms` are
+vision-only; timeout accepts integers from 1 to 2147483647 milliseconds.
+`--stream-routed-output` is web-only. Partial writes preserve sibling settings.
+The new-option receipt exposes only the selected public `webSearch` or `vision`
+state and `codexWebSearch` apply report. `{applied:false, reason, retryable}`
+distinguishes native apply deferral/refusal from a saved setting; a missing or
+mismatched new setting is unverified and nonzero. Read status for full observed
+settings, including web reasoning. Do not retry blindly on ownership refusal.
+
+### Memory and compaction routing overrides
+
+```bash
+ocx agent memory-models show --json
+ocx agent memory-models set --extract-model <route> --extract-effort high --consolidation-model <route> --json
+ocx agent memory-models show --json
+ocx agent compaction-routing show --json
+ocx agent compaction-routing set --model <route> --effort high --triggers manual,auto --sources '<exact-source>,<provider>/*' --json
+ocx agent compaction-routing show --json
+```
+
+Each set replaces the entire block. Memory accepts extract/consolidation model
+and optional effort pairs; an effort without that phase's model is refused.
+Omitted phases use their existing/default route, not a stopped pipeline.
+`--file memory.json` instead reads the block itself:
+
+```json
+{"extract":{"model":"example/model","reasoningEffort":"high"}}
+```
+
+An explicit memory file `{}` is valid and remains an empty override block;
+`ocx agent memory-models clear --json` writes null. Both mean no custom override,
+not disabled memory processing. File mode is exclusive with scalar options.
+Regular UTF-8 files or piped `--file -` use the 4 MiB/30-second bounded-input
+contract, including a 4 MiB serialized request limit.
+
+Compaction files contain required `model`, optional `reasoningEffort`, `triggers`
+and `sourceModels`. Triggers are unique `manual`/`auto`; source selectors must be
+exact and unique, or provider/* patterns. Omitted triggers use server defaults;
+omitted sources select all sources, not the previous custom scope.
+`ocx agent compaction-routing clear --json` writes null and restores ordinary
+compaction routing without disabling compaction. No synthetic model call verifies
+these saves.
+
+Reads return only `{memoryModels: blockOrNull}` or `{compactionRouting: blockOrNull}`.
+Writes add `catalogRefreshPending`: false exits 0 without promising every client
+applied, true exits 1 after saving. Missing/malformed pending evidence is null with
+`verification:"unverified"` and exit 1. Read back before recovery.
+
 ### `ocx effort [status|set|clear]`
 
 Inspect or change main and subagent reasoning-effort caps through the live proxy, or the local
@@ -92,13 +157,14 @@ for the request surfaces where caps apply.
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
-These are local controls with human output; do not append `--json`. Re-read
-`ocx v2 status` after a change and distinguish stored settings from new-session behavior.
+These operate locally by default. `--live` uses the selected running proxy with no
+local fallback; both targets support `--json`. Re-read status on the same target
+after a change and distinguish stored settings from new-session behavior.
 
 | Subcommand | Action |
 | --- | --- |
 | `status` (default) | Report the current v2 flag, multi-agent mode, and thread concurrency. |
-| `on` | Enable the global `multi_agent_v2` feature and resync the catalog. Rejected while the v2 hybrid pin is active because the global override would defeat it. |
+| `on` | Enable the global `multi_agent_v2` feature; local changes resync the catalog. Rejected while the v2 hybrid pin is active because the global override would defeat it. |
 | `off` | Disable the `multi_agent_v2` feature and resync the catalog. |
 | `mode v1` | Force all models to v1, disable native v2, and preserve the active thread limit. |
 | `mode default` | Respect upstream model surface pins. |
@@ -137,6 +203,40 @@ itself. A missing argument or a whitespace-only value is rejected; only `--clear
 removes the hint. The Subagents dashboard's Ultra mode **on** toggle has a stricter
 gate: it requires the native feature to be enabled with an explicit v2 surface
 (`ocx v2 mode v2`); `ocx v2 on` alone does not satisfy that dashboard gate.
+
+#### Explicit v2 target and outcome
+
+```bash
+ocx v2 status --json
+ocx v2 status --live --json
+ocx v2 mode v1 --live --json
+ocx v2 status --live --json
+```
+
+The live write uses the existing management route. Only explicit live `mode`
+accepts `--acknowledge-surface-advisory`; add it only when acknowledging that
+advisory is requested. Local mode and status/on/off/keep-native/threads/hint reject
+it. There is no automatic acknowledgment.
+
+For literal reserved hint text, pass one quoted operand after `--`:
+
+```bash
+ocx v2 mode-hint --live --json -- '--clear'
+```
+
+This stores literal `--clear`; without `--`, `mode-hint --clear` removes the hint.
+The suffix is not scanned for help, live, JSON or clear controls; controls belong
+before `--`. Extra operands and duplicate flags refuse before mutation.
+
+Local JSON is `{ok, target:"local", action, changed, state, sync}` using actual
+post-write state. Mode/keep-native and changed on/off keep their real sync attempt
+even without a discovered port; threads/hints and unchanged on/off add no sync.
+An absent/malformed sync result becomes unverified with exit 1, not success.
+`changed` or state can be unknown after failure; do not claim rollback.
+Live status reports validated state/advisory/recommendation with `target:"live"`;
+writes add `ok:true` and `catalogRefresh`. Only committed, nondegraded refresh exits
+0. HTTP 502 may mean partially applied native state: inspect before retrying.
+Local usage errors retain exit 1; new live usage errors use exit 2.
 
 ## Combo routing
 
@@ -587,6 +687,26 @@ promising a handoff it cannot complete.
 ```bash
 ocx system settings --stream-mode eager-relay
 ```
+
+Additional system booleans take on/off: `--show-codex-credits`, `--account-picker`,
+`--main-account-hard-lock`, `--ultra-fast-tier`, and `--fast-rows`. They write only
+explicit fields and may combine with existing system options. Showing credits is
+a display preference, not paid-credit opt-in; system Ultra Fast is separate from
+provider Fast.
+
+```bash
+ocx system settings --json
+ocx system settings --show-codex-credits on --json
+ocx system settings --json
+```
+
+New-option writes report `{ok:true, settings: observedFields, catalogRefreshPending}`.
+Ultra Fast performs same-target GET read-back because PUT omits that value. A
+missing/mismatched/read-failed observation stays `verification:"unverified"` with
+`unverifiedFields` and a nonzero exit after acceptance; requested values are never
+substituted for observations. Combined desktop switches retain stored/effective
+and apply facts. Pending catalog or deferred/refused native apply is distinct from
+a saved setting. False pending is not proof that every client has reloaded.
 
 `ocx system update` updates OpenCodex itself. The separate Codex CLI inspection surface is:
 

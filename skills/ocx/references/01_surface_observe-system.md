@@ -1248,7 +1248,7 @@ JSON mode: `envelope`.
 
 ### `ocx system settings`
 
-Usage: `ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-tee|eager-relay>] [--desktop-authless <on|off>] [--client-compaction <on|off>] [--json]`
+Usage: `ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-tee|eager-relay>] [--desktop-authless <on|off>] [--client-compaction <on|off>] [--show-codex-credits <on|off>] [--account-picker <on|off>] [--main-account-hard-lock <on|off>] [--ultra-fast-tier <on|off>] [--fast-rows <on|off>] [--json]`
 
 Read or update supported runtime settings.
 
@@ -1266,10 +1266,17 @@ State-changing: yes.
 | `--desktop-authless` | string | on \| off for Codex Desktop authless. |
 | `--client-compaction` | string | on \| off for native replay portability; summaries may consume provider quota. |
 | `--json` | boolean | Emit the result as JSON. |
+| `--show-codex-credits` | string | on/off display preference only; never paid-credit permission. |
+| `--account-picker` | string | on/off Codex account picker visibility. |
+| `--main-account-hard-lock` | string | on/off routing ownership policy; does not rotate native login. |
+| `--ultra-fast-tier` | string | on/off routing tier; confirmed by same-target read-back. |
+| `--fast-rows` | string | on/off Fast model rows, separate from provider Fast. |
 
-JSON mode: `payload`.
+JSON mode: `envelope`.
 
 - Mixed read/write: no setting flags reads; setting flags write only submitted fields. Stored, effective and config-apply states can differ.
+- New-option writes use narrow fields and actual observed values. ultraFastTier is read back because the PUT response omits it; missing/mismatching evidence stays saved-but-unverified and nonzero.
+- catalogRefreshPending is not a full catalog disposition. Native apply can remain deferred/refused separately. Old no-new-option settings output remains compatible.
 
 ### `ocx system startup health`
 

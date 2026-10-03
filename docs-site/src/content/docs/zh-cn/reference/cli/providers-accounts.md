@@ -244,11 +244,7 @@ generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean,
 
 ### `ocx account login|reauth|code|cancel ...`
 
-在无头 shell 中运行基于浏览器或手动代码的账号认证。请使用
-`ocx account --help` 查看与提供方相关的命令形式。如果 Codex 账号登录已保存但模型目录刷新
-仍待完成，人类可读输出仍会成功退出，并在 stderr 打印固定的 `ocx sync` 恢复指引。使用
-`--json` 时 stdout 保持可解析，已完成的登录状态会包含 `catalogRefreshPending: true`，且不会
-打印人类可读警告。
+在无头 shell 中通过浏览器或手动代码完成账号认证。提供方对应的命令语法见 `ocx account --help`。即使 Codex 登录已保存，只要验证或模型目录刷新仍待完成，普通输出和 `--json` 都会返回退出码 1。已保存的登录信息会保留，不要仅因后续操作待完成就重新发起认证。目录刷新待完成时，普通输出会在 stderr 显示 `ocx sync` 指引；`--json` 则在可解析的 stdout 中保留状态和待完成标志，不混入提示文字。
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 

@@ -61,11 +61,11 @@ function capability(key: string) {
 }
 
 describe("account discovery follows actual family-specific workflows", () => {
-  test("logout documents the existing local grammar without executing credential removal", () => {
-    const source = readFileSync(repoPath("src", "cli", "dispatch.ts"), "utf8");
-    const usage = /console\.error\(`Usage: (ocx logout <provider> \[--json\])  /.exec(source)?.[1];
+  test("logout documents explicit targets without executing credential removal", () => {
+    const source = readFileSync(repoPath("src", "cli", "logout-command.ts"), "utf8");
+    const usage = /Usage: (ocx logout <provider> \[--live\] \[--json\])/.exec(source)?.[1];
     expect(capability("logout").usage).toBe(usage);
-    expect(capability("logout").routes).toEqual([]);
+    expect(capability("logout").routes).toEqual([{ method: "POST", path: "/api/oauth/logout" }]);
     expect(capability("logout").mutates).toBe(true);
     expect(capability("logout").json).toBe("envelope");
   });

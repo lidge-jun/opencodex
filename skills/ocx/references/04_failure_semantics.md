@@ -211,3 +211,31 @@ native alias can make `--native-alias off` refuse; clear that alias too only if
 that is the intended change. `set` is an upsert without CAS. Statistics with
 incomplete history can exit 0: preserve coverage limits and nullable measurements;
 never convert the report into unsupported cost or savings claims.
+
+## Account, settings and v2 boundaries
+
+Unsupported pool fields or conflicting account selectors refuse before writing.
+Null stored policy, effective state and inert pooling are different; do not turn
+null into false or retry an unsupported setting. OpenAI per-account auto-switch
+requires `--account`; omission retains pool scope. Unavailable quota activation
+may return 409: inspect window availability, never enable paid credits or consume
+a reset grant as recovery. Anthropic grant GET may read upstream but never spends.
+
+Login options depend on the actual flow. Device-only browser flags, add-account
+on reauth/Codex, or either new flag on native Kiro `--method` refuse before login.
+Preserve flow identity on cancellation/expiry; do not restart or verify automatically.
+Live OAuth logout failure never authorizes local credential deletion.
+
+Memory/compaction set replaces a full block, not just supplied phase/scope fields.
+Memory `{}` or clear/null restores existing routing without disabling the pipeline;
+compaction clear restores ordinary compaction. Read back before fixing an unintended
+scope. A settings write can be accepted yet return pending/unverified and exit 1.
+Missing Ultra Fast read-back must remain unverified. Sidecar saved state and native
+apply are separate; inspect ownership rather than replaying a refused apply.
+
+v2 parse failures preserve local exit 1 and live exit 2. Advisory acknowledgment
+is accepted only for explicit live mode; never auto-ack to bypass refusal. A 502
+from live v2 may mean partial native application, not rollback. Local sync can
+actually run without a discovered proxy port; void/malformed evidence exits 1 as
+unverified. Inspect `v2 status` on the same local/live target before recovery.
+Unknown state, saved state and client convergence must remain separate.

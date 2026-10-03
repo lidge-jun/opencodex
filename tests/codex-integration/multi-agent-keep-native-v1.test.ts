@@ -269,7 +269,7 @@ describe("ocx v2 keep-native-v1", () => {
         events.push(featureActionOf(args));
         writeFileSync(codexConfig, readFileSync(codexConfig, "utf8").replace("enabled = true", "enabled = false"));
       },
-      sync: async () => { events.push("sync"); },
+      sync: async () => { events.push("sync"); return { status: "applied", ok: true, added: 0, catalogPath: null, catalogExists: true, catalogWritten: false, cacheSynced: false, message: "fixture" }; },
       log: captureLog().log,
     });
 
@@ -308,7 +308,7 @@ describe("ocx v2 keep-native-v1", () => {
         actions.push(featureActionOf(args).split(" ")[1]!);
         writeFileSync(codexConfig, readFileSync(codexConfig, "utf8").replace("enabled = true", "enabled = false"));
       },
-      sync: async () => {},
+      sync: async () => ({ status: "applied", ok: true, added: 0, catalogPath: null, catalogExists: true, catalogWritten: false, cacheSynced: false, message: "fixture" }),
       log: captureLog().log,
     })).toBe(0);
     expect(loadConfig().multiAgentMode).toBe("v2");
@@ -320,7 +320,7 @@ describe("ocx v2 keep-native-v1", () => {
     isolateHomes();
     const { logs, errors, log } = captureLog();
     let syncs = 0;
-    const deps = { log, sync: async () => { syncs++; } };
+    const deps = { log, sync: async () => { syncs++; return { status: "applied", ok: true, added: 0, catalogPath: null, catalogExists: true, catalogWritten: false, cacheSynced: false, message: "fixture" }; } };
 
     expect(await cmdV2(["keep-native-v1"], deps)).toBe(1);
     expect(errors.join("\n")).toContain("expected on|off");

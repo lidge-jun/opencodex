@@ -63,7 +63,11 @@ const ACCOUNT_USAGE = `Usage:
   ocx account add-key <provider> [--label <label>] [--json]
   ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]
   ocx account import-orca --source <orca-data-directory> --registry <orca-data.json> [--apply] [--json]
-  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--open-browser on|off] [--add-account on|off] [--code -] [--no-wait] [--json]
+  ocx account pool <provider> [--enabled on|off] [--threshold N] [--strategy NAME] [--sticky N] [--quota-window W] [--json]
+  ocx account credits openai <ID on|off|--all on|off> [--json]
+  ocx account quota-activation openai ID --window fiveHour|weekly <on|off> [--json]
+  ocx account anthropic-reset-grants [ID] [--json]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json] (--flow required for codex)
   ocx account reset-credits <account-id|main> [--consume --yes] [--json]
@@ -403,6 +407,12 @@ async function cmdClear(rest: string[], deps: AccountDeps): Promise<number> {
 export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promise<number> {
   const [sub, ...rest] = args;
   try {
+    if (["pool", "credits", "quota-activation", "anthropic-reset-grants"].includes(sub ?? "")
+      || (sub === "auto-switch" && rest[0]?.trim().toLowerCase() === "openai"
+        && rest.some(arg => arg === "--account" || arg.startsWith("--account=")))) {
+      const { handleAccountPolicyCommand } = await import("./account-policy");
+      return handleAccountPolicyCommand(sub as "pool" | "auto-switch" | "credits" | "quota-activation" | "anthropic-reset-grants", rest, deps);
+    }
     if (sub === "list") return await cmdList(rest, deps);
     if (sub === "history") {
       const { cmdAccountHistory } = await import("./account-history");

@@ -15,7 +15,9 @@ import {
 const USAGE = `Usage:
   ocx system [status] [--json]
   ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-tee|eager-relay>]
-      [--desktop-authless <on|off>] [--client-compaction <on|off>] [--json]
+      [--desktop-authless <on|off>] [--client-compaction <on|off>]
+      [--show-codex-credits <on|off>] [--account-picker <on|off>] [--main-account-hard-lock <on|off>]
+      [--ultra-fast-tier <on|off>] [--fast-rows <on|off>] [--json]
   ocx system startup <health|install-service|install-shim> [--json]
   ocx system diagnostics [--json]
   ocx system sync [--json]
@@ -192,6 +194,12 @@ async function update(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 
 export async function handleSystemCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   const [sub = "status", ...rest] = argv;
+  if (sub === "settings") {
+    const { SYSTEM_PARITY_OPTIONS, handleSystemSettingsParity } = await import("./system-settings-parity");
+    if (rest.some(arg => SYSTEM_PARITY_OPTIONS.some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {
+      return handleSystemSettingsParity(rest, deps);
+    }
+  }
   if (sub === "codex-cli-update") {
     const { handleCodexCliUpdateCommand } = await import("./codex-cli-update");
     return await handleCodexCliUpdateCommand(rest);

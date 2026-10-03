@@ -38,7 +38,7 @@ export async function runProviderAction(action: () => Promise<number | void>): P
     if (error instanceof CliUsageError) {
       // Domain/input parsers supply static diagnostics; no raw parser/OS error reaches here.
       console.error(`Error: ${terminalSafeText(error.message)}`);
-      if (error.usage) console.error(terminalSafeText(error.usage));
+      if (error.usage) for (const line of error.usage.split("\n")) console.error(terminalSafeText(line));
       return 2;
     }
     if (error instanceof RuntimeApiError) {

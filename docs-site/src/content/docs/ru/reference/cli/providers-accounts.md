@@ -270,12 +270,7 @@ generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean,
 
 ### `ocx account login|reauth|code|cancel ...`
 
-Запускать browser-based или manual-code account-authentication из headless-shell. Для
-provider-specific формы команды используйте `ocx account --help`. Если login аккаунта Codex
-сохранён, но обновление каталога моделей ещё не завершилось, human-readable вывод по-прежнему
-завершается успешно и печатает в stderr фиксированную рекомендацию `ocx sync`. С `--json` stdout
-остаётся пригодным для парсинга, а завершённый login-state содержит
-`catalogRefreshPending: true` без human-readable предупреждения.
+Выполняет аутентификацию через браузер или ручной ввод кода из консоли без графического интерфейса. Синтаксис для конкретного провайдера указан в `ocx account --help`. Если вход Codex сохранён, но проверка или обновление каталога ещё не завершены, текстовый режим и `--json` возвращают код 1. Сохранённый вход остаётся видимым; не начинайте аутентификацию заново только из-за ожидающих операций. При ожидании каталога текстовый режим выводит рекомендацию `ocx sync` в stderr. Режим `--json` сохраняет машиночитаемый stdout и признаки ожидания без текстового предупреждения.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 

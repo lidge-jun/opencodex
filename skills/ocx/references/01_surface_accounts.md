@@ -8,11 +8,11 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 36.
+Declared capabilities: 40.
 
 ### `ocx account login`
 
-Usage: `ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method <builder-id|google|github>] [--code -] [--no-wait] [--json]`
+Usage: `ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method <builder-id|google|github>] [--code -] [--no-wait] [--open-browser <on|off>] [--add-account <on|off>] [--json]`
 
 Log in to an OAuth provider; Kiro can add a native device account.
 
@@ -36,12 +36,16 @@ State-changing: yes.
 | `--code` | string | Use - to read authorization material from stdin. |
 | `--no-wait` | boolean | Return after flow start. |
 | `--json` | boolean | Emit the command result as JSON. |
+| `--open-browser` | string | on or off for browser-capable login; rejected for explicit/native device flows. |
+| `--add-account` | string | Fresh generic OAuth login only: on forces a fresh flow, off permits existing import preference. Not supported with reauth/Codex/Kiro method. |
 
 JSON mode: `payload`.
 
 - openai, codex and chatgpt address the Codex pool. Native main uses the separate account main reauth flow.
 - Login is a human authorization handoff. Codes, verification material and credentials must not be copied into agent transcripts. Legacy argv code input warns about exposure; use stdin.
-- No --open-browser or --live flag is implemented. Provider OAuth --id requires --reauth; --method is Kiro add-only.
+- No --live flag is implemented. Provider OAuth --id requires --reauth; --method is Kiro add-only.
+- Omitted options preserve each flow's existing defaults. Explicit browser flags are refused for Codex device, known native-device providers and native Kiro method; add-account is refused for reauth/Codex/Kiro method.
+- Start/code/poll are pinned; human verification remains required. Only public handoff/flow/state fields are printed. Completed-but-validation/catalog-pending outcomes remain visible and nonzero.
 
 ### `ocx account history`
 
@@ -339,35 +343,39 @@ State-changing: yes.
 | PUT | `/api/oauth/accounts/pool` |
 | GET | `/api/oauth/accounts` |
 | PUT | `/api/oauth/accounts/auto-switch` |
+| GET | `/api/codex-auth/accounts` |
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the stored threshold and whether it is applied. |
-| `--account` | string | Anthropic account ID; inherit restores the pool default, off stores zero. |
+| `--account` | string | Per-account scope for openai or anthropic; openai resolves main/exact ID/unambiguous alias from the selected runtime. |
 
 JSON mode: `envelope`.
 
-- An explicit action is required; status is the read-only action. A bare invocation is a usage error.
-- on stores 80, off stores 0 and threshold accepts 0-100. Anthropic requires --account <id> for every action and alone accepts inherit, which sends null. Codex and generic OAuth accept neither --account nor inherit.
-- Generic pool inert:true means stored but not applied; false means applied; absent means support is unknown. API-key providers are refused.
+- Without --account the existing pool-wide operation remains. OpenAI per-account status reads override plus effective threshold; on writes80, off0, inherit null, threshold a validated0–100 integer.
+- New OpenAI policy writes require successful unambiguous roster evidence and never fall back to a raw unresolved selector. These are routing thresholds, not pool enablement or paid-credit permission.
 
 ### `ocx logout`
 
-Usage: `ocx logout <provider> [--json]`
+Usage: `ocx logout <provider> [--live] [--json]`
 
 Remove the active stored OAuth credential for a provider locally.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| POST | `/api/oauth/logout` |
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit schemaVersion, ok, provider and removed; missing credentials include reason:not_found. |
+| `--live` | boolean | Use the selected public-OAuth runtime logout; no local credential fallback. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
 
 JSON mode: `envelope`.
 
-- Local credential-store operation, not POST /api/oauth/logout. Requires operator intent; rejects malformed arguments before store access. Missing credential exits 4, usage errors exit 2. Does not prove that a running proxy has reloaded its cached credentials.
+- No-live retains atomic local removed/not-found results and exits0/4. Live sends one provider-level OAuth logout and reports only its success receipt, not removed:true or global sign-out.
+- Live does not sign out Codex/native-main. Target/argument failure never causes local credential removal.
 
 ### `ocx account current`
 
@@ -577,7 +585,7 @@ JSON mode: `envelope`.
 
 ### `ocx account reauth`
 
-Usage: `ocx account reauth <provider> [--id <account-id>] [--device] [--code -] [--no-wait] [--json]`
+Usage: `ocx account reauth <provider> [--id <account-id>] [--device] [--code -] [--no-wait] [--open-browser <on|off>] [--json]`
 
 Reauthenticate a provider account through the existing login flow.
 
@@ -599,10 +607,12 @@ State-changing: yes.
 | `--code` | string | Use - to read the short-lived authorization code from stdin. |
 | `--no-wait` | boolean | Return after starting the flow. |
 | `--json` | boolean | Emit login instructions or completion state. |
+| `--open-browser` | string | on or off for browser-capable login; rejected for explicit/native device flows. |
 
 JSON mode: `payload`.
 
 - Alias of account login with --reauth. openai, codex and chatgpt address the pool; native main uses account main reauth. Human completes authorization; keep returned login material out of transcripts. Kiro --method cannot be combined with reauth.
+- Explicit add-account is incompatible with reauth. Browser preference is accepted only by browser-capable flows; device verification remains manual.
 
 ### `ocx account code`
 
@@ -830,3 +840,97 @@ State-changing: yes.
 JSON mode: `payload`.
 
 - Even without --rollback this calls recovery with rollback:false; it is not the doctor read. Rollback writes the native login only after explicit confirmation.
+
+### `ocx account pool`
+
+Usage: `ocx account pool <provider> [--enabled <on|off>] [--threshold <0-100>] [--strategy <name>] [--sticky <1-100>] [--quota-window <five-hour|weekly|max-utilization>] [--json]`
+
+Read or edit the selected runtime's supported pool policy fields.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| GET | `/api/pool/settings` |
+| PUT | `/api/pool/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--enabled` | string | Stored pool preference; unsupported for Codex. Not equivalent to threshold0. |
+| `--threshold` | number | Auto-switch threshold0–100. |
+| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex, least-loaded is Kiro. |
+| `--sticky` | number | Sticky limit1–100. |
+| `--quota-window` | string | Anthropic only: five-hour, weekly or max-utilization. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+
+JSON mode: `envelope`.
+
+- Reads the target supported-field list before a narrow PUT. Null/unsupported, stored/effective and generic inert policy stay distinct; disabling does not promise that reactive429 rotation stops.
+- No local classification/defaults are round-tripped into the live target; supported-field reads are not CAS.
+
+### `ocx account credits`
+
+Usage: `ocx account credits openai <id|alias|main> <on|off> [--json]; ocx account credits openai --all <on|off> [--json]`
+
+Explicitly opt one or all current Codex accounts into paid credits after quota limits.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| GET | `/api/codex-auth/accounts` |
+| PUT | `/api/codex-auth/accounts/credits` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--all` | boolean | Exclusive with one account selector. On covers current selectable accounts plus main; off clears the opt-in set. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+
+JSON mode: `envelope`.
+
+- Requires explicit operator on/off intent. Showing credit balances does not grant paid-use permission; no login/quota failure auto-enables it.
+- One/all shapes are exclusive. Strict selected-runtime account resolution refuses ambiguity/unavailable roster; the response owns the applied set. It never consumes a reset grant.
+
+### `ocx account quota-activation`
+
+Usage: `ocx account quota-activation openai <id|alias|main> --window <fiveHour|weekly> <on|off> [--json]`
+
+Enable or disable a Codex account window's automatic quota refresh policy.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| GET | `/api/codex-auth/accounts` |
+| PUT | `/api/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--window` | string | fiveHour or weekly; these spellings differ from pool quota-window. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+
+JSON mode: `envelope`.
+
+- Writes only the selected account/window mutation, preserving siblings. Enabling an unavailable window returns conflict; disabling remains allowed.
+- The server may schedule a quota refresh. This does not redeem a reset grant or opt into paid credits.
+
+### `ocx account anthropic-reset-grants`
+
+Usage: `ocx account anthropic-reset-grants [account-id] [--json]`
+
+Read Anthropic reset-grant eligibility and pending status without consuming a grant.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/anthropic/reset-grants` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+
+JSON mode: `envelope`.
+
+- Optional identity is the exact Anthropic account ID. Omission delegates active/fallback account choice to the server, not the Codex alias resolver.
+- This GET can refresh access/status information upstream. Empty grants, unavailable status, pending operation and unavailable journal remain distinct. Consume remains a GUI-session-only human handoff; no session acquisition or retry is performed.

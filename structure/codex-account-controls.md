@@ -60,8 +60,8 @@ login for reauthentication, including when the window fills during the awaited t
 
 `PUT /api/codex-auth/accounts/credits` writes one account (`{ id, creditsAfterLimit }`, pool
 accounts and `__main__`) or the whole list (`{ all }`: on lists `__main__` and every selectable
-pool account, off clears it). It has no CLI verb yet (`deferred-verb`, owner "#6334 follow-up");
-`ocx config set creditCodexAccountIds` covers scripted use. The dashboard control is
+pool account, off clears it). `ocx account credits openai` exposes explicit one/all on/off scope through
+`src/cli/account-policy.ts`, with validated target identities and the same narrow API body. The dashboard control is
 `gui/src/components/CodexCreditSpend.tsx`: one global switch in the Codex Auth header beside the
 "Codex credits" display switch, derived from the rows (off when none may spend, mixed when some
 may, on when all may, matching the quota auto-refresh control), and one switch per account inside

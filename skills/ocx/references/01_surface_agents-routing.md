@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 42.
+Declared capabilities: 48.
 
 ### `ocx agent subagents force`
 
@@ -80,7 +80,7 @@ JSON mode: `payload`.
 
 ### `ocx agent injection`
 
-Usage: `ocx agent injection status [--json]; ocx agent injection set [--model <id|->] [--effort <level|->] [--prompt <text|->] [--guidance <on|off>] [--json]; ocx agent injection suggest <work description> [--model <id>] [--apply] [--json]`
+Usage: `ocx agent injection status [--json]; ocx agent injection set [--model <id|->] [--effort <level|->] [--prompt <text|->] [--guidance <on|off>] [--sync-codex-defaults <on|off>] [--json]; ocx agent injection suggest <work description> [--model <id>] [--apply] [--json]`
 
 Show or set the delegation model and effort, or suggest both for a described piece of delegated work.
 
@@ -100,11 +100,13 @@ State-changing: yes.
 | `--prompt` | string | set: a custom guidance prompt, - clears it. |
 | `--guidance` | string | set: on or off for OpenCodex delegation guidance. |
 | `--apply` | boolean | suggest: write the proposed model and effort through the delegation settings write. |
+| `--sync-codex-defaults` | string | set only: enable/disable the existing model-dependent default-sync policy. |
 
 JSON mode: `payload`.
 
 - guidance aliases injection. Bare invocation reads; use explicit status before --json. set requires at least one setting and - clears model, effort or prompt.
 - suggest may spend a model call; it writes no settings unless --apply is explicitly supplied. Preserve unsized/unassigned/already-set outcomes.
+- Default-sync edits return actual normalized model/effort/prompt/guidance/default-sync state; they do not promise a client catalog rewrite. Clearing a model also clears dependent settings under server validation.
 
 ### `ocx combo test`
 
@@ -359,7 +361,7 @@ JSON mode: `payload`.
 
 ### `ocx agent sidecar web`
 
-Usage: `ocx agent sidecar web (--list | [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|->] [--reasoning <level>] [--max-descriptions <n>] [--enabled <on|off>]) [--json]`
+Usage: `ocx agent sidecar web (--list | [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|->] [--reasoning <level>] [--enabled <on|off>] [--stream-routed-output <on|off>]) [--json]`
 
 List web candidates or change the web sidecar.
 
@@ -376,17 +378,18 @@ State-changing: yes.
 | `--model` | string | Model selector; - clears. |
 | `--backend` | string | Backend selector; - clears. |
 | `--reasoning` | string | Reasoning level. |
-| `--max-descriptions` | number | Positive description limit. |
 | `--enabled` | string | on or off. |
 | `--json` | boolean | Emit structured JSON. |
+| `--stream-routed-output` | string | Stream routed web-search model output; web only. |
 
 JSON mode: `payload`.
 
 - Without --list at least one setting is required. Stored settings and Codex application outcomes remain distinct.
+- Web reasoning remains supported even though the mutation reply does not echo it. max-descriptions and timeout belong only to vision. New-option replies project the saved web settings and actual native apply report.
 
 ### `ocx agent sidecar vision`
 
-Usage: `ocx agent sidecar vision (--list | [--model <id|->] [--backend <openai|anthropic|routed|->] [--reasoning <level>] [--max-descriptions <n>] [--enabled <on|off>]) [--json]`
+Usage: `ocx agent sidecar vision (--list | [--model <id|->] [--backend <openai|anthropic|routed|->] [--reasoning <level>] [--max-descriptions <n>] [--enabled <on|off>] [--timeout-ms <1-2147483647>]) [--json]`
 
 List vision candidates or change the vision sidecar.
 
@@ -406,10 +409,12 @@ State-changing: yes.
 | `--max-descriptions` | number | Positive description limit. |
 | `--enabled` | string | on or off. |
 | `--json` | boolean | Emit structured JSON. |
+| `--timeout-ms` | number | Vision request timeout, integer1–2147483647 milliseconds. |
 
 JSON mode: `payload`.
 
 - Without --list at least one setting is required. Stored settings and Codex application outcomes remain distinct.
+- Stream-routed-output belongs only to web. Timeout changes preserve siblings; native apply and saved state are distinct.
 
 ### `ocx effort`
 
@@ -502,112 +507,167 @@ JSON mode: `envelope`.
 
 ### `ocx v2 status`
 
-Usage: `ocx v2 [status]`
+Usage: `ocx v2 [status] [--live] [--json]`
 
 Report local multi-agent mode and Codex feature settings.
 
 State-changing: no.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| GET | `/api/v2` |
 
-JSON mode: `none`.
+| Flag | Value | Meaning |
+|---|---|---|
+| `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
 
-- Local config/CODEX_HOME and official Codex feature transition helpers; no management HTTP or --json mode. Changes affect new sessions.
-- This command does not claim to update a remote proxy.
+JSON mode: `envelope`.
+
+- Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
+- Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
+- Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied.
 
 ### `ocx v2 on`
 
-Usage: `ocx v2 on`
+Usage: `ocx v2 on [--live] [--json]`
 
 Enable the local Codex multi_agent_v2 feature.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| PUT | `/api/v2` |
 
-JSON mode: `none`.
+| Flag | Value | Meaning |
+|---|---|---|
+| `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
 
-- Local config/CODEX_HOME and official Codex feature transition helpers; no management HTTP or --json mode. Changes affect new sessions.
-- Mode/feature changes may resync catalogs; a failed resync does not mean the setting was rolled back.
+JSON mode: `envelope`.
+
+- Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
+- Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
+- Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied.
 
 ### `ocx v2 off`
 
-Usage: `ocx v2 off`
+Usage: `ocx v2 off [--live] [--json]`
 
 Disable the local Codex multi_agent_v2 feature.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| PUT | `/api/v2` |
 
-JSON mode: `none`.
+| Flag | Value | Meaning |
+|---|---|---|
+| `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
 
-- Local config/CODEX_HOME and official Codex feature transition helpers; no management HTTP or --json mode. Changes affect new sessions.
-- Mode/feature changes may resync catalogs; a failed resync does not mean the setting was rolled back.
+JSON mode: `envelope`.
+
+- Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
+- Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
+- Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied.
 
 ### `ocx v2 mode`
 
-Usage: `ocx v2 mode <v1|default|v2>`
+Usage: `ocx v2 mode <v1|default|v2> [--live] [--json] [--acknowledge-surface-advisory]`
 
 Set local model-catalog multi-agent mode.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| PUT | `/api/v2` |
 
-JSON mode: `none`.
+| Flag | Value | Meaning |
+|---|---|---|
+| `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+| `--acknowledge-surface-advisory` | boolean | Explicit live mode only; never implicitly acknowledged. |
 
-- Local config/CODEX_HOME and official Codex feature transition helpers; no management HTTP or --json mode. Changes affect new sessions.
-- Mode/feature changes may resync catalogs; a failed resync does not mean the setting was rolled back.
+JSON mode: `envelope`.
+
+- Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
+- Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
+- Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied.
 
 ### `ocx v2 keep-native-v1`
 
-Usage: `ocx v2 keep-native-v1 <on|off>`
+Usage: `ocx v2 keep-native-v1 <on|off> [--live] [--json]`
 
 Keep native ChatGPT on v1 while routed models use v2.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| PUT | `/api/v2` |
 
-JSON mode: `none`.
+| Flag | Value | Meaning |
+|---|---|---|
+| `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
 
-- Local config/CODEX_HOME and official Codex feature transition helpers; no management HTTP or --json mode. Changes affect new sessions.
-- Mode/feature changes may resync catalogs; a failed resync does not mean the setting was rolled back.
+JSON mode: `envelope`.
+
+- Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
+- Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
+- Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied.
 
 ### `ocx v2 threads`
 
-Usage: `ocx v2 threads <n>`
+Usage: `ocx v2 threads <n> [--live] [--json]`
 
 Set the local active-mode thread limit (integer at least 1).
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| PUT | `/api/v2` |
 
-JSON mode: `none`.
+| Flag | Value | Meaning |
+|---|---|---|
+| `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
 
-- Local config/CODEX_HOME and official Codex feature transition helpers; no management HTTP or --json mode. Changes affect new sessions.
-- This command does not claim to update a remote proxy.
+JSON mode: `envelope`.
+
+- Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
+- Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
+- Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied.
 
 ### `ocx v2 mode-hint`
 
-Usage: `ocx v2 mode-hint <text|--clear>`
+Usage: `ocx v2 mode-hint <text|--clear> [--live] [--json]; ocx v2 mode-hint [--live] [--json] -- <literal-text>`
 
 Set nonblank local delegation hint text or restore effort-derived policy.
 
 State-changing: yes.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| PUT | `/api/v2` |
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--clear` | boolean | Unset the hint. |
+| `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
 
-JSON mode: `none`.
+JSON mode: `envelope`.
 
-- Local config/CODEX_HOME and official Codex feature transition helpers; no management HTTP or --json mode. Changes affect new sessions.
-- This command does not claim to update a remote proxy.
+- Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
+- Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
+- Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied.
+- Use -- before one literal hint that equals a reserved control such as --live, --json or --clear. Text after the terminator is never interpreted as a target/output flag.
 
 ### `ocx combo list`
 
@@ -879,6 +939,142 @@ JSON mode: `envelope`.
 
 - Uses jev=1,comboId and range. Preserves actual counts, nullable averages, measurement coverage and incomplete/truncated history.
 - No monetary cost or comparative savings baseline exists in this DTO. This is not a decision probe and makes no model inference request.
+
+### `ocx agent memory-models show`
+
+Usage: `ocx agent memory-models show [--json]`
+
+Read the memory model override block.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+
+JSON mode: `envelope`.
+
+- An omitted phase keeps its existing/default route; this does not disable extraction, consolidation or the memory pipeline. File{} means no configured overrides, while clear sends null.
+- Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
+
+### `ocx agent memory-models set`
+
+Usage: `ocx agent memory-models set (--file <FILE|-> | [--extract-model <model> [--extract-effort <effort>]] [--consolidation-model <model> [--consolidation-effort <effort>]]) [--json]`
+
+Replace the memory model override block.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--file` | string | Bounded strict block JSON or explicit stdin; exclusive with all scalar fields. |
+| `--extract-model` | string | Extraction override model. |
+| `--extract-effort` | string | Requires an extraction model. |
+| `--consolidation-model` | string | Consolidation override model. |
+| `--consolidation-effort` | string | Requires a consolidation model. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+
+JSON mode: `envelope`.
+
+- An omitted phase keeps its existing/default route; this does not disable extraction, consolidation or the memory pipeline. File{} means no configured overrides, while clear sends null.
+- Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
+
+### `ocx agent memory-models clear`
+
+Usage: `ocx agent memory-models clear [--json]`
+
+Clear the memory model override block.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+
+JSON mode: `envelope`.
+
+- An omitted phase keeps its existing/default route; this does not disable extraction, consolidation or the memory pipeline. File{} means no configured overrides, while clear sends null.
+- Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
+
+### `ocx agent compaction-routing show`
+
+Usage: `ocx agent compaction-routing show [--json]`
+
+Read the compaction routing override block.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+
+JSON mode: `envelope`.
+
+- Clear restores ordinary compaction routing; it does not disable compaction. Omitted triggers/sources retain server defaults.
+- Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
+
+### `ocx agent compaction-routing set`
+
+Usage: `ocx agent compaction-routing set (--file <FILE|-> | --model <model> [--effort <effort>] [--triggers <manual,auto>] [--sources <selector,...>]) [--json]`
+
+Replace the compaction routing override block.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--file` | string | Bounded strict block JSON or explicit stdin; exclusive with all scalar fields. |
+| `--model` | string | Required routing override model in scalar mode. |
+| `--effort` | string | Optional canonical pinned effort. |
+| `--triggers` | string | Unique nonempty manual/auto values; no lossy filtering. |
+| `--sources` | string | Unique exact selectors or provider/* patterns; omitted means all/default scope. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+
+JSON mode: `envelope`.
+
+- Clear restores ordinary compaction routing; it does not disable compaction. Omitted triggers/sources retain server defaults.
+- Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
+
+### `ocx agent compaction-routing clear`
+
+Usage: `ocx agent compaction-routing clear [--json]`
+
+Clear the compaction routing override block.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the validated task result as one JSON document. |
+
+JSON mode: `envelope`.
+
+- Clear restores ordinary compaction routing; it does not disable compaction. Omitted triggers/sources retain server defaults.
+- Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
 
 ### `ocx memory`
 

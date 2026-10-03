@@ -228,7 +228,7 @@ preemption が未バインドリクエストを直ちに引き上げます。既
 
 ### `ocx account login|reauth|code|cancel ...`
 
-ヘッドレス シェルからブラウザベースまたは手動コードのアカウント認証を実行します。プロバイダー固有のコマンド形式には `ocx account --help` を使用します。Codex account login は保存済みでも catalog refresh が保留中なら成功終了し、human output の stderr に固定の `ocx sync` 案内を出します。`--json` は案内を混ぜず、完了 state に `catalogRefreshPending: true` を保持します。
+ヘッドレスシェルから、ブラウザーまたは手動コードでアカウント認証を実行します。プロバイダーごとの構文は `ocx account --help` で確認できます。Codex のログインが保存済みでも、検証やモデルカタログの更新が保留中なら、通常出力と `--json` のどちらも終了コード 1 を返します。保存済みのログインは保持されるため、保留だけを理由に認証をやり直さないでください。通常出力ではカタログ更新の保留時に stderr へ `ocx sync` の案内を表示します。`--json` は stdout に解析可能な状態と保留フラグを返し、この案内は混ぜません。
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 

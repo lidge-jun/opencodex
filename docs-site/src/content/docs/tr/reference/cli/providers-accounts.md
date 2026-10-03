@@ -331,13 +331,7 @@ değer 1 ile çıkar. `--json` şunu döndürür:
 
 ### `ocx account login|reauth|code|cancel ...`
 
-Başsız bir kabuktan tarayıcı tabanlı veya manuel kodlu hesap kimlik
-doğrulamasını çalıştırın. Sağlayıcıya özgü komut şekli için `ocx account --help`
-kullanın. Bir Codex hesap girişi kaydedilirse ancak model kataloğu yenilemesi
-beklemede kalırsa insan çıktısı yine de başarıyla çıkar ve stderr'e sabit `ocx
-sync` kurtarma rehberliği yazdırır. `--json`, stdout'u ayrıştırılabilir tutar ve
-insan uyarısı olmadan tamamlanan giriş durumunda `catalogRefreshPending: true`
-taşır.
+Grafik arayüzü olmayan bir kabuktan tarayıcı veya elle girilen kod ile hesap doğrulaması yapar. Sağlayıcıya özgü sözdizimi için `ocx account --help` kullanın. Codex girişi kaydedilmiş olsa bile doğrulama ya da model kataloğu yenilemesi bekliyorsa hem metin modu hem de `--json` çıkış kodu 1 döndürür. Kaydedilen giriş korunur; yalnızca bekleyen işlem nedeniyle kimlik doğrulamayı yeniden başlatmayın. Katalog yenilemesi beklerken metin modu stderr üzerinde `ocx sync` yönlendirmesi gösterir. `--json`, metin uyarısı eklemeden durumu ve bekleme işaretlerini ayrıştırılabilir stdout çıktısında tutar.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 

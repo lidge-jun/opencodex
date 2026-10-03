@@ -27,8 +27,8 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 |---|---|
 | [lifecycle](01_surface_lifecycle.md) | 12 |
 | [providers-models](01_surface_providers-models.md) | 47 |
-| [accounts](01_surface_accounts.md) | 36 |
-| [agents-routing](01_surface_agents-routing.md) | 42 |
+| [accounts](01_surface_accounts.md) | 40 |
+| [agents-routing](01_surface_agents-routing.md) | 48 |
 | [integrations](01_surface_integrations.md) | 33 |
 | [observe-system](01_surface_observe-system.md) | 87 |
 | [access-remote](01_surface_access-remote.md) | 22 |
@@ -595,6 +595,22 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_accounts.md#ocx-account-main-recover)
 
+### `ocx account pool`
+
+[State-changing task](01_surface_accounts.md#ocx-account-pool)
+
+### `ocx account credits`
+
+[State-changing task](01_surface_accounts.md#ocx-account-credits)
+
+### `ocx account quota-activation`
+
+[State-changing task](01_surface_accounts.md#ocx-account-quota-activation)
+
+### `ocx account anthropic-reset-grants`
+
+[Read-oriented task](01_surface_accounts.md#ocx-account-anthropic-reset-grants)
+
 ### `ocx agent status`
 
 [Read-oriented task](01_surface_agents-routing.md#ocx-agent-status)
@@ -734,6 +750,30 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx combo stats`
 
 [Read-oriented task](01_surface_agents-routing.md#ocx-combo-stats)
+
+### `ocx agent memory-models show`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-agent-memory-models-show)
+
+### `ocx agent memory-models set`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-memory-models-set)
+
+### `ocx agent memory-models clear`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-memory-models-clear)
+
+### `ocx agent compaction-routing show`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-agent-compaction-routing-show)
+
+### `ocx agent compaction-routing set`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-compaction-routing-set)
+
+### `ocx agent compaction-routing clear`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-compaction-routing-clear)
 
 ### `ocx grok status`
 
@@ -1249,6 +1289,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 300
-- of those, state-changing: 185
+- declared capabilities: 310
+- of those, state-changing: 192
 - head-resolved invocations: 2
