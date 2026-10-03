@@ -933,6 +933,7 @@
     "grok-reset-coupon-cli.test.ts": "providers/xai",
     "grok-reset-coupons.test.ts": "providers/xai",
     "grok-selection.test.ts": "providers/xai",
+    "grok-session-identity.test.ts": "providers/xai",
     "grok-status.test.ts": "providers/xai",
     "grok-sync.test.ts": "providers/xai",
     "grok-writer-boundary.test.ts": "providers/xai",
