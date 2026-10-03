@@ -28,6 +28,20 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 Safe to run at any time; none of these change state.
 
+### `ocx message sessions`
+
+Discover already-loaded local Codex sessions without reading conversation history.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit a versioned local session directory. |
+
+JSON mode: `envelope`.
+
+- Linux/macOS Unix socket only. Uses effective CODEX_HOME; starts no daemon and returns no partial directory.
+
 ### `ocx link port`
 
 Allocate a free loopback port for a remote home link.
@@ -529,6 +543,27 @@ JSON mode: `payload`.
 ## State-changing capabilities
 
 Each of these writes. Check the flags column before running one unattended.
+
+### `ocx message send`
+
+Submit one correlated peer message to an exact loaded local Codex destination.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--thread` | string | Exact loaded UUID; choose this or --name. |
+| `--name` | string | Unique exact loaded name; choose this or --thread. |
+| `--stdin` | boolean | Read at most 16 KiB of UTF-8 message text. |
+| `--kind` | string | request (default), response or notification. |
+| `--in-reply-to` | string | Request message UUID; required only for a response. |
+| `--json` | boolean | Emit a receipt with not_sent, queued or unknown status. |
+
+JSON mode: `envelope`.
+
+- Contract-tested Codex 0.160.0 only. Sender context comes from CODEX_THREAD_ID, not an authentication claim.
+- queued means submitted, not processed. unknown must not be replayed; no automatic retry, daemon start or thread resume.
+- Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No remote/Claude transport or skill installation.
 
 ### `ocx chatgpt`
 
@@ -1332,6 +1367,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 74
-- of those, state-changing: 43
+- declared capabilities: 76
+- of those, state-changing: 44
 - head-resolved invocations: 2

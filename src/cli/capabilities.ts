@@ -96,6 +96,30 @@ export const HEAD_CAPABILITIES: readonly HeadCapability[] = [
  */
 export const CAPABILITIES: readonly Capability[] = [
   {
+    command: ["message", "sessions"],
+    summary: "Discover already-loaded local Codex sessions without reading conversation history.",
+    routes: [], flags: [{ name: "--json", value: "boolean", summary: "Emit a versioned local session directory." }],
+    mutates: false, json: "envelope",
+    bannerLines: ["ocx message <sub>           Loaded local Codex sessions and queued peer messages (sessions|send)"],
+    details: ["Linux/macOS Unix socket only. Uses effective CODEX_HOME; starts no daemon and returns no partial directory."],
+  },
+  {
+    command: ["message", "send"],
+    summary: "Submit one correlated peer message to an exact loaded local Codex destination.",
+    routes: [], mutates: true, json: "envelope",
+    flags: [
+      { name: "--thread", value: "string", summary: "Exact loaded UUID; choose this or --name." },
+      { name: "--name", value: "string", summary: "Unique exact loaded name; choose this or --thread." },
+      { name: "--stdin", value: "boolean", required: true, summary: "Read at most 16 KiB of UTF-8 message text." },
+      { name: "--kind", value: "string", summary: "request (default), response or notification." },
+      { name: "--in-reply-to", value: "string", summary: "Request message UUID; required only for a response." },
+      { name: "--json", value: "boolean", summary: "Emit a receipt with not_sent, queued or unknown status." },
+    ],
+    details: ["Contract-tested Codex 0.160.0 only. Sender context comes from CODEX_THREAD_ID, not an authentication claim.",
+      "queued means submitted, not processed. unknown must not be replayed; no automatic retry, daemon start or thread resume.",
+      "Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No remote/Claude transport or skill installation."],
+  },
+  {
     command: ["chatgpt"],
     summary: "Experimental ChatGPT app-server shim: launch, restore or status (macOS only).",
     routes: [], flags: [], mutates: true, json: "none",

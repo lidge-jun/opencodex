@@ -15,10 +15,13 @@ const DEFAULT_DEPS: CodexShimAutoRestoreCliDeps = {
   readConfig: readConfigDiagnostics,
 };
 
+/** Identify command namespaces whose execution must not trigger automatic shim repair. */
 export function skipsCodexShimAutoRestore(command: string | undefined, args: string[]): boolean {
   if (command === "uninstall" || command === "remove") return true;
   // `lab` is read-only inspection; it must not trigger shim side effects.
   if (command === "lab") return true;
+  // Local messaging owns its helpers; even malformed usage must not repair/start anything.
+  if (command === "message") return true;
   // `resolve` is read-only inspection for embedding shells: a lookup made to populate
   // a consent surface must not trigger a shim repair side effect first.
   if (command === "resolve") return true;
