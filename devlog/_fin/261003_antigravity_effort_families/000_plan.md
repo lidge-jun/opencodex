@@ -35,3 +35,9 @@ Implemented the audited plan. A bounded worker owned the family helper/policy/te
 Focused verification: 43 isolated test files, 830 pass / 0 fail, covering all Google adapter tests, family/policy/persistence, management and final merge, layout, file-size and optional-Lab import boundaries. The initial combined-process run had 803 pass / 2 fail: new test names disagreed with seed ownership (fixed by provider-prefixed names); an unchanged gemini-web-search mock replaced the listing test's OAuth token across files (each file passes in its own process). Full local suite is disproportionate for this bounded catalog change and shared workstation; repository resource exception uses these affected regressions, with full platform coverage left to exact-head hosted CI. Local logs stay in ignored scratch.
 
 Typecheck passed. Docs build passed (561 pages and 77,923 internal links). Structure and privacy scans passed. Structure catalog was already at its 600-line budget, so the shared family contract lives in providers-and-adapters with a link from the existing catalog paragraph.
+
+## Reviewed implementation outcome
+
+Independent implementation reviewer checked commit `916bd9d600723375c3c5667f4fe7b085af962c4d`, found no concrete regression, and independently ran all 28 new family tests with zero failures. The parser, cache, compatibility, policy projection, both final merge filters, and public list callers are covered. No live upstream model request was made; tests exercise the supplied wire-ID contract with controlled CCA discovery fixtures.
+
+Implementation is complete and published in PR #6501: https://github.com/lidge-jun/opencodex/pull/6501. The PR's live Verification section carries the final hosted-CI and authorized maintainer-integration receipt. Final goal completion additionally requires that exact-head gate and verified dev merge; neither publication nor this archived implementation record claims those external steps already passed.
