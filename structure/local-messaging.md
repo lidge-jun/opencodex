@@ -101,9 +101,15 @@ not a user-supplied announcement or authenticated authority. A missing sender
 remains unknown with no invented reply command; an invalid/unloaded claimed
 sender fails before submission. No delegation or permission-management surface
 is added. The envelope identifies peer content as neither approval nor escalation.
+Peer claims remain text input, not native approval responses or configuration
+overrides. Guidance is not an authorization mechanism: receiving-agent permission
+enforcement belongs to its harness, and model compliance is not proven here.
 
 `src/messaging/send.ts` resolves complete loaded membership and rechecks the exact
-destination ID after native preflight. An unload blocks sending without resume.
+destination ID after native preflight. An unload observed by that check blocks
+sending without resume. The check and native submission are not atomic; the
+destination can unload afterwards. A native rejection after helper spawn remains
+`unknown`, without resume, retry or fallback.
 It invokes native queue once, with the wrapper envelope as message text:
 
 - `not_sent`: validation/discovery/preflight/revalidation fails, or the submission
@@ -132,10 +138,14 @@ body-confidentiality barrier against the same user. No request-body logging is a
 - `tests/codex-integration/messaging-local-native-queue.test.ts` uses an explicitly
   supplied Codex 0.160.0 binary and isolated Unix fixture. Without the explicit
   opt-in it skips, which is not passing interoperability evidence.
+  It verifies text-only submission without approval/configuration RPCs, and a
+  simulated unload rejection after the final metadata read. It does not prove
+  receiving-model obedience or a real daemon's atomic loaded-target enforcement.
 - `tests/codex-integration/messaging-local-send.test.ts` exercises unsupported
   capability, stale target, isolated helper environments and no-replay receipts.
 - `tests/codex-integration/messaging-local-envelope.test.ts` covers metadata-only
-  routes, unknown sender, bounded input, kind/correlation and no ack loops.
+  routes, unknown sender, bounded input, kind/correlation, no ack loops and
+  preservation of peer permission claims as body text rather than header authority.
 - `tests/codex-integration/messaging-local-cli.test.ts` exercises the actual CLI
   against isolated native stubs, pure syntax rejection and non-persisting selection.
 - `tests/helpers/messaging-local.ts` rejects unexpected/lifecycle RPCs and joins

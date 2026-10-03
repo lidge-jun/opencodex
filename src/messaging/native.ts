@@ -22,6 +22,7 @@ export async function withNativeMessageHome<T>(path: string | undefined,
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
+/** Require the pinned native version and Unix queue flags before submission, without fallback. */
 export async function preflightNative(runtime: NativeMessageRuntime, budget: MessageBudget,
   env: NodeJS.ProcessEnv, run: MessageRunner): Promise<void> {
   const version = await run(runtime.argv(["--version"]), budget, { env, timeoutMs: 5000 });

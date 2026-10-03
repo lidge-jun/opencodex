@@ -3,6 +3,7 @@ import { resolveCodexRuntime } from "../codex/runtime";
 import { codexExecInvocation } from "../codex/exec-invocation";
 import type { NativeMessageRuntime } from "../messaging/native";
 
+/** Resolve the effective existing Codex home using the shared policy, without creating it. */
 export function messageCodexHome(env: NodeJS.ProcessEnv): string {
   return resolveCodexHomeDir({ env });
 }

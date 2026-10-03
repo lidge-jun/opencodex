@@ -7,6 +7,7 @@ import type { MessageRunner } from "../../src/messaging/native";
 import { LOCAL_OTHER, LOCAL_TARGET, localFixtureThread, localMessagingFixture } from "../helpers/messaging-local";
 
 export const QUEUE_HELP = "Usage: codex queue [OPTIONS] --thread <THREAD> --message <TEXT>\n  --thread <THREAD>\n  --message <TEXT>\n  --remote <ADDR>\nAccepted: unix://PATH";
+/** Record isolated native invocations, optionally replacing the successful probe/queue stub. */
 function helper(handler?: MessageRunner) {
   const calls: { argv: readonly string[]; env: NodeJS.ProcessEnv | undefined }[] = [];
   const run: MessageRunner = async (argv, budget, options) => {
