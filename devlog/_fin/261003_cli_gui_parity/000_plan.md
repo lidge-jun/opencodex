@@ -37,6 +37,8 @@ The tree remains Bun TypeScript: src/cli owns domain handlers and pure help/capa
 | wp7 | 070_observation_api_tools.md | wp6 | Timeline/log fidelity, scoped usage and chosen-key/audio tools; layer 6 |
 | wp8 | 080_acceptance_publication.md | wp7 | Residual task proof, final skill/docs and all exact-head PR receipts; finish layer 6 |
 
+The final source adjudication found bounded read gaps in log selection, model-row search and Tray-equivalent quota/filtered totals. [083_residual_read_workflows.md](083_residual_read_workflows.md) adds those repairs inside wp8's P amendment. [081](081_acceptance_revalidation.md) records the pinned-dev propagation and closure sequence; [082](082_acceptance_contract.md) defines the final evidence ledger. These additions preserve the fixed objective and all acceptance criteria.
+
 Every work phase runs a full P→A→B→C→D cycle. wp0 is code-free. Later P revalidates its existing decade doc and quotes the previous D conclusion; changes to decisions return to the same architect before A. Branch names: codex/cli-parity-foundation → codex/cli-parity-providers → codex/cli-parity-models → codex/cli-parity-accounts → codex/cli-parity-integrations → codex/cli-parity-observation. The bottom targets dev; each child targets its open parent. No native stack registration or merge is authorized.
 
 ## Coverage and decisions

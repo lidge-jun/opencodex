@@ -414,8 +414,8 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 
 | Alias | Equivalent resource |
 | --- | --- |
-| `ocx logs [filters] [--follow] [--json|--jsonl]` | `ocx observe logs` |
-| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]` | `ocx observe usage` |
+| `ocx logs [filters] [--follow] [--json|--jsonl|--events]` | `ocx observe logs` |
+| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]` | `ocx observe usage` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
@@ -450,6 +450,157 @@ Any displayed totals reflect readable records only. If a filter has no readable 
 the warning and guidance instead of total lines; skipped records may contain matches.
 `--json` preserves the response-level `usageIncomplete` diagnostic and reason.
 
+### Filter a bounded log snapshot
+
+```bash
+ocx logs filter --surface claude --status errors --time-window 1h --scan-limit 2000 --limit 50 --json
+```
+
+`ocx observe logs filter` is the equivalent family form. This reads one recent
+window, filters locally, then keeps the newest matches in their original order.
+`--scan-limit` controls fetched rows (1–2000, default 2000); `--limit` controls
+returned rows (1–2000, default 200). JSON reports
+`{schemaVersion:1,logs,cursor,filters,window:{scanLimit,loaded,matched,returned,limit}}`.
+Counts describe this observed window, not all history. JSONL emits rows only;
+empty matches succeed. Cursor metadata is not a resumable search token.
+
+Selectors include `--surface all|codex|claude|grok`, `--status all|success|errors`,
+`--time-window all|15m|1h|24h`, `--model`, `--provider`, `--conversation`
+(alias `--conversationId`), `--intercepted-only`, `--min-tok-per-sec`,
+`--max-tok-per-sec`, and `--protocol-mode all|native|translated|legacy-bridge|blocked|none`.
+Model/provider equality is trimmed and case-insensitive, including
+resolved/served models and attempts. Claude includes Desktop; Codex means absent
+surface. Success is HTTP 200–299, errors 400–599. Time lower bounds are inclusive.
+Speed uses observed value-kind tok/s, with inclusive minimum and exclusive
+maximum; unavailable values fail active speed filters. Protocol none includes
+absent or invalid traces. Conversation matching uses the same hash-aware IDs as
+ordinary logs. Interception selects string-valued rewrite markers.
+
+Unknown/repeated/conflicting flags, invalid bounds, and follow/events fail before
+discovery. Malformed, oversized or failed reads are nonzero, not empty results.
+To reduce response size, reduce the scan limit; reducing output limit does not
+change the fetch. For streaming use the separate follow forms below.
+
+### Search usage model rows
+
+```bash
+ocx usage --range 7d --search 'model-a' --json
+```
+
+`--search` matches a trimmed case-insensitive substring in model, provider or
+resolved model after reading the report. It sorts model rows by descending total
+tokens with stable ties and keeps up to 100. JSON adds
+`modelView:{query,matchedModelCount,returnedModelCount,limit:100,truncated}`;
+human output labels the view and shows its selected model rows. Report totals,
+provider/day/account rows, exact filters and incomplete/window metadata remain
+unchanged. No model match does not mean no report usage.
+
+An explicit blank query (`--search=`) selects the top-100 view; omitting search
+preserves the existing output. Exact `--provider`/`--model` still scope the
+underlying report. Search does not broaden selected-key or connected-client
+self scope and is never sent as a new Hub API query parameter.
+
+### Saved companion usage totals
+
+```bash
+ocx companion show --json
+ocx companion usage --json
+```
+
+The second command reads saved companion settings, then today and 30d usage
+sequentially on the same management runtime. It applies the saved `models` and
+`hiddenProviders` preferences and preserves unknown/unmeasured costs and tokens.
+Null model selection means all; an empty selection means none. It does not
+change settings, operate native windows or relay through a connected client.
+
+JSON returns `schemaVersion:1`, `filters`, `settingsUpdatedAt`,
+`settingsCorrupt`, `settingsFallback`, `ranges` and `partial`. Each range has
+`status:"available"` with filtered `data`, or `status:"unavailable"`.
+An unavailable range sets partial and exit 1 while retaining the other range.
+Available incomplete data retains its own metadata; it is not measured zero.
+Valid server defaults retain a null settings timestamp and set fallback;
+corrupt-file defaults additionally set corrupt and warn in human output.
+Malformed settings stop before usage reads. These reads are not an atomic
+snapshot. Each GET has a 10-second fetch/body deadline after discovery and a
+32 MiB response cap; this is not a whole-command deadline. Signals exit 130/143
+without late results.
+
+### Follow request windows or injection sequences
+
+```bash
+ocx logs --help
+ocx logs --limit 200 --json
+ocx logs --follow --events --limit 200
+```
+
+`--events` requires follow and implies JSONL; redundant `--jsonl` is accepted.
+`--json` remains one-shot and conflicts with follow/events. Each events-v1 line
+is `{schemaVersion:1,type:"snapshot"|"append",rows,cursor,limit}`. Replace the
+consumer window on snapshot, append/trim on append, preserving order and repeated
+IDs. Initial empty and reset/removal snapshots are emitted; stable empty polls
+remain silent. Legacy arrays are snapshots with cursor null, not invented cursors.
+These are observed windows, not a lossless replay of traffic missed between polls
+or after ring eviction.
+
+`ocx logs --follow --jsonl --limit 200` retains row-shaped output. It re-emits changed
+occurrences, including same-ID status/token amendments and repeated IDs. Do not
+collapse everything by request ID. This legacy output cannot encode removals,
+resets or exact window order; choose events when those distinctions matter.
+Log follow limit is 1–2000, default 200.
+
+```bash
+ocx observe injection --limit 500 --json
+ocx observe injection --follow --jsonl --limit 500
+```
+
+Injection emits ordered `{seq,at,line}` rows, where `at` is epoch milliseconds;
+internal `after` advances with seq. Follow limit is 1–2000, default 500. JSON is
+one-shot and JSONL requires follow. Observation does not enable capture. Empty
+polls do not identify disabled capture or prove absence of gaps. Detectable runtime
+drift stops; undetectable restart/latest-N gaps cannot be excluded without an API
+epoch/gap marker.
+
+Both follow loops use serial one-second waits, 10-second fetch/body deadlines and
+32 MiB response limits. Malformed/oversized/transport errors stop with stderr and
+exit 1, without automatic retry/reconnect. Reduce limit for oversized windows.
+SIGINT/Ctrl-C exits 130, SIGTERM 143, with no later polls/output. Inspect exit state
+and retained rows instead of treating cancellation as complete history.
+
+### Companion timeline and key-scoped usage
+
+```bash
+ocx companion timeline --help
+ocx companion timeline --hours 24 --bucket-minutes 60 --metric total --aggregation sum --grouping model --model example/model-a --hide-provider excluded-provider --json
+```
+
+Replace fictional IDs with the selected filters. Repeat `--model` for individual
+provider/model IDs (nested slashes allowed; not CSV); repeat `--hide-provider` to
+exclude providers. Positive `--provider` is unsupported. Hours are 6/24/72/168,
+bucket minutes 1–1440 with at most 2000 buckets, metric total/input/output/cached,
+aggregation sum/average/max, grouping model/modelAccount. The API limits filter
+inputs to 100 items. This reads usage without changing companion settings.
+
+Check `appliedFilters.models/hiddenProviders`. Timeline bounds are epoch seconds,
+with exclusive end, unlike ordinary usage's millisecond custom window. The end must
+match the request-time bucket, or its immediate successor if the request crosses
+a bucket boundary; an older aligned window is refused. Empty
+series retains bucket/filter metadata. `missingMeasurements` and `truncated` must
+remain visible: zero-filled points do not prove complete zero usage.
+
+On a non-client management host:
+
+```bash
+ocx access key list --json
+ocx usage --api-key-id key-example --range 7d --json
+```
+
+Use a non-secret actual key ID. The CLI requires exact response acknowledgment in
+`filter.apiKeyId`; ignored filters fail rather than showing unscoped totals.
+An unknown acknowledged ID can return `matched:false` and empty traffic, not 404.
+Keep incomplete/custom-window facts. Connected clients reject `--api-key-id`
+before enrolled-key access or transport; omit it for existing self-only Hub usage
+or perform the selected-key view on the Hub. No data key grants management authority.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Read or change runtime debug overrides through the running proxy's management API.
@@ -467,7 +618,7 @@ debug defaults from `OPENCODEX_USAGE_DEBUG=1`.
 
 ## API access
 
-### `ocx access <key|endpoints|models|test> ...`
+### `ocx access <key|endpoints|models|test|audio> ...`
 
 Inspect admission keys, external endpoints and models with the access family.
 `ocx api-key` aliases the access-key family. Creation and rotation-start return a
@@ -486,6 +637,102 @@ and `ocx access key rotate abort <id> <rotation-id> --json`, with authority for
 the chosen action. Re-list afterward. Missing pending state alone does not prove
 commit: expiry or abort can also clear it. Do not route around consent by issuing
 the secret-returning management request directly.
+
+### Rename one key without changing its access policy
+
+```bash
+ocx access key rename key-example 'Research client' --json
+ocx access key list --json
+```
+
+Use an actual unique ID or unambiguous name. Rename sends only `{id,name}` and
+preserves provider/model scopes; it does not rotate/delete a key. The response
+contains id/name/createdAt and optional allowedProviders/allowedModels, never
+plaintext or a prefix. List remains masked. Names are control-free, trimmed,
+nonempty and at most 64 JavaScript string units. The read/rename sequence is not
+CAS; inspect the masked roster after an unknown outcome before retrying. The
+root `api-key rename` alias uses the same command.
+
+### Explicit-key model and audio checks
+
+Discover the installed syntax without contacting upstream:
+
+```bash
+ocx access test --help
+ocx access audio transcribe --help
+ocx access audio live-check --help
+```
+
+Model requests, audio uploads and live-session checks require explicit operator
+authorization for that particular upstream operation and possible quota/cost.
+The operator supplies the selected key from an approved private stdin source in
+a human-operated terminal outside the agent session. Agents must not capture it
+or ask for it in chat. Never put it in argv/environment. These are the ocx side
+of that private pipe, not direct interactive key prompts or an agent-run batch:
+
+```bash
+ocx access test example/model --protocol responses --api-key-stdin --json
+ocx access audio transcribe sample.wav --model gpt-4o-mini-transcribe --api-key-stdin --json
+ocx access audio live-check --model gpt-live-1-codex --api-key-stdin --json
+```
+
+Choose only the authorized task and real model/file. TTY input is refused. Input
+is bounded to 4096 bytes/30 seconds, valid UTF-8 printable ASCII, without outer
+whitespace, controls or extra lines; one final LF/CRLF is allowed. This deliberately
+covers currently issued keys, not every Unicode value the server configuration
+might accept. Exact supplied-key occurrences in permitted text become `[redacted]`;
+arbitrary encodings are not guaranteed detected. No encoded key carrier is printed.
+
+Targets are the checked local serving origin or existing normalized enrolled Hub
+origin, with identity checked around asynchronous work. There is no custom-origin,
+admin or enrolled-key fallback, redirect following, credential cache or automatic
+retry. The operator reports only the non-secret result to the agent.
+
+#### Model control and response limits
+
+Protocols are chat (default), responses or messages. Selected-key mode first
+sends one credentialless malformed-JSON control to that endpoint. Only the native
+key-required 401 advances to one fixed 16-token model request using the supplied
+key. The control has a 5-second/4096-byte response budget; the request has a
+60-second/2 MiB response budget including body reads. Authless/unrecognized
+controls stop before inference. Local logging/admission bookkeeping may still occur.
+
+JSON is `{schemaVersion:1,control:{outcome,status?},request:{outcome,status?},response?}`.
+Safe response contains protocol, ordered text, complete/limited completion and
+optional measured token counts. A usable length-limited reply is `limited`;
+refusal/content-filter/tool-only or malformed responses are unsupported, even
+with HTTP 2xx. Error metadata, IDs, tools and reasoning are not printed.
+Operational failure retains one versioned report plus fixed stderr/exit 1;
+invalid grammar/key input exits 2 without a fabricated report.
+
+Success says only: “Credentialless request was refused; the model request using
+the supplied key succeeded.” Listener/policy changes between calls remain possible;
+this does not certify key scope, atomic admission or billing identity. Without
+`--api-key-stdin`, legacy test JSON remains its original payload and says nothing
+about a newly selected key.
+
+#### Transcription and live readiness
+
+Transcription requires a nonempty regular file of at most 25,000,000 bytes with a
+30-second local read limit, and a multipart body capped at 32 MiB. Models are
+gpt-4o-transcribe, gpt-4o-mini-transcribe or whisper-1, subject to target support.
+Upload/response share 130 seconds; response is capped at 2 MiB. Success returns
+only `{text}`, including empty text, with exact-key redaction. Failure leaves
+stdout empty and prints fixed stderr/nonzero; no JSON error envelope or raw body.
+
+Audio uses explicit-key admission without the model control. Live-check sends
+fixed session.update and session.close only. Readiness requires session.started
+or session.updated with nonblank native session ID within 15 seconds; socket-open
+or session.created alone is insufficient. After readiness it waits at most 2
+seconds for normal code-1000 closure. Each UTF-8 frame is capped at 64 KiB, aggregate
+2 MiB; there is no retained frame history.
+
+Live JSON is `{schemaVersion:1,ready,close:"confirmed"|"unverified",check:"session-readiness",event?}`.
+Operational failure preserves that observation without raw frames. Partial readiness
+with unverified close exits 1; a later normal close cannot erase an earlier error.
+Signals exit 130/143. This checks readiness/closure only, not microphone, upload,
+tool execution, full voice roundtrip or server lease release. Opening the upstream
+session is not guaranteed free. No reconnect or retry is automatic.
 
 ### `ocx api <protocols|explain|policy> ...`
 
@@ -734,8 +981,9 @@ config destroys the other providers, agents, and MCP entries already in it.
 :::
 
 No key is ever serialized. Configs carry either a documented environment reference or a
-non-secret loopback placeholder. A loopback proxy (`127.0.0.1`, the default) requires no
-admission key at all. Set a referenced variable only when the client schema supports it and
+non-secret loopback placeholder. A loopback address (`127.0.0.1`) alone does not establish keyless
+admission: check the target policy and endpoint. Selected-key model/audio commands
+still require explicit key input on loopback. Set a referenced variable only when the client schema supports it and
 the proxy binds beyond loopback; see
 [Remote access](/reference/configuration/server/#remote-access) for how admission keys are issued. Keys for
 the upstream providers themselves are a separate thing entirely, configured per

@@ -1,3 +1,4 @@
+import { runCatalogAction } from "./catalog-command-result";
 import {
   CliUsageError,
   desktopSwitchApplyReason,
@@ -14,6 +15,7 @@ import {
 
 const USAGE = `Usage:
   ocx system [status] [--json]
+  ocx system health [--json]
   ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-tee|eager-relay>]
       [--desktop-authless <on|off>] [--client-compaction <on|off>]
       [--show-codex-credits <on|off>] [--account-picker <on|off>] [--main-account-hard-lock <on|off>]
@@ -45,6 +47,46 @@ async function status(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   ]);
   const result = { settings, startup, memory };
   printData(result, wantsJson, summaryLines(result));
+}
+
+/** The management health observation is distinct from root liveness and aggregate status. */
+async function health(argv: string[], deps: RuntimeApiDeps): Promise<number> {
+  return runCatalogAction(async () => {
+    const args = [...argv], wantsJson = takeFlag(args, "--json");
+    if (args.length) throw new CliUsageError("system health accepts only --json", USAGE);
+    const raw = await runtimeRequest("/api/system/health", { method: "GET", redirect: "error" }, deps);
+    const value = recordValue(raw), ledger = recordValue(value?.spendLedger);
+    const counter = (number: unknown): number => {
+      if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 0 || number > 1_000_000) {
+        throw new Error("Invalid health counter");
+      }
+      return number;
+    };
+    if (!value || Array.isArray(raw) || !ledger || Array.isArray(value.spendLedger)
+      || value.status !== "ok" || value.service !== "opencodex"
+      || typeof value.version !== "string" || !value.version.trim()
+      || typeof value.uptime !== "number" || !Number.isFinite(value.uptime) || value.uptime < 0
+      || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0
+      || (ledger.ownership !== "held" && ledger.ownership !== "unheld")
+      || typeof ledger.initialized !== "boolean" || typeof ledger.configured !== "boolean"
+      || typeof ledger.degraded !== "boolean") throw new Error("Invalid system health response");
+    const result = {
+      status: "ok", service: "opencodex", version: value.version, uptime: value.uptime, pid: value.pid,
+      spendLedger: {
+        ownership: ledger.ownership, initialized: ledger.initialized, configured: ledger.configured,
+        degraded: ledger.degraded, persistFailures: counter(ledger.persistFailures), corruptRecords: counter(ledger.corruptRecords),
+      },
+    };
+    printData(result, wantsJson, [
+      `Management endpoint: ${result.status} (${result.service} ${result.version}, PID ${result.pid})`,
+      `Uptime: ${result.uptime} seconds`,
+      `Spend ledger: ${ledger.degraded ? "degraded" : "no degradation reported"}; ownership ${ledger.ownership}`,
+      `Ledger initialized: ${ledger.initialized}; configured: ${ledger.configured}`,
+      `Ledger persistence failures: ${result.spendLedger.persistFailures}; corrupt records: ${result.spendLedger.corruptRecords}`,
+      "This observation does not certify every subsystem healthy.",
+      ...(ledger.degraded ? ["Next: inspect the proxy diagnostics and spend-ledger configuration before relying on spend limits."] : []),
+    ]);
+  });
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
@@ -194,6 +236,7 @@ async function update(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 
 export async function handleSystemCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   const [sub = "status", ...rest] = argv;
+  if (sub === "health") return health(rest, deps);
   if (sub === "settings") {
     const { SYSTEM_PARITY_OPTIONS, handleSystemSettingsParity } = await import("./system-settings-parity");
     if (rest.some(arg => SYSTEM_PARITY_OPTIONS.some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {

@@ -1,5 +1,7 @@
 # Recipes
 
+For a short task/target/read-back map, start with [Choose a workflow](../SKILL.md#choose-a-workflow).
+
 Choose a task first with offline root, family and leaf help, then read its generated
 chapter. For live management sequences, check the target before the first call:
 
@@ -1067,3 +1069,259 @@ reports `remoteCleanup:"unverified"`; neither proves a remote disconnect attempt
 Both can exit 0. Follow the receipt's `ocx disconnect` recovery on the remote
 client when authorized. `--force` requires `--yes`; `--yes` alone is invalid.
 Ordinary revoke remains unchanged.
+
+## 25. Follow observed windows without claiming lossless history
+
+Discover the installed flags, then choose a one-shot view or follow:
+
+```bash
+ocx logs --help
+ocx logs --limit 200 --json
+ocx logs --follow --events --limit 200
+```
+
+`--events` requires follow, implies JSONL and permits redundant `--jsonl`; `--json`
+is one-shot and cannot combine with follow/events. Each events-v1 object contains
+`schemaVersion`, `type`, `rows`, `cursor`, `limit`. Replace your window on `snapshot`;
+append then trim to limit on `append`. Preserve order and repeated request IDs.
+The initial snapshot is emitted even empty, as are reset/removal snapshots.
+Stable empty polls stay silent. Legacy full-array responses use cursor null;
+no cursor is fabricated. This reconstructs observed windows, not requests lost
+between polls or evicted from the ring.
+
+If a row feed is required instead:
+
+```bash
+ocx logs --follow --jsonl --limit 200
+```
+
+This preserves the legacy row shape but re-emits changed occurrences, including
+same-ID status/token amendments and repeated IDs. Do not deduplicate blindly by
+request ID. Row output cannot represent removals, resets or exact window order;
+use events for that. Log follow limit is 1–2000 (default 200).
+
+```bash
+ocx observe injection --help
+ocx observe injection --limit 500 --json
+ocx observe injection --follow --jsonl --limit 500
+```
+
+Injection follow emits ordered `{seq,at,line}` rows, advancing its internal `after`;
+`at` is epoch milliseconds. Limit is 1–2000, default 500. `--json` stays one-shot,
+and `--jsonl` requires follow. Capture is not enabled by observing it. Empty polls
+do not establish whether capture is off, idle or missing records. Runtime drift
+that can be detected stops the command; undetectable restarts and latest-N gaps
+cannot be ruled out because this API has no epoch/gap marker.
+
+Both follows poll serially after a one-second wait, with 10-second fetch/body and
+32 MiB response limits. On malformed/oversized/transport failures they stop, not
+truncate or reconnect. Reduce limit for oversized windows. Ctrl-C exits 130,
+SIGTERM 143, failures 1; no later poll/output survives cancellation. Verify the
+exit status and retained observations; a stopped follow is not a completed history.
+
+## 26. Read timeline, ledger health and one key's usage
+
+```bash
+ocx companion timeline --help
+ocx companion timeline --hours 24 --bucket-minutes 60 --metric total --aggregation sum --grouping model --model example/model-a --hide-provider excluded-provider --json
+ocx health --json
+ocx system health --json
+```
+
+Timeline models/providers above are fictional. Repeat `--model` once per exact
+provider/model identifier; nested model slashes are allowed, embedded CSV is not.
+Repeat `--hide-provider` for exclusions; there is no positive `--provider` filter.
+Hours are 6/24/72/168; bucket minutes 1–1440 with at most 2000 buckets. Metric is
+total/input/output/cached, aggregation sum/average/max, grouping model/modelAccount.
+Compare `appliedFilters` with the request. Start/end/bucketSeconds are seconds,
+not the milliseconds used by ordinary usage custom windows. Preserve
+`missingMeasurements` and `truncated`: zero points may be missing evidence.
+Empty series retains metadata and is not a complete-zero usage claim.
+
+Root health checks liveness; system health reads management diagnostics. Its
+`status:"ok"` may coexist with `spendLedger.degraded:true`, unheld ownership or
+nonzero persistence/corruption counters. Exit 0 confirms a valid observation, not
+that every subsystem is healthy. `system status` remains a separate aggregate.
+
+On a standalone/Hub management host, use a non-secret key ID from masked listing:
+
+```bash
+ocx access key list --json
+ocx usage --api-key-id key-example --range 7d --json
+```
+
+Replace the fictional ID. Require matching `filter.apiKeyId` in the result; an
+older server ignoring it is refused. Unknown acknowledged IDs may return
+`matched:false`/no traffic instead of 404. Preserve incomplete/custom-window facts.
+Connected clients reject caller-selected key scope before enrolled-key access or
+transport; omit the flag for self-only usage or perform the selected-key report
+on the Hub. A data key cannot grant management access.
+
+Rename only the label of an authorized key, then re-list:
+
+```bash
+ocx access key rename key-example 'Research client' --json
+ocx access key list --json
+```
+
+Use a unique ID or unambiguous name. The narrow write sends only ID/name, retains
+provider/model scopes, and does not rotate/delete or return plaintext. Names are
+trimmed, nonempty, control-free and at most 64 JavaScript string units. Resolution
+and write are not CAS; on an unknown outcome inspect the masked roster before
+retrying. `api-key rename` shares this command family.
+
+## 27. Hand off a selected-key model or audio check
+
+First discover grammar without contacting a model:
+
+```bash
+ocx access test --help
+ocx access audio transcribe --help
+ocx access audio live-check --help
+```
+
+These tasks may contact upstream services and spend quota; transcription also
+uploads the chosen file. Obtain explicit operator authorization for the particular
+model request, file upload or live readiness check. The operator then uses a
+private terminal outside the agent session and attaches an already-approved
+secret source to stdin. Never ask for the key in chat, read it into agent tools,
+or put it in argv/environment. The following are the **ocx side** of that private
+stdin pipe, not commands for the agent to run or direct interactive key prompts:
+
+```bash
+ocx access test example/model --protocol responses --api-key-stdin --json
+ocx access audio transcribe sample.wav --model gpt-4o-mini-transcribe --api-key-stdin --json
+ocx access audio live-check --model gpt-live-1-codex --api-key-stdin --json
+```
+
+These are alternative tasks, not a batch to execute. Model/file examples must be
+replaced with the explicitly selected target and file. Direct TTY input refuses.
+Input is at most 4096 bytes with a 30-second deadline: valid UTF-8, printable ASCII,
+no outer whitespace/control characters or extra lines; one final LF/CRLF is allowed.
+This deliberately covers currently issued keys; it does not claim the server's
+configuration schema forbids Unicode. Exact key occurrences in permitted response
+text are replaced with `[redacted]`; arbitrary encodings are not guaranteed detected.
+Mutable input buffers are cleared, but immutable strings/carrier copies are GC-managed.
+
+The target is the identity-checked local serving origin or the existing normalized
+enrolled Hub origin. No custom origin flag, admin credential or enrolled-key fallback
+exists. Detected target/enrollment changes refuse rather than silently redirect.
+Ask the operator for the non-secret outcome only; do not capture the input pipeline.
+
+### Interpret the model observation
+
+Chosen-key mode first sends one credentialless malformed-JSON control to the exact
+selected protocol endpoint. Only the native key-required 401 permits the subsequent
+single fixed 16-token request with the supplied key. Control is capped at 5 seconds/
+4096 response bytes; the model request at 60 seconds/2 MiB, including body reads.
+Authless/unrecognized controls stop without inference. Local logging/admission
+bookkeeping can still occur. There are no retries or protocol substitutions.
+
+Success means: “Credentialless request was refused; the model request using the
+supplied key succeeded.” This is not atomic key verification, certified scope or
+billing attribution: policy/listener changes between the two calls remain possible.
+Inspect the versioned report's control/request observations and response completion.
+Length-limited text stays `completion:"limited"`; a tool-only/refusal/content-filter
+or malformed response is unsupported, not success merely because HTTP was 2xx.
+Existing tests without `--api-key-stdin` retain their legacy payload and cannot
+establish anything about a newly selected key.
+
+### Interpret transcription and live readiness
+
+Audio uses explicit-key admission directly, not the model control. Transcription
+requires one nonempty regular file no larger than 25,000,000 bytes, read within
+30 seconds; multipart is bounded to 32 MiB. Models are gpt-4o-transcribe,
+gpt-4o-mini-transcribe or whisper-1; actual target support still governs acceptance.
+Upload plus response has a 130-second limit and 2 MiB response cap. Only `{text}`
+is returned, including valid empty text, with exact-key redaction; extra fields
+are discarded. Failure leaves stdout empty, prints fixed stderr and exits nonzero;
+there is no JSON error envelope. No automatic retry uploads the file again.
+
+Live-check sends only fixed session.update and session.close. Within 15 seconds,
+readiness must be session.started/updated with a nonblank native session ID;
+socket open or session.created is insufficient. It then waits up to 2 seconds for
+normal code-1000 closure. Frames are capped at 64 KiB UTF-8 each, 2 MiB total.
+Readiness with unverified closure is partial and exits 1. Normal close after an
+earlier error does not erase the failure. The report proves only the observed
+session readiness/closure, not server lease release or a full voice roundtrip.
+There is no microphone capture, audio upload in live-check, tool execution or
+reconnect, and no promise that opening the upstream session costs nothing.
+
+## 28. Select a bounded log window and search usage model rows
+
+```bash
+ocx logs filter --help
+ocx logs filter --surface claude --status errors --time-window 1h --scan-limit 2000 --limit 50 --json
+ocx usage --range 7d --search 'model-a' --json
+```
+
+`logs filter` fetches one recent snapshot, selects within it, then returns the
+newest matching rows in their original order. `--scan-limit` is the raw window
+(default 2000), while `--limit` caps output (default 200); both accept 1–2000.
+Read `window.loaded`, `matched` and `returned` before describing the result.
+No matches means none in this observed window, not none in stored history.
+Choose `--jsonl` instead of `--json` only when row-only output is sufficient.
+This command rejects follow/events; use recipe 25 for streaming observations.
+
+Optional selectors are `--model`, `--provider`, `--conversation` (also
+`--conversationId`), `--intercepted-only`, `--min-tok-per-sec`,
+`--max-tok-per-sec`, and `--protocol-mode`. Model/provider equality ignores case
+and surrounding whitespace and includes resolved/served models and attempts.
+Claude includes Desktop; absent surface is Codex. Status success selects
+200–299 and errors 400–599. Time windows are all/15m/1h/24h.
+Speed bounds use observed value-kind tok/s only: minimum inclusive, maximum
+exclusive; unavailable speed cannot match an active bound. Protocol choices are
+all/native/translated/legacy-bridge/blocked/none; none includes invalid or absent
+traces. Conversation selection accepts the server's hash-aware identities.
+
+Usage search is different: it matches a trimmed, case-insensitive substring in
+model/provider/resolvedModel, sorts by total tokens and returns at most 100 model
+rows. It leaves report totals and provider/day/account rows unchanged. Check
+`modelView` for match/return counts and truncation. An explicit blank search
+selects a top-100 view; omit search for the existing layout. Exact `--provider`
+and `--model` still scope the underlying report. On a connected client the same
+search stays inside self-only Hub usage; it cannot select another key's records.
+
+## 29. Read the saved companion usage view
+
+```bash
+ocx companion show --json
+ocx companion usage --json
+```
+
+Run on the machine serving the intended management API. Usage captures saved
+`models` and `hiddenProviders`, then reads today and 30d sequentially from the
+same runtime. It applies those filters to the public totals/model rows and
+preserves unmeasured, unpriced, incomplete and window facts. Null model selection
+means all; an explicit empty selection means none. It does not change saved
+settings, perform native window actions or use a connected-client relay.
+
+Inspect both `ranges` entries and the process exit. A failed range is unavailable,
+not zero; the other remains visible, `partial` is true and the command exits 1.
+Both available ranges can still contain incomplete data. Server defaults preserve
+null `settingsUpdatedAt` and set `settingsFallback`; a valid corrupt-file fallback
+also sets `settingsCorrupt` and warns in human output. Malformed settings stop the read before
+usage requests. Do not infer a valid user-saved filter from a fallback or describe
+these separate reads as one atomic snapshot.
+
+## 30. Read one API-key pool's quota
+
+```bash
+ocx account list example --json
+ocx account list example --quota --json
+ocx account list example --quota --refresh --json
+```
+
+Replace `example` with a configured API-key provider. The first command lists
+stored identities without requesting quota. Use the second only when its
+upstream probe work is authorized; the third explicitly refreshes the existing
+quota cache. This reads each key's quota, not the provider-wide report returned
+by `account refresh`, and does not create or reveal a key.
+
+Read `quotaMode`, `quotaUnavailable` and the actual `quota` fields together.
+Probe, passive and unsupported are distinct. Missing/unavailable is not zero;
+real zero credit or usage remains zero. Custom windows and provider credits can
+be present instead of familiar Codex percentages. Returned key rows without
+quota-mode evidence are unverified/nonzero; an empty pool is valid. A read does not alter stored key
+selection or prove that a credential can serve a model. Do not replace a failed
+measurement with a paid test request or repeatedly force-refresh it.

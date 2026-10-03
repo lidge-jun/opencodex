@@ -142,7 +142,7 @@ describe("ocx capabilities output", () => {
     try { code = await runCapabilities(["--json", "--route", "/api/usage"]); } finally { cap.restore(); }
     expect(code).toBe(0);
     const parsed = JSON.parse(cap.lines.join("\n")) as { capabilities: { invocation: string }[] };
-    expect(parsed.capabilities.map(c => c.invocation)).toEqual(["ocx usage", "ocx models order set", "ocx combo stats", "ocx observe usage"]);
+    expect(parsed.capabilities.map(c => c.invocation)).toEqual(["ocx usage", "ocx models order set", "ocx combo stats", "ocx companion usage", "ocx observe usage"]);
   });
 
   test("an unmatched route exits non-zero instead of reporting empty success", async () => {
@@ -209,7 +209,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "GET /api/codex-auth/quota",
   "GET /api/request-history",
   "GET /api/request-history/{id}",
-  "GET /api/system/health",
   "GET /api/system/windows-replace-retries",
   "GET /api/update/badge",
   "PATCH /api/codex-auth/pool-strategy",

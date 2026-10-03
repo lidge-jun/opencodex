@@ -254,8 +254,7 @@ config détruit les autres fournisseurs, agents et entrées MCP déjà présents
 :::
 
 Aucune clé n'est jamais sérialisée. Les configurations portent soit une référence d'environnement documentée, soit un
-Espace réservé de bouclage non secret. Un proxy de bouclage (`127.0.0.1`, la valeur par défaut) ne nécessite aucun
-clé d'admission du tout. Définissez une variable référencée uniquement lorsque le schéma client la prend en charge et
+Espace réservé de bouclage non secret. Une adresse de bouclage (`127.0.0.1`) ne prouve pas que l’accès est sans clé : vérifiez la politique et le point de terminaison. Les commandes de modèle/audio avec clé sélectionnée exigent une entrée explicite même en bouclage. Définissez une variable référencée uniquement lorsque le schéma client la prend en charge et
 le proxy se lie au-delà du bouclage ; voir
 [Accès à distance](/fr/reference/configuration/server/#accès-à-distance) pour savoir comment les clés d'admission sont délivrées. Clés pour
 les fournisseurs en amont eux-mêmes sont une chose entièrement distincte, configurée par

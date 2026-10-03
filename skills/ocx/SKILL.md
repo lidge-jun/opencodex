@@ -42,13 +42,35 @@ method. Exit 4 means no declaration matched. Full `ocx capabilities --json` and
 `--mutating-only --json` are useful for broad inventories, not mandatory preflight.
 Declarations describe the installed CLI; actual handlers remain the grammar authority.
 
+## Choose a workflow
+
+Start with the named read or preview, then follow its recipe. Help is offline;
+the target column describes execution. A listed write still needs authority for
+that task, and read-oriented probes can contact upstream services.
+
+| Task domain | Start | Execution target | Verify the result |
+|---|---|---|---|
+| Lifecycle | `ocx status --json` | Local runtime | Compare readiness, runtime identity and version; [diagnosis](references/03_recipes.md#7-diagnose-management-api-is-unreachable) |
+| Providers and models | `ocx provider snapshot --json` | Live management; local authoring is separate | Read saved state and catalog disposition; [provider edits](references/03_recipes.md#6-save-locally-or-change-the-running-provider-configuration), [model identities](references/03_recipes.md#14-add-a-custom-model-locally-or-on-the-running-proxy) |
+| Accounts | `ocx account list --json` | Live management | Read active/selected state; quota is opt-in and can probe upstream; [pool policy](references/03_recipes.md#17-inspect-pool-policy-before-changing-account-scope), [per-key quota](references/03_recipes.md#30-read-one-api-key-pools-quota) |
+| Agents and routing | `ocx route policy list --json` | Live management; `v2` distinguishes local and live | Inspect revision, saved overrides and apply outcome; [routing edits](references/03_recipes.md#15-create-or-revise-a-routing-profile-from-an-editable-document), [runtime settings](references/03_recipes.md#20-change-runtime-settings-and-v2-with-explicit-targets) |
+| Integrations | `ocx help integration` | Selected runtime and its client files | Preview before applying; inspect refusals and ownership; [file integrations](references/03_recipes.md#21-preview-a-file-integration-then-commit-the-reviewed-plan) |
+| Observation and maintenance | `ocx logs filter --help` | Live management; connected `usage` is self-scoped | Retain window, filter and incomplete/partial facts; [filtered reads](references/03_recipes.md#28-select-a-bounded-log-window-and-search-usage-model-rows), [companion totals](references/03_recipes.md#29-read-the-saved-companion-usage-view) |
+| Access and remote | `ocx connect status --json` | Local connection; management runs on its serving host | Separate connection health, key scope and revocation; [remote targeting](references/05_remote_hub.md), [private key handoff](references/03_recipes.md#27-hand-off-a-selected-key-model-or-audio-check) |
+| Lab | `ocx help lab` | Local evidence; explicit probes and automation have effects | Inspect evidence and export/probe limits; [Lab workflow](references/03_recipes.md#13-inspect-local-lab-evidence-before-exporting-or-running-probes) |
+
+These are task entry points, not a count of GUI parity. Native window focus,
+browser presentation and session-only actions retain their own interfaces.
+Grant inspection does not authorize grant consumption; persisted local Desktop
+export does not export an unsaved dashboard draft.
+
 ## Before live management work
 
 1. `ocx ready --json` checks readiness (`ready`, `pending`, `failed`, `unreachable`).
 2. `ocx status --json` checks the target and `versionSkew.relation`. `unknown` is
    not a confirmed match; a mismatch needs the intended installation resolved.
 3. Run the task with `--json` **only when that leaf supports it**. `ocx doctor`
-   rejects it; `ocx v2` has human output, not a JSON contract.
+   rejects it; `ocx v2` supports JSON for both local and explicit live targets.
 
 These checks do not require starting a proxy for offline help, local provider
 configuration, config validation or local Lab inspection. On a connected client,
@@ -62,6 +84,20 @@ intentional no-ops. Management failures normally print stderr prose even with
 `--json`; usage codes include 2 and legacy 64 exceptions for `capabilities`,
 `ready`, and `resolve`. See [JSON shapes](references/02_json_shapes.md) and
 [failure semantics](references/04_failure_semantics.md) before scripting recovery.
+
+## Observation and explicit-key API tasks
+
+For request/injection follow, timeline exclusions and scoped usage, start with
+[observation recipes](references/03_recipes.md#25-follow-observed-windows-without-claiming-lossless-history).
+Use versioned log events to reconstruct observed windows; row JSONL cannot express
+removals. Neither stream guarantees lossless traffic history.
+
+Selected-key model/audio tasks are separate from management calls. They require
+explicit operator authorization for upstream calls/uploads and a private human
+terminal handoff for key input. Never collect the key in this agent session,
+argv or environment, and never substitute an admin/enrolled credential. Read
+[the selected-key and audio recipe](references/03_recipes.md#27-hand-off-a-selected-key-model-or-audio-check)
+before proposing one. Reports are observations, not key-scope/billing certificates.
 
 ## Consent: one thing you must not do
 
@@ -144,8 +180,8 @@ credential handoff, managed rotation and disconnection order.
 The generated index routes to eight task chapters. Lab includes local reads,
 public evidence operations and explicit automation controls; it is not read-only.
 Read-oriented probes can contact providers, consume quota or refresh caches.
-Routing-profile writes and discovered-model display-name edits are current CLI
-gaps; custom-model editing is a different workflow. Browser presentation and
+Routing-profile writes use explicit file/revision workflows; discovered-model
+display-name edits use raw upstream IDs, distinct from custom-model editing. Browser presentation and
 session-only consent actions remain outside agent management authority.
 
 The index and chapters are generated by `scripts/generate-ocx-skill-surface.ts`.

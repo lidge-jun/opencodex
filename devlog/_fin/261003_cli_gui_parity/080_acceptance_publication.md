@@ -1,6 +1,8 @@
 # wp8 — Close the task ledger and publish the reviewed manual stack
 
-Depends on wp7. Class C3 verification/docs; no speculative feature additions. Finish layer 6. Any genuinely new eligible gap discovered here is appended as an in-scope P-phase work unit, not hidden as an exclusion or ignored to finish.
+Depends on wp7. Class C3 bounded residual repairs plus verification/docs; no speculative feature additions. Finish layer 6. Confirmed eligible gaps are appended as explicit P-phase subordinate work units and tasks, not hidden as exclusions or ignored to finish. The source-backed repairs in083 were discovered during this P cycle; c9 and the six-PR delivery contract remain unchanged.
+
+The executable source/integration/closure revalidation is [081](081_acceptance_revalidation.md), final ledger/proof schema is [082](082_acceptance_contract.md), and three residual read workflows are [083](083_residual_read_workflows.md). These refinements resolve earlier shorthand below. Main accepts WP8-ARCH-01 through10 from `.tmp/cli-parity/wp8-architect.md`; architect handle `01a103aa-4695-7890-8f40-e3d69c16a60f` reflects the exact revision before independent A. Add the named residual tasks using the supported loop CLI; no goal schema or criterion is weakened.
 
 ## Exact completion work
 
@@ -8,7 +10,7 @@ MODIFY 008_task_ledger.json with per-row final commands/target, phase/PR, execut
 
 MODIFY skills/ocx/SKILL.md and references/02_json_shapes.md, 03_recipes.md, 04_failure_semantics.md, 05_remote_hub.md plus generated domain references to accurately describe delivered workflows. Add a compact task-to-command reference and examples for local/live choice, bounded body files, read-back and partial failure. Preserve all human-only/secret handoffs. Correct the opening coverage claim to the measured scope, not 'everything'.
 
-MODIFY affected public CLI docs and structure docs with final behavior; eliminate stale capability/debt counts by deriving them. Verify translated docs do not contradict changed English claims. Archive this unit to devlog/_fin only when every phase is complete; repair any tracked plan references in the same closure change. Record remaining pre-existing/API-only debt separately.
+MODIFY affected public CLI docs and structure docs with final behavior; eliminate stale capability/debt counts by deriving them. Verify translated docs do not contradict changed English claims. After all prior D outcomes and WP8 substantive task acceptance have physical proof, prepare final closure by archiving to devlog/_fin and repairing current tracked links, as081 specifies. Keep C open until that committed/published archived head passes its final receipt, QA/review and exact-head CI, then record D. Archival location never substitutes for completion evidence. Preserve immutable historical paths and record remaining pre-existing/API-only debt separately.
 
 ## Publication contract
 

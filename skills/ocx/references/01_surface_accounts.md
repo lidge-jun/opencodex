@@ -114,7 +114,7 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--all` | boolean | Include notes for providers with no stored accounts. |
-| `--quota` | boolean | Include quota observations; OAuth may probe upstream. |
+| `--quota` | boolean | Include quota observations; OAuth and supported API-key providers may probe upstream. |
 | `--refresh` | boolean | With --quota, bypass quota cache; otherwise has no effect. |
 | `--json` | boolean | Emit the command result as JSON. |
 

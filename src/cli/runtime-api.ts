@@ -22,6 +22,8 @@ export interface RuntimeApiDeps {
   /** Test injection for commands that read a secret from stdin instead of argv. */
   stdinImpl?: CliStdin;
   stdinTimeoutMs?: number;
+  /** Cancellation for bounded secret-byte reads; line readers retain their contract. */
+  stdinSignal?: AbortSignal;
   /** Optional proxy liveness probe injection for commands that check or fall back around live runtime state. */
   findLiveProxy?: (io?: LivenessIo) => Promise<LiveProxy | null>;
 }
@@ -399,16 +401,19 @@ export async function readSecretBytes(
   deps: RuntimeApiDeps,
   label: string,
   maxBytes = MAX_LINK_CREDENTIAL_BYTES,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   const input: CliStdin = deps.stdinImpl ?? process.stdin;
   const timeoutMs = deps.stdinTimeoutMs ?? 120_000;
+  const signal = deps.stdinSignal;
+  signal?.throwIfAborted();
   if (input.readableEnded === true) throw new CliUsageError(`${label} input was empty`);
-  return await new Promise<Uint8Array>((resolve, reject) => {
+  return await new Promise<Uint8Array<ArrayBuffer>>((resolve, reject) => {
     const chunks: Uint8Array[] = [];
     let total = 0;
     let settled = false;
     const cleanup = () => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       input.removeListener("data", onData);
       input.removeListener("end", onEnd);
       input.removeListener("error", onError);
@@ -459,6 +464,7 @@ export async function readSecretBytes(
       resolve(result);
     });
     const onError = (error: Error) => finish(() => reject(error));
+    const onAbort = () => finish(() => reject(signal?.reason));
     const timer = setTimeout(
       () => finish(() => reject(new CliUsageError(`timed out waiting for ${label} on stdin`))),
       timeoutMs,
@@ -466,6 +472,8 @@ export async function readSecretBytes(
     input.on("data", onData);
     input.on("end", onEnd);
     input.on("error", onError);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 

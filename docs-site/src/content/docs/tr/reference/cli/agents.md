@@ -280,8 +280,7 @@ diğer sağlayıcıları, ajanları ve MCP girdilerini yok eder.
 :::
 
 Hiçbir anahtar asla serileştirilmez. Yapılandırmalar belgelenmiş bir ortam
-referansı veya gizli olmayan bir geri döngü yer tutucusu taşır. Bir geri döngü
-proxy'si (`127.0.0.1`, varsayılan) hiçbir kabul anahtarı gerektirmez. Referans
+referansı veya gizli olmayan bir geri döngü yer tutucusu taşır. Geri döngü adresi (`127.0.0.1`) tek başına anahtarsız erişimi kanıtlamaz; hedefin politikasını ve uç noktasını kontrol edin. Seçili anahtarla model/ses CLI komutları geri döngüde de açık anahtar girişi gerektirir. Referans
 verilen bir değişkeni yalnızca istemci şeması desteklediğinde ve proxy geri
 döngünün ötesine bağlandığında ayarlayın; kabul anahtarlarının nasıl verildiğini
 görmek için [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim)

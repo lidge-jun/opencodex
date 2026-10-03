@@ -19,6 +19,29 @@ Read connection status again after an authorized connect, rotation or disconnect
 A saved connection, completed catalog transfer, client-file rewrite and healthy
 remote service are separate observations; retain partial/refused outcomes.
 
+### Usage targets and companion views
+
+`ocx usage` on a connected client uses its enrolled data key for the Hub's
+self-scoped `/v1/usage` report. It does not expose account breakdowns or other
+clients' records. Exact provider/model filters and custom windows retain that
+scope; `--search` selects model rows locally after the scoped read and leaves
+its totals intact. `--api-key-id` is refused on connected clients; use the Hub's
+management host for an authorized selected-key report.
+
+`ocx companion usage --json` is a management read of saved companion settings
+and today's/30-day usage on one pinned runtime. It applies that runtime's saved
+model selection and provider exclusions. This is distinct from connected-client
+self usage and from the inference-only loopback companion listener below.
+It neither relays management through a connected client nor falls back to local
+usage. Inspect each range's availability, `partial`, and settings fallback flags;
+the three reads do not form an atomic snapshot. See [the recipe](03_recipes.md#29-read-the-saved-companion-usage-view).
+
+`ocx remote-workspace hub status`, `runtimes` and `sessions` inspect the serving
+runtime's Hub inventory. They can invoke its existing discovery/probe work.
+Available empty inventory differs from unavailable/nonzero. Remote browser
+navigation, browser-session controls and paired-session SSH/link flows remain
+with their owning UI; an inventory read does not grant their authority.
+
 ## One port, and what runs on it
 
 A hub's data plane is one port. Remote machines dial `hostname:port` with their own

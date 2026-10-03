@@ -320,6 +320,26 @@ tokens, authorization headers, request content, emails, and account identities.
 Identity-check the live proxy. Human output reports PID/port; `--json` emits `{ok, pid, port}`. The
 command exits 0 only when healthy and 1 otherwise, making it suitable for service probes.
 
+### `ocx system health [--json]`
+
+```bash
+ocx health --json
+ocx system health --json
+```
+
+Root health is the liveness probe. System health is a separate management
+observation: `{status:"ok",service:"opencodex",version,uptime,pid,spendLedger}`,
+with uptime in seconds. `system status` remains its settings/startup/memory aggregate.
+A valid system-health observation exits 0 even if the spend ledger is degraded.
+Read ownership held/unheld, initialized, configured, degraded, persistFailures and
+corruptRecords; status ok does not certify every subsystem healthy. Failed/malformed
+reads remain nonzero with safe stderr, not fabricated healthy data.
+
+For bounded diagnostics, [request/injection follow](/reference/cli/agents/#follow-request-windows-or-injection-sequences)
+stops on error or detected target change instead of reconnecting automatically.
+SIGINT exits 130 and SIGTERM 143. Versioned log events reconstruct observed windows,
+not traffic missed between polls; injection seq cannot exclude restart/eviction gaps.
+
 ### `ocx ready [--json] [--wait [--timeout <seconds>]]`
 
 Check post-sync readiness through the unauthenticated `GET /readyz` endpoint. It returns `200` when

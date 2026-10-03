@@ -53,7 +53,7 @@ this wire projection does not change the usage ledger.
 
 ## CLI readiness diagnostics
 
-The [CLI management contract](cli-management.md#cli-readiness-diagnostics) owns terminal-safe human diagnostics, structured-output fidelity and capability argument failures.
+The [CLI management contract](cli-management.md#cli-readiness-diagnostics) owns terminal-safe human diagnostics, structured-output fidelity and capability argument failures. Its [data-key and observation contract](cli-management.md#data-key-probes-and-observation-streams) also owns explicit stdin cancellation, credential separation and bounded follow lifetimes.
 
 ## CLI resolve and stop contracts for embedding shells
 

@@ -1,4 +1,5 @@
 /** `ocx account` — list and switch provider credentials (issue #180). */
+import { apiKeyQuotaText } from "./account-key-quota";
 import { loadConfig } from "../config";
 import { explainCodexUseOutcome, reportCodexAccountTargetError, resolveCodexUseTarget } from "./account-target";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -138,6 +139,7 @@ function priorityText(row: AccountRow): string {
  * decides on before a long session. The full breakdown stays in `--json`.
  */
 function quotaText(row: AccountRow): string {
+  if (row.type === "api-key") return apiKeyQuotaText(row);
   if (row.quotaUnavailable) return row.quotaFailure ? `unavailable (${row.quotaFailure})` : "unavailable";
   const quota = row.quota;
   if (!quota) return "-";

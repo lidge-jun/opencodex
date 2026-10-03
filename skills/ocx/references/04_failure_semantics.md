@@ -274,3 +274,75 @@ run cleanup. Forced link revoke requires `--force --yes`. Success reports remote
 cleanup skipped, and idempotent not-found reports it unverified; neither confirms
 an attempted remote disconnect. Review the remote-client disconnect recovery
 separately. Do not interpret exit 0 as proof that all remote state was removed.
+
+## Filtered observation recovery
+
+`logs filter` rejects follow/events, conflicting outputs, unknown/repeated flags
+and invalid bounds before discovery. Empty matches are a successful observation
+of the scanned window. Malformed or oversized replies and transport failures are
+nonzero, never an empty success. Reduce `--scan-limit` for an oversized snapshot;
+reducing `--limit` alone cannot reduce the fetched window. No automatic history
+scan or retry occurs.
+
+`usage --search` is local model-row selection after the scoped read. A search
+miss leaves report totals intact; `filter.matched:false` and incomplete-history
+markers remain independent. Invalid model data must not be read as no matches.
+Omit search to recover the existing report layout, not to change authorization.
+
+`companion usage` retains available ranges when another range fails, prints a
+fixed partial-failure diagnostic and exits 1. Do not sum unavailable data as zero.
+Valid server defaults from a corrupt settings file remain usable but visibly
+flagged; malformed settings stop before usage reads. Each settings/range GET has
+its own 10-second fetch/body deadline after discovery and 32 MiB body bound;
+these are not a 10-second whole-command promise. Signals exit 130/143 without
+late output. A retry is a new observation, not an atomic continuation.
+
+API-key `account list --quota` distinguishes unsupported, passive, unmeasured and
+unavailable readings. Missing quota-mode evidence on a returned key row is
+unverified/nonzero; invalid consumed fields fail instead of becoming zero.
+`--refresh` bypasses the existing quota cache only when quota was requested.
+Do not loop on failed probes: explicit quota reads may contact providers.
+
+## Observation and selected-key recovery
+
+Follow usage errors exit 2. Request/injection follow failures stop with fixed stderr
+and exit 1; they do not silently truncate, retry or reconnect. A 32 MiB window
+refusal suggests reducing `--limit`. Detected runtime drift requires an explicit
+restart of follow. Ctrl-C/SIGINT exits 130, SIGTERM 143, without subsequent polls
+or output. Retained rows are observations, not proof of a complete history. Use
+log events for resets/removals; legacy row JSONL cannot reconstruct them. Injection
+has no epoch/gap indicator and cannot promise lossless restart recovery.
+
+Timeline exclusions use `--hide-provider`; `--provider` is unsupported. Stale or
+future bucket windows fail instead of appearing as current usage; only the
+request-time end or its immediate successor after a rollover is accepted. Read the
+applied filter acknowledgment and incomplete evidence rather than retrying a zero
+plot as a fault. Management health can report status ok with degraded spendLedger;
+liveness and subsystem readiness are different. Key-scoped usage refuses an
+unacknowledged filter; connected clients reject the flag before enrolled-key access
+or network. Unknown acknowledged IDs can legitimately match nothing.
+
+Rename accepts only a unique key identity/name and a valid new label. Usage or
+ambiguous/missing selector exits 2; an unconfirmed write exits 1 with fixed stderr.
+Re-list masked state before retrying. It never rotates keys or broadens scopes.
+
+Selected-key model/audio input is explicit bounded stdin in the operator's private
+terminal. Invalid grammar/input exits 2 before a data request; input timeout or
+operation/target/HTTP/response-size/schema failure exits 1. Never repair failure by using an
+admin/enrolled credential, another protocol, another origin, automatic key capture
+or a repeated paid request/upload. Model tests only advance after exact native
+credential-required 401; authless/unrecognized control means verification unavailable,
+not a broken key. Chosen-key JSON operational failure preserves the versioned
+observations with fixed stderr. Unkeyed legacy JSON remains the original payload.
+
+A usable limited model reply is visibly limited, not unsupported. Refusal, content
+filter, tool-only or malformed replies cannot establish success. Even a success
+report cannot certify atomic key admission, scope or billing identity. Only exact
+key occurrences in permitted text are redacted, not every possible encoding.
+
+Transcription failure prints no stdout, only fixed stderr/nonzero; successful JSON
+is `{text}`. Do not re-upload automatically. Live-check operational failures retain
+the ready/close DTO; readiness plus unverified close is partial/exit 1. A normal
+close after earlier failure is still failure. No raw frames/errors or credential
+carriers are exposed. Timeouts and cancellation close local resources without
+proving upstream lease release or absence of cost. Signals return 130/143.

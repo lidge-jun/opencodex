@@ -30,8 +30,8 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [accounts](01_surface_accounts.md) | 40 |
 | [agents-routing](01_surface_agents-routing.md) | 48 |
 | [integrations](01_surface_integrations.md) | 40 |
-| [observe-system](01_surface_observe-system.md) | 87 |
-| [access-remote](01_surface_access-remote.md) | 25 |
+| [observe-system](01_surface_observe-system.md) | 92 |
+| [access-remote](01_surface_access-remote.md) | 28 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -879,6 +879,18 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_integrations.md#ocx-integration-native-cursor-local-installer)
 
+### `ocx logs filter`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-logs-filter)
+
+### `ocx observe logs filter`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-observe-logs-filter)
+
+### `ocx companion usage`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-companion-usage)
+
 ### `ocx observe logs`
 
 [Read-oriented task](01_surface_observe-system.md#ocx-observe-logs)
@@ -1191,6 +1203,14 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_observe-system.md#ocx-tray-uninstall)
 
+### `ocx system health`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-health)
+
+### `ocx companion timeline`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-companion-timeline)
+
 ### `ocx access key`
 
 [State-changing task](01_surface_access-remote.md#ocx-access-key)
@@ -1242,6 +1262,18 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx remote-workspace hub sessions`
 
 [Read-oriented task](01_surface_access-remote.md#ocx-remote-workspace-hub-sessions)
+
+### `ocx access key rename`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-key-rename)
+
+### `ocx access audio transcribe`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-audio-transcribe)
+
+### `ocx access audio live-check`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-audio-live-check)
 
 ### `ocx lab status`
 
@@ -1329,6 +1361,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 320
-- of those, state-changing: 195
+- declared capabilities: 328
+- of those, state-changing: 198
 - head-resolved invocations: 2

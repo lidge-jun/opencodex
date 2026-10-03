@@ -373,12 +373,14 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "companion",
-    usage: "ocx companion <show|set|reset> ...",
-    summary: "Inspect and configure menu-bar and widget companion usage settings.",
+    usage: "ocx companion <show|set|reset|usage|timeline> ...",
+    summary: "Inspect companion settings, filtered usage and timeline, or change preferences.",
     details: [
       "ocx companion and ocx companion show read settings; use --json for machine-readable output.",
       "ocx companion set accepts one or more key=value assignments; values are parsed as JSON when possible.",
       "ocx companion reset restores the default settings.",
+      "ocx companion usage reads today and 30-day totals with saved model/provider filters; unavailable ranges return partial output and exit 1.",
+      "ocx companion timeline reads buckets; --model selects models and --hide-provider excludes providers.",
     ],
   },
   {
@@ -423,10 +425,10 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "`inspect star` reads the repository star status only. Starring uses your GitHub identity and is available from the dashboard alone.",
     ],
   },
-  { name: "logs", usage: "ocx logs [filters] [--follow] [--json|--jsonl]", summary: "Read or follow request logs (alias of ocx observe logs)." },
+  { name: "logs", usage: "ocx logs [filters] [--follow] [--json|--jsonl|--events]", summary: "Read or follow request logs." },
   {
     name: "usage",
-    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]",
+    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]",
     summary: "Report token usage and estimated cost (alias of ocx observe usage).",
   },
   {
@@ -441,14 +443,17 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "memory", usage: "ocx memory [--json]", summary: "Alias of ocx observe memory." },
   {
     name: "access",
-    usage: "ocx access <key|endpoints|models|test> ...",
+    usage: "ocx access <key|endpoints|models|test|audio> ...",
     summary: "Manage OpenCodex admission API keys and inspect external endpoints.",
     details: [
       "Key rotation start uses POST /api/keys/rotate and returns the replacement secret once.",
       "Commit uses POST /api/keys/rotate/commit; abort uses DELETE /api/keys/rotate with the returned rotation id.",
+      "key rename changes a masked key's name without clearing its scopes.",
+      "test --api-key-stdin uses one supplied data key; it never substitutes management or enrolled credentials.",
+      "audio transcribe/live-check use explicit piped key input and may use provider quota; authorize the operation first.",
     ],
   },
-  { name: "api-key", usage: "ocx api-key <list|create|rotate|remove> ...", summary: "Alias of ocx access key." },
+  { name: "api-key", usage: "ocx api-key <list|get|create|set|rename|rotate|remove> ...", summary: "Alias of ocx access key." },
   {
     name: "api",
     usage: "ocx api <protocols|explain|policy> ...",
@@ -491,10 +496,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "system",
-    usage: "ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...",
+    usage: "ocx system <status|health|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...",
     summary: "Manage headless runtime settings, startup, sync, diagnostics, OpenCodex updates, and read-only Codex CLI inspection.",
     details: [
       "system update manages OpenCodex itself.",
+      "system health reads authenticated service and spend-ledger diagnostics; root health remains liveness.",
       "ocx system codex-cli-update check [--json]",
       "ocx system codex-cli-update attest [--json]",
       "ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]",

@@ -128,15 +128,16 @@ describe("access capability workflows preserve consent and handler grammar", () 
     expect(await handleAccessCommand(["test", "fixture/model", "--protocol", protocol, "--json"], io.deps)).toBe(0);
     expect(io.requests).toEqual([{ method: "POST", path, body }]);
   });
-  test("chosen-key, rename and future audio options are not falsely advertised", async () => {
+  test("chosen-key, rename and audio capabilities match supported explicit workflows", async () => {
     const leaf = capability("access test");
-    expect(leaf.flags.map(flag => flag.name)).toEqual(["--protocol", "--json"]);
+    expect(leaf.flags.map(flag => flag.name)).toEqual(["--protocol", "--json", "--api-key-stdin"]);
     const io = transport();
-    expect(await handleAccessCommand(["test", "fixture/model", "--api-key-stdin"], io.deps)).toBe(2);
+    expect(await handleAccessCommand(["test", "fixture/model", "--api-key-stdin", "--api-key-stdin"], io.deps)).toBe(2);
     expect(io.requests).toEqual([]);
     const keys = ACCESS_REMOTE_CAPABILITIES.map(row => row.command.join(" "));
-    expect(keys).not.toContain("access key rename");
-    expect(keys.some(key => key.startsWith("access audio"))).toBe(false);
+    expect(keys).toContain("access key rename");
+    expect(keys).toContain("access audio transcribe");
+    expect(keys).toContain("access audio live-check");
   });
   test("secret-returning actions are family handoffs, never executable headings", () => {
     const family = capability("access key");

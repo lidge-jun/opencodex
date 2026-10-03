@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 25.
+Declared capabilities: 28.
 
 ### `ocx link port`
 
@@ -464,7 +464,7 @@ JSON mode: `payload`.
 
 ### `ocx access test`
 
-Usage: `ocx access test <model> [--protocol <chat|responses|messages>] [--json]`
+Usage: `ocx access test <model> [--protocol <chat|responses|messages>] [--api-key-stdin] [--json]`
 
 Send a small inference request through the selected protocol.
 
@@ -476,11 +476,14 @@ Drives no management route.
 |---|---|---|
 | `--protocol` | string | chat \| responses \| messages; default chat. |
 | `--json` | boolean | Emit the result as JSON. |
+| `--api-key-stdin` | boolean | Read one explicit data key from bounded piped stdin; no secret argv/env or management/enrolled-key fallback. |
 
-JSON mode: `payload`.
+JSON mode: `envelope`.
 
-- Data-plane POST /v1/chat/completions, /v1/responses or /v1/messages according to --protocol; these are not management API routes. May spend upstream quota; run only for an explicitly authorized inference probe.
-- Uses runtime management headers and has no chosen-key input; success is not validation of a newly created data key.
+- Data-plane model POSTs are not management routes. The request may spend provider quota; run only for an explicitly authorized model probe. Legacy unkeyed behavior/JSON remains unchanged.
+- Explicit-key mode first sends a credentialless malformed-body control to the same protocol endpoint. Only the native key-required401 permits one16-token keyed request. Authless/unrecognized targets refuse before inference.
+- Version1 selected-key JSON reports control/request observations and a safe text/completion/usage projection. Limited output stays limited; neither control nor response certifies billing identity, key scopes or atomic policy stability.
+- Keys use explicit bounded stdin and printableASCII input compatible with issued keys. Same-target identity checks, deadlines, redirect refusal, exact-key redaction and cancellation apply; no retries or fallback credential.
 
 ### `ocx remote-workspace hub status`
 
@@ -544,3 +547,69 @@ JSON mode: `payload`.
 
 - Existing remote-workspace status remains executor-local. These fixed reads use the selected management Hub; they do not create pairing grants, sessions or remote commands.
 - Available empty lists succeed. Disabled Hub observations return explicit available:false and exit1; malformed or refused responses are not presented as empty success. Runtime reads can perform availability probes.
+
+### `ocx access key rename`
+
+Usage: `ocx access key rename <id-or-name> <name> [--json]`
+
+Rename an unambiguously selected API key while preserving its scopes.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| GET | `/api/keys` |
+| PATCH | `/api/keys` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the command result as JSON. |
+
+JSON mode: `payload`.
+
+- Resolves a unique ID/name from the pinned management roster and sends only id/name. Duplicate-ID ambiguity is refused; no plaintext, scope clear, rotation or deletion is involved.
+- Name follows existing trimmed nonempty64-unit/control-character rules. Resolution is not revision CAS; API-key root alias shares the operation.
+
+### `ocx access audio transcribe`
+
+Usage: `ocx access audio transcribe <file> --model <gpt-4o-transcribe|gpt-4o-mini-transcribe|whisper-1> --api-key-stdin [--json]`
+
+Transcribe an explicitly chosen bounded audio file with a supplied data key.
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--model` | string | Required supported transcription model; no silent model fallback. |
+| `--api-key-stdin` | boolean | Required bounded explicit data key on piped stdin; no management/enrolled-key substitution. |
+| `--json` | boolean | Emit the command result as JSON. |
+
+JSON mode: `payload`.
+
+- Fixed data-plane POST /v1/audio/transcriptions with file/model/response_format=json. May use provider quota; requires explicit upload/inference authority.
+- File must be nonempty regular input≤25,000,000bytes; multipart≤32MiB, response≤2MiB, request130s. Only the requested text result is returned, with exact supplied-key redaction.
+- Audio uses its own explicit-key admission, including on an otherwise authless model listener. No generic model control, retries, secret argv/env or redirect following.
+
+### `ocx access audio live-check`
+
+Usage: `ocx access audio live-check --model <id> --api-key-stdin [--json]`
+
+Check actual live-session readiness, then close the connection.
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--model` | string | Required live model; sent to the existing live route. |
+| `--api-key-stdin` | boolean | Required bounded printableASCII key, encoded only in the established audio subprotocol. |
+| `--json` | boolean | Emit the command result as JSON. |
+
+JSON mode: `envelope`.
+
+- Fixed data-plane WebSocket /v1/live with the existing audio key carrier and session.update, then session.close. It contacts upstream and may incur provider usage; no microphone, audio upload, tool execution or voice-roundtrip claim.
+- Version1 report distinguishes readiness from confirmed normal close. Socket-open alone is not ready.15s readiness,2s close deadline; stuck/abnormal closure remains unverified/nonzero, with local socket termination.
+- No raw frames/session IDs/encoded credentials are printed. NativeWebSocket redirect refusal is verified separately from HTTP upload behavior.

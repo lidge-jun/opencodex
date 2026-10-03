@@ -789,7 +789,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   companion: async deps => {
     const { handleCompanionCommand } = await import("./companion");
-    return await handleCompanionCommand(deps.args.slice(1));
+    return await handleCompanionCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   route: async deps => {
     if (deps.args[1] !== "combo" && deps.args[1] !== "policy") {
@@ -814,7 +814,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   observe: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    return await handleObserveCommand(deps.args.slice(1));
+    return await handleObserveCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   inspect: async deps => {
     const { handleInspectCommand } = await import("./inspect");
@@ -822,11 +822,11 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   logs: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
+    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)], { findLiveProxy: deps.findLiveProxy });
   },
   usage: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
+    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)], { findLiveProxy: deps.findLiveProxy });
   },
   storage: async deps => {
     // `ocx storage` used to be a pure alias of `observe storage`, which reached only the report
@@ -842,11 +842,11 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   access: async deps => {
     const { handleAccessCommand } = await import("./access");
-    return await handleAccessCommand(deps.args.slice(1));
+    return await handleAccessCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   "api-key": async deps => {
     const { handleAccessCommand } = await import("./access");
-    return await handleAccessCommand(["key", ...deps.args.slice(1)]);
+    return await handleAccessCommand(["key", ...deps.args.slice(1)], { findLiveProxy: deps.findLiveProxy });
   },
   api: async deps => {
     const { handleApiCommand } = await import("./api-protocols");
@@ -884,7 +884,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   system: async deps => {
     const { handleSystemCommand } = await import("./system-command");
-    return await handleSystemCommand(deps.args.slice(1));
+    return await handleSystemCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   config: async deps => {
     const { handleConfigCommand } = await import("./config-command");

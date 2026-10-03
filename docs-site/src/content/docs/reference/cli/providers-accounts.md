@@ -571,7 +571,22 @@ per-account probe (Anthropic, Kiro, Google Antigravity, and Devin today). It is 
 once per stored credential; the default listing stays a local read. `--refresh` bypasses the
 cached result. An account with no per-account quota shows `-`, and one whose probe failed shows
 `unavailable` — blank would read as "no usage" rather than "not measured". `--json` carries the
-full breakdown per account, not just the summarized windows:
+full breakdown per account, not just the summarized windows.
+
+API-key pools also support `ocx account list <provider> --quota [--refresh]`.
+Without `--quota`, their listing does not request a quota probe. The opt-in read
+uses each stored key's quota owner; `--refresh` requests fresh evidence from that
+owner and may contact the upstream provider. It does not replace stored keys or
+read the provider-wide aggregate returned by `account refresh`.
+
+API-key JSON rows preserve `quotaMode` (`probe`, `passive`, `unsupported`),
+optional/null `quota`, and `quotaUnavailable` when returned. Public quota can
+include custom windows, USD credit balances, Kiro credits and update times, not
+only Codex-style percentages. Human output distinguishes unsupported, not
+measured, unavailable and actual measurements. Unknown is not zero; observed
+zero is retained. Malformed consumed fields or a returned key row without
+quota-mode evidence fail rather than fabricate support. An empty pool remains
+valid. Keys remain masked.
 
 Google Antigravity rows carry the same `Gem` / `Cla` windows as the provider-level quota, computed
 from that account's own credential and Cloud Code Assist project id. The per-account probe always

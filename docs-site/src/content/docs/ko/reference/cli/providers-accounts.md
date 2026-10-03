@@ -301,6 +301,8 @@ ocx account clear-cooldown anthropic <id-or-alias>
 cooldown을 해제하면 계정 generation도 전진하므로 이전 quota probe가 해제된 상태를 되살리거나
 오래된 quota 기반 eligibility를 게시할 수 없습니다.
 
+API 키 풀의 키별 할당량은 `ocx account list <provider> --quota [--refresh] --json`으로 조회합니다. `--quota`를 생략하면 할당량 확인을 요청하지 않습니다. 명시한 경우 공급자에 요청을 보낼 수 있으므로 반복 조회에 주의하세요. `quotaMode`, `quotaUnavailable`, 실제 `quota`를 함께 확인해야 하며, 측정하지 못한 값을 0으로 해석하면 안 됩니다. 공급자 전체 보고서를 읽는 아래 `account refresh`와는 별도 조회입니다.
+
 ### `ocx account refresh <provider> [--json]`
 
 Codex 풀에는 `ocx account refresh openai [--json]`를 사용합니다. 계정 할당량을 강제로 새로 고치고 사용 가능 주간/월간 비율과 재설정 시간을 출력합니다. 할당량 데이터가 없으면 0%가 아니라 알 수 없음으로 보고합니다. JSON 봉투는 `{ accounts: AccountRow[] }`이며, Codex 행마다 `quota`가 붙습니다.
