@@ -63,6 +63,7 @@ interface UsageReportInput {
 
 const MAX_MODEL_ROWS = 10;
 
+/** Render scalar report values with terminal control characters escaped. */
 function terminalText(value: unknown): string {
   const text = typeof value === "string" ? value
     : value === null || value === undefined ? ""
@@ -75,6 +76,7 @@ function terminalText(value: unknown): string {
   });
 }
 
+/** Format a finite count, distinguishing missing readings from invalid values. */
 function count(value: number | undefined): string {
   if (value === undefined || value === null) return "0";
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("en-US") : "—";
@@ -90,6 +92,7 @@ function usd(value: number | undefined): string {
   return `~$${value.toFixed(4)}`;
 }
 
+/** Align a terminal-safe text table without changing the underlying report rows. */
 function table(header: string[], rows: string[][]): string[] {
   if (rows.length === 0) return [];
   header = header.map(terminalText);
@@ -99,6 +102,7 @@ function table(header: string[], rows: string[][]): string[] {
   return [line(header), ...rows.map(line)];
 }
 
+/** Describe the report interval and filters with terminal-safe text. */
 function describeScope(data: UsageReportInput): string {
   const interval = data.customWindow && typeof data.since === "number" && typeof data.until === "number"
     ? `custom ${new Date(data.since).toISOString()} to ${new Date(data.until).toISOString()} (inclusive)`
@@ -110,7 +114,8 @@ function describeScope(data: UsageReportInput): string {
   return terminalText(parts.join(", "));
 }
 
-export function formatUsageReport(data: UsageReportInput): string[] {
+/** Render usage totals and a bounded model table without modifying the API payload. */
+export function formatUsageReport(data: UsageReportInput, modelLimit = MAX_MODEL_ROWS): string[] {
   const summary = data.summary ?? {};
   const lines: string[] = [describeScope(data), ""];
   if (data.source === "hub" && data.scope === "client") {
@@ -184,7 +189,7 @@ export function formatUsageReport(data: UsageReportInput): string[] {
   const models = (data.models ?? []).filter(row => row.requests > 0);
   if (models.length > 0) {
     lines.push("");
-    const shown = models.slice(0, MAX_MODEL_ROWS);
+    const shown = models.slice(0, modelLimit);
     lines.push(...table(
       ["MODEL", "PROVIDER", "REQUESTS", "TOKENS", "EST. COST"],
       shown.map(row => [row.model ?? "-", row.provider, count(row.requests), count(row.totalTokens), usd(row.estimatedCostUsd)]),

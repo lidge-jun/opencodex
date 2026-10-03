@@ -16,6 +16,7 @@ export function printVersion(): void {
   console.log(`opencodex ${packageVersion()}`);
 }
 
+/** Print the lightweight top-level command syntax and examples. */
 export function printUsage(): void {
   console.log(`opencodex (ocx) — Universal provider proxy for Codex
 
@@ -76,7 +77,7 @@ Usage:
   ocx inspect <sub>           Effective config, catalog, analytics, pacing, client-config
   ocx route <sub>             Routing features (combo, policy)
   ocx logs [filters]          Alias of ocx observe logs
-  ocx usage [--range <today|1d|7d|30d|all>] [--provider <name>] [--model <id>]
+  ocx usage [--range <today|1d|7d|30d|all>] [--provider <name>] [--model <id>] [--top <1-1000>]
                               Token and estimated-cost report (alias of ocx observe usage)
   ocx storage <sub>           Storage report, cleanup, trash, and the cleanup policy
   ocx memory [--json]         Alias of ocx observe memory

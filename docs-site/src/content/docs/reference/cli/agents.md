@@ -497,3 +497,7 @@ Human `ocx logs` output includes `id=<request-id>`. Pass that value to `ocx logs
 ## Upstream error details
 
 When an upstream error envelope contains several message fields, OpenCodex uses the first nonblank string in its established priority order. Empty or malformed fields no longer hide a valid fallback diagnostic.
+
+## Choose the number of usage model rows
+
+`ocx usage --top 25` (or `ocx observe usage --top 25`) shows up to 25 models instead of the default ten. Values from 1 to 1000 are accepted. Server ordering, provider/account tables and totals are unchanged. `--top` applies to human-readable output only; combining it with `--json` exits with usage error code 2. Use `--json` without `--top` to obtain the full machine-readable report.

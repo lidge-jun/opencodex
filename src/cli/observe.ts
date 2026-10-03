@@ -27,7 +27,7 @@ const USAGE = `Usage:
   ocx logs index-status
   ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>]
       [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>]
-      [--provider <name>] [--model <id>] [--json]
+      [--provider <name>] [--model <id>] [--top <1-1000>] [--json]
   ocx observe storage [codex-logs [status|protect|unprotect|repair|compact] [--mode <compat|quiet>]] [--json]
   ocx observe memory [--json]
   ocx observe debug [--json]
@@ -36,6 +36,7 @@ const USAGE = `Usage:
 
 type LogEntry = Record<string, unknown> & { id?: string | number; timestamp?: string; provider?: string; model?: string; status?: number };
 
+/** Encode defined usage or log filters while omitting absent query values. */
 function query(params: Record<string, string | number | undefined>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) if (value !== undefined) search.set(key, String(value));
@@ -43,6 +44,7 @@ function query(params: Record<string, string | number | undefined>): string {
   return encoded ? `?${encoded}` : "";
 }
 
+/** Read log rows from the supported array and management-envelope shapes. */
 function logRows(data: unknown): LogEntry[] {
   if (Array.isArray(data)) return data as LogEntry[];
   if (data && typeof data === "object") {
@@ -117,6 +119,7 @@ async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   } while (true);
 }
 
+/** Fetch the persisted routing decision for one caller-supplied request ID. */
 async function explain(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const requestId = args.shift();
@@ -128,6 +131,7 @@ async function explain(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, wantsJson ? undefined : [JSON.stringify(result, null, 2)]);
 }
 
+/** Rebuild the request-history index and report its resulting metadata. */
 async function rebuildIndex(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -144,6 +148,7 @@ async function rebuildIndex(argv: string[], deps: RuntimeApiDeps): Promise<void>
   }
 }
 
+/** Report request-history indexing state without changing the index. */
 async function indexStatus(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -161,9 +166,13 @@ async function indexStatus(argv: string[], deps: RuntimeApiDeps): Promise<void> 
   }
 }
 
+/** Fetch a validated usage report and apply an optional model-row limit only to human output. */
 async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
+  const top = takeIntegerOption(args, "--top", { min: 1 });
+  if (top !== undefined && top > 1000) throw new CliUsageError("--top must be an integer 1-1000", USAGE);
+  if (top !== undefined && wantsJson) throw new CliUsageError("--top cannot be combined with --json", USAGE);
   const range = takeOption(args, "--range") ?? "30d";
   const surface = takeOption(args, "--surface") ?? "all";
   const provider = takeOption(args, "--provider");
@@ -217,9 +226,10 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   // renderer during --json and let its assumptions affect a path that is meant
   // to bypass it entirely.
   if (wantsJson) printData(result, true);
-  else printData(result, false, formatUsageReport(result as Parameters<typeof formatUsageReport>[0]));
+  else printData(result, false, formatUsageReport(result as Parameters<typeof formatUsageReport>[0], top));
 }
 
+/** Print a read-only management diagnostic in the selected human or JSON format. */
 async function simple(path: string, argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -229,6 +239,7 @@ async function simple(path: string, argv: string[], deps: RuntimeApiDeps): Promi
   printData(result, wantsJson, summaryLines(result));
 }
 
+/** Route storage diagnostics and explicit Codex-log protection or repair actions. */
 async function storage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (argv[0] !== "codex-logs") {
     await simple("/api/storage", argv, deps);
@@ -265,6 +276,7 @@ async function storage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, summaryLines(result));
 }
 
+/** Dispatch an observation command through the shared CLI error and exit-code boundary. */
 export async function handleObserveCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   return runCliAction(async () => {
     const [sub = "logs", ...rest] = argv;

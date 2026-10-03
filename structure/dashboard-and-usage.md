@@ -201,7 +201,7 @@ The response retains its preset range discriminator for compatibility and explic
 the existing 366-day cap. GUI custom reports bypass the held preset/session cache.
 Both dashboard and CLI reject a custom report unless the server echoes `customWindow: true`
 and the exact requested numeric `since` and `until`. An older daemon that silently returns a
-preset report cannot supply totals labelled with the requested custom interval.
+preset report cannot supply totals labelled with the requested custom interval. `src/cli/usage-report.ts` renders ten model rows by default. `ocx usage --top <n>` and `ocx observe usage --top <n>` accept 1 through 1000 for human output only; truncation is local, preserves server ranking and totals, and never changes the API query or JSON payload. Invalid limits and `--json` combinations exit 2 before fetching; range validation precedes the format-combination check and each error names its own cause.
 
 Resetting a manual model price keeps the map, even when temporarily empty, through persistence
 reconciliation. This removes only the requested entry and preserves sibling rates independently
