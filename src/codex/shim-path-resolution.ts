@@ -1,4 +1,4 @@
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { isWslRuntime, wslAutomountRoot } from "./home";
 import { SHIM_MARKER } from "./shim-templates";
@@ -42,6 +42,14 @@ export function realIsDirectory(path: string): boolean {
 const SHIM_HEADER_MAX_BYTES = 16 * 1024;
 
 function inspectShimFile(path: string): boolean | null {
+  if (process.platform !== "win32") {
+    try {
+      // POSIX shells skip non-executable files, including symlink targets.
+      accessSync(path, constants.X_OK);
+    } catch {
+      return null;
+    }
+  }
   let fd: number | undefined;
   try {
     // Follow npm launcher symlinks, but never read a known special file.

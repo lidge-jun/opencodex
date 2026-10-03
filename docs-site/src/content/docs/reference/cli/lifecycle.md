@@ -711,8 +711,10 @@ For Windows installations that expose only `codex.exe`, use `ocx service install
 For fnm-managed Codex, installation resolves the temporary multishell directory to the durable
 Node installation while preserving the launcher filename. If that directory cannot be resolved,
 installation refuses instead of wrapping a temporary path. When Codex is selected, `ocx connect`
-also reports shim readiness. This readiness check skips special-file PATH entries while preserving
-the order of regular launchers, including npm and fnm symlinks. If a different PATH wrapper hides a healthy shim, fix PATH order;
+also reports shim readiness. This readiness check skips special-file PATH entries and, on macOS
+and Linux, files without execute permission, including symlink targets. It preserves the order of
+regular executable launchers, including npm and fnm symlinks. Windows keeps its PATHEXT lookup.
+If a different PATH wrapper hides a healthy shim, fix PATH order;
 reinstalling the same shim does not change which command your shell finds first. If the tracked shim
 is healthy but no `codex` command is found, connect reports it as inactive and asks you to add its
 directory to PATH. A failed PATH inspection reports activation as unverified instead of claiming
