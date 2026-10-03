@@ -679,6 +679,12 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
     printDesktopHelp();
     return 0;
   }
+  if (command === "profile") {
+    const { handleClaudeDesktopProfileCommand } = await import("./claude-desktop-profile");
+    return handleClaudeDesktopProfileCommand(argv.slice(1), {
+      runtimeRequestImpl: deps.runtimeRequestImpl, findLiveProxy: deps.findLiveProxyImpl,
+    });
+  }
 
   // Mode flags remain apply aliases and are parsed before subcommands.
   const applyFlags = argv.filter(arg => APPLY_FLAGS.includes(arg));

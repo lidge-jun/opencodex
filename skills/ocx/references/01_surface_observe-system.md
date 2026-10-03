@@ -811,7 +811,7 @@ JSON mode: `payload`.
 
 ### `ocx storage policy set`
 
-Usage: `ocx storage policy set [--enabled <true|false>] [--percent <1-100>] [--mode <quarantine|permanent>] [--schedule <startup|daily|weekly|manual>] [--json]`
+Usage: `ocx storage policy set [--enabled <true|false>] [--archived-bytes-over <bytes>] [--reduce-to-bytes <bytes> | --remove-oldest-percent <1-100> | --percent <1-100>] [--mode <quarantine|permanent>] [--schedule <startup|daily|weekly|manual>] [--json]`
 
 Save submitted cleanup policy fields.
 
@@ -828,10 +828,14 @@ State-changing: yes.
 | `--mode` | string | quarantine \| permanent. |
 | `--schedule` | string | startup \| daily \| weekly \| manual. |
 | `--json` | boolean | Emit the result as JSON. |
+| `--archived-bytes-over` | number | Nonnegative safe integer byte trigger; zero is valid. |
+| `--reduce-to-bytes` | number | Nonnegative safe integer cleanup target, exclusive with either percentage spelling. |
+| `--remove-oldest-percent` | number | Canonical integer percentage spelling; mutually exclusive with --percent and byte target. |
 
 JSON mode: `payload`.
 
-- At least one setting is required. Percent writes target.removeOldestPercent; mode, schedule and range validation belong to the server.
+- Only supplied fields are written. Omitted enabled/mode/schedule remain unchanged; setting a policy does not run cleanup or implicitly enable it.
+- Both percentage spellings use integer CLI grammar and server range validation. The alias cannot be combined with the canonical percentage flag.
 
 ### `ocx storage policy run`
 

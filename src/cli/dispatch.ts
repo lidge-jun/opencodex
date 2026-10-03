@@ -495,7 +495,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   "remote-workspace": async deps => {
     const { runRemoteWorkspaceCommand } = await import("./remote-workspace");
-    return await runRemoteWorkspaceCommand(deps.args.slice(1));
+    return await runRemoteWorkspaceCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   disconnect: async deps => {
     const { handleDisconnectCommand } = await import("./connect");
@@ -870,13 +870,13 @@ const commandRunners: Record<string, CommandRunner> = {
       // integrations `client` manages, so they get their own subcommand rather than being
       // folded into one that means something else.
       const { handleIntegrationCommand } = await import("./inspect");
-      return await handleIntegrationCommand(deps.args.slice(1));
+      return await handleIntegrationCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
     } else if (integration === "claude") {
       const { handleClaudeConfigCommand } = await import("./integrations");
       return await handleClaudeConfigCommand(deps.args.slice(2));
     } else if (integration === "client") {
       const { handleClientIntegrationCommand } = await import("./integrations");
-      return await handleClientIntegrationCommand(deps.args.slice(2));
+      return await handleClientIntegrationCommand(deps.args.slice(2), { findLiveProxy: deps.findLiveProxy });
     } else {
       console.error("Usage: ocx integration <claude|grok|client> <subcommand>");
       return 2;
@@ -903,7 +903,7 @@ const commandRunners: Record<string, CommandRunner> = {
     // "ocx claude desktop" → write Desktop 3P config
     if (deps.args[1] === "desktop") {
       const { handleClaudeDesktopCommand } = await import("./claude-desktop");
-      const exitCode = await handleClaudeDesktopCommand(deps.args.slice(2));
+      const exitCode = await handleClaudeDesktopCommand(deps.args.slice(2), { findLiveProxyImpl: deps.findLiveProxy });
       if (exitCode !== 0) return exitCode;
       return 0;
     }

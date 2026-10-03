@@ -11,7 +11,9 @@ import {
   runtimeBaseUrl,
   runtimeRequest,
   takeIntegerOption,
+  takeFlag,
   takeJsonFlag,
+  printData,
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
@@ -20,7 +22,9 @@ export const LINK_USAGE = `Usage:
   ocx link port [--json]
   ocx link issue --alias <alias> --tunnel-port <port> [--json]
   ocx link status [--json]
-  ocx link revoke --link-id <id> [--json]`;
+  ocx link revoke --link-id <id> [--force --yes] [--json]
+
+Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.`;
 
 type LinkState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
 type ListenerState = "off" | "listening" | "failed";
@@ -258,19 +262,43 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
 }
 
 async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
-  takeJsonFlag(args);
+  const wantsJson = takeJsonFlag(args);
+  const force = takeFlag(args, "--force");
+  const confirmed = takeFlag(args, "--yes");
   const linkId = takeOption(args, "--link-id");
   if (!linkId || !LINK_ID.test(linkId)) throw new CliUsageError("revoke requires a valid --link-id", LINK_USAGE);
   rejectArgs(args, LINK_USAGE);
+  if (force && !confirmed) throw new CliUsageError("forced revoke skips remote cleanup; pass --yes to confirm", LINK_USAGE);
+  if (confirmed && !force) throw new CliUsageError("--yes requires --force", LINK_USAGE);
+  let remoteCleanup: "skipped" | "unverified" = "skipped";
   try {
-    const response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}`, { method: "DELETE" }, deps);
+    const response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}`, force ? {
+      method: "DELETE",
+      redirect: "error",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ force: true }),
+    } : { method: "DELETE" }, deps);
+    // Legacy revoke accepts an empty response; a forced receipt needs observed identity.
+    if (force && response === null) throw new Error("invalid link API response: revoke object");
     validateRevoke(response, linkId);
   } catch (error) {
     // Revoke is idempotent: a link the Home no longer has is already revoked, and a Child retrying
     // a join rollback depends on that answer being success. A 404 without this code comes from a
     // listener that does not serve the management API and stays a failure.
     const code = error instanceof RuntimeApiError && error.status === 404 ? errorCodeBody(error.body)?.error.code : undefined;
-    if (code !== "link_not_found") throw error;
+    if (code !== "link_not_found") {
+      if (force && !(error instanceof RuntimeApiError)) throw new Error("Forced link revoke failed; inspect link status before retrying.");
+      throw error;
+    }
+    remoteCleanup = "unverified";
+  }
+  if (force) {
+    const recovery = "Run ocx disconnect on the remote client.";
+    printData({ linkId, remoteCleanup, recovery }, wantsJson, [
+      remoteCleanup === "skipped" ? `Revoked ${linkId}; remote cleanup was skipped.` : `Link ${linkId} is already absent; remote cleanup is unverified.`,
+      recovery,
+    ]);
+    return;
   }
   console.log(JSON.stringify({ linkId }));
 }

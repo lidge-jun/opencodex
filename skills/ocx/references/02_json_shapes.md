@@ -320,3 +320,60 @@ Live status has `target:"live"` plus validated v2 state, surface advisory and hi
 recommendation. Live writes add `ok:true` and full `catalogRefresh`; committed,
 nondegraded convergence is required for exit 0. These are distinct from settings'
 boolean pending flag.
+
+## Integration preview and recovery receipts
+
+Preview JSON is one validated version-1 plan: `clientId`, `operation`, optional
+`profileId`, `state`, `foreignEdit`, ordered `changes:[{kind,path}]`, `fingerprint`,
+`canApply`, `willChange`, and `refusalReason` when refused. It contains structural
+paths, not values. A valid refused or no-op preview exits 0; no mutation is implied.
+Only an applicable bound `pN:<32 lowercase hex>` token is a commit input.
+`pN:unbound` can describe refusal but cannot authorize or bind a write.
+
+Stale bound writes emit no stdout, fixed re-preview guidance on stderr and exit 5.
+They do not emit or auto-adopt a replacement plan. Successful mutation receipts
+contain `ok`, `clientId`, `state`, invocation-derived `operation`, optional
+`profileId`, `changed`, `opId`, `reason`, `residual`, and a separately labeled,
+redacted `snapshotPath` where supplied. A valid `ok:false` receipt exits 1;
+HTTP failures use their mapped exit and stderr instead of an invented JSON error.
+
+Journal deletion returns `{ok:true, opId, clientId, snapshotRemoved}` with optional
+`profileId`. False snapshot removal is committed retirement with incomplete cleanup
+and exit 1. Aside sync returns `{results:[...]}`; rows identify `client:"aside"`
+and `profileId`, then success `ok/changed` or refusal `ok/state/refusalReason/reason`
+and optional residual/backup facts. Empty results exit 0; any failed row exits 1.
+
+## Desktop, Cursor and Hub observations
+
+Runtime Desktop profile show returns `{profile, models, rendered, port}`; import
+adds `ok:true`. The profile is versioned assignments/defaults with applied markers
+when present. Models carry availability and assignment facts; rendered rows are
+not proof that a native client applied them. Import is save-only.
+
+Cursor status projects `privateInference`, `regularCursor`, `gateway`, `lastSeen`,
+`effortTable`, `models`, `guideUrl`. Gateway `apiKeyMode` is `credential` or
+`placeholder`, without returning a credential. Installer lookup is
+`{available,url,version,reason}`; unavailable means null URL/version and can have
+null reason. Both are observations with exit 0 when valid, never install receipts.
+
+Available Hub status is `{available:true,devices,runtimes,sessions}`. Runtimes
+reads return `{runtimes:{codex:{available,...},claude:{available,...},pi:{available,...}}}`;
+session reads return `{sessions:[...]}`. Device roots expose IDs/labels, not executor
+filesystem paths. Session events are public observed text with sequence/time/type;
+terminal rendering escapes controls. Empty lists on an available Hub succeed.
+
+Disabled Hub observation (outer HTTP 200) instead prints `available:false`, a fixed
+activation/Hub reason, `devices:[]`, `runtimes:{}`, `sessions:[]` and exits 1. Inner
+HTTP 409 exits 5 with stderr and no fabricated empty success.
+
+## Maintenance receipts
+
+New storage policy setters return `{ok:true,policy,job:{status}}`. Policy preserves
+`enabled`, nested `trigger:{archivedBytesOver}`, one target (`reduceToBytes` or
+`removeOldestPercent`), mode, schedule and optional last/next-run facts. Job status
+`idle`/`running` is observed state, not evidence this setter started cleanup.
+
+Forced link revocation returns `{linkId,remoteCleanup,recovery}`. Cleanup is
+`skipped` after a successful forced write, or `unverified` after idempotent
+link-not-found. This field comes from explicit CLI force intent, not a server
+cleanup report. Both can exit 0 while remote client recovery remains outstanding.

@@ -29,9 +29,9 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [providers-models](01_surface_providers-models.md) | 47 |
 | [accounts](01_surface_accounts.md) | 40 |
 | [agents-routing](01_surface_agents-routing.md) | 48 |
-| [integrations](01_surface_integrations.md) | 33 |
+| [integrations](01_surface_integrations.md) | 40 |
 | [observe-system](01_surface_observe-system.md) | 87 |
-| [access-remote](01_surface_access-remote.md) | 22 |
+| [access-remote](01_surface_access-remote.md) | 25 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -851,6 +851,34 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_integrations.md#ocx-claude-desktop-apply)
 
+### `ocx integration client preview`
+
+[Read-oriented task](01_surface_integrations.md#ocx-integration-client-preview)
+
+### `ocx integration client history remove`
+
+[State-changing task](01_surface_integrations.md#ocx-integration-client-history-remove)
+
+### `ocx integration client sync`
+
+[State-changing task](01_surface_integrations.md#ocx-integration-client-sync)
+
+### `ocx claude desktop profile show`
+
+[Read-oriented task](01_surface_integrations.md#ocx-claude-desktop-profile-show)
+
+### `ocx claude desktop profile import`
+
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-profile-import)
+
+### `ocx integration native cursor status`
+
+[Read-oriented task](01_surface_integrations.md#ocx-integration-native-cursor-status)
+
+### `ocx integration native cursor local-installer`
+
+[Read-oriented task](01_surface_integrations.md#ocx-integration-native-cursor-local-installer)
+
 ### `ocx observe logs`
 
 [Read-oriented task](01_surface_observe-system.md#ocx-observe-logs)
@@ -1203,6 +1231,18 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_access-remote.md#ocx-access-test)
 
+### `ocx remote-workspace hub status`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-remote-workspace-hub-status)
+
+### `ocx remote-workspace hub runtimes`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-remote-workspace-hub-runtimes)
+
+### `ocx remote-workspace hub sessions`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-remote-workspace-hub-sessions)
+
 ### `ocx lab status`
 
 [Read-oriented task](01_surface_lab.md#ocx-lab-status)
@@ -1289,6 +1329,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 310
-- of those, state-changing: 192
+- declared capabilities: 320
+- of those, state-changing: 195
 - head-resolved invocations: 2

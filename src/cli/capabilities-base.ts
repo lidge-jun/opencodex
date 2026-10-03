@@ -59,11 +59,11 @@ export const CAPABILITIES: readonly Capability[] = [
     command: ["link","revoke"],
     summary: "Revoke a link credential and remove its link record.",
     routes: [{"method":"DELETE","path":"/api/link/{id}"}],
-    flags: [{"name":"--link-id","value":"string","required":true,"summary":"Link id to revoke."},{"name":"--json","value":"boolean","summary":"Emit the revoked link id as JSON."}],
+    flags: [{"name":"--link-id","value":"string","required":true,"summary":"Link id to revoke."},{"name":"--json","value":"boolean","summary":"Emit the revoked link id as JSON."},{"name":"--force","value":"boolean","summary":"Explicitly skip remote disconnect while retiring the local link; requires --yes."},{"name":"--yes","value":"boolean","summary":"Confirms force only; refused without --force."}],
     mutates: true,
     json: "envelope",
-    details: ["Requires a valid link ID and loopback admin authority. No force-removal option exists.","Always emits a CLI-shaped {linkId} JSON object. Already-revoked link_not_found is idempotent success."],
-    usage: "ocx link revoke --link-id <id> [--json]",
+    details: ["Requires a valid link ID and loopback admin authority. Explicit force additionally requires --yes.","Ordinary revoke always emits {linkId} JSON; forced revoke has human output or a JSON cleanup receipt. Already-revoked link_not_found is idempotent success.","Ordinary revoke retains its no-body and idempotent behavior. Forced success reports remoteCleanup:skipped from invocation intent; already-missing link reports unverified. Neither proves the remote client disconnected.","If forced cleanup was needed, run ocx disconnect on the remote client. No new enrollment, SSH trust or credential action is implied."],
+    usage: "ocx link revoke --link-id <id> [--force --yes] [--json]",
   },
   {
     command: ["remote-workspace","pair"],
@@ -664,7 +664,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the client rows or toggle result as JSON."}],
     mutates: true,
     json: "payload",
-    details: ["Each toggle writes the selected client configuration through its runtime owner. Refused disables remain failures. Cursor status and installer have no branch in this handler and must remain deferred."],
+    details: ["Each toggle writes the selected client configuration through its runtime owner. Refused disables remain failures. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor."],
     usage: "ocx integration native [list] [--json]; ocx integration native <claude|claude-desktop|codex|grok> <on|off> [--json]",
   },
   {
@@ -674,7 +674,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--client","value":"string","summary":"File integration ID; aside selects profiles."},{"name":"--profile","value":"number","summary":"Aside nonnegative integer account ID; requires --client aside."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."},{"name":"--overwrite-conflict","value":"boolean","summary":"Explicitly permit replacing a conflicting block."},{"name":"--op","value":"string","summary":"Operation ID; --op-id is an alias."},{"name":"--confirm-drift","value":"boolean","summary":"Explicitly allow replacing edits made after the snapshot."}],
     mutates: true,
     json: "payload",
-    details: ["status/show/list reads all clients, one client or Aside profiles. history/journal reads rollback records; expired snapshots stay visible.","enable/disable requires --client; an omitted Aside --profile toggles all profiles. --overwrite-conflict applies only to enable.","restore requires --op (alias --op-id); --client requires --profile and only Aside supports that profile selector. --confirm-drift is an explicit user waiver, never auto-retried. No preview or journal-retirement verb is claimed."],
+    details: ["status/show/list reads all clients, one client or Aside profiles. history/journal reads rollback records; expired snapshots stay visible.","enable/disable requires --client; an omitted Aside --profile toggles all profiles. --overwrite-conflict applies only to enable.","restore requires --op (alias --op-id); --client requires --profile and only Aside supports that profile selector. --confirm-drift is an explicit user waiver, never auto-retried. Use client preview or restore --preview to inspect a change, history remove --op ID --yes to retire a journal row, and sync --client aside to refresh managed profiles."],
     usage: "ocx integration client status [--client <id>] [--profile <id>] [--json]; ocx integration client history [--client <id>] [--profile <id>] [--json]; ocx integration client enable --client <id> [--profile <id>] [--overwrite-conflict] [--json]; ocx integration client disable --client <id> [--profile <id>] [--json]; ocx integration client restore --op <opId> [--client aside --profile <id>] [--confirm-drift] [--json]",
   },
   {

@@ -239,3 +239,38 @@ from live v2 may mean partial native application, not rollback. Local sync can
 actually run without a discovered proxy port; void/malformed evidence exits 1 as
 unverified. Inspect `v2 status` on the same local/live target before recovery.
 Unknown state, saved state and client convergence must remain separate.
+
+## Integration and maintenance recovery
+
+Preview is an observation: valid refused/no-op plans exit 0. Read `canApply`,
+`willChange` and refusal reason before choosing a write. Never auto-confirm drift,
+overwrite a conflict, or treat a fingerprint as permission. An unbound refusal
+fingerprint cannot commit. A stale bound write exits 5, leaves stdout empty and
+prints a fixed re-preview instruction on stderr; preserve the exact original
+client/action/profile/opId/default-map/drift intent when preparing a new preview.
+Do not adopt a replacement fingerprint automatically. Syntax errors exit 2,
+not-found 4, malformed/runtime failures 1. Preview needs passive catalog evidence;
+unavailability does not trigger a provider refresh inside the command.
+
+History deletion is irreversible. The latest recovery row is protected. If a
+receipt says `snapshotRemoved:false`, the row is already retired and exit is 1;
+inspect before further cleanup, never claim rollback or repeat deletion. Aside
+sync empty results mean no eligible profiles; partial results leave successful
+writes intact and exit 1. There is no profile selector, local-write fallback or
+broad-sync fallback for that command. Preserve residual and redacted backup facts.
+
+Runtime Desktop import saves only and retains server conflict/availability/applied
+marker checks. On refusal, do not import locally or apply native state as a fallback.
+Cursor installer unavailable is a valid read even with null reason; no download,
+installation or trust change follows automatically.
+
+Hub activation off can return outer HTTP 200 with `available:false`: the CLI emits
+that narrow observation and exits 1. It is not an available empty Hub. Inner 409
+is exit 5; client-role, transport and malformed replies remain failures. Inspect
+the intended Hub and its activation setting without automatically changing them.
+
+Storage target forms conflict; omitted enable remains unchanged and set does not
+run cleanup. Forced link revoke requires `--force --yes`. Success reports remote
+cleanup skipped, and idempotent not-found reports it unverified; neither confirms
+an attempted remote disconnect. Review the remote-client disconnect recovery
+separately. Do not interpret exit 0 as proof that all remote state was removed.

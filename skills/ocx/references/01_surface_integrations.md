@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 33.
+Declared capabilities: 40.
 
 ### `ocx claude config`
 
@@ -211,7 +211,7 @@ State-changing: yes.
 
 JSON mode: `payload`.
 
-- Each toggle writes the selected client configuration through its runtime owner. Refused disables remain failures. Cursor status and installer have no branch in this handler and must remain deferred.
+- Each toggle writes the selected client configuration through its runtime owner. Refused disables remain failures. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor.
 
 ### `ocx integration client`
 
@@ -249,7 +249,7 @@ JSON mode: `payload`.
 
 - status/show/list reads all clients, one client or Aside profiles. history/journal reads rollback records; expired snapshots stay visible.
 - enable/disable requires --client; an omitted Aside --profile toggles all profiles. --overwrite-conflict applies only to enable.
-- restore requires --op (alias --op-id); --client requires --profile and only Aside supports that profile selector. --confirm-drift is an explicit user waiver, never auto-retried. No preview or journal-retirement verb is claimed.
+- restore requires --op (alias --op-id); --client requires --profile and only Aside supports that profile selector. --confirm-drift is an explicit user waiver, never auto-retried. Use client preview or restore --preview to inspect a change, history remove --op ID --yes to retire a journal row, and sync --client aside to refresh managed profiles.
 
 ### `ocx grok status`
 
@@ -430,7 +430,7 @@ JSON mode: `payload`.
 
 ### `ocx integration client enable`
 
-Usage: `ocx integration client enable --client <id> [--profile <id>] [--overwrite-conflict] [--json]`
+Usage: `ocx integration client enable --client <id> [--profile <id>] [--overwrite-conflict] [--plan-fingerprint <token>] [--reasoning-default <model=effort> ... | --clear-reasoning-defaults] [--json]`
 
 Apply the selected managed file integration.
 
@@ -448,15 +448,20 @@ State-changing: yes.
 | `--profile` | number | Aside nonnegative integer account ID; requires --client aside. |
 | `--overwrite-conflict` | boolean | Explicitly permit replacing a conflicting block. |
 | `--json` | boolean | Emit the result as JSON. |
+| `--plan-fingerprint` | string | Optional versioned token from a matching preview; stale intent is refused without retry. |
+| `--reasoning-default` | string | Repeat MODEL=EFFORT to replace the full Droid defaults map; exact model IDs, duplicate keys refused. |
+| `--clear-reasoning-defaults` | boolean | Droid apply/overwrite only: send an empty map, distinct from omitted inherited defaults. |
 
 JSON mode: `payload`.
 
 - An omitted Aside profile toggles all Aside profiles. Ownership, snapshots, journal and conflict refusals remain server-owned.
 - Partial Aside failures remain failures after emitting the per-profile result. Never infer permission to overwrite from a refusal.
+- Bound Aside mutations require one explicit profile. Repeat the exact preview action/profile/options. The token is concurrency evidence, not authorization; stale state requires a new explicit preview.
+- Droid map omission preserves inheritance; supplied entries replace the full map, clear sends {}. Only Droid apply/overwrite accepts these options.
 
 ### `ocx integration client disable`
 
-Usage: `ocx integration client disable --client <id> [--profile <id>] [--json]`
+Usage: `ocx integration client disable --client <id> [--profile <id>] [--plan-fingerprint <token>] [--json]`
 
 Disable the selected managed file integration.
 
@@ -473,15 +478,17 @@ State-changing: yes.
 | `--client` | string | Explicit file integration ID. |
 | `--profile` | number | Aside nonnegative integer account ID; requires --client aside. |
 | `--json` | boolean | Emit the result as JSON. |
+| `--plan-fingerprint` | string | Optional versioned token from a matching preview; stale intent is refused without retry. |
 
 JSON mode: `payload`.
 
 - An omitted Aside profile toggles all Aside profiles. Ownership, snapshots, journal and conflict refusals remain server-owned.
 - Partial Aside failures remain failures after emitting the per-profile result. Never infer permission to overwrite from a refusal.
+- Bound Aside mutations require one explicit profile. Repeat the exact preview action/profile/options. The token is concurrency evidence, not authorization; stale state requires a new explicit preview.
 
 ### `ocx integration client restore`
 
-Usage: `ocx integration client restore --op <opId> [--client aside --profile <id>] [--confirm-drift] [--json]`
+Usage: `ocx integration client restore --op <opId> [--client aside --profile <id>] [--confirm-drift] [--preview | --plan-fingerprint <token>] [--json]`
 
 Restore a selected rollback operation, retaining drift refusal.
 
@@ -491,6 +498,8 @@ State-changing: yes.
 |---|---|
 | POST | `/api/client-integrations/restore` |
 | POST | `/api/client-integrations/aside/profiles/{profileId}/restore` |
+| POST | `/api/client-integrations/restore/preview` |
+| POST | `/api/client-integrations/aside/profiles/{profileId}/preview` |
 
 | Flag | Value | Meaning |
 |---|---|---|
@@ -499,10 +508,14 @@ State-changing: yes.
 | `--profile` | number | Aside nonnegative integer account ID; requires --client aside. |
 | `--confirm-drift` | boolean | Explicitly allow replacing edits made after the snapshot. |
 | `--json` | boolean | Emit the result as JSON. |
+| `--preview` | boolean | Inspect restoration without mutating; exclusive with a commit fingerprint. |
+| `--plan-fingerprint` | string | Optional versioned token from a matching preview; stale intent is refused without retry. |
 
 JSON mode: `payload`.
 
 - With --client, restore requires --profile; only Aside profiles accept that selector. No automatic drift confirmation or retry.
+- Preview preserves exact opId/profile/confirm-drift intent. Generic restore derives the client on the server; the returned plan does not embed opId or complete command input.
+- A refused or no-op preview is completed inspection, not applied work. A stale bound mutation exits5 with a fixed re-preview hint; no replacement token is automatically adopted.
 
 ### `ocx claude config status`
 
@@ -670,6 +683,164 @@ JSON mode: `none`.
 - Uses local helpers or the live local apply route; connected gateway clients use the hub profile download path. No --json mode.
 - First-party requires a local hub with interception enabled. Preserve account-risk warnings, trust prompts and ownership refusals; metadata grants no consent.
 - Application and committed-marker persistence can diverge; inspect status after application and preserve warnings.
+
+### `ocx integration client preview`
+
+Usage: `ocx integration client preview --client <id> --operation <apply|overwrite|disable> [--profile <id>] [--reasoning-default <model=effort> ... | --clear-reasoning-defaults] [--json]`
+
+Inspect a managed client change before choosing whether to apply it.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| POST | `/api/client-integrations/preview` |
+| POST | `/api/client-integrations/aside/profiles/{profileId}/preview` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--client` | string | Explicit client; profile selectors require aside. |
+| `--profile` | number | One Aside nonnegative integer profile ID. |
+| `--operation` | string | Required apply, overwrite or disable; Aside requires one profile. |
+| `--reasoning-default` | string | Repeat MODEL=EFFORT to replace the full Droid defaults map; exact model IDs, duplicate keys refused. |
+| `--clear-reasoning-defaults` | boolean | Droid apply/overwrite only: send an empty map, distinct from omitted inherited defaults. |
+| `--json` | boolean | Emit one validated task result as JSON. |
+
+JSON mode: `payload`.
+
+- Uses an existing passive model snapshot; an unavailable preview never secretly refreshes providers or changes client files.
+- A valid refused plan, including an unbound refusal, is readable inspection. Only an applicable bound token can accompany a later write; repeat the original command intent.
+- Shows structural paths and consequences, not secret values or a client-file diff.
+
+### `ocx integration client history remove`
+
+Usage: `ocx integration client history remove --op <opId> --yes [--client aside [--profile <id>]] [--json]`
+
+Retire a selected rollback-history entry and its retained snapshot.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| DELETE | `/api/client-integrations/journal` |
+| DELETE | `/api/client-integrations/aside/profiles/journal` |
+| DELETE | `/api/client-integrations/aside/profiles/{profileId}/journal` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--op` | string | Exact operation ID to retire. |
+| `--yes` | boolean | Required explicit confirmation of irreversible rollback-history retirement. |
+| `--client` | string | Explicit client; profile selectors require aside. |
+| `--profile` | number | One Aside nonnegative integer profile ID. |
+| `--json` | boolean | Emit one validated task result as JSON. |
+
+JSON mode: `payload`.
+
+- journal remove is an alias. Omitting --client addresses the global journal; --client aside selects Aside history and optional --profile narrows it. Other clients are rejected for deletion scope.
+- The server protects the latest row and validates ownership. snapshotRemoved:false reports committed retirement with incomplete cleanup and exits1; never retry blindly or claim rollback.
+
+### `ocx integration client sync`
+
+Usage: `ocx integration client sync --client aside [--json]`
+
+Refresh the managed Aside profiles through their existing owner.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| POST | `/api/client-integrations/aside/sync` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--client` | string | Explicit client; profile selectors require aside. |
+| `--json` | boolean | Emit one validated task result as JSON. |
+
+JSON mode: `envelope`.
+
+- Uses the existing local attested synchronization exchange; no new public target/auth option, profile override or broad sync fallback.
+- Empty results mean no eligible profiles. Partial or malformed outcomes stay nonzero with safe per-profile recovery facts.
+
+### `ocx claude desktop profile show`
+
+Usage: `ocx claude desktop profile show [--json]`
+
+Read the selected running proxy’s Desktop profile and available models.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/claude-desktop` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit one validated task result as JSON. |
+
+JSON mode: `payload`.
+
+- The existing claude desktop show remains local. Runtime profile observation can gather model inventory; it is not guaranteed offline.
+
+### `ocx claude desktop profile import`
+
+Usage: `ocx claude desktop profile import <file|-> [--json]`
+
+Validate and save a Desktop profile on the selected running proxy.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit one validated task result as JSON. |
+
+JSON mode: `payload`.
+
+- Bounded JSON file or explicit stdin; canonical DesktopProfile validation and the management owner retain availability, concurrent-save and applied-marker rules.
+- Save only: --apply and native-mode flags are refused, and failed management writes never save a local fallback. Apply separately through the existing Desktop workflow.
+
+### `ocx integration native cursor status`
+
+Usage: `ocx integration native cursor status [--json]`
+
+Read Cursor installation, gateway requirements and model capabilities.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/native-integrations/cursor` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit one validated task result as JSON. |
+
+JSON mode: `payload`.
+
+- Status can gather model inventory but does not install or toggle Cursor. A displayed placeholder does not authorize a credential-required listener.
+
+### `ocx integration native cursor local-installer`
+
+Usage: `ocx integration native cursor local-installer [--json]`
+
+Read the available Cursor installer link without downloading or installing it.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/native-integrations/cursor/local-installer` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit one validated task result as JSON. |
+
+JSON mode: `payload`.
+
+- May fetch the public update manifest. available:false and nullable reason are valid observations; no installation or trust change is performed.
 
 ### `ocx codex-shim install`
 

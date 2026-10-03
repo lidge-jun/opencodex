@@ -863,3 +863,207 @@ discovered port. Threads/hints and unchanged on/off add no sync. Local JSON repo
 `changed`, observed `state`, and `sync`; void/malformed sync evidence is
 `unverified`, exits 1, and does not erase an already-landed change. Live writes
 retain full catalog disposition; read back after partial/unknown outcomes.
+
+## 21. Preview a file integration, then commit the reviewed plan
+
+Discover syntax offline; these operations need the intended running proxy:
+
+```bash
+ocx integration client preview --help
+ocx integration client status --client hermes --json
+ocx integration client preview --client hermes --operation apply --json > hermes-preview.json
+```
+
+Review `changes`, `state`, `foreignEdit`, `canApply` and `willChange`. A refused
+plan or applicable no-op is successful inspection (exit 0), not applied work.
+Changes are structural paths, not secret values or a full file diff. Preview
+uses passive catalog evidence; it does not secretly refresh providers. If the
+preview is unavailable, resolve catalog availability separately and preview again.
+
+Only after reviewing an applicable plan and choosing to apply it:
+
+```bash
+PLAN_FINGERPRINT="$(jq -er 'select(.canApply == true) | .fingerprint' hermes-preview.json)"
+ocx integration client enable --client hermes --plan-fingerprint "$PLAN_FINGERPRINT" --json
+ocx integration client status --client hermes --json
+```
+
+The token is concurrency evidence, not authorization. Commits accept `pN:` plus
+32 lowercase hex digits; a refused preview may show `pN:unbound`, which cannot
+commit. Repeat the exact action/client/profile/options. `apply` maps to enable;
+`overwrite` maps to enable with `--overwrite-conflict`; `disable` maps to disable.
+Existing direct enable/disable/restore remains available without a fingerprint.
+A stale commit prints a fixed re-preview instruction on stderr, leaves stdout
+empty and exits 5. Never adopt a replacement token or retry automatically.
+
+### Restore after inspecting drift
+
+The following operation/profile IDs are examples; select actual IDs from history:
+
+```bash
+ocx integration client history --client aside --profile 1 --json
+ocx integration client restore --op op-example --client aside --profile 1 --preview --json
+```
+
+If drift is refused, inspect the changes first. Only when replacing the later edits
+is intended, preview that explicit intent and review the resulting plan:
+
+```bash
+ocx integration client restore --op op-example --client aside --profile 1 --preview --confirm-drift --json > restore-preview.json
+```
+
+Then, if authorized, repeat the same op/profile/drift choice in the bound write:
+
+```bash
+RESTORE_FINGERPRINT="$(jq -er 'select(.canApply == true) | .fingerprint' restore-preview.json)"
+ocx integration client restore --op op-example --client aside --profile 1 --confirm-drift --plan-fingerprint "$RESTORE_FINGERPRINT" --json
+ocx integration client status --client aside --profile 1 --json
+```
+
+Aside preview and bound writes require one profile; there is no aggregate preview.
+Generic restore omits client/profile, and the server derives its non-Aside client
+from the operation. The plan does not contain opId or all original command input;
+keep that context yourself. `--preview` and `--plan-fingerprint` cannot combine.
+
+### Replace or clear Droid reasoning defaults
+
+Repeated `--reasoning-default MODEL=EFFORT` replaces the complete map, not one key.
+Use exact, case-sensitive namespaced IDs and efforts supported by the target.
+The example model below is fictional; substitute a supported connected model.
+
+```bash
+ocx integration client preview --client droid --operation apply --reasoning-default example/model-a=high --json > droid-preview.json
+```
+
+After review and an explicit apply decision:
+
+```bash
+DROID_FINGERPRINT="$(jq -er 'select(.canApply == true) | .fingerprint' droid-preview.json)"
+ocx integration client enable --client droid --reasoning-default example/model-a=high --plan-fingerprint "$DROID_FINGERPRINT" --json
+ocx integration client status --client droid --json
+```
+
+Repeat every map entry in the commit. Omission preserves existing defaults;
+`--clear-reasoning-defaults` sends `{}`. To clear, preview apply/overwrite with
+that flag and repeat it in the matching enable command. Clear and entries conflict;
+duplicate keys refuse. These flags work only for Droid apply/overwrite, never
+another client, disable or restore. The server validates model-specific efforts.
+
+For a requested complete clear, first inspect:
+
+```bash
+ocx integration client preview --client droid --operation apply --clear-reasoning-defaults --json > droid-clear-preview.json
+```
+
+After reviewing that applicable plan and choosing the clear:
+
+```bash
+DROID_CLEAR_FINGERPRINT="$(jq -er 'select(.canApply == true) | .fingerprint' droid-clear-preview.json)"
+ocx integration client enable --client droid --clear-reasoning-defaults --plan-fingerprint "$DROID_CLEAR_FINGERPRINT" --json
+```
+
+## 22. Retire recovery history or refresh Aside profiles
+
+History removal permanently retires the selected recovery record and its backup;
+it is not restore or disable. Inspect history, confirm that losing that recovery
+point is intended, then use its exact opId (the ID here is fictional):
+
+```bash
+ocx integration client history --client aside --profile 1 --json
+ocx integration client history remove --op op-example --client aside --profile 1 --yes --json
+ocx integration client history --client aside --profile 1 --json
+```
+
+No selector means the global journal; `--client aside` means aggregate Aside
+history and `--profile N` narrows it. Other client selectors are refused for
+removal. The newest row is protected. `snapshotRemoved:false` exits 1 after the
+record was retired: cleanup is incomplete, not rolled back. Do not replay deletion.
+
+```bash
+ocx integration client sync --client aside --json
+ocx integration client status --client aside --json
+```
+
+Sync uses the existing attested Aside owner, with no profile selector or broad
+sync/local fallback. `{results:[]}` means no eligible profiles and exits 0, not
+applied writes. Any failed profile exits 1 while preserving successful outcomes.
+Read every row, residual flag and separately labeled redacted backup path; address
+the refusal before another sync. Reopen Aside after verified profile-file changes.
+
+## 23. Save a runtime Desktop profile or inspect Cursor
+
+```bash
+ocx claude desktop profile show --json > desktop-observed.json
+jq '.profile' desktop-observed.json > desktop-profile.json
+```
+
+Edit and review the versioned profile itself, not the outer response. Preserve
+server-owned applied markers; do not forge them to claim application. Import
+accepts bounded regular JSON files or explicit piped stdin, with the existing
+4 MiB/30-second input contract. For the requested save:
+
+```bash
+ocx claude desktop profile import desktop-profile.json --json
+ocx claude desktop profile show --json
+```
+
+This saves on the selected runtime only. It does not apply to native Desktop;
+`--apply` and native-mode flags are refused. A failed runtime save never writes a
+local fallback. Existing `claude desktop show/import` remain local and existing
+`claude desktop apply` is a separate action on that machine; verify host/context
+before choosing it. Runtime profile reads can gather model inventory.
+
+```bash
+ocx integration native cursor status --json
+ocx integration native cursor local-installer --json
+```
+
+Cursor status can gather model inventory; installer lookup can fetch a public
+manifest. Neither is an offline guarantee, download, install or toggle. An
+unavailable installer with `reason:null` is valid, including when Private Inference
+is already installed. Credential mode requires an existing proxy credential;
+the displayed placeholder is not one. Do not fetch a key to complete this read.
+
+## 24. Observe the Hub and change maintenance policy deliberately
+
+```bash
+ocx remote-workspace hub status --json
+ocx remote-workspace hub runtimes --json
+ocx remote-workspace hub sessions --json
+```
+
+These read the selected management Hub; ordinary `remote-workspace status` stays
+executor-local. Runtimes is an object keyed `codex`, `claude`, `pi`, not an array.
+Available Hub with no devices/sessions is empty success. Disabled Hub can arrive
+as outer HTTP 200 with `available:false`, empty collections and a fixed CLI reason;
+the CLI prints this observation and exits 1. It is not an empty available Hub.
+Inner HTTP 409 exits 5 with stderr guidance. Use the intended Hub with feature
+activation configured; do not enable it or pair/start/revoke a session as recovery.
+Runtime reads can probe executable availability.
+
+```bash
+ocx storage policy show --json
+ocx storage policy set --archived-bytes-over 1073741824 --reduce-to-bytes 536870912 --json
+ocx storage policy show --json
+```
+
+This saves nested `trigger.archivedBytesOver` and `target.reduceToBytes` without
+starting cleanup or changing omitted enabled state. Byte values are safe
+nonnegative integers. Alternatively choose `--remove-oldest-percent 10` (legacy
+`--percent 10`); these two spellings and reduce-to are mutually exclusive.
+Percentages are integer CLI inputs with server-supported range 1–100. Read the
+returned policy/job; an already-enabled schedule retains its authority. Do not
+append `--enabled true` or run cleanup unless that additional effect is intended.
+
+Only when revocation without remote cleanup is explicitly requested:
+
+```bash
+ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
+```
+
+The link ID is fictional; use the selected actual ID. A successful forced revoke
+reports `remoteCleanup:"skipped"`, derived from force intent. Idempotent not-found
+reports `remoteCleanup:"unverified"`; neither proves a remote disconnect attempt.
+Both can exit 0. Follow the receipt's `ocx disconnect` recovery on the remote
+client when authorized. `--force` requires `--yes`; `--yes` alone is invalid.
+Ordinary revoke remains unchanged.

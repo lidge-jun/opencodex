@@ -913,6 +913,58 @@ ocx update --tag preview
 New versions become available when the [Release workflow](https://github.com/lidge-jun/opencodex/actions/workflows/release.yml)
 publishes them to npm.
 
+## Save cleanup thresholds without starting a cleanup
+
+```bash
+ocx storage policy show --json
+ocx storage policy set --archived-bytes-over 1073741824 --reduce-to-bytes 536870912 --json
+ocx storage policy show --json
+```
+
+The setter writes nested `trigger.archivedBytesOver` and one target. Byte values
+are safe nonnegative integers. Alternatively choose `--remove-oldest-percent 10`
+or legacy `--percent 10`; the two percentage flags and reduce-to are mutually
+exclusive. CLI percentages are integers with server-supported range 1–100.
+Omitted `--enabled` leaves the stored value unchanged; explicit values are `true`
+and `false`. Set does not run cleanup, but an already-enabled schedule remains
+in force. Do not add enable or an immediate policy run unless intended.
+
+The new-field receipt is `{ok:true,policy,job:{status}}`, with observed trigger,
+target, mode, schedule and optional last/next-run facts. `job.status` describes an
+existing idle/running state, not a cleanup started by this command. Read back on
+an unknown outcome rather than replaying the write.
+
+## Forced link revoke and remote recovery
+
+Only when skipping remote cleanup is explicitly intended, use the actual selected
+link ID (`lnk_0123456789abcdef` below is fictional):
+
+```bash
+ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
+```
+
+`--force` requires `--yes`; `--yes` alone is invalid. Ordinary revoke is unchanged.
+A forced success returns `{linkId,remoteCleanup:"skipped",recovery}`. Idempotent
+link-not-found instead reports `remoteCleanup:"unverified"`. Both can exit 0;
+these facts derive from CLI intent, not a server cleanup report. Neither means
+remote disconnect was attempted or confirmed. Follow the recovery instruction,
+`ocx disconnect` on the remote client, when that action is authorized.
+
+## Observe Remote Workspace from the Hub
+
+```bash
+ocx remote-workspace hub status --json
+ocx remote-workspace hub runtimes --json
+ocx remote-workspace hub sessions --json
+```
+
+These fixed management reads are separate from executor-local
+`ocx remote-workspace status`. Runtime availability is a keyed object; an available
+Hub with no devices/sessions is empty success. Disabled Hub observation can arrive
+as HTTP 200 with `available:false` yet exits 1; it is not empty success. Inner
+HTTP 409 exits 5. Reads never enroll devices, create sessions or submit prompts.
+See [Hub observation and recovery](/guides/remote-workspace/#inspect-the-hub-without-starting-a-session).
+
 ## Remote Hub client lifecycle
 
 Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, and `ocx connect rotate --pairing-code-stdin`. The initial catalog download fails after five seconds without incoming bytes, but active transfers may run longer; use `--catalog-timeout <seconds>` (1–120) to override that inactivity window. `ocx disconnect` restores local state offline and does not revoke the hub key. While connected only, `ocx connect revoke --admin-token-stdin` revokes the persisted `apiKeyId`; after disconnect use the hub's **Integrations → API Keys** page. Secrets are stdin-only and never belong in argv.

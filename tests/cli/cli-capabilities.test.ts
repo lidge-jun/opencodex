@@ -206,7 +206,6 @@ describe("ocx capabilities output", () => {
  * `route.exempt` needs, and the test prints the exact key to add or remove.
  */
 const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
-  "GET /api/claude-desktop",
   "GET /api/codex-auth/quota",
   "GET /api/request-history",
   "GET /api/request-history/{id}",
@@ -220,7 +219,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "POST /api/stop",
   "POST /api/system/restart",
   "POST /api/windows-tray",
-  "PUT /api/claude-desktop",
   "PUT /api/codex-auth/failover",
   "PUT /api/disabled-models",
 ];

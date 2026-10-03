@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 22.
+Declared capabilities: 25.
 
 ### `ocx link port`
 
@@ -73,7 +73,7 @@ JSON mode: `payload`.
 
 ### `ocx link revoke`
 
-Usage: `ocx link revoke --link-id <id> [--json]`
+Usage: `ocx link revoke --link-id <id> [--force --yes] [--json]`
 
 Revoke a link credential and remove its link record.
 
@@ -87,11 +87,15 @@ State-changing: yes.
 |---|---|---|
 | `--link-id` | string | Link id to revoke. |
 | `--json` | boolean | Emit the revoked link id as JSON. |
+| `--force` | boolean | Explicitly skip remote disconnect while retiring the local link; requires --yes. |
+| `--yes` | boolean | Confirms force only; refused without --force. |
 
 JSON mode: `envelope`.
 
-- Requires a valid link ID and loopback admin authority. No force-removal option exists.
-- Always emits a CLI-shaped {linkId} JSON object. Already-revoked link_not_found is idempotent success.
+- Requires a valid link ID and loopback admin authority. Explicit force additionally requires --yes.
+- Ordinary revoke always emits {linkId} JSON; forced revoke has human output or a JSON cleanup receipt. Already-revoked link_not_found is idempotent success.
+- Ordinary revoke retains its no-body and idempotent behavior. Forced success reports remoteCleanup:skipped from invocation intent; already-missing link reports unverified. Neither proves the remote client disconnected.
+- If forced cleanup was needed, run ocx disconnect on the remote client. No new enrollment, SSH trust or credential action is implied.
 
 ### `ocx remote-workspace pair`
 
@@ -477,3 +481,66 @@ JSON mode: `payload`.
 
 - Data-plane POST /v1/chat/completions, /v1/responses or /v1/messages according to --protocol; these are not management API routes. May spend upstream quota; run only for an explicitly authorized inference probe.
 - Uses runtime management headers and has no chosen-key input; success is not validation of a newly created data key.
+
+### `ocx remote-workspace hub status`
+
+Usage: `ocx remote-workspace hub status [--json]`
+
+Read Hub devices, runtime availability and sessions.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/remote-workspace` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit one validated task result as JSON. |
+
+JSON mode: `payload`.
+
+- Existing remote-workspace status remains executor-local. These fixed reads use the selected management Hub; they do not create pairing grants, sessions or remote commands.
+- Available empty lists succeed. Disabled Hub observations return explicit available:false and exit1; malformed or refused responses are not presented as empty success. Runtime reads can perform availability probes.
+
+### `ocx remote-workspace hub runtimes`
+
+Usage: `ocx remote-workspace hub runtimes [--json]`
+
+Read Codex, Claude and Pi availability on the Hub.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/remote-workspace/runtimes` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit one validated task result as JSON. |
+
+JSON mode: `payload`.
+
+- Existing remote-workspace status remains executor-local. These fixed reads use the selected management Hub; they do not create pairing grants, sessions or remote commands.
+- Available empty lists succeed. Disabled Hub observations return explicit available:false and exit1; malformed or refused responses are not presented as empty success. Runtime reads can perform availability probes.
+
+### `ocx remote-workspace hub sessions`
+
+Usage: `ocx remote-workspace hub sessions [--json]`
+
+Read Hub sessions and their public recent events.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/remote-workspace/sessions` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit one validated task result as JSON. |
+
+JSON mode: `payload`.
+
+- Existing remote-workspace status remains executor-local. These fixed reads use the selected management Hub; they do not create pairing grants, sessions or remote commands.
+- Available empty lists succeed. Disabled Hub observations return explicit available:false and exit1; malformed or refused responses are not presented as empty success. Runtime reads can perform availability probes.

@@ -2,6 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "cli-integration-preview.test.ts": "cli", "cli-integration-droid.test.ts": "cli", "cli-integration-journal.test.ts": "cli", "cli-aside-sync.test.ts": "cli", "cli-claude-desktop-profile.test.ts": "cli", "cli-integration-cursor.test.ts": "cli", "cli-remote-workspace-hub.test.ts": "cli", "cli-storage-policy-fields.test.ts": "cli", "cli-link-force.test.ts": "cli",
     "cli-account-policy.test.ts": "cli",
     "cli-account-login-options.test.ts": "cli",
     "cli-logout-runtime.test.ts": "cli",

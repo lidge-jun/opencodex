@@ -522,6 +522,53 @@ Usage errors exit 2 before any request is sent. `--json` prints the management A
 
 ## Client integrations
 
+### Preview and recover managed file integrations
+
+```bash
+ocx integration client preview --client hermes --operation apply --json
+ocx integration client restore --op op-example --preview --json
+```
+
+`op-example` is fictional; use an ID from history. Preview operations are apply,
+overwrite and disable; restore uses `--preview` on its existing command. Review
+structural changes and `canApply`/`willChange`; valid refusal/no-op exits 0 without
+applying. Enable/disable/restore accept optional `--plan-fingerprint` for an
+explicit bound commit. Direct legacy writes remain available. Aside preview or
+bound writes require `--client aside --profile N`. Drift confirmation and overwrite
+are never automatic; stale binding exits 5 with empty stdout and a re-preview
+instruction on stderr. Follow the [complete preview/commit and drift recipes](/guides/integrations/#preview-and-bind-a-terminal-write).
+
+Droid apply/overwrite supports repeated `--reasoning-default MODEL=EFFORT` for
+full map replacement, or exclusive `--clear-reasoning-defaults` for `{}`. Omission
+preserves the map. Repeat the exact map in preview and commit; see
+[Droid defaults](/guides/integrations/#factory-droid).
+
+History removal is irreversible and requires an exact opId plus `--yes`:
+`ocx integration client history remove --op op-example --yes --json` addresses the
+global journal. Only `--client aside` and optional `--profile N` provide narrower
+delete scopes. The newest row is protected. `snapshotRemoved:false` exits 1 after
+retirement with cleanup incomplete; do not retry deletion or claim rollback.
+
+`ocx integration client sync --client aside --json` refreshes eligible profiles
+through the attested owner, with no profile selector or local fallback. Empty
+`results` is successful observation of no eligible profiles; a failed row makes
+the aggregate nonzero while preserving other successes. Read status and recovery
+facts before retrying; [Aside controls](/guides/integrations/#aside-profile-controls)
+explain profile intent versus file state.
+
+### Inspect Cursor without installing it
+
+```bash
+ocx integration native cursor status --json
+ocx integration native cursor local-installer --json
+```
+
+Status can gather model inventory; installer lookup may fetch a public manifest.
+They do not download/install or toggle Cursor. Status distinguishes credential
+from placeholder gateway mode; the placeholder is not an access credential.
+Installer `{available:false,url:null,version:null,reason:null}` is valid, including
+when Private Inference is already installed. A valid unavailable read exits 0.
+
 ### `ocx integration <claude|grok> ...`
 
 Manage supported Claude and Grok integrations. The direct command families below expose their
@@ -550,6 +597,31 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 The families are `opus`, `fable`, `sonnet`, and `haiku`; new routes start in `opus`. `none` is valid
 only when that family is empty. Legacy apply flags `--static`, `--hybrid`, and `--discovery-only`
 remain supported. Use `ocx claude config <status|set> ...` for Claude Code settings.
+
+#### Read or save the selected runtime's Desktop profile
+
+The existing show/import commands above are local. The `profile` family targets
+the running management runtime and can gather model inventory:
+
+```bash
+ocx claude desktop profile show --json > desktop-observed.json
+jq '.profile' desktop-observed.json > desktop-profile.json
+```
+
+Edit/review the versioned profile, preserving server-owned applied markers. For
+an authorized save, then read-back:
+
+```bash
+ocx claude desktop profile import desktop-profile.json --json
+ocx claude desktop profile show --json
+```
+
+Import accepts the profile itself, not the outer `{profile,models,rendered,port}`
+response, using bounded regular JSON files or explicit stdin `-` (4 MiB/30 seconds).
+It returns those observed fields plus `ok:true`, meaning saved only. `--apply` and
+native-mode flags are rejected; failed runtime save has no local fallback. Apply
+is a separate existing Desktop action on its machine, so verify host/context
+before choosing it. Rendered models are not proof of native application.
 
 ### `ocx opencode [opencode args...]`
 
