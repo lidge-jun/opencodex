@@ -257,12 +257,13 @@ transport side (send budget, failover, logging) is in
 
 ## Managed native Messages
 
-Behind `protocols.rollout.managedMessagesNative` (default off). A Messages request whose settled
+Behind `protocols.rollout.managedMessagesNative` (explicit policy defaults off). An enabled Anthropic
+pool supplies absent native flags for its settled provider under the [pool native preference](../providers/anthropic-account-pool.md#native-request-preference); explicit false/malformed flags remain off. A Messages request whose settled
 route is a direct, key-auth `anthropic` provider is sent as Messages instead of replaying through
-Responses; with `managedMessagesNativeOAuth` also on, so is an unpooled Anthropic OAuth account
+Responses; with `managedMessagesNativeOAuth` also on, so is an Anthropic OAuth account, including pooled accounts
 (below). `nativeMessagesDeclineReason` names the first rule that keeps a route off the lane:
 `rollout-disabled`, `cross-wire-ir` (another adapter), `auth-mode-not-native` (`forward`, or an
-OAuth route the OAuth rule does not admit), `oauth-account-pool`, `combo-or-policy-route`, `effort-row` / `fast-row` (synthetic rows need the
+OAuth route the OAuth rule does not admit), `combo-or-policy-route`, `effort-row` / `fast-row` (synthetic rows need the
 adapter's wire rewrite), `vision-preprocessing` (an image for a model declared unable to read
 it), and `bridge-only-policy` when operator policy that only the translated path applies would
 engage: a pinned reasoning effort for the route (`resolvePinnedEffort`, read with the translated
@@ -299,7 +300,12 @@ Caller betas. The ingress hands over `anthropic-beta` explicitly; caller `Author
 `x-api-key` never reach the managed provider.
 `src/adapters/anthropic/beta-allowlist.ts` keeps a value only when it is on the list for the
 destination's class and re-emits it in the list's own spelling: `interleaved-thinking-2025-05-14`
-for `api.anthropic.com`, nothing for an Anthropic-compatible host. Proxy-owned betas (the OAuth
+for generic callers to `api.anthropic.com`, plus the native-client allowance described below for
+recognized native clients; nothing for an Anthropic-compatible host. Independently of client
+recognition, a caller-requested `inline-tools-2026-09-15` is retained when outgoing system-message
+content directly contains typed inline definitions or tool references in additions/removals.
+Arguments, schemas and nested/unknown containers do not activate that feature allowance; no beta
+is injected. Proxy-owned betas (the OAuth
 pair) are set by the builder, and an operator's configured beta is merged, not replaced. Any
 dropped value adds `anthropic-beta-dropped` to the trace; the value itself is never recorded.
 
@@ -314,8 +320,8 @@ dropped, a message left empty dropped) and the trace gains `opaque-state-strippe
 fails closed. Because the source body is never mutated, each build — including one after a key
 re-selection moves to another domain — decides from the full envelope copy the lane was given.
 
-Client identity. `src/adapters/anthropic/client-identity.ts` captures a bounded observed CLI bundle
-on an opaque request-local handle: CLI-class UA plus valid session UUID, `X-App: cli`, JS and Node
+Client identity. `src/adapters/anthropic/client-identity.ts` captures a bounded observed CLI or Desktop Code bundle
+on an opaque request-local handle: recognized CLI/SDK/Desktop Code UA plus valid session UUID, `X-App: cli`, JS and Node
 SDK markers are required. Optional allowlisted SDK and request-id fields retain valid scalars.
 Duplicates, oversized/invalid values and headers named by `Connection` cannot gain forwarding
 authority. The handle stores its headers privately in a WeakMap and serializes without them.
@@ -326,9 +332,9 @@ Caller credentials, proxy/hop headers, arbitrary SDK names and betas are never p
 These are compatibility observations, not authorization or proof of client provenance. Missing
 identity, generated Responses, caller-forward and compatible destinations keep their contracts.
 The accepted native first-party behavior preserves one genuine Claude Code session id and its
-metadata device/session components across token refresh and an eligible unpooled account switch,
+metadata device/session components across token refresh and an eligible account switch,
 matching a genuine client on a manual account switch. Consequently, accounts serving that session
-are linkable upstream. Pooled accounts stay on the Responses bridge described below. Traffic without
+are linkable upstream. Pooled accounts use the native builder and shared Anthropic routing policy. Traffic without
 a genuine client identity retains per-credential synthesized session ids.
 `tests/adapters/anthropic/anthropic-client-identity.test.ts` and
 `tests/claude-integration/messages-native-oauth.test.ts` cover header continuity through refresh
@@ -336,25 +342,40 @@ and account switch, destination isolation, bounded parsing and credential exclus
 
 OAuth. Behind `managedMessagesNativeOAuth`, which `resolveProtocolSettings` treats as off unless
 `managedMessagesNative` is on. Only the `anthropic` provider the OAuth store serves, only to
-`api.anthropic.com` (the builder refuses any other host for an OAuth token), and only an unpooled
-account set: `anthropicAccountPool.enabled` (config) or a stored quorum of two usable accounts
-(`hasAnthropicFailoverQuorum`, supplied by the ingress and `count_tokens`, never by the planner)
-declines with `oauth-account-pool`, because rotation, session affinity and quota ranking live in
-`prepareResponsesTransport`. `src/server/messages-native-oauth.ts` resolves the account at
-dispatch by the same steps that transport takes for an unpooled route (capture the selection,
-resolve the active snapshot, commit against the capture) and re-checks the binding before every
-physical send, re-resolving through the same owner if it moved. Planning and `count_tokens` read
-config and the read-only account set only; nothing selects, refreshes or writes. The body gets the
-Claude Code identity block and declared client tool names under the OAuth prefix.
+`api.anthropic.com` (the builder refuses any other host for an OAuth token). Native dispatch uses
+shared Anthropic strategy, model-route restrictions and session affinity. A shared Desktop system
+cache cohort never supplies affinity. `src/server/messages-native-oauth.ts` resolves and commits
+an exact credential generation and rechecks the current route and binding before each physical send.
+Route changes during asynchronous preparation re-enter bounded admission; pause, manual selection,
+credential replacement and provider UUID changes cannot authorize a stale send. Planning and
+`count_tokens` select, refresh and write no accounts. The body retains the native preamble when
+recognized, otherwise gets the Claude Code identity block, with declared OAuth tool names.
 `src/adapters/anthropic/account-metadata.ts` copy-on-write aligns a valid JSON-string
 `metadata.user_id.account_uuid` with the provider UUID captured alongside the native binding.
 The local pool id is never used; malformed, absent and unknown metadata stays unchanged.
 Every rebuild starts from the source body; the binding also checks UUID equality before send.
 Conflicting provider credential headers fail before dispatch on every OAuth build, including
 builds without a provider UUID.
+Native OAuth Messages collect top-level and typed inline tool declarations before rewriting declared
+client names in tool choices, uses, references, additions and removals, including typed tool-result
+content. Typed built-in names stay fixed; ambiguous original or wire-name collisions are refused.
+The copy-on-write traversal leaves input schemas, tool arguments, unknown containers and cache markers
+(including lifetimes) opaque. Nested inline support is structural; it does not assert upstream acceptance.
 Key-auth and caller-forward requests retain their metadata. The answer's
-`tool_use` names are mapped back for exactly those names. A 401 or 429 is answered as the bridge
-answers an unpooled account: no refresh replay, no same-token replay, no rotation.
+`tool_use` names are mapped back for exactly those names. A 401 remains terminal. Classified
+pre-output 429 and account-entitlement 403 responses use shared bearer-fenced recovery within
+account-failover and physical-send limits. Refused response bodies are disposed before rebinding.
+Already-tried alternate accounts are excluded; the shared permitted same-account throttle retry
+remains available. Each physical response records quota against its sending credential, and family
+revalidation admission precedes send accounting. No account recovery occurs after output consumption.
+
+Observed native CLI and Desktop Code compatibility bundles preserve an existing bounded billing
+and known identity preamble through `src/adapters/anthropic/native-client-preamble.ts`; the proxy
+does not generate or sign billing text. Counting uses the same observed bundle. The first-party
+native beta allowance retains the source-listed inline-tool, per-turn control, thinking display,
+advisor and scoped-cache schemas. Advisor may perform sub-inference already requested by the caller;
+no feature or beta-gated body is injected. Generic managed callers keep the narrower allowance,
+and compatible destinations receive no first-party allowance. These handles grant no credential authority.
 
 `handleNativeMessages` mirrors native Chat on the shared pieces: `beginInferenceAttempt`,
 `createFinalRequestLog`, the request spend tracker charged per physical send, proactive key

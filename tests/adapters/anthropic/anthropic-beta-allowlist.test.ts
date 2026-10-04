@@ -101,3 +101,15 @@ describe("the builder applies the allowlist", () => {
     expect(built.headers).not.toHaveProperty("anthropic-beta");
   });
 });
+
+describe('observed native client feature betas', () => {
+  const nativeBetas = ['advisor-tool-2026-03-01', 'per-turn-control-2026-07-01', 'redact-thinking-2026-02-12', 'inline-tools-2026-09-15', 'thinking-display-updates-2026-08-18', 'prompt-caching-scope-2026-01-05', 'mid-conversation-system-2026-04-07'];
+  test('keeps required schemas only for an observed first-party native client', () => {
+    expect(allowlistAnthropicBetas(nativeBetas.join(','), 'first-party', { observedNativeClient: true })).toEqual({betas:nativeBetas, dropped:false});
+    expect(allowlistAnthropicBetas(nativeBetas.join(','), 'first-party')).toEqual({betas:[], dropped:true});
+    expect(allowlistAnthropicBetas(nativeBetas.join(','), 'compatible', { observedNativeClient: true })).toEqual({betas:[], dropped:true});
+  });
+  test('unknown betas remain excluded for an observed native client', () => {
+    expect(allowlistAnthropicBetas('inline-tools-2026-09-15,unknown-fixture-2099-01-01','first-party',{ observedNativeClient: true })).toEqual({betas:['inline-tools-2026-09-15'],dropped:true});
+  });
+});

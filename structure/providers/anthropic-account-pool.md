@@ -145,3 +145,35 @@ limits array retires absent families. Shared rejection and family rejection keep
 resets, so Fable must wait for both relevant windows while Sonnet need only wait for shared quota.
 
 Regression coverage: `tests/adapters/anthropic/anthropic-model-weekly-admission.test.ts`.
+
+## Native Messages dispatch
+
+`src/server/messages-native-oauth.ts` binds native Claude Messages through the same session,
+model-route and generation-fenced account authority as Responses. It rechecks current model routes
+across asynchronous preparation and before sending. Concurrent affine sessions retain their own
+account while a manual selection revokes stale affinity authority.
+`src/server/messages-native.ts` preserves caller message/cache structure while substituting the
+committed credential and provider UUID. Physical sends acquire family admission before spend/send
+accounting, release the lease on every exit and attribute quota only to the actual sending generation.
+Bounded pre-output refusal recovery uses `src/oauth/anthropic-account-refusal.ts`; optional tried-account
+exclusions apply only to alternate selection, preserving the permitted same-account throttle retry.
+Rejected bodies are disposed before rebinding; output consumption never re-enters account recovery.
+Account changes may start a cold cache. The proxy does not share caches across accounts.
+
+## Native request preference
+
+`anthropicAccountPool.nativeMessages` is an optional Anthropic-only boolean, defaulting to true.
+`src/protocols/settings.ts` applies this default only to the settled `anthropic` provider with
+the pool enabled and only to absent native rollout flags. Explicit false or malformed present
+flags stay off; a false/malformed pool preference vetoes pooled native dispatch, and OAuth requires
+managed native. Pool-off and other providers retain explicit settings. Policy revisions include
+normalized input states as well as effective policy, so masked setting changes invalidate previews.
+The config schema salvages malformed present native policy conservatively without discarding
+unrelated providers. Validated writes reject malformed input.
+
+`src/server/management/oauth-account-routes.ts` exposes the preference through unified and legacy
+pool settings. Anthropic writes patch the latest persisted config through its mutation owner before
+updating live state. A confirmed published write followed by bookkeeping failure adopts the saved
+pool and returns a fixed warning; an unpublished failure keeps old state. Unknown outcomes require
+reload and are not represented as a successful save. The GUI checkbox is a saved preference rather
+than a promise that a route is eligible; explicit rollout opt-outs still apply.

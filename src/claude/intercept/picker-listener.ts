@@ -23,6 +23,10 @@ export interface PickerListenerOptions {
 }
 export interface PickerListenerHandle { port: number; close(): Promise<void> }
 
+// Browser session cookies can exceed the HTTP compatibility layer's 16 KiB default.
+// Keep both sides bounded, while allowing ordinary desktop session headers through.
+export const PICKER_MAX_HEADER_BYTES = 64 * 1024;
+
 const HOP_HEADERS = new Set([
   "connection", "keep-alive", "proxy-connection", "proxy-authenticate", "proxy-authorization",
   "te", "trailer", "transfer-encoding", "upgrade",
@@ -65,7 +69,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
   const upstream = options.upstream ?? { host: "claude.ai", port: 443, servername: "claude.ai" };
   const cap = options.maxEncodedBytes ?? BOOTSTRAP_MAX_ENCODED_BYTES;
   const upgrades = new Set<Duplex>();
-  const server = createServer({ cert: options.leaf.certPem, key: options.leaf.keyPem, ALPNProtocols: ["http/1.1"] });
+  const server = createServer({ cert: options.leaf.certPem, key: options.leaf.keyPem, ALPNProtocols: ["http/1.1"], maxHeaderSize: PICKER_MAX_HEADER_BYTES });
 
   server.on("request", (req: IncomingMessage, res: ServerResponse) => {
     const method = req.method ?? "GET";
@@ -87,7 +91,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     const upReq = httpsRequest({
       host: upstream.host, port: upstream.port, servername: upstream.servername,
       ca: upstream.ca, rejectUnauthorized: true, agent: false,
-      method, path: req.url, headers,
+      method, path: req.url, headers, maxHeaderSize: PICKER_MAX_HEADER_BYTES,
     }, upRes => {
       const status = upRes.statusCode ?? 502;
       const originalHeaders = filteredHeaders(upRes.rawHeaders);
@@ -132,7 +136,12 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
         res.end(rewritten ?? original);
       });
     });
-    upReq.on("error", fail);
+    upReq.on("error", error => {
+      if ((error as NodeJS.ErrnoException).code === "HPE_HEADER_OVERFLOW") {
+        options.log?.(`picker ${method} ${category} upstream:headers-too-large`);
+      }
+      fail();
+    });
     req.on("error", () => upReq.destroy());
     res.on("close", () => { if (!res.writableEnded) upReq.destroy(); });
     req.pipe(upReq);

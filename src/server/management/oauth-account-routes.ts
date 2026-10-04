@@ -1,3 +1,5 @@
+import { readConfigFileSnapshot, validateConfigCandidate } from "../../config/diagnostics";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { parseAnthropicModelRoutes, readAnthropicModelRoutes } from "../../oauth/anthropic-model-routes";
 import { effectiveAnthropicAccountThreshold } from "../../oauth/anthropic-account-threshold";
 import { handleAnthropicAccountThreshold } from "./anthropic-account-threshold";
@@ -16,6 +18,7 @@ import {
   readConfigDiagnostics,
   reconcileLiveConfigFromDisk,
   saveConfigPreservingClaudeCode,
+  mutatePersistedConfig,
 } from "../../config";
 import {
   clearLoginState,
@@ -208,6 +211,44 @@ function genericOAuthProviderConfig(provider: string, config: ManagementContext[
   if (configured) return configured;
   const definition = OAUTH_PROVIDERS[provider];
   return definition?.resolveProviderConfig?.(config) ?? definition?.providerConfig;
+}
+
+/** Both Anthropic writers share publication-aware recovery from the atomic mutation owner. */
+function persistAnthropicPoolPatch(
+  config: OcxConfig,
+  patch: (target: OcxConfig) => { changed: boolean; value: NonNullable<OcxConfig["anthropicAccountPool"]> },
+): { status: "saved"; warning?: "config_bookkeeping_failed" } | { status: "failed"; response: Response } {
+  const before = readConfigFileSnapshot();
+  const unknown = () => ({ status: "failed" as const, response: jsonResponse({
+    error: "Pool settings save state is unknown; reload settings before editing again",
+    code: "config_save_state_unknown",
+  }, 409) });
+  try {
+    const saved = mutatePersistedConfig(patch);
+    if (saved.status === "unavailable") return unknown();
+    config.anthropicAccountPool = saved.value;
+    reconcileLiveStateStores();
+    return { status: "saved" };
+  } catch (error) {
+    const persisted = readConfigFileSnapshot();
+    if (persisted.diagnostics.source !== "file" || persisted.raw === undefined) return unknown();
+    // File reads may salvage hand edits; recovery success requires a strict, authoritative document.
+    let validated: ReturnType<typeof validateConfigCandidate>;
+    try { validated = validateConfigCandidate(JSON.parse(persisted.raw.replace(/^\uFEFF/, ""))); }
+    catch { return unknown(); }
+    if (!validated.ok) return unknown();
+    const current = validated.config;
+    const expected = patch(structuredClone(current)).value;
+    const matches = JSON.stringify(current.anthropicAccountPool) === JSON.stringify(expected);
+    if (matches) {
+      config.anthropicAccountPool = current.anthropicAccountPool;
+      // A failed reconcile must not turn confirmed publication back into a rollback.
+      try { reconcileLiveStateStores(); } catch { /* Fixed warning covers bookkeeping failure. */ }
+      return { status: "saved", warning: "config_bookkeeping_failed" };
+    }
+    if (error instanceof ConfigWritePublishedError || persisted.raw !== before.raw) return unknown();
+    return { status: "failed", response: jsonResponse({ error: "Pool settings could not be saved" }, 500) };
+  }
 }
 
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -565,13 +606,17 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (req.method !== "GET" && !isPlainRecord(rawBody)) {
       return jsonResponse({ error: "body must be an object" }, 400);
     }
-    const fields = rawBody as { provider?: unknown; enabled?: unknown; strategy?: unknown; stickyLimit?: unknown; autoSwitchThreshold?: unknown; quotaWindow?: unknown; maxConcurrentPerAccount?: unknown; routes?: unknown };
+    const fields = rawBody as { provider?: unknown; enabled?: unknown; strategy?: unknown; stickyLimit?: unknown; autoSwitchThreshold?: unknown; quotaWindow?: unknown; maxConcurrentPerAccount?: unknown; routes?: unknown; nativeMessages?: unknown };
     const provider = req.method === "GET"
       ? (url.searchParams.get("provider") ?? "").trim().toLowerCase()
       : (typeof fields.provider === "string" ? fields.provider.trim().toLowerCase() : "");
     const kind = provider ? poolSettingsCapability(provider, config.providers?.[provider]) : null;
     if (!provider || !kind) {
       return jsonResponse({ error: "pool settings are only available for the codex, anthropic and generic OAuth pools" }, 400);
+    }
+    if (Object.hasOwn(fields, "nativeMessages")) {
+      if (kind !== "anthropic") return jsonResponse({ error: "nativeMessages is only part of the anthropic pool contract" }, 400);
+      if (typeof fields.nativeMessages !== "boolean") return jsonResponse({ error: "nativeMessages must be a boolean" }, 400);
     }
     // Validated by the SHARED parsers before any kind-specific write, so a bad strategy or
     // sticky limit is refused identically whichever pool is addressed.
@@ -625,17 +670,24 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         if (stickyLimit !== undefined) config.accountPoolStickyLimit = stickyLimit;
         if (autoSwitchThreshold !== undefined) config.autoSwitchThreshold = autoSwitchThreshold;
       } else if (kind === "anthropic") {
-        const pool = { ...(config.anthropicAccountPool ?? {}) };
-        if (fields.enabled !== undefined) pool.enabled = fields.enabled as boolean;
-        if (strategy !== undefined) pool.strategy = strategy as never;
-        if (stickyLimit !== undefined) pool.stickyLimit = stickyLimit;
-        if (autoSwitchThreshold !== undefined) pool.autoSwitchThreshold = autoSwitchThreshold;
-        if (quotaWindow !== undefined) pool.quotaWindow = quotaWindow as never;
-        if (Object.hasOwn(fields, "routes")) {
-          if (fields.routes === null) delete pool.routes;
-          else if (parsedRoutes?.ok) pool.routes = parsedRoutes.routes;
-        }
-        config.anthropicAccountPool = pool;
+        const patchPool = (target: OcxConfig) => {
+          const pool = { ...(target.anthropicAccountPool ?? {}) };
+          if (fields.nativeMessages !== undefined) pool.nativeMessages = fields.nativeMessages as boolean;
+          if (fields.enabled !== undefined) pool.enabled = fields.enabled as boolean;
+          if (strategy !== undefined) pool.strategy = strategy as never;
+          if (stickyLimit !== undefined) pool.stickyLimit = stickyLimit;
+          if (autoSwitchThreshold !== undefined) pool.autoSwitchThreshold = autoSwitchThreshold;
+          if (quotaWindow !== undefined) pool.quotaWindow = quotaWindow as never;
+          if (Object.hasOwn(fields, "routes")) {
+            if (fields.routes === null) delete pool.routes;
+            else if (parsedRoutes?.ok) pool.routes = parsedRoutes.routes;
+          }
+          target.anthropicAccountPool = pool;
+          return { changed: true, value: pool };
+        };
+        const saved = persistAnthropicPoolPatch(config, patchPool);
+        if (saved.status === "failed") return saved.response;
+        return jsonResponse({ ...unifiedPoolSettingsDto(config, provider, kind), ...(saved.warning ? { warning: saved.warning } : {}) });
       } else {
         const prov = config.providers[provider]!;
         const next = { ...(prov.oauthAccountFailover ?? {}) };
@@ -679,6 +731,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       stickyLimit: normalizeAccountPoolStickyLimit(pool.stickyLimit),
       quotaWindow: normalizeAccountPoolQuotaWindow(pool.quotaWindow),
       ...readAnthropicModelRoutes(pool.routes),
+      nativeMessages: !Object.hasOwn(pool, "nativeMessages") || pool.nativeMessages === true,
       experimental: true,
     });
   }
@@ -696,8 +749,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       quotaWindow?: unknown;
       maxConcurrentPerAccount?: unknown;
       routes?: unknown;
+      nativeMessages?: unknown;
     };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    if (Object.hasOwn(body, "nativeMessages")) {
+      if (provider !== "anthropic") return jsonResponse({ error: "nativeMessages is only part of the anthropic pool contract" }, 400);
+      if (typeof body.nativeMessages !== "boolean") return jsonResponse({ error: "nativeMessages must be a boolean" }, 400);
+    }
     if (provider !== "anthropic") {
       const {
         poolSettingsCapability, genericPoolSettingsDto, parseGenericPoolStrategy, parseGenericAutoSwitchThreshold,
@@ -796,28 +854,36 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const parsedLegacyRoutes = Object.hasOwn(body, "routes") && body.routes !== null
       ? parseAnthropicModelRoutes(body.routes) : null;
     if (parsedLegacyRoutes && !parsedLegacyRoutes.ok) return jsonResponse({ error: parsedLegacyRoutes.error }, 400);
-    const routes = Object.hasOwn(body, "routes")
-      ? (parsedLegacyRoutes?.ok ? parsedLegacyRoutes.routes : undefined)
-      : config.anthropicAccountPool?.routes;
-    config.anthropicAccountPool = {
-      enabled,
-      autoSwitchThreshold: threshold,
-      ...(strategy !== undefined ? { strategy } : {}),
-      ...(stickyLimit !== undefined ? { stickyLimit } : {}),
-      ...(quotaWindow !== undefined ? { quotaWindow } : {}),
-      ...(routes !== undefined ? { routes } : {}),
+    const legacyPatch = (target: OcxConfig) => {
+      const pool = { ...(target.anthropicAccountPool ?? {}) };
+      if (body.enabled !== undefined) pool.enabled = enabled;
+      else if (pool.enabled === undefined) pool.enabled = false;
+      if (body.nativeMessages !== undefined) pool.nativeMessages = body.nativeMessages as boolean;
+      if (body.autoSwitchThreshold !== undefined) pool.autoSwitchThreshold = threshold;
+      else if (pool.autoSwitchThreshold === undefined) pool.autoSwitchThreshold = 80;
+      if (body.strategy !== undefined) pool.strategy = strategy;
+      if (body.stickyLimit !== undefined) pool.stickyLimit = stickyLimit;
+      if (body.quotaWindow !== undefined) pool.quotaWindow = quotaWindow;
+      if (Object.hasOwn(body, "routes")) {
+        if (body.routes === null) delete pool.routes;
+        else if (parsedLegacyRoutes?.ok) pool.routes = parsedLegacyRoutes.routes;
+      }
+      target.anthropicAccountPool = pool;
+      return { changed: true, value: pool };
     };
-    saveConfigPreservingClaudeCode(config);
-    reconcileLiveStateStores();
+    const saved = persistAnthropicPoolPatch(config, legacyPatch);
+    if (saved.status === "failed") return saved.response;
     return jsonResponse({
       ok: true,
       provider,
-      enabled,
-      autoSwitchThreshold: threshold,
-      strategy: normalizeAccountPoolStrategy(strategy),
-      stickyLimit: normalizeAccountPoolStickyLimit(stickyLimit),
-      quotaWindow: normalizeAccountPoolQuotaWindow(quotaWindow),
-      routes: routes ?? null,
+      enabled: config.anthropicAccountPool?.enabled === true,
+      autoSwitchThreshold: config.anthropicAccountPool?.autoSwitchThreshold ?? 80,
+      strategy: normalizeAccountPoolStrategy(config.anthropicAccountPool?.strategy),
+      stickyLimit: normalizeAccountPoolStickyLimit(config.anthropicAccountPool?.stickyLimit),
+      quotaWindow: normalizeAccountPoolQuotaWindow(config.anthropicAccountPool?.quotaWindow),
+      routes: config.anthropicAccountPool?.routes ?? null,
+      nativeMessages: !Object.hasOwn(config.anthropicAccountPool ?? {}, "nativeMessages") || config.anthropicAccountPool?.nativeMessages === true,
+      ...(saved.warning ? { warning: saved.warning } : {}),
       experimental: true,
     });
   }

@@ -198,7 +198,9 @@ The User-Agent is a routing hint, not a trust boundary: a client that fakes it r
 any local process already reaches (the `api.anthropic.com` intercept is on the Claude Code proxy
 too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
 because each terminator presents a certificate only its intended client trusts. `claude.ai:443` is
-terminated by a `node:https` HTTP/1.1 relay (`picker-listener.ts`) only while the runtime's cached
+terminated by a `node:https` HTTP/1.1 relay (`picker-listener.ts`) with a bounded 64 KiB
+incoming-request and ordinary upstream-response header allowance for browser session cookies,
+only while the runtime's cached
 decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
 trusted in the login keychain (`picker-trust.ts`). The picker CA (`picker-ca.ts`) carries critical
@@ -242,8 +244,12 @@ remote `ccr` (`picker-bootstrap.ts`), failing open to the original bytes; the mo
 comes from a persisted snapshot (`picker-models.ts`), so a bootstrap never waits on discovery. Picker aliases carry `[1m]` only for authoritative windows of at least 1M, using the shared context marker helper with auto-context disabled. Sub-million opt-ins remain unmarked because the picker cannot guarantee the Desktop runner's compaction environment. A
 CONNECT to claude.ai that arrives before the first refresh waits at most 3 s, then goes blind. A
 picker proxy bind failure only disables picker mode; a picker construction or start failure closes
-every socket the start had bound before rethrowing. Nothing is logged but method, bootstrap or
-other, and status.
+every socket the start had bound before rethrowing. Ordinary session cookies within the header
+allowance relay unchanged. Upstream header overflow returns an empty 502 and logs the fixed
+reason `upstream:headers-too-large`; other records contain only method, bootstrap or other,
+status, and fixed bootstrap rewrite outcomes. Header values and request paths are not logged.
+Upgraded connections retain raw TLS relay semantics; their upstream bytes do not pass through
+the ordinary HTTP response parser.
 
 ### Picker catalog rewrite bounds
 

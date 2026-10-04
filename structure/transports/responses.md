@@ -420,7 +420,7 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 | `request-sidecar-auth.ts` | Routed-compaction image projection, sidecar credential resolution and vision preprocessing. |
 | `response-effects.ts` | Completion notification, replay publication and live request-tool aliases. |
 | `request-send-budget.ts` | Request-wide send accounting, remaining allowance, the pending recovery permit and the shared ambiguous-resend grant. |
-| `reset-replay.ts` | The operator opt-in for replacing an ambiguous native Responses send, and the per-request grant both stages claim from. |
+| `reset-replay.ts` | Self-contained-request eligibility and the shared operator replacement grant for native Responses and generic translated initial/rebuilt pre-header sends; adapter-owned transports and translated post-header failures are excluded. |
 | `request-spend.ts` | This request's entries in the durable spend ledger: one per physical send, settled from the terminal usage. |
 | `passthrough-execution.ts` | Native host-lease transfer and the enclosing dispatch/delivery `finally`. |
 | `passthrough-dispatch.ts` | Native request preparation, upstream sends and pre-commit recovery. |

@@ -13,12 +13,16 @@ export function claimDevinTrajectory(
   apiKey: string,
   host: string,
   conversation: string | null | undefined,
+  parentThreadId?: string,
 ): DevinTrajectoryClaim {
   if (!conversation) return { release() {} };
-  // Structured framing separates host and conversation even if either contains a delimiter.
+  // Tag both forms so a standalone JSON-like ID cannot alias a parent/own pair.
+  const identity = parentThreadId
+    ? ["codex-child", parentThreadId, conversation]
+    : ["standalone", conversation];
   // Only the fixed digest and UUID enter the retained map, never the token or conversation.
   const key = new Bun.CryptoHasher("sha256")
-    .update(JSON.stringify([devinCacheIdentity(apiKey, host), conversation])).digest("hex");
+    .update(JSON.stringify([devinCacheIdentity(apiKey, host), identity])).digest("hex");
   let entry = trajectories.get(key);
   if (entry?.active) return { trajectoryId: crypto.randomUUID(), release() {} };
   if (!entry) {

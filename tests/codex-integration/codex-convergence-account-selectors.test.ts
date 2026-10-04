@@ -696,6 +696,9 @@ test("retained and convergence writers resolve, clear, reject, and recover auto-
 
   for (const writer of ["retained", "convergence"] as const) {
     const write = async (nextConfig: OcxConfig): Promise<RawCatalog> => {
+      // A refresh may clear every routed row only while config.json is a readable file (#6529),
+      // and the provider-emptied step below does exactly that, as a real save would.
+      saveConfig(nextConfig);
       if (writer === "retained") {
         const result = await syncCatalogModels(nextConfig);
         expect(result.catalogWritten).toBe(true);

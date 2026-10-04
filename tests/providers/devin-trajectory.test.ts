@@ -5,6 +5,15 @@ describe("bounded Devin trajectory claims", () => {
   const host = "https://server.codeium.com";
   const namespace = () => crypto.randomUUID();
 
+  function releasedId(own: string, parent?: string): string | undefined {
+    // Release sequential claims so overlap fallback cannot mask a key collision.
+    const claim = claimDevinTrajectory("fixture", host, own, parent);
+    try {
+      expect(claim.trajectoryId).toMatch(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+      return claim.trajectoryId;
+    } finally { claim.release(); }
+  }
+
   test("unnamed claims leave allocation to the wire", () => {
     for (const name of [undefined, null, ""]) {
       const claim = claimDevinTrajectory("fixture", host, name);
@@ -34,6 +43,61 @@ describe("bounded Devin trajectory claims", () => {
     a.release();
     const b = claimDevinTrajectory("fixture", host, name + "\x1fsuffix");
     try { expect(b.trajectoryId).not.toBe(a.trajectoryId); } finally { b.release(); }
+  });
+
+  test("released claims separate supplied parents for the same child and retain each parent's UUID", () => {
+    const own = namespace();
+    const parentA = "parent-a-" + own;
+    const parentB = "parent-b-" + own;
+    const a = releasedId(own, parentA);
+    const b = releasedId(own, parentB);
+    expect(releasedId(own, parentA)).toBe(a);
+    expect(releasedId(own, parentB)).toBe(b);
+    expect(b, "same child in different supplied parents must not collide").not.toBe(a);
+  });
+
+  test("parent/own delimiter pairs remain distinct after sequential release", () => {
+    const prefix = namespace();
+    // A colon join would make both identities `${prefix}:a:b:c`.
+    const a = releasedId("c", prefix + ":a:b");
+    const b = releasedId("b:c", prefix + ":a");
+    expect(releasedId("c", prefix + ":a:b")).toBe(a);
+    expect(releasedId("b:c", prefix + ":a")).toBe(b);
+    expect(b).not.toBe(a);
+  });
+
+  test("a standalone serialized tagged child tuple cannot impersonate the actual child identity", () => {
+    const own = namespace();
+    const parent = "parent-" + own;
+    const literal = JSON.stringify(["codex-child", parent, own]);
+    const standalone = releasedId(literal);
+    const child = releasedId(own, parent);
+    expect(releasedId(literal)).toBe(standalone);
+    expect(releasedId(own, parent)).toBe(child);
+    expect(child).not.toBe(standalone);
+  });
+
+  test("JSON-like and delimiter-bearing parents remain distinct for one own ID", () => {
+    const prefix = namespace();
+    const own = '["own",":\\u001f",{"nested":true}]';
+    const parentA = prefix + ':["parent",{"a":"b:c"}]';
+    const parentB = prefix + ':["parent",{"a:b":"c"}]';
+    const a = releasedId(own, parentA);
+    const b = releasedId(own, parentB);
+    expect(releasedId(own, parentA)).toBe(a);
+    expect(releasedId(own, parentB)).toBe(b);
+    expect(b).not.toBe(a);
+  });
+
+  test("JSON-like own IDs remain distinct under one delimiter-bearing parent", () => {
+    const parent = namespace() + ':parent\x1f["codex-child",{}]';
+    const ownA = '["own",{"a":"b:c"}]';
+    const ownB = '["own",{"a:b":"c"}]';
+    const a = releasedId(ownA, parent);
+    const b = releasedId(ownB, parent);
+    expect(releasedId(ownA, parent)).toBe(a);
+    expect(releasedId(ownB, parent)).toBe(b);
+    expect(b).not.toBe(a);
   });
 
   test("three overlapping claims are distinct and cannot release the retained owner", () => {
