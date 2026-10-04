@@ -40,7 +40,7 @@ import {
   nativeMultiAgentDefaults,
 } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
-import { routedRemovalBackedByConfigFile, unconfiguredRoutedRemoval } from "./routed-removal";
+import { ocxRoutedNamespaceCounts, routedRemovalBackedByConfigFile, unconfiguredRoutedRemoval } from "./routed-removal";
 import { ConfigMutationLockError } from "../../config/mutation-lock";
 import {
   accountBoundNativeOpenAiSlugsBySelector,
@@ -71,6 +71,7 @@ import {
   replaceActiveCodexCatalog,
   replaceCodexModelsCache,
   type PreparedCatalogFileWrite,
+  type CatalogFileReplacement,
 } from "../internal/catalog-writer";
 import { visibleCodexAccountSelectors } from "./account-models";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_OPENAI_MODELS, NATIVE_RESERVE_MODEL } from "./native-models";
@@ -110,9 +111,10 @@ interface RetainedCatalogSyncResult {
   /**
    * `desired_disabled`: observed under K after the provider await. `unbacked_routed_removal`: the
    * catalog would lose routed namespaces config.json still enables, or config.json is missing or
-   * unreadable (#6529). Nothing was written in either case.
+   * unreadable (#6529). `foreign_owner`: this Codex home is bound to another OPENCODEX_HOME. Nothing
+   * was written in any of these cases.
    */
-  skippedReason?: "desired_disabled" | "unbacked_routed_removal";
+  skippedReason?: "desired_disabled" | "unbacked_routed_removal" | "foreign_owner" | "owner_unknown";
   /** With `unbacked_routed_removal`: how many routed namespaces the refused write would have emptied. */
   protectedRoutedNamespaces?: number;
 }
@@ -565,6 +567,15 @@ function writeRetainedCatalogSync({
   // A refresh may drop a provider's rows only when config.json on disk agrees the provider is gone.
   // Without that, a config that is not the user's (missing or unreadable file read as defaults,
   // another OPENCODEX_HOME) would publish a native-only catalog and exit cleanly (#6529).
+  const refused = (protectedRoutedNamespaces: number): RetainedCatalogSyncResult => ({
+    added: 0,
+    path: catalogPath,
+    catalogWritten: false,
+    comboOmissions,
+    skippedReason: "unbacked_routed_removal",
+    protectedRoutedNamespaces,
+  });
+  let replacement: CatalogFileReplacement | undefined;
   const removal = unconfiguredRoutedRemoval(onDiskCatalog, catalog, config);
   if (removal !== null) {
     // Hold C (K -> C) from the config read through the replacement, so a save that enables one of
@@ -573,29 +584,23 @@ function writeRetainedCatalogSync({
     try {
       backed = withConfigMutationLockSync(() => {
         if (!routedRemovalBackedByConfigFile(removal)) return false;
-        replaceActiveCodexCatalog(permit, owningCodexHome, preparedCatalog);
-        return true;
+        replacement = replaceActiveCodexCatalog(permit, owningCodexHome, preparedCatalog);
+        return replacement.kind !== "refused";
       });
     } catch (error) {
       if (!(error instanceof ConfigMutationLockError)) throw error;
     }
     if (!backed) {
-      return {
-        added: 0,
-        path: catalogPath,
-        catalogWritten: false,
-        comboOmissions,
-        skippedReason: "unbacked_routed_removal",
-        protectedRoutedNamespaces: removal.namespaces.length,
-      };
+      return refused(removal.namespaces.length);
     }
   } else {
-    replaceActiveCodexCatalog(permit, owningCodexHome, preparedCatalog);
+    replacement = replaceActiveCodexCatalog(permit, owningCodexHome, preparedCatalog);
+    if (replacement.kind === "refused") return refused(ocxRoutedNamespaceCounts(onDiskCatalog).size);
   }
   return {
     added,
     path: catalogPath,
-    catalogWritten: true,
+    catalogWritten: replacement?.kind === "written",
     comboOmissions,
   };
 }
@@ -685,7 +690,7 @@ export async function syncCatalogModels(
       owningCodexHome,
       modelEntitlements,
     });
-  });
+  }, { intent: "refresh", writer: "retained-sync" });
   if (committed.kind === "completed" && committed.value !== null) {
     return {
       ...committed.value,
@@ -698,6 +703,10 @@ export async function syncCatalogModels(
     catalogWritten: false,
     comboOmissions,
     refreshOutcome: "refused",
+    ...(committed.kind === "unavailable" && committed.reason === "foreign-owner"
+      ? { skippedReason: "foreign_owner" as const } : {}),
+    ...(committed.kind === "unavailable" && committed.reason === "owner-unknown"
+      ? { skippedReason: "owner_unknown" as const } : {}),
   };
 }
 
@@ -765,9 +774,7 @@ export function invalidateCodexModelsCacheWithPermitOutcome(
     // `cacheSynced` mean what its name and its consumers already assume, and what
     // `pullRemoteCatalog` and the early returns in `refreshCodexModelCatalog`
     // already assert: a write happened.
-    if (!preparedBytesDifferFromDisk(preparedCache)) return "unchanged";
-    replaceCodexModelsCache(permit, owningCodexHome, preparedCache);
-    return "written";
+    return replaceCodexModelsCache(permit, owningCodexHome, preparedCache).kind;
   } catch {
     return "failed";
   }
@@ -786,6 +793,7 @@ export function invalidateCodexModelsCache(options?: CodexCatalogSyncOptions): b
   const outcome = withCatalogWriteSerialization(
     owningCodexHome,
     permit => invalidateCodexModelsCacheWithPermit(permit, owningCodexHome, options),
+    { intent: "cache", writer: "cache-invalidate" },
   );
   return outcome.kind === "completed" && outcome.value;
 }

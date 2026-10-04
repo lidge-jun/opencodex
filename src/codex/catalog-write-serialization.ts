@@ -28,6 +28,7 @@ import { chmodSync, lstatSync, realpathSync } from "node:fs";
 
 import { Database } from "bun:sqlite";
 
+import { inspectCodexHomeOwner } from "./codex-home-owner";
 import {
   CodexUserIdentityRefusal,
   resolveCodexCatalogSerializationDatabasePath,
@@ -51,9 +52,17 @@ export interface CatalogWritePermit {
 
 declare const catalogWritePermitBrand: unique symbol;
 
+/** Refresh derives from config; pull uses hub authority; restore deliberately returns to native. */
+export type CatalogWriteIntent = "refresh" | "cache" | "pull" | "restore";
+
+export interface CatalogWriteOptions {
+  readonly intent: CatalogWriteIntent;
+  readonly writer: string;
+}
+
 export type CatalogSerializationOutcome<T> =
   | { kind: "completed"; value: T }
-  | { kind: "unavailable"; reason: "busy" | "database" | "unsafe-path" };
+  | { kind: "unavailable"; reason: "busy" | "database" | "unsafe-path" | "foreign-owner" | "owner-unknown" };
 
 export class CatalogWritePermitRefusal extends Error {
   readonly code = "CODEX_CATALOG_WRITE_PERMIT_REFUSED";
@@ -69,6 +78,8 @@ interface PermitRegistration {
   readonly canonicalCodexHome: string;
   /** Identifies the acquisition, so a permit cannot outlive its transaction. */
   readonly transactionId: string;
+  readonly intent: CatalogWriteIntent;
+  readonly writer: string;
   live: boolean;
 }
 
@@ -121,6 +132,18 @@ export function assertCatalogWritePermit(
   }
 }
 
+/** Only a live acquisition may expose its declared intent and writer. */
+export function catalogWritePermitContext(permit: CatalogWritePermit): CatalogWriteOptions {
+  const registration = activePermits.get(permit as unknown as object);
+  if (!registration?.live) throw new CatalogWritePermitRefusal("The catalog write permit is not live.");
+  return { intent: registration.intent, writer: registration.writer };
+}
+
+function ownerRefusal(canonicalCodexHome: string): "foreign-owner" | "owner-unknown" | null {
+  const owner = inspectCodexHomeOwner(canonicalCodexHome);
+  return owner.kind === "foreign" ? "foreign-owner" : owner.kind === "unknown" ? "owner-unknown" : null;
+}
+
 /**
  * Acquire K for one canonical CODEX_HOME and run `write` while it is held.
  *
@@ -135,7 +158,11 @@ export function assertCatalogWritePermit(
 export function withCatalogWriteSerialization<T>(
   canonicalCodexHome: string,
   write: (permit: CatalogWritePermit) => T,
+  options: CatalogWriteOptions,
 ): CatalogSerializationOutcome<T> {
+  // Re-evaluate on every acquisition; unknown evidence cannot authorize a takeover.
+  const refusedOwner = ownerRefusal(canonicalCodexHome);
+  if (refusedOwner) return { kind: "unavailable", reason: refusedOwner };
   let databasePath: string;
   try {
     databasePath = resolveCodexCatalogSerializationDatabasePath(
@@ -188,10 +215,20 @@ export function withCatalogWriteSerialization<T>(
     database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     transactionOpen = true;
 
+    // Ownership may have changed while opening K. Refuse before minting a permit or invoking work.
+    const lockedOwnerRefusal = ownerRefusal(canonicalCodexHome);
+    if (lockedOwnerRefusal) {
+      database.exec("ROLLBACK");
+      transactionOpen = false;
+      return { kind: "unavailable", reason: lockedOwnerRefusal };
+    }
+
     acquisitionCounter += 1;
     registration = {
       canonicalCodexHome,
       transactionId: `${process.pid}:${acquisitionCounter}`,
+      intent: options.intent,
+      writer: options.writer,
       live: true,
     };
     // A bare object: nothing about it is guessable or reconstructable, because

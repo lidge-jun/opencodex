@@ -1,3 +1,4 @@
+import { assertCodexHomeOwner, codexHomeOwnerBlocksCompensation, CodexHomeOwnerRefusal, type CodexHomeOwnerRefusalReason } from "../codex-home-owner";
 import { loadConfig } from "../../config";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { siblingOfLivePort, siblingSkipMessage } from "../sibling-start";
@@ -24,6 +25,7 @@ import {
 import {
   journaledInjectedCatalogPath,
   removeJournal,
+  releaseJournalHomeBinding,
   restoreJournalState,
 } from "../journal";
 import {
@@ -128,6 +130,7 @@ export interface CodexRestoreHistoryResult {
 }
 
 export interface CodexNativeRestoreResult {
+  ownershipRefusal?: CodexHomeOwnerRefusalReason;
   success: boolean;
   message: string;
   externalProvider?: string;
@@ -339,6 +342,9 @@ export interface RestoreConfigOptions {
 
 /** The config/profile half of a native restore, reported as one artifact. */
 function restoreCodexConfigInline(kind = "sync", options: RestoreConfigOptions = {}): CodexRestoreConfigResult {
+  assertCodexHomeOwner(getCodexHome());
+  beforeRestoreConfigForTests?.(kind);
+  assertCodexHomeOwner(getCodexHome());
   const preImages = captureCodexPreImages();
   const result = restoreCodexConfigInlineImpl(kind, options);
   if (result.state === "failed") {
@@ -350,7 +356,6 @@ function restoreCodexConfigInline(kind = "sync", options: RestoreConfigOptions =
 
 function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOptions): CodexRestoreConfigResult {
   try {
-    beforeRestoreConfigForTests?.(kind);
     const disposition = resolveRestoreHistoryDisposition(options.removeProviderTable);
     if (disposition.kind === "refuse") {
       return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${disposition.reason}.` };
@@ -368,12 +373,20 @@ function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOption
     // accepting that tagged conversations stop opening.
     const capturedBlock = options.removeProviderTable === true ? null : readOcxProviderTableBlock();
     const journal = restoreJournalState();
+    if (journal.ownershipRefusal) throw new CodexHomeOwnerRefusal(journal.ownershipRefusal);
     if (journal.unverified) {
       return {
         state: "failed", changed: false, action: "failed",
         message: "Codex journal recovery was not verified; current configuration files and the journal were preserved.",
       };
     }
+    if (journal.profileRestoreFailed) {
+      return {
+        state: "failed", changed: false, action: "failed",
+        message: "Codex profile could not be restored; native files and the journal binding were preserved.",
+      };
+    }
+    assertCodexHomeOwner(getCodexHome());
     const restored = journal.configRestored
       ? { success: true, message: "Codex config restored from opencodex journal.", retainedProviderTable: undefined as string[] | undefined }
       : removeCodexConfig({
@@ -403,6 +416,9 @@ function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOption
       if (settled.kind === "stand-down" && settled.retainProviderTable && capturedBlock !== null) {
         retainedLines = retainOcxProviderTableOnDisk(capturedBlock) ?? retainedLines;
       }
+      // All native work and the final migration check succeeded. A field-level
+      // fallback retains its snapshot, but no longer owns this Codex home.
+      releaseJournalHomeBinding();
     }
     if (restored.success && retainedLines !== null) {
       return {
@@ -430,6 +446,7 @@ function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOption
         }
       : { state: "failed", changed: false, action: "failed", message: restored.message };
   } catch (error) {
+    if (error instanceof CodexHomeOwnerRefusal) throw error;
     return { state: "failed", changed: false, action: "failed", message: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -451,7 +468,8 @@ function restoreCodexCatalogArtifact(
     const restored = withCatalogWriteSerialization(owningCodexHome, permit =>
       revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())
         ? null
-        : restoreCodexCatalogWithPermit(permit, owningCodexHome, journaledCatalogPath));
+        : restoreCodexCatalogWithPermit(permit, owningCodexHome, journaledCatalogPath),
+      { intent: "restore", writer: "codex-restore" });
     return restored.kind === "completed" && restored.value !== null
       ? { state: "ok", changed: restored.value.removed > 0, ...restored.value, message: "Codex catalog restored." }
       : restored.kind === "completed"
@@ -487,8 +505,10 @@ export async function restoreNativeCodexAsync(
   const sibling = siblingRestoreSkip();
   if (sibling) return sibling;
   try {
+    assertCodexHomeOwner(getCodexHome());
     return await restoreNativeCodexAsyncImpl(options);
   } catch (error) {
+    if (error instanceof CodexHomeOwnerRefusal) return homeOwnerRestoreRefusal(error);
     if (!(error instanceof CodexRestoreRefusal)) throw error;
     return failedConfigRestoreEnvelope(error.config);
   }
@@ -549,6 +569,7 @@ async function restoreNativeCodexAsyncImpl(
         readAdmissionUnderLock: () => witness,
       },
       (ctx) => {
+        assertCodexHomeOwner(getCodexHome());
         if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
           throw new CodexWriteLockSkipped("desired_enabled");
         }
@@ -576,6 +597,7 @@ async function restoreNativeCodexAsyncImpl(
           // Throw inside N so the published remove transition rolls back too.
           if (restored.state === "failed") throw new CodexRestoreRefusal(restored);
         } catch (error) {
+          if (codexHomeOwnerBlocksCompensation(getCodexHome(), error)) throw error;
           const compensated = restoreCodexPreImages(preImages);
           if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
           throw error;
@@ -681,11 +703,27 @@ async function restoreNativeCodexAsyncImpl(
   };
 }
 
+function homeOwnerRestoreRefusal(error: CodexHomeOwnerRefusal): CodexNativeRestoreResult {
+  return { ...skippedRestoreEnvelope(false, error.message), ownershipRefusal: error.reason };
+}
+
 export function restoreNativeCodex(
   options: { skipHistory?: boolean; revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
 ): CodexNativeRestoreResult {
   const sibling = siblingRestoreSkip();
   if (sibling) return sibling;
+  try {
+    assertCodexHomeOwner(getCodexHome());
+    return restoreNativeCodexImpl(options);
+  } catch (error) {
+    if (error instanceof CodexHomeOwnerRefusal) return homeOwnerRestoreRefusal(error);
+    throw error;
+  }
+}
+
+function restoreNativeCodexImpl(
+  options: { skipHistory?: boolean; revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
+): CodexNativeRestoreResult {
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     removeJournal();
