@@ -93,6 +93,10 @@ Operational contract when enabled:
 
 See [Configuration](/reference/configuration/providers/#anthropicaccountpool-experimental).
 
+For managed native OAuth requests, declared custom tools use consistent names across deferred
+references and inline additions or removals. Tool arguments, schemas and cache markers are retained.
+Ambiguous tool declarations are rejected before sending a request.
+
 ## Quickstart
 
 ```bash
