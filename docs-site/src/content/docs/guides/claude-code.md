@@ -93,9 +93,19 @@ Operational contract when enabled:
 
 See [Configuration](/reference/configuration/providers/#anthropicaccountpool-experimental).
 
-For managed native OAuth requests, declared custom tools use consistent names across deferred
-references and inline additions or removals. Tool arguments, schemas and cache markers are retained.
-Ambiguous tool declarations are rejected before sending a request.
+### Native Messages with account pooling
+
+With both `protocols.rollout.managedMessagesNative` and
+`protocols.rollout.managedMessagesNativeOAuth` enabled, eligible direct Anthropic OAuth routes
+can use the stored account pool while preserving native message history and cache breakpoints.
+Session affinity, model routes, pause/cooldown exclusions and bounded pre-output account recovery
+follow the shared pool policy. Both switches remain opt-in.
+
+Recognized native CLI and Desktop Code requests retain their billing/identity preamble and
+supported feature beta headers. Generated requests keep the SDK identity shape. Declared custom
+tools use consistent names across deferred references and inline additions/removals, while
+arguments, schemas and cache markers remain unchanged. Ambiguous declarations are rejected.
+An account switch may start a cold cache; this does not transfer caches or guarantee cache hits.
 
 ## Quickstart
 

@@ -31,3 +31,6 @@ Read-only architect proposal/reflection and independent audit recorded before im
 
 Architect handle: 01a10493-1a9a-73d2-96f9-86ef0df9518d. Main accepts CL-A01/A05/A08; amends CL-A02 duplicate carries, CL-A03 session priority, CL-A04 lease-before-charge, CL-A06 malformed protocol salvage, CL-A07 CSS sibling and CL-G01–G04 route race/raw malformed/help/preview coverage. Reflection requested on amended roadmap.
 Architect reflection on amended roadmap: ALIGNED; all CL-A02/A03/A04/A06/A07 and CL-G01–G04 resolved. Independent audit remains required. No implementation evidence claimed.
+
+## wp1 outcome
+Published draft [#6552](https://github.com/lidge-jun/opencodex/pull/6552) at b89935ce3071bc8b1b34517d2e8e07c81d2f0612. Deferred and inline naming carried with collision/opaque refinements; source #6533 fully accounted, #6534/#6547 partial. Focused tests 38 passed; layout/ratchet 27 passed; typecheck, structure, privacy and docs build passed. Independent implementation/security review found no actionable defects. Hosted checks were running at the initial exact-head inspection, with native jobs skipped; draft remains, no live acceptance claimed. Next: wp2 native compatibility and pooled dispatch. No source PR/issue closed.
