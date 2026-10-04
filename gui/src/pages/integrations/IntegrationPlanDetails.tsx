@@ -44,6 +44,10 @@ const REFUSAL_KEYS: Partial<Record<string, TKey>> = {
 function Plan({ plan }: { plan: IntegrationMutationPlan }) {
   const t = useT();
   const refusalKey = plan.refusalReason ? REFUSAL_KEYS[plan.refusalReason] : undefined;
+  // A missing store is the one superseded refusal the operator fixes by hand, so it names the fix.
+  const refusal = plan.supersededReason === "missing-store" && plan.missingStoreDocument !== undefined
+    ? t("integrations.plan.refusal.missingStore", { document: plan.missingStoreDocument })
+    : t(refusalKey ?? "integrations.plan.refused");
   return (
     <div className="integration-plan-details">
       <p className="integration-plan-operation">
@@ -56,7 +60,7 @@ function Plan({ plan }: { plan: IntegrationMutationPlan }) {
           {plan.profileId !== undefined && <p>{t("integrations.plan.noop.profilePreference")}</p>}
         </>
       )}
-      {!plan.canApply && <p>{t(refusalKey ?? "integrations.plan.refused")}</p>}
+      {!plan.canApply && <p>{refusal}</p>}
       {plan.changes.length > 0 && (
         <ul className="integration-plan-changes">
           {plan.changes.map(change => (

@@ -383,7 +383,7 @@ observed. Naming the store without the last three would be naming a file we cann
 file this operation reads, writes, journals and records, and whether a write there reaches the
 client. It decides from three facts, in order:
 
-1. No declared store, or no store on disk — the config file, unchanged, unless the declaration's `missingStore` says the client still reads the absent store; that is an ineffective write carrying its remedy. A client that has never run
+1. No declared store, or no store on disk — the config file, unchanged, unless the declaration's `missingStore` says the client still reads the absent store; that is an ineffective write carrying its remedy; status rows and refused previews also publish `supersededReason` and the store's `missingStoreDocument`, so the dashboard names what to create in its own language. A client that has never run
    still imports what we write there, which is why the rule keys on the store's presence rather
    than on a client version.
 2. This project's own block already in one of the two files — that file. Disable removes what we
