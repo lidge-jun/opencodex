@@ -58,28 +58,30 @@ const request = (): Request => new Request("http://localhost/v1/responses", {
   body: JSON.stringify({ model: "combo/fan", stream: false, input: "hello" }),
 });
 
-function upstream(fallbackStatus: number, fallbackMessage: string): string[] {
+function upstream(fallbackStatus: number, fallbackMessage: string, primaryStatus = 429): string[] {
   const hosts: string[] = [];
   globalThis.fetch = (async (input: string | URL | Request) => {
     const host = new URL(input instanceof Request ? input.url : String(input)).host;
     hosts.push(host);
     return host.startsWith("primary")
-      ? Response.json({ error: { message: "weekly usage limit reached", type: "rate_limit_error" } }, { status: 429 })
+      ? Response.json({ error: { message: "weekly usage limit reached", type: "rate_limit_error" } }, { status: primaryStatus })
       : Response.json({ error: { message: fallbackMessage, type: "invalid_request_error" } }, { status: fallbackStatus });
   }) as typeof fetch;
   return hosts;
 }
 
 describe("combo exhaustion reports the primary's quota refusal", () => {
-  for (const [status, message] of [
-    [401, "OpenAI account pool has no usable account credential"],
-    [400, "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account."],
+  for (const [primary, status, message] of [
+    [429, 401, "OpenAI account pool has no usable account credential"],
+    [429, 400, "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account."],
+    [429, 403, "forbidden"],
+    [402, 401, "invalid api key"],
   ] as const) {
-    test(`over a fallback ${status}`, async () => {
-      const hosts = upstream(status, message);
+    test(`a primary ${primary} over a fallback ${status}`, async () => {
+      const hosts = upstream(status, message, primary);
       const response = await handleResponses(request(), config, { model: "", provider: "" } as RequestLogContext);
       expect(hosts).toEqual(["primary.example", "fallback.example"]);
-      expect(response.status).toBe(429);
+      expect(response.status).toBe(primary);
       expect(await response.text()).toContain("weekly usage limit reached");
     });
   }
