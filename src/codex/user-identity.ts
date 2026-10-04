@@ -318,7 +318,7 @@ function resolveTrustedPosixTmp(): string {
   try {
     realTmp = realpathSync.native(POSIX_TMP_PATH);
     const entry = statSync(realTmp);
-    if (!entry.isDirectory() || entry.uid !== 0) {
+    if (!entry.isDirectory() || (entry.uid !== 0 && entry.uid !== 65534)) {
       refuse("The system temporary directory has unsafe ownership.");
     }
     if ((entry.mode & POSIX_TMP_REQUIRED_MODE) !== POSIX_TMP_REQUIRED_MODE) {
