@@ -717,6 +717,15 @@ or failing to claim a new root safely, therefore leaves the working proxy and it
 place. Existing or conflicting scheduler registrations continue to fail closed rather than being
 deleted as an unsafe best-effort rollback.
 
+If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
+`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
+proxy is not running. The message includes the lock path, recorded PID, current liveness,
+executable name when available, and lease age. The process identity is unverified: the PID
+may have been reused, so liveness and executable name describe whichever process occupies
+that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
+process based only on this PID. A later mutation attempt can reclaim a stale lease once its
+age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
 Wrap a script-based `codex` launcher on PATH with a lightweight autostart script. Real `codex.exe`

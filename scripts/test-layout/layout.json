@@ -1260,6 +1260,7 @@
     "ollama-native-parser.test.ts": "providers/ollama",
     "ollama-native-reasoning-wire.test.ts": "providers/ollama",
     "ollama-native-structured-output.test.ts": "providers/ollama",
+    "ollama-native-tool-continuations.test.ts": "providers/ollama",
     "ollama-native-v4.test.ts": "providers/ollama",
     "ollama-native.test.ts": "providers/ollama",
     "ollama-show-enrichment-v7.test.ts": "providers/ollama",
