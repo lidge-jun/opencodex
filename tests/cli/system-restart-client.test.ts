@@ -148,10 +148,10 @@ describe("bound system restart client", () => {
   });
 
   test("refuses a restart through a CLI whose version differs from the attested proxy", async () => {
-    for (const [proxyVersion, cliVersion] of [
-      ["2.49.0", "2.53.0"],
-      ["2.53.0", "2.49.0"],
-      ["test", "2.53.0"],
+    for (const [proxyVersion, cliVersion, expected] of [
+      ["2.49.0", "2.53.0", "restart_version_skew_cli_newer"],
+      ["2.53.0", "2.49.0", "restart_version_skew"],
+      ["test", "2.53.0", "restart_version_skew"],
     ] as const) {
       const setup = successfulDeps();
       setup.deps.cliVersion = cliVersion;
@@ -173,7 +173,7 @@ describe("bound system restart client", () => {
       const outcome = await requestBoundSystemRestart(target, 10_000, setup.deps);
       expect(outcome).toMatchObject({ accepted: false, uncertain: false });
       expect(outcome.accepted ? "" : (outcome.error as Error).message)
-        .toBe("restart_version_skew");
+        .toBe(expected);
       expect(setup.requests).toHaveLength(1);
     }
   });

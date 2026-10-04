@@ -117,6 +117,11 @@ If a live listener cannot be attested to a runtime PID (including a pre-update p
 closed without an `ensure` or stop/start fallback. After confirming ownership, use `ocx stop` then
 `ocx start` for a standalone proxy. For a service-managed proxy, use `ocx stop` followed by
 `ocx service start` so supervision is restored.
+When the invoking CLI is newer than the attested proxy, restart does not respawn in place (that
+would keep serving the old build). Instead it carries the attested PID and port through a guarded
+stop validated under the ownership lease — refusing if the target changed — and starts the
+current installation only after the target shows stopped, accepting the replacement only when it
+serves this CLI version on the expected port.
 One invocation re-observes transient discovery races. A failed start is retried only when
 the previous attempt never launched a child or the launched child is known to have exited.
 If a launch may still be running, restart reports the original failure without starting
