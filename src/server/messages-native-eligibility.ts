@@ -106,7 +106,7 @@ function credentialDeclineReason(
   const provider = route.provider;
   if (provider.authMode === undefined || provider.authMode === "key") return undefined;
   if (provider.authMode !== "oauth") return "auth-mode-not-native";
-  if (!resolveProtocolSettings(config).rollout.managedMessagesNativeOAuth) return "auth-mode-not-native";
+  if (!resolveProtocolSettings(config, route.providerName).rollout.managedMessagesNativeOAuth) return "auth-mode-not-native";
   if (route.providerName !== "anthropic") return "auth-mode-not-native";
   if (!credentialDomainFor(provider)?.firstPartyAnthropic) return "auth-mode-not-native";
   return undefined;
@@ -132,7 +132,7 @@ export function nativeMessagesDeclineReason(
   config: OcxConfig,
   selector: NativeMessagesSelector = {},
 ): NativeMessagesDeclineReason | undefined {
-  if (!resolveProtocolSettings(config).rollout.managedMessagesNative) return "rollout-disabled";
+  if (!resolveProtocolSettings(config, route.providerName).rollout.managedMessagesNative) return "rollout-disabled";
   const provider = route.provider;
   if (provider.adapter !== "anthropic") return "cross-wire-ir";
   const credentialDecline = credentialDeclineReason(route, config, selector);

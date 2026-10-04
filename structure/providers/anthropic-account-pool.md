@@ -159,3 +159,21 @@ Bounded pre-output refusal recovery uses `src/oauth/anthropic-account-refusal.ts
 exclusions apply only to alternate selection, preserving the permitted same-account throttle retry.
 Rejected bodies are disposed before rebinding; output consumption never re-enters account recovery.
 Account changes may start a cold cache. The proxy does not share caches across accounts.
+
+## Native request preference
+
+`anthropicAccountPool.nativeMessages` is an optional Anthropic-only boolean, defaulting to true.
+`src/protocols/settings.ts` applies this default only to the settled `anthropic` provider with
+the pool enabled and only to absent native rollout flags. Explicit false or malformed present
+flags stay off; a false/malformed pool preference vetoes pooled native dispatch, and OAuth requires
+managed native. Pool-off and other providers retain explicit settings. Policy revisions include
+normalized input states as well as effective policy, so masked setting changes invalidate previews.
+The config schema salvages malformed present native policy conservatively without discarding
+unrelated providers. Validated writes reject malformed input.
+
+`src/server/management/oauth-account-routes.ts` exposes the preference through unified and legacy
+pool settings. Anthropic writes patch the latest persisted config through its mutation owner before
+updating live state. A confirmed published write followed by bookkeeping failure adopts the saved
+pool and returns a fixed warning; an unpublished failure keeps old state. Unknown outcomes require
+reload and are not represented as a successful save. The GUI checkbox is a saved preference rather
+than a promise that a route is eligible; explicit rollout opt-outs still apply.
