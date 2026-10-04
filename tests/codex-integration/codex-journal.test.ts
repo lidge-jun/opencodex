@@ -304,7 +304,7 @@ describe("codex-journal", () => {
     expect(existsSync(journalPath)).toBe(false);
   });
 
-  test("reconcileJournal handles corrupt JSON gracefully", () => {
+  test("reconcileJournal preserves corrupt JSON without authorizing recovery", () => {
     const journalPath = join(testDir, "opencodex-journal.json");
     writeFileSync(journalPath, "NOT VALID JSON{{{", "utf8");
 
@@ -315,7 +315,8 @@ describe("codex-journal", () => {
     `);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).restored).toBe(false);
-    expect(existsSync(journalPath)).toBe(false);
+    expect(readFileSync(journalPath, "utf8")).toBe("NOT VALID JSON{{{");
+    expect(r.stderr).toContain("ownership could not be verified");
   });
 
   test("reconcileJournal no-ops when no journal exists", () => {
@@ -386,19 +387,21 @@ describe("codex-journal", () => {
     expect(existsSync(journalPath)).toBe(false);
   });
 
-  test("removeJournal cleans up", () => {
+  test("removeJournal refuses unknown journal evidence", () => {
     const journalPath = join(testDir, "opencodex-journal.json");
     writeFileSync(journalPath, "{}", "utf8");
 
     const r = runScript(testDir, `
       const { removeJournal } = require("./src/codex/journal");
-      removeJournal();
+      let refusal;
+      try { removeJournal(); } catch (error) { refusal = error.reason; }
       const fs = require("fs");
       const path = require("path");
-      console.log(JSON.stringify({ exists: fs.existsSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json")) }));
+      console.log(JSON.stringify({ refusal, exists: fs.existsSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json")) }));
     `);
     expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout).exists).toBe(false);
+    expect(JSON.parse(r.stdout)).toEqual({ refusal: "owner-unknown", exists: true });
+    expect(readFileSync(journalPath, "utf8")).toBe("{}");
   });
 
   test("removeCodexConfig is a successful no-op when Codex is not installed", () => {

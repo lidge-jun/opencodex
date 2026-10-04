@@ -29,6 +29,9 @@ export interface PoolSettings {
   stickyLimit: number;
   autoSwitchThreshold: number | null;
   quotaWindow: AccountPoolQuotaWindow | null;
+  /** Keep native Claude Code Messages on first-party Anthropic when their route permits. */
+  nativeMessages: boolean | null;
+  warning?: "config_bookkeeping_failed";
 }
 
 /** Fields a caller may write. Named in GUI terms; mapped to the wire below. */
@@ -39,6 +42,7 @@ export interface PoolSettingsWrite {
   /** GUI callers say "threshold"; the contract says autoSwitchThreshold. */
   threshold?: number;
   quotaWindow?: AccountPoolQuotaWindow;
+  nativeMessages?: boolean;
 }
 
 function toDto(json: unknown, provider: string, fallback?: PoolSettingsWrite): PoolSettings {
@@ -59,6 +63,12 @@ function toDto(json: unknown, provider: string, fallback?: PoolSettingsWrite): P
     quotaWindow: (raw.quotaWindow ?? fallback?.quotaWindow) === undefined || raw.quotaWindow === null
       ? null
       : normalizeAccountPoolQuotaWindow(raw.quotaWindow ?? fallback?.quotaWindow),
+    // Provider scope wins over a mismatched kind. Present malformed values fail closed;
+    // only an absent field may use the submitted value (including false after a 204).
+    nativeMessages: provider !== "anthropic" ? null
+      : Object.hasOwn(raw, "nativeMessages") ? raw.nativeMessages === true
+        : fallback?.nativeMessages ?? true,
+    ...(raw.warning === "config_bookkeeping_failed" ? { warning: raw.warning } : {}),
   };
 }
 
@@ -79,6 +89,7 @@ export function poolSettingsRequestBody(provider: string, fields: PoolSettingsWr
     ...(fields.stickyLimit !== undefined ? { stickyLimit: fields.stickyLimit } : {}),
     ...(fields.threshold !== undefined ? { autoSwitchThreshold: fields.threshold } : {}),
     ...(fields.quotaWindow !== undefined ? { quotaWindow: fields.quotaWindow } : {}),
+    ...(provider === "anthropic" && fields.nativeMessages !== undefined ? { nativeMessages: fields.nativeMessages } : {}),
   };
 }
 
@@ -102,6 +113,15 @@ export async function getPoolSettings(
   }
 }
 
+/** The API could not establish whether the write reached disk; callers must reload. */
+export class PoolSettingsSaveStateUnknownError extends Error {
+  readonly code = "config_save_state_unknown";
+  constructor() {
+    super("config_save_state_unknown");
+    this.name = "PoolSettingsSaveStateUnknownError";
+  }
+}
+
 export async function putPoolSettings(
   apiBase: string,
   provider: string,
@@ -116,11 +136,18 @@ export async function putPoolSettings(
       headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
       body: JSON.stringify(poolSettingsRequestBody(provider, fields)),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      if (provider === "anthropic" && response.status === 409) {
+        const failure = await response.json().catch(() => null);
+        if (failure?.code === "config_save_state_unknown") throw new PoolSettingsSaveStateUnknownError();
+      }
+      return null;
+    }
     // A 2xx with no parseable body is still a successful write; the old per-route clients
     // only inspected response.ok and a management PUT may answer 204.
     return toDto(await response.json().catch(() => ({})), provider, fields);
-  } catch {
+  } catch (error) {
+    if (error instanceof PoolSettingsSaveStateUnknownError) throw error;
     return null;
   }
 }

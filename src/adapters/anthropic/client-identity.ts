@@ -1,5 +1,5 @@
 /** Request-local compatibility data. Client headers never grant authorization or credential authority. */
-import { classifyInterceptClient } from "../../claude/intercept/client-class";
+import { DESKTOP_ENTRYPOINTS, interceptEntrypoint } from "../../claude/intercept/client-class";
 
 const MAX_IDENTITY_BYTES = 4096;
 const MAX_VALUE_BYTES = 512;
@@ -19,7 +19,11 @@ const bundles = new WeakMap<AnthropicClientIdentity, Readonly<Record<string, str
 
 function valid(name: typeof NAMES[number], value: string): boolean {
   if (!value || Buffer.byteLength(value) > MAX_VALUE_BYTES || /[^\x20-\x7e]/.test(value)) return false;
-  if (name === "User-Agent") return classifyInterceptClient(value) === "cli";
+  if (name === "User-Agent") {
+    const entrypoint = interceptEntrypoint(value);
+    return entrypoint === "cli" || entrypoint === "sdk-cli" || entrypoint === "sdk"
+      || (DESKTOP_ENTRYPOINTS as readonly string[]).includes(entrypoint ?? "");
+  }
   if (name === "X-App") return value === "cli";
   if (name === "X-Claude-Code-Session-Id" || name === "x-client-request-id") return UUID.test(value);
   if (name === "X-Stainless-Lang") return value === "js";
@@ -28,7 +32,7 @@ function valid(name: typeof NAMES[number], value: string): boolean {
   return SDK_TOKEN.test(value);
 }
 
-/** Select only a coherent observed CLI bundle; a UA alone does not select this compatibility lane. */
+/** Select only a coherent observed CLI/SDK/Desktop Code bundle; a UA alone cannot select this lane. */
 export function captureAnthropicClientIdentity(headers: Headers): AnthropicClientIdentity | undefined {
   const connection = headers.get("connection") ?? "";
   if (Buffer.byteLength(connection) > MAX_VALUE_BYTES) return undefined;
@@ -39,7 +43,7 @@ export function captureAnthropicClientIdentity(headers: Headers): AnthropicClien
     const value = headers.get(name);
     if (value === null) continue;
     // Headers joins duplicate occurrences. Every scalar validator rejects joined values;
-    // the anchored CLI UA parser also rejects a second appended user agent.
+    // the anchored Claude UA parser also rejects a second appended user agent.
     if (hopNames.has(name.toLowerCase()) || !valid(name, value)) {
       if ((REQUIRED as readonly string[]).includes(name)) return undefined;
       continue;
@@ -52,6 +56,11 @@ export function captureAnthropicClientIdentity(headers: Headers): AnthropicClien
   const handle = Object.freeze({}) as AnthropicClientIdentity;
   bundles.set(handle, Object.freeze(selected));
   return handle;
+}
+
+/** A locally captured coherent compatibility bundle; neither provenance nor authorization. */
+export function hasObservedAnthropicClientIdentity(identity: AnthropicClientIdentity | undefined): boolean {
+  return identity !== undefined && bundles.has(identity);
 }
 
 /** Called only after the builder verifies a first-party destination. Unknown/forged handles do nothing. */

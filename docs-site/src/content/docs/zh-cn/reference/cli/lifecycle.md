@@ -215,6 +215,15 @@ ocx service uninstall
 
 在 Windows 上，创建 Task Scheduler 条目需要提升权限。识别到本地化的访问被拒绝文本时，会沿用现有的指导路径。如果该文本不可读，则回退要求命令形态为 `/create /tn opencodex-proxy /xml <non-empty-path> /f`，状态为 1，并且令牌明确为非提升权限；这时仪表盘的 Startup Safety 操作可以自动请求 UAC。如果该回退无法判断令牌状态，它会保留原始调度器错误。外部任务和操作绝不会发出自动提升标记。请批准仪表盘的 UAC 提示，或在提升权限的 PowerShell 窗口中重新运行 `ocx service install`。
 
+If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
+`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
+proxy is not running. The message includes the lock path, recorded PID, current liveness,
+executable name when available, and lease age. The process identity is unverified: the PID
+may have been reused, so liveness and executable name describe whichever process occupies
+that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
+process based only on this PID. A later mutation attempt can reclaim a stale lease once its
+age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
 在 PATH 上把基于脚本的 `codex` 启动器包装为一个轻量自启动脚本。真实的 `codex.exe` 目标会保持不变，以避免破坏精确的可执行文件调用。

@@ -153,6 +153,12 @@ cannot be overwritten by PID or runtime publication. Before either runtime branc
 `recoverStartStateUnderOwnershipLease` (`src/cli/start-owner-fence.ts`) holds that same
 lease and rechecks the owner before stale PID cleanup, cross-home sibling detection, or startup journal recovery;
 an owner claim committed during the early probe cannot be followed by shared Codex writes.
+When that lease is still busy after its wait, `acquireOwnershipMutationLease`
+(`src/service/ownership-mutation-lease.mjs`) names the holder in its error and on the error's
+`holder` field. That means the owner's PID, whether it is alive, a live holder's executable name
+when `tasklist`/`ps` answers within a second, and the owner's age on the clock stale recovery
+uses, plus the 30-second reclaim rule. `ocx service status` prints the same holder line whenever
+the lease directory exists. That read never reclaims.
 The connected-client branch, which returns into `startClientRuntime` before the server path,
 takes the same lease through `startClientRuntimeUnderOwnershipLease`
 (`src/cli/client-start-fence.ts`), rechecks there, and releases once the client runtime has

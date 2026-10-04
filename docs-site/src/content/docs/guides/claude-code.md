@@ -93,6 +93,29 @@ Operational contract when enabled:
 
 See [Configuration](/reference/configuration/providers/#anthropicaccountpool-experimental).
 
+### Native Messages with account pooling
+
+An enabled Anthropic account pool prefers native Messages for eligible direct Anthropic routes
+when neither native rollout flag explicitly disables that path. In Providers → Anthropic →
+Account pooling → **How account selection works**, **Preserve native Claude requests** stores
+`anthropicAccountPool.nativeMessages` (default true). Turning it off selects the legacy bridge
+for pooled requests. With pooling off, the explicit native rollout settings keep their behavior.
+
+Explicit `protocols.rollout.managedMessagesNative: false` disables both native paths;
+`managedMessagesNativeOAuth: false` disables native OAuth. Invalid present settings fail closed.
+The checkbox shows the saved preference, so an enabled checkbox does not override these flags
+or a route that requires proxy translation. Native requests retain history/cache breakpoints,
+session affinity, model routes, pause/cooldown exclusions and bounded pre-output recovery.
+
+Recognized native CLI and Desktop Code requests retain their billing/identity preamble and
+supported feature beta headers. Generated requests keep the SDK identity shape. Declared custom
+tools use consistent names across deferred references and inline additions/removals, while
+arguments, schemas and cache markers remain unchanged. Ambiguous declarations are rejected.
+An account switch may start a cold cache; this does not transfer caches or guarantee cache hits.
+For inline tool changes in system messages, send the required `inline-tools-2026-09-15` beta;
+the first-party native builder preserves it with typed blocks independently of client recognition.
+See [Claude’s inline tool contract](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages).
+
 ## Quickstart
 
 ```bash
@@ -265,6 +288,11 @@ in its profile still answers, but only as a plain relay that does not read claud
 picker lists Anthropic's own models until the removal succeeds. OpenCodex remembers which certificate
 still needs removal and retries on the next restart; `ocx claude desktop picker status` shows the
 picker as unavailable meanwhile.
+
+Picker mode allows up to 64 KiB of headers on incoming requests and ordinary HTTP
+responses, preserving browser session cookies. Larger upstream response headers return
+502 and log `upstream:headers-too-large`, without cookie values or request paths.
+Upgraded connections continue to relay bytes directly after the request handshake.
 
 While picker mode is on, Claude Desktop reaches the network through OpenCodex. If OpenCodex stops,
 Desktop is offline until you fully restart it or turn picker mode off. Check the state with

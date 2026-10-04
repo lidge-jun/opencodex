@@ -145,6 +145,7 @@ import { honorSiblingMarker, markSiblingStart, siblingOfLivePort, siblingRuntime
 import { consumeSiblingHandoff } from "../codex/sibling-handoff";
 import {
   reconcileClientStartupBeforeReady,
+  syncCodexBeforeCatalogObservation,
   syncClaudeAgentDefsAtProxyStartup,
 } from "./claude-agent-startup-sync";
 import {
@@ -631,12 +632,14 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Loopback-only (legacy mode still forward-tags) and respects syncResumeHistory opt-out.
   let historyGuardian: ReturnType<typeof startHistoryMigrationGuardian> | undefined;
   let routingHealer: { stop(): void } | undefined; // routing-healer.ts; stopped first in syncCleanup
+  let catalogHealer: { stop(): void } | undefined;
 
   let cleaned = false;
   let cleanupSucceeded = true;
   const syncCleanup = () => {
     if (cleaned) return cleanupSucceeded;
     cleaned = true;
+    try { catalogHealer?.stop(); } catch { /* best-effort */ }
     try { routingHealer?.stop(); } catch { /* best-effort */ }
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
@@ -719,9 +722,14 @@ async function handleStart(options: { block?: boolean } = {}) {
   // deferred until the best-effort Claude roster and Desktop registry settle. This
   // keeps /readyz closed across startup initialization without making an optional
   // Claude integration failure prevent the proxy from starting.
+  const catalogHealerModule = siblingStart ? null : await import("../codex/catalog-self-heal");
   const startupSync = await reconcileClientStartupBeforeReady(
     readinessGate,
-    gate => syncCodexOnStartIfEnabled(port, config, undefined, gate),
+    gate => syncCodexBeforeCatalogObservation(gate,
+      forwarding => syncCodexOnStartIfEnabled(port, config, undefined, forwarding),
+      () => {
+        if (catalogHealerModule && !siblingStart && !cleaned) catalogHealer = catalogHealerModule.startCodexCatalogSelfHeal({ port });
+      }),
     () => systemEnv.injected
       ? Promise.resolve(null)
       : syncClaudeAgentDefsAtProxyStartup(config, port),

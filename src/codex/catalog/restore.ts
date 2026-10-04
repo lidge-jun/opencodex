@@ -6,9 +6,12 @@ import { RETIRED_NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./m
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import {
   withCatalogWriteSerialization,
+  CatalogWritePermitRefusal,
   type CatalogWritePermit,
 } from "../catalog-write-serialization";
 import { replaceActiveCodexCatalog } from "../internal/catalog-writer";
+import { FOREIGN_CODEX_HOME_OWNER_MESSAGE, UNKNOWN_CODEX_HOME_OWNER_MESSAGE } from "./routed-removal";
+import { notifyCatalogPublication } from "./publication-observer";
 
 function visibleAccountReplacementNatives(
   models: readonly RawEntry[],
@@ -72,7 +75,10 @@ export function restoreCodexCatalogWithPermit(
 ): { removed: number; kept: number; path: string } {
   const catalogPath = injectedCatalogPath ?? readCodexCatalogPath();
   const catalog = readCatalog(catalogPath);
-  if (!catalog || !Array.isArray(catalog.models)) return { removed: 0, kept: 0, path: catalogPath };
+  if (!catalog || !Array.isArray(catalog.models)) {
+    notifyCatalogPublication({ kind: "published", path: catalogPath, intent: "restore" });
+    return { removed: 0, kept: 0, path: catalogPath };
+  }
   const disabledModels = currentDisabledModelsForRestore();
   const replacementVisibility = visibleAccountReplacementNatives(catalog.models, disabledModels);
   const backup = readCatalogBackup(catalogPath);
@@ -94,10 +100,11 @@ export function restoreCodexCatalogWithPermit(
       models: [...backup.models.filter(m => typeof m.slug !== "string"
         || !RETIRED_NATIVE_OPENAI_MODELS.has(trustedAccountBoundNativeCatalogSlug(m) ?? m.slug)), ...userNativeAdditions],
     };
-    replaceActiveCodexCatalog(permit, owningCodexHome, {
+    const replacement = replaceActiveCodexCatalog(permit, owningCodexHome, {
       path: catalogPath,
       content: `${JSON.stringify(restored, null, 2)}\n`,
     });
+    if (replacement.kind === "refused") throw new CatalogWritePermitRefusal("Catalog restoration was refused.");
     return { removed, kept: restored.models.length, path: catalogPath };
   }
   const before = catalog.models.length;
@@ -110,11 +117,13 @@ export function restoreCodexCatalogWithPermit(
   const removed = before - native.length;
   if (removed > 0) {
     catalog.models = native;
-    replaceActiveCodexCatalog(permit, owningCodexHome, {
+    const replacement = replaceActiveCodexCatalog(permit, owningCodexHome, {
       path: catalogPath,
       content: `${JSON.stringify(catalog, null, 2)}\n`,
     });
+    if (replacement.kind === "refused") throw new CatalogWritePermitRefusal("Catalog restoration was refused.");
   }
+  if (removed === 0) notifyCatalogPublication({ kind: "published", path: catalogPath, intent: "restore" });
   return { removed, kept: native.length, path: catalogPath };
 }
 
@@ -123,10 +132,14 @@ export function restoreCodexCatalog(): { removed: number; kept: number; path: st
   const outcome = withCatalogWriteSerialization(
     owningCodexHome,
     permit => restoreCodexCatalogWithPermit(permit, owningCodexHome),
+    { intent: "restore", writer: "catalog-restore" },
   );
-  return outcome.kind === "completed"
-    ? outcome.value
-    : { removed: 0, kept: 0, path: readCodexCatalogPath() };
+  if (outcome.kind === "unavailable") {
+    throw new CatalogWritePermitRefusal(outcome.reason === "foreign-owner"
+      ? FOREIGN_CODEX_HOME_OWNER_MESSAGE : outcome.reason === "owner-unknown"
+        ? UNKNOWN_CODEX_HOME_OWNER_MESSAGE : `Catalog restoration unavailable (${outcome.reason}).`);
+  }
+  return outcome.value;
 }
 
 /** Force Codex's models_cache stale from the on-disk catalog. Returns whether a cache write occurred. */

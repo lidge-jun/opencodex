@@ -1,4 +1,5 @@
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
+import { protocolConfigSchema } from "./schema/config-schema";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -66,6 +67,7 @@ import {
   runtimeRoleSchema,
   spendSchema,
   chatgptDesktopSchema,
+  chatgptDesktopConfigIssue,
   compactionRoutingSchema,
   skillsConfigSchema,
   memoryModelsSchema,
@@ -109,6 +111,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (normalized.chatgptDesktop?.appServerShim === true && process.platform !== "darwin") {
     warnings.push("chatgptDesktop.appServerShim is experimental and macOS only; ignored on this platform");
   }
+  const chatgptDesktopIssue = chatgptDesktopConfigIssue(rawParsed);
+  if (chatgptDesktopIssue) warnings.push(`${chatgptDesktopIssue}; the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
   warnings.push(...inheritedFastWireConflictProviderNames(normalized).map(inheritedFastWireConflictWarning));
   warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
   warnings.push(...degradedListenerWarnings(rawParsed, normalized));
@@ -647,7 +651,19 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   if (memoryModels !== undefined && !memoryModelsSchema.safeParse(memoryModels).success) {
     return { ok: false, error: "schema_invalid: memoryModels: requires a nonblank model and an optional declared reasoningEffort per configured phase, and no other fields" };
   }
-  const routeValue = (rawConfigRecord(value)?.anthropicAccountPool as Record<string, unknown> | undefined)?.routes;
+  const protocols = rawConfigRecord(value)?.protocols;
+  if (protocols !== undefined && !protocolConfigSchema.safeParse(protocols).success) {
+    return { ok: false, error: "schema_invalid: protocols: expected valid protocol policy and boolean rollout flags" };
+  }
+  const rawAnthropicPool = rawConfigRecord(value)?.anthropicAccountPool;
+  const anthropicPool = rawConfigRecord(rawAnthropicPool);
+  if (rawAnthropicPool !== undefined && !anthropicPool) {
+    return { ok: false, error: "schema_invalid: anthropicAccountPool: must be an object" };
+  }
+  if (anthropicPool && Object.hasOwn(anthropicPool, "nativeMessages") && typeof anthropicPool.nativeMessages !== "boolean") {
+    return { ok: false, error: "schema_invalid: anthropicAccountPool.nativeMessages: must be a boolean" };
+  }
+  const routeValue = anthropicPool?.routes;
   if (routeValue !== undefined) {
     const parsed = parseAnthropicModelRoutes(routeValue);
     if (!parsed.ok) return { ok: false, error: `schema_invalid: anthropicAccountPool.routes: ${parsed.error}` };
@@ -730,6 +746,8 @@ export function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
     if (salvaged) {
       const config = normalizeApiKeyIds(salvaged.parsed);
       const warnings = degradedListenerWarnings(parsed, config);
+      const chatgptDesktopIssue = chatgptDesktopConfigIssue(parsed);
+      if (chatgptDesktopIssue) warnings.push(`${chatgptDesktopIssue}; the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
       return {
         config,
         source: "fallback",

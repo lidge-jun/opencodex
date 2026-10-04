@@ -44,7 +44,7 @@ describe("Devin Anthropic signature fallback", () => {
     return { thinking: byNum.get(11), signature: byNum.get(12) };
   }
 
-  async function run(signature: string, modelId: string, observed?: AdapterEvent[], userText = "go", meta: Pick<IncomingMeta, "sendBudget" | "onRecoveryWithheld"> = {}): Promise<AdapterEvent[]> {
+  async function run(signature: string, modelId: string, observed?: AdapterEvent[], userText = "go", meta: Partial<Pick<IncomingMeta, "sendBudget" | "onRecoveryWithheld" | "headers" | "abortSignal">> = {}): Promise<AdapterEvent[]> {
     const parsed = parseRequest({
       model: `devin/${modelId}`,
       input: [
@@ -101,12 +101,22 @@ describe("Devin Anthropic signature fallback", () => {
 
   test("a refused signed Claude turn is retried once with the signature withheld", async () => {
     responses = ["refuse", "ok"];
-    const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium");
+    const headers = new Headers({ "thread-id": crypto.randomUUID() });
+    const signature = encodeDevinSignature("EpcBClaude", "anthropic");
+    const events = await run(signature, "claude-opus-5-5-medium", undefined, "go", { headers, abortSignal: AbortSignal.timeout(3_000) });
     expect(requests).toHaveLength(2);
     expect(assistantSignature(requests[0]!)).toEqual({ thinking: "summarised thought", signature: "EpcBClaude" });
     expect(assistantSignature(requests[1]!)).toEqual({ thinking: "summarised thought", signature: undefined });
     expect(events.some(e => e.type === "error")).toBe(false);
     expect(events).toContainEqual({ type: "text_delta", text: "ok" });
+    const trajectoryOf = (request: Buffer) => {
+      const reference = [...iterFields(request)].find(field => field.num === 15)!.value as Buffer;
+      return ([...iterFields(reference)].find(field => field.num === 1)!.value as Buffer).toString();
+    };
+    expect(trajectoryOf(requests[1]!)).toBe(trajectoryOf(requests[0]!));
+    await run(signature, "claude-opus-5-5-medium", undefined, "go", { headers, abortSignal: AbortSignal.timeout(3_000) });
+    expect(requests).toHaveLength(3);
+    expect(trajectoryOf(requests[2]!)).toBe(trajectoryOf(requests[0]!));
   });
 
   test("a signed refusal at 95% of the catalog window retries unsigned before overflow classification", async () => {

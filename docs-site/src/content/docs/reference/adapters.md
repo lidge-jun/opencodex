@@ -121,7 +121,10 @@ be configured on a separately named custom or self-hosted Ollama provider with
   Codex may record assistant commentary before a pending call's results. Text/thinking with no
   new tool calls is deferred until the batch is settled, so genuine results remain beside their
   originating calls. A new tool-call batch still settles the preceding one; missing results retain
-  an explicit unknown-status marker, and orphan or duplicate results remain invalid.
+  an explicit unknown-status marker. Additional outputs for an open call join in arrival order;
+  output arriving after its batch settles is preserved as explicitly attributed conversation
+  text, after any pending call/result pair. Unknown call IDs and mismatched tool identities remain
+  invalid; this does not create or execute another tool call.
   `tool_choice: "none"` and `auto` behave normally; **`required` or an exact named choice fails
   closed**, because Ollama's `/api/chat` has no `tool_choice` field to enforce it with.
 - **Structured output is refused on canonical Ollama Cloud.** Ollama currently documents structured
@@ -577,6 +580,16 @@ configuration that names the old id is rewritten at startup.
 - Uses `runTurn` rather than the ordinary fetch/parse path. Requests and server events are encoded
   with manual protobuf framing in `devin/cloud-direct/wire.ts`; the ordinary `buildRequest` /
   `parseStream` path is disabled.
+- Named conversations reuse a trajectory across sequential turns, scoped to the resolved credential
+  and tenant host. Own-thread identity takes precedence over session markers (`session_id`,
+  `session-id`, or `x-session-affinity`). When an own-thread identity and a nonempty
+  `x-codex-parent-thread-id` are both supplied, their pair identifies the conversation,
+  so equal own IDs under different parents remain separate. Standalone own and session-only
+  identities retain their existing precedence; a shared parent alone is not a conversation identity.
+  Overlapping turns receive distinct IDs. The proxy retains at most 256 entries in memory,
+  evicts only inactive entries, and releases claims after completion, failure, or cancellation.
+  Restarting the proxy clears retention. Unnamed calls continue allocating an ID per request.
+  This supports continuity but does not guarantee an upstream cache hit or a particular saving.
 - Reasoning continuity carries provider signatures across turns. If Cognition refuses a signed
   Anthropic replay before visible output, Devin retries once with the signature withheld and the
   thinking text preserved.

@@ -223,7 +223,7 @@ TTL or lock-file deletion participates in recovery.
 An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
 serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.
 
-`startServer` composes up to four sockets in one synchronous startup transaction: the public data listener, optional unauthenticated data-loopback and hub-management listeners, and the optional `hub-link` listener, which opens only for a recorded link and persists its concrete `127.0.0.1:<listenerPort>`. Linked-machine data uses the [connection-bound relay contract](remote-link.md#connection-bound-relay-authentication); client-local credentials and routing policy remain unchanged.
+`startServer` composes up to four sockets in one synchronous startup transaction: the public data listener, optional unauthenticated data-loopback and hub-management listeners, and the optional `hub-link` listener, which opens only for a recorded link and persists its concrete `127.0.0.1:<listenerPort>`. HTTP Responses/Messages apply the [caller header contract](data-planes/inbound-compat.md#http-caller-conversation-identity) before turn admission and dispatch. Linked-machine data uses the [connection-bound relay contract](remote-link.md#connection-bound-relay-authentication); client-local credentials and routing policy remain unchanged.
 The data-loopback socket serves a fixed data-plane allowlist: Responses and its compact sibling,
 the native search relay, the standalone Images POSTs, keyed file/stream transcription, `GET /v1/models`, the realtime voice shapes,
 and the Anthropic and OpenAI chat wires the host's own local clients speak — `POST /v1/messages`,
@@ -593,7 +593,7 @@ manager children. A replacement refusal passes through owner-aware recovery: onl
 owner revives the stopped runtime; foreign ownership stays transferred and unknown ownership
 remains a reported recovery requirement. Dashboard restart delegates the lease token to its `service repair` child, and releases the lease before that refresh: the service manager spawns `ocx start` outside the worker's process tree with no token, so the managed child must take the lease itself (#5760). Before the direct-start fallthrough kills or spawns on the port, the worker takes the lease back — a refresh that stayed claimed stops the restart — and re-runs the recorded-owner veto under it because a claim could have landed during the unleased refresh window. Direct start holds the same lease through bind plus PID and runtime-address publication. If listener rollback cannot prove the socket closed, the process retains its lease until exit.
 The registration is never deleted; `ocx service install` releases the marker only after the
-registration succeeds.
+registration succeeds. Busy lease diagnostics name the recorded PID, current liveness and executable, and lease age. The process identity is unverified because a PID may be reused.
 
 Bun updater lease and recovery behavior follows the [update transaction contract](ops/service-and-sidecars.md#bun-updater-ownership-transaction).
 

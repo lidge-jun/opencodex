@@ -27,8 +27,9 @@ import {
   applyAnthropicOAuthAuth,
   resolveAnthropicMessagesUrl,
 } from "../anthropic";
-import { applyAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
+import { applyAnthropicClientIdentity, hasObservedAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
 import { bindAnthropicAccountMetadata } from "./account-metadata";
+import { shouldPreserveNativeClientPreamble } from "./native-client-preamble";
 import { allowlistAnthropicBetas } from "./beta-allowlist";
 
 /**
@@ -106,14 +107,51 @@ function isClientTool(tool: unknown): tool is Rec & { name: string } {
   return isRec(tool) && typeof tool.name === "string" && (tool.type === undefined || tool.type === "custom");
 }
 
+/** Only documented system-message tool blocks enable the caller's inline-tools beta. */
+function hasInlineToolChanges(body: Rec): boolean {
+  return Array.isArray(body.messages) && body.messages.some(message => isRec(message)
+    && message.role === "system" && Array.isArray(message.content) && message.content.some(block => {
+      if (!isRec(block) || !isRec(block.tool)) return false;
+      if (block.type !== "tool_addition" && block.type !== "tool_removal") return false;
+      const tool = block.tool;
+      return tool.type === "tool_reference" && typeof tool.name === "string"
+        || block.type === "tool_addition" && tool.type === "tool_definition"
+          && isRec(tool.definition) && typeof tool.definition.name === "string";
+    }));
+}
+
+/** Allocate only once the first changed item is encountered. */
+function mapPreservingIdentity<T>(items: T[], mapItem: (item: T) => T): T[] {
+  let out: T[] | undefined;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    const mapped = mapItem(item);
+    if (mapped !== item && !out) out = items.slice(0, i);
+    if (out) out.push(mapped);
+  }
+  return out ?? items;
+}
+
+/** Collection and rewriting follow exactly the same typed content containers. */
+function mapOAuthContentBlocks(blocks: unknown[], mapBlock: (block: Rec) => Rec): unknown[] {
+  return mapPreservingIdentity(blocks, block => {
+    if (!isRec(block)) return block;
+    if (block.type === "tool_result" && Array.isArray(block.content)) {
+      const content = mapOAuthContentBlocks(block.content, mapBlock);
+      if (content !== block.content) return mapBlock({ ...block, content });
+    }
+    return mapBlock(block);
+  });
+}
+
 /**
  * The Claude OAuth request shape the adapter produces, applied to a Messages body: the Claude
  * Code identity as the first system block, and declared client tool names under the OAuth
- * prefix — in `tools`, a named `tool_choice` and the history's `tool_use` blocks. Copy-on-write;
- * the input is not mutated. Two caller names that meet under the prefix are refused rather than
- * guessed at.
+ * prefix — in declarations, choices, uses and typed references, including tool-result content.
+ * Copy-on-write; arguments, schemas, unknown containers and cache markers stay opaque.
+ * Ambiguous original or wire names are refused before any history is rewritten.
  */
-export function anthropicOAuthWireBody(body: Rec): { body: Rec; toolNames: Map<string, string> } {
+export function anthropicOAuthWireBody(body: Rec, clientIdentity?: AnthropicClientIdentity): { body: Rec; toolNames: Map<string, string> } {
   const out: Rec = { ...body };
   const toolNames = new Map<string, string>();
   const owners = new Map<string, string>();
@@ -126,7 +164,9 @@ export function anthropicOAuthWireBody(body: Rec): { body: Rec; toolNames: Map<s
     return wire;
   };
   const identity = { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION };
-  if (typeof body.system === "string" && body.system.length > 0) {
+  if (shouldPreserveNativeClientPreamble(body.system, clientIdentity)) {
+    out.system = body.system;
+  } else if (typeof body.system === "string" && body.system.length > 0) {
     out.system = [identity, { type: "text", text: body.system }];
   } else if (Array.isArray(body.system)) {
     const first = body.system[0];
@@ -135,29 +175,65 @@ export function anthropicOAuthWireBody(body: Rec): { body: Rec; toolNames: Map<s
   } else {
     out.system = [identity];
   }
-  // Only names the caller declared as its own tools are renamed. A typed tool (a server tool,
-  // or a client-executed builtin such as `bash_*`) keeps the name its type fixes, and so do
-  // its calls in the history.
+  // Collect every declaration before mapping, including definitions after their references.
+  // Typed server/client builtins keep fixed names and reserve them against client collisions.
   const declared = new Set<string>();
-  if (Array.isArray(body.tools)) {
-    out.tools = body.tools.map(tool => {
-      if (!isClientTool(tool)) return tool;
-      declared.add(tool.name);
-      return { ...tool, name: wireName(tool.name) };
-    });
+  const typedNames = new Set<string>();
+  const inlineTypedNames = new Set<string>();
+  const collectDeclaration = (tool: unknown, inline = false): void => {
+    if (isClientTool(tool)) declared.add(tool.name);
+    else if (isRec(tool) && typeof tool.name === "string") {
+      typedNames.add(tool.name);
+      if (inline) inlineTypedNames.add(tool.name);
+    }
+  };
+  if (Array.isArray(body.tools)) body.tools.forEach(tool => collectDeclaration(tool));
+  if (Array.isArray(body.messages)) {
+    for (const message of body.messages) {
+      if (!isRec(message) || !Array.isArray(message.content)) continue;
+      mapOAuthContentBlocks(message.content, block => {
+        if (block.type === "tool_addition" && isRec(block.tool) && block.tool.type === "tool_definition") {
+          collectDeclaration(block.tool.definition, true);
+        }
+        return block;
+      });
+    }
   }
-  const renames = (name: unknown): name is string => typeof name === "string" && declared.has(name);
+  for (const name of declared) {
+    if (typedNames.has(name)) throw new Error(inlineTypedNames.has(name)
+      ? "inline typed and client tool names collide" : "typed and client tool names collide");
+    if (typedNames.has(applyClaudeToolPrefix(name))) throw new Error("typed and client wire tool names collide");
+    wireName(name);
+  }
+  const renames = (name: unknown): name is string => typeof name === "string" && declared.has(name) && applyClaudeToolPrefix(name) !== name;
+  const mapDeclaration = (tool: unknown): unknown => isClientTool(tool) && renames(tool.name)
+    ? { ...tool, name: wireName(tool.name) } : tool;
+  if (Array.isArray(body.tools)) {
+    out.tools = mapPreservingIdentity(body.tools, mapDeclaration);
+  }
   if (isRec(body.tool_choice) && body.tool_choice.type === "tool" && renames(body.tool_choice.name)) {
     out.tool_choice = { ...body.tool_choice, name: wireName(body.tool_choice.name) };
   }
-  const isRenamedUse = (block: unknown): block is Rec & { name: string } => isRec(block) && block.type === "tool_use" && renames(block.name);
+  const mapBlock = (block: Rec): Rec => {
+    if (block.type === "tool_use" && renames(block.name)) return { ...block, name: wireName(block.name) };
+    if (block.type === "tool_reference" && renames(block.tool_name)) return { ...block, tool_name: wireName(block.tool_name) };
+    if ((block.type === "tool_addition" || block.type === "tool_removal") && isRec(block.tool)) {
+      const tool = block.tool;
+      if (tool.type === "tool_reference" && renames(tool.name)) {
+        return { ...block, tool: { ...tool, name: wireName(tool.name) } };
+      }
+      if (block.type === "tool_addition" && tool.type === "tool_definition") {
+        const definition = mapDeclaration(tool.definition);
+        if (definition !== tool.definition) return { ...block, tool: { ...tool, definition } };
+      }
+    }
+    return block;
+  };
   if (Array.isArray(body.messages)) {
-    out.messages = body.messages.map(message => {
-      if (!isRec(message) || !Array.isArray(message.content) || !message.content.some(isRenamedUse)) return message;
-      return {
-        ...message,
-        content: message.content.map(block => isRenamedUse(block) ? { ...block, name: wireName(block.name) } : block),
-      };
+    out.messages = mapPreservingIdentity(body.messages, message => {
+      if (!isRec(message) || !Array.isArray(message.content)) return message;
+      const content = mapOAuthContentBlocks(message.content, mapBlock);
+      return content !== message.content ? { ...message, content } : message;
     });
   }
   return { body: out, toolNames };
@@ -172,11 +248,12 @@ export function anthropicMessagesNativeWireBody(
   provider: Pick<OcxProviderConfig, "baseUrl" | "authMode">,
   modelId: string,
   body: Readonly<Record<string, unknown>>,
+  options: Pick<AnthropicMessagesPassthroughOptions, "clientIdentity"> = {},
 ): { wireBody: Rec; strippedOpaqueState: boolean; oauthToolNames?: Map<string, string> } {
   const allowlisted = anthropicMessagesPassthroughBody(body, modelId);
   const opaque = opaqueStateForDestination(allowlisted, credentialDomainFor(provider));
   if (provider.authMode !== "oauth") return { wireBody: opaque.body, strippedOpaqueState: opaque.stripped };
-  const oauth = anthropicOAuthWireBody(opaque.body);
+  const oauth = anthropicOAuthWireBody(opaque.body, credentialDomainFor(provider)?.firstPartyAnthropic ? options.clientIdentity : undefined);
   return { wireBody: oauth.body, strippedOpaqueState: opaque.stripped, oauthToolNames: oauth.toolNames };
 }
 
@@ -207,7 +284,7 @@ export function buildAnthropicMessagesPassthroughRequest(
       : "anthropic provider requires a non-empty apiKey (authMode: key)");
   }
   const url = resolveAnthropicMessagesUrl(provider);
-  const native = anthropicMessagesNativeWireBody(provider, modelId, body);
+  const native = anthropicMessagesNativeWireBody(provider, modelId, body, options);
   const { strippedOpaqueState, oauthToolNames } = native;
   const wireBody = oauth ? bindAnthropicAccountMetadata(native.wireBody, options.providerAccountUuid) : native.wireBody;
   const headers = anthropicBaseRequestHeaders(wireBody.stream === true);
@@ -226,7 +303,8 @@ export function buildAnthropicMessagesPassthroughRequest(
     }
   }
   if (domain?.firstPartyAnthropic) applyAnthropicClientIdentity(headers, options.clientIdentity, provider.headers);
-  const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible");
+  const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible",
+    { inlineTools: hasInlineToolChanges(wireBody), observedNativeClient: hasObservedAnthropicClientIdentity(options.clientIdentity) });
   mergeAnthropicBetaHeader(headers, betas.betas);
   return {
     url,
