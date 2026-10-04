@@ -154,7 +154,8 @@ const PACKAGE_TREE_RECHECK_MS = 1_000;
 /**
  * Fences a live process whose package manifest was replaced, and once the replacement is readable,
  * stable for the debounce interval and any configured `runtimeReady` check passes, hands it to
- * `onReplaced` exactly once.
+ * `onReplaced`. If the callback throws, the guard rechecks the tree and may call it again after
+ * another debounce interval while the replacement persists.
  */
 export function createPackageTreeIntegrityGuard(
   observe: ObservePackageTree = observePackageManifest,
