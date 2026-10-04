@@ -1,5 +1,5 @@
 /* Keep timing-basis labels readable inside the fixed-width rate column in every locale. */
-.logs-decode-rate { display: flex; white-space: normal; overflow-wrap: anywhere; }
+.logs-stack-end.logs-decode-rate { display: flex; white-space: normal; overflow-wrap: anywhere; }
 .logs-decode-rate .text-caption { font-family: var(--font-ui); }
 
 .log-detail-grid.log-detail-performance-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
