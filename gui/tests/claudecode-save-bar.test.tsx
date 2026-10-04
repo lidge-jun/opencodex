@@ -32,6 +32,49 @@ beforeEach(() => {
   };
 });
 
+test("a late Save from an unmounted page keeps a newer page's connection switch", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const server = { systemEnv: false, enabled: true };
+  let offline = false;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/native-integrations/claude")) {
+      server.enabled = (JSON.parse(String(init?.body)) as { enabled: boolean }).enabled;
+      offline = true;
+      return Response.json({ desiredEnabled: server.enabled });
+    }
+    if (!url.endsWith("/api/claude-code")) return new Response(null, { status: 404 });
+    if (init?.method === "PUT") {
+      await gate;
+      Object.assign(server, JSON.parse(String(init.body)));
+      return Response.json({ ok: true });
+    }
+    if (offline) return Response.json({ error: "offline" }, { status: 503 });
+    return Response.json({ ...SERVER, autoConnectSupported: true, ...server, modelMap: {} });
+  }) as typeof fetch;
+  const page = await mount();
+  const cached = () => readSessionListCacheEntry<{ state: { systemEnv: boolean; enabled: boolean } }>("ocx.claude-code.v1:http://localhost")?.data?.state;
+  try {
+    await page.click(page.container.querySelector<HTMLInputElement>('input[aria-label="Auto-connect"]')!);
+    await act(async () => { page.button("Save").click(); });
+    // The page is replaced while its Save is out, and the new page turns Claude off.
+    await act(async () => { page.root.render(<LanguageProvider><ClaudeCode key="new" apiBase="http://localhost" /></LanguageProvider>); });
+    await settle(page.testWindow);
+    await page.click(page.button("Toggle Claude connection"));
+    expect(server.enabled).toBe(false);
+    release();
+    await settle(page.testWindow);
+    expect(server.systemEnv).toBe(true);
+    expect(cached()?.systemEnv).toBe(true);
+    expect(cached()?.enabled).toBe(false);
+  } finally {
+    release();
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
+});
+
 test("a 1P reread from an unmounted page cannot overwrite a newer page's Save", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
