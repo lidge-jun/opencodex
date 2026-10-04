@@ -7,7 +7,7 @@ These commands control agent policy and routing, inspect the live proxy, and con
 
 ## Agent policy
 
-### `ocx agent <status|injection|effort|subagents|fallback|roles|sidecar> ...`
+### `ocx agent <status|injection|effort|subagents|fallback|roles|sidecar|memory-models|compaction-routing> ...`
 
 Manage the headless multi-agent roster, effort caps, prompt injection, fallback, and sidecar settings.
 Use `status` for the current policy. See [Sub-agent surfaces](/guides/sub-agent-surface/) for how
@@ -68,6 +68,71 @@ otherwise) and points at `ocx sync` when it could not happen; a save that leaves
 where it was has nothing to report and prints no `Codex config:` line. The flag works for
 `vision` too.
 
+### Injection defaults and sidecar runtime settings
+
+```bash
+ocx agent injection status --json
+ocx agent injection set --sync-codex-defaults off --json
+ocx agent injection status --json
+ocx agent sidecar web --stream-routed-output on --json
+ocx agent sidecar vision --timeout-ms 30000 --json
+ocx agent sidecar status --json
+```
+
+Run writes only for the requested change. Injection `--sync-codex-defaults on|off`
+updates `syncCodexSubagentDefaults`; omitted model/effort/prompt/guidance stay intact,
+and `-` clears model/effort/prompt. The receipt has actual normalized
+`model`, `effort`, `prompt`, `multiAgentGuidanceEnabled` and
+`syncCodexSubagentDefaults`, not a fabricated catalog result.
+
+Web `--reasoning` remains supported. `--max-descriptions` and `--timeout-ms` are
+vision-only; timeout accepts integers from 1 to 2147483647 milliseconds.
+`--stream-routed-output` is web-only. Partial writes preserve sibling settings.
+The new-option receipt exposes only the selected public `webSearch` or `vision`
+state and `codexWebSearch` apply report. `{applied:false, reason, retryable}`
+distinguishes native apply deferral/refusal from a saved setting; a missing or
+mismatched new setting is unverified and nonzero. Read status for full observed
+settings, including web reasoning. Do not retry blindly on ownership refusal.
+
+### Memory and compaction routing overrides
+
+```bash
+ocx agent memory-models show --json
+ocx agent memory-models set --extract-model <route> --extract-effort high --consolidation-model <route> --json
+ocx agent memory-models show --json
+ocx agent compaction-routing show --json
+ocx agent compaction-routing set --model <route> --effort high --triggers manual,auto --sources '<exact-source>,<provider>/*' --json
+ocx agent compaction-routing show --json
+```
+
+Each set replaces the entire block. Memory accepts extract/consolidation model
+and optional effort pairs; an effort without that phase's model is refused.
+Omitted phases use their existing/default route, not a stopped pipeline.
+`--file memory.json` instead reads the block itself:
+
+```json
+{"extract":{"model":"example/model","reasoningEffort":"high"}}
+```
+
+An explicit memory file `{}` is valid and remains an empty override block;
+`ocx agent memory-models clear --json` writes null. Both mean no custom override,
+not disabled memory processing. File mode is exclusive with scalar options.
+Regular UTF-8 files or piped `--file -` use the 4 MiB/30-second bounded-input
+contract, including a 4 MiB serialized request limit.
+
+Compaction files contain required `model`, optional `reasoningEffort`, `triggers`
+and `sourceModels`. Triggers are unique `manual`/`auto`; source selectors must be
+exact and unique, or provider/* patterns. Omitted triggers use server defaults;
+omitted sources select all sources, not the previous custom scope.
+`ocx agent compaction-routing clear --json` writes null and restores ordinary
+compaction routing without disabling compaction. No synthetic model call verifies
+these saves.
+
+Reads return only `{memoryModels: blockOrNull}` or `{compactionRouting: blockOrNull}`.
+Writes add `catalogRefreshPending`: false exits 0 without promising every client
+applied, true exits 1 after saving. Missing/malformed pending evidence is null with
+`verification:"unverified"` and exit 1. Read back before recovery.
+
 ### `ocx effort [status|set|clear]`
 
 Inspect or change main and subagent reasoning-effort caps through the live proxy, or the local
@@ -92,11 +157,14 @@ for the request surfaces where caps apply.
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
+These operate locally by default. `--live` uses the selected running proxy with no
+local fallback; both targets support `--json`. Re-read status on the same target
+after a change and distinguish stored settings from new-session behavior.
 
 | Subcommand | Action |
 | --- | --- |
 | `status` (default) | Report the current v2 flag, multi-agent mode, and thread concurrency. |
-| `on` | Enable the global `multi_agent_v2` feature and resync the catalog. Rejected while the v2 hybrid pin is active because the global override would defeat it. |
+| `on` | Enable the global `multi_agent_v2` feature; local changes resync the catalog. Rejected while the v2 hybrid pin is active because the global override would defeat it. |
 | `off` | Disable the `multi_agent_v2` feature and resync the catalog. |
 | `mode v1` | Force all models to v1, disable native v2, and preserve the active thread limit. |
 | `mode default` | Respect upstream model surface pins. |
@@ -136,12 +204,46 @@ removes the hint. The Subagents dashboard's Ultra mode **on** toggle has a stric
 gate: it requires the native feature to be enabled with an explicit v2 surface
 (`ocx v2 mode v2`); `ocx v2 on` alone does not satisfy that dashboard gate.
 
+#### Explicit v2 target and outcome
+
+```bash
+ocx v2 status --json
+ocx v2 status --live --json
+ocx v2 mode v1 --live --json
+ocx v2 status --live --json
+```
+
+The live write uses the existing management route. Only explicit live `mode`
+accepts `--acknowledge-surface-advisory`; add it only when acknowledging that
+advisory is requested. Local mode and status/on/off/keep-native/threads/hint reject
+it. There is no automatic acknowledgment.
+
+For literal reserved hint text, pass one quoted operand after `--`:
+
+```bash
+ocx v2 mode-hint --live --json -- '--clear'
+```
+
+This stores literal `--clear`; without `--`, `mode-hint --clear` removes the hint.
+The suffix is not scanned for help, live, JSON or clear controls; controls belong
+before `--`. Extra operands and duplicate flags refuse before mutation.
+
+Local JSON is `{ok, target:"local", action, changed, state, sync}` using actual
+post-write state. Mode/keep-native and changed on/off keep their real sync attempt
+even without a discovered port; threads/hints and unchanged on/off add no sync.
+An absent/malformed sync result becomes unverified with exit 1, not success.
+`changed` or state can be unknown after failure; do not claim rollback.
+Live status reports validated state/advisory/recommendation with `target:"live"`;
+writes add `ok:true` and `catalogRefresh`. Only committed, nondegraded refresh exits
+0. HTTP 502 may mean partially applied native state: inspect before retrying.
+Local usage errors retain exit 1; new live usage errors use exit 2.
+
 ## Combo routing
 
-### `ocx combo <list|show|set|remove> ...` · `ocx route combo ...`
+### `ocx combo <list|show|set|remove|stats> ...` · `ocx route combo ...`
 
 Manage combo failover and round-robin virtual models. `ocx route combo` is the hierarchical alias;
-combo is currently the supported routing resource. Targets use
+combos and routing profiles are distinct resources. Combo targets use
 `provider/model[:weight],provider/model[:weight]`.
 
 ```bash
@@ -168,7 +270,141 @@ unsaved selection and reports the gate, backend, and latency; it may spend one d
 `ocx combo discover [--query <text>]` lists configured System One rows and catalog models that look
 like decision models, with the derived endpoint.
 
+For structured target metadata, inspect offline help and the current combo:
+
+```bash
+ocx combo set --help
+ocx combo list --json
+ocx combo show reliable --json
+```
+
+A `--targets-file` document is a nonempty ordered array, for example this shape
+with provider/model values replaced by actual configured candidates:
+
+```json
+[{"provider":"example","model":"raw/model","weight":1,"reasoningEfforts":["high"],"modelProfile":"Reasoning tasks","lastResort":false}]
+```
+
+Optional fields are `weight`, `reasoningEfforts`, `modelProfile` and `lastResort`.
+Efforts are a unique nonempty list of `low`, `medium`, `high`, `xhigh`, `max`, `ultra`;
+empty/none/minimal custom-model semantics do not apply. Files or explicit piped
+`-` have a 4 MiB limit and 30-second read deadline; the serialized management body
+must also fit 4 MiB. Unknown fields refuse before the write.
+
+```bash
+ocx combo set reliable --targets-file targets.json --image-input auto --reasoning-effort-mode strict --json
+ocx combo show reliable --json
+```
+
+`--targets-file` and `--targets` are mutually exclusive. Omitting both preserves
+complete target metadata for partial edits; replacement files preserve order and
+explicit `lastResort: false`. `--image-input auto|disabled` and
+`--reasoning-effort-mode strict|adaptive` preserve omission, while explicit `auto`
+and `strict` override saved disabled/adaptive values. Reasoning-effort mode is
+separate from `--effort-mode fallback|force`, which governs the default effort.
+`--native-alias on|off` preserves explicit false; the legacy bare flag means true.
+Turning it off may require the intended alias clear, `--native-alias off --alias -`,
+to avoid retaining an incompatible native alias. Set/rename is an upsert without
+CAS, so re-read after changes. The receipt is `{success, id, model, combo, catalogRefresh}`;
+skipped, failed or degraded catalog refresh returns nonzero after saving.
+
+### Observe combo decision statistics
+
+```bash
+ocx combo stats reliable --range 30d --json
+```
+
+Use the exact stored combo ID from list/show, not its public model or alias.
+Ranges are `7d`, `30d` (default), and `all`. This reads recorded JEV observations
+without running a paid decision probe. Inspect decisions, model attempts,
+measured attempts, model tokens and decision tokens separately. Keep the
+`measuredModelAttempts/modelAttempts` and `decisionUsageReported/decisions`
+coverage ratios with the totals. Nullable averages are unavailable, not zero.
+Preserve `usageIncomplete`, `historyTruncated`, `entriesTruncated`, dropped-entry
+counts and snapshot-window boundaries. Zero observations do not prove success.
+There is no monetary cost or comparative savings field in this report.
+
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
+
+## Routing profiles
+
+Existing profiles support inspection and evaluation through the live API:
+
+```bash
+ocx route policy list --json
+ocx route policy show reliable --json
+ocx route policy dry-run reliable --model-context 128000 --tools --image --structured-output --json
+```
+
+Only run this evaluation with authority to activate Lab on the target. The management POST can activate Lab and start automation that is already enabled there, including upstream probes. Use list/show for observation without that activation effect.
+
+Replace `reliable` with a listed ID. `evaluate` is an alias for `dry-run`; both
+send requirements to the saved profile's evaluator without an inference request.
+Creation, update and deletion use the explicit file/revision workflow below.
+Combo writes edit a separate resource. Missing profiles return exit 4 and missing
+operands return 2.
+
+### Edit a routing profile with its observed revision
+
+Create/update can activate Lab and already-enabled automation, including upstream
+probes. Only run them with that authority. List/show are observational; first
+read offline help and save the intended profile:
+
+```bash
+ocx route policy update --help
+ocx route policy show reliable --json > profile.observed.json
+jq 'del(.id, .model, .revision) | if .alias == null then del(.alias) else . end' profile.observed.json > profile.next.json
+```
+
+Edit and review the next file; keep the observed file unchanged. Input contains
+only editable `alias`, `candidates`, `require`, `optimize`, `limits`,
+`unknownEvidence`, and `compatibility` with supported nested fields. `id`, `model`,
+`revision`, unknown keys and null alias are not editable input. The server still
+validates provider, alias and policy semantics. `--file -` accepts piped stdin;
+regular UTF-8 files/stdin have the 4 MiB and 30-second bounded read contract.
+
+```bash
+ocx route policy update reliable --file profile.next.json --expected-revision '<exact-revision-from-observed-show>' --json
+ocx route policy show reliable --json
+```
+
+Use the original opaque revision explicitly. HTTP 409 / exit 5 means read show
+again, review concurrent changes and rebuild the edit. Never silently fetch a
+replacement revision, retry or convert update into create. For an authorized new
+ID use `ocx route policy create <new-id> --file profile.next.json --json` without a
+revision. Authorized removal is `ocx route policy remove <id> --yes --json` and
+has no revision guard.
+
+Create/update returns `{success, id, model, profile, catalogRefresh}` with the new
+`profile.revision`; remove returns `{success, id, catalogRefresh}`. Only committed,
+nondegraded refresh exits 0. A saved receipt with skipped/failed/degraded refresh
+exits 1: inspect before recovery instead of repeating the configuration write.
+
+## Compatibility Lab
+
+Lab is local inspection **and** explicit evidence/automation management. Reads
+use the local projection and do not require a running management API:
+
+```bash
+ocx lab status --json
+ocx lab catalog --json
+ocx lab subjects --limit 10 --json
+ocx lab automation status --json
+ocx lab automation runs --limit 10 --json
+ocx lab public community --json
+```
+
+`subject`, `observations`, `event`, `artifact`, and `production-signals` follow
+local evidence lineage. The public family offers preview/export by repeated
+`--event <id>`, verification/import through `--file <bundle.json>`, and community
+context. Export and import write local evidence. Verification can print its
+result and still exit nonzero when the bundle is not cryptographically valid.
+
+Automation enable/disable changes local policy; manual `lab run` selects a layer
+and scenario and may spend upstream quota. Read `ocx help lab` and the relevant
+leaf before these authorized operations. A saved local policy does not prove
+that a separately running proxy's scheduler adopted it. Full automation policy
+editing and run cancellation are not exposed by these CLI controls.
 
 ## Observability and debug
 
@@ -178,8 +414,8 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 
 | Alias | Equivalent resource |
 | --- | --- |
-| `ocx logs [filters] [--follow] [--json|--jsonl]` | `ocx observe logs` |
-| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]` | `ocx observe usage` |
+| `ocx logs [filters] [--follow] [--json|--jsonl|--events]` | `ocx observe logs` |
+| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]` | `ocx observe usage` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
@@ -214,6 +450,157 @@ Any displayed totals reflect readable records only. If a filter has no readable 
 the warning and guidance instead of total lines; skipped records may contain matches.
 `--json` preserves the response-level `usageIncomplete` diagnostic and reason.
 
+### Filter a bounded log snapshot
+
+```bash
+ocx logs filter --surface claude --status errors --time-window 1h --scan-limit 2000 --limit 50 --json
+```
+
+`ocx observe logs filter` is the equivalent family form. This reads one recent
+window, filters locally, then keeps the newest matches in their original order.
+`--scan-limit` controls fetched rows (1–2000, default 2000); `--limit` controls
+returned rows (1–2000, default 200). JSON reports
+`{schemaVersion:1,logs,cursor,filters,window:{scanLimit,loaded,matched,returned,limit}}`.
+Counts describe this observed window, not all history. JSONL emits rows only;
+empty matches succeed. Cursor metadata is not a resumable search token.
+
+Selectors include `--surface all|codex|claude|grok`, `--status all|success|errors`,
+`--time-window all|15m|1h|24h`, `--model`, `--provider`, `--conversation`
+(alias `--conversationId`), `--intercepted-only`, `--min-tok-per-sec`,
+`--max-tok-per-sec`, and `--protocol-mode all|native|translated|legacy-bridge|blocked|none`.
+Model/provider equality is trimmed and case-insensitive, including
+resolved/served models and attempts. Claude includes Desktop; Codex means absent
+surface. Success is HTTP 200–299, errors 400–599. Time lower bounds are inclusive.
+Speed uses observed value-kind tok/s, with inclusive minimum and exclusive
+maximum; unavailable values fail active speed filters. Protocol none includes
+absent or invalid traces. Conversation matching uses the same hash-aware IDs as
+ordinary logs. Interception selects string-valued rewrite markers.
+
+Unknown/repeated/conflicting flags, invalid bounds, and follow/events fail before
+discovery. Malformed, oversized or failed reads are nonzero, not empty results.
+To reduce response size, reduce the scan limit; reducing output limit does not
+change the fetch. For streaming use the separate follow forms below.
+
+### Search usage model rows
+
+```bash
+ocx usage --range 7d --search 'model-a' --json
+```
+
+`--search` matches a trimmed case-insensitive substring in model, provider or
+resolved model after reading the report. It sorts model rows by descending total
+tokens with stable ties and keeps up to 100. JSON adds
+`modelView:{query,matchedModelCount,returnedModelCount,limit:100,truncated}`;
+human output labels the view and shows its selected model rows. Report totals,
+provider/day/account rows, exact filters and incomplete/window metadata remain
+unchanged. No model match does not mean no report usage.
+
+An explicit blank query (`--search=`) selects the top-100 view; omitting search
+preserves the existing output. Exact `--provider`/`--model` still scope the
+underlying report. Search does not broaden selected-key or connected-client
+self scope and is never sent as a new Hub API query parameter.
+
+### Saved companion usage totals
+
+```bash
+ocx companion show --json
+ocx companion usage --json
+```
+
+The second command reads saved companion settings, then today and 30d usage
+sequentially on the same management runtime. It applies the saved `models` and
+`hiddenProviders` preferences and preserves unknown/unmeasured costs and tokens.
+Null model selection means all; an empty selection means none. It does not
+change settings, operate native windows or relay through a connected client.
+
+JSON returns `schemaVersion:1`, `filters`, `settingsUpdatedAt`,
+`settingsCorrupt`, `settingsFallback`, `ranges` and `partial`. Each range has
+`status:"available"` with filtered `data`, or `status:"unavailable"`.
+An unavailable range sets partial and exit 1 while retaining the other range.
+Available incomplete data retains its own metadata; it is not measured zero.
+Valid server defaults retain a null settings timestamp and set fallback;
+corrupt-file defaults additionally set corrupt and warn in human output.
+Malformed settings stop before usage reads. These reads are not an atomic
+snapshot. Each GET has a 10-second fetch/body deadline after discovery and a
+32 MiB response cap; this is not a whole-command deadline. Signals exit 130/143
+without late results.
+
+### Follow request windows or injection sequences
+
+```bash
+ocx logs --help
+ocx logs --limit 200 --json
+ocx logs --follow --events --limit 200
+```
+
+`--events` requires follow and implies JSONL; redundant `--jsonl` is accepted.
+`--json` remains one-shot and conflicts with follow/events. Each events-v1 line
+is `{schemaVersion:1,type:"snapshot"|"append",rows,cursor,limit}`. Replace the
+consumer window on snapshot, append/trim on append, preserving order and repeated
+IDs. Initial empty and reset/removal snapshots are emitted; stable empty polls
+remain silent. Legacy arrays are snapshots with cursor null, not invented cursors.
+These are observed windows, not a lossless replay of traffic missed between polls
+or after ring eviction.
+
+`ocx logs --follow --jsonl --limit 200` retains row-shaped output. It re-emits changed
+occurrences, including same-ID status/token amendments and repeated IDs. Do not
+collapse everything by request ID. This legacy output cannot encode removals,
+resets or exact window order; choose events when those distinctions matter.
+Log follow limit is 1–2000, default 200.
+
+```bash
+ocx observe injection --limit 500 --json
+ocx observe injection --follow --jsonl --limit 500
+```
+
+Injection emits ordered `{seq,at,line}` rows, where `at` is epoch milliseconds;
+internal `after` advances with seq. Follow limit is 1–2000, default 500. JSON is
+one-shot and JSONL requires follow. Observation does not enable capture. Empty
+polls do not identify disabled capture or prove absence of gaps. Detectable runtime
+drift stops; undetectable restart/latest-N gaps cannot be excluded without an API
+epoch/gap marker.
+
+Both follow loops use serial one-second waits, 10-second fetch/body deadlines and
+32 MiB response limits. Malformed/oversized/transport errors stop with stderr and
+exit 1, without automatic retry/reconnect. Reduce limit for oversized windows.
+SIGINT/Ctrl-C exits 130, SIGTERM 143, with no later polls/output. Inspect exit state
+and retained rows instead of treating cancellation as complete history.
+
+### Companion timeline and key-scoped usage
+
+```bash
+ocx companion timeline --help
+ocx companion timeline --hours 24 --bucket-minutes 60 --metric total --aggregation sum --grouping model --model example/model-a --hide-provider excluded-provider --json
+```
+
+Replace fictional IDs with the selected filters. Repeat `--model` for individual
+provider/model IDs (nested slashes allowed; not CSV); repeat `--hide-provider` to
+exclude providers. Positive `--provider` is unsupported. Hours are 6/24/72/168,
+bucket minutes 1–1440 with at most 2000 buckets, metric total/input/output/cached,
+aggregation sum/average/max, grouping model/modelAccount. The API limits filter
+inputs to 100 items. This reads usage without changing companion settings.
+
+Check `appliedFilters.models/hiddenProviders`. Timeline bounds are epoch seconds,
+with exclusive end, unlike ordinary usage's millisecond custom window. The end must
+match the request-time bucket, or its immediate successor if the request crosses
+a bucket boundary; an older aligned window is refused. Empty
+series retains bucket/filter metadata. `missingMeasurements` and `truncated` must
+remain visible: zero-filled points do not prove complete zero usage.
+
+On a non-client management host:
+
+```bash
+ocx access key list --json
+ocx usage --api-key-id key-example --range 7d --json
+```
+
+Use a non-secret actual key ID. The CLI requires exact response acknowledgment in
+`filter.apiKeyId`; ignored filters fail rather than showing unscoped totals.
+An unknown acknowledged ID can return `matched:false` and empty traffic, not 404.
+Keep incomplete/custom-window facts. Connected clients reject `--api-key-id`
+before enrolled-key access or transport; omit it for existing self-only Hub usage
+or perform the selected-key view on the Hub. No data key grants management authority.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Read or change runtime debug overrides through the running proxy's management API.
@@ -231,14 +618,121 @@ debug defaults from `OPENCODEX_USAGE_DEBUG=1`.
 
 ## API access
 
-### `ocx access <key|endpoints|models|test> ...`
+### `ocx access <key|endpoints|models|test|audio> ...`
 
-Manage OpenCodex admission API keys and inspect external endpoints and models. `ocx api-key
-<list|create|remove> ...` is an alias of `ocx access key`.
+Inspect admission keys, external endpoints and models with the access family.
+`ocx api-key` aliases the access-key family. Creation and rotation-start return a
+one-time plaintext credential in text and JSON output. Agents must leave those
+steps to a human-operated terminal outside the agent session; request only
+confirmation and non-secret key/rotation IDs, never the credential.
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+After the human configures and verifies the replacement, committing its rotation
+or removing the old key requires separate explicit revocation authority. Safe
+non-secret follow-ups are `ocx access key rotate commit <id> <rotation-id> --json`
+and `ocx access key rotate abort <id> <rotation-id> --json`, with authority for
+the chosen action. Re-list afterward. Missing pending state alone does not prove
+commit: expiry or abort can also clear it. Do not route around consent by issuing
+the secret-returning management request directly.
+
+### Rename one key without changing its access policy
+
+```bash
+ocx access key rename key-example 'Research client' --json
+ocx access key list --json
+```
+
+Use an actual unique ID or unambiguous name. Rename sends only `{id,name}` and
+preserves provider/model scopes; it does not rotate/delete a key. The response
+contains id/name/createdAt and optional allowedProviders/allowedModels, never
+plaintext or a prefix. List remains masked. Names are control-free, trimmed,
+nonempty and at most 64 JavaScript string units. The read/rename sequence is not
+CAS; inspect the masked roster after an unknown outcome before retrying. The
+root `api-key rename` alias uses the same command.
+
+### Explicit-key model and audio checks
+
+Discover the installed syntax without contacting upstream:
+
+```bash
+ocx access test --help
+ocx access audio transcribe --help
+ocx access audio live-check --help
+```
+
+Model requests, audio uploads and live-session checks require explicit operator
+authorization for that particular upstream operation and possible quota/cost.
+The operator supplies the selected key from an approved private stdin source in
+a human-operated terminal outside the agent session. Agents must not capture it
+or ask for it in chat. Never put it in argv/environment. These are the ocx side
+of that private pipe, not direct interactive key prompts or an agent-run batch:
+
+```bash
+ocx access test example/model --protocol responses --api-key-stdin --json
+ocx access audio transcribe sample.wav --model gpt-4o-mini-transcribe --api-key-stdin --json
+ocx access audio live-check --model gpt-live-1-codex --api-key-stdin --json
+```
+
+Choose only the authorized task and real model/file. TTY input is refused. Input
+is bounded to 4096 bytes/30 seconds, valid UTF-8 printable ASCII, without outer
+whitespace, controls or extra lines; one final LF/CRLF is allowed. This deliberately
+covers currently issued keys, not every Unicode value the server configuration
+might accept. Exact supplied-key occurrences in permitted text become `[redacted]`;
+arbitrary encodings are not guaranteed detected. No encoded key carrier is printed.
+
+Targets are the checked local serving origin or existing normalized enrolled Hub
+origin, with identity checked around asynchronous work. There is no custom-origin,
+admin or enrolled-key fallback, redirect following, credential cache or automatic
+retry. The operator reports only the non-secret result to the agent.
+
+#### Model control and response limits
+
+Protocols are chat (default), responses or messages. Selected-key mode first
+sends one credentialless malformed-JSON control to that endpoint. Only the native
+key-required 401 advances to one fixed 16-token model request using the supplied
+key. The control has a 5-second/4096-byte response budget; the request has a
+60-second/2 MiB response budget including body reads. Authless/unrecognized
+controls stop before inference. Local logging/admission bookkeeping may still occur.
+
+JSON is `{schemaVersion:1,control:{outcome,status?},request:{outcome,status?},response?}`.
+Safe response contains protocol, ordered text, complete/limited completion and
+optional measured token counts. A usable length-limited reply is `limited`;
+refusal/content-filter/tool-only or malformed responses are unsupported, even
+with HTTP 2xx. Error metadata, IDs, tools and reasoning are not printed.
+Operational failure retains one versioned report plus fixed stderr/exit 1;
+invalid grammar/key input exits 2 without a fabricated report.
+
+Success says only: “Credentialless request was refused; the model request using
+the supplied key succeeded.” Listener/policy changes between calls remain possible;
+this does not certify key scope, atomic admission or billing identity. Without
+`--api-key-stdin`, legacy test JSON remains its original payload and says nothing
+about a newly selected key.
+
+#### Transcription and live readiness
+
+Transcription requires a nonempty regular file of at most 25,000,000 bytes with a
+30-second local read limit, and a multipart body capped at 32 MiB. Models are
+gpt-4o-transcribe, gpt-4o-mini-transcribe or whisper-1, subject to target support.
+Upload/response share 130 seconds; response is capped at 2 MiB. Success returns
+only `{text}`, including empty text, with exact-key redaction. Failure leaves
+stdout empty and prints fixed stderr/nonzero; no JSON error envelope or raw body.
+
+Audio uses explicit-key admission without the model control. Live-check sends
+fixed session.update and session.close only. Readiness requires session.started
+or session.updated with nonblank native session ID within 15 seconds; socket-open
+or session.created alone is insufficient. After readiness it waits at most 2
+seconds for normal code-1000 closure. Each UTF-8 frame is capped at 64 KiB, aggregate
+2 MiB; there is no retained frame history.
+
+Live JSON is `{schemaVersion:1,ready,close:"confirmed"|"unverified",check:"session-readiness",event?}`.
+Operational failure preserves that observation without raw frames. Partial readiness
+with unverified close exits 1; a later normal close cannot erase an earlier error.
+Signals exit 130/143. This checks readiness/closure only, not microphone, upload,
+tool execution, full voice roundtrip or server lease release. Opening the upstream
+session is not guaranteed free. No reconnect or retry is automatic.
 
 ### `ocx api <protocols|explain|policy> ...`
 
@@ -275,6 +769,53 @@ Usage errors exit 2 before any request is sent. `--json` prints the management A
 
 ## Client integrations
 
+### Preview and recover managed file integrations
+
+```bash
+ocx integration client preview --client hermes --operation apply --json
+ocx integration client restore --op op-example --preview --json
+```
+
+`op-example` is fictional; use an ID from history. Preview operations are apply,
+overwrite and disable; restore uses `--preview` on its existing command. Review
+structural changes and `canApply`/`willChange`; valid refusal/no-op exits 0 without
+applying. Enable/disable/restore accept optional `--plan-fingerprint` for an
+explicit bound commit. Direct legacy writes remain available. Aside preview or
+bound writes require `--client aside --profile N`. Drift confirmation and overwrite
+are never automatic; stale binding exits 5 with empty stdout and a re-preview
+instruction on stderr. Follow the [complete preview/commit and drift recipes](/guides/integrations/#preview-and-bind-a-terminal-write).
+
+Droid apply/overwrite supports repeated `--reasoning-default MODEL=EFFORT` for
+full map replacement, or exclusive `--clear-reasoning-defaults` for `{}`. Omission
+preserves the map. Repeat the exact map in preview and commit; see
+[Droid defaults](/guides/integrations/#factory-droid).
+
+History removal is irreversible and requires an exact opId plus `--yes`:
+`ocx integration client history remove --op op-example --yes --json` addresses the
+global journal. Only `--client aside` and optional `--profile N` provide narrower
+delete scopes. The newest row is protected. `snapshotRemoved:false` exits 1 after
+retirement with cleanup incomplete; do not retry deletion or claim rollback.
+
+`ocx integration client sync --client aside --json` refreshes eligible profiles
+through the attested owner, with no profile selector or local fallback. Empty
+`results` is successful observation of no eligible profiles; a failed row makes
+the aggregate nonzero while preserving other successes. Read status and recovery
+facts before retrying; [Aside controls](/guides/integrations/#aside-profile-controls)
+explain profile intent versus file state.
+
+### Inspect Cursor without installing it
+
+```bash
+ocx integration native cursor status --json
+ocx integration native cursor local-installer --json
+```
+
+Status can gather model inventory; installer lookup may fetch a public manifest.
+They do not download/install or toggle Cursor. Status distinguishes credential
+from placeholder gateway mode; the placeholder is not an access credential.
+Installer `{available:false,url:null,version:null,reason:null}` is valid, including
+when Private Inference is already installed. A valid unavailable read exits 0.
+
 ### `ocx integration <claude|grok> ...`
 
 Manage supported Claude and Grok integrations. The direct command families below expose their
@@ -303,6 +844,31 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 The families are `opus`, `fable`, `sonnet`, and `haiku`; new routes start in `opus`. `none` is valid
 only when that family is empty. Legacy apply flags `--static`, `--hybrid`, and `--discovery-only`
 remain supported. Use `ocx claude config <status|set> ...` for Claude Code settings.
+
+#### Read or save the selected runtime's Desktop profile
+
+The existing show/import commands above are local. The `profile` family targets
+the running management runtime and can gather model inventory:
+
+```bash
+ocx claude desktop profile show --json > desktop-observed.json
+jq '.profile' desktop-observed.json > desktop-profile.json
+```
+
+Edit/review the versioned profile, preserving server-owned applied markers. For
+an authorized save, then read-back:
+
+```bash
+ocx claude desktop profile import desktop-profile.json --json
+ocx claude desktop profile show --json
+```
+
+Import accepts the profile itself, not the outer `{profile,models,rendered,port}`
+response, using bounded regular JSON files or explicit stdin `-` (4 MiB/30 seconds).
+It returns those observed fields plus `ok:true`, meaning saved only. `--apply` and
+native-mode flags are rejected; failed runtime save has no local fallback. Apply
+is a separate existing Desktop action on its machine, so verify host/context
+before choosing it. Rendered models are not proof of native application.
 
 ### `ocx opencode [opencode args...]`
 
@@ -374,6 +940,9 @@ client applies its own defaults for those).
 The managed DSH export requires DSH 0.1.0-rc.6 or newer and owns only
 `llm-pi-ai.providers.opencodex`. DSH hot reloads that provider; the user's default model and
 `deepseek-official` remain untouched. This export is loopback-only and carries no real credential.
+DSH 0.1.7 and newer import `settings.yaml` once into the first profile that boots and then rename
+it, so the dashboard integration writes the same provider into the `llm-pi-ai` row of the Desktop
+profile's `$DSH_HOME/profiles/desktop/cordis.patch.yml` once that profile exists.
 
 opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. The generated Pi and OMP exports do
 not require an environment variable: each carries the literal `opencodex-loopback` placeholder.
@@ -415,8 +984,9 @@ config destroys the other providers, agents, and MCP entries already in it.
 :::
 
 No key is ever serialized. Configs carry either a documented environment reference or a
-non-secret loopback placeholder. A loopback proxy (`127.0.0.1`, the default) requires no
-admission key at all. Set a referenced variable only when the client schema supports it and
+non-secret loopback placeholder. A loopback address (`127.0.0.1`) alone does not establish keyless
+admission: check the target policy and endpoint. Selected-key model/audio commands
+still require explicit key input on loopback. Set a referenced variable only when the client schema supports it and
 the proxy binds beyond loopback; see
 [Remote access](/reference/configuration/server/#remote-access) for how admission keys are issued. Keys for
 the upstream providers themselves are a separate thing entirely, configured per
@@ -440,6 +1010,26 @@ promising a handoff it cannot complete.
 ```bash
 ocx system settings --stream-mode eager-relay
 ```
+
+Additional system booleans take on/off: `--show-codex-credits`, `--account-picker`,
+`--main-account-hard-lock`, `--ultra-fast-tier`, and `--fast-rows`. They write only
+explicit fields and may combine with existing system options. Showing credits is
+a display preference, not paid-credit opt-in; system Ultra Fast is separate from
+provider Fast.
+
+```bash
+ocx system settings --json
+ocx system settings --show-codex-credits on --json
+ocx system settings --json
+```
+
+New-option writes report `{ok:true, settings: observedFields, catalogRefreshPending}`.
+Ultra Fast performs same-target GET read-back because PUT omits that value. A
+missing/mismatched/read-failed observation stays `verification:"unverified"` with
+`unverifiedFields` and a nonzero exit after acceptance; requested values are never
+substituted for observations. Combined desktop switches retain stored/effective
+and apply facts. Pending catalog or deferred/refused native apply is distinct from
+a saved setting. False pending is not proof that every client has reloaded.
 
 `ocx system update` updates OpenCodex itself. The separate Codex CLI inspection surface is:
 

@@ -40,7 +40,7 @@ The Codex restart command follows the [CLI restart scope contract](../runtime.md
 
 The account reference documents the [Orca source-owned import](../codex-home.md#orca-source-owned-account-import).
 Its local-only command is declared in `src/cli/capabilities.ts`, and the generated skill surface
-lists its required source/registry paths and preview/apply flags.
+lists its required source/registry paths and preview/apply flags. The index and domain chapters follow the [CLI reference generation contract](../cli-management.md#generated-operating-reference).
 
 Local validation follows [the contributor test policy](../../AGENTS.md#commands): run the
 suite by default, with a documented resource exception requiring focused regression tests.

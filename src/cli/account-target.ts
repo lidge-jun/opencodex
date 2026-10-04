@@ -46,6 +46,14 @@ export async function resolveCodexAccountTarget(
   const accounts = (Array.isArray(res.json.accounts) ? res.json.accounts : [])
     .filter((entry): entry is { id: string; alias?: unknown } =>
       typeof entry === "object" && entry !== null && typeof (entry as { id?: unknown }).id === "string");
+  return resolveCodexAccountTargetFromRows(accounts, requested);
+}
+
+/** Shared precedence only; new policy callers validate their target roster before calling. */
+export function resolveCodexAccountTargetFromRows(
+  accounts: readonly { id: string; alias?: unknown }[], requested: string,
+): Exclude<CodexAccountTarget, { networkDown: true }> {
+  if (requested === MAIN_ALIAS || requested === MAIN_CODEX_ACCOUNT_ID) return { id: MAIN_CODEX_ACCOUNT_ID };
   if (accounts.some(account => account.id === requested)) return { id: requested };
   if (isReservedCodexAccountWord(requested)) {
     return { error: `"${requested}" is reserved; it clears the selection with \`ocx account use\` and names no account`, kind: "reserved" };

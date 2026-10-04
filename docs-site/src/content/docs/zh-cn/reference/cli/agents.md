@@ -101,12 +101,15 @@ ocx debug usage logs [-f|--follow]
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-管理 OpenCodex 准入 API 密钥，并检查外部端点和模型。`ocx api-key
-<list|create|remove> ...` 是 `ocx access key` 的别名。
+查看 OpenCodex 接入 API 密钥列表、外部端点和模型。`ocx api-key` 是 `ocx access key` 命令组的别名。
+
+创建密钥和开始轮换时，无论选择文本还是 JSON 输出，都会返回仅显示一次的明文凭据。代理应将这些步骤交给人在代理会话之外直接操作的终端完成。不要索要密钥本身，也不要让用户将其粘贴到聊天中；只接收配置和连接验证的确认，以及非秘密的密钥 ID 和轮换 ID。
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+确认新密钥已配置并验证连接，不等于批准撤销旧密钥。提交轮换或删除旧密钥前，需要另行获得撤销该密钥的明确授权。执行获准的操作后，再次查看列表。不要通过直接调用 API 绕过这一流程。
 
 ## Client integrations
 
@@ -190,7 +193,7 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。
 :::
 
-任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，只有在客户端配置格式支持的情况下才设置相应的环境变量。有关准入密钥的签发方法，请参阅 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。上游 provider 自身的密钥需要单独配置，请参阅 [Providers](/guides/providers/)。
+任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。仅凭环回地址（`127.0.0.1`）不能认定无需密钥；应检查目标的认证策略和端点。使用所选密钥的模型及音频 CLI 即使在环回上也需要明确提供密钥。当代理绑定到环回地址之外时，只有在客户端配置格式支持的情况下才设置相应的环境变量。有关准入密钥的签发方法，请参阅 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。上游 provider 自身的密钥需要单独配置，请参阅 [Providers](/guides/providers/)。
 
 生成的 gjc 集成使用非机密的本地环回占位值，不需要环境变量。此集成仅支持本地环回，不配置远程准入凭据。
 

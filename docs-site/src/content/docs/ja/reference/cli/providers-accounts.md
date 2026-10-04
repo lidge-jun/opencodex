@@ -14,7 +14,7 @@ description: プロバイダー構成、資格情報、クォータ、および�
 |サブコマンド |サポートされているフラグ |アクション |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` |構成されたプロバイダーと残りのレジストリ エントリを一覧表示します。 `--jsonl` は設定済みプロバイダーごとに1行の JSON オブジェクトを出力します。 |
-| `add <name>` | `--adapter <adapter>`、`--base-url <url>`、`--api-key <key>`、`--default-model <model>`、`--set-default`、`--force`、`--json`、`--sync` |レジストリ/カスタムプロバイダーを追加します。 `--force` は上書きします。 `--sync` は、実行中のプロキシを人間出力モードで更新します。 |
+| `add <name>` | `--adapter <adapter>`、`--base-url <url>`、`--api-key <key>`、`--default-model <model>`、`--set-default`、`--force`、`--json`、`--sync` | ローカルに保存します。`--force` は上書きを許可し、`--sync` は JSON と通常出力の両方で同期を試みます。 |
 | `edit <name>` |プロバイダーフィールドフラグ、`--headers <json>`、`--json` |キー プールを置き換えずに、検証済みのライブ プロバイダー フィールドを編集します。`--headers` はカスタム要求ヘッダーをマージします。`{}` または `-` を渡すとクリアします。 |
 | `test <name>` | `--json` |実際の上流モデルのエンドポイントを調査します。 |
 | `show <name>` | `--json` | API キーをマスクして設定を表示します。 |
@@ -24,6 +24,8 @@ description: プロバイダー構成、資格情報、クォータ、および�
 | `quota` | `--refresh`、`--json` |プロバイダー クォータ レポートを読み取ります。 |
 | `presets` | `--json` |ダッシュボードプロバイダーのプリセットを一覧表示します。 |
 | `account-mode` | `pool`、`direct`、`--json` |プールされた Codex アカウント ルーティングまたは直接の Codex アカウント ルーティングを選択します。 |
+
+既定の `add`、`remove`、`set-default` はローカル設定を変更します。稼働中のプロキシを変更するには `--live`、ライブ削除にはさらに `--yes` が必要です。`--sync --json` も保存後に同期を試み、失敗時は保存を保持して非ゼロ終了と `needsSync: true` を返します。`--live` と `--sync` は併用できません。pacing と snapshot/apply の手順は[英語版](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)を参照してください。
 
 ```bash
 ocx provider list --json
@@ -226,7 +228,7 @@ preemption が未バインドリクエストを直ちに引き上げます。既
 
 ### `ocx account login|reauth|code|cancel ...`
 
-ヘッドレス シェルからブラウザベースまたは手動コードのアカウント認証を実行します。プロバイダー固有のコマンド形式には `ocx account --help` を使用します。Codex account login は保存済みでも catalog refresh が保留中なら成功終了し、human output の stderr に固定の `ocx sync` 案内を出します。`--json` は案内を混ぜず、完了 state に `catalogRefreshPending: true` を保持します。
+ヘッドレスシェルから、ブラウザーまたは手動コードでアカウント認証を実行します。プロバイダーごとの構文は `ocx account --help` で確認できます。Codex のログインが保存済みでも、検証やモデルカタログの更新が保留中なら、通常出力と `--json` のどちらも終了コード 1 を返します。保存済みのログインは保持されるため、保留だけを理由に認証をやり直さないでください。通常出力ではカタログ更新の保留時に stderr へ `ocx sync` の案内を表示します。`--json` は stdout に解析可能な状態と保留フラグを返し、この案内は混ぜません。
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
@@ -313,15 +315,15 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 
 `ocx model` は `ocx models` の別名です。サブコマンドを使用しない場合、構成されたプロバイダーに静的にシードされたモデルを一覧表示します。 `--provider` は 1 つの構成済みプロバイダーをフィルターし、`--json` はモデル メタデータを返します。 `live` は実行中のカタログを読み取ります。 `add`、`edit`、`remove`、および `list-custom` は手動カタログ エントリを管理します。 `enable`、`disable`、および `provider` は可視性を制御します。 `selected` はプロバイダー許可リストを制御します。 `context` はプロバイダーのコンテキストの上限を制御します。 `shadow` はバックグラウンドのシャドウ コール インターセプトを管理します。
 
-ダッシュボードが提供するモデルごとの操作はすべてここで利用できるため、ヘッドレスインストールではカタログを管理するために GUI が必要ありません。 `add`、`remove`、および `list-custom` は設定ファイルに対して機能し、カタログ同期を通じて実行中のプロキシに適用されます。残りはライブ管理 API と通信し、プロキシが実行されている必要があります (`ocx start`、またはインストールされたサービス)。
+`add` と `remove` は既定でローカル保存し、`--live` で稼働中のプロキシを変更します。ローカル `--json` 保存時にプロキシがなければ `sync.status: "not-attempted"`、`needsSync: true`、終了コード 0 を返します。試行した同期が失敗しても保存は維持され、終了コードは非ゼロです。`list-custom` はローカル一覧です。`display-name` は raw upstream ID、`order` は picker の public ID を使います。完全な並べ替え、featured 接頭部、native 順序のリセット制約は[英語版](/reference/cli/providers-accounts/#display-names-and-picker-identities)を参照してください。
 
 |サブコマンド |サポートされているフラグ |アクション |
 | --- | --- | --- |
 | `list` (デフォルト) | `--provider <name>`、`--json` |構成されたプロバイダーにシードされたモデルをリストします。 |
 | `live` | `--provider <name>`、`--json` |実行時に検出されたモデルを含む、実行中のカタログを読み取ります。行には、`native`/`routed`、`custom`、および `enabled`/`disabled` というフラグが付けられます。 |
-| `add <provider> <modelId>` | `--display-name <name>`、`--context-window <tokens>`、`--modalities <text,image,audio>` |プロバイダー カタログが宣伝していないモデルを登録します。 |
+| `add <provider> <modelId>` | `--display-name <name>`、`--context-window <tokens>`、`--modalities <text,image,audio>`, `--live`, `--json` | カスタムモデルをローカルに、または `--live` で稼働中のプロキシに登録します。 |
 | `edit <custom-id>` | `--model-id <id>`、`--display-name <name\|->`、`--context-window <tokens\|0>`、`--modalities <text,image,audio\|->`、`--json` |カスタムモデルを編集します。 `-` はフィールドをクリアします。 `0` はコンテキスト ウィンドウをクリアします。 |
-| `remove <custom-id\|provider/modelId>` | `--yes` |カスタムモデルを削除します。標準入力が対話型端末ではない場合は、`--yes` が必要です。 |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | カスタムモデルを削除します。`--live` または `--json` では `--yes` が必要です。 |
 | `list-custom` | `--json` |他のサブコマンドで取得される `custom-id` を持つすべてのカスタム モデルを表示します。 |
 | `enable <provider/model\|native-model>` | `--native`、`--json` | 1 つのモデルを Codex に表示できるようにします。 |
 | `disable <provider/model\|native-model>` | `--native`、`--json` | Codex から 1 つのモデルを非表示にします。 |

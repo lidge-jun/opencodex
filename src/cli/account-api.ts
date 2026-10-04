@@ -1,4 +1,4 @@
-import { parseQuotaFailureCode, type QuotaFailureCode } from "../providers/quota-types";
+import { parseQuotaFailureCode, type QuotaFailureCode, type ProviderQuota, type AccountQuotaMode } from "../providers/quota-types";
 /**
  * Data-access layer for `ocx account` (issue #180) — live-proxy HTTP client and
  * per-family account readers. Kept separate from account.ts (command handlers)
@@ -10,6 +10,8 @@ import { isPublicOAuthProvider } from "../oauth/index";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
 import { projectCodexQuotaRefreshOutcome, type CodexQuotaRefreshOutcome } from "../codex/quota-refresh-outcome";
+
+import { projectApiKeyQuotaRows } from "./account-key-quota";
 
 export type AccountType = "codex" | "oauth" | "api-key";
 
@@ -38,7 +40,8 @@ export interface AccountRow {
   priority?: number;
   /** Null means the account inherits the global usage-switch threshold. */
   autoSwitchThresholdOverride?: number | null;
-  quota?: CodexQuotaDto | null;
+  quota?: (CodexQuotaDto & Partial<ProviderQuota>) | null;
+  quotaMode?: AccountQuotaMode;
   quotaRefresh?: CodexQuotaRefreshOutcome;
   quotaUnavailable?: boolean;
   quotaFailure?: QuotaFailureCode;
@@ -123,7 +126,7 @@ export async function apiJson(
   method: "GET" | "PUT" | "POST" | "DELETE",
   path: string,
   body?: unknown,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; redirect?: RequestRedirect } = {},
 ): Promise<ApiResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   try {
@@ -132,6 +135,7 @@ export async function apiJson(
       headers: runningProxyUpdateHeaders(),
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: options.signal,
+      ...(options.redirect ? { redirect: options.redirect } : {}),
     });
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     return { status: res.status, json };
@@ -416,12 +420,19 @@ interface ApiKeyDto {
   active?: boolean;
 }
 
-async function fetchKeyRows(deps: AccountDeps, baseUrl: string, name: string): Promise<FamilyRows> {
-  const res = await apiJson(deps, baseUrl, "GET", `/api/providers/keys?name=${encodeURIComponent(name)}`);
+async function fetchKeyRows(deps: AccountDeps, baseUrl: string, name: string, quota?: { refresh?: boolean }): Promise<FamilyRows> {
+  const query = `?name=${encodeURIComponent(name)}${quota ? `&quota=1${quota.refresh ? "&refresh=1" : ""}` : ""}`;
+  const res = await apiJson(deps, baseUrl, "GET", `/api/providers/keys${query}`, undefined, quota ? { redirect: "error" } : {});
   if (res.status === 0) {
     return { rows: [], activeId: null, status: 0, networkDown: true, transportError: res.transportError };
   }
   if (res.status !== 200) return { rows: [], activeId: null, status: res.status, errorJson: res.json };
+  if (quota) {
+    try { return projectApiKeyQuotaRows(res.json, name); }
+    catch (error) {
+      return { rows: [], activeId: null, status: 200, errorJson: { error: error instanceof Error ? error.message : "Malformed API-key quota response." } };
+    }
+  }
   const activeId = typeof res.json.activeId === "string" ? res.json.activeId : null;
   const keys = Array.isArray(res.json.keys) ? res.json.keys as ApiKeyDto[] : [];
   const rows = keys.map(k => ({
@@ -444,7 +455,7 @@ export function fetchRows(
 ): Promise<FamilyRows> {
   if (type === "codex") return fetchCodexRows(deps, baseUrl, Boolean(quota?.refresh), quota !== undefined);
   if (type === "oauth") return fetchOAuthRows(deps, baseUrl, name, quota);
-  return fetchKeyRows(deps, baseUrl, name);
+  return fetchKeyRows(deps, baseUrl, name, quota);
 }
 
 export async function fetchProviderQuotaReport(

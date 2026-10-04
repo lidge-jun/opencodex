@@ -5,22 +5,30 @@ import {
   rejectArgs,
   runCliAction,
   runtimeRequest,
+  runtimeBaseUrl,
   takeFlag,
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
 
+import { prepareComboInput } from "./combo-input";
+import { printComboWriteResult } from "./combo-result";
+import { runCatalogAction } from "./catalog-command-result";
+import { serializeManagementJson } from "./json-input";
+
 const USAGE = `Usage:
   ocx combo [list] [--json]
   ocx combo show <id> [--json]
-  ocx combo set <id> [--targets <provider/model[:weight],...>]
+  ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->]
       [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->]
       [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->]
       (force overrides valid client effort and can increase cost/latency) [--alias <name|->]
-      [--native-alias] [--display-name <label|->]
+      [--native-alias [on|off]] [--display-name <label|->]
+      [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>]
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
       (jev only; the provider must be a configured jev-decision row)
       [--rename-from <id>] [--json]
+  ocx combo stats <id> [--range <7d|30d|all>] [--json]
   ocx combo remove <id> --yes [--json]
   ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
       [--decision-timeout <ms>] [--json]
@@ -72,18 +80,22 @@ async function show(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(combo, wantsJson);
 }
 
-async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   const args = [...argv];
   const id = args.shift()?.trim();
   const wantsJson = takeFlag(args, "--json");
   if (!id) throw new CliUsageError("combo id is required", USAGE);
+  const additional = await prepareComboInput(args, deps);
   const targetsRaw = takeOption(args, "--targets");
   const renameFrom = takeOption(args, "--rename-from");
+  const replacingTargets = targetsRaw !== undefined || additional.targets !== undefined;
+  deps = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
+  // A structured target file replaces the target list, not unrelated combo settings.
   const partialCurrent = targetsRaw === undefined
-    ? await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", {}, deps)
+    ? await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", { redirect: "error" }, deps)
     : undefined;
   const partialExisting = partialCurrent?.combos?.find(row => row.id === (renameFrom ?? id));
-  if (targetsRaw === undefined && !partialExisting) {
+  if (!replacingTargets && !partialExisting) {
     throw new CliUsageError("--targets is required when creating a combo", USAGE);
   }
   const strategyRaw = takeOption(args, "--strategy");
@@ -104,7 +116,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     throw new CliUsageError("--effort-mode must be fallback, force, or -", USAGE);
   }
   const alias = takeOption(args, "--alias");
-  const nativeAlias = takeFlag(args, "--native-alias");
+
   const displayName = takeOption(args, "--display-name");
   const decisionProvider = takeOption(args, "--decision-provider");
   const decisionModel = takeOption(args, "--decision-model");
@@ -138,15 +150,18 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   // Listing-only nulls must not be resent as explicit clears (alias rejects null).
   const combo: Record<string, unknown> = partialExisting
     ? Object.fromEntries(Object.entries(partialExisting).filter(([, value]) => value !== null))
-    : { strategy, stickyLimit: stickyLimit ?? 1, targets: parseTargets(targetsRaw!) };
+    : { strategy, stickyLimit: stickyLimit ?? 1, targets: additional.targets ?? parseTargets(targetsRaw!) };
   delete combo.id;
   delete combo.model;
+  if (additional.targets !== undefined) combo.targets = additional.targets;
   if (strategyRaw !== undefined) combo.strategy = strategy;
   if (stickyLimit !== undefined) combo.stickyLimit = stickyLimit;
   if (effort !== undefined) combo.defaultEffort = effort === "-" ? null : effort;
   if (effortMode !== undefined) combo.defaultEffortMode = effortMode === "-" ? "fallback" : effortMode;
   if (alias !== undefined) combo.alias = alias === "-" ? "" : alias;
-  if (nativeAlias) combo.nativeAlias = true;
+  if (additional.nativeAlias !== undefined) combo.nativeAlias = additional.nativeAlias;
+  if (additional.imageInput !== undefined) combo.imageInput = additional.imageInput;
+  if (additional.reasoningEffortMode !== undefined) combo.reasoningEffortMode = additional.reasoningEffortMode;
   if (displayName !== undefined) combo.displayName = displayName === "-" ? "" : displayName;
   if (decisionProvider !== undefined) combo.decisionProvider = decisionProvider === "-" ? null : decisionProvider;
   if (decisionModel !== undefined) combo.decisionModel = decisionModel === "-" ? null : decisionModel;
@@ -158,17 +173,20 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     delete combo.decisionModel;
     delete combo.decisionTimeoutMs;
   }
-  const current = partialCurrent ?? await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", {}, deps);
+  const current = partialCurrent ?? await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", { redirect: "error" }, deps);
   const existing = (current.combos ?? []).find(row => row.id === (renameFrom ?? id));
-  if (existing?.imageInput === "disabled") combo.imageInput = "disabled";
+  if (additional.imageInput === undefined && existing?.imageInput === "disabled") combo.imageInput = "disabled";
+  if (effort === undefined && existing?.defaultEffort != null && combo.defaultEffort === undefined) {
+    combo.defaultEffort = existing.defaultEffort;
+  }
   if (effortMode === undefined && existing?.defaultEffortMode === "force") {
     combo.defaultEffortMode = effort === "-" ? "fallback" : "force";
   }
   const result = await runtimeRequest("/api/combos", {
-    method: "PUT",
-    body: JSON.stringify({ id, combo, ...(renameFrom ? { renameFrom } : {}) }),
+    method: "PUT", redirect: "error",
+    body: serializeManagementJson({ id, combo, ...(renameFrom ? { renameFrom } : {}) }),
   }, deps);
-  printData(result, wantsJson, [`Saved combo ${id}.`]);
+  return printComboWriteResult(result, id, wantsJson);
 }
 
 async function remove(argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -249,11 +267,16 @@ async function discover(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 }
 
 export async function handleComboCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  const [subcommand, ...writeArgs] = argv;
+  if (subcommand === "set" || subcommand === "create" || subcommand === "update") return runCatalogAction(() => set(writeArgs, deps));
+  if (subcommand === "stats") {
+    const { handleComboStatsCommand } = await import("./combo-stats");
+    return handleComboStatsCommand(writeArgs, deps);
+  }
   return runCliAction(async () => {
     const [sub = "list", ...rest] = argv;
     if (sub === "list") await list(rest, deps);
     else if (sub === "show") await show(rest, deps);
-    else if (sub === "set" || sub === "create" || sub === "update") await set(rest, deps);
     else if (sub === "remove" || sub === "delete") await remove(rest, deps);
     else if (sub === "test") await testDecision(rest, deps);
     else if (sub === "discover") await discover(rest, deps);

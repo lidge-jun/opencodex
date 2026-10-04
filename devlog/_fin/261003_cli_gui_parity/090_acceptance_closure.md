@@ -1,0 +1,23 @@
+# CLI task parity: implementation acceptance and publication handoff
+
+The CLI and shipped operating skill cover the audited meaningful management workflows through named commands, explicit targets and observable results. The final inventory retains all 178 baseline rows: 163 verified eligible canonical task families, one account-selection alias and fourteen positively justified consent/native/presentation exclusions. Five rows require human-terminal handoffs and one has mixed authority. This measures bounded task-family coverage, not unrestricted autonomous access to every GUI control.
+
+Discovery is organized into eight task domains and 328 declared capabilities. The six manual PR layers contain foundation/discovery, provider workflows, models/routing, accounts/settings, integrations/maintenance and observation/API workflows. Every layer keeps its own base, review scope and hosted-CI obligation; no PR merge, native stack, release or deployment is part of this publication.
+
+## Accepted implementation and limits
+
+Provider/model/settings/integration writers reuse existing validation and state owners. Local configuration, running-proxy management, connected-client self reports and explicit-key data requests remain separate. Partial saves or native apply failures do not become full success, and retries do not silently replace stale baselines or approval fingerprints. Existing confirmations, plaintext-secret handoffs, browser sessions and OS consent remain controlling boundaries.
+
+The final residual work adds bounded dashboard-style log selection, model-row substring search without changing report totals, saved companion filters with independently available today/30-day views, and opt-in per-key quota observations. The review round also repaired nested help discovery, rendered flag-table choices, actionable stopped-runtime/client-role recovery, explicit local provider validation and failed connectivity exit status.
+
+Functional/security review passed after repairs. Independent semantic acceptance passed after all 163 verified records were traced to actual CLI operations, GUI actions and shared owners. The ledger has 1984 primary source references across 226 files, bound to immutable integrated checkpoint `49b0f34e0cb9fbfc22c48b170cc20b13dbcf0073`. Additional nested references keep the same source identity. Static joins, executed behavior, discovery, exclusions and hosted CI remain distinct proof kinds.
+
+The rejected early hypothesis was that an existing command declaration or module-level source anchor was enough to close a GUI task. It was not: that approach missed filters, dropped quota fields, a wrong exit code and several incorrect evidence joins. Concrete handler/field/target tracing and isolated execution replaced it. Future evidence of a missing meaningful effect, incorrect target or unexercised claimed behavior reopens that specific row; it must not be hidden as a presentation exclusion.
+
+## Verification and remaining publication receipt
+
+Commands, counts, failures and scope limitations are in [084](084_acceptance_evidence.md), [085](085_residual_verification.md) and [086](086_review_reconciliation.md). The final structural ledger validator passed nine independent negative fixtures. Source tests, typecheck, structure, generated surface, privacy, file-size and layout checks passed at the recorded checkpoints. Public docs built 561 pages and checked 78,073 internal links. Actual root-CLI candidate QA passed 65 cases; three later provider connectivity cases independently passed. Final frozen-source QA includes all 68 cases.
+
+This archival move is closure preparation after substantive implementation and semantic acceptance. The native cycle stays in Check until the archived, committed and published tip passes its source-bound local receipt, final CLI QA and successful current-head hosted CI for all six PRs. Those live receipts are stored outside this document and reported on the PRs, avoiding a self-referential edit just to embed a future commit hash. A pending, cancelled, skipped or older-head run never becomes passing evidence. Optional platform jobs that do not execute are disclosed separately.
+
+The unit moved from `devlog/_plan/261003_cli_gui_parity/` to `devlog/_fin/261003_cli_gui_parity/`. Internal relative links remain valid. Historical command strings, failed logs and immutable source identities retain their original paths; the sole authoritative final ledger is [008_task_ledger.json](008_task_ledger.json). Final publication evidence is a separate required closing condition, not something proved by this directory name.

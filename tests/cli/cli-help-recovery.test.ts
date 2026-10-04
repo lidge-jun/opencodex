@@ -58,9 +58,9 @@ describe("CLI help recovery", () => {
     const account = helpRecoveryCandidates(["account"]);
     expect(account.every(candidate => candidate.path.length === 2)).toBe(true);
     expect(account.some(candidate => candidate.path.join(" ") === "account main")).toBe(true);
-    expect(helpRecoveryCandidates(["account", "main"]).map(candidate => candidate.path)).toEqual([["account", "main", "reauth"]]);
+    expect(helpRecoveryCandidates(["account", "main"]).map(candidate => candidate.path.at(-1))).toEqual(["reauth", "doctor", "list", "register", "add", "switch", "recover"]);
     expect(helpRecoveryCandidates(["model"]).some(candidate => candidate.path.join(" ") === "models context")).toBe(true);
-    expect(helpRecoveryCandidates(["models", "context"])).toEqual([]);
+    expect(helpRecoveryCandidates(["models", "context"]).map(candidate => candidate.path.at(-1))).toEqual(["status", "value", "provider", "all"]);
   });
 
   test("matching folds case, handles transposition, deduplicates aliases and respects distance limits", () => {
@@ -73,6 +73,28 @@ describe("CLI help recovery", () => {
     expect(suggestHelpPaths(["models", "cntxt"])).toEqual([]);
     expect(suggestHelpPaths(["rester"])).toEqual([["restart"], ["restore"]]);
     expect(suggestHelpPaths(["internla"])).toEqual([]);
+  });
+
+  test("access alias recovery uses canonical depth and stays deterministic", () => {
+    expect(helpRecoveryCandidates(["api-key"])).toEqual(helpRecoveryCandidates(["access", "key"]));
+    expect(helpRecoveryCandidates(["access", "keys"])).toEqual(helpRecoveryCandidates(["access", "key"]));
+    for (const prefix of [["api-key"], ["access", "keys"], ["access", "key"]]) {
+      expect(suggestHelpPaths([...prefix, "lisst"])).toEqual([["access", "key", "list"]]);
+      expect(suggestHelpPaths([...prefix, "delet"])).toEqual([["access", "key", "remove"]]);
+      expect(suggestHelpPaths([...prefix, "rotate", "commti"])).toEqual([["access", "key", "rotate", "commit"]]);
+      expect(formatHelpRecovery([...prefix, "lisst"])).toBe(
+        "Detailed help unavailable for the requested topic.\nDid you mean:\n  ocx help access key list\nSee: ocx help access key");
+    }
+    expect(suggestHelpPaths(["api-ke"])).toEqual([["access", "key"]]);
+    expect(suggestHelpPaths(["access", "kyes"])).toEqual([["access", "key"]]);
+    expect(suggestHelpPaths(["api-key", "qzxv"])).toEqual([]);
+    expect(suggestHelpPaths(["api-key", "lisst", "private\u001b[2J"])).toEqual([]);
+    expect(suggestHelpPaths(["api-key", "lisst", ...Array(6).fill("operand")])).toEqual([]);
+    const result = cli(["help", "api-key", "lisst"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(formatHelpRecovery(["api-key", "lisst"]) + "\n");
+    expect(result.stderr).not.toContain("TypeError");
   });
 
   test("matching rejects unsafe tokens and excessive depth without truncating to candidates", () => {

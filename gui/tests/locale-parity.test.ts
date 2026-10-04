@@ -285,57 +285,57 @@ const DSH_VISIBLE_COPY: Record<(typeof LOCALE_CODES)[number], readonly [string, 
   en: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex manages only llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH hot reloads this provider; your default model and deepseek-official stay unchanged. Currently loopback-only; no real credential is written.",
+    "OpenCodex manages only the opencodex provider of the llm-pi-ai row in $DSH_HOME/profiles/desktop/cordis.patch.yml, the Desktop profile DSH 0.1.7+ reads ($DSH_HOME/settings.yaml until that profile exists). DSH hot reloads this provider; your default model and deepseek-official stay unchanged. Currently loopback-only; no real credential is written.",
   ],
   fr: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex gère uniquement llm-pi-ai.providers.opencodex dans $DSH_HOME/settings.yaml. DSH recharge ce fournisseur à chaud ; votre modèle par défaut et deepseek-official restent inchangés. Seule l’adresse de bouclage est actuellement prise en charge ; aucun identifiant réel n’est écrit.",
+    "OpenCodex gère uniquement le fournisseur opencodex de la ligne llm-pi-ai dans $DSH_HOME/profiles/desktop/cordis.patch.yml, le profil Desktop que lit DSH 0.1.7+ ($DSH_HOME/settings.yaml tant que ce profil n’existe pas). DSH recharge ce fournisseur à chaud ; votre modèle par défaut et deepseek-official restent inchangés. Seule l’adresse de bouclage est actuellement prise en charge ; aucun identifiant réel n’est écrit.",
   ],
   de: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex verwaltet nur llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH lädt diesen Anbieter im laufenden Betrieb neu; Ihr Standardmodell und deepseek-official bleiben unverändert. Derzeit nur über Loopback; es werden keine echten Zugangsdaten geschrieben.",
+    "OpenCodex verwaltet nur den Anbieter opencodex in der llm-pi-ai-Zeile von $DSH_HOME/profiles/desktop/cordis.patch.yml, dem Desktop-Profil, das DSH ab 0.1.7 liest ($DSH_HOME/settings.yaml, solange dieses Profil fehlt). DSH lädt diesen Anbieter im laufenden Betrieb neu; Ihr Standardmodell und deepseek-official bleiben unverändert. Derzeit nur über Loopback; es werden keine echten Zugangsdaten geschrieben.",
   ],
   ja: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex が管理するのは $DSH_HOME/settings.yaml 内の llm-pi-ai.providers.opencodex だけです。DSH はこのプロバイダーをホットリロードし、既定のモデルと deepseek-official は変更しません。現在はループバック専用で、実際の認証情報は書き込みません。",
+    "OpenCodex が管理するのは $DSH_HOME/profiles/desktop/cordis.patch.yml（DSH 0.1.7 以降が読む Desktop プロファイル。存在しない間は $DSH_HOME/settings.yaml）の llm-pi-ai 行にある opencodex プロバイダーだけです。DSH はこのプロバイダーをホットリロードし、既定のモデルと deepseek-official は変更しません。現在はループバック専用で、実際の認証情報は書き込みません。",
   ],
   ko: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex는 $DSH_HOME/settings.yaml의 llm-pi-ai.providers.opencodex만 관리합니다. DSH는 이 provider를 hot reload하며 기본 model과 deepseek-official은 변경하지 않습니다. 현재 loopback 전용이며 실제 credential을 기록하지 않습니다.",
+    "OpenCodex는 $DSH_HOME/profiles/desktop/cordis.patch.yml(DSH 0.1.7+가 읽는 Desktop profile, 이 profile이 없으면 $DSH_HOME/settings.yaml)의 llm-pi-ai 행에 있는 opencodex provider만 관리합니다. DSH는 이 provider를 hot reload하며 기본 model과 deepseek-official은 변경하지 않습니다. 현재 loopback 전용이며 실제 credential을 기록하지 않습니다.",
   ],
   ru: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex управляет только llm-pi-ai.providers.opencodex в $DSH_HOME/settings.yaml. DSH применяет этот провайдер горячей перезагрузкой; модель по умолчанию и deepseek-official остаются без изменений. Сейчас поддерживается только loopback; реальные учётные данные не записываются.",
+    "OpenCodex управляет только провайдером opencodex в строке llm-pi-ai файла $DSH_HOME/profiles/desktop/cordis.patch.yml — профиля Desktop, который читает DSH 0.1.7+ ($DSH_HOME/settings.yaml, пока этого профиля нет). DSH применяет этот провайдер горячей перезагрузкой; модель по умолчанию и deepseek-official остаются без изменений. Сейчас поддерживается только loopback; реальные учётные данные не записываются.",
   ],
   tr: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex yalnızca $DSH_HOME/settings.yaml içindeki llm-pi-ai.providers.opencodex bölümünü yönetir. DSH bu sağlayıcıyı çalışırken yeniden yükler; varsayılan modeliniz ve deepseek-official değişmez. Şimdilik yalnızca geri döngü desteklenir; gerçek kimlik bilgisi yazılmaz.",
+    "OpenCodex yalnızca $DSH_HOME/profiles/desktop/cordis.patch.yml içindeki llm-pi-ai satırının opencodex sağlayıcısını yönetir; bu, DSH 0.1.7+ sürümünün okuduğu Desktop profilidir (profil yokken $DSH_HOME/settings.yaml). DSH bu sağlayıcıyı çalışırken yeniden yükler; varsayılan modeliniz ve deepseek-official değişmez. Şimdilik yalnızca geri döngü desteklenir; gerçek kimlik bilgisi yazılmaz.",
   ],
   zh: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex 只管理 $DSH_HOME/settings.yaml 中的 llm-pi-ai.providers.opencodex。DSH 会热重载该 provider；你的默认模型和 deepseek-official 保持不变。目前仅支持环回地址，且不会写入真实凭据。",
+    "OpenCodex 只管理 $DSH_HOME/profiles/desktop/cordis.patch.yml（DSH 0.1.7 起读取的 Desktop profile；该 profile 不存在时为 $DSH_HOME/settings.yaml）中 llm-pi-ai 这一行的 opencodex provider。DSH 会热重载该 provider；你的默认模型和 deepseek-official 保持不变。目前仅支持环回地址，且不会写入真实凭据。",
   ],
   "zh-TW": [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex 只管理 $DSH_HOME/settings.yaml 中的 llm-pi-ai.providers.opencodex。DSH 會熱重載該 provider；你的預設模型與 deepseek-official 維持不變。目前僅支援 loopback，且不會寫入真實憑證。",
+    "OpenCodex 只管理 $DSH_HOME/profiles/desktop/cordis.patch.yml（DSH 0.1.7 起讀取的 Desktop profile；該 profile 不存在時為 $DSH_HOME/settings.yaml）中 llm-pi-ai 這一列的 opencodex provider。DSH 會熱重載該 provider；你的預設模型與 deepseek-official 維持不變。目前僅支援 loopback，且不會寫入真實憑證。",
   ],
   vi: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex chỉ quản lý llm-pi-ai.providers.opencodex trong $DSH_HOME/settings.yaml. DSH sẽ hot reload provider này; model mặc định của bạn và deepseek-official không thay đổi. Hiện chỉ hỗ trợ loopback; không ghi credential thật nào.",
+    "OpenCodex chỉ quản lý provider opencodex trong dòng llm-pi-ai của $DSH_HOME/profiles/desktop/cordis.patch.yml, profile Desktop mà DSH 0.1.7+ đọc ($DSH_HOME/settings.yaml khi profile đó chưa tồn tại). DSH sẽ hot reload provider này; model mặc định của bạn và deepseek-official không thay đổi. Hiện chỉ hỗ trợ loopback; không ghi credential thật nào.",
   ],
   pt: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "O OpenCodex gerencia apenas llm-pi-ai.providers.opencodex em $DSH_HOME/settings.yaml. O DSH recarrega esse provedor a quente; seu modelo padrão e o deepseek-official permanecem inalterados. Atualmente somente loopback; nenhuma credencial real é gravada.",
+    "O OpenCodex gerencia apenas o provedor opencodex da linha llm-pi-ai em $DSH_HOME/profiles/desktop/cordis.patch.yml, o perfil Desktop que o DSH 0.1.7+ lê ($DSH_HOME/settings.yaml enquanto esse perfil não existir). O DSH recarrega esse provedor a quente; seu modelo padrão e o deepseek-official permanecem inalterados. Atualmente somente loopback; nenhuma credencial real é gravada.",
   ],
 };
 

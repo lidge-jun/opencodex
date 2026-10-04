@@ -5,6 +5,23 @@ description: Setup, start, stop, service, diagnostics, sync, and update commands
 
 These commands install, run, inspect, repair, and update the local opencodex proxy and its Codex integration.
 
+## Discover before starting services
+
+`ocx help`, `ocx help <family>` and `ocx help <family> <leaf>` are offline.
+Use `ocx help --all` when the compact root is insufficient. Help, local config
+validation and local Lab inspection do not require starting a proxy.
+
+Before a live management workflow, run `ocx ready --json` and `ocx status --json`.
+Readiness distinguishes `pending`, `failed` and `unreachable`; only `ready: true`
+confirms readiness. Check the target and `versionSkew.relation`: `unknown` is not
+proof of matching versions. A version mismatch calls for resolving the intended
+installation, not repeatedly trying a newer flag against an older server.
+
+Output and exit conventions are command-specific. `ready` and `resolve` reject
+invalid arguments with 64, while `doctor --json` is unsupported and exits 2.
+A successful local save or accepted restart request does not prove convergence;
+read the command receipt and re-check status after the requested operation.
+
 ## Setup
 
 ### `ocx init` · `ocx setup`
@@ -101,6 +118,19 @@ Missing or unreadable evidence blocks the guarded stop.
 
 ### `ocx restart`
 
+When this CLI is newer than an attested standalone POSIX proxy, restart can stop the old
+installation and launch this one. This guarded update requires an unclaimed physical home,
+a detached proxy whose parent is PID 1, no installed or active service, and a known CLI version.
+The stop uses the same connection that proved the old proxy's identity. The command launches
+once only after confirmed shutdown, then requires the exact child PID, endpoint, fresh identity
+proof and matching version. Missing version, uncertain stop, timeout or an unexpected replacement
+reports failure without another stop or start. If the runtime this CLI would launch is still the
+small placeholder an in-place npm install leaves before its postinstall, restart refuses before
+stopping anything; after a confirmed stop it waits for the runtime within the same deadline and
+launches nothing if it does not arrive. Windows, foreground, desktop-supervised, service,
+connected-client and sibling runtimes do not use this update path; use their owning lifecycle
+controls. A newer proxy or incomparable version still refuses an in-place downgrade.
+
 When a proxy is running, ask that exact attested PID and port to restart in place, wait for its
 normal drain, and verify a different runtime PID on the same port. Managed routing and service
 supervision stay installed throughout; an uncertain request is observed rather than replayed as a
@@ -122,7 +152,7 @@ the previous attempt never launched a child or the launched child is known to ha
 If a launch may still be running, restart reports the original failure without starting
 a second proxy, even when a health probe finds nothing. When an accepted restart never publishes a replacement, the command re-observes
 once before giving up — a proxy that crashed mid-restart reads absent and is started fresh,
-while a replacement that landed just past the shortened replacement wait still proves success within the overall observation deadline. A live target is
+while a replacement that landed just past the shortened replacement wait still proves success within the overall observation deadline. Outside the guarded newer-CLI update path, a live target is
 never stopped to make room, so a stale-but-listening process can not be replaced by a second
 proxy racing it for the port.
 Every failed start attempt is followed by a beat and a strong re-observation before the
@@ -303,6 +333,26 @@ tokens, authorization headers, request content, emails, and account identities.
 Identity-check the live proxy. Human output reports PID/port; `--json` emits `{ok, pid, port}`. The
 command exits 0 only when healthy and 1 otherwise, making it suitable for service probes.
 
+### `ocx system health [--json]`
+
+```bash
+ocx health --json
+ocx system health --json
+```
+
+Root health is the liveness probe. System health is a separate management
+observation: `{status:"ok",service:"opencodex",version,uptime,pid,spendLedger}`,
+with uptime in seconds. `system status` remains its settings/startup/memory aggregate.
+A valid system-health observation exits 0 even if the spend ledger is degraded.
+Read ownership held/unheld, initialized, configured, degraded, persistFailures and
+corruptRecords; status ok does not certify every subsystem healthy. Failed/malformed
+reads remain nonzero with safe stderr, not fabricated healthy data.
+
+For bounded diagnostics, [request/injection follow](/reference/cli/agents/#follow-request-windows-or-injection-sequences)
+stops on error or detected target change instead of reconnecting automatically.
+SIGINT exits 130 and SIGTERM 143. Versioned log events reconstruct observed windows,
+not traffic missed between polls; injection seq cannot exclude restart/eviction gaps.
+
 ### `ocx ready [--json] [--wait [--timeout <seconds>]]`
 
 Check post-sync readiness through the unauthenticated `GET /readyz` endpoint. It returns `200` when
@@ -379,6 +429,27 @@ accounts (redacted ids) with a recovery `Action:`, and a static OK that the Code
 not fabricate official-client metadata. Doctor never mutates credentials or applies repairs.
 
 ## Catalog sync
+
+### Read saved state separately from synchronization
+
+Model, provider, settings and v2 receipts have different completion contracts.
+Local custom-model changes opportunistically sync: no proxy means a successful
+save, `needsSync:true`, `sync.status:"not-attempted"` and exit 0. An explicit local
+provider `--sync` without a proxy instead returns nonzero after saving.
+
+Settings writes use `catalogRefreshPending`, while live v2/catalog writes use a
+full `catalogRefresh` disposition. Local v2 mode/keep-native and changed on/off
+still attempt their established sync even when no port was discovered. JSON
+reports actual changed state and sync evidence; unverified/failed sync is nonzero.
+Threads/hints and unchanged on/off do not introduce a new sync attempt.
+
+Inspect the same target with `ocx v2 status --json` or `ocx v2 status --live --json`,
+and use `ocx system settings --json` for settings read-back. A saved-but-pending or
+unknown outcome does not prove rollback and is not permission to replay a write.
+See [v2 outcomes](/reference/cli/agents/#explicit-v2-target-and-outcome) and
+[account policy](/reference/cli/providers-accounts/#pool-policy-account-thresholds-and-paid-credit-intent)
+for target, scope and spending boundaries. A reset-grant status read can contact
+upstream status but never consumes or resumes a grant.
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
@@ -930,6 +1001,58 @@ ocx update --tag preview
 
 New versions become available when the [Release workflow](https://github.com/lidge-jun/opencodex/actions/workflows/release.yml)
 publishes them to npm.
+
+## Save cleanup thresholds without starting a cleanup
+
+```bash
+ocx storage policy show --json
+ocx storage policy set --archived-bytes-over 1073741824 --reduce-to-bytes 536870912 --json
+ocx storage policy show --json
+```
+
+The setter writes nested `trigger.archivedBytesOver` and one target. Byte values
+are safe nonnegative integers. Alternatively choose `--remove-oldest-percent 10`
+or legacy `--percent 10`; the two percentage flags and reduce-to are mutually
+exclusive. CLI percentages are integers with server-supported range 1–100.
+Omitted `--enabled` leaves the stored value unchanged; explicit values are `true`
+and `false`. Set does not run cleanup, but an already-enabled schedule remains
+in force. Do not add enable or an immediate policy run unless intended.
+
+The new-field receipt is `{ok:true,policy,job:{status}}`, with observed trigger,
+target, mode, schedule and optional last/next-run facts. `job.status` describes an
+existing idle/running state, not a cleanup started by this command. Read back on
+an unknown outcome rather than replaying the write.
+
+## Forced link revoke and remote recovery
+
+Only when skipping remote cleanup is explicitly intended, use the actual selected
+link ID (`lnk_0123456789abcdef` below is fictional):
+
+```bash
+ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
+```
+
+`--force` requires `--yes`; `--yes` alone is invalid. Ordinary revoke is unchanged.
+A forced success returns `{linkId,remoteCleanup:"skipped",recovery}`. Idempotent
+link-not-found instead reports `remoteCleanup:"unverified"`. Both can exit 0;
+these facts derive from CLI intent, not a server cleanup report. Neither means
+remote disconnect was attempted or confirmed. Follow the recovery instruction,
+`ocx disconnect` on the remote client, when that action is authorized.
+
+## Observe Remote Workspace from the Hub
+
+```bash
+ocx remote-workspace hub status --json
+ocx remote-workspace hub runtimes --json
+ocx remote-workspace hub sessions --json
+```
+
+These fixed management reads are separate from executor-local
+`ocx remote-workspace status`. Runtime availability is a keyed object; an available
+Hub with no devices/sessions is empty success. Disabled Hub observation can arrive
+as HTTP 200 with `available:false` yet exits 1; it is not empty success. Inner
+HTTP 409 exits 5. Reads never enroll devices, create sessions or submit prompts.
+See [Hub observation and recovery](/guides/remote-workspace/#inspect-the-hub-without-starting-a-session).
 
 ## Remote Hub client lifecycle
 
