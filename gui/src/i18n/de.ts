@@ -5,6 +5,15 @@ import type { TKey } from "./en";
  * German i18n catalog, generated from en.ts. Must match the `TKey` set (compile-checked).
  */
 export const de: Record<TKey, string> = {
+  "reasoningRetention.title": "Aufbewahrung von Denktext",
+  "reasoningRetention.description": "Bei gerouteter v1-Komprimierung mit lesbarer Zusammenfassung bleibt Denktext bis zum kleineren Wert aus Kontextanteil und Token-Limit lokal und kehrt danach als historischer Kontext zurück. Darüber wird er lokal archiviert und durch einen Pfadhinweis ersetzt. Standard: 20 % und 100.000 Token. Private Anbieter-Denkdaten werden nicht entschlüsselt; undurchsichtige Komprimierungsausgaben bleiben unverändert.",
+  "reasoningRetention.percent": "Kontextfenster (%)",
+  "reasoningRetention.tokens": "Token-Limit",
+  "reasoningRetention.reset": "Standard wiederherstellen",
+  "reasoningRetention.invalid": "Prozentsatz größer als 0 und höchstens 100 sowie eine positive ganze Tokenzahl eingeben.",
+  "reasoningRetention.loadFailed": "Einstellungen konnten nicht geladen werden.",
+  "reasoningRetention.saveFailed": "Einstellungen konnten nicht gespeichert werden.",
+  "reasoningRetention.saved": "Einstellungen gespeichert.",
   "nav.claude": "Claude",
   "claude.pageSub": "OpenCodex-Routing und Einstellungen für Claude Code.",
 

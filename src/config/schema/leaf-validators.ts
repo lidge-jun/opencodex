@@ -62,6 +62,11 @@ export const compactionRoutingSchema = z.object({
     .optional(),
 }).strict();
 
+export const reasoningRetentionSchema = z.object({
+  maxContextPercent: z.number().gt(0).max(100).optional(),
+  maxTokens: z.number().int().positive().optional(),
+}).strict();
+
 /**
  * One phase of Codex's memory pipeline. A present phase must name a model: the GUI's "Off"
  * removes the phase instead of blanking it, so an empty entry would only ever come from a

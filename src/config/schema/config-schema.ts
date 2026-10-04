@@ -28,6 +28,7 @@ import {
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
   compactionRoutingSchema,
+  reasoningRetentionSchema,
   memoryModelSettingSchema,
   memoryModelsSchema,
   modelPreferHostedToolsConfigError,
@@ -187,6 +188,8 @@ export const configSchema = z.object({
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
   compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   compactionRecovery: compactionRecoverySchema.optional().catch(undefined),
+  // A bad hand edit disables only this block; writes validate the catch-free leaf first.
+  reasoningRetention: reasoningRetentionSchema.optional().catch(undefined),
   // A hand-edited malformed phase disables only that phase instead of rejecting
   // providers/apiKeys, matching the load-time degradation notice; the management write
   // boundary (validateConfigCandidate) still refuses the bad value through the shared,

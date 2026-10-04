@@ -1,4 +1,5 @@
 import { capturePoolQuotaWriter } from "../../codex/account-store";
+import { join } from "node:path";
 import { previewXaiOauthWireModel } from "./core-normalize";
 import {
   admissionModelDeniedResponse,
@@ -10,11 +11,13 @@ import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import {
   getConfigPath,
+  getConfigDir,
   multiAgentGuidanceEnabled,
 } from "../../config";
 import { resolveProviderApiKey } from "../../providers/key-store";
 import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
+import { applyReasoningRetention, appendRetentionNotice } from "../../responses/reasoning-retention";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
@@ -1424,7 +1427,16 @@ export async function handleResponsesCompact(
 
   // ROUTED model: run the v2 synthetic-compaction turn internally (appends COMPACT_PROMPT, no
   // tools) and decode the resulting ocx1 envelope into plain v1 replacement-history items.
-  const inputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
+  const rawInputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
+  // Keep readable reasoning local until success, outside the summarizer request.
+  // Opaque compaction responses below keep their original protocol and ciphertext.
+  const retention = applyReasoningRetention(rawInputItems, {
+    archiveDir: join(getConfigDir(), "reasoning-archive"),
+    contextWindow: route.staticPolicy.model.contextWindow ?? route.staticPolicy.model.maxInputTokens,
+    maxContextPercent: config.reasoningRetention?.maxContextPercent,
+    maxTokens: config.reasoningRetention?.maxTokens,
+  });
+  const inputItems = retention.input;
   const internalBody = {
     ...raw,
     // Canonical ChatGPT Responses rejects non-streaming turns. Daybreak cannot use the
@@ -1528,8 +1540,9 @@ export async function handleResponsesCompact(
   if (decoded === null || decoded.trim().length === 0) {
     return formatErrorResponse(502, "invalid_response_error", "compaction turn produced an empty summary");
   }
-  const summary = decoded;
-  const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
+  const summary = appendRetentionNotice(decoded, retention.archived);
+  const output = [...buildCompactV1Output(extractCompactUserMessages(inputItems), summary),
+    ...(retention.retainedReasoning ?? [])];
   if (!options.compactionRoutingOverride) rememberCompactHandoffRoute(req, admission, raw.model);
   return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
 }

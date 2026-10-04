@@ -5,6 +5,15 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  "reasoningRetention.title": "Akıl yürütmeyi saklama",
+  "reasoningRetention.description": "Okunabilir özet döndüren yönlendirilmiş v1 sıkıştırmada bağlam yüzdesi ile token sınırının küçüğüne kadar akıl yürütme yerelde tutulur, sıkıştırma modeline gönderilmez ve başarıdan sonra geçmiş bağlam olarak geri getirilir. Sınır aşılırsa yerel arşivlenir ve dosya yolu notuyla değiştirilir. Varsayılan: %20 ve 100.000 token. Sağlayıcının özel akıl yürütmesi çözülmez; opak sıkıştırma çıktısı değişmeden kalır.",
+  "reasoningRetention.percent": "Bağlam penceresi (%)",
+  "reasoningRetention.tokens": "Token sınırı",
+  "reasoningRetention.reset": "Varsayılanları geri yükle",
+  "reasoningRetention.invalid": "0’dan büyük, 100’ü aşmayan bir yüzde ve pozitif tam sayı token sınırı girin.",
+  "reasoningRetention.loadFailed": "Ayarlar yüklenemedi.",
+  "reasoningRetention.saveFailed": "Ayarlar kaydedilemedi.",
+  "reasoningRetention.saved": "Ayarlar kaydedildi.",
   "nav.claude": "Claude",
   "claude.pageSub": "Claude Code için OpenCodex yönlendirmesi ve ayarları.",
 

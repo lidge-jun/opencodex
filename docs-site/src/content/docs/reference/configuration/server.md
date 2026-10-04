@@ -733,6 +733,41 @@ caller's credential does not cross to the other provider. The selected model mus
 input size and content. Restart the proxy after editing
 `config.json` by hand. Dashboard saves apply immediately.
 
+### Reasoning retention during compaction
+
+For routed v1 `POST /v1/responses/compact`, readable reasoning stays local while the selected
+model summarizes other context. After a readable summary succeeds, exact retained text returns
+alongside it in framed historical context messages, not as new assistant reasoning or instructions.
+Repeated compaction withholds those messages again. Ordinary subsequent turns replay them as history.
+
+```json
+{
+  "reasoningRetention": {
+    "maxContextPercent": 20,
+    "maxTokens": 100000
+  }
+}
+```
+
+Both fields are optional and default at runtime to `20` percent and `100000` estimated tokens.
+The effective limit is the smaller of the percentage of the compacting model's context window
+and the absolute token cap; when the context window is unknown, only the absolute cap applies.
+Above the limit, readable text is written verbatim under the resolved OpenCodex home's
+`reasoning-archive/` (normally `~/.opencodex/reasoning-archive/`). The summarizer receives a
+path note instead of the text, and the finished readable summary includes a notice naming that file.
+New archives are private to the user on POSIX. Failed compaction returns no replacement history.
+
+**Dashboard → Overview → Reasoning retention** edits both limits; **Restore defaults** removes
+the override. GET/PUT `/api/settings` exposes `reasoningRetention`: null clears the block,
+and omission preserves it. Percentages must be greater than 0 and at most 100; token caps must
+be positive integers, and unknown fields are rejected. Invalid hand edits disable only this
+block with a warning, keeping unrelated providers and settings.
+
+Private provider ciphertext and signatures are not decrypted or copied into portable retained
+messages. An upstream native opaque compaction response retains its exact output item and
+ciphertext, without added retained messages or a rewritten summary. Native compact endpoints
+and direct v2 `compaction_trigger` requests keep their existing behavior.
+
 ## Memory routing
 
 In **Dashboard → Overview → Memory routing**, choose a model and an optional reasoning effort for

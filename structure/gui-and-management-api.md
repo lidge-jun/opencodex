@@ -42,6 +42,8 @@ Native steering follows [the shared WebSocket contract](transports/streaming-hea
 The shared server request path follows the Responses
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior. The configuration-only [priority failback](providers/openai-accounts.md#ongoing-priority-failback) preference adds no new dashboard control or account-eligibility override.
 
+The Overview Reasoning retention panel (`gui/src/components/ReasoningRetentionPanel.tsx`) reads and saves `reasoningRetention` via GET/PUT `/api/settings` in `src/server/management/config-routes.ts`: omission preserves it, null resets defaults (20% and 100000 tokens), validation precedes mutation, and save failure restores value and key presence. Loading disables writes, failures permit retry without losing edits, and stale responses cannot update a new API target. Its scope is the [routed v1 compaction contract](transports/responses-failover.md#compaction-routing-overrides); opaque output stays unchanged. `tests/config/settings-reasoning-retention.test.ts` and `gui/tests/reasoning-retention-panel.test.tsx` cover the API and controls.
+
 The Overview Memory routing panel reads and saves optional per-phase `memoryModels` through
 `src/server/management/config-routes.ts`. Settings GET and PUT echo the persisted block; PUT
 rejects malformed targets without dropping unrelated config. An unknown saved model remains

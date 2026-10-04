@@ -4,6 +4,15 @@ import type { TKey } from "./en";
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  "reasoningRetention.title": "推理保留",
+  "reasoningRetention.description": "仅路由 v1 压缩的可读摘要路径启用：阈值取上下文窗口比例与 token 上限中的较小值。阈值内的可读推理本地暂留，不发给压缩模型，成功后随摘要作为历史上下文带回；超限则本地归档并返回路径说明。默认 20% 和 100,000 token。无法解密提供商的私有推理，原生密文压缩输出保持原样。",
+  "reasoningRetention.percent": "上下文窗口比例（%）",
+  "reasoningRetention.tokens": "Token 上限",
+  "reasoningRetention.reset": "恢复默认",
+  "reasoningRetention.invalid": "比例须大于 0 且不超过 100，token 上限须为正整数。",
+  "reasoningRetention.loadFailed": "无法加载推理保留设置。",
+  "reasoningRetention.saveFailed": "无法保存推理保留设置。",
+  "reasoningRetention.saved": "推理保留设置已保存。",
   "nav.claude": "Claude",
   "claude.pageSub": "管理 Claude Code 的 OpenCodex 路由和设置。",
 

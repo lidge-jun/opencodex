@@ -123,6 +123,8 @@ export function warnDegradedCompactionRouting(rawParsed: unknown, validated: Ocx
  * the ratchet only ever moves down: a per-block call there costs a line the file does not have.
  */
 export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
+  const retentionWarning = degradedReasoningRetentionWarning(rawParsed, validated);
+  if (retentionWarning) console.warn(retentionWarning);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
   const chatgptDesktop = chatgptDesktopConfigIssue(rawParsed);
@@ -130,6 +132,11 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);
   warnDegradedMemoryModels(rawParsed, validated);
+}
+
+export function degradedReasoningRetentionWarning(rawParsed: unknown, validated: OcxConfig): string | null {
+  if (rawConfigRecord(rawParsed)?.reasoningRetention === undefined || validated.reasoningRetention !== undefined) return null;
+  return "config.json reasoningRetention is invalid — using the default 20% share and 100,000 token cap";
 }
 
 /**
