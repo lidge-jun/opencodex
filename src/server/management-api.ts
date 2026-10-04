@@ -178,6 +178,12 @@ async function handleCodexAgentRoleRoutesOnDemand(ctx: ManagementContext): Promi
  * Lazy like the Lab and routing-profile handlers: the protocol planner reaches the router and
  * the ingress eligibility rules, which no other dashboard request needs.
  */
+async function handleOptimizeRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/optimize")) return null;
+  const { handleOptimizeRoutes } = await import("./management/optimize-routes");
+  return handleOptimizeRoutes(ctx);
+}
+
 async function handleProtocolRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/protocols")) return null;
   const { handleProtocolRoutes } = await import("./management/protocol-routes");
@@ -346,6 +352,7 @@ export async function handleManagementAPI(
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))
+    ??     (await handleOptimizeRoutesOnDemand(ctx))
     ??     (await handleProtocolRoutesOnDemand(ctx))
     ??     (await handleGrokCouponRoutesOnDemand(ctx))
     ??     (await handleAnthropicResetGrantRoutesOnDemand(ctx))
@@ -503,7 +510,7 @@ export async function handleManagementAPI(
     return handleNativeProfileAPI(req, url, config, deps.nativeProfileApi);
   }
 
-  if (url.pathname.startsWith("/api/codex-auth/") || url.pathname === "/api/oauth/codex/bulk-import") {
+  if (url.pathname.startsWith("/api/codex-auth/") || url.pathname.startsWith("/api/oauth/codex/bulk-import")) {
     // Native-main device reauth (#3898): a dedicated namespace the generic
     // codex-auth dispatch must not swallow (it would 404 as an unknown pool
     // route). Same management origin/auth/session wrapping as every /api/*.

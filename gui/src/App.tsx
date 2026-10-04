@@ -4,6 +4,7 @@ import Dashboard from "./pages/Dashboard";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
 import Subagents from "./pages/Subagents";
+import Optimize from "./pages/Optimize";
 import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
@@ -18,7 +19,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import QuotaSummaryBar from "./components/quota-summary-bar/QuotaSummaryBar";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { DesktopStarOnboarding } from "./components/desktop-star-onboarding";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconGauge, IconHardDrive, IconCodex, IconClaude, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
+import { IconGrid, IconZap, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconGauge, IconHardDrive, IconCodex, IconClaude, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
@@ -55,6 +56,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   "codex-set": "nav.codexSet",
   integrations: "nav.integrations",
   claude: "nav.claude",
+  optimize: "nav.optimize",
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -77,6 +79,7 @@ const NAV: NavEntry[] = [
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
+  { id: "optimize", tkey: "nav.optimize", Icon: IconZap },
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "quota", tkey: "nav.quota", Icon: IconGauge },
@@ -578,6 +581,7 @@ export default function App() {
                 {page === "providers" && <Providers apiBase={sharedBase} />}
                 {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} connected={targets.connected} catalogSyncedAt={targets.catalogSyncedAt} reportRestart={report} />}
                 {page === "subagents" && <Subagents key={sharedBase} apiBase={sharedBase} />}
+                {page === "optimize" && <Optimize key={sharedBase} apiBase={sharedBase} />}
                 {page === "logs" && <Logs apiBase={sharedBase} />}
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />}
                 {page === "quota" && <QuotaPage apiBase={sharedBase} active={page === "quota"} />}

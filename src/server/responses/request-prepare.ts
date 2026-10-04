@@ -1402,6 +1402,10 @@ export async function prepareResponsesRequest(
     : config.activeCodexAccountId ?? null;
 
   commitSkillsSnapshot?.();
+  if (config.optimize) {
+    const { applyOptimizations } = await import("../../optimize/pipeline");
+    await applyOptimizations(parsed, config, logCtx);
+  }
   return {
     inboundWire,
     translatorBudget,

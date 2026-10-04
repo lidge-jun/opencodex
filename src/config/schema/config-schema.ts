@@ -74,6 +74,16 @@ import { parseDesktopProfile } from "../../claude/desktop-profile";
 import { isInterceptBindingId, isInterceptBindingRoute } from "../../claude/intercept/model-bindings";
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES, MAX_APP_OWNED_MEMORY_BUDGET_MB, MIN_APP_OWNED_MEMORY_BUDGET_MB } from "../../lib/app-owned-memory";
 
+
+export const optimizeSchema = z.object({
+  rtkEnabled: z.boolean().optional(),
+  headroomEnabled: z.boolean().optional(),
+  headroomUrl: z.string().trim().optional(),
+  headroomTimeoutMs: z.number().int().positive().optional(),
+  ponytailEnabled: z.boolean().optional(),
+  ponytailLevel: z.enum(["lite", "full", "ultra"]).optional(),
+}).strict();
+
 export const configSchema = z.object({
   chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   codexNativeSteering: z.boolean().optional().catch(false),
@@ -307,6 +317,7 @@ export const configSchema = z.object({
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
+  optimize: optimizeSchema.optional().catch(undefined),
   blockedModelRedirects: blockedModelRedirectsSchema.optional().catch(undefined),
   // Preserve malformed hand edits for a local routing error; candidate writes use the shared parser.
   anthropicAccountPool: z.unknown().optional(),

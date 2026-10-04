@@ -100,4 +100,4 @@ export const IconFilter = (p: P) => (<svg {...S(p)}><path d="M4 5h16l-6 7v5l-4 2
 /** Claude sunburst, using the same currentColor stroke as the navigation marks. */
 export const IconClaude = (p: P) => (<svg {...S(p)}><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M5.6 18.4 18.4 5.6M8.5 3.7l7 16.6M3.7 8.5l16.6 7M3.7 15.5l16.6-7M8.5 20.3l7-16.6"/></svg>);
 export const IconGauge = (p: P) => (<svg {...S(p)}><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>);
-
+export const IconZap = (p: P) => (<svg {...S(p)}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>);

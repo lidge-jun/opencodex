@@ -45,12 +45,7 @@ export async function handleCodexAuthAPI(
     }) });
   }
 
-  if (
-    (url.pathname === "/api/codex-auth/bulk-import" ||
-     url.pathname === "/api/oauth/codex/bulk-import" ||
-     url.pathname === "/api/codex-auth/accounts/import") &&
-    req.method === "POST"
-  ) {
+  if ((url.pathname === "/api/codex-auth/accounts/import" || url.pathname.endsWith("/bulk-import")) && req.method === "POST") {
     let body: unknown;
     try {
       body = await req.json();

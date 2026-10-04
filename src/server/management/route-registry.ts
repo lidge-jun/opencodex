@@ -106,6 +106,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/codex-auth/low-quota-events", module: "server/management/low-quota-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The authenticated event history is an operator diagnostic with no CLI verb yet.", owner: "rt5 low-quota", ownerDoc: "structure/gui-and-management-api.md" } },
   { method: "GET", path: "/api/codex-auth/reset-credits", module: "codex/auth-api/routes", mutates: false },
   { method: "PATCH", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api/routes", mutates: true },
+  { method: "POST", path: "/api/codex-auth/accounts/import", module: "codex/auth-api/routes", mutates: true },
   { method: "POST", path: "/api/codex-auth/accounts", module: "codex/auth-api/routes", mutates: true },
   { method: "POST", path: "/api/codex-auth/accounts/clear-cooldown", module: "codex/auth-api/routes", mutates: true },
   { method: "POST", path: "/api/codex-auth/accounts/refresh", module: "codex/auth-api/routes", mutates: true },
@@ -356,6 +357,11 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/quota-reset-routes
   { method: "GET", path: "/api/quota-resets", module: "server/management/quota-reset-routes", mutates: false, mechanism: "negated-guard" },
   // server/management/workflow-budget-routes
+  // server/management/optimize-routes
+  { method: "GET", path: "/api/optimize", module: "server/management/optimize-routes", mutates: false },
+  { method: "PATCH", path: "/api/optimize", module: "server/management/optimize-routes", mutates: true },
+  { method: "GET", path: "/api/optimize/headroom/status", module: "server/management/optimize-routes", mutates: false },
+  { method: "POST", path: "/api/optimize/test", module: "server/management/optimize-routes", mutates: false },
   { method: "GET", path: "/api/protocols", module: "server/management/protocol-routes", mutates: false },
   { method: "POST", path: "/api/protocols/plan", module: "server/management/protocol-routes", mutates: false },
   { method: "PATCH", path: "/api/protocols/settings", module: "server/management/protocol-routes", mutates: true },
