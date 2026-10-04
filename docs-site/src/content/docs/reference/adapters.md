@@ -579,7 +579,10 @@ configuration that names the old id is rewritten at startup.
   `parseStream` path is disabled.
 - Named conversations reuse a trajectory across sequential turns, scoped to the resolved credential
   and tenant host. Own-thread identity takes precedence over session markers (`session_id`,
-  `session-id`, or `x-session-affinity`); a shared parent alone is not a conversation identity.
+  `session-id`, or `x-session-affinity`). When an own-thread identity and a nonempty
+  `x-codex-parent-thread-id` are both supplied, their pair identifies the conversation,
+  so equal own IDs under different parents remain separate. Standalone own and session-only
+  identities retain their existing precedence; a shared parent alone is not a conversation identity.
   Overlapping turns receive distinct IDs. The proxy retains at most 256 entries in memory,
   evicts only inactive entries, and releases claims after completion, failure, or cancellation.
   Restarting the proxy clears retention. Unnamed calls continue allocating an ID per request.

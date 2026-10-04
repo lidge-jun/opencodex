@@ -753,11 +753,13 @@ export function createDevinAdapter(
       };
 
       try {
-        const conversation = incoming.headers.get("thread-id")?.trim() || parsed._codexOwnThreadId?.trim()
+        const ownThreadId = incoming.headers.get("thread-id")?.trim() || parsed._codexOwnThreadId?.trim();
+        const conversation = ownThreadId
           || incoming.headers.get("session_id")?.trim() || incoming.headers.get("session-id")?.trim()
           || incoming.headers.get("x-session-affinity")?.trim()
           || (!incoming.headers.has("x-codex-parent-thread-id") ? parsed._clientThreadId : undefined);
-        trajectory = claimDevinTrajectory(apiKey, host, conversation);
+        trajectory = claimDevinTrajectory(apiKey, host, conversation,
+          ownThreadId ? incoming.headers.get("x-codex-parent-thread-id")?.trim() || undefined : undefined);
         const trajectoryId = trajectory.trajectoryId;
         // Read the selected UID's catalog row, not the picker's collapsed base.
         contextWindow = resolveDevinContextWindow(provider, modelUid, catalog?.byUid.get(modelUid));

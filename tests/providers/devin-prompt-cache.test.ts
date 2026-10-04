@@ -356,6 +356,123 @@ describe("one catalog read serves the cached chat path", () => {
     expect(repeat).toBe(a);
   });
 
+  test("the same child under different supplied parents has separate wire UUIDs and repeat continuity", async () => {
+    seed([{ uid: "swe-2-high" }]);
+    const own = crypto.randomUUID();
+    const parents = ["parent-a-" + own, "parent-b-" + own];
+    for (const parent of [...parents, ...parents]) {
+      const events = await run("swe-2-high", {}, {}, undefined,
+        new Headers({ "thread-id": own, "x-codex-parent-thread-id": parent }), { _clientThreadId: parent });
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(events.at(-1)?.type).toBe("done");
+    }
+    const [a, b, aRepeat, bRepeat] = sentTrajectories();
+    expect(aRepeat).toBe(a);
+    expect(bRepeat).toBe(b);
+    expect(b, "different supplied parents must not collide on one wire UUID").not.toBe(a);
+  });
+
+  test("parent B retains its wire UUID across sequential turns while parent A holds the same child active", async () => {
+    seed([{ uid: "swe-2-high" }]);
+    const own = crypto.randomUUID();
+    const aHeaders = new Headers({ "thread-id": own, "x-codex-parent-thread-id": "parent-a-" + own });
+    const bHeaders = new Headers({ "thread-id": own, "x-codex-parent-thread-id": "parent-b-" + own });
+    const recorded = globalThis.fetch;
+    let release!: () => void;
+    let sent!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const firstSent = new Promise<"sent">(resolve => { sent = () => resolve("sent"); });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await recorded(input, init);
+      if (String(input).endsWith("/GetChatMessage") && requests.length === 1) {
+        sent();
+        await held;
+      }
+      return response;
+    }) as typeof fetch;
+    const deadline = AbortSignal.timeout(3_000);
+    const first = run("swe-2-high", {}, {}, deadline, aHeaders);
+    try {
+      const ended = first.then(() => "ended" as const, () => "ended" as const);
+      const timedOut = new Promise<"timeout">(resolve => deadline.addEventListener("abort", () => resolve("timeout"), { once: true }));
+      expect(await Promise.race([firstSent, ended, timedOut])).toBe("sent");
+      for (const headers of [bHeaders, bHeaders, aHeaders, aHeaders]) {
+        const events = await run("swe-2-high", {}, {}, undefined, headers);
+        expect(events.some(event => event.type === "error")).toBe(false);
+        expect(events.at(-1)?.type).toBe("done");
+      }
+    } finally {
+      release();
+      try { expect((await first).at(-1)?.type).toBe("done"); }
+      finally { globalThis.fetch = recorded; }
+    }
+    await run("swe-2-high", {}, {}, undefined, aHeaders);
+    await run("swe-2-high", {}, {}, undefined, bHeaders);
+    const [a, b1, b2, aOverlap1, aOverlap2, aLater, bLater] = sentTrajectories();
+    expect(new Set([a, aOverlap1, aOverlap2]).size).toBe(3);
+    expect(aLater).toBe(a);
+    expect(b1).not.toBe(a);
+    expect(b2, "parent B must retain its own UUID while parent A is active").toBe(b1);
+    expect(bLater).toBe(b1);
+  });
+
+  test("internal own and header own select the same qualified trajectory and explicit own wins", async () => {
+    seed([{ uid: "swe-2-high" }]);
+    const own = crypto.randomUUID();
+    const parent = "parent-" + own;
+    await run("swe-2-high", {}, {}, undefined,
+      new Headers({ "x-codex-parent-thread-id": " " + parent + " ", session_id: "session-a-" + own }),
+      { _codexOwnThreadId: " " + own + " ", _clientThreadId: "parsed-other-" + own });
+    await run("swe-2-high", {}, {}, undefined,
+      new Headers({ "thread-id": " " + own + " ", "x-codex-parent-thread-id": parent, session_id: "session-b-" + own }));
+    await run("swe-2-high", {}, {}, undefined,
+      new Headers({ "thread-id": "explicit-" + own, "x-codex-parent-thread-id": parent }), { _codexOwnThreadId: own });
+    await run("swe-2-high", {}, {}, undefined,
+      new Headers({ "x-codex-parent-thread-id": parent }), { _codexOwnThreadId: "explicit-" + own });
+    const [internal, header, explicit, explicitRepeat] = sentTrajectories();
+    expect(header).toBe(internal);
+    expect(explicit).not.toBe(internal);
+    expect(explicitRepeat).toBe(explicit);
+  });
+
+  test.each(["session_id", "session-id", "x-session-affinity"])("session-only %s remains unqualified across changing parents", async alias => {
+    seed([{ uid: "swe-2-high" }]);
+    const name = crypto.randomUUID();
+    for (const parent of [undefined, "parent-a-" + name, "parent-b-" + name, ""]) {
+      const headers = new Headers({ [alias]: name });
+      if (parent !== undefined) headers.set("x-codex-parent-thread-id", parent);
+      const events = await run("swe-2-high", {}, {}, undefined, headers, { _clientThreadId: "parsed-" + parent });
+      expect(events.at(-1)?.type).toBe("done");
+    }
+    const [first, ...repeats] = sentTrajectories();
+    expect(repeats).toEqual([first, first, first]);
+  });
+
+  test("missing or blank parent leaves own identity standalone with own precedence", async () => {
+    seed([{ uid: "swe-2-high" }]);
+    const own = crypto.randomUUID();
+    for (const parent of [undefined, "", " \t "]) {
+      const headers = new Headers({ "thread-id": " " + own + " ", session_id: "session-" + own });
+      if (parent !== undefined) headers.set("x-codex-parent-thread-id", parent);
+      await run("swe-2-high", {}, {}, undefined, headers,
+        { _codexOwnThreadId: "internal-other-" + own, _clientThreadId: "parsed-other-" + own });
+    }
+    await run("swe-2-high", {}, {}, undefined, new Headers(), { _codexOwnThreadId: own });
+    const [first, ...repeats] = sentTrajectories();
+    expect(repeats).toEqual([first, first, first]);
+  });
+
+  test.each(["", " \t "])("blank parent header %p suppresses direct parsed fallback at the adapter boundary", async parent => {
+    // This is the adapter contract; ingress header materialization may omit blank values.
+    seed([{ uid: "swe-2-high" }]);
+    const headers = new Headers({ "x-codex-parent-thread-id": parent });
+    const identity = { _clientThreadId: crypto.randomUUID() };
+    for (let i = 0; i < 2; i++) {
+      expect((await run("swe-2-high", {}, {}, undefined, headers, identity)).at(-1)?.type).toBe("done");
+    }
+    expect(sentTrajectories()[1]).not.toBe(sentTrajectories()[0]);
+  });
+
   test("internal own identity survives headerless handoffs and outranks session aliases", async () => {
     seed([{ uid: "swe-2-high" }]);
     const own = crypto.randomUUID();
@@ -363,10 +480,12 @@ describe("one catalog read serves the cached chat path", () => {
     await run("swe-2-high", {}, {}, undefined, new Headers({ "thread-id": own }));
     await run("swe-2-high", {}, {}, undefined, new Headers({ "thread-id": "explicit-" + own }), { _codexOwnThreadId: own });
     await run("swe-2-high", {}, {}, undefined, new Headers({ "x-codex-parent-thread-id": "parent-" + own }), { _codexOwnThreadId: own, _clientThreadId: "parent-" + own });
-    const [internal, header, explicit, handedOff] = sentTrajectories();
+    await run("swe-2-high", {}, {}, undefined, new Headers({ "x-codex-parent-thread-id": "parent-" + own }), { _codexOwnThreadId: own, _clientThreadId: "parent-" + own });
+    const [internal, header, explicit, handedOff, handedOffRepeat] = sentTrajectories();
     expect(header).toBe(internal);
     expect(explicit).not.toBe(internal);
-    expect(handedOff).toBe(internal);
+    expect(handedOff).not.toBe(internal);
+    expect(handedOffRepeat).toBe(handedOff);
   });
 
   test("parent-only requests with parsed parent identity remain unnamed", async () => {
