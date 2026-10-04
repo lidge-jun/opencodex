@@ -352,6 +352,11 @@ The local pool id is never used; malformed, absent and unknown metadata stays un
 Every rebuild starts from the source body; the binding also checks UUID equality before send.
 Conflicting provider credential headers fail before dispatch on every OAuth build, including
 builds without a provider UUID.
+Native OAuth Messages collect top-level and typed inline tool declarations before rewriting declared
+client names in tool choices, uses, references, additions and removals, including typed tool-result
+content. Typed builtin names stay fixed; ambiguous original or wire-name collisions are refused.
+The copy-on-write traversal leaves input schemas, tool arguments, unknown containers and cache markers
+(including lifetimes) opaque. Nested inline support is structural; it does not assert upstream acceptance.
 Key-auth and caller-forward requests retain their metadata. The answer's
 `tool_use` names are mapped back for exactly those names. A 401 or 429 is answered as the bridge
 answers an unpooled account: no refresh replay, no same-token replay, no rotation.

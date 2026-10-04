@@ -50,6 +50,34 @@ const SOURCE = {
   ],
 };
 
+// Exact deferred-reference fixture from public #6533 (f7175bfb1e).
+const DEFERRED_SOURCE = {
+  model: "selector",
+  max_tokens: 64,
+  stream: true,
+  system: "fixture system",
+  tools: [
+    { name: "lookup", description: "fixture", input_schema: { type: "object", properties: {} } },
+    { type: "web_search_20250305", name: "web_search" },
+    { type: "bash_20250124", name: "bash" },
+  ],
+  tool_choice: { type: "tool", name: "lookup" },
+  messages: [
+    { role: "user", content: "fixture question" },
+    { role: "assistant", content: [
+      { type: "tool_use", id: "toolu_1", name: "lookup", input: { opaque: { type: "tool_reference", tool_name: "lookup" } } },
+      { type: "tool_use", id: "toolu_2", name: "bash", input: { command: "true" } },
+    ] },
+    { role: "user", content: [
+      { type: "tool_result", tool_use_id: "toolu_1", content: [
+        { type: "text", text: "fixture result", cache_control: { type: "ephemeral", ttl: "1h", scope: "turn" } },
+        { type: "tool_reference", tool_name: "lookup" },
+      ] },
+      { type: "tool_result", tool_use_id: "toolu_2", content: "" },
+    ] },
+  ],
+};
+
 describe("buildAnthropicMessagesPassthroughRequest with OAuth", () => {
   test("places the credential and fingerprint exactly as the adapter does", async () => {
     const built = buildAnthropicMessagesPassthroughRequest(oauthProvider(), "claude-wire", SOURCE);
@@ -119,9 +147,249 @@ describe("buildAnthropicMessagesPassthroughRequest with OAuth", () => {
     expect(() => anthropicOAuthWireBody(body)).toThrow("collide");
   });
 
+  // Inline-name regressions from #6534/#6547 (e3eefbaedf).
+  test("renames inline tool additions before references and removals without mutating source or cache metadata", () => {
+    const body = {
+      tools: [{ name: "lookup", input_schema: { type: "object", properties: {} } }],
+      messages: [{ role: "assistant", content: [
+        { type: "tool_addition", tool: { type: "tool_reference", name: "ReadNotifications" }, cache_control: { type: "ephemeral", ttl: "1h" } },
+        { type: "tool_addition", tool: { type: "tool_definition", definition: {
+          name: "ReadNotifications", input_schema: { type: "object", properties: { q: { type: "string" } } },
+        } } },
+        { type: "tool_removal", tool: { type: "tool_reference", name: "ReadNotifications" } },
+        { type: "tool_addition", tool: { type: "tool_reference", name: "lookup" } },
+        { type: "tool_removal", tool: { type: "tool_reference", name: "lookup" } },
+        { type: "text", text: "keep cache", cache_control: { type: "ephemeral", ttl: "1h", scope: "turn" } },
+      ] }],
+    };
+    const original = structuredClone(body);
+    const shaped = anthropicOAuthWireBody(body);
+    const blocks = (shaped.body.messages as { content: Record<string, unknown>[] }[])[0]!.content;
+    expect((blocks[0]!.tool as Record<string, unknown>).name).toBe("custom_ReadNotifications");
+    expect(blocks[0]!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect((((blocks[1]!.tool as Record<string, unknown>).definition as Record<string, unknown>).name)).toBe("custom_ReadNotifications");
+    expect((blocks[2]!.tool as Record<string, unknown>).name).toBe("custom_ReadNotifications");
+    expect((blocks[3]!.tool as Record<string, unknown>).name).toBe("custom_lookup");
+    expect((blocks[4]!.tool as Record<string, unknown>).name).toBe("custom_lookup");
+    expect(blocks[5]!.cache_control).toEqual({ type: "ephemeral", ttl: "1h", scope: "turn" });
+    expect([...shaped.toolNames]).toEqual([
+      ["custom_lookup", "lookup"],
+      ["custom_ReadNotifications", "ReadNotifications"],
+    ]);
+    expect(body).toEqual(original);
+  });
+
+  test("typed inline builtin definitions and their references keep their fixed names", () => {
+    const definition = { type: "bash_20250124", name: "bash", input_schema: { properties: { scope: { type: "string" } } } };
+    const content = [{ type: "tool_addition", tool: { type: "tool_definition", definition } },
+      { type: "tool_removal", tool: { type: "tool_reference", name: "bash" } }];
+    const source = { ...SOURCE, tools: [], messages: [{ role: "system", content }] };
+    const built = buildAnthropicMessagesPassthroughRequest(oauthProvider(), "m", source);
+    expect(built.wireBody.messages).toEqual(source.messages);
+    expect(built.oauthToolNames?.size).toBe(0);
+    const collision = { ...source, tools: [{ name: "bash", input_schema: {} }] };
+    expect(() => buildAnthropicMessagesPassthroughRequest(oauthProvider(), "m", collision)).toThrow("inline typed and client tool names collide");
+    expect(definition.name).toBe("bash");
+  });
+
   test("a key-auth provider gets no OAuth shaping", () => {
     const shaped = anthropicMessagesNativeWireBody({ baseUrl: "https://api.anthropic.com", authMode: "key" }, "m", SOURCE);
     expect(shaped.oauthToolNames).toBeUndefined();
     expect(shaped.wireBody.system).toBe("fixture system");
+  });
+});
+
+describe("native OAuth typed tool-name preservation", () => {
+  test("#6533 nested reference fixture preserves opaque input and cache metadata", () => {
+    const before = JSON.stringify(DEFERRED_SOURCE);
+    const shaped = anthropicOAuthWireBody(DEFERRED_SOURCE);
+    const messages = shaped.body.messages as typeof DEFERRED_SOURCE.messages;
+    const content = messages[2]!.content as { content: unknown[] }[];
+    expect(content[0]!.content).toEqual([
+      { type: "text", text: "fixture result", cache_control: { type: "ephemeral", ttl: "1h", scope: "turn" } },
+      { type: "tool_reference", tool_name: "custom_lookup" },
+    ]);
+    const uses = messages[1]!.content as { input: unknown }[];
+    expect(uses[0]!.input).toBe((DEFERRED_SOURCE.messages[1]!.content as { input: unknown }[])[0]!.input);
+    expect([...shaped.toolNames]).toEqual([["custom_lookup", "lookup"]]);
+    expect(JSON.stringify(DEFERRED_SOURCE)).toBe(before);
+  });
+
+  test("collects later cross-message inline declarations before choices, uses and references", () => {
+    const source = { tool_choice: { type: "tool", name: "later" }, messages: [
+      { role: "assistant", content: [
+        { type: "tool_use", name: "later", id: "toolu_later", input: {} },
+        { type: "tool_reference", tool_name: "later" },
+        { type: "tool_removal", tool: { type: "tool_reference", name: "later" } },
+      ] },
+      { role: "user", content: [{ type: "tool_addition", tool: { type: "tool_definition", definition: {
+        type: "custom", name: "later", input_schema: { type: "object" },
+      } } }] },
+    ] };
+    const before = JSON.stringify(source);
+    const shaped = anthropicOAuthWireBody(source);
+    expect(shaped.body.tool_choice).toEqual({ type: "tool", name: "custom_later" });
+    expect(shaped.body.messages).toEqual([
+      { role: "assistant", content: [
+        { type: "tool_use", name: "custom_later", id: "toolu_later", input: {} },
+        { type: "tool_reference", tool_name: "custom_later" },
+        { type: "tool_removal", tool: { type: "tool_reference", name: "custom_later" } },
+      ] },
+      { role: "user", content: [{ type: "tool_addition", tool: { type: "tool_definition", definition: {
+        type: "custom", name: "custom_later", input_schema: { type: "object" },
+      } } }] },
+    ]);
+    expect([...shaped.toolNames]).toEqual([["custom_later", "later"]]);
+    expect(JSON.stringify(source)).toBe(before);
+  });
+
+  test("collects and maps declarations through the same nested tool-result containers", () => {
+    const content = [
+      { type: "tool_reference", tool_name: "nested" },
+      { type: "tool_result", tool_use_id: "toolu_outer", content: [
+        { type: "tool_result", tool_use_id: "toolu_inner", content: [
+          { type: "tool_addition", tool: { type: "tool_definition", definition: { name: "nested", input_schema: {} } } },
+          { type: "tool_use", name: "nested", input: {} },
+          { type: "tool_removal", tool: { type: "tool_reference", name: "nested" } },
+        ] },
+      ] },
+    ];
+    const before = JSON.stringify(content);
+    const shaped = anthropicOAuthWireBody({ messages: [{ role: "user", content }] });
+    expect(shaped.body.messages).toEqual([{ role: "user", content: [
+      { type: "tool_reference", tool_name: "custom_nested" },
+      { type: "tool_result", tool_use_id: "toolu_outer", content: [
+        { type: "tool_result", tool_use_id: "toolu_inner", content: [
+          { type: "tool_addition", tool: { type: "tool_definition", definition: { name: "custom_nested", input_schema: {} } } },
+          { type: "tool_use", name: "custom_nested", input: {} },
+          { type: "tool_removal", tool: { type: "tool_reference", name: "custom_nested" } },
+        ] },
+      ] },
+    ] }]);
+    expect(JSON.stringify(content)).toBe(before);
+  });
+
+  for (const kind of ["original", "wire"] as const) {
+    for (const typedInline of [false, true]) {
+      for (const clientInline of [false, true]) {
+        for (const reverse of [false, true]) {
+          test(`rejects ${kind} collision: typed inline=${typedInline}, client inline=${clientInline}, reverse=${reverse}`, () => {
+            const client = { name: "lookup", input_schema: {} };
+            const typed = { type: "bash_20250124", name: kind === "original" ? "lookup" : "custom_lookup" };
+            const entries = [
+              { inline: clientInline, definition: client },
+              { inline: typedInline, definition: typed },
+            ];
+            if (reverse) entries.reverse();
+            const source = {
+              tools: entries.filter(e => !e.inline).map(e => e.definition),
+              messages: [{ role: "user", content: entries.filter(e => e.inline).map(e => ({
+                type: "tool_addition", tool: { type: "tool_definition", definition: e.definition },
+              })) }],
+            };
+            const before = JSON.stringify(source);
+            expect(() => anthropicOAuthWireBody(source)).toThrow("collide");
+            expect(JSON.stringify(source)).toBe(before);
+          });
+        }
+      }
+    }
+  }
+
+  for (const reverse of [false, true]) {
+    test(`registers unused inline client names for prefix collisions: reverse=${reverse}`, () => {
+      const names = reverse ? ["custom_lookup", "lookup"] : ["lookup", "custom_lookup"];
+      const source = { messages: names.map(name => ({ role: "user", content: [{
+        type: "tool_addition", tool: { type: "tool_definition", definition: { name, input_schema: {} } },
+      }] })) };
+      expect(() => anthropicOAuthWireBody(source)).toThrow("collide");
+    });
+  }
+
+  test("nested typed declarations also reject original and wire collisions", () => {
+    for (const name of ["lookup", "custom_lookup"]) {
+      const source = { tools: [{ name: "lookup", input_schema: {} }], messages: [{ role: "user", content: [{
+        type: "tool_result", tool_use_id: "toolu_outer", content: [{
+          type: "tool_addition", tool: { type: "tool_definition", definition: { type: "bash_20250124", name } },
+        }],
+      }] }] };
+      expect(() => anthropicOAuthWireBody(source)).toThrow("collide");
+    }
+  });
+
+  test("typed and undeclared uses, references and inline references retain identity", () => {
+    const content = ["bash", "missing"].flatMap(name => [
+      { type: "tool_use", name, input: {} },
+      { type: "tool_reference", tool_name: name },
+      { type: "tool_addition", tool: { type: "tool_reference", name } },
+      { type: "tool_removal", tool: { type: "tool_reference", name } },
+    ]);
+    const tools = [{ type: "bash_20250124", name: "bash" }];
+    const messages = [{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content }] }];
+    const tool_choice = { type: "tool", name: "bash" };
+    const shaped = anthropicOAuthWireBody({ tools, messages, tool_choice });
+    expect(shaped.body.messages).toBe(messages);
+    expect(shaped.body.tools).toBe(tools);
+    expect(shaped.body.tool_choice).toBe(tool_choice);
+    expect(shaped.toolNames.size).toBe(0);
+  });
+
+  test("keeps schemas, arguments, unknown containers and cache markers opaque with copy-on-write", () => {
+    const hidden = { type: "tool_addition", tool: { type: "tool_definition", definition: { name: "hidden", input_schema: {} } } };
+    const payload = { type: "tool_reference", tool_name: "lookup", content: [hidden] };
+    const cache = { type: "ephemeral", ttl: "1h", scope: "turn" };
+    const schema = { type: "object", properties: { value: { const: payload } }, content: [hidden] };
+    const unknown = { type: "future_container", content: [payload, hidden] };
+    const text = { type: "text", text: "literal lookup", cache_control: cache, content: [hidden] };
+    const use = { type: "tool_use", name: "lookup", input: payload, content: [hidden], cache_control: cache };
+    const definition = { name: "inline", input_schema: schema, cache_control: cache };
+    const addition = { type: "tool_addition", tool: { type: "tool_definition", definition, content: [hidden] }, cache_control: cache };
+    const nested = { type: "tool_result", tool_use_id: "toolu_1", content: [use, unknown, text], cache_control: cache };
+    const content = [nested, addition, { type: "tool_reference", tool_name: "hidden" }];
+    const untouched = { role: "user", content: "unchanged" };
+    const source = { tools: [{ name: "lookup", input_schema: schema, cache_control: cache }], messages: [{ role: "user", content }, untouched] };
+    const before = JSON.stringify(source);
+    const shaped = anthropicOAuthWireBody(source);
+    const messages = shaped.body.messages as { content: Record<string, unknown>[] }[];
+    const blocks = messages[0]!.content;
+    const inner = blocks[0]!.content as Record<string, unknown>[];
+    expect(inner[0]!.name).toBe("custom_lookup");
+    expect(inner[0]!.input).toBe(payload);
+    expect(inner[0]!.content).toBe(use.content);
+    expect(inner[1]).toBe(unknown);
+    expect(inner[2]).toBe(text);
+    expect(blocks[2]).toBe(content[2]);
+    expect(messages[1]).toBe(untouched);
+    expect(blocks[0]!.cache_control).toBe(cache);
+    expect(inner[0]!.cache_control).toBe(cache);
+    const wireTool = (shaped.body.tools as Record<string, unknown>[])[0]!;
+    expect(wireTool.input_schema).toBe(schema);
+    expect(wireTool.cache_control).toBe(cache);
+    const wireInline = blocks[1]!.tool as Record<string, unknown>;
+    expect(wireInline.content).toBe(addition.tool.content);
+    expect((wireInline.definition as Record<string, unknown>).input_schema).toBe(schema);
+    expect((wireInline.definition as Record<string, unknown>).cache_control).toBe(cache);
+    expect(blocks[1]!.cache_control).toBe(cache);
+    expect([...shaped.toolNames]).toEqual([["custom_lookup", "lookup"], ["custom_inline", "inline"]]);
+    expect(JSON.stringify(source)).toBe(before);
+  });
+
+  test("already-prefixed client declarations and histories require no copies", () => {
+    const tools = [{ type: "custom", name: "custom_lookup", input_schema: {} }];
+    const messages = [{ role: "assistant", content: [{ type: "tool_use", name: "custom_lookup", input: {} }] }];
+    const shaped = anthropicOAuthWireBody({ tools, messages });
+    expect(shaped.body.tools).toBe(tools);
+    expect(shaped.body.messages).toBe(messages);
+    expect(shaped.toolNames.size).toBe(0);
+  });
+
+  test("key auth preserves the exact deferred and inline source histories", () => {
+    const source = { ...DEFERRED_SOURCE, messages: [...DEFERRED_SOURCE.messages, { role: "user", content: [{
+      type: "tool_addition", tool: { type: "tool_definition", definition: { name: "later", input_schema: {} } },
+    }] }] };
+    const shaped = anthropicMessagesNativeWireBody({ baseUrl: "https://api.anthropic.com", authMode: "key" }, "m", source);
+    expect(shaped.wireBody.messages).toBe(source.messages);
+    expect(shaped.wireBody.tools).toBe(source.tools);
+    expect(shaped.oauthToolNames).toBeUndefined();
   });
 });
