@@ -17,7 +17,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import QuotaSummaryBar from "./components/quota-summary-bar/QuotaSummaryBar";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { DesktopStarOnboarding } from "./components/desktop-star-onboarding";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconClaude, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconClaude, IconMenu, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
@@ -34,10 +34,11 @@ import { zoomManagedOn } from "./lib/desktop-zoom";
 import { useSidebarCollapse } from "./use-sidebar-collapse";
 import { useDesktopZoom } from "./use-desktop-zoom";
 import { DesktopZoomControl } from "./components/desktop-zoom-control";
+import { ThemeSwitch, type ThemeMode } from "./components/theme-switch";
 import { MainTopStrip, SidebarTopStrip } from "./components/app-titlebar";
 import { watchMacTitlebarMetrics, windowChromeHandlers } from "./lib/window-chrome";
 
-type Theme = "light" | "dark" | "system";
+type Theme = ThemeMode;
 
 const PAGE_TKEY: Record<Page, TKey> = {
   dashboard: "nav.dashboard",
@@ -83,8 +84,6 @@ const NAV: NavEntry[] = [
   { id: "integrations", tkey: "nav.integrations", Icon: IconGlobe },
 ];
 
-const THEME_ICON = { light: IconSun, dark: IconMoon, system: IconMonitor } as const;
-const THEME_TKEY: Record<Theme, TKey> = { light: "theme.light", dark: "theme.dark", system: "theme.system" };
 
 export interface RemoteWorkspaceRouteProps {
   available: boolean;
@@ -278,8 +277,7 @@ export default function App() {
     { pollMs: 30_000, enabled: targetsSettled },
   );
 
-  const cycleTheme = () => setTheme(t => (t === "light" ? "dark" : t === "dark" ? "system" : "light"));
-  const ThemeIcon = THEME_ICON[theme];
+  const themeSwitch = <ThemeSwitch theme={theme} onChange={setTheme} />;
   const displayedVersion: string = healthPoll.data ?? __APP_VERSION__;
 
   const [stopping, setStopping] = useState(false);
@@ -485,13 +483,17 @@ export default function App() {
               style={{ flex: 1, minWidth: 0, width: "100%" }}
             />
           </div>
-          <button type="button" className="theme-toggle" onClick={cycleTheme}
-            aria-label={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`} title={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`}>
-            <ThemeIcon /> <span className="mode">{t(THEME_TKEY[theme])}</span>
-          </button>
-          {zoomManaged && (
-            <DesktopZoomControl percent={desktopZoom.percent} canZoomIn={desktopZoom.canZoomIn}
-              canZoomOut={desktopZoom.canZoomOut} onStep={desktopZoom.step} />
+          {zoomManaged ? (
+            <div className="sidebar-display-row">
+              {themeSwitch}
+              <DesktopZoomControl percent={desktopZoom.percent} canZoomIn={desktopZoom.canZoomIn}
+                canZoomOut={desktopZoom.canZoomOut} onStep={desktopZoom.step} />
+            </div>
+          ) : (
+            <div className="sidebar-action-row sidebar-action-row--theme">
+              <span className="sidebar-action-label">{t("theme.label")}</span>
+              {themeSwitch}
+            </div>
           )}
           <div className="sidebar-action-row">
             <span className="sidebar-action-label">{t("dash.actions")}</span>
