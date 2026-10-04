@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  acknowledgeSave,
   applyServerRead,
   claudeCodeSaveBody,
   isClaudeCodeDraftDirty,
@@ -82,4 +83,23 @@ test("merge and revert move exactly the editable fields", () => {
   const reverted = revertEditable(draft, STATE);
   expect(reverted.authMode).toBe("auto");
   expect(reverted.enabled).toBe(false);
+});
+
+test("an edit back to the old value during Save survives the acknowledging read", () => {
+  const old = editable({ authMode: "proxy" });
+  const submitted = editable({ authMode: "auto" });
+  // Saved auto, then switched back to proxy while the PUT was in flight.
+  const acked = acknowledgeSave({ draft: editable({ authMode: "proxy" }), baseline: old, adoptNextRead: false }, submitted)!;
+  expect(acked.adoptNextRead).toBe(false);
+  expect(isClaudeCodeDraftDirty(acked.draft, acked.baseline)).toBe(true);
+  const read = applyServerRead(acked, editable({ authMode: "auto" }));
+  expect(read.draft.state.authMode).toBe("proxy");
+});
+
+test("after a successful Save, Revert restores the saved values", () => {
+  const submitted = editable({ authMode: "auto" });
+  const acked = acknowledgeSave({ draft: submitted, baseline: editable({ authMode: "proxy" }), adoptNextRead: false }, submitted)!;
+  expect(acked.adoptNextRead).toBe(true);
+  expect(isClaudeCodeDraftDirty(acked.draft, acked.baseline)).toBe(false);
+  expect(revertEditable(editable({ authMode: "subscription" }).state, acked.baseline.state).authMode).toBe("auto");
 });

@@ -100,3 +100,19 @@ export function applyServerRead(current: ClaudeCodeEditState | null, next: Claud
     adoptNextRead: false,
   };
 }
+
+/**
+ * A successful PUT makes the submitted draft the new baseline right away, before the
+ * refresh lands. Otherwise two things go wrong in that window: an edit that happens to
+ * return to the OLD baseline reads as clean and is replaced by the saved value, and Revert
+ * restores settings the server has already overwritten. The following read still gets the
+ * final word through applyServerRead (adoptNextRead when nothing changed since submission).
+ */
+export function acknowledgeSave(current: ClaudeCodeEditState | null, submitted: ClaudeCodeEditable): ClaudeCodeEditState | null {
+  if (!current) return current;
+  const baseline: ClaudeCodeEditable = {
+    state: { ...current.baseline.state, ...pickEditable(submitted.state) },
+    rows: submitted.rows,
+  };
+  return { draft: current.draft, baseline, adoptNextRead: claudeCodeDraftKey(current.draft) === claudeCodeDraftKey(submitted) };
+}

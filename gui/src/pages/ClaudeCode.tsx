@@ -20,8 +20,8 @@ import { AUTO_COMPACT_WINDOW_DEFAULT, formatCompactWindow, newClientId, type Cla
 import { SmallFastModelSetting } from "./claude-code-settings";
 import { interceptReasonKey, normalizeSharedProxy, selectFirstPartyNotice, type FirstPartyNotice } from "./claude-code-first-party";
 import {
+  acknowledgeSave,
   applyServerRead,
-  claudeCodeDraftKey,
   claudeCodeSaveBody,
   isClaudeCodeDraftDirty,
   revertEditable,
@@ -260,7 +260,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
 
   const save = async () => {
     if (!state || !edit || saving) return;
-    const submitted = claudeCodeDraftKey(edit.draft);
+    const submitted = edit.draft;
     setStatus("");
     setSaving(true);
     try {
@@ -270,8 +270,8 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
         body: JSON.stringify(claudeCodeSaveBody(state, rows)),
       });
       await readJsonOrThrow(r, t("claude.saveFailed"));
-      // The next read acknowledges this Save, unless the user kept editing while it was in flight.
-      setEdit(current => current && claudeCodeDraftKey(current.draft) === submitted ? { ...current, adoptNextRead: true } : current);
+      // The submitted draft is what the server now holds; edits made meanwhile stay dirty.
+      setEdit(current => acknowledgeSave(current, submitted));
       setOk(true);
       setStatus(t("claude.saved"));
       codeResource.refresh();
