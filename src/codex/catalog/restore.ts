@@ -11,6 +11,7 @@ import {
 } from "../catalog-write-serialization";
 import { replaceActiveCodexCatalog } from "../internal/catalog-writer";
 import { FOREIGN_CODEX_HOME_OWNER_MESSAGE, UNKNOWN_CODEX_HOME_OWNER_MESSAGE } from "./routed-removal";
+import { notifyCatalogPublication } from "./publication-observer";
 
 function visibleAccountReplacementNatives(
   models: readonly RawEntry[],
@@ -74,7 +75,10 @@ export function restoreCodexCatalogWithPermit(
 ): { removed: number; kept: number; path: string } {
   const catalogPath = injectedCatalogPath ?? readCodexCatalogPath();
   const catalog = readCatalog(catalogPath);
-  if (!catalog || !Array.isArray(catalog.models)) return { removed: 0, kept: 0, path: catalogPath };
+  if (!catalog || !Array.isArray(catalog.models)) {
+    notifyCatalogPublication({ kind: "published", path: catalogPath, intent: "restore" });
+    return { removed: 0, kept: 0, path: catalogPath };
+  }
   const disabledModels = currentDisabledModelsForRestore();
   const replacementVisibility = visibleAccountReplacementNatives(catalog.models, disabledModels);
   const backup = readCatalogBackup(catalogPath);
@@ -119,6 +123,7 @@ export function restoreCodexCatalogWithPermit(
     });
     if (replacement.kind === "refused") throw new CatalogWritePermitRefusal("Catalog restoration was refused.");
   }
+  if (removed === 0) notifyCatalogPublication({ kind: "published", path: catalogPath, intent: "restore" });
   return { removed, kept: native.length, path: catalogPath };
 }
 

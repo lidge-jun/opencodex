@@ -226,7 +226,9 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 
 識別値やダイジェストは観測時点のファイルを表し、持続的な更新許可ではありません。選択されたランタイム、過去のインストーラー、実効 npm 設定、ツールの真正性は証明しません。指定した Node も観測するだけで、ランチャーが選ぶ Node だとは証明しません。対象の実行、レジストリ要求、インストール、設定の書き込み、プロセス制御は行いません。既存の Windows `check` は引き続き候補・設定のファイルシステム I/O を行いません。
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]` は、プロキシを起動せずにローカル設定を表示します。`show` を省略しても、どちらかのフラグ、または両方を任意の順序で指定できます。`--source` は診断のソース、エラー、警告を含め、表示時のみ使用できます。`--json` は明示的な操作の前にも指定でき、実行する操作を変更しません。`--json` または `--source` の重複と不明な引数は拒否されます。
 
 検証された OpenCodex 設定を検査し、安全に変更します。 `show` および `get` はシークレットをマスクします。インポートは書き込む前に検証され、`--yes` が必要です。
 

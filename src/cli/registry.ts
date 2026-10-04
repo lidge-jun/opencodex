@@ -484,9 +484,14 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "config",
-    usage: "ocx config <show|get|set|unset|validate|export|import> ...",
+    usage: "ocx config [show|get|set|unset|validate|export|import] ...",
     summary: "Inspect and safely modify validated OpenCodex configuration.",
-    details: ["Secrets are masked by show/get. Import requires --yes and validates before writing."],
+    details: [
+      "show is the default: ocx config [show] [--json] [--source]. Flags alone also display the local configuration without a running proxy.",
+      "--json may precede an explicit action without changing which action runs.",
+      "--source is only supported for show and includes diagnostic source, error, and warning fields.",
+      "Secrets are masked by show/get. Import requires --yes and validates before writing.",
+    ],
   },
   {
     name: "claude",

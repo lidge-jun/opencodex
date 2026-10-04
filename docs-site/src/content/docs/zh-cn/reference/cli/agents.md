@@ -231,7 +231,9 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 
 标识或摘要仅描述观察时的文件，不是持久的更新许可，也不证明选中的运行时、过去的安装程序、实际 npm 配置或工具真实性。明确指定的 Node 也只是被观察，不证明启动器会选择它。命令不会执行目标、请求包注册表、安装、写入配置或控制进程。现有 Windows `check` 仍不执行候选项或配置的文件系统 I/O。
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]` 无需运行代理即可显示本地配置。省略 `show` 时，可使用任一标志或按任意顺序组合使用。`--source` 包含诊断来源、错误和警告，仅适用于显示操作。`--json` 可放在显式操作之前，不会改变执行的操作。重复的 `--json` 或 `--source` 标志及未知参数会被拒绝。
 
 检查并安全修改已验证的 OpenCodex 配置。`show` 和 `get` 会隐藏密钥。导入会先验证再写入，并且需要 `--yes`。
 
