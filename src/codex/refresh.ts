@@ -14,8 +14,12 @@ export interface CodexCatalogRefreshResult {
   cacheSynced: boolean;
   comboOmissions: ComboCatalogOmission[];
   refreshOutcome?: "committed" | "refused";
-  /** Desired OFF observed under K during the catalog commit; no cache write either. */
-  skippedReason?: "desired_disabled";
+  /**
+   * Desired OFF observed under K during the catalog commit, or a write refused because it would
+   * empty routed namespaces config.json does not back (#6529); no cache write either way.
+   */
+  skippedReason?: "desired_disabled" | "unbacked_routed_removal";
+  protectedRoutedNamespaces?: number;
 }
 
 interface RefreshDeps {
@@ -50,9 +54,9 @@ export async function refreshCodexModelCatalog(
   const catalogExists = deps.existsSync(result.path);
   const catalogWritten = result.catalogWritten === true;
   const comboOmissions = result.comboOmissions ?? [];
-  if (result.skippedReason === "desired_disabled" || result.refreshOutcome === "refused") {
-    // The commit path observed OFF under K. Invalidate nothing: rewriting the
-    // models cache here would be exactly the routed-cache write the skip refused.
+  if (result.skippedReason !== undefined || result.refreshOutcome === "refused") {
+    // The commit path observed OFF, or an unbacked routed removal, under K. Invalidate
+    // nothing: rewriting the models cache here would be exactly the write the skip refused.
     return { ...result, catalogExists, catalogWritten: false, cacheSynced: false, comboOmissions };
   }
   if (!catalogExists) {

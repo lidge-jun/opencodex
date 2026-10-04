@@ -373,6 +373,25 @@ to snapshot persistence instead of relying on the progress argument alone.
 
 > Decision record: [ADR-0015](decisions/ADR-0015-codex-home.md)
 
+## Config-backed catalog removals
+
+A refresh removes a provider's OpenCodex-authored routed rows wholesale only when config.json agrees
+the provider is gone (#6529). `src/codex/catalog/routed-removal.ts` lists the namespaces whose rows
+are in the active catalog, missing from the candidate, and not enabled by the driving config (native
+alias rows count as `combo`; foreign and account-bound rows never count). Both catalog writers —
+retained sync (`ocx start`/`ensure`/`sync`) and the convergence commit (management writes, login,
+auto-refresh) — hold the catalog lock K, then config mutation lock C, from the config.json
+re-read through replacement. A busy C also refuses the retained sync write. When the file is
+missing, unreadable or salvaged, or still enables one of those namespaces, the write is refused and the
+active catalog and models cache keep their bytes, so a config-less process (an empty
+`OPENCODEX_HOME` reads defaults, which route nothing) cannot publish a native-only catalog into this
+home. Removals inside an enabled namespace (discovery, disabled models, deleted custom rows) and
+catalogs without routed rows are unaffected; see the [shared catalog](catalog.md#shared-catalog).
+`ocx sync` reports the refusal as one count-only warning, and `ocx restore` stays the deliberate way
+to drop routed rows. Coverage: `tests/codex-integration/codex-catalog-routed-removal.test.ts`,
+`tests/codex-integration/codex-catalog-sync-hardening.test.ts`, and
+`tests/codex-integration/codex-convergence-contract.test.ts`.
+
 ## Codex-home diagnostics
 
 Desktop executable membership uses the [discovered installation root](runtime.md#codex-desktop-process-membership), independently of the Codex state directory resolved here.

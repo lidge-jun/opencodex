@@ -520,6 +520,7 @@
   "codex-catalog-refresh-status.test.ts": "codex-integration",
   "codex-catalog-restore.test.ts": "codex-integration",
   "codex-catalog-sync-hardening.test.ts": "codex-integration",
+  "codex-catalog-routed-removal.test.ts": "codex-integration",
   "codex-catalog-write-serialization.test.ts": "codex-integration",
   "codex-catalog-writer.test.ts": "codex-integration",
   "codex-catalog.test.ts": "codex-integration",
