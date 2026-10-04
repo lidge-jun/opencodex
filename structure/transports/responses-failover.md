@@ -49,18 +49,18 @@ with the same item id. The batch/non-streaming bridge follows the same rule.
 `src/lib/upstream-retry.ts` guards upstream fetches against stale pooled keep-alive sockets
 (Cloudflare closes idle connections; Bun's fetch reuses the dead socket and rejects with
 `ECONNRESET` before any response bytes). `fetchWithResetRetry` never retries on its own
-account. A reset-shaped rejection is replayed only when the caller passes `replaySafe: true`,
-and then up to 3 total attempts with jittered backoff, warn-logged. Without it the rejection
-becomes the terminal refusal described in
+account. A caller passing `replaySafe: true` permits up to 3 total attempts with jittered
+backoff, warn-logged. A separate `retryOnReset` operator grant can authorize an ambiguous
+replacement within the existing send budget. Without either permission, the rejection becomes the terminal refusal described in
 [ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary).
 Reusable request bytes were never the test: a string body makes a send mechanically
 repeatable, not idempotent, and a model POST is not idempotent. Timeouts, aborts,
 `ECONNREFUSED`, HTTP error statuses, and mid-stream SSE failures are never retried at all.
 
-The opted-in callers are the sidecars, whose work is a tool call rather than a turn: the
+The `replaySafe` callers are the sidecars, whose work is a tool call rather than a turn: the
 vision describers, the web-search executors and loop, and the image loop. The model-POST
 paths — native Responses passthrough, the generic adapter dispatch and its continuation loop,
-compact, and native Chat — are deliberately not opted in. Adapters with their own
+compact, and native Chat — do not set `replaySafe`; eligible operator-granted replacements are separate. Adapters with their own
 `fetchResponse` (kiro, cursor, google) keep their own retry policies; kiro imports the shared
 abort/sleep helpers from this module.
 
@@ -83,7 +83,7 @@ counter rather than holding a second. A replacement never widens a send budget: 
 fit inside the allowance the leg already had, and it is charged to the same counter every other
 send goes through.
 
-The number of replacements is the request's as well. A leg reads it from `route.provider`, which
+Generic translated dispatch in `src/server/responses/adapter-dispatch.ts` asks the same pre-header gate for initial and rebuilt sends, sharing the replacement grant and charging each physical send once to the existing request/workflow budgets. Adapter-owned transports and translated post-header failures are excluded. Coverage: `tests/responses/responses-translated-reset.test.ts`. The number of replacements is the request's as well. A leg reads it from `route.provider`, which
 credential rotation, OAuth refresh, transport resolution and each combo target reassign inside one
 request, so the grant is held to the smallest ceiling any leg has presented rather than to
 whatever the asking leg presents. Otherwise a request that had already spent the one replacement a
