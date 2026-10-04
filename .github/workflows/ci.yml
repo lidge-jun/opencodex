@@ -197,6 +197,7 @@ jobs:
       # skipping the check it selects.
       setup_action: ${{ steps.narrow.outputs.setup_action }}
       remote_helper: ${{ steps.narrow.outputs.remote_helper }}
+      deploy: ${{ steps.narrow.outputs.deploy }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -341,6 +342,16 @@ jobs:
             # real only on macOS and Windows, so its job lints and tests the crate on all three.
             remote_helper:
               - 'native/remote-workspace-helper/**'
+            # The Cloudflare Workers package keeps its own manifest and lockfile, and the root
+            # typecheck does not reach it. `ci` omits deploy/** so a Worker-only edit does not start
+            # the full matrix; the push trigger mirrors `ci`, so this stays pull-request scope like
+            # docs and structure. The supervisor and its test are listed because the job runs that
+            # test, and ci.yml so an edit here verifies itself.
+            deploy:
+              - 'deploy/**'
+              - 'docker/cloudflare-supervisor.ts'
+              - 'tests/service/cloudflare-deploy.test.ts'
+              - '.github/workflows/ci.yml'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
             # bin/ocx.mjs executes it: without that entry an ordinary source PR
@@ -443,9 +454,10 @@ jobs:
         env:
           SETUP_ACTION: ${{ steps.filter.outputs.setup_action }}
           REMOTE_HELPER: ${{ steps.filter.outputs.remote_helper }}
+          DEPLOY: ${{ steps.filter.outputs.deploy }}
         run: |
           set -euo pipefail
-          for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER"; do
+          for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER" "deploy=$DEPLOY"; do
             case "${pair#*=}" in
               true|false)
                 printf '%s\n' "$pair" >> "$GITHUB_OUTPUT"
@@ -1198,6 +1210,42 @@ jobs:
       - name: Run Rust tests
         run: cargo test --locked --manifest-path native/remote-workspace-helper/Cargo.toml
 
+  # The Cloudflare Workers package, when a change touches it (see the deploy filter). Linux only:
+  # Workers code has no host-OS behaviour. It installs from the package's own frozen lockfile and
+  # typechecks there, then runs the unit test that imports the Worker modules and the container
+  # supervisor, because a deploy-only change does not match `ci` and would otherwise skip it.
+  # No `wrangler deploy --dry-run`: with a `containers` entry it builds the root Docker image,
+  # which docker-smoke already covers.
+  cloudflare-deploy:
+    name: cloudflare deploy
+    needs: changes
+    if: needs.changes.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install Worker dependencies
+        working-directory: deploy/cloudflare
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck the Worker
+        working-directory: deploy/cloudflare
+        run: bun run typecheck
+
+      # The root install is for the test preload, which imports the proxy's own modules.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Cloudflare deploy unit test
+        run: bun test tests/service/cloudflare-deploy.test.ts
+
   # `gates` already runs `privacy:scan` on every event it runs for, so this job
   # covers exactly the pull requests `gates` skips -- its condition is the
   # complement of `gates`' own, with no path list: every pull request runs the
@@ -1511,7 +1559,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped`, which is the shape the step below is written to catch.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, privacy-gate, npm-global-smoke, widget, desktop-shell, setup-action, remote-helper]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, privacy-gate, npm-global-smoke, widget, desktop-shell, setup-action, remote-helper, cloudflare-deploy]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1532,6 +1580,7 @@ jobs:
           CHANGES_STRUCTURE: ${{ needs.changes.outputs.structure }}
           CHANGES_SETUP_ACTION: ${{ needs.changes.outputs.setup_action }}
           CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
+          CHANGES_DEPLOY: ${{ needs.changes.outputs.deploy }}
           CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
           CHANGES_DESKTOP: ${{ needs.changes.outputs.desktop }}
           GH_TOKEN: ${{ github.token }}
@@ -1587,6 +1636,10 @@ jobs:
           if [ "$CHANGES_REMOTE_HELPER" = "true" ]; then
             remote_helper=requested
           fi
+          deploy=not-requested
+          if [ "$CHANGES_DEPLOY" = "true" ]; then
+            deploy=requested
+          fi
           # privacy-gate runs exactly where `gates` (scoped) does not, on every
           # pull request the ci filter declines. Deriving it from `scoped` keeps
           # the two scans complementary here as they are in the jobs' own
@@ -1615,7 +1668,7 @@ jobs:
           GATED_JOBS="$GATED_JOBS macos-control platform-windows docs-site-build"
           GATED_JOBS="$GATED_JOBS structure-gate widget"
           GATED_JOBS="$GATED_JOBS desktop-shell"
-          GATED_JOBS="$GATED_JOBS setup-action remote-helper"
+          GATED_JOBS="$GATED_JOBS setup-action remote-helper cloudflare-deploy"
           GATED_JOBS="$GATED_JOBS privacy-gate"
 
           expected_for() {
@@ -1631,6 +1684,7 @@ jobs:
               structure-gate) echo "$structure" ;;
               setup-action) echo "$setup_action" ;;
               remote-helper) echo "$remote_helper" ;;
+              cloudflare-deploy) echo "$deploy" ;;
               privacy-gate) echo "$privacy" ;;
               macos-control) echo "$dispatch" ;;
               platform-windows) echo "$windows" ;;

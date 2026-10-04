@@ -251,6 +251,7 @@ describe("CI review lanes", () => {
     results["privacy-gate"] = { result: "skipped" };
     results["setup-action"] = { result: "skipped" };
     results["remote-helper"] = { result: "skipped" };
+    results["cloudflare-deploy"] = { result: "skipped" };
     const run = (value: typeof results, packaging = "true") => spawnSync("bash", ["-c", step!.run!], {
       encoding: "utf8",
       env: {
@@ -258,7 +259,7 @@ describe("CI review lanes", () => {
         EVENT_NAME: "workflow_dispatch", LANE: "release-gates",
         CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: packaging,
         CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
-        CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false",
+        CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false", CHANGES_DEPLOY: "false",
       },
       timeout: 5_000,
     });
