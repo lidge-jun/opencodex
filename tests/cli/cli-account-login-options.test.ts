@@ -4,6 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { handleAccountAuthCommand } from "../../src/cli/account-auth";
 import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
+import { repoPath } from "../helpers/repo-root";
+import { pathToFileURL } from "node:url";
 
 const SECRET = "synthetic-private-value";
 let home: TempHome;
@@ -172,7 +174,8 @@ describe("login terminal and code boundaries", () => {
   });
   test("human instructions preserve intended lines but escape terminal controls", async () => {
     mkdirSync(home.codexHome, { recursive: true });
-    const source = new URL("../../src/cli/account-auth.ts", import.meta.url).pathname;
+    // A file URL imports on every platform; a URL pathname is "/D:/..." on Windows.
+    const source = pathToFileURL(repoPath("src", "cli", "account-auth.ts")).href;
     const script = `import {handleAccountAuthCommand} from ${JSON.stringify(source)};
       globalThis.fetch = async () => { throw new Error('Network forbidden'); };
       const result = await handleAccountAuthCommand('login', ['openai','--no-wait'], {
