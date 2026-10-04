@@ -71,19 +71,29 @@ export interface ProtocolSettings {
 }
 
 /** Resolve protocol policy with conservative defaults for every absent or malformed field. */
-export function resolveProtocolSettings(config: Pick<OcxConfig, "protocols">): Readonly<ProtocolSettings> {
+export function resolveProtocolSettings(config: Pick<OcxConfig, "protocols" | "anthropicAccountPool">, providerName?: string): Readonly<ProtocolSettings> {
   const raw: unknown = config.protocols;
   const protocols = isRec(raw) ? raw : {};
   const rollout = isRec(protocols.rollout) ? protocols.rollout : {};
   const on = (key: keyof ProtocolRolloutSettings): boolean => rollout[key] === true;
-  const managedMessagesNative = on("managedMessagesNative");
+  // A present malformed container cannot become an absent/default-on policy.
+  const validContainers = (raw === undefined || isRec(raw))
+    && (!Object.hasOwn(protocols, "rollout") || isRec(protocols.rollout));
+  const rawPool: unknown = config.anthropicAccountPool;
+  const pool = isRec(rawPool) ? rawPool : {};
+  const pooled = providerName === "anthropic" && pool.enabled === true;
+  const poolPreference = !Object.hasOwn(pool, "nativeMessages") || pool.nativeMessages === true;
+  const nativeOn = (key: "managedMessagesNative" | "managedMessagesNativeOAuth") => validContainers
+    && (!pooled || poolPreference)
+    && (Object.hasOwn(rollout, key) ? rollout[key] === true : pooled);
+  const managedMessagesNative = nativeOn("managedMessagesNative");
   return Object.freeze({
     unrepresentable: protocols.unrepresentable === "reject" ? "reject" : "legacy",
     rollout: Object.freeze({
       nativeChatCombos: on("nativeChatCombos"),
       managedMessagesNative,
       // OAuth extension is meaningless without the key-auth path it extends.
-      managedMessagesNativeOAuth: managedMessagesNative && on("managedMessagesNativeOAuth"),
+      managedMessagesNativeOAuth: managedMessagesNative && nativeOn("managedMessagesNativeOAuth"),
       directEncoders: on("directEncoders"),
       shadowPlan: on("shadowPlan"),
     }),
@@ -95,16 +105,30 @@ export function resolveProtocolSettings(config: Pick<OcxConfig, "protocols">): R
  * dashboard can tell a preview computed under an older policy from a current one. Not a
  * security boundary; FNV-1a over a canonical JSON projection.
  */
-export function protocolPolicyRevision(config: Pick<OcxConfig, "apiSurfaces" | "claudeCode" | "protocols">): string {
+export function protocolPolicyRevision(config: Pick<OcxConfig, "apiSurfaces" | "claudeCode" | "protocols" | "anthropicAccountPool">): string {
   const surfaces = resolveApiSurfaceSettings(config);
   const settings = resolveProtocolSettings(config);
+  const anthropicSettings = resolveProtocolSettings(config, "anthropic");
+  const state = (record: unknown, key: string) => !isRec(record) || !Object.hasOwn(record, key)
+    ? "absent" : record[key] === true ? "true" : record[key] === false ? "false" : "invalid";
+  const container = (value: unknown) => value === undefined ? "absent" : isRec(value) ? "object" : "invalid";
+  const rawProtocols: unknown = config.protocols;
+  const rawRollout = isRec(rawProtocols) ? rawProtocols.rollout : undefined;
   const canonical = JSON.stringify({
     messages: [surfaces.messages.enabled, surfaces.messages.source],
     unrepresentable: settings.unrepresentable,
+    nativeInputs: [
+      container(rawProtocols), container(rawRollout),
+      state(rawRollout, "managedMessagesNative"), state(rawRollout, "managedMessagesNativeOAuth"),
+      container(config.anthropicAccountPool), state(config.anthropicAccountPool, "enabled"),
+      state(config.anthropicAccountPool, "nativeMessages"),
+    ],
     rollout: [
       settings.rollout.nativeChatCombos,
       settings.rollout.managedMessagesNative,
       settings.rollout.managedMessagesNativeOAuth,
+      anthropicSettings.rollout.managedMessagesNative,
+      anthropicSettings.rollout.managedMessagesNativeOAuth,
       settings.rollout.directEncoders,
       settings.rollout.shadowPlan,
     ],
