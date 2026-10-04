@@ -31,6 +31,13 @@
 .theme-switch__btn:hover:not([aria-pressed="true"]), .zoom-control__btn:hover:not(:disabled), .zoom-control__value:hover { background: var(--accent-soft); color: var(--text); }
 .theme-switch__btn:focus-visible, .zoom-control__btn:focus-visible, .zoom-control__value:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
 .zoom-control__btn:disabled { opacity: 0.4; cursor: default; }
+/* The drawer layout follows the 44px mobile touch height (design-system/components.md). The
+   drawer is up to 280px wide, so three 40px theme buttons still share the row with the zoom
+   stepper; the pill grows with its buttons instead of clipping a choice. */
+@media (max-width: 760px) {
+  .theme-switch { height: auto; }
+  .theme-switch__btn { width: 40px; height: 44px; }
+}
 
 /* Page zoom shrinks the CSS viewport, so a zoomed or short window is shorter than the menu plus
    the footer. On the desktop layout the menu scrolls and the footer (language, theme, zoom, proxy)
