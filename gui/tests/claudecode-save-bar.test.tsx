@@ -32,6 +32,40 @@ beforeEach(() => {
   };
 });
 
+test("a late Save refresh from an unmounted page reaches the page on screen", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const server = { systemEnv: false };
+  globalThis.fetch = (async (input, init) => {
+    if (!String(input).endsWith("/api/claude-code")) return new Response(null, { status: 404 });
+    if (init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as { systemEnv: boolean };
+      await gate;
+      server.systemEnv = body.systemEnv;
+      return Response.json({ ok: true });
+    }
+    return Response.json({ ...SERVER, autoConnectSupported: true, ...server, modelMap: {} });
+  }) as typeof fetch;
+  const page = await mount();
+  const autoConnect = () => page.container.querySelector<HTMLInputElement>('input[aria-label="Auto-connect"]')!;
+  try {
+    await page.click(autoConnect());
+    await act(async () => { page.button("Save").click(); });
+    await act(async () => { page.root.render(<LanguageProvider><ClaudeCode key="new" apiBase="http://localhost" /></LanguageProvider>); });
+    await settle(page.testWindow);
+    release();
+    await settle(page.testWindow);
+    expect(server.systemEnv).toBe(true);
+    expect(readSessionListCacheEntry<{ state: { systemEnv: boolean } }>("ocx.claude-code.v1:http://localhost")?.data?.state.systemEnv).toBe(true);
+    expect(autoConnect().checked).toBe(true);
+    expect(page.barState()).toBe("No changes");
+  } finally {
+    release();
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
+});
+
 test("a late Save from an unmounted page keeps a newer page's connection switch", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });

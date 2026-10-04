@@ -31,7 +31,8 @@ import {
 
 export { AutoConnectSetting, SmallFastModelSetting } from "./claude-code-settings";
 
-type CachedClaudeCode = { state: ClaudeCodeState; rows: MapRow[] };
+/** `superseded`: a write landed while this read was out, so it must not reach any draft. */
+type CachedClaudeCode = { state: ClaudeCodeState; rows: MapRow[]; superseded?: boolean };
 
 function normalizeFirstPartyState(state: ClaudeCodeState): ClaudeCodeState {
   return {
@@ -150,11 +151,8 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     const nextRows = Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ id: newClientId(), from, to: String(to) }));
     const next = { state: nextState, rows: nextRows };
     if (signal.aborted) throw new Error("Claude Code request aborted");
-    // Superseded by a write: return it to the resource, but never let it reach the draft or cache.
-    if (epoch !== writeEpoch(cacheKey)) return next;
-    // The only place a read reaches the draft, at the successful read boundary, without a
-    // synchronization effect.
-    setEdit(current => applyServerRead(current, next));
+    // Superseded by a write: hand it to the resource marked, so no mount folds it into a draft.
+    if (epoch !== writeEpoch(cacheKey)) return { ...next, superseded: true };
     writeSessionListCacheEntry(cacheKey, next);
     return next;
   }, [apiBase, cacheKey, t]);
@@ -172,6 +170,17 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     },
   );
   const loadState = codeResource.state;
+  /*
+   * Every mount folds each new server read into its own draft here, during render, instead of
+   * the fetcher doing it: the resource is shared, so a refresh another (possibly unmounted)
+   * page started must still reach the page on screen.
+   */
+  const [seenRead, setSeenRead] = useState(loadState.data);
+  if (loadState.data !== seenRead) {
+    setSeenRead(loadState.data);
+    const read = loadState.data;
+    if (read && !read.superseded) setEdit(current => applyServerRead(current, { state: read.state, rows: read.rows }));
+  }
   const data = loadState.data ?? cached;
   const state = edit?.draft.state ?? data?.state ?? null;
   const rows = edit?.draft.rows ?? data?.rows ?? [];
@@ -271,10 +280,9 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       }
       await readJsonOrThrow(response, t("claude.saveFailed"));
       bumpWriteEpoch(cacheKey);
-      // The PUT is the commit: show it now. The reread only refreshes derived diagnostics
+      // The PUT is the commit: show it now. The refresh only updates derived diagnostics
       // (applied state, notices), and its failure must not leave the switch showing the old value.
       applyLive({ cliFirstParty: requested });
-      await fetchCode(new AbortController().signal).catch(() => undefined);
       codeResource.refresh();
     } catch (error) {
       setOk(false);
