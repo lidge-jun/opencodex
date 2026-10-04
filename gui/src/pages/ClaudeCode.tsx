@@ -113,8 +113,16 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const { pending: connectionPending, change: changeConnection } = useClaudeConnection(apiBase);
   const [firstPartyPending, setFirstPartyPending] = useState(false);
   const firstPartyInFlight = useRef(false);
+  /*
+   * Bumped by every successful write. A read remembers the epoch it started in and is
+   * dropped if a write landed meanwhile: the 1P switch reads through its own controller, so
+   * a GET it began before a Save could otherwise finish after that Save and put the old
+   * values back into the draft, the baseline and the session cache.
+   */
+  const writeEpoch = useRef(0);
 
   const fetchCode = useCallback(async (signal: AbortSignal): Promise<CachedClaudeCode> => {
+    const epoch = writeEpoch.current;
     const res = await fetch(`${apiBase}/api/claude-code`, { signal });
     const r = await readJsonOrThrow<ClaudeCodeState & { modelMap?: Record<string, string> }>(
       res,
@@ -137,6 +145,8 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     const nextRows = Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ id: newClientId(), from, to: String(to) }));
     const next = { state: nextState, rows: nextRows };
     if (signal.aborted) throw new Error("Claude Code request aborted");
+    // Superseded by a write: return it to the resource, but never let it reach the draft or cache.
+    if (epoch !== writeEpoch.current) return next;
     // The only place a read reaches the draft, at the successful read boundary, without a
     // synchronization effect.
     setEdit(current => applyServerRead(current, next));
@@ -211,6 +221,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     if (!state) return;
     setStatus("");
     await changeConnection(!state.enabled, enabled => {
+      writeEpoch.current += 1;
       applyLive({ enabled });
       codeResource.refresh();
     }, error => {
@@ -247,6 +258,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
           ? t(interceptReasonKey(payload.code), { port: payload.port ?? "", bound: payload.bound ?? "", configured: payload.configured ?? "" }) : t(key));
       }
       await readJsonOrThrow(response, t("claude.saveFailed"));
+      writeEpoch.current += 1;
       await fetchCode(new AbortController().signal);
       codeResource.refresh();
     } catch (error) {
@@ -271,6 +283,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
         body: JSON.stringify(claudeCodeSaveBody(submitted.state, submitted.rows)),
       });
       await readJsonOrThrow(r, t("claude.saveFailed"));
+      writeEpoch.current += 1;
       // The submitted draft is what the server now holds; edits made meanwhile stay dirty.
       setEdit(current => acknowledgeSave(current, submitted));
       setOk(true);

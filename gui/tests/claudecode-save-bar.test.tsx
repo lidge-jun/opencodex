@@ -31,6 +31,51 @@ beforeEach(() => {
   };
 });
 
+test("a read begun before a successful Save cannot undo it", async () => {
+  // The 1P switch's GET is held until after Save is acknowledged and refreshed; every read
+  // after it fails, so only the read epoch keeps the stale response out of the draft.
+  let releaseStale!: () => void;
+  const stale = new Promise<void>(resolve => { releaseStale = resolve; });
+  const server = { systemEnv: false, cliFirstParty: false };
+  let holdNextGet = false;
+  let staleReleased = false;
+  globalThis.fetch = (async (input, init) => {
+    if (!String(input).endsWith("/api/claude-code")) return new Response(null, { status: 404 });
+    if (init?.method === "PUT") {
+      Object.assign(server, JSON.parse(String(init.body)));
+      return Response.json({ ok: true });
+    }
+    const snapshot = { ...SERVER, autoConnectSupported: true, ...server, modelMap: {} };
+    // Once the stale read is released, the network fails: nothing later can paper over it.
+    if (staleReleased) return Response.json({ error: "offline" }, { status: 503 });
+    if (holdNextGet) {
+      holdNextGet = false;
+      await stale;
+      staleReleased = true;
+    }
+    return Response.json(snapshot);
+  }) as typeof fetch;
+  const page = await mount();
+  try {
+    const autoConnect = () => page.container.querySelector<HTMLInputElement>('input[aria-label="Auto-connect"]')!;
+    await page.click(autoConnect());
+    expect(page.barState()).toBe("Unsaved changes");
+    holdNextGet = true;
+    await act(async () => { page.button("Toggle Claude Code CLI first-party").click(); });
+    await page.click(page.button("Save"));
+    expect(server.systemEnv).toBe(true);
+    expect(autoConnect().checked).toBe(true);
+    releaseStale();
+    await settle(page.testWindow);
+    expect(autoConnect().checked).toBe(true);
+    expect(page.barState()).toBe("No changes");
+  } finally {
+    releaseStale();
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
+});
+
 afterEach(() => {
   clearClientResourceStoresForTests();
   globalThis.fetch = originalFetch;
