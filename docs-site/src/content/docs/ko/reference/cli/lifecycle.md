@@ -351,6 +351,15 @@ Windows에서 Task Scheduler 항목을 만들려면 권한 상승이 필요합�
 작업이나 외부 연산은 자동 권한 상승 표시를 절대 내지 못합니다. 대시보드 UAC 프롬프트를 승인하거나
 상승된 PowerShell 창에서 `ocx service install`을 다시 실행해 주세요.
 
+If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
+`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
+proxy is not running. The message includes the lock path, recorded PID, current liveness,
+executable name when available, and lease age. The process identity is unverified: the PID
+may have been reused, so liveness and executable name describe whichever process occupies
+that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
+process based only on this PID. A later mutation attempt can reclaim a stale lease once its
+age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
 macOS와 Linux에서 `ocx codex-shim install`은 확정된 OpenCodex 홈에 전용 wrapper `<OPENCODEX_HOME>/bin/codex`와 셸에서 읽을 `<OPENCODEX_HOME>/codex-shell-env.sh`를 설치합니다. 원래 런처는 brew, npm, fnm이 설치한 위치에 그대로 있어 패키지 관리자 업데이트와 버전 롤백 뒤에도 다시 감쌀 필요가 없습니다. Windows는 기존처럼 스크립트 런처를 제자리에서 감싸며 실제 `codex.exe`는 건드리지 않습니다. Windows에서 `codex.exe`만 제공된다면 `ocx service install`을 사용하세요.
