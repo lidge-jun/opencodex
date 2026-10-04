@@ -32,6 +32,51 @@ beforeEach(() => {
   };
 });
 
+test("a 1P reread from an unmounted page cannot overwrite a newer page's Save", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const server = { systemEnv: false, cliFirstParty: false };
+  let hold = false;
+  let offline = false;
+  globalThis.fetch = (async (input, init) => {
+    if (!String(input).endsWith("/api/claude-code")) return new Response(null, { status: 404 });
+    if (init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      Object.assign(server, body);
+      if ("systemEnv" in body) offline = true;
+      return Response.json({ ok: true });
+    }
+    if (offline) return Response.json({ error: "offline" }, { status: 503 });
+    const snapshot = { ...SERVER, autoConnectSupported: true, ...server, modelMap: {} };
+    if (hold) {
+      hold = false;
+      await gate;
+    }
+    return Response.json(snapshot);
+  }) as typeof fetch;
+  const page = await mount();
+  const cachedSystemEnv = () => readSessionListCacheEntry<{ state: { systemEnv: boolean } }>("ocx.claude-code.v1:http://localhost")?.data?.state.systemEnv;
+  try {
+    hold = true;
+    await act(async () => { page.button("Toggle Claude Code CLI first-party").click(); });
+    await settle(page.testWindow);
+    // A new page replaces the old one while its reread is still out.
+    await act(async () => { page.root.render(<LanguageProvider><ClaudeCode key="new" apiBase="http://localhost" /></LanguageProvider>); });
+    await settle(page.testWindow);
+    await page.click(page.container.querySelector<HTMLInputElement>('input[aria-label="Auto-connect"]')!);
+    await page.click(page.button("Save"));
+    expect(server.systemEnv).toBe(true);
+    expect(cachedSystemEnv()).toBe(true);
+    release();
+    await settle(page.testWindow);
+    expect(cachedSystemEnv()).toBe(true);
+  } finally {
+    release();
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
+});
+
 for (const control of ["first-party", "connection"] as const) {
   test(`a successful ${control} switch survives a failed reread, on screen and in the session copy`, async () => {
     const server = { cliFirstParty: false, enabled: true };

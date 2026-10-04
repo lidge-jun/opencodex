@@ -45,6 +45,17 @@ function normalizeFirstPartyState(state: ClaudeCodeState): ClaudeCodeState {
   };
 }
 
+/*
+ * Bumped by every successful write, per session-cache key and shared by every mount. A read
+ * remembers the epoch it started in and is dropped if a write landed meanwhile: the 1P switch
+ * reads through its own controller, so a GET it began before a Save (even from a page that
+ * has since unmounted) could otherwise finish afterwards and put the old values back into the
+ * draft, the baseline and the session cache.
+ */
+const writeEpochs = new Map<string, number>();
+const writeEpoch = (key: string) => writeEpochs.get(key) ?? 0;
+const bumpWriteEpoch = (key: string) => { writeEpochs.set(key, writeEpoch(key) + 1); };
+
 const firstPartyNoticeKeys: Record<Exclude<FirstPartyNotice, null>, TKey> = {
   unknown: "claude.firstParty.unknown",
   foreign: "claude.firstParty.foreign",
@@ -115,13 +126,6 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const [firstPartyPending, setFirstPartyPending] = useState(false);
   const firstPartyInFlight = useRef(false);
   /*
-   * Bumped by every successful write. A read remembers the epoch it started in and is
-   * dropped if a write landed meanwhile: the 1P switch reads through its own controller, so
-   * a GET it began before a Save could otherwise finish after that Save and put the old
-   * values back into the draft, the baseline and the session cache.
-   */
-  const writeEpoch = useRef(0);
-  /*
    * The latest server-owned state the page has confirmed: the last accepted read with any
    * immediate switch result laid on top. Save publishes its session copy from this, not from
    * the baseline it captured before the PUT, because the 1P and connection switches stay
@@ -130,7 +134,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const confirmedState = useRef<ClaudeCodeState | null>(cached?.state ?? null);
 
   const fetchCode = useCallback(async (signal: AbortSignal): Promise<CachedClaudeCode> => {
-    const epoch = writeEpoch.current;
+    const epoch = writeEpoch(cacheKey);
     const res = await fetch(`${apiBase}/api/claude-code`, { signal });
     const r = await readJsonOrThrow<ClaudeCodeState & { modelMap?: Record<string, string> }>(
       res,
@@ -154,7 +158,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     const next = { state: nextState, rows: nextRows };
     if (signal.aborted) throw new Error("Claude Code request aborted");
     // Superseded by a write: return it to the resource, but never let it reach the draft or cache.
-    if (epoch !== writeEpoch.current) return next;
+    if (epoch !== writeEpoch(cacheKey)) return next;
     confirmedState.current = nextState;
     // The only place a read reaches the draft, at the successful read boundary, without a
     // synchronization effect.
@@ -237,7 +241,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     if (!state) return;
     setStatus("");
     await changeConnection(!state.enabled, enabled => {
-      writeEpoch.current += 1;
+      bumpWriteEpoch(cacheKey);
       applyLive({ enabled });
       codeResource.refresh();
     }, error => {
@@ -275,7 +279,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
           ? t(interceptReasonKey(payload.code), { port: payload.port ?? "", bound: payload.bound ?? "", configured: payload.configured ?? "" }) : t(key));
       }
       await readJsonOrThrow(response, t("claude.saveFailed"));
-      writeEpoch.current += 1;
+      bumpWriteEpoch(cacheKey);
       // The PUT is the commit: show it now. The reread only refreshes derived diagnostics
       // (applied state, notices), and its failure must not leave the switch showing the old value.
       applyLive({ cliFirstParty: requested });
@@ -296,7 +300,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     setStatus("");
     setSaving(true);
     // Reads already in flight predate this Save; none of them may reach the draft or cache.
-    writeEpoch.current += 1;
+    bumpWriteEpoch(cacheKey);
     try {
       const r = await fetch(`${apiBase}/api/claude-code`, {
         method: "PUT",
@@ -305,7 +309,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
         body: JSON.stringify(claudeCodeSaveBody(submitted.state, submitted.rows)),
       });
       await readJsonOrThrow(r, t("claude.saveFailed"));
-      writeEpoch.current += 1;
+      bumpWriteEpoch(cacheKey);
       // Replace the session copy now, so a failed refresh cannot leave pre-Save values to reseed a
       // revisit: the latest confirmed server fields plus exactly what this Save submitted.
       writeSessionListCacheEntry(cacheKey, savedCopy(confirmedState.current ?? submitted.state, submitted));
