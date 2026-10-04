@@ -12,14 +12,16 @@ import {
 } from "../../src/codex/quota";
 import { codexPoolQuotaEvidence } from "../../src/routing/quota";
 import { computeCodexUsageScore } from "../../src/codex/routing/cooldown-math";
+import { isCodexAccountHeldForCredits } from "../../src/codex/account-credit-use";
 import type { WhamUsageResponse } from "../../src/codex/quota";
 
 describe("consumable credits at an included usage limit", () => {
-  const wham = (credits: unknown, allowed = true): WhamUsageResponse => ({
+  const wham = (credits: unknown, allowed = true, spendReached?: unknown): WhamUsageResponse => ({
     plan_type: "pro",
     rate_limit: { allowed, primary_window: { used_percent: 100, limit_window_seconds: 604800 } },
     rate_limit_reset_credits: { available_count: 0 },
     credits,
+    ...(spendReached !== undefined ? { spend_control: { reached: spendReached } } : {}),
   } as WhamUsageResponse);
   const available = { has_credits: true, unlimited: false, overage_limit_reached: false, balance: "42.5" };
 
@@ -63,8 +65,19 @@ describe("consumable credits at an included usage limit", () => {
     expect(computeCodexUsageScore(quota, "pro", Date.now(), true)).toBe(100);
   });
 
-  it("honors an explicit upstream refusal even with a positive balance", () => {
-    expect(isCodexQuotaExhausted(parseUsageQuota(wham(available, false)), "pro", true)).toBe(true);
+  it.each([undefined, false])("included-plan refusal does not deny fresh consented credits (%j)", spendReached => {
+    const quota = parseUsageQuota(wham(available, false, spendReached))!;
+    quota.weeklyResetAt = Date.now() + 60_000;
+    expect(isCodexQuotaExhausted(quota, "pro", true)).toBe(false);
+    expect(isCodexQuotaExhausted(quota, "pro")).toBe(true);
+    expect(isCodexAccountHeldForCredits({ creditCodexAccountIds: ["__main__"] }, "__main__", quota, "pro", Date.now())).toBe(false);
+    expect(isCodexAccountHeldForCredits({}, "__main__", quota, "pro", Date.now())).toBe(true);
+  });
+
+  it.each([true, "false", 0, null])("a reached or malformed spending control denies a positive balance (%j)", reached => {
+    const quota = parseUsageQuota(wham(available, true, reached))!;
+    expect(isCodexQuotaExhausted(quota, "pro", true)).toBe(true);
+    expect(computeCodexUsageScore(quota, "pro", Date.now(), true)).toBe(100);
   });
 
   it("reset tickets alone do not grant automatic spending headroom", () => {

@@ -30,6 +30,7 @@ export interface CodexSpendableCredits {
   unlimited?: boolean;
   balance?: number;
   overageLimitReached?: boolean;
+  /** Credit spending control, never the included-plan rate_limit.allowed verdict. */
   allowed?: boolean;
   observedAt: number;
 }
@@ -147,6 +148,7 @@ export type WhamUsageResponse = {
     balance?: unknown;
     overage_limit_reached?: unknown;
   } | null;
+  spend_control?: { reached?: unknown } | null;
   rate_limit_reset_credits?: { available_count: number } | null;
   additional_rate_limits?: WhamAdditionalRateLimit[] | null;
 };

@@ -926,7 +926,9 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
         ...(parsed.hasCredits !== undefined ? { hasCredits: parsed.hasCredits } : {}),
         ...(parsed.unlimited !== undefined ? { unlimited: parsed.unlimited } : {}),
         ...(parsed.overageLimitReached !== undefined ? { overageLimitReached: parsed.overageLimitReached } : {}),
-        ...(typeof data.rate_limit?.allowed === "boolean" ? { allowed: data.rate_limit.allowed } : {}),
+        // Included-plan refusal is precisely when opted-in credits take over, not a credit veto.
+        // A declared spending control permits credits only with an explicit unreached verdict.
+        ...(data.spend_control?.reached !== undefined ? { allowed: data.spend_control.reached === false } : {}),
         ...(balance !== undefined && Number.isFinite(balance) ? { balance } : {}),
       };
     }

@@ -301,8 +301,11 @@ and a separate observation clock. Explicit zero/null replaces earlier evidence; 
 headers retain its original clock. A positive balance with `has_credits`, or unlimited credits,
 can keep an account selectable at 100% included usage for five minutes only when its id is in
 `creditCodexAccountIds`. Balance evidence never grants permission: unlisted accounts retain the
-default 100% hold, and opted-in accounts require fresh evidence. Explicit upstream
-refusal or an overage limit always defeats that credit evidence. Selection caps its usage score
+default 100% hold, and opted-in accounts require fresh evidence. Included-plan `rate_limit.allowed`
+does not grant or veto credit spending; a declared `spend_control.reached` must be explicitly false,
+and a reached or malformed verdict or an overage limit defeats that credit evidence. Missing
+spending-control evidence does not invent a refusal. Existing cached refusal flags are retained
+until a fresh WHAM credits observation replaces them. Selection caps its usage score
 at 99 so accounts with more included headroom remain preferred; observed percentage bars stay
 unchanged. Bulk pause and complete-snapshot recovery use the same credit decision. Credits-only
 payloads cannot clear cooldowns, actual request refusals still drive cooldown/failover, and the
