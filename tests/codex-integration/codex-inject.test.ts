@@ -10,6 +10,8 @@ import {
   dominantEol,
   setRootOpenaiBaseUrl,
   setRootRealtimeWsBaseUrl,
+  buildChatgptBaseUrlLine,
+  setRootChatgptBaseUrl,
   stripInjectedOpenaiBaseUrl,
   stripOpencodexConfig,
   stripRootContextWindowOverrides,
@@ -660,6 +662,38 @@ describe("Design B openai_base_url injection", () => {
       expect(stripJournaledOpenaiBaseUrl(rewritten, "http://127.0.0.1:10100/v1", null)).toBe(
         'experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"\nmodel = "gpt-5.5"\n',
       );
+    });
+  });
+
+  describe("chatgpt_base_url accounting override", () => {
+    const loopback = { baseUrl: "http://127.0.0.1:10100/v1", requiresAdmissionToken: false, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" } as const;
+    const base = 'model = "gpt-5.5"\n\n[features]\nfast_mode = true\n';
+
+    test("is written as its own marker-owned pair with /backend-api/ target", () => {
+      const routed = setRootOpenaiBaseUrl(base, loopback).content;
+      const { content, keptUserChatgptBaseUrl } = setRootChatgptBaseUrl(routed, loopback);
+      expect(keptUserChatgptBaseUrl).toBe(false);
+      expect(content).toContain('chatgpt_base_url = "http://127.0.0.1:10100/backend-api/"');
+      expect(content).toContain(OCX_ROUTING_MARKER_LINE);
+    });
+
+    test("a user's own root chatgpt_base_url is preserved", () => {
+      const original = [
+        "# User custom config",
+        'chatgpt_base_url = "https://custom.backend/api/"',
+        'openai_base_url = "http://127.0.0.1:10100/v1"',
+      ].join("\n");
+      const { content, keptUserChatgptBaseUrl } = setRootChatgptBaseUrl(original, loopback);
+      expect(keptUserChatgptBaseUrl).toBe(true);
+      expect(content).toContain('chatgpt_base_url = "https://custom.backend/api/"');
+    });
+
+    test("strip removes marker-owned chatgpt_base_url", () => {
+      const routed = setRootOpenaiBaseUrl(base, loopback).content;
+      const injected = setRootChatgptBaseUrl(routed, loopback).content;
+      const stripped = stripInjectedOpenaiBaseUrl(injected);
+      expect(stripped).not.toContain("chatgpt_base_url");
+      expect(stripped).toContain("[features]");
     });
   });
 

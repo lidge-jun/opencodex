@@ -53,6 +53,12 @@ export function isRootRealtimeWsBaseUrlLine(line: string): boolean {
   return rootAssignmentKey(line) === REALTIME_WS_BASE_URL_KEY;
 }
 
+export const CHATGPT_BASE_URL_KEY = "chatgpt_base_url";
+
+export function isRootChatgptBaseUrlLine(line: string): boolean {
+  return rootAssignmentKey(line) === CHATGPT_BASE_URL_KEY;
+}
+
 export function tomlStringPattern(key: string): RegExp {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const keyToken = `(?:${escaped}|"${escaped}"|'${escaped}')`;
@@ -121,6 +127,8 @@ export function stripJournaledOpenaiBaseUrl(
       if (!injectedUrl || rootTomlString(line, "openai_base_url") !== injectedUrl) continue;
     } else if (isRootRealtimeWsBaseUrlLine(line)) {
       if (!injectedRealtimeWsUrl || rootTomlString(line, REALTIME_WS_BASE_URL_KEY) !== injectedRealtimeWsUrl) continue;
+    } else if (isRootChatgptBaseUrlLine(line)) {
+      // Drop marker-owned chatgpt_base_url
     } else {
       continue;
     }

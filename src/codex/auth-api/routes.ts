@@ -45,7 +45,75 @@ export async function handleCodexAuthAPI(
     }) });
   }
 
+  if (
+    (url.pathname === "/api/codex-auth/bulk-import" ||
+     url.pathname === "/api/oauth/codex/bulk-import" ||
+     url.pathname === "/api/codex-auth/accounts/import") &&
+    req.method === "POST"
+  ) {
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      try {
+        body = await req.text();
+      } catch {
+        return jsonResponse({ error: "Invalid request body" }, 400);
+      }
+    }
+
+    const overwrite = Boolean(body && typeof body === "object" && (body as Record<string, unknown>).overwrite);
+    const rawInput = body && typeof body === "object" && "json" in body
+      ? (body as Record<string, unknown>).json
+      : body;
+
+    const { extractCodexAccountsFromRaw, importCodexAccounts } = await import("../bulk-import");
+    const extracted = extractCodexAccountsFromRaw(rawInput);
+    if (extracted.length === 0) {
+      return jsonResponse({ error: "No valid Codex accounts found in payload" }, 400);
+    }
+
+    const result = await importCodexAccounts(extracted, { config, overwrite });
+    if (result.imported.length > 0 && convergeCodexCatalog) {
+      await convergeCodexCatalog();
+    }
+
+    return jsonResponse({
+      success: result.success,
+      count: result.imported.length,
+      total: result.total,
+      imported: result.imported,
+      skipped: result.skipped,
+      errors: result.errors,
+    });
+  }
+
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "POST") {
+    let body: unknown = null;
+    try {
+      body = await req.json();
+    } catch {
+      // ignore
+    }
+    if (body) {
+      const { extractCodexAccountsFromRaw, importCodexAccounts } = await import("../bulk-import");
+      const extracted = extractCodexAccountsFromRaw(body);
+      if (extracted.length > 0) {
+        const overwrite = Boolean(typeof body === "object" && (body as Record<string, unknown>).overwrite);
+        const result = await importCodexAccounts(extracted, { config, overwrite });
+        if (result.imported.length > 0 && convergeCodexCatalog) {
+          await convergeCodexCatalog();
+        }
+        return jsonResponse({
+          success: result.success,
+          count: result.imported.length,
+          total: result.total,
+          imported: result.imported,
+          skipped: result.skipped,
+          errors: result.errors,
+        });
+      }
+    }
     return manualImportDisabledResponse();
   }
 

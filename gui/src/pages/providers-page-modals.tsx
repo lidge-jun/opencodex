@@ -1,4 +1,5 @@
 import AddProviderModal from "../components/AddProviderModal";
+import { ImportProviderJsonModal } from "../components/ImportProviderJsonModal";
 import ProviderModelsNotice, { type ProviderModelsNoticeProps } from "../components/ProviderModelsNotice";
 import AddCodexAccountModal from "../components/AddCodexAccountModal";
 import OAuthTosWarningModal from "../components/OAuthTosWarningModal";
@@ -23,6 +24,7 @@ export function ProvidersPageModals({
   removeConfirmName,
   removeDefaultProvider,
   codexLoginOpen,
+  importJsonOpen,
   jsonLeaveOpen,
   jsonSaving,
   oauthTosPending,
@@ -35,6 +37,8 @@ export function ProvidersPageModals({
   onOpenAdd,
   onCloseCodexLogin,
   onCodexAdded,
+  onCloseImportJson,
+  onJsonImported,
   onCancelRemove,
   onConfirmRemove,
   onCancelJsonLeave,
@@ -55,6 +59,7 @@ export function ProvidersPageModals({
   removeConfirmName: string | null;
   removeDefaultProvider: string | null;
   codexLoginOpen: boolean;
+  importJsonOpen?: boolean;
   jsonLeaveOpen?: boolean;
   jsonSaving?: boolean;
   oauthTosPending: { provider: string; addAccount: boolean } | null;
@@ -67,6 +72,8 @@ export function ProvidersPageModals({
   onOpenAdd: () => void;
   onCloseCodexLogin: () => void;
   onCodexAdded: (completion: CodexAccountMutationCompletion) => void;
+  onCloseImportJson?: () => void;
+  onJsonImported?: (names: string[]) => void;
   onCancelRemove: () => void;
   onConfirmRemove: () => void;
   onCancelJsonLeave?: () => void;
@@ -102,6 +109,14 @@ export function ProvidersPageModals({
           apiBase={apiBase}
           onClose={onCloseCodexLogin}
           onAdded={onCodexAdded}
+        />
+      )}
+      {importJsonOpen && onCloseImportJson && onJsonImported && (
+        <ImportProviderJsonModal
+          open={importJsonOpen}
+          apiBase={apiBase}
+          onClose={onCloseImportJson}
+          onImported={onJsonImported}
         />
       )}
       {removeConfirmName && (

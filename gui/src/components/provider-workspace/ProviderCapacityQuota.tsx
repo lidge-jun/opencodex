@@ -107,7 +107,14 @@ export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuo
           {credits && (
             <div className="pws-capacity-recovery">
               <span>{t("quota.creditsBalance")}</span>
-              <strong>{formatCredits(credits.remaining)}</strong>
+              <strong>
+                {formatCredits(credits.remaining)}
+                {report.source?.startsWith("ckey") && (
+                  <span className="muted" style={{ fontWeight: "normal", marginLeft: "6px" }}>
+                    (~{new Intl.NumberFormat("vi-VN").format(Math.round(credits.remaining * 25_000))} VND)
+                  </span>
+                )}
+              </strong>
             </div>
           )}
           {periodEnd !== null && (

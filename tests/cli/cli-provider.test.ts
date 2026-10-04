@@ -718,3 +718,24 @@ test("provider add --text-only preserves other capability axes during force over
     });
   } finally { removeTreeWithRetry(dir); }
 });
+
+test("provider import --json imports 9router connections", () => {
+  const { dir } = freshConfig();
+  try {
+    const payload = JSON.stringify({
+      connections: [
+        { provider: "groq", apiKey: "gsk_test", name: "groq-test" },
+      ],
+    });
+    const tmpFile = join(dir, "9router-export.json");
+    writeFileSync(tmpFile, payload);
+    const result = runCli(["provider", "import", tmpFile, "--json"], { OPENCODEX_HOME: dir });
+    expect(result.status, result.stderr).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.action).toBe("import");
+    expect(parsed.imported).toContain("groq-test");
+  } finally {
+    removeTreeWithRetry(dir);
+  }
+});
+

@@ -10,12 +10,13 @@ import { useAddCodexAccountOAuth } from "./use-add-codex-account-oauth";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 
 export default function AddCodexAccountModal({
-  apiBase, onClose, onAdded, reauthAccountId,
+  apiBase, onClose, onAdded, reauthAccountId, onOpenBulkImport,
 }: {
   apiBase: string;
   onClose: () => void;
   onAdded: (completion: CodexAccountMutationCompletion) => void;
   reauthAccountId?: string;
+  onOpenBulkImport?: () => void;
 }) {
   const t = useT();
   const [ui, dispatch] = useReducer(addCodexAccountUiReducer, reauthAccountId, initialAddCodexAccountUiState);
@@ -64,6 +65,7 @@ export default function AddCodexAccountModal({
             onIdChange={value => dispatch({ type: "set-id", id: value })}
             onStartOAuth={() => { void startOAuth(ui.id); }}
             onStartDeviceOAuth={() => { void startOAuth(ui.id, { device: true }); }}
+            onBulkImport={onOpenBulkImport ? () => { closeModal(); onOpenBulkImport(); } : undefined}
             onClose={closeModal}
           />
         )}

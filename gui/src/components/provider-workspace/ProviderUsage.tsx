@@ -5,7 +5,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useT, useI18n } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
-import { formatRequestCount, formatTokenCount, formatCostUsd } from "../../provider-workspace/usage";
+import { formatRequestCount, formatTokenCount, formatCostUsd, formatCostDual } from "../../provider-workspace/usage";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountQuotaReading, ProviderUsageTotals, ProviderModelUsageRow } from "./types";
 import ProviderCurrentQuota from "./ProviderCurrentQuota";
@@ -22,6 +22,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, currentQ
 }) {
   const t = useT();
   const { locale } = useI18n();
+  const isCkey = item.name === "ckey" || item.name === "ckey-vn";
   const hasUsage = usageTotals?.requests !== undefined;
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
 
@@ -51,8 +52,8 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, currentQ
           <>
             <div className="pws-usage-metrics pws-usage-metrics-3" role="group" aria-label={t("pws.usageLast30d")}>
               <div className="pws-usage-metric">
-                <span className="pws-usage-metric-value mono">{formatCostUsd(providerCost, locale)}</span>
-                <span className="muted pws-usage-metric-label">{t("pws.estimatedCost")}</span>
+                <span className="pws-usage-metric-value mono">{isCkey ? formatCostDual(providerCost, locale) : formatCostUsd(providerCost, locale)}</span>
+                <span className="muted pws-usage-metric-label">{isCkey ? `${t("pws.estimatedCost")} (USD / VND)` : t("pws.estimatedCost")}</span>
               </div>
               <div className="pws-usage-metric">
                 <span className="pws-usage-metric-value">{formatRequestCount(usageTotals?.requests, locale)}</span>
@@ -78,7 +79,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, currentQ
               <thead>
                 <tr>
                   <th>{t("pws.col.model")}</th>
-                  <th className="num">{t("pws.col.cost")}</th>
+                  <th className="num">{isCkey ? `${t("pws.col.cost")} (USD / VND)` : t("pws.col.cost")}</th>
                   <th className="num">{t("pws.col.tokens")}</th>
                   <th className="num">{t("pws.col.requests")}</th>
                   <th>{t("pws.col.share")}</th>
@@ -104,7 +105,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, currentQ
                             <div className="muted pws-model-attribution">{t("pws.unresolvedRequestedModel")}</div>
                           )}
                         </td>
-                        <td className="num mono">{formatCostUsd(row.estimatedCostUsd, locale)}</td>
+                        <td className="num mono">{isCkey ? formatCostDual(row.estimatedCostUsd, locale) : formatCostUsd(row.estimatedCostUsd, locale)}</td>
                         <td className="num mono">{formatTokenCount(row.totalTokens, locale)}</td>
                         <td className="num">{row.requests}</td>
                         <td>

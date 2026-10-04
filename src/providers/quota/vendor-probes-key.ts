@@ -46,6 +46,15 @@ const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
 const SYNTHETIC_BASE_URL = "https://api.synthetic.new/v2";
 const DEEPINFRA_BASE_URL = "https://api.deepinfra.com";
 const NEURALWATT_BASE_URL = "https://api.neuralwatt.com/v1";
+const CKEY_INFERENCE_BASE_URL = "https://api.xah.io/v1";
+const CKEY_API_BASE = "https://ckey.vn";
+const CKEY_PROFILE_URL = `${CKEY_API_BASE}/api/profile`;
+const CKEY_USAGE_STATS_URL = `${CKEY_API_BASE}/api/llm/usage-stats`;
+/**
+ * Approximate VND→USD exchange rate for display purposes only.
+ * 1 USD ≈ 25,000 VND (rounded market-rate estimate; not for billing).
+ */
+const VND_PER_USD = 25_000;
 
 
 function isCanonicalA6apiBaseUrl(baseUrl: string): boolean {
@@ -933,6 +942,116 @@ async function fetchNeuralwattQuota(provider: string, config: OcxProviderConfig)
   return windows > 0 ? report(provider, "neuralwatt:quota", quota) : null;
 }
 
+function isCanonicalCkeyBaseUrl(baseUrl: string): boolean {
+  const n = normalizedBaseUrl(baseUrl);
+  return (
+    n === CKEY_INFERENCE_BASE_URL ||
+    n === "https://api.xah.io" ||
+    n === "https://ckey.vn" ||
+    n === "https://ckey.vn/api"
+  );
+}
+
+/**
+ * Ckey.vn account quota probe.
+ *
+ * Ckey.vn exposes:
+ *   - GET https://ckey.vn/api/profile?key=<k>   → profile.balance_raw (VND integer)
+ *   - GET https://ckey.vn/api/llm/usage-stats?key=<k> → charged_vnd, requests, total_tokens
+ *
+ * Both endpoints use the account API key as a `?key=` query parameter (not a
+ * Bearer header). The same `ck-prod-...` key used for inference is the account key.
+ *
+ * Prices are reported in VND (the service's native currency) with an approximate
+ * USD conversion shown alongside for user convenience. 1 USD ≈ 25,000 VND
+ * (VND_PER_USD constant; not for billing).
+ */
+async function fetchCkeyQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalCkeyBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
+  if (!apiKey) return null;
+
+  const profileUrl = `${CKEY_PROFILE_URL}?key=${encodeURIComponent(apiKey)}`;
+  const statsUrl = `${CKEY_USAGE_STATS_URL}?key=${encodeURIComponent(apiKey)}`;
+
+  // Fetch profile (balance) and usage stats in parallel.
+  const [profileRes, statsRes] = await Promise.all([
+    quotaFetch(provider, config, profileUrl, {
+      headers: { Accept: "application/json" },
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    }).catch(() => null),
+    quotaFetch(provider, config, statsUrl, {
+      headers: { Accept: "application/json" },
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    }).catch(() => null),
+  ]);
+
+  // 4xx on profile = bad key / terminal failure.
+  if (profileRes && !profileRes.ok) {
+    return profileRes.status >= 400 && profileRes.status < 500 && profileRes.status !== 408 && profileRes.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+
+  const quota: ProviderQuota = { updatedAt: Date.now(), customWindows: [] };
+  let balanceRaw: number | undefined;
+  let chargedVnd: number | undefined;
+
+  // ── Balance ─────────────────────────────────────────────────────────────────
+  if (profileRes?.ok) {
+    const body = asRecord(await readQuotaJson(profileRes));
+    const profile = asRecord(asRecord(body?.data)?.profile) ?? asRecord(body?.data) ?? body;
+    balanceRaw = toFiniteNumber(profile?.balance_raw);
+    if (balanceRaw !== undefined && balanceRaw >= 0) {
+      const balanceUsd = balanceRaw / VND_PER_USD;
+      const vndFormatted = new Intl.NumberFormat("vi-VN").format(balanceRaw);
+      const usdFormatted = balanceUsd.toFixed(2);
+      quota.customWindows!.push({
+        label: `Account balance: ${vndFormatted} VND (~$${usdFormatted} USD)`,
+        percent: 0, // balance-only window, no cap percentage
+      });
+    }
+  }
+
+  // ── Usage stats ─────────────────────────────────────────────────────────────
+  if (statsRes?.ok) {
+    const body = asRecord(await readQuotaJson(statsRes));
+    const data = asRecord(asRecord(body)?.data) ?? body;
+    chargedVnd = toFiniteNumber(data?.charged_vnd);
+    const totalRequests = toFiniteNumber(data?.requests);
+    const totalTokens = toFiniteNumber(data?.total_tokens);
+
+    if (chargedVnd !== undefined && chargedVnd >= 0) {
+      const chargedUsd = chargedVnd / VND_PER_USD;
+      const vndFormatted = new Intl.NumberFormat("vi-VN").format(Math.round(chargedVnd));
+      const usdFormatted = chargedUsd.toFixed(4);
+      let label = `Usage (all-time): ${vndFormatted} VND (~$${usdFormatted} USD)`;
+      if (totalRequests !== undefined && totalTokens !== undefined) {
+        label += ` · ${totalRequests} req · ${new Intl.NumberFormat("en").format(totalTokens)} tok`;
+      }
+      quota.customWindows!.push({ label, percent: 0 });
+    }
+  }
+
+  if (balanceRaw !== undefined && balanceRaw >= 0) {
+    const remainingUsd = balanceRaw / VND_PER_USD;
+    const usedUsd = (chargedVnd !== undefined && chargedVnd >= 0 ? chargedVnd : 0) / VND_PER_USD;
+    const totalCap = remainingUsd + usedUsd;
+    quota.creditsUsd = {
+      remaining: remainingUsd,
+      used: usedUsd,
+      limit: totalCap,
+      percent: totalCap > 0 ? Math.min(100, Math.round((usedUsd / totalCap) * 100)) : 0,
+    };
+  }
+
+  return quota.customWindows!.length > 0 || quota.creditsUsd !== undefined
+    ? report(provider, "ckey:profile", quota)
+    : null;
+}
+
 
 export function normalizedBaseUrl(value: string): string | null {
   try {
@@ -1261,8 +1380,10 @@ export function keyQuotaReaderForProvider(name: string, provider: OcxProviderCon
   if (name === "synthetic" && isCanonicalSyntheticBaseUrl(provider.baseUrl)) return fetchSyntheticQuota;
   if (name === "deepinfra" && isCanonicalDeepInfraBaseUrl(provider.baseUrl)) return fetchDeepInfraQuota;
   if (name === "neuralwatt" && isCanonicalNeuralwattBaseUrl(provider.baseUrl)) return fetchNeuralwattQuota;
+  if (name === "ckey" && isCanonicalCkeyBaseUrl(provider.baseUrl)) return fetchCkeyQuota;
   return null;
 }
+
 
 export function providerApiKeyQuotaMode(name: string, provider: OcxProviderConfig): AccountQuotaMode {
   return keyQuotaReaderForProvider(name, provider) ? "probe" : "unsupported";

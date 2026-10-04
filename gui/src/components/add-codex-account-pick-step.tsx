@@ -1,4 +1,4 @@
-import { IconGlobe, IconLink } from "../icons";
+import { IconGlobe, IconLink, IconDownload } from "../icons";
 import { useT } from "../i18n/shared";
 
 export function AddCodexAccountPickStep({
@@ -7,6 +7,7 @@ export function AddCodexAccountPickStep({
   onIdChange,
   onStartOAuth,
   onStartDeviceOAuth,
+  onBulkImport,
   onClose,
 }: {
   id: string;
@@ -14,6 +15,7 @@ export function AddCodexAccountPickStep({
   onIdChange: (value: string) => void;
   onStartOAuth: () => void;
   onStartDeviceOAuth: () => void;
+  onBulkImport?: () => void;
   onClose: () => void;
 }) {
   const t = useT();
@@ -52,6 +54,18 @@ export function AddCodexAccountPickStep({
           </div>
         </div>
       </button>
+
+      {onBulkImport && (
+        <button type="button" className="list-row" onClick={onBulkImport} style={{ marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <IconDownload width={20} />
+            <div>
+              <div className="title">{"Import JSON / Bulk Accounts"}</div>
+              <div className="sub">{"Paste Cockpit, 9router, Sub2API, auth.json, or tokens"}</div>
+            </div>
+          </div>
+        </button>
+      )}
 
       {error && <div className="notice notice-err" style={{ marginTop: 8 }}>{error}</div>}
 

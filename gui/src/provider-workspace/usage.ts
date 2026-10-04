@@ -240,6 +240,8 @@ export function formatTokenCount(n: number | undefined, locale = "en"): string {
   return formatRequestCount(n, locale);
 }
 
+export const VND_PER_USD = 25_000;
+
 /** Format a USD cost estimate for display. Returns "—" when unavailable. */
 export function formatCostUsd(value: number | null | undefined, locale = "en"): string {
   if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return "\u2014";
@@ -248,3 +250,13 @@ export function formatCostUsd(value: number | null | undefined, locale = "en"): 
     maximumFractionDigits: 4,
   }).format(value)}`;
 }
+
+/** Format a cost estimate showing both USD and VND for VND-native providers like Ckey.vn. */
+export function formatCostDual(value: number | null | undefined, locale = "en"): string {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return "\u2014";
+  const usdStr = formatCostUsd(value, locale);
+  const vndAmount = Math.round(value * VND_PER_USD);
+  const vndStr = new Intl.NumberFormat("vi-VN").format(vndAmount);
+  return `${usdStr} (~${vndStr} VND)`;
+}
+

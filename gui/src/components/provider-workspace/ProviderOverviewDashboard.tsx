@@ -5,7 +5,7 @@
  */
 import { useMemo, useState } from "react";
 import { useT, useI18n } from "../../i18n/shared";
-import { IconAlert, IconChevron, IconRefresh } from "../../icons";
+import { IconAlert, IconChevron, IconRefresh, IconDownload } from "../../icons";
 import type { WorkspaceSections, WorkspaceItem } from "../../provider-workspace/catalog";
 import {
   accountQuotaFromReport,
@@ -35,6 +35,7 @@ export default function ProviderOverviewDashboard({
   quotasLoading = false,
   onSelectProvider,
   onEditConfig,
+  onImportJson,
   onRefreshAllQuotas,
 }: {
   sections: WorkspaceSections;
@@ -44,6 +45,7 @@ export default function ProviderOverviewDashboard({
   quotasLoading?: boolean;
   onSelectProvider: (name: string) => void;
   onEditConfig?: () => void;
+  onImportJson?: () => void;
   /** Force a fresh read of every provider's quota; omitted when the page cannot drive one. */
   onRefreshAllQuotas?: () => Promise<boolean>;
 }) {
@@ -151,6 +153,13 @@ export default function ProviderOverviewDashboard({
               <IconRefresh width={14} height={14} aria-hidden="true" />
               {" "}
               {refreshingQuotas ? t("codexAuth.refreshingQuota") : t("pws.refreshAllQuotas")}
+            </button>
+          )}
+          {onImportJson && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onImportJson}>
+              <IconDownload width={14} height={14} aria-hidden="true" />
+              {" "}
+              {t("prov.importJson")}
             </button>
           )}
           {onEditConfig && (

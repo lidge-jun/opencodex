@@ -10,7 +10,7 @@ import { applyActiveAccountReauth, buildProviderWorkspace, isAccountProvider, ty
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
 import { oauthTosRisk } from "../oauth-tos-risk";
 import { ToastNotice, type NoticeTone } from "../ui";
-import { IconPlus } from "../icons";
+import { IconPlus, IconDownload } from "../icons";
 import { useT } from "../i18n/shared";
 import { useProviderAccountPools, type AccountSelectionTarget } from "../hooks/useProviderAccountPools";
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
@@ -448,6 +448,15 @@ export default function Providers({ apiBase, scopeProvider, scopeEmpty }: {
     saveConfig, openJsonEditor, discardJsonEditor, requestCloseJsonEditor, restoreJsonEditor,
     jsonIsDirty, setJsonLeaveOpen,
   } = jsonEditor;
+  const [importJsonOpen, setImportJsonOpen] = useState(false);
+  const onJsonImported = (_names: string[]) => {
+    setImportJsonOpen(false);
+    notify(t("prov.importSuccess"), true);
+    void fetchConfig();
+    void fetchOauth();
+    void fetchProviderQuotas(true);
+    bumpModelsRefresh();
+  };
 
   /**
    * Force a fresh quota read for one provider and resolve with what actually happened.
@@ -644,6 +653,7 @@ export default function Providers({ apiBase, scopeProvider, scopeEmpty }: {
       {!scopeProvider && <div className="page-head">
         <h2>{t("nav.providers")}</h2>
         <div className="row">
+          <button type="button" className="btn btn-ghost" onClick={() => setImportJsonOpen(true)}><IconDownload />{t("prov.importJson")}</button>
           <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
         </div>
       </div>}
@@ -684,6 +694,7 @@ export default function Providers({ apiBase, scopeProvider, scopeEmpty }: {
         onSelect={setWorkspaceSelected}
         onAddProvider={intent => { setAddIntent(intent ?? null); setAdding(true); }}
         onEditConfig={openJsonEditor}
+        onImportJson={() => setImportJsonOpen(true)}
         jsonEditor={{
           open: jsonEditorOpen,
           draft,
@@ -784,6 +795,9 @@ export default function Providers({ apiBase, scopeProvider, scopeEmpty }: {
           ? Object.entries(config.providers).find(([name, provider]) => name !== removeConfirmName && provider.disabled !== true)?.[0] ?? null
           : null}
         codexLoginOpen={codexLoginOpen}
+        importJsonOpen={importJsonOpen}
+        onCloseImportJson={() => setImportJsonOpen(false)}
+        onJsonImported={onJsonImported}
         jsonLeaveOpen={jsonLeaveOpen}
         jsonSaving={jsonSaving}
         oauthTosPending={oauthTosPending}

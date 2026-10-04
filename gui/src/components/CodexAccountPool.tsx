@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
-import { IconPlus } from "../icons";
+import { IconPlus, IconDownload } from "../icons";
 import { EmptyState, type NoticeTone } from "../ui";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
 import AddCodexAccountModal from "./AddCodexAccountModal";
+import { BulkImportCodexModal } from "./BulkImportCodexModal";
 import { useCodexAccountPool, type CodexAccountPoolController } from "../hooks/useCodexAccountPool";
 import { useCodexCreditsVisibility } from "../hooks/useCodexCreditsVisibility";
 import { useMainDeviceReauth } from "./use-main-device-reauth";
@@ -64,6 +65,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   controller?: CodexAccountPoolController;
 }) {
   const t = useT();
+  const tr = (k: string, fb: string) => (t as unknown as (key: string) => string)(k) || fb;
   const autoSwitch = useCodexAutoSwitch(apiBase, {
     updated: t("codexAuth.autoSwitchUpdated"),
     updateFailed: t("codexAuth.autoSwitchUpdateFailed"),
@@ -86,6 +88,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     || mainReauth.state.phase === "committing";
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
   const [modelsNotice, setModelsNotice] = useState<{ catalogRefreshPending: boolean } | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const hardLockFocusPending = useRef(false);
@@ -570,9 +573,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           <div className="section-sep">
             <span className="section-label">{t("codexAuth.accountPool")}</span>
             <div className="sep-line" />
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowAdd(true)}>
-              <IconPlus width={14} /> {t("codexAuth.add")}
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowBulkImport(true)}>
+                <IconDownload width={14} /> {tr("codexAuth.bulkImport", "Bulk Import")}
+              </button>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowAdd(true)}>
+                <IconPlus width={14} /> {t("codexAuth.add")}
+              </button>
+            </div>
           </div>
 
           {activePoolNeedsReauth && activePoolAccount && (
@@ -696,6 +704,20 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           reauthAccountId={reauthId ?? undefined}
           onClose={closeAddModal}
           onAdded={handleAccountAdded}
+          onOpenBulkImport={() => setShowBulkImport(true)}
+        />
+      )}
+
+      {showBulkImport && (
+        <BulkImportCodexModal
+          open={showBulkImport}
+          apiBase={apiBase}
+          onClose={() => setShowBulkImport(false)}
+          onImported={(count) => {
+            setShowBulkImport(false);
+            void load();
+            showActionFeedback(`Imported ${count} account${count === 1 ? "" : "s"}`);
+          }}
         />
       )}
       {modelsNotice && <ProviderModelsNotice

@@ -8,6 +8,7 @@
  *   show <name>   Show provider config details (secrets masked)
  *   set-default <name>  Change the default provider
  */
+import { readFileSync } from "node:fs";
 import { hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig } from "../config";
 import { apiKeyTransportConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../config/provider-validation";
 import { hasHelpFlag, printSubcommandUsage } from "./help";
@@ -469,9 +470,114 @@ function handleSetDefault(args: string[]): void {
 }
 
 // ---------------------------------------------------------------------------
-// Router (F2 fix: handle help flags internally, like service/codex-shim)
+// provider import
 // ---------------------------------------------------------------------------
 
+const IMPORT_USAGE = "Usage: ocx provider import <file|-> [--force] [--json] [--sync]";
+
+async function handleImport(args: string[]): Promise<void> {
+  const restArgs = [...args];
+  const force = consumeFlag(restArgs, "--force");
+  const wantsJson = consumeFlag(restArgs, "--json");
+  const wantsSync = consumeFlag(restArgs, "--sync");
+
+  const file = restArgs[0];
+  if (!file || (file.startsWith("-") && file !== "-")) {
+    console.error(IMPORT_USAGE);
+    process.exit(1);
+  }
+  rejectUnknownArgs(restArgs.slice(1), IMPORT_USAGE);
+
+  let rawContent: string;
+  try {
+    if (file === "-") {
+      rawContent = readFileSync(0, "utf8");
+    } else {
+      rawContent = readFileSync(file, "utf8");
+    }
+  } catch (err: unknown) {
+    console.error(`Failed to read input: ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  const { parseAndNormalizeProviderJson } = await import("../providers/json-import");
+  let importResult: ReturnType<typeof parseAndNormalizeProviderJson>;
+  try {
+    importResult = parseAndNormalizeProviderJson(rawContent);
+  } catch (err: unknown) {
+    console.error(`Import failed: ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  const config = loadConfig();
+  const added: string[] = [];
+  const skipped: string[] = [];
+
+  for (const [name, provConfig] of Object.entries(importResult.providers)) {
+    if (hasOwnProvider(config.providers, name) && !force) {
+      skipped.push(name);
+      continue;
+    }
+    config.providers[name] = provConfig;
+    added.push(name);
+  }
+
+  let codexImported: string[] = [];
+  if (importResult.codexAccounts.length > 0) {
+    const { importCodexAccounts } = await import("../codex/bulk-import");
+    const codexRes = await importCodexAccounts(importResult.codexAccounts, { config, overwrite: force });
+    codexImported = codexRes.imported;
+  }
+
+  if (added.length > 0) {
+    validateAndSave(config);
+    if (wantsSync) {
+      const live = await findLiveProxy();
+      if (live) {
+        await syncModelsToCodex(live.port).catch(e => {
+          console.error(`Warning: sync failed: ${e instanceof Error ? e.message : String(e)}`);
+          return null;
+        });
+      }
+    }
+  }
+
+  if (wantsJson) {
+    console.log(JSON.stringify({
+      action: "import",
+      sourceKind: importResult.sourceKind,
+      imported: added,
+      skipped,
+      codexAccounts: codexImported.length,
+      codexAccountIds: codexImported,
+      needsSync: added.length > 0,
+    }, null, 2));
+    return;
+  }
+
+  if (added.length === 0 && skipped.length > 0 && codexImported.length === 0) {
+    console.log(`No providers imported (${skipped.length} existing skipped, use --force to overwrite: ${skipped.join(", ")})`);
+    return;
+  }
+
+  if (added.length > 0) {
+    console.log(`✅ Imported ${added.length} provider(s) (${importResult.sourceKind}):`);
+    for (const name of added) {
+      const prov = config.providers[name]!;
+      console.log(`  - ${name} (adapter=${prov.adapter}, baseUrl=${prov.baseUrl})`);
+    }
+  }
+  if (skipped.length > 0) {
+    console.log(`ℹ️  Skipped ${skipped.length} already configured (use --force to overwrite): ${skipped.join(", ")}`);
+  }
+  if (codexImported.length > 0) {
+    console.log(`✅ Imported ${codexImported.length} Codex account(s): ${codexImported.join(", ")}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Router (F2 fix: handle help flags internally, like service/codex-shim)
+// ---------------------------------------------------------------------------
 
 export async function handleProviderCommand(args: string[]): Promise<void> {
   const sub = args[0];
@@ -489,6 +595,9 @@ export async function handleProviderCommand(args: string[]): Promise<void> {
       break;
     case "add":
       await handleAdd(subArgs);
+      break;
+    case "import":
+      await handleImport(subArgs);
       break;
     case "remove":
       handleRemove(subArgs);

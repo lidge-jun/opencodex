@@ -7,6 +7,7 @@ export type Page =
   | "startup"
   | "providers"
   | "models"
+  | "quota"
   | "subagents"
   | "logs"
   | "usage"
@@ -22,6 +23,7 @@ export const VALID_PAGES = new Set<Page>([
   "startup",
   "providers",
   "models",
+  "quota",
   "subagents",
   "logs",
   "usage",

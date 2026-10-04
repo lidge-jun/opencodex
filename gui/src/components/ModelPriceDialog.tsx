@@ -195,29 +195,46 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
           <span className="muted text-label">{t("pricing.override.modelId")}</span>
           <code className="mono text-control">{model.namespaced}</code>
         </div>
-        <p id={`${id}-help`} className="muted small">{t("pricing.override.help")}</p>
+        <p id={`${id}-help`} className="muted small">
+          {t("pricing.override.help")}
+          {(model.provider === "ckey" || model.provider === "ckey-vn") && (
+            <span> · Ckey.vn native pricing in VND (1 USD ≈ 25,000 VND). USD rate converts to VND equivalent below.</span>
+          )}
+        </p>
         {phase === "loading" && <p role="status" className="muted small">{t("pricing.override.loading")}</p>}
-        {RATE_FIELDS.map(field => (
-          <Fragment key={field}>
-            <label className="field-label" htmlFor={`${id}-${field}`}>{t(RATE_LABELS[field])}</label>
-            <input ref={field === "input" ? inputRef : undefined} id={`${id}-${field}`}
-              className="input" type="number" min={0} max={MAX_RATE} step="any" inputMode="decimal"
-              value={draft[field]} disabled={locked}
-              required={field === "input" || field === "output"}
-              aria-describedby={`${id}-help${errorKey ? ` ${id}-error` : ""}`}
-              aria-invalid={errorKey === "pricing.override.invalid" ? true : undefined}
-              onChange={event => {
-                if (locked || requestRef.current) return;
-                const value = event.target.value;
-                setDraft(current => ({
-                  ...current,
-                  cacheRead: current.cacheRead || "0", cacheWrite: current.cacheWrite || "0",
-                  [field]: value,
-                }));
-                setErrorKey(null);
-              }} />
-          </Fragment>
-        ))}
+        {RATE_FIELDS.map(field => {
+          const isCkey = model.provider === "ckey" || model.provider === "ckey-vn";
+          const numVal = Number(draft[field]);
+          const vndEq = isCkey && Number.isFinite(numVal) && numVal > 0 ? Math.round(numVal * 25_000) : null;
+          return (
+            <Fragment key={field}>
+              <label className="field-label" htmlFor={`${id}-${field}`}>
+                {t(RATE_LABELS[field])}{isCkey ? " (USD)" : ""}
+              </label>
+              <input ref={field === "input" ? inputRef : undefined} id={`${id}-${field}`}
+                className="input" type="number" min={0} max={MAX_RATE} step="any" inputMode="decimal"
+                value={draft[field]} disabled={locked}
+                required={field === "input" || field === "output"}
+                aria-describedby={`${id}-help${errorKey ? ` ${id}-error` : ""}`}
+                aria-invalid={errorKey === "pricing.override.invalid" ? true : undefined}
+                onChange={event => {
+                  if (locked || requestRef.current) return;
+                  const value = event.target.value;
+                  setDraft(current => ({
+                    ...current,
+                    cacheRead: current.cacheRead || "0", cacheWrite: current.cacheWrite || "0",
+                    [field]: value,
+                  }));
+                  setErrorKey(null);
+                }} />
+              {vndEq !== null && (
+                <span className="muted small mono" style={{ display: "block", marginTop: "2px", marginBottom: "6px" }}>
+                  ≈ {new Intl.NumberFormat("vi-VN").format(vndEq)} VND / 1M tokens
+                </span>
+              )}
+            </Fragment>
+          );
+        })}
         {recovered && <p role="status" className="muted small">{t("pricing.override.recovered")}</p>}
         {errorKey && <p id={`${id}-error`} className="model-display-name-error" role="alert">{t(errorKey)}</p>}
         <div className="modal-actions">

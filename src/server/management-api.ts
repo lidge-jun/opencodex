@@ -503,7 +503,7 @@ export async function handleManagementAPI(
     return handleNativeProfileAPI(req, url, config, deps.nativeProfileApi);
   }
 
-  if (url.pathname.startsWith("/api/codex-auth/")) {
+  if (url.pathname.startsWith("/api/codex-auth/") || url.pathname === "/api/oauth/codex/bulk-import") {
     // Native-main device reauth (#3898): a dedicated namespace the generic
     // codex-auth dispatch must not swallow (it would 404 as an unknown pool
     // route). Same management origin/auth/session wrapping as every /api/*.

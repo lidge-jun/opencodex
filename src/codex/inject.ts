@@ -847,15 +847,22 @@ export {
   buildProfileFile,
   buildProviderTableBlock,
   buildRealtimeWsBaseUrlLine,
+  buildChatgptBaseUrlLine,
   chooseCatalogPathForInjection,
   currentExternalCodexModelProvider,
   dominantEol,
   externalCodexModelProvider,
   setRootOpenaiBaseUrl,
   setRootRealtimeWsBaseUrl,
+  setRootChatgptBaseUrl,
   stripInjectedOpenaiBaseUrl,
   stripRootContextWindowOverrides,
 } from "./inject/config-toml";
+
+export {
+  CHATGPT_BASE_URL_KEY,
+  isRootChatgptBaseUrlLine,
+} from "./injected-marker";
 
 export {
   classifyCodexRouting,

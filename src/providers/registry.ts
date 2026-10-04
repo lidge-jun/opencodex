@@ -7,24 +7,18 @@ import type {
 } from "./registry/types";
 import { PROVIDER_REGISTRY_CORE } from "./registry/entries-core";
 import { PROVIDER_REGISTRY_EXTENDED } from "./registry/entries-extended";
+import { PROVIDER_REGISTRY_COMMUNITY } from "./registry/entries-community";
 
 export type {
-  ProviderAuthKind,
-  MetadataModelIdNormalize,
-  InboundWire,
-  ModelWireDefault,
-  ResponsesTerminalRepairPolicy,
-  ProviderModelDiscoveryScalar,
-  ProviderModelDiscoveryPredicate,
-  ProviderModelDiscoveryFilter,
-  ProviderModelDiscoverySpec,
-  ProviderRegistryEntry,
-  ProviderConfigSeed,
+  ProviderAuthKind, MetadataModelIdNormalize, InboundWire, ModelWireDefault,
+  ResponsesTerminalRepairPolicy, ProviderModelDiscoveryScalar, ProviderModelDiscoveryPredicate,
+  ProviderModelDiscoveryFilter, ProviderModelDiscoverySpec, ProviderRegistryEntry, ProviderConfigSeed,
 } from "./registry/types";
 
 export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   ...PROVIDER_REGISTRY_CORE,
   ...PROVIDER_REGISTRY_EXTENDED,
+  ...PROVIDER_REGISTRY_COMMUNITY,
 ];
 
 export function providerRegistryFastWireError(

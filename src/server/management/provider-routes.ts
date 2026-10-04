@@ -1990,5 +1990,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   if (url.pathname === "/api/provider-presets" && req.method === "GET") {
     return jsonResponse({ providers: deriveProviderPresets() });
   }
+  if (url.pathname === "/api/providers/import" && req.method === "POST") {
+    const { handleProviderImportRoute } = await import("./provider-import-route");
+    return handleProviderImportRoute(ctx);
+  }
   return null;
 }

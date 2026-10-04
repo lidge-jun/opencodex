@@ -47,6 +47,12 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper", "opengateway", "tokenlab",
   "opencode-free", "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
   "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun", "claude-cli",
+  "api-airforce", "kilocode", "kilo-gateway", "blackbox", "bluesminds", "bazaarlink", "atria", "dahl", "bai", "tokenrouter",
+  "tokenharbor", "nanobanana", "morph", "poolside", "trae", "kimchi", "llm7", "tinyfish", "byteplus", "volcengine-ark",
+  "cohere", "agnes", "v1m", "iflow", "perplexity", "perplexity-agent", "vertex-partner", "selfhosted-stt", "selfhosted-tts",
+  "selfhosted-embedding", "brave-search", "tavily", "exa", "firecrawl", "jina-reader", "serper", "searchapi", "assemblyai",
+  "deepgram", "cartesia", "elevenlabs", "fish-audio", "playht", "black-forest-labs", "fal-ai", "recraft", "stability-ai",
+  "runwayml", "voyage-ai", "jina-ai", "ckey",
 ];
 
 describe("provider registry parity", () => {
@@ -1118,7 +1124,10 @@ describe("provider registry parity", () => {
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
     // claude-cli joins them as the first CLI-backed member: its row is `key` because the turn
     // leaves this machine, and keyless because the Claude Code CLI reads the operator's sign-in.
-    expect(optionalKeyProviders).toEqual(["litellm", "opencode-free", "mimo-free", "claude-cli"]);
+    expect(optionalKeyProviders).toEqual([
+      "litellm", "opencode-free", "mimo-free", "claude-cli",
+      "api-airforce", "kilocode", "selfhosted-stt", "selfhosted-tts", "selfhosted-embedding", "jina-reader"
+    ]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {
@@ -1131,7 +1140,7 @@ describe("provider registry parity", () => {
     // nous is a MIXED free/paid provider: the free tier is per-model (the
     // `:free` slugs), not a property of the whole provider, so it is not in
     // the provider-level freeTier list (see review feedback on PR #1397).
-    expect(freeTierProviders).toEqual(["scaleway", "nvidia", "cloudflare-workers-ai"]);
+    expect(freeTierProviders).toEqual(["scaleway", "nvidia", "cloudflare-workers-ai", "api-airforce", "kilocode"]);
   });
 
   test("nous exposes free models at model level, not provider level", () => {

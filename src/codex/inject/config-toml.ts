@@ -5,9 +5,11 @@ import { resolveEffectiveProjectModelProvider } from "../project-config-warnings
 import {
   OCX_ROUTING_MARKER_LINE,
   REALTIME_WS_BASE_URL_KEY,
+  CHATGPT_BASE_URL_KEY,
   isOcxRoutingMarkerLine,
   isRootOpenaiBaseUrlLine,
   isRootRealtimeWsBaseUrlLine,
+  isRootChatgptBaseUrlLine,
   providerTableStart,
   providerTableString,
   rootTomlString,
@@ -305,6 +307,41 @@ export function setRootRealtimeWsBaseUrl(
 }
 
 /**
+ * Companion to setRootOpenaiBaseUrlForTarget for the chatgpt_base_url accounting endpoint override.
+ * Points Codex CLI's WHAM usage polling (/wham/usage) at the proxy's /backend-api/ endpoint
+ * so /usage reports the active provider's rate limits and quota.
+ */
+export function buildChatgptBaseUrlLine(target: CodexRoutingTarget): string {
+  const backendBaseUrl = target.baseUrl.replace(/\/v1\/?$/, "/backend-api/");
+  return `${CHATGPT_BASE_URL_KEY} = ${tomlString(backendBaseUrl)}`;
+}
+
+export function setRootChatgptBaseUrl(
+  content: string,
+  target: CodexRoutingTarget,
+): { content: string; keptUserChatgptBaseUrl: boolean } {
+  const { bom, lines, rootEnd } = rootSourceLines(content);
+  const key = buildChatgptBaseUrlLine(validateCodexRoutingTarget(target));
+  for (let index = 0; index < rootEnd; index++) {
+    if (!lines[index]!.structural || !isRootChatgptBaseUrlLine(lines[index]!.text)) continue;
+    if (!ownedRootUrl(lines, index, CHATGPT_BASE_URL_KEY)) return { content, keptUserChatgptBaseUrl: true };
+    lines[index - 1]!.text = OCX_ROUTING_MARKER_LINE;
+    lines[index]!.text = key;
+    return { content: bom + sourceText(lines), keptUserChatgptBaseUrl: false };
+  }
+  for (let index = 0; index < rootEnd; index++) {
+    if (!isRootRealtimeWsBaseUrlLine(lines[index]!.text) && !isRootOpenaiBaseUrlLine(lines[index]!.text)) continue;
+    if (!ownedRootUrl(lines, index, lines[index]!.text.startsWith("openai") ? "openai_base_url" : REALTIME_WS_BASE_URL_KEY)) continue;
+    const eol = dominantEol(content);
+    lines[index]!.eol ||= eol;
+    lines.splice(index + 1, 0, ...[OCX_ROUTING_MARKER_LINE, key].map(text => ({ text, eol, structural: true })));
+    return { content: bom + sourceText(lines), keptUserChatgptBaseUrl: false };
+  }
+  return { content, keptUserChatgptBaseUrl: false };
+}
+
+
+/**
  * Root key codex-rs reads for its web-search mode. The value opencodex writes is the only one that
  * takes the native hosted tool away; the other modes keep it, so they are never written here.
  */
@@ -444,7 +481,7 @@ export function stripInjectedOpenaiBaseUrl(content: string): string {
     if (!line.structural || !isOcxRoutingMarkerLine(line.text)) continue;
     const next = lines[index + 1];
     if (index + 1 < rootEnd && next?.structural
-      && (isRootOpenaiBaseUrlLine(next.text) || isRootRealtimeWsBaseUrlLine(next.text))) {
+      && (isRootOpenaiBaseUrlLine(next.text) || isRootRealtimeWsBaseUrlLine(next.text) || isRootChatgptBaseUrlLine(next.text))) {
       const key = rootAssignmentKey(next.text)!;
       if (rootTomlString(next.text, key) === null) continue;
       drop.add(index);

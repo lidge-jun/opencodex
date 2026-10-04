@@ -83,6 +83,7 @@ export default function ProviderWorkspaceShell({
   onRemoveProvider,
   onAddProvider,
   onEditConfig,
+  onImportJson,
   jsonEditor,
   jsonSaving = false,
   modelsRefreshToken = 0,
@@ -104,6 +105,7 @@ export default function ProviderWorkspaceShell({
   onRemoveProvider?: (name: string) => void;
   onAddProvider: (intent?: AddProviderIntent) => void;
   onEditConfig?: () => void;
+  onImportJson?: () => void;
   jsonEditor?: JsonEditorState;
   jsonSaving?: boolean;
   /** Bump after login/config changes so /api/selected-models is refetched. */
@@ -612,6 +614,7 @@ export default function ProviderWorkspaceShell({
             quotasLoading={quotasLoading}
             onSelectProvider={(name) => onSelect(name)}
             onEditConfig={onEditConfig}
+            onImportJson={onImportJson}
             {...(onRefreshAllQuotas ? { onRefreshAllQuotas } : {})}
           />
         )}
