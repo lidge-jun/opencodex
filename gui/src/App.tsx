@@ -98,7 +98,10 @@ function readStoredTheme(): Theme {
 function focusAfterSwitcher(): void {
   const row = document.querySelector<HTMLElement>(".sidebar .nav-item.active");
   const box = row?.getBoundingClientRect();
-  if (row && box && box.width > 0 && box.right > 0 && box.left < window.innerWidth) {
+  const onScreen = !!box && box.width > 0 && box.height > 0
+    && box.right > 0 && box.left < window.innerWidth
+    && box.bottom > 0 && box.top < window.innerHeight;
+  if (row && onScreen) {
     row.focus({ preventScroll: true });
     return;
   }

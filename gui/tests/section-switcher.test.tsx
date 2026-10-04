@@ -128,6 +128,10 @@ test("focus moves to a survivor when the focused member disappears", async () =>
 
 test("hiding the switcher under a focused button hands focus back to the parent", async () => {
   const orphaned: string[] = [];
+  // Stands in for App's target (the sidebar row or main): somewhere outside the switcher.
+  const fallback = win.document.createElement("button");
+  fallback.textContent = "Remote Link row";
+  win.document.body.appendChild(fallback as never);
   const { createRoot } = await import("react-dom/client");
   const host = win.document.createElement("div");
   win.document.body.appendChild(host as never);
@@ -135,7 +139,7 @@ test("hiding the switcher under a focused button hands focus back to the parent"
   const show = async (visible: boolean) => {
     await act(async () => {
       root!.render(visible
-        ? <SectionSwitcher items={ITEMS.slice(2)} currentPage="remote" onNavigate={() => {}} ariaLabel="Section pages" onFocusOrphaned={() => orphaned.push("moved")} />
+        ? <SectionSwitcher items={ITEMS.slice(2)} currentPage="remote" onNavigate={() => {}} ariaLabel="Section pages" onFocusOrphaned={() => { orphaned.push("moved"); fallback.focus(); }} />
         : null);
     });
   };
@@ -145,6 +149,9 @@ test("hiding the switcher under a focused button hands focus back to the parent"
   // Remote Workspace went away, one member is left, and App stops rendering the switcher.
   await show(false);
   expect(orphaned).toEqual(["moved"]);
+  // Focus landed on the parent's target, not on <body>, after the nav left the DOM.
+  expect(win.document.querySelector("nav.section-switcher")).toBeNull();
+  expect(win.document.activeElement).toBe(fallback as never);
 
   // Unmounting while focus is elsewhere leaves focus alone.
   await show(true);
