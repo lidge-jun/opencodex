@@ -289,6 +289,19 @@ healthy request can retry; stable missing files still cache as empty. Symlinked 
 directories pass through canonical confinement: inside-cwd targets load, outside targets
 do not. The 30-second, 128-entry cache rechecks capacity at insertion time.
 
+## HTTP error details
+
+`src/adapters/openai-chat/errors.ts` formats complete, bounded HTTP error bodies for native Chat
+and the search/image sidecar loops. It keeps the existing JSON extraction and also reads JSON
+`data:` records when the response declares `text/event-stream`. Only an error envelope or an
+`event: error` record supplies a detail; ordinary stream content, comments, malformed data and
+`[DONE]` do not. SSE parsing accepts CR, LF, CRLF, multiline data and an unterminated final record,
+matching the shared decoder's field and EOF conventions. Extracted text still passes through
+secret redaction and the 400-character display cap. Callers retain the existing bounded-reader
+status-only fallback for unreadable, oversized or timed-out bodies; no extra body read or logging
+is added. `tests/adapters/openai/openai-chat-error-body.test.ts` covers formatting and the search
+bridge's client-message and request-log delivery.
+
 ## OpenGateway chat provider
 
 The `opengateway` key preset uses the OpenAI Chat adapter at

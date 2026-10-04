@@ -1,23 +1,56 @@
 import { isCyberPolicyCode } from "../../lib/errors";
 import { redactSecretString } from "../../lib/redact";
+import { sseFieldValue } from "../../lib/sse-decoder";
 import type { AdapterEvent, OcxUsage } from "../../types";
 
 // 260715 (issue #126): surface upstream error detail through the web-search sidecar loop.
 // loop.ts only appends a suffix to "Provider error N" when the adapter exposes
 // formatErrorBody; without it, strict OpenAI-compatible backends (NVIDIA NIM pydantic
 // validation, "This model only supports single tool-calls at once!", etc.) were reduced
-// to a bare status code. JSON-only extraction: recognized string fields are returned,
-// HTML/non-JSON bodies yield "" so raw markup is never echoed to the client.
-export function formatOpenAIChatErrorBody(status: number, _headers: Headers, payloadText: string): string {
-  let parsed: unknown;
+// to a bare status code. JSON fields are also extracted from declared SSE error bodies;
+// HTML/non-JSON data and ordinary stream content are never echoed to the client.
+export function formatOpenAIChatErrorBody(status: number, headers: Headers, payloadText: string): string {
+  let detail: string | undefined;
   try {
-    parsed = JSON.parse(payloadText);
+    detail = extractErrorDetail(JSON.parse(payloadText));
   } catch {
-    return "";
+    const mediaType = headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    if (mediaType === "text/event-stream") detail = extractSseErrorDetail(payloadText);
   }
-  const detail = extractErrorDetail(parsed);
-  if (!detail) return "";
-  return redactSecretString(detail).slice(0, 400);
+  return detail ? redactSecretString(detail).slice(0, 400) : "";
+}
+
+/** Parse only the already bounded, complete error body; never read or clone a response here. */
+function extractSseErrorDetail(text: string): string | undefined {
+  let event: string | undefined;
+  let data: string[] = [];
+  const dispatch = (): string | undefined => {
+    try {
+      const parsed: unknown = JSON.parse(data.join("\n"));
+      // A message/title field on a successful stream event is not error evidence.
+      const hasError = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        && (parsed as Record<string, unknown>).error != null;
+      return event === "error" || hasError ? extractErrorDetail(parsed) : undefined;
+    } catch {
+      return undefined; // Includes comments, malformed JSON and [DONE].
+    } finally {
+      event = undefined;
+      data = [];
+    }
+  };
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    if (line === "") {
+      const detail = dispatch();
+      if (detail) return detail;
+      continue;
+    }
+    const eventValue = sseFieldValue(line, "event");
+    if (eventValue !== null) event = eventValue;
+    const dataValue = sseFieldValue(line, "data");
+    if (dataValue !== null) data.push(dataValue);
+  }
+  // Match the shared decoder's EOF behavior for producers omitting the final blank line.
+  return dispatch();
 }
 
 function extractErrorDetail(parsed: unknown): string | undefined {

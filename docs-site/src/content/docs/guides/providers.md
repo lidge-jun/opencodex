@@ -13,6 +13,16 @@ These links preserve the preset's referral parameters. Sponsor information is sh
 the configured provider name, adapter and endpoint match the preset; it never changes routing,
 account selection or defaults.
 
+## Provider error details
+
+For OpenAI-compatible Chat providers, native Chat requests and search/image sidecar requests
+show the upstream error message even when an HTTP error uses `text/event-stream` instead of a
+JSON body. For example, an SSE error containing `Input text data may contain inappropriate
+content.` appears after `Provider error 400`, helping distinguish a provider refusal from a
+connection problem. Secret-shaped values remain redacted. If no recognized error message can be
+read safely, the error keeps its status-only fallback. This does not change provider acceptance
+rules or enable additional retries.
+
 ## OpenAI account modes
 
 | Provider id | Use | Credential/account rule |

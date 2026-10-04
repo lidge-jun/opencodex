@@ -2,6 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "openai-chat-error-body.test.ts": "adapters/openai",
     "usage-antigravity-55.test.ts": "usage",
     "provider-antigravity-wire-snapshot.test.ts": "providers",
     "antigravity-discovered-families.test.ts": "adapters/google",
