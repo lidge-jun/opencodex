@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget, remainingComboQuotaCooldownMs } from "../../src/combos";
+import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget, snapshotComboQuotaCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { handleComboResponses, handleResponses } from "../../src/server/responses/core";
 import { executeComboResponses } from "../../src/server/responses/core-combo";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { jsonUtf8Bytes } from "../../src/lib/json-byte-size";
+import { createProtocolEnvelope } from "../../src/protocols/envelope";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { inspectResponseLogJson } from "../../src/server/request-log";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -89,16 +91,94 @@ function upstream(fallbackStatus: number, fallbackMessage: string, primaryStatus
   return hosts;
 }
 
+// Exercise the real reject-policy eligibility path and native dispatch seam with a budget
+// for one selected target: its eligibility copy and dispatch copy, never an unused target.
+async function nativeCombo(cfg = config, status = 200) {
+  const nativeConfig: OcxConfig = {
+    ...cfg,
+    protocols: { unrepresentable: "reject", rollout: { nativeChatCombos: true } },
+  };
+  const chatBody = { model: "combo/fan", stream: false, n: 2, messages: [{ role: "user", content: "hello" }] };
+  const budget = createTranslatorBudget({ maxTurnBytes: 2 * jsonUtf8Bytes(chatBody) });
+  const envelope = createProtocolEnvelope({ inbound: "chat", body: chatBody, translatorBudget: budget });
+  const copies: Record<string, unknown>[] = [];
+  const dispatched: string[] = [];
+  const req = request();
+  try {
+    const response = await executeComboResponses(req, await req.clone().json(), "fan", nativeConfig,
+      { model: "", provider: "" }, {
+        translatorBudget: budget,
+        sendBudget: createRequestExecutionBudget(),
+        protocolSource: {
+          inbound: "chat",
+          envelope: {
+            ...envelope,
+            freshBody: () => {
+              const copy = envelope.freshBody();
+              copies.push(copy);
+              return copy;
+            },
+          },
+          dispatchNativeChild: async ({ route, finishLog }) => {
+            dispatched.push(route.providerName);
+            finishLog(status);
+            return status === 200
+              ? Response.json({ choices: [{ message: { role: "assistant", content: "ok" } }] })
+              : Response.json({ error: { message: "invalid api key", type: "authentication_error" } }, { status });
+          },
+        },
+      }, { handleResponses, handleComboResponses });
+    return { response, dispatched, copies, overflows: budget.snapshot().overflows };
+  } finally {
+    budget.dispose();
+  }
+}
+
 describe("combo exhaustion reports the primary's quota refusal", () => {
-  test("quota cooldown evidence respects request eligibility and expiry for 429 and 402", () => {
+  for (const cooled of [false, true]) {
+    test(`a successful native Chat combo skips unused quota eligibility (cooldown: ${cooled})`, async () => {
+      if (cooled) coolComboTarget("fan", { provider: "fallback", model: "model-fallback" }, { retryAfter: "120", status: 429 });
+      const { response, dispatched, copies, overflows } = await nativeCombo();
+      expect(response.status).toBe(200);
+      expect(dispatched).toEqual(["primary"]);
+      expect(copies.map(copy => copy.model)).toEqual(["primary/model-primary", "primary/model-primary"]);
+      expect(overflows).toBe(0);
+    });
+  }
+
+  test("a request-ineligible quota snapshot cannot replace the fallback's 401", async () => {
+    coolComboTarget("fan", { provider: "primary", model: "model-primary" }, { retryAfter: "120", status: 429 });
+    const bridged = { ...config, providers: { ...config.providers, primary: { ...config.providers.primary!, adapter: "openai-responses" } } };
+    // n: 2 cannot traverse this primary's Responses bridge under the reject policy.
+    const { response, dispatched, overflows } = await nativeCombo(bridged, 401);
+    expect(dispatched).toEqual(["fallback"]);
+    expect(response.status).toBe(401);
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(overflows).toBe(0);
+  });
+
+  test("a throwing snapshot eligibility check preserves the fallback's 401", async () => {
+    coolComboTarget("fan", { provider: "primary", model: "model-primary" }, { retryAfter: "120", status: 429 });
+    const { response, dispatched, overflows } = await nativeCombo(config, 401);
+    expect(dispatched).toEqual(["fallback"]);
+    expect(response.status).toBe(401);
+    expect(response.headers.get("retry-after")).toBeNull();
+    // Only lazy eligibility for the cooled primary attempts a third charged body copy.
+    expect(overflows).toBe(1);
+  });
+
+  test("quota cooldown snapshots retain usable targets and expiry for 429 and 402", () => {
     for (const status of [429, 402]) {
       coolComboTarget("fan", { provider: "primary", model: "model-primary" }, { retryAfter: "120", status, now: 1_000 });
-      expect(remainingComboQuotaCooldownMs(config, "fan", undefined, 1_000)).toBe(120_000);
-      expect(remainingComboQuotaCooldownMs(config, "fan", target => target.provider === "fallback", 1_000)).toBeUndefined();
-      expect(remainingComboQuotaCooldownMs(config, "fan", undefined, 121_000)).toBeUndefined();
+      expect(snapshotComboQuotaCooldowns(config, "fan", 1_000)).toMatchObject([
+        { target: { provider: "primary", model: "model-primary" }, cooldownUntil: 121_000 },
+      ]);
+      const disabled = { ...config, providers: { ...config.providers, primary: { ...config.providers.primary!, disabled: true } } };
+      expect(snapshotComboQuotaCooldowns(disabled, "fan", 1_000)).toEqual([]);
+      expect(snapshotComboQuotaCooldowns(config, "fan", 121_000)).toEqual([]);
     }
     coolComboTarget("fan", { provider: "primary", model: "model-primary" }, { retryAfter: "120", now: 1_000 });
-    expect(remainingComboQuotaCooldownMs(config, "fan", undefined, 1_000)).toBeUndefined();
+    expect(snapshotComboQuotaCooldowns(config, "fan", 1_000)).toEqual([]);
   });
 
   for (const [primary, status, message] of [

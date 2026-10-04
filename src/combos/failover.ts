@@ -196,26 +196,21 @@ export function remainingComboCooldownMs(comboId: string, now = Date.now()): num
   return soonest;
 }
 
-/** Quota evidence only for targets the caller could select apart from their cooldown. */
-export function remainingComboQuotaCooldownMs(
+/** Snapshot active quota cooldowns without inspecting request eligibility or changing state. */
+export function snapshotComboQuotaCooldowns<T extends Pick<OcxComboTarget, "provider" | "model">>(
   comboId: string,
-  eligibleTargets: Iterable<Pick<OcxComboTarget, "provider" | "model">>,
+  targets: Iterable<T>,
   now = Date.now(),
-): number | undefined {
-  let soonest: number | undefined;
-  for (const target of eligibleTargets) {
+): Array<{ target: T; cooldownUntil: number }> {
+  const snapshot: Array<{ target: T; cooldownUntil: number }> = [];
+  for (const target of targets) {
     const key = cooldownMapKey(comboId, target);
     const cooldown = targetCooldowns.get(key);
-    if (!cooldown) continue;
-    const remaining = cooldown.cooldownUntil - now;
-    if (remaining <= 0) {
-      targetCooldowns.delete(key);
-      continue;
-    }
+    if (!cooldown || cooldown.cooldownUntil <= now) continue;
     if (cooldown.status !== 429 && cooldown.status !== 402) continue;
-    if (soonest === undefined || remaining < soonest) soonest = remaining;
+    snapshot.push({ target, cooldownUntil: cooldown.cooldownUntil });
   }
-  return soonest;
+  return snapshot;
 }
 
 export function comboCooldownRetryAfterSeconds(comboId: string, now = Date.now()): string | undefined {

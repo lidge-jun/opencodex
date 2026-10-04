@@ -6,7 +6,7 @@ import {
   coolComboTarget,
   earliestComboCooldown,
   isComboTargetInCooldown,
-  remainingComboQuotaCooldownMs as remainingTargetQuotaCooldownMs,
+  snapshotComboQuotaCooldowns as snapshotTargetQuotaCooldowns,
   type ComboFailureCooldownScope,
 } from "./failover";
 import { quotaResetRemainingMs } from "./reset-window";
@@ -68,16 +68,15 @@ function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget, now: 
   return !cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now, target.model);
 }
 
-/** Apply the picker's provider and request eligibility, ignoring only the cooldown itself. */
-export function remainingComboQuotaCooldownMs(
+/** Capture usable providers' quota cooldowns; request eligibility is deferred to exhaustion. */
+export function snapshotComboQuotaCooldowns(
   config: OcxConfig,
   comboId: string,
-  eligible?: (target: NormalizedComboTarget) => boolean,
   now = Date.now(),
-): number | undefined {
+): Array<{ target: NormalizedComboTarget; cooldownUntil: number }> {
   const targets = getCombo(config, comboId)?.targets.filter(target =>
-    targetProviderIsUsable(config, target, now) && (eligible?.(target) ?? true)) ?? [];
-  return remainingTargetQuotaCooldownMs(comboId, targets, now);
+    targetProviderIsUsable(config, target, now)) ?? [];
+  return snapshotTargetQuotaCooldowns(comboId, targets, now);
 }
 
 function quotaWindowExhausted(percent: number | undefined, resetAt: number | undefined, now: number): boolean {

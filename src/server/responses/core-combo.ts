@@ -28,7 +28,7 @@ import {
   concreteComboRequestBody,
   comboDefaultEffort,
   isComboTargetInCooldown,
-  remainingComboQuotaCooldownMs,
+  snapshotComboQuotaCooldowns,
   noteComboSuccess,
   comboFailureDecision,
   advanceComboAfterFailure,
@@ -686,9 +686,7 @@ export async function executeComboResponses(
   let quotaFailedChildLog: RequestLogContext | undefined;
   // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
   // fresh cooldown is not a reason the request found no target.
-  const cooldownSnapshotAt = Date.now();
-  const quotaCooldownMs = remainingComboQuotaCooldownMs(config, comboId, targetEligible, cooldownSnapshotAt);
-  const quotaCooldownUntil = quotaCooldownMs === undefined ? undefined : cooldownSnapshotAt + quotaCooldownMs;
+  const quotaCooldownSnapshot = snapshotComboQuotaCooldowns(config, comboId);
   const exhaustedFailure = (): Response => {
     const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
     const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
@@ -697,6 +695,18 @@ export async function executeComboResponses(
     if (quotaFailure) return quotaFailure;
     // The quota-refused target was cooled before this request picked, so the ladder never saw
     // its refusal. The cooldown, with its Retry-After, is still the honest answer.
+    let quotaCooldownUntil: number | undefined;
+    const now = Date.now();
+    for (const { target, cooldownUntil } of quotaCooldownSnapshot) {
+      if (cooldownUntil <= now) continue;
+      try {
+        if (!targetEligible(target)) continue;
+      } catch {
+        // An eligibility check can exhaust the translator budget; it is not quota evidence.
+        continue;
+      }
+      quotaCooldownUntil = Math.min(quotaCooldownUntil ?? cooldownUntil, cooldownUntil);
+    }
     const remainingQuotaCooldownMs = quotaCooldownUntil === undefined ? 0 : quotaCooldownUntil - Date.now();
     return remainingQuotaCooldownMs > 0
       ? comboUnavailableResponse(`No available targets for combo: ${comboId}`, {
