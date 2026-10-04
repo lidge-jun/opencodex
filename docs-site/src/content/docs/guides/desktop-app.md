@@ -87,7 +87,8 @@ patch needs to be preserved across an update.
 
 On macOS and Linux, Cmd (macOS) or Ctrl (Linux) with `+`, `-` and `0`, or Ctrl with the mouse wheel,
 zooms the window between 50% and 300% in 10% steps, and `0` returns to 100%. The sidebar shows the
-same level with `-`, `+` and a reset button beside the theme and language rows. The level is
+same level next to the theme switch, as `-`, the current percentage and `+`; clicking the
+percentage returns to 100%. The level is
 remembered and applied again the next time the app starts. The dashboard comes from the proxy the
 app is attached to, so an app attached to an older proxy keeps the earlier behaviour (20% steps, not
 remembered, no sidebar control) until that proxy is updated. Windows uses the browser engine's own
