@@ -570,7 +570,8 @@ const commandRunners: Record<string, CommandRunner> = {
     const cacheGateSnapshot = deps.loadConfig();
     const desiredDisabled = !shouldSyncCodexOnStart(cacheGateSnapshot);
     const invalidated = withCatalogWriteSerialization(owningCodexHome, permit =>
-      invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, { allowWhenDesiredDisabled: true }));
+      invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, { allowWhenDesiredDisabled: true }),
+    { intent: "cache", writer: "sync-cache" });
     const cacheJson = cacheArgs.includes("--json");
     const jsonSafeLog = cacheJson
       ? { log: (...values: unknown[]) => console.error(...values), error: (...values: unknown[]) => console.error(...values) }
@@ -633,6 +634,10 @@ const commandRunners: Record<string, CommandRunner> = {
       console.log("No Codex catalog to derive a cache from; nothing to sync.");
     } else if (unchanged) {
       console.log("Codex model cache is already current; nothing to sync.");
+    } else if (invalidated.kind === "unavailable"
+      && (invalidated.reason === "foreign-owner" || invalidated.reason === "owner-unknown")) {
+      const { FOREIGN_CODEX_HOME_OWNER_MESSAGE, UNKNOWN_CODEX_HOME_OWNER_MESSAGE } = await import("../codex/catalog/routed-removal");
+      console.error(invalidated.reason === "foreign-owner" ? FOREIGN_CODEX_HOME_OWNER_MESSAGE : UNKNOWN_CODEX_HOME_OWNER_MESSAGE);
     } else if (!ok) {
       console.error(`Cache refresh did not complete (${invalidated.kind}). The Codex model cache was not rewritten.`);
     }

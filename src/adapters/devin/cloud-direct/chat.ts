@@ -536,6 +536,8 @@ export type CloudChatEvent =
 
 interface BuildArgs {
   apiKey: string;
+  /** CortexTrajectoryReference #15 id; minted per request when absent. */
+  trajectoryId?: string;
   userJwt?: string;
   modelUid: string;
   messages: ChatHistoryItem[];
@@ -779,9 +781,9 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
     // native client and CLIProxyAPIPlus, which places it outside its tools gate.
     encodeMessage(13, encodeVarintField(1, PROMPT_CACHE_EPHEMERAL)),
     // #15 CortexTrajectoryReference: { id, 1, 4 }. Present on every verified
-    // request.
+    // request. A supplied id retains continuity across sequential named turns.
     encodeMessage(15, Buffer.concat([
-      encodeString(1, crypto.randomUUID()),
+      encodeString(1, args.trajectoryId ?? crypto.randomUUID()),
       encodeVarintField(2, 1),
       encodeVarintField(3, 4),
     ])),
@@ -1105,6 +1107,8 @@ export interface CloudChatRequest {
   tools?: ToolDef[];
   /** Cascade ID — reuse across turns of the same conversation. */
   cascadeId?: string;
+  /** Trajectory ID (#15) — reuse across sequential turns of one conversation. */
+  trajectoryId?: string;
   /** Optional sampling overrides. */
   completionOpts?: BuildArgs['completionOpts'];
   /** Override request_type (default = 5, CASCADE). */
@@ -1255,6 +1259,7 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     tools: req.tools,
     cascadeId: sessionIds.cascadeId,
     sessionId: sessionIds.sessionId,
+    trajectoryId: req.trajectoryId,
     requestId: BigInt(Date.now()),
     triggerId: crypto.randomUUID(),
     requestType: req.requestType,

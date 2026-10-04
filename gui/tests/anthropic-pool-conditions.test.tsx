@@ -53,7 +53,7 @@ afterEach(async () => {
   await testWindow.happyDOM?.close?.();
 });
 
-type Settings = { enabled: boolean; autoSwitchThreshold?: number; strategy?: string; quotaWindow?: string };
+type Settings = { enabled: boolean; autoSwitchThreshold?: number; strategy?: string; quotaWindow?: string; nativeMessages?: boolean };
 
 /** GET answers with settings (or fails); PUT answers per the supplied status. */
 function stubPool(get: Settings | "fail", putStatus = 200): { puts: number } {
@@ -89,6 +89,7 @@ async function mount(accountCount: number): Promise<HTMLElement> {
 }
 
 const toggleOf = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("button[aria-pressed]")!;
+const nativeOf = (host: HTMLElement) => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
 
 describe("Claude account pool conditions", () => {
   test("the conditions notice is static text with a closed details disclosure", async () => {
@@ -159,6 +160,129 @@ describe("Claude account pool conditions", () => {
     expect(toggleOf(host).disabled).toBe(true);
     expect(host.querySelector(".anthropic-pool-card__notice")?.getAttribute("role")).toBeNull();
   });
+
+  test("native Messages preservation defaults on and saves the server-confirmed value", async () => {
+    const calls: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        calls.push(body);
+        return Response.json({ ...body, nativeMessages: false });
+      }
+      return Response.json({ enabled: true, kind: "anthropic" });
+    }) as typeof fetch;
+    const host = await mount(2);
+    const toggle = host.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!;
+    expect(toggle.checked).toBe(true);
+    expect(host.textContent).toContain("cache hits are not guaranteed");
+    await act(async () => { toggle.click(); await flush(); });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ provider: "anthropic", nativeMessages: false });
+    expect(host.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!.checked).toBe(false);
+  });
+
+  test("native Messages toggle rolls back after a failed save and stays disabled after a failed load", async () => {
+    stubPool({ enabled: true, nativeMessages: true }, 500);
+    const host = await mount(2);
+    const toggle = host.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!;
+    expect(toggle.checked).toBe(true);
+    await act(async () => { toggle.click(); await flush(); });
+    expect(host.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!.checked).toBe(true);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(DICTS.en["anthropicPool.saveFailed"]);
+
+    stubPool("fail");
+    const failedHost = await mount(2);
+    expect(failedHost.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!.disabled).toBe(true);
+  });
+
+  test("native opt-out survives unmount and reload, and the checkbox remains a preference while pooling is off", async () => {
+    let saved: Record<string, unknown> = { enabled: false, nativeMessages: true };
+    const writes: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      if (init?.method === "PUT") {
+        saved = JSON.parse(String(init.body));
+        writes.push(saved);
+      }
+      return Response.json(saved);
+    }) as typeof fetch;
+    const host = await mount(1);
+    expect(toggleOf(host).disabled).toBe(true);
+    expect(nativeOf(host).disabled).toBe(false);
+    await act(async () => { nativeOf(host).click(); await flush(); });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ enabled: false, nativeMessages: false });
+    expect(nativeOf(host).checked).toBe(false);
+    const root = mountedRoots.pop();
+    await act(async () => { root?.unmount(); });
+    const reloaded = await mount(2);
+    expect(nativeOf(reloaded).checked).toBe(false);
+    expect(nativeOf(reloaded).getAttribute("aria-label")).toBe(DICTS.en["anthropicPool.nativeMessagesLabel"]);
+    expect(reloaded.textContent).toContain("Explicit rollout opt-outs still apply.");
+  });
+
+  test("loading and saving disable edits and only the successful response changes the checkbox", async () => {
+    let resolveRead!: (response: Response) => void;
+    let resolveWrite!: (response: Response) => void;
+    globalThis.fetch = (async (_input, init) => new Promise<Response>(resolve => {
+      if (init?.method === "PUT") resolveWrite = resolve;
+      else resolveRead = resolve;
+    })) as typeof fetch;
+    const host = await mount(2);
+    expect(nativeOf(host).disabled).toBe(true);
+    expect(toggleOf(host).disabled).toBe(true);
+    await act(async () => { resolveRead(Response.json({ enabled: true, nativeMessages: true, strategy: "round-robin" })); await flush(); });
+    await act(async () => { nativeOf(host).click(); await flush(); });
+    expect(nativeOf(host).checked).toBe(true);
+    expect(host.querySelector('[aria-busy="true"]')).not.toBeNull();
+    for (const control of host.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button")) expect(control.disabled).toBe(true);
+    await act(async () => { resolveWrite(Response.json({ enabled: true, nativeMessages: false })); await flush(); });
+    expect(nativeOf(host).checked).toBe(false);
+    expect(nativeOf(host).disabled).toBe(false);
+  });
+
+  test("a confirmed published save adopts the response and announces its bookkeeping warning", async () => {
+    globalThis.fetch = (async (_input, init) => Response.json(init?.method === "PUT"
+      ? { enabled: true, nativeMessages: false, warning: "config_bookkeeping_failed" }
+      : { enabled: true, nativeMessages: true })) as typeof fetch;
+    const host = await mount(2);
+    await act(async () => { nativeOf(host).click(); await flush(); });
+    expect(nativeOf(host).checked).toBe(false);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(DICTS.en["anthropicPool.saveWarning"]);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(nativeOf(host).disabled).toBe(false);
+  });
+
+  test("unknown save state removes saved claims and permits edits only after a successful reload", async () => {
+    let reads = 0;
+    let failReload = true;
+    globalThis.fetch = (async (_input, init) => {
+      if (init?.method === "PUT") return Response.json({ code: "config_save_state_unknown" }, { status: 409 });
+      reads++;
+      if (reads > 1 && failReload) return new Response(null, { status: 500 });
+      return Response.json({ enabled: true, nativeMessages: reads === 1, autoSwitchThreshold: reads === 1 ? 80 : 61 });
+    }) as typeof fetch;
+    const host = await mount(2);
+    await act(async () => { nativeOf(host).click(); await flush(); });
+    expect(reads).toBe(1);
+    expect(nativeOf(host).disabled).toBe(true);
+    expect(host.querySelector('button[aria-pressed]')).toBeNull();
+    expect(host.querySelector('input[type="number"]')).toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(DICTS.en["anthropicPool.saveStateUnknown"]);
+    expect(host.textContent).not.toContain(DICTS.en["anthropicPool.disabledDesc"]);
+    const reload = () => Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent === DICTS.en["anthropicPool.reloadSettings"])!;
+    await act(async () => { reload().click(); await flush(); });
+    expect(reads).toBe(2);
+    expect(nativeOf(host).disabled).toBe(true);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(DICTS.en["anthropicPool.loadFailed"]);
+    failReload = false;
+    await act(async () => { reload().click(); await flush(); });
+    expect(reads).toBe(3);
+    expect(nativeOf(host).disabled).toBe(false);
+    expect(nativeOf(host).checked).toBe(false);
+    expect(toggleOf(host).getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector<HTMLInputElement>('input[type="number"]')?.value).toBe("61");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
 });
 
 describe("the enabled status line follows the selected strategy", () => {
@@ -227,6 +351,11 @@ describe("every locale carries the same pool claims", () => {
     "anthropicPool.detailsFailover",
     "anthropicPool.detailsActivity",
     "anthropicPool.detailsGuide",
+    "anthropicPool.nativeMessagesLabel",
+    "anthropicPool.nativeMessagesHelp",
+    "anthropicPool.saveWarning",
+    "anthropicPool.saveStateUnknown",
+    "anthropicPool.reloadSettings",
   ] as const;
 
   test("keys exist and the checkable tokens survive translation", () => {

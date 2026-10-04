@@ -373,6 +373,53 @@ to snapshot persistence instead of relying on the progress argument alone.
 
 > Decision record: [ADR-0015](decisions/ADR-0015-codex-home.md)
 
+## Config-backed catalog removals
+
+A refresh removes a provider's OpenCodex-authored routed rows wholesale only when config.json agrees
+the provider is gone (#6529). `src/codex/catalog/routed-removal.ts` lists the namespaces whose rows
+are in the active catalog, missing from the candidate, and not enabled by the driving config. Native
+aliases and combo-owned rows with the generated description prefix count as `combo`, including bare
+and slashed aliases; ownership alone does not establish authorship. Foreign and trusted account-bound
+rows never count. Both catalog writers —
+retained sync (`ocx start`/`ensure`/`sync`) and the convergence commit (management writes, login,
+auto-refresh) — hold the catalog lock K, then config mutation lock C, from the config.json
+re-read through replacement. A busy C also refuses the retained sync write. When the file is
+missing, unreadable or salvaged, or still enables one of those namespaces, the write is refused and the
+active catalog and models cache keep their bytes, so a config-less process (an empty
+`OPENCODEX_HOME` reads defaults, which route nothing) cannot publish a native-only catalog into this
+home. Removals inside an enabled namespace (discovery, disabled models, deleted custom rows) and
+catalogs without routed rows are unaffected; see the [shared catalog](catalog.md#shared-catalog).
+`ocx sync` reports the refusal as one count-only warning, and `ocx restore` stays the deliberate way
+to drop routed rows. Coverage: `tests/codex-integration/codex-catalog-routed-removal.test.ts`,
+`tests/codex-integration/codex-catalog-sync-hardening.test.ts`, and
+`tests/codex-integration/codex-convergence-contract.test.ts`.
+
+## Catalog writer ownership and intent
+
+`src/codex/codex-home-owner.ts` reads the injection journal's `opencodexHome` binding without modifying recovery evidence. A readable legacy journal has no binding; the next injection records its owner. Canonical aliases of the same physical OpenCodex home remain owned. A proven vanished home is stale and can be adopted, while foreign active or unknown ownership refuses writes. Every acquisition rechecks ownership under K before issuing its live permit; later calls re-evaluate the evidence.
+
+Injection and both native-restore paths check ownership before cleanup and at publication. The exported journal snapshot and injected-state writers also check ownership themselves before mutation, including direct calls; a foreign binding protects both its identity and recovery metadata. Successful deliberate config/profile restoration releases ownership at the native restoration boundary. Exact restoration removes the journal; successful field-level restoration preserves its recovery data and releases only the home binding. Catalog-only restore retains the binding. A later catalog failure remains a failed artifact. This does not add a new transaction across native and catalog restoration or guarantee custom-path recovery after the original journal was released.
+
+Each `withCatalogWriteSerialization` call supplies `refresh`, `cache`, `pull` or `restore` intent and a writer label. The existing permit registry binds that context to one live acquisition. `src/codex/internal/catalog-writer.ts` skips identical catalog/cache bytes and preserves their mtime. A refresh cannot clear all routed rows without readable file-backed config; restore deliberately clears them, pull keeps the hub's authority, and a cache permit cannot replace the catalog. Remote pull accepts an unchanged derived cache as success. Sync and sync-cache report owner refusals without private paths.
+
+These checks coordinate cooperating processes running as the same OS user. They do not isolate files from an arbitrary process with that user's direct filesystem access.
+
+## Catalog write audit
+
+Catalog and cache writes and admission refusals leave bounded diagnostic records through `src/codex/catalog/write-audit.ts`. The catalog serialization owner coordinates every append and compaction under K; denied writers never receive a publication permit. Identical bytes produce no event. Audit failure preserves the catalog operation's outcome.
+
+Records contain fixed categories, time and process identifiers, redacted bounded home identity, routed counts and config provenance. They contain no model/provider names or raw command arguments. Each event is at most 2 KiB; retention keeps complete newest records within both 256 KiB and 400 records. Reads are bounded to the tail. On POSIX, owner creation is private and regular-file-only; a foreign writer can append only to an existing valid file within capacity, without creating or compacting it. Windows owner creation uses an exclusive blank file and required NTFS ACL hardening with a one-second deadline before diagnostic bytes, checking descriptor/path identity before and after hardening and refreshing metadata after legitimate ACL changes. ACL failure or timeout leaves the new file blank and skips the diagnostic. Existing Windows files are skipped by owner and foreign callers without ACL mutation because no read-only NTFS privacy verifier exists; mode 0600 does not establish NTFS privacy. Consequently Windows records at most the first event in a newly created audit file: subsequent events are skipped in the same process and after restart. This fallback does not provide a complete Windows audit stream; a failed initial harden leaves a blank residual and later events remain skipped.
+
+The audit artifact is `opencodex-catalog-audit.jsonl` under the Codex home. New owner-created files with file-backed config attempt existing uninstall registration. A separate Codex home lies outside the config manifest's ownership root, so its audit remains an explicit cleanup residual; this does not broaden uninstall deletion authority.
+
+## Owner catalog healing
+
+`src/codex/catalog-self-heal.ts` is preloaded without timers before the owner's startup sync. `src/cli/claude-agent-startup-sync.ts` forwards the sync readiness verdict and starts observation synchronously on successful settlement, before deferred Claude roster or Desktop registry awaits. Successful no-op and OFF syncs establish observation; OFF remains gated until enabled, and failed sync never adopts a baseline. Observation stops before teardown. Its unreferenced 30-second timer observes the selected catalog's file identity and parses bounded regular-file content only after a change. Importing admission or catalog writers starts no timer.
+
+A lost routed namespace is repaired through ordinary management convergence only while its provider remains enabled and the owner is idle: no sibling, shutdown/recycle, connected client or client-owned journal; integration remains enabled, runtime ownership is current, and the Codex-home binding permits this writer. A synchronous precommit guard rechecks lifecycle, path and ownership inside K→C after gathering. Observation reuse, target changes, publication/release, precommit/postcommit and expected-target admission compare native realpaths with `samePath`; if either realpath is unavailable they use lexical `samePath`. Null selections remain unavailable. Directory symlink aliases and Windows casing refer to the same target; distinct paths and hardlinks do not. Missing/corrupt selected custom catalogs remain unavailable; healing does not select another target implicitly.
+
+A matching committed owner publication establishes the baseline even while lifecycle gates prevent healing; baseline acceptance performs no write. Publications during this healer's own convergence remain fenced until its terminal result. Deliberate restore/native release fences pending work and clears retry state; successful owner empty publication is accepted. Failed or refused convergence retains an explicit pending retry, including catalog-success/cache-failure when no missing namespace remains on disk. Retries wait five minutes and obey rolling limits of six attempts and three successful heals per hour. Successful convergence accepts its result, while configuration deletion or a target change retires the old obligation. These are local cooperative recovery rules, not proof of installed Desktop or live-provider behavior.
+
 ## Codex-home diagnostics
 
 Desktop executable membership uses the [discovered installation root](runtime.md#codex-desktop-process-membership), independently of the Codex state directory resolved here.

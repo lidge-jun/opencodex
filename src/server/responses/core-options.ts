@@ -1,3 +1,4 @@
+import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
 import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
 import type { RouteResult } from "../../router";
@@ -24,6 +25,8 @@ import type { PolicyRequestScope } from "./policy-request-scope";
 export interface ConsumedComboFailure {
   response: Response;
   classificationText: string;
+  /** Complete bounded-envelope evidence captured before display truncation; never serialized. */
+  codexModelRefusal?: CodexAccountModelRefusal;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
   /** Complete structured provider type, retained for conservative recovery classification. */

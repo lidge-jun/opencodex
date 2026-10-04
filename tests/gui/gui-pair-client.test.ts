@@ -1,4 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import type { OcxConfig } from "../../src/types";
+import { runGuiCommand } from "../../src/cli/gui";
+import { createGuiPairingGrant, consumeGuiPairingGrant, issueGuiSession, authorizeGuiSessionRequest } from "../../src/server/gui-session";
+import { createManagementSessionControl, managementPrincipal, managementSessionIssuance, requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";
+import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
+import type { ManagementContext } from "../../src/server/management/context";
+import { describe, expect, spyOn, test } from "bun:test";
 import { requestBoundGuiPairingGrant } from "../../src/cli/gui-pair-client";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -159,4 +165,167 @@ describe("GUI pairing client", () => {
     expect(rejected).toEqual({ kind: "unavailable", reason: "rejected" });
     expect(JSON.stringify(rejected)).not.toContain("secret-must-not-surface");
   });
+});
+
+const localConfig: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "test", providers: {} };
+const localOrigin = "http://127.0.0.1:10100";
+function pairingState(): Extract<ManagementAuthState, { available: true }> {
+  return { available: true, token: `ocx_admin_${"D".repeat(43)}`, source: "environment", sessions: new Map(), pairingGrants: new Map() };
+}
+function pairingRequest(origin = localOrigin, extra: Record<string, string> = {}): Request {
+  return new Request(`${origin}/opencodex-session`, { method: "POST", headers: { Host: new URL(origin).host, Origin: origin, ...extra } });
+}
+const localAttempt = { ingress: "public" as const, peerAddress: "127.0.0.1", tailscaleUser: null, browserOrigin: localOrigin };
+
+// PURE_PAIRING_REGRESSIONS_BEGIN
+
+describe("standalone one-use pairing boundaries", () => {
+  test("mint, redeem once, enforce CSRF and expire without sliding", () => {
+    const state = pairingState(), now = Date.now();
+    const created = createGuiPairingGrant(localOrigin, localConfig, state, now);
+    expect(created.serverOrigin).toBe(localOrigin);
+    expect(state.pairingGrants.has(created.grant)).toBe(false);
+    const session = consumeGuiPairingGrant(pairingRequest(), { grant: created.grant }, localConfig, state, now, localAttempt);
+    expect(session).toMatchObject({ issuance: "pairing", serverOrigin: localOrigin, browserOrigin: localOrigin });
+    if (!session || "allowed" in session) throw new Error("expected a real redeemed session");
+    expect(consumeGuiPairingGrant(pairingRequest(), { grant: created.grant }, localConfig, state, now, localAttempt)).toBeNull();
+    const request = (csrf?: string) => new Request(`${localOrigin}/api/link/join`, { method: "POST", headers: {
+      Host: "127.0.0.1:10100", Origin: localOrigin, "x-opencodex-gui-origin": localOrigin,
+      "x-opencodex-api-key": session.token, ...(csrf ? { "x-opencodex-csrf-token": csrf } : {}),
+    } });
+    expect(authorizeGuiSessionRequest(request(), localConfig, state, now).ok).toBe(false);
+    expect(authorizeGuiSessionRequest(request(session.csrfToken), localConfig, state, now + 1000).ok).toBe(true);
+    expect(state.sessions.get(session.token)?.expiresAt).toBe(now + 300000);
+    expect(authorizeGuiSessionRequest(request(session.csrfToken), localConfig, state, now + 300000).ok).toBe(false);
+  });
+  test("wrong address, alternate credentials, missing peer and nonlocal peer cannot burn a valid code", () => {
+    const state = pairingState(), now = Date.now();
+    const created = createGuiPairingGrant(localOrigin, localConfig, state, now);
+    for (const peerAddress of [null, "", "192.0.2.3"]) {
+      expect(consumeGuiPairingGrant(pairingRequest(), { grant: created.grant }, localConfig, state, now,
+        { ...localAttempt, peerAddress })).toBeNull();
+    }
+    expect(consumeGuiPairingGrant(pairingRequest(), { grant: created.grant }, localConfig, state, now)).toBeNull();
+    expect(consumeGuiPairingGrant(pairingRequest("http://127.0.0.1:10101"), { grant: created.grant }, localConfig, state, now, localAttempt)).toBeNull();
+    expect(consumeGuiPairingGrant(pairingRequest(localOrigin, { Origin: "https://foreign.example.test" }), { grant: created.grant }, localConfig, state, now, localAttempt)).toBeNull();
+    for (const name of ["authorization", "x-opencodex-api-key", "x-api-key"]) {
+      expect(consumeGuiPairingGrant(pairingRequest(localOrigin, { [name]: "old-credential" }), { grant: created.grant }, localConfig, state, now, localAttempt)).toBeNull();
+    }
+    expect(state.pairingGrants.size).toBe(1);
+    expect(consumeGuiPairingGrant(pairingRequest(), { grant: created.grant }, localConfig, state, now,
+      { ...localAttempt, peerAddress: "::ffff:127.0.0.1" })).toMatchObject({ issuance: "pairing" });
+  });
+  test("CORS and hub hints cannot widen the standalone mint", () => {
+    for (const origin of ["http://localhost:10100", "http://127.0.0.1:10101", "https://127.0.0.1:10100", "https://foreign.example.test", "http://127.0.0.1:10100/"]) {
+      const state = pairingState();
+      expect(() => createGuiPairingGrant(origin, { ...localConfig, corsAllowOrigins: [origin], hub: { managementPublicOrigin: origin } }, state)).toThrow();
+      expect(state.pairingGrants.size).toBe(0);
+    }
+    for (const config of [{ ...localConfig, hostname: "0.0.0.0" }, { ...localConfig, hostname: "localhost" },
+      { ...localConfig, runtimeRole: "client" as const }, { ...localConfig, port: 0 }]) {
+      expect(() => createGuiPairingGrant(localOrigin, config, pairingState())).toThrow();
+    }
+  });
+  test("default standalone and IPv6 use the same exact-origin contract", () => {
+    for (const [config, origin, peerAddress] of [
+      [{ ...localConfig, runtimeRole: undefined, hostname: undefined }, localOrigin, "127.0.0.1"],
+      [{ ...localConfig, hostname: "::1" }, "http://[::1]:10100", "::1"],
+    ] as const) {
+      const state = pairingState(), created = createGuiPairingGrant(origin, config, state);
+      expect(consumeGuiPairingGrant(pairingRequest(origin), { grant: created.grant }, config, state, Date.now(),
+        { ...localAttempt, browserOrigin: origin, peerAddress })).toMatchObject({ issuance: "pairing" });
+    }
+  });
+  test("role changes cannot convert grants and invalidate local paired sessions", () => {
+    const state = pairingState(), now = Date.now();
+    const hub = { ...localConfig, runtimeRole: "hub" as const, hub: { managementPublicOrigin: localOrigin } };
+    const localGrant = createGuiPairingGrant(localOrigin, localConfig, state, now);
+    expect(consumeGuiPairingGrant(pairingRequest(), { grant: localGrant.grant }, hub, state, now, localAttempt)).toBeNull();
+    const hubGrant = createGuiPairingGrant(localOrigin, hub, state, now);
+    expect(consumeGuiPairingGrant(pairingRequest(), { grant: hubGrant.grant }, localConfig, state, now, localAttempt)).toBeNull();
+    const session = consumeGuiPairingGrant(pairingRequest(), { grant: localGrant.grant }, localConfig, state, now, localAttempt);
+    if (!session || "allowed" in session) throw new Error("expected local pairing");
+    const request = new Request(`${localOrigin}/api/link/status`, { headers: { Host: "127.0.0.1:10100",
+      "x-opencodex-api-key": session.token, "x-opencodex-gui-origin": localOrigin } });
+    expect(authorizeGuiSessionRequest(request, hub, state, now).ok).toBe(false);
+    expect(state.sessions.has(session.token)).toBe(false);
+  });
+  test("remote hub pairing remains origin-bound with its existing lifetime", () => {
+    const state = pairingState(), now = Date.now(), origin = "https://hub.example.test";
+    const config: OcxConfig = { ...localConfig, runtimeRole: "hub", hostname: "0.0.0.0", hub: { managementPublicOrigin: origin } };
+    const created = createGuiPairingGrant(origin, config, state, now);
+    const session = consumeGuiPairingGrant(pairingRequest(origin), { grant: created.grant }, config, state, now);
+    expect(session).toMatchObject({ issuance: "pairing", expiresAt: now + 12 * 60 * 60000 });
+  });
+  test("ordinary local bootstrap remains unpaired", () => {
+    const state = pairingState();
+    const session = issueGuiSession(new Request(`${localOrigin}/opencodex-session`, {
+      headers: { Host: "127.0.0.1:10100", Origin: localOrigin },
+    }), localConfig, state);
+    expect(session).toMatchObject({ issuance: "loopback" });
+    expect(state.pairingGrants.size).toBe(0);
+  });
+});
+
+// PURE_PAIRING_REGRESSIONS_END
+
+test("operator CLI proof -> one-use grant -> real paired session -> guarded join, without an isPaired stub", async () => {
+  const state = pairingState(), output: string[] = [];
+  const log = spyOn(console, "log").mockImplementation(value => { output.push(String(value)); });
+  const local = { attestationSecret: secret, pid: target.pid!, port: target.port };
+  let joins = 0;
+  try {
+    const result = await runGuiCommand(["pair", "--origin", localOrigin, "--json"], {
+      loadConfig: () => localConfig, findLiveProxy: async () => target, openDefaultGui: async () => 0,
+      requestPairingGrant: (runtime, origin) => requestBoundGuiPairingGrant(runtime, origin, {
+        readRuntime: () => ({ ...target, attestationSecret: secret }),
+        fetchImpl: (async (input, init) => {
+          if (!init?.method) return proofResponse(init);
+          const req = new Request(input, init);
+          expect(requireManagementAuth(req, state, localConfig, local)).toBeNull();
+          expect(managementPrincipal(req, state, localConfig, local)).toBe("gui-pair-capability");
+          return Response.json(createGuiPairingGrant(req.headers.get(GUI_PAIR_BROWSER_ORIGIN_HEADER)!, localConfig, state), { status: 201 });
+        }) as typeof fetch,
+      }),
+    });
+    expect(result).toBe(0); expect(output).toHaveLength(1);
+    const grant = JSON.parse(output[0]!).grant;
+    const paired = consumeGuiPairingGrant(pairingRequest(), { grant }, localConfig, state, Date.now(), localAttempt);
+    if (!paired || "allowed" in paired) throw new Error("operator grant was not redeemed");
+    const ordinary = issueGuiSession(new Request(`${localOrigin}/`, { headers: { Host: "127.0.0.1:10100" } }), localConfig, state)!;
+    const sessionControl = createManagementSessionControl(state);
+    const routeState: LinkRouteState = { pendingHosts: new Map(), confirmedHosts: new Map([["home", {
+      alias: "home", fingerprint: `SHA256:${"a".repeat(32)}`, keyType: "ed25519", knownHostLine: "home ssh-ed25519 AAAA", probedAt: Date.now(), ocxVersion: "2.71.0",
+    }]]), supervisor: {} as LinkRouteState["supervisor"], listener: {} as LinkRouteState["listener"] };
+    for (const [session, expected] of [[ordinary, 403], [paired, 202]] as const) {
+      const req = new Request(`${localOrigin}/api/link/join`, { method: "POST", headers: {
+        Host: "127.0.0.1:10100", Origin: localOrigin, "content-type": "application/json", "x-opencodex-api-key": session.token,
+        "x-opencodex-gui-origin": localOrigin, "x-opencodex-csrf-token": session.csrfToken,
+      }, body: JSON.stringify({ alias: "home" }) });
+      expect(requireManagementAuth(req, state, localConfig)).toBeNull();
+      const ctx: ManagementContext = { req, url: new URL(req.url), config: localConfig, version: "test",
+        principal: managementPrincipal(req, state, localConfig) ?? undefined, sessionControl,
+        trustedLoopbackIngress: true, guiSessionIssuance: managementSessionIssuance(req, state),
+        deps: { liveListenPort: () => localConfig.port, linkKnownHostsPath: () => "/unused/known_hosts",
+          sshRunner: { run: async () => { throw new Error("unexpected SSH"); } } as never, ...{ joinHome: async () => { joins++; return { linkId: "lnk_0123456789abcdef", apiKeyId: "link-key-1" }; } } },
+        convergeCodexCatalog: async () => ({ status: "unchanged" } as never), syncClaudeAgentDefsBestEffort: async () => {},
+      };
+      expect((await handleLinkRoutes(ctx, routeState))?.status).toBe(expected);
+    }
+    expect(joins).toBe(1);
+  } finally { log.mockRestore(); }
+});
+
+test("standalone CLI rejects actual runtime address/port mismatch before requesting a grant", async () => {
+  let requests = 0;
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    for (const runtime of [{ ...target, port: 10101 }, { ...target, hostname: "0.0.0.0" }]) {
+      expect(await runGuiCommand(["pair", "--origin", localOrigin], { loadConfig: () => localConfig,
+        findLiveProxy: async () => runtime, openDefaultGui: async () => 0,
+        requestPairingGrant: async () => { requests++; return { kind: "unavailable", reason: "rejected" }; },
+      })).toBe(1);
+    }
+    expect(requests).toBe(0);
+  } finally { log.mockRestore(); }
 });

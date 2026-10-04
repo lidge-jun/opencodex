@@ -169,3 +169,32 @@ describe("snapshot side effects", () => {
     expect(calls).toBe(0);
   });
 });
+
+
+test("Anthropic pool preview uses each settled provider while providerless settings stay explicit-only", () => {
+  const config = baseConfig({
+    defaultProvider: "anthropic",
+    providers: {
+      anthropic: { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", models: ["claude-fixture"] },
+      compatible: { adapter: "anthropic", authMode: "key", baseUrl: "https://compatible.example", apiKey: "fixture", models: ["claude-other"] },
+    },
+    anthropicAccountPool: { enabled: true },
+  });
+  const request = { model: "anthropic/claude-fixture", inbound: "messages" as const, features: [] };
+  const snapshot = buildProtocolPlanSnapshot(config, request);
+  expect(snapshot.settings.rollout.managedMessagesNative).toBe(false);
+  expect(snapshot.candidates[0]).toMatchObject({ provider: "anthropic", nativeEligible: true });
+  const enabled = previewProtocolPlan(config, request);
+  expect(enabled.mode).toBe("native");
+  expect(previewProtocolPlan(config, { ...request, model: "compatible/claude-other" }).mode).toBe("legacy-bridge");
+  for (const rollout of [{ managedMessagesNative: false }, { managedMessagesNativeOAuth: false }]) {
+    config.protocols = { rollout };
+    const optedOut = previewProtocolPlan(config, request);
+    expect(optedOut.mode).toBe("legacy-bridge");
+    expect(optedOut.policyRevision).not.toBe(enabled.policyRevision);
+  }
+  config.protocols = { rollout: { managedMessagesNative: true, managedMessagesNativeOAuth: true } };
+  config.anthropicAccountPool!.nativeMessages = false;
+  expect(previewProtocolPlan(config, request).mode).toBe("legacy-bridge");
+  expect(previewProtocolPlan(config, { ...request, model: "compatible/claude-other" }).mode).toBe("native");
+});

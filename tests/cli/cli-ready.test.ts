@@ -638,7 +638,7 @@ describe("runReady --wait deadline correctness", () => {
 // that the SAME identifier `readinessGate` is (1) created in handleStart via
 // createReadinessGate(), (2) passed to startServer in the retry path, and
 // (3) passed to reconcileClientStartupBeforeReady before that helper gives a
-// deferred gate to syncCodexOnStartIfEnabled. The successful transition is held
+// deferred gate through catalog observation to syncCodexOnStartIfEnabled. The successful transition is held
 // until the Claude roster fence settles; this source guard complements the
 // executable delayed-roster test in tests/claude-integration/claude-agent-startup-sync.test.ts.
 describe("handleStart readinessGate wiring (source-level)", () => {
@@ -656,19 +656,24 @@ describe("handleStart readinessGate wiring (source-level)", () => {
     );
     expect(reconcileMatch, "startup reconciliation must receive the server readinessGate").not.toBeNull();
 
+    const observationMatch = cliSource.match(
+      /gate\s*=>\s*syncCodexBeforeCatalogObservation\s*\(\s*gate\s*,/,
+    );
+    expect(observationMatch, "catalog observation must preserve the deferred reconciliation gate").not.toBeNull();
     const syncMatch = cliSource.match(
-      /gate\s*=>\s*syncCodexOnStartIfEnabled\s*\(\s*port\s*,\s*config\s*,\s*undefined\s*,\s*gate\s*\)/,
+      /forwarding\s*=>\s*syncCodexOnStartIfEnabled\s*\(\s*port\s*,\s*config\s*,\s*undefined\s*,\s*forwarding\s*\)/,
     );
     expect(syncMatch, "Codex startup sync must receive the deferred reconciliation gate").not.toBeNull();
 
-    // Source order must be: create → startServer → reconciliation → Codex sync.
+    // Source order must be: create → startServer → reconciliation → observation → Codex sync.
     const createIdx = createMatch!.index!;
     const startIdx = startMatch!.index!;
     const reconcileIdx = reconcileMatch!.index!;
     const syncIdx = syncMatch!.index!;
     expect(createIdx).toBeLessThan(startIdx);
     expect(startIdx).toBeLessThan(reconcileIdx);
-    expect(reconcileIdx).toBeLessThan(syncIdx);
+    expect(reconcileIdx).toBeLessThan(observationMatch!.index!);
+    expect(observationMatch!.index!).toBeLessThan(syncIdx);
   });
 
   test("the readinessGate identifier is the SAME symbol at all three call sites", () => {

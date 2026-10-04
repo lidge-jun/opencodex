@@ -19,6 +19,7 @@
  *   distinct one. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor extracts JWT `sub` —
  *   both append distinct identified accounts under multiauth.
  */
+import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -34,6 +35,7 @@ import {
 } from "../lib/state-store-sweeper";
 import { validateCopilotApiBaseUrl } from "./github-copilot";
 import { validateDevinApiBaseUrl } from "./devin/api-base";
+import { REFRESH_SKEW_MS } from "./refresh-policy";
 import { parseAnthropicAccountThreshold } from "./anthropic-account-threshold";
 import type { OAuthAccountSelection, OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
@@ -531,6 +533,8 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   };
   if (typeof candidate.email === "string" && candidate.email.length > 0) normalized.email = candidate.email;
   if (typeof candidate.accountId === "string" && candidate.accountId.length > 0) normalized.accountId = candidate.accountId;
+  const identity = normalizeAnthropicIdentity(candidate.anthropicIdentity, candidate.access);
+  if (identity) normalized.anthropicIdentity = identity;
   if (isCredentialSource(candidate.source)) normalized.source = candidate.source;
   if (typeof candidate.projectId === "string" && candidate.projectId.length > 0) normalized.projectId = candidate.projectId;
   if (typeof candidate.apiBaseUrl === "string" && candidate.apiBaseUrl.length > 0) {
@@ -868,6 +872,7 @@ export async function saveCredentialWithReceipt(
   const receipt = await mutateStore(store => {
     const set = store[provider];
     const previousActiveAccountId = set?.activeAccountId;
+    const previousSelectionRevision = set?.selectionRevision;
     const previousAccounts = new Map(
       set?.accounts.map(account => [account.id, structuredClone(account)]) ?? [],
     );
@@ -879,6 +884,21 @@ export async function saveCredentialWithReceipt(
       const id = newAccountId(safe);
       store[provider] = { activeAccountId: id, accounts: [{ id, credential: safe, addedAt: Date.now() }] };
       accountId = id;
+    } else if (provider === "anthropic" && safe.source === "local-cli") {
+      const existing = set.accounts.find(a => matchesAnthropicImport(a.credential, safe));
+      if (existing) {
+        existing.credential = { ...safe, ...mergeAnthropicIdentity(safe, existing.credential),
+          accountId: safe.accountId ?? existing.credential.accountId, email: safe.email ?? existing.credential.email };
+        set.selectionRevision = previousSelectionRevision;
+        delete existing.needsReauth;
+        delete existing.needsReauthReason;
+        accountId = existing.id;
+      } else {
+        const id = distinctAccountId(safe, set.accounts);
+        set.accounts.push({ id, credential: safe, addedAt: Date.now() });
+        set.activeAccountId = id;
+        accountId = id;
+      }
     } else if (identity) {
       const existing = set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
       if (existing) {
@@ -1308,7 +1328,9 @@ export async function setAccountPaused(
     if (paused && set.activeAccountId === accountId) {
       const start = set.accounts.findIndex(candidate => candidate.id === accountId);
       const ring = [...set.accounts.slice(start + 1), ...set.accounts.slice(0, start)];
-      const fallback = ring.find(candidate => candidate.paused !== true && candidate.needsReauth !== true);
+      const fallback = ring.find(candidate => candidate.paused !== true && candidate.needsReauth !== true
+        && !(provider === "anthropic" && candidate.credential.source === "local-cli"
+          && candidate.credential.expires <= Date.now() + REFRESH_SKEW_MS));
       if (fallback) {
         set.activeAccountId = fallback.id;
         set.selectionRevision = randomUUID();

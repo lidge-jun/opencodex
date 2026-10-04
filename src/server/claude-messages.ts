@@ -80,7 +80,7 @@ import { upstreamWireForAdapter } from "../protocols/contract";
 import { createProtocolEnvelope, type ProtocolEnvelope } from "../protocols/envelope";
 import { featuresFromMessagesBody, type ProtocolFeature } from "../protocols/features";
 import { credentialDomainFor, messagesBodyHasOpaqueState } from "../protocols/opaque-state";
-import { hasAnthropicFailoverQuorum } from "../oauth/anthropic-routing";
+import { hasAnthropicFailoverQuorum, anthropicSessionKeyFromParts } from "../oauth/anthropic-routing";
 import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
 import { requestPathForLane } from "../protocols/path";
 import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols/settings";
@@ -1208,6 +1208,13 @@ async function handleClaudeMessagesWithBudget(
       // Compatibility identity is an opaque request-local handle, separate from credentials.
       clientIdentity: captureAnthropicClientIdentity(req.headers),
       callerAnthropicBeta: req.headers.get("anthropic-beta"),
+      sessionKey: anthropicSessionKeyFromParts({
+        sessionIdHeader: req.headers.get("session_id")?.trim() || req.headers.get("x-claude-code-session-id"),
+        threadIdHeader: req.headers.get("thread_id"),
+        clientThreadId: conversationIdFromClaudeMetadata(isRec(nativeBody.metadata) ? nativeBody.metadata : undefined),
+        promptCacheKey: typeof internalBody.prompt_cache_key === "string" ? internalBody.prompt_cache_key : null,
+        promptCacheKeyIsSharedCohort: cacheKeySource === "system",
+      }),
     });
   }
 
@@ -1315,10 +1322,12 @@ async function handleClaudeMessagesWithBudget(
     const replayRefusal = isReplayRefusalResponse(response);
     // Re-shape the OpenAI-style error envelope into the Anthropic one, preserving status.
     let message = `upstream error (${response.status})`;
+    let contextError = false;
     try {
       const text = await response.text();
       try {
-        const parsed = JSON.parse(text) as { error?: { message?: string; type?: string } | string; message?: string };
+        const parsed = JSON.parse(text) as { error?: { message?: string; type?: string; code?: unknown } | string; message?: string };
+        contextError = typeof parsed?.error === "object" && parsed.error?.code === "context_length_exceeded";
         const nested = typeof parsed?.error === "object" && parsed.error ? parsed.error.message : undefined;
         const flat = typeof parsed?.error === "string" ? parsed.error : parsed?.message;
         message = nested || flat || (text ? `upstream error (${response.status}): ${text.slice(0, 400)}` : message);
@@ -1327,7 +1336,7 @@ async function handleClaudeMessagesWithBudget(
       }
     } catch { /* keep fallback message */ }
     const upstreamRetryAfter = response.headers.get("retry-after");
-    const retryAfter = replayRefusal
+    const retryAfter = replayRefusal || contextError
       ? undefined
       : resolveClientRetryAfter({
           status: response.status,
@@ -1347,10 +1356,10 @@ async function handleClaudeMessagesWithBudget(
     const nativeMainFence = response.status === 503
       && upstreamRetryAfter?.trim() === "1"
       && message === CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE;
-    const transient = !replayRefusal && !nativeMainFence && isTransientUpstreamStatus(response.status);
+    const transient = !replayRefusal && !nativeMainFence && !contextError && isTransientUpstreamStatus(response.status);
     const outStatus = replayRefusal
       ? REPLAY_REFUSED_STATUS
-      : nativeMainFence ? 503 : transient ? 529 : response.status;
+      : nativeMainFence ? 503 : contextError ? 400 : transient ? 529 : response.status;
     const outHeaders = new Headers({ "Content-Type": "application/json" });
     if (retryAfter) outHeaders.set("Retry-After", retryAfter);
     else if (transient) outHeaders.set("Retry-After", "2");
@@ -1359,7 +1368,7 @@ async function handleClaudeMessagesWithBudget(
       outStatus,
       message,
       undefined,
-      replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
+      replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : contextError ? "context_length_exceeded" : undefined,
     )), {
       status: outStatus,
       headers: outHeaders,
@@ -1410,7 +1419,7 @@ async function handleClaudeMessagesWithBudget(
       );
     }
     return new Response(JSON.stringify(message), {
-      status: isError ? 502 : 200,
+      status: isError ? (translatedError?.code === "context_length_exceeded" ? 400 : 502) : 200,
       headers: { "Content-Type": "application/json" },
     });
   }
@@ -1432,6 +1441,9 @@ async function handleClaudeMessagesWithBudget(
         "request_too_large",
         "translation_buffer_limit",
       );
+    }
+    if (error?.code === "context_length_exceeded") {
+      return anthropicErrorResponse(400, error.message ?? "upstream context limit exceeded", "invalid_request_error", error.code);
     }
     return anthropicErrorResponse(502, error?.message ?? "upstream request failed", "api_error");
   }
@@ -1680,9 +1692,9 @@ export async function handleClaudeCountTokens(
     // A thread delta would undercount; refuse it exactly as the translated Messages path does.
     if (carriesMessageThread(raw)) return messageThreadUnsupportedResponse();
     // PF-08: an eligible managed-key route counts the body the native lane would send.
-    const nativeCountBody = resolveProtocolSettings(config).rollout.managedMessagesNative
-      ? (await import("./messages-native")).nativeMessagesCountBody(config, cc, raw, { fastRow: countFastRow !== null })
-      : undefined;
+    const nativeCountBody = (await import("./messages-native")).nativeMessagesCountBody(
+      config, cc, raw, { fastRow: countFastRow !== null }, captureAnthropicClientIdentity(req.headers),
+    );
     // A count answers for the prompt a real turn from this model would forward, so it projects
     // the same unserialized content that turn's `message_start` floor does. Counting the raw
     // caller body instead reported replayed thinking this route never sends (#4857 family).

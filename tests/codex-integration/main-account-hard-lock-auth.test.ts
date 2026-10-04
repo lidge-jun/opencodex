@@ -104,6 +104,7 @@ function forbidPhysicalReads(): void {
   spyOn(mainAccount, "getMainAccountToken").mockImplementation(forbidden);
   spyOn(mainAccount, "getValidMainAccountToken").mockImplementation(forbidden);
   spyOn(mainAccount, "isMainAccountCredentialUsable").mockImplementation(forbidden);
+  spyOn(mainAccount, "getMainAccountCredentialStatus").mockImplementation(forbidden);
 }
 
 function addAlternative(cfg: OcxConfig): void {

@@ -462,8 +462,8 @@ describe("resolveMatchedPrice", () => {
     }
   });
 
-  test("16. shipped overlay membership: 152 keys, including canonical Fable 5.1, Opus 5, Opus 5.5, Sonnet 5.5, GPT-6.1 Sol, OpenCode Go and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(152);
+  test("16. shipped overlay membership: 160 keys, including canonical Fable 5.1, Opus 5, Opus 5.5, Sonnet 5.5, GPT-6.1 Sol, OpenCode Go and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(160);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -522,6 +522,14 @@ describe("resolveMatchedPrice", () => {
       "google-antigravity/gemini-3.5-flash-high",
       "google-antigravity/gemini-3-flash-agent",
       "google-antigravity/gemini-3.1-pro-preview",
+      "google-antigravity/claude-sonnet-5-5",
+      "google-antigravity/claude-sonnet-5-5-low",
+      "google-antigravity/claude-sonnet-5-5-medium",
+      "google-antigravity/claude-sonnet-5-5-high",
+      "google-antigravity/claude-opus-5-5",
+      "google-antigravity/claude-opus-5-5-low",
+      "google-antigravity/claude-opus-5-5-medium",
+      "google-antigravity/claude-opus-5-5-high",
       "google-antigravity/claude-sonnet-4-6",
       "google-antigravity/claude-opus-4-6-thinking",
       "google-antigravity/claude-opus-4-6",

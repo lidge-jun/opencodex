@@ -11,7 +11,7 @@ A machine link connects an OpenCodex **Home** computer to a **Child** computer o
 - For a Child-initiated link, the Child can log in to Home with an OpenSSH key (password login is not supported).
 - OpenCodex 2.66.0 or later is installed on the Child computer, and on Home for a Child-initiated link.
 - Both computers run macOS or Linux.
-- The dashboard that starts the link is opened on that computer itself (browser or desktop app, standalone install) or through a paired Hub session.
+- The dashboard that adds a Child from Home is opened on Home itself or through a paired Hub session. Turning the current computer into a Child requires an operator-paired dashboard session; a credentialless local dashboard session cannot commit that routing change.
 
 Password SSH and Windows are outside the current flow. A link can be started from either side: from the Home, as described next, or from the Child, as described in [Connect this computer as a Child](#connect-this-computer-as-a-child).
 
@@ -49,7 +49,9 @@ Connecting restarts OpenCodex on this computer. Codex turns that are already run
 
 The Child waits for its configured port while the old process releases it. If a CLI-managed restart still fails, run `ocx start` on the Child and check `~/.opencodex/restart-handoff.log`. In the desktop app, the app starts and supervises the replacement automatically.
 
-The **Child** role is available only while OpenCodex runs on its configured port, because the Child restarts on exactly that port. If the dashboard says OpenCodex is not running on its configured port, restart it there first.
+If **Child** says to pair this machine first, open this computer's configured literal-loopback HTTP dashboard, for example `http://127.0.0.1:<configured-port>`. The local pairing form appears only when pairing is missing and the dashboard and API use the same loopback origin. Copy the form's `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` command, run it in a terminal on this computer, and paste the one-use code into the form. Use the exact origin shown in the form; a provider API key or admin token is not a pairing code. Missing pairing is separate from a configured-port mismatch.
+
+The **Child** role also requires a standalone OpenCodex runtime running on its configured port, because the Child restarts on exactly that port. If the dashboard says OpenCodex is not running on its configured port, restart it there first.
 
 ## Link status
 

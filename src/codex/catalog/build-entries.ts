@@ -372,7 +372,7 @@ export function orderForModelPicker(
  * user tooling do not. `owned_by` describes upstream ownership, and `comp_hash`
  * describes history compatibility; neither is an authorship signal.
  */
-function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
+export function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
   if (isNativeAliasCatalogEntry(entry)) return true;
   const desc = typeof entry.description === "string" ? entry.description : "";
   const slug = typeof entry.slug === "string" ? entry.slug : "";

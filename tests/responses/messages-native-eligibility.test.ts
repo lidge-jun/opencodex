@@ -126,3 +126,62 @@ describe("planner mirrors the native Messages rule", () => {
     expect(combo.candidates[0]).toMatchObject({ provider: "anth", nativeEligible: false, declineReasons: ["combo-or-policy-route"] });
   });
 });
+
+test("Anthropic pool defaults do not change native eligibility for another provider", () => {
+  const config = { providers: {}, anthropicAccountPool: { enabled: true } } as unknown as OcxConfig;
+  const other = { providerName: "compatible", modelId: "claude-fixture", provider: { adapter: "anthropic", authMode: "key", baseUrl: "https://compatible.example" } } as RouteResult;
+  expect(nativeMessagesDeclineReason(other, { messages: [] }, config)).toBe("rollout-disabled");
+});
+
+test("Anthropic legacy preference preserves another provider's explicit native preview and count", async () => {
+  const conf = config(ON);
+  conf.anthropicAccountPool = { enabled: true, nativeMessages: false };
+  const plan = previewProtocolPlan(conf, { model: "anth/claude-x", inbound: "messages", features: [] });
+  expect(plan.mode).toBe("native");
+  const { nativeMessagesCountBody } = await import("../../src/server/messages-native");
+  const source = { model: "anth/claude-x", messages: [{ role: "user", content: "fixture" }] };
+  expect(nativeMessagesCountBody(conf, undefined, source, {})).toMatchObject({ model: "claude-x", messages: source.messages });
+});
+
+
+test("pool default, explicit opt-out, preview and actual count ingress agree without credentials or network", async () => {
+  const { nativeMessagesCountBody } = await import("../../src/server/messages-native");
+  const { handleClaudeCountTokens, estimateClaudeRequestTokens } = await import("../../src/server/claude-messages");
+  const conf = config({
+    defaultProvider: "anthropic",
+    providers: { anthropic: { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", models: ["claude-fixture"] } },
+    anthropicAccountPool: { enabled: true },
+    claudeCode: { nativePassthrough: false },
+  });
+  const body = { model: "anthropic/claude-fixture", messages: [{ role: "user", content: "Count this fixture" }] };
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => { calls++; throw new Error("count must not fetch"); }) as typeof globalThis.fetch;
+  try {
+    const source = structuredClone(body);
+    const native = nativeMessagesCountBody(conf, conf.claudeCode, body, {});
+    expect(native).toMatchObject({ model: "claude-fixture", messages: body.messages });
+    // First-party native OAuth adds the Claude identity even without any stored credential.
+    expect(native!.system).toEqual([{ type: "text", text: "You are a Claude agent, built on Anthropic's Claude Agent SDK." }]);
+    const count = async () => {
+      const response = await handleClaudeCountTokens(new Request("http://localhost/v1/messages/count_tokens", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), conf);
+      expect(response.status).toBe(200);
+      return (await response.json()).input_tokens as number;
+    };
+    const nativeTokens = await count();
+    expect(nativeTokens).toBeGreaterThan(estimateClaudeRequestTokens(body, body.model));
+    expect(previewProtocolPlan(conf, { model: body.model, inbound: "messages", features: [] }).mode).toBe("native");
+    for (const rollout of [{ managedMessagesNative: false }, { managedMessagesNativeOAuth: false }]) {
+      conf.protocols = { rollout };
+      expect(nativeMessagesCountBody(conf, conf.claudeCode, body, {})).toBeUndefined();
+      expect(await count()).toBe(estimateClaudeRequestTokens(body, body.model));
+      expect(previewProtocolPlan(conf, { model: body.model, inbound: "messages", features: [] }).mode).toBe("legacy-bridge");
+    }
+    conf.protocols = { rollout: { managedMessagesNative: true, managedMessagesNativeOAuth: true } };
+    conf.anthropicAccountPool!.nativeMessages = false;
+    expect(nativeMessagesCountBody(conf, conf.claudeCode, body, {})).toBeUndefined();
+    expect(await count()).toBe(estimateClaudeRequestTokens(body, body.model));
+    expect(body).toEqual(source);
+  } finally { globalThis.fetch = originalFetch; }
+  expect(calls).toBe(0);
+});

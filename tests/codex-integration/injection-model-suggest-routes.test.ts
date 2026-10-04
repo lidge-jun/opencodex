@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listCatalogNativeSlugs, type CatalogModel } from "../../src/codex/catalog";
@@ -10,13 +10,12 @@ import type { RoleSizingCall } from "../../src/server/management/codex-role-auto
 import type { OcxConfig } from "../../src/types";
 import { ManagementRequest as Request } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { peekCodexRuntimeProcessCache, resetCodexRuntimeResolveCacheForTests, setCodexRuntimeResolveCacheForTests } from "../../src/codex/runtime";
+import { bundledCatalogCacheState, resetBundledCatalogCacheForTests, setBundledCatalogCacheForTests } from "../../src/codex/catalog/bundled";
 
-const saved = {
-  CODEX_HOME: process.env.CODEX_HOME,
-  OPENCODEX_HOME: process.env.OPENCODEX_HOME,
-  HOME: process.env.HOME,
-  USERPROFILE: process.env.USERPROFILE,
-};
+const ENV_KEYS = ["CODEX_HOME", "OPENCODEX_HOME", "HOME", "USERPROFILE"] as const;
+let saved: Record<string, string | undefined> = {};
+
 let root = "";
 let calls: RoleSizingCall[] = [];
 let catalogLoads = 0;
@@ -34,6 +33,7 @@ let config: OcxConfig;
 const RUNTIME_DISCOVERY_CACHE = "codex-runtime.json";
 
 beforeEach(() => {
+  saved = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]));
   root = mkdtempSync(join(tmpdir(), "ocx-injection-suggest-"));
   mkdirSync(join(root, "codex"), { recursive: true });
   mkdirSync(join(root, "ocx"), { recursive: true });
@@ -42,6 +42,11 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = join(root, "ocx");
   process.env.HOME = join(root, "home");
   process.env.USERPROFILE = join(root, "home");
+  // Keep real catalog/handler behavior, but never discover an installed Codex in this fixture.
+  const runtime = { command: join(root, "fixture-codex"), version: "0.145.0", source: "fallback" as const };
+  resetFixtureDiscovery();
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] }, { discoverAlternatives: false });
+  setBundledCatalogCacheForTests(runtime, { models: [{ slug: "gpt-5.5", base_instructions: "fixture native model" }] });
   calls = [];
   catalogLoads = 0;
   answer = { text: sized("fast", "glance") };
@@ -56,12 +61,23 @@ beforeEach(() => {
   } as unknown as OcxConfig;
 });
 
+function resetFixtureDiscovery(): void {
+  resetCodexRuntimeResolveCacheForTests();
+  resetBundledCatalogCacheForTests();
+}
+
 afterEach(() => {
-  for (const [name, value] of Object.entries(saved)) {
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
+  try {
+    resetFixtureDiscovery();
+    expect(peekCodexRuntimeProcessCache().kind).toBe("unavailable");
+    expect(bundledCatalogCacheState().valueIdentity).toBeNull();
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    removeTreeWithRetry(root);
   }
-  removeTreeWithRetry(root);
 });
 
 const deps = {
@@ -92,19 +108,36 @@ async function suggest(body: unknown) {
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 
+type SnapshotEntry = { kind: "directory" } | { kind: "file"; bytes: string };
+
 function snapshot() {
-  const files: Record<string, string> = {};
-  for (const dir of ["codex", "ocx"]) {
-    for (const name of readdirSync(join(root, dir))) {
-      if (name === RUNTIME_DISCOVERY_CACHE) continue;
-      files[`${dir}/${name}`] = readFileSync(join(root, dir, name), "utf8");
+  const files: Record<string, SnapshotEntry> = {};
+  const visit = (directory: string, prefix: string): void => {
+    for (const name of readdirSync(directory).sort()) {
+      const path = join(directory, name);
+      const relative = `${prefix}/${name}`;
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) throw new Error(`fixture snapshot refuses symbolic link: ${relative}`);
+      if (stat.isFile()) {
+        if (relative === `ocx/${RUNTIME_DISCOVERY_CACHE}`) continue;
+        files[relative] = { kind: "file", bytes: readFileSync(path).toString("base64") };
+      } else if (stat.isDirectory()) {
+        files[relative] = { kind: "directory" };
+        visit(path, relative);
+      } else {
+        throw new Error(`fixture snapshot refuses nonregular entry: ${relative}`);
+      }
     }
-  }
+  };
+  for (const dir of ["codex", "ocx"]) visit(join(root, dir), dir);
   return { files, config: JSON.stringify(config) };
 }
 
 describe("POST /api/injection-model/suggest", () => {
   test("sizes the described work in one call and proposes an offered model and a savable effort, writing nothing", async () => {
+    mkdirSync(join(root, "codex", "tmp", "nested"), { recursive: true });
+    mkdirSync(join(root, "codex", "empty"));
+    writeFileSync(join(root, "codex", "tmp", "nested", "bytes"), Buffer.from([255, 0]));
     const before = snapshot();
     const result = await suggest({ work: "Rename symbols across one file and run its tests." });
     expect(result.status).toBe(200);
@@ -171,5 +204,87 @@ describe("buildRoleProposals alwaysProposeEffort", () => {
     const [always] = buildRoleProposals(roles, sizing, classified, { alwaysProposeEffort: true });
     expect(plain).toMatchObject({ proposedModel: "m", proposedEffort: null });
     expect(always).toEqual({ ...plain!, proposedEffort: "high" } as typeof always);
+  });
+});
+
+
+describe("injection suggestion fixture isolation", () => {
+  test("snapshot observes nested bytes, empty directories and file/directory replacement", () => {
+    const nested = join(root, "codex", "tmp", "nested");
+    mkdirSync(nested, { recursive: true });
+    const bytes = join(nested, "bytes");
+    writeFileSync(bytes, Buffer.from([255, 0]));
+    const before = snapshot();
+    expect(before.files["codex/tmp/nested/bytes"]).toEqual({ kind: "file", bytes: "/wA=" });
+    writeFileSync(bytes, Buffer.from([254, 0]));
+    expect(snapshot()).not.toEqual(before);
+    writeFileSync(bytes, Buffer.from([255, 0]));
+    expect(snapshot()).toEqual(before);
+    const empty = join(nested, "empty");
+    mkdirSync(empty);
+    expect(snapshot()).not.toEqual(before);
+    expect(snapshot().files["codex/tmp/nested/empty"]).toEqual({ kind: "directory" });
+    removeTreeWithRetry(empty);
+    expect(snapshot()).toEqual(before);
+    removeTreeWithRetry(bytes);
+    mkdirSync(bytes);
+    expect(snapshot()).not.toEqual(before);
+  });
+
+  test("only the exact regular runtime cache file is exempt", () => {
+    const cache = join(root, "ocx", RUNTIME_DISCOVERY_CACHE);
+    const before = snapshot();
+    writeFileSync(cache, "cache bytes");
+    expect(snapshot()).toEqual(before);
+    const nested = join(root, "codex", "nested");
+    mkdirSync(nested);
+    const nestedCache = join(nested, RUNTIME_DISCOVERY_CACHE);
+    writeFileSync(nestedCache, "before");
+    const nestedBefore = snapshot();
+    writeFileSync(nestedCache, "after");
+    expect(snapshot()).not.toEqual(nestedBefore);
+    const topBefore = snapshot();
+    writeFileSync(join(root, "codex", RUNTIME_DISCOVERY_CACHE), "not the runtime cache");
+    expect(snapshot()).not.toEqual(topBefore);
+    const directoryBefore = snapshot();
+    removeTreeWithRetry(cache);
+    mkdirSync(cache);
+    expect(snapshot()).not.toEqual(directoryBefore);
+  });
+
+  test("snapshot refuses a link rather than traversing its target", () => {
+    const target = join(root, "outside-observed-homes");
+    mkdirSync(target);
+    writeFileSync(join(target, "sentinel"), "must not be read by the snapshot");
+    symlinkSync(target, join(root, "codex", "link"), process.platform === "win32" ? "junction" : "dir");
+    expect(() => snapshot()).toThrow(/refuses symbolic link/);
+  });
+
+  test("discovery cleanup removes both seeded process memo owners", () => {
+    expect(peekCodexRuntimeProcessCache().kind).toBe("available");
+    expect(bundledCatalogCacheState().valueIdentity).not.toBeNull();
+    resetFixtureDiscovery();
+    expect(peekCodexRuntimeProcessCache().kind).toBe("unavailable");
+    expect(bundledCatalogCacheState().valueIdentity).toBeNull();
+  });
+});
+
+describe("incoming environment changed after module evaluation", () => {
+  let previousProfile: string | undefined;
+  const incomingProfile = join(tmpdir(), "injection-incoming-profile");
+  beforeAll(() => {
+    previousProfile = process.env.USERPROFILE;
+    process.env.USERPROFILE = incomingProfile;
+  });
+  afterAll(() => {
+    try {
+      expect(process.env.USERPROFILE).toBe(incomingProfile);
+    } finally {
+      if (previousProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousProfile;
+    }
+  });
+  test("case cleanup restores its incoming environment, not the module snapshot", () => {
+    expect(process.env.USERPROFILE).toBe(join(root, "home"));
   });
 });

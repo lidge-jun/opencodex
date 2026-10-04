@@ -43,6 +43,8 @@ export type LinkErrorCode = typeof LINK_ERROR_CODES[number];
 export type LinkWireDirection = "hub-initiated" | "client-initiated";
 export type LinkWireState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
 export type LinkListenerState = "off" | "listening" | "failed";
+export const LINK_JOIN_DENIALS = ["pairing_required", "standalone_required", "join_port_mismatch"] as const;
+export type LinkJoinDenied = typeof LINK_JOIN_DENIALS[number];
 
 export interface LinkCandidateView { alias: string; source: string }
 export interface LinkProbeView { alias: string; fingerprint: string; keyType: string }
@@ -54,11 +56,13 @@ export interface RemoteLinkStatusWire {
   links: LinkRowWire[];
   child: null | { alias: string; state: LinkWireState; since: string; reason: string | null };
   /**
-   * Whether this dashboard session may join a Home as a Child: a dashboard session on a
+   * Whether this dashboard session may join a Home as a Child: a paired dashboard session on a
    * standalone runtime that listens on its configured port. The server omits the field for
    * non-dashboard callers, read as false.
    */
   joinAvailable: boolean;
+  /** GUI-only gate explanation. Older servers may omit it; unknown reasons normalize to null. */
+  joinDenied?: LinkJoinDenied | null;
 }
 
 const LINK_STATES: readonly LinkWireState[] = ["connecting", "connected", "reconnecting", "failed", "idle"];
@@ -120,7 +124,8 @@ export function parseRemoteLinkStatus(value: unknown): RemoteLinkStatusWire {
     if (!isRecord(value.child) || !nonEmpty(value.child.alias) || !isLinkState(value.child.state) || !nonEmpty(value.child.since) || (value.child.reason !== null && typeof value.child.reason !== "string")) throw new Error("invalid child");
     child = { alias: value.child.alias, state: value.child.state, since: value.child.since, reason: value.child.reason as string | null };
   }
-  return { role: value.role as RemoteLinkStatusWire["role"], listener: { state: listener.state as LinkListenerState, port: listener.port as number | null }, links, child, joinAvailable: value.joinAvailable === true };
+  const joinDenied = LINK_JOIN_DENIALS.includes(value.joinDenied as LinkJoinDenied) ? value.joinDenied as LinkJoinDenied : null;
+  return { role: value.role as RemoteLinkStatusWire["role"], listener: { state: listener.state as LinkListenerState, port: listener.port as number | null }, links, child, joinAvailable: value.joinAvailable === true, joinDenied };
 }
 
 /** Read link-route JSON and preserve the server's machine-readable error code. */
