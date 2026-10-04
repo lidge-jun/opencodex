@@ -190,6 +190,10 @@ block buffer and tracks appended output bytes incrementally. A caller cancellati
 terminal returns 499 / `client_cancelled`; an already accepted terminal keeps its result. Reader,
 timer, turn, and translator ownership are released through the existing lifecycle.
 
+## HTTP caller conversation identity
+
+`src/server/caller-session-identity.ts` promotes validated `x-session-id` on HTTP Responses and Messages before turn admission in `src/server/index/serve-options.ts`. Explicit `session_id`, `session-id`, or `thread-id` presence wins, including empty values; managed Grok promotion runs first on Responses. The trimmed marker must start with an ASCII letter/digit, contain only letters, digits, dots, underscores, colons or hyphens, and stay within 128 characters. Loopback admission keeps it; authenticated admission scopes it with the trusted credential principal into an opaque SHA-256 identifier and skips promotion without that principal. Bodies and abort signals are preserved, and the original Request owns Bun timeout lookup. This provides continuity, not authorization or guaranteed cache hits. Existing explicit/Grok identities, Chat Completions, WebSocket frames, compact and count_tokens retain their behavior.
+
 ## Chat conversation identity forwarding
 
 `src/server/chat-completions.ts` preserves caller `prompt_cache_key` on the Chat-to-Responses
