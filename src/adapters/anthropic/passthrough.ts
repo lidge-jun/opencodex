@@ -124,7 +124,7 @@ function mapOAuthContentBlocks(blocks: unknown[], mapBlock: (block: Rec) => Rec)
     if (!isRec(block)) return block;
     if (block.type === "tool_result" && Array.isArray(block.content)) {
       const content = mapOAuthContentBlocks(block.content, mapBlock);
-      if (content !== block.content) block = { ...block, content };
+      if (content !== block.content) return mapBlock({ ...block, content });
     }
     return mapBlock(block);
   });
