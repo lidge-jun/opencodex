@@ -689,7 +689,7 @@ du débogage Claude efface immédiatement l'anneau.
 
 ## Interface graphique (page Claude)
 
-La barre latérale du tableau de bord comporte une page **Claude** dédiée (sous API) et une bascule **Claude ON**
+La barre latérale du tableau de bord comporte une page **Claude** dédiée (sous Connexion) et une bascule **Claude ON**
 (étiquette volontairement identique dans toutes les langues). La page affiche :
 
 - Interrupteur général des requêtes entrantes

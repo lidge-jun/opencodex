@@ -1,4 +1,13 @@
 {
+  "codex-shim-overlay.test.ts": "codex-integration",
+  "codex-shim-migration.test.ts": "codex-integration",
+  "codex-shim-overlay-transaction.test.ts": "codex-integration",
+  "codex-shim-overlay-readiness.test.ts": "codex-integration",
+  "codex-shim-overlay-candidates.test.ts": "codex-integration",
+  "droid-normalized-reasoning-defaults.test.ts": "clients",
+  "responses-combo-exhausted-error.test.ts": "responses",
+  "cli-config-default-show.test.ts": "cli",
+  "ollama-native-tool-continuations.test.ts": "providers/ollama",
   "usage-antigravity-55.test.ts": "usage", "provider-antigravity-wire-snapshot.test.ts": "providers",
   "antigravity-discovered-families.test.ts": "adapters/google",
   "provider-antigravity-effort-families.test.ts": "providers",

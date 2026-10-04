@@ -1,6 +1,9 @@
+import { isolateCodexShimEnvironment } from "../helpers/codex-shim-install-fixture";
 import { describe, expect, test } from "bun:test";
 import { collectCodexEnvKeyReadiness } from "../../src/cli/doctor";
 import type { CodexShimDiagnostic } from "../../src/codex/shim";
+
+isolateCodexShimEnvironment();
 
 const config = `
 model_provider = "opencodex"
@@ -35,6 +38,17 @@ describe("doctor Codex env_key launch readiness", () => {
   test("distinguishes an installed but unhealthy shim", () => {
     const row = collectCodexEnvKeyReadiness(config, {}, { ...missingShim, installed: true }, true);
     expect(row?.shimState).toBe("unhealthy");
+  });
+
+  test("an inactive runnable overlay keeps the token warning and advises shell activation", () => {
+    const row = collectCodexEnvKeyReadiness(config, {}, {
+      installed: true, healthy: false, runnable: true, active: false, summary: "inactive",
+    }, true);
+    expect(row?.shimState).toBe("inactive");
+    expect(row?.detail).toContain("variable is unset");
+    expect(row?.action).toContain("codex-shell-env.sh");
+    expect(row?.action).not.toContain("codex-shim install");
+    expect(row?.action).toContain("Absolute Codex paths and GUI launchers bypass");
   });
 
   test("does not warn when the configured environment variable is set", () => {

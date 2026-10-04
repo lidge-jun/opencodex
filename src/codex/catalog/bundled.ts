@@ -29,6 +29,7 @@ import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
+import { decodeOverlayState } from "../shim-state-file";
 
 
 import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, findSupportedNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
@@ -196,14 +197,20 @@ export function codexCommandCandidates(): string[] {
 
 export function codexShimCommandCandidates(): string[] {
   try {
-    const state = JSON.parse(readFileSync(join(getConfigDir(), "codex-shim.json"), "utf8")) as {
+    const configDir = getConfigDir();
+    const state = JSON.parse(readFileSync(join(configDir, "codex-shim.json"), "utf8")) as {
+      schema?: unknown;
+      mode?: unknown;
       wrapperPath?: unknown;
       originalPath?: unknown;
       backupPath?: unknown;
       wrappers?: Array<{ wrapperPath?: unknown; originalPath?: unknown; backupPath?: unknown }>;
     };
+    const overlay = decodeOverlayState(state, configDir);
+    if ((state.schema !== undefined || state.mode !== undefined) && !overlay) return [];
     const files = Array.isArray(state.wrappers) && state.wrappers.length > 0 ? state.wrappers : [state];
-    const out: string[] = [];
+    const out: string[] = overlay && isSpawnableCodexCandidate(overlay.launcherPath)
+      ? [overlay.launcherPath] : [];
     for (const file of files) {
       for (const value of [file.backupPath, file.originalPath, file.wrapperPath]) {
         if (typeof value !== "string" || value.length === 0) continue;

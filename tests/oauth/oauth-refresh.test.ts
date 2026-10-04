@@ -23,6 +23,7 @@ import {
 import * as storeModule from "../../src/oauth/store";
 import * as configModule from "../../src/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoRoot } from "../helpers/repo-root";
 
 const origHome = process.env.HOME;
 const origLocalAppData = process.env.LOCALAPPDATA;
@@ -586,6 +587,143 @@ describe("oauth refresh hardening", () => {
       .rejects.toBeInstanceOf(OAuthLoginRequiredError);
     expect(refreshCalls).toBe(1);
     expect(readOAuthRefreshIntent("anthropic", id)).toEqual(pending);
+  });
+
+  describe("Anthropic real-adapter transport intent", () => {
+    const proxyKeys = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
+    const dns = { code: "ENOTFOUND", syscall: "getaddrinfo", hostname: "api.anthropic.com" };
+    const scenarios: Array<{
+      name: string; outcome: "retry" | "blocked" | "reauth";
+      first: () => Promise<Response>; proxy?: string; redirectStatus?: number;
+    }> = [
+      { name: "HTTP 503", outcome: "retry", first: async () => new Response("unavailable", { status: 503 }) },
+      ...[302, 303].map(status => ({ name: `manual redirect ${status}`, outcome: "blocked" as const, redirectStatus: status,
+        first: async () => new Response("redirect body must stay private", {
+          status, headers: { Location: "https://other.invalid/token" },
+        }),
+      })),
+      { name: "timeout", outcome: "blocked", first: async () => { throw new DOMException("timeout", "TimeoutError"); } },
+      { name: "invalid_grant", outcome: "reauth", first: async () => Response.json({ error: "invalid_grant" }, { status: 400 }) },
+      { name: "wrong-host DNS", outcome: "blocked", first: async () => { throw { ...dns, hostname: "other.invalid" }; } },
+      { name: "unstructured DNS text", outcome: "blocked", first: async () => { throw new Error("getaddrinfo ENOTFOUND api.anthropic.com"); } },
+      { name: "DNS-shaped body-read failure", outcome: "blocked", first: async () => new Response(new ReadableStream({
+        start(controller) { controller.error(dns); },
+      })) },
+      { name: "proxy-configured token-host DNS", outcome: "blocked", proxy: "http://proxy.invalid:8080", first: async () => { throw dns; } },
+    ];
+    for (const scenario of scenarios) test(scenario.name, async () => {
+      const savedProxyEnv = proxyKeys.map(key => [key, process.env[key]] as const);
+      try {
+        for (const key of proxyKeys) delete process.env[key];
+        if (scenario.proxy) process.env.HTTPS_PROXY = scenario.proxy;
+        await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+        const id = getAccountSet("anthropic")!.activeAccountId;
+        const credential = getAccountCredential("anthropic", id)!;
+        const tokenInits: RequestInit[] = [];
+        globalThis.fetch = (async (input, init) => {
+          if (String(input) === "https://api.anthropic.com/api/oauth/profile") {
+            return Response.json({ account: { uuid: "synthetic-account-a" } });
+          }
+          expect(String(input)).toBe("https://api.anthropic.com/v1/oauth/token");
+          tokenInits.push(init!);
+          if (tokenInits.length === 1) return scenario.first();
+          return Response.json({ access_token: "fresh", refresh_token: "rt-fresh", expires_in: 3600 });
+        }) as typeof fetch;
+        const refresh = () => refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic!, credential);
+        if (scenario.outcome === "reauth") await expect(refresh()).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+        else if (scenario.redirectStatus) {
+          await expect(refresh()).rejects.toMatchObject({
+            name: "AnthropicTokenError", httpStatus: undefined, oauthError: undefined, requestNotSent: false,
+            message: `Anthropic OAuth redirect HTTP ${scenario.redirectStatus}: outcome unknown`,
+          });
+        } else await expect(refresh()).rejects.toBeDefined();
+        const pending = readOAuthRefreshIntent("anthropic", id);
+        expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBe(scenario.outcome === "reauth" ? true : undefined);
+        if (scenario.outcome === "blocked") {
+          expect(pending).toMatchObject({ generation: credentialGeneration(credential) });
+          expect(pending?.cleanupPending).toBeUndefined();
+        } else expect(pending).toBeUndefined();
+        if (scenario.outcome === "retry") {
+          await expect(refresh()).resolves.toBe("fresh");
+          expect(getAccountCredential("anthropic", id)?.refresh).toBe("rt-fresh");
+          expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+          expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+        } else {
+          await expect(refresh()).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+          expect(readOAuthRefreshIntent("anthropic", id)).toEqual(pending);
+        }
+        expect(tokenInits).toHaveLength(scenario.outcome === "retry" ? 2 : 1);
+        for (const init of tokenInits) expect(init).toMatchObject({ redirect: "manual", keepalive: false, protocol: "http1.1" });
+      } finally {
+        for (const [key, value] of savedProxyEnv) {
+          if (value === undefined) delete process.env[key]; else process.env[key] = value;
+        }
+      }
+    });
+
+    // The startup proxy snapshot is taken at module evaluation, so each startup environment
+    // runs in its own child process instead of depending on how this runner was launched.
+    const childPrelude = `
+      import assert from "node:assert/strict";
+      import { OAUTH_PROVIDERS, OAuthLoginRequiredError, refreshAnthropicAccountWithLock } from "./src/oauth";
+      import { credentialGeneration, getAccountCredential, getAccountSet, readOAuthRefreshIntent, saveCredential } from "./src/oauth/store";
+      import { outboundProxyConfigured, startupOutboundProxyConfigured } from "./src/lib/proxy-env";
+      const dns = ${JSON.stringify(dns)};
+      const inits = [];
+      globalThis.fetch = async (input, init) => {
+        if (String(input) === "https://api.anthropic.com/api/oauth/profile") {
+          return Response.json({ account: { uuid: "synthetic-account-a" } });
+        }
+        assert.equal(String(input), "https://api.anthropic.com/v1/oauth/token");
+        inits.push(init);
+        if (inits.length === 1) throw dns;
+        return Response.json({ access_token: "fresh", refresh_token: "rt-fresh", expires_in: 3600 });
+      };
+      await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+      const id = getAccountSet("anthropic").activeAccountId;
+      const credential = getAccountCredential("anthropic", id);
+      const refresh = () => refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic, credential);
+    `;
+    const runChild = async (startupProxy: string | undefined, body: string) => {
+      const env: Record<string, string | undefined> = { ...process.env };
+      for (const key of proxyKeys) delete env[key];
+      if (startupProxy !== undefined) env.HTTPS_PROXY = startupProxy;
+      const child = Bun.spawn([process.execPath, "--eval", `${childPrelude}${body}\nprocess.exit(0);`], {
+        cwd: repoRoot(), env, stdout: "pipe", stderr: "pipe",
+      });
+      const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+    };
+
+    test("structured token-host DNS from a proxy-free startup", () => runChild(undefined, `
+      assert.equal(startupOutboundProxyConfigured, false);
+      assert.equal(outboundProxyConfigured(), false);
+      await assert.rejects(refresh, error => error.name === "AnthropicTokenError" && error.requestNotSent === true
+        && error.httpStatus === undefined);
+      assert.equal(readOAuthRefreshIntent("anthropic", id), undefined);
+      assert.equal(getAccountSet("anthropic").accounts[0].needsReauth, undefined);
+      assert.equal(await refresh(), "fresh");
+      assert.equal(getAccountCredential("anthropic", id)?.refresh, "rt-fresh");
+      assert.equal(readOAuthRefreshIntent("anthropic", id), undefined);
+      assert.equal(getAccountSet("anthropic").accounts[0].needsReauth, undefined);
+      assert.equal(inits.length, 2);
+      for (const init of inits) assert.deepEqual([init.redirect, init.keepalive, init.protocol], ["manual", false, "http1.1"]);
+    `));
+
+    for (const current of [undefined, ""]) test(`startup proxy with current HTTPS_PROXY ${current === undefined ? "deleted" : "empty"}`, () => runChild("http://proxy.invalid:8080", `
+      for (const key of ${JSON.stringify(proxyKeys)}) delete process.env[key];
+      ${current === undefined ? "" : 'process.env.HTTPS_PROXY = "";'}
+      assert.equal(startupOutboundProxyConfigured, true);
+      assert.equal(outboundProxyConfigured(), false);
+      await assert.rejects(refresh, error => error === dns);
+      const pending = readOAuthRefreshIntent("anthropic", id);
+      assert.equal(pending?.generation, credentialGeneration(credential));
+      assert.equal(pending?.cleanupPending, undefined);
+      assert.equal(getAccountSet("anthropic").accounts[0].needsReauth, undefined);
+      await assert.rejects(refresh, OAuthLoginRequiredError);
+      assert.deepEqual(readOAuthRefreshIntent("anthropic", id), pending);
+      assert.equal(inits.length, 1);
+    `));
   });
 
   test("a pre-dispatch Anthropic abort clears its unconsumed refresh intent", async () => {

@@ -16,7 +16,8 @@ import { resolveServiceListenPort, reportServiceServing } from "./health";
 import { platformOps, proxyStillLiveAfterStop, stopTrackedProxyForServiceCommand, installServiceSafely, installFreshWindowsSchedulerSafely, removeServiceInstallState, isServiceInstalled } from "./orchestration";
 import { repairService } from "./repair";
 import type { ServiceRepairVerb } from "./repair";
-import { TASK, plistPath, readServiceBackend, releaseServiceOwner, resolveServiceOwnership } from "./state";
+import { TASK, plistPath, readServiceBackend, releaseServiceOwner, resolveServiceOwnership, serviceStatePaths } from "./state";
+import { ownershipMutationLeaseStatusLine } from "./ownership-mutation-lease.mjs";
 import { foreignServiceOwnerRefusal, unknownServiceOwnerRefusal } from "./repair";
 import type { ServiceBackend } from "./state";
 import { unitPath } from "./systemd";
@@ -419,6 +420,10 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         // subsumes the not-installed case and adds the serving / stale-plist split.
         console.log(await serviceStatusReport());
       }
+      // A busy lease is why a supervised start can keep failing while the line above only
+      // says "not running"; report its recorded PID with unverified identity and lease age here.
+      const lease = ownershipMutationLeaseStatusLine(serviceStatePaths());
+      if (lease) console.log(lease);
       console.log(`Diagnostics: ${serviceDiagnosticsSummary()}`);
       break;
     }

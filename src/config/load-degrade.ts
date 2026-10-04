@@ -42,6 +42,7 @@ import {
   transientRetryOn5xxPolicySchema,
   runtimeRoleSchema,
   spendSchema,
+  chatgptDesktopConfigIssue,
 } from "./schema/leaf-validators";
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
 
@@ -126,6 +127,8 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
   if (desktopCompatibilityConfigError(rawParsed)) console.warn("Invalid desktopCompatibility startup preference ignored; no desktop compatibility service will start automatically.");
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
+  const chatgptDesktop = chatgptDesktopConfigIssue(rawParsed);
+  if (chatgptDesktop) console.warn(`⚠️  config.json ${chatgptDesktop} — the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);
   warnDegradedMemoryModels(rawParsed, validated);

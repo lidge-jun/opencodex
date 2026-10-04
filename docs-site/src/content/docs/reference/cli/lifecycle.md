@@ -717,22 +717,51 @@ or failing to claim a new root safely, therefore leaves the working proxy and it
 place. Existing or conflicting scheduler registrations continue to fail closed rather than being
 deleted as an unsafe best-effort rollback.
 
+If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
+`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
+proxy is not running. The message includes the lock path, recorded PID, current liveness,
+executable name when available, and lease age. The process identity is unverified: the PID
+may have been reused, so liveness and executable name describe whichever process occupies
+that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
+process based only on this PID. A later mutation attempt can reclaim a stale lease once its
+age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-Wrap a script-based `codex` launcher on PATH with a lightweight autostart script. Real `codex.exe`
-targets are left untouched to avoid breaking exact executable invocations.
-If installation is refused or the resulting shim is unhealthy, the command exits nonzero and
-the dashboard reports the failure reason. A healthy existing shim still counts as success.
+On macOS and Linux, install a private autostart wrapper at `<OPENCODEX_HOME>/bin/codex` and a
+sourceable `<OPENCODEX_HOME>/codex-shell-env.sh`, using the resolved OpenCodex home. The native
+launcher stays where brew, npm, or fnm installed it; package-manager upgrades and version rollbacks
+continue to work without rewrapping that launcher. On Windows, script-based launchers are still
+wrapped in place. Real `codex.exe` targets are left untouched.
+If installation is refused or the wrapper cannot run, the command exits nonzero and the dashboard
+reports the failure reason. A runnable Unix wrapper counts as a successful install even before
+activation in the current shell; an already-installed healthy shim also counts as success.
 For Windows installations that expose only `codex.exe`, use `ocx service install` for autostart.
+
+After brew/fnm and other PATH setup, run the activation command printed by install. With the default
+home, it is:
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+For a custom home, use the printed, quoted path. Sourcing is idempotent: it removes duplicate private
+bin entries and puts that directory first on PATH. To activate future shells, add that source line
+after your package-manager PATH setup yourself; OpenCodex never edits shell startup files. Install
+cannot change its parent shell. `ocx status`, `ocx codex-shim status`, `ocx doctor`, and `ocx connect`
+report a runnable but unselected wrapper as **not active**, with the activation command. Shell
+aliases/functions and separately configured desktop or service launchers still need their own setup.
 
 For fnm-managed Codex, installation resolves the temporary multishell directory to the durable
 Node installation while preserving the launcher filename. If that directory cannot be resolved,
 installation refuses instead of wrapping a temporary path. When Codex is selected, `ocx connect`
-also reports shim readiness. This readiness check skips special-file PATH entries while preserving
-the order of regular launchers, including npm and fnm symlinks. If a different PATH wrapper hides a healthy shim, fix PATH order;
+also reports shim readiness. This readiness check skips special-file PATH entries and, on macOS
+and Linux, files without execute permission, including symlink targets. It preserves the order of
+regular executable launchers, including npm and fnm symlinks. Windows keeps its PATHEXT lookup.
+If a different PATH wrapper hides a runnable shim, fix PATH order;
 reinstalling the same shim does not change which command your shell finds first. If the tracked shim
-is healthy but no `codex` command is found, connect reports it as inactive and asks you to add its
-directory to PATH. A failed PATH inspection reports activation as unverified instead of claiming
+is runnable but no `codex` command is found, connect reports it as inactive and prints the activation
+command. A failed PATH inspection reports activation as unverified instead of claiming
 that no command exists. These warnings do not change the connect command's exit status.
 
 Before an install or repair is committed, OpenCodex runs the saved launcher with `--version` while
@@ -744,11 +773,13 @@ use `ocx service install` instead when a dynamic command-manager launcher cannot
 Cleanup refusals include a bounded diagnostic suffix identifying the probe phase, a recognized
 native error code or signal, and the exit status when known. It does not include launcher paths
 or raw child output, and does not relax the validation or rollback checks.
-During upgrades, an installed Unix shim that lacks the current validation guard is regenerated and
-probed. If its saved launcher is unsafe, OpenCodex removes the obsolete shim and restores the
-original launcher instead of leaving the unsafe wrapper installed.
+An older Unix shim installed in place is migrated only by an explicit `ocx codex-shim install`.
+Migration restores the recorded native launcher without replacing a newer launcher already present,
+then installs the private wrapper. If private installation fails after native restoration, the native
+launcher stays restored and the operation can be retried. Missing or unusable native launchers require
+package-manager repair; OpenCodex does not guess another installation or rewrap the manager's path.
 
-Launcher installation alone does not prove that Codex requests will use OpenCodex. After a healthy
+Launcher installation alone does not prove that Codex requests will use OpenCodex. After a runnable
 install, the command checks the current Codex routing and reports a warning instead of a green result
 when routing is external, user-owned, or unverifiable. It also warns when outbound proxy variables
 exist only in the current process while `config.proxy` is unset or unresolved, because Codex
@@ -756,24 +787,24 @@ launchers and background services may not inherit that environment. These checks
 never print proxy values; resolve the reported handoff and run `ocx doctor` before relying on
 autostart.
 
-If a completed external Codex update overwrites an installed shim, the next ordinary `ocx` command
-backs up the stable new launcher and restores the shim before dispatch. The zero-effect
+On Unix, automatic repair refreshes only the private wrapper and never rewrites package-manager
+launchers or migrates an older in-place shim. On Windows, if a completed external Codex update
+overwrites an installed shim, the next ordinary `ocx` command backs up the stable new launcher
+and restores the shim before dispatch. The zero-effect
 `ocx system codex-cli-update check` inspection command and malformed invocations in its reserved
-`ocx system codex-cli-update` namespace never perform that repair.
-A launcher that is still
-changing is left untouched and retried later. Repair failures warn without failing the requested
+`ocx system codex-cli-update` namespace never perform that repair. `ocx status`, `ocx doctor`, and
+`ocx codex-shim status` also skip shim auto-repair and report the observed state.
+A launcher that is still changing is left untouched and retried later. Repair failures warn without failing the requested
 command; manual fallback: `ocx codex-shim install`. Set `codexShimAutoRestore` to `false`, or set
 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out.
 
-That restore needs the original launcher OpenCodex saved next to the shim. A version manager —
-mise, asdf, volta — rewrites its whole install tree on upgrade, which destroys the shim *and* that
-backup, so there is nothing left to restore from. **A version-manager install tree is not a
-supported shim target.** OpenCodex reports the condition and stops rather than wrapping the newly
-installed binary as a replacement original: doing so would record a history that never happened, and
-the next upgrade would overwrite it again, so the repair would silently undo itself on the version
-manager's schedule.
+The Unix wrapper retains its recorded native launcher path. Package-manager changes behind that
+durable entry are followed automatically; removing that entry requires package-manager repair.
+Dynamic command-manager launchers still have to pass the validation above. Windows in-place repair
+needs the saved original beside the shim; if a version manager destroys the whole tree and backup,
+OpenCodex reports the condition and stops instead of inventing a replacement original.
 
-If your `codex` is owned by a version manager, route through Codex configuration instead of the
+If your version-manager launcher cannot pass validation, route through Codex configuration instead of the
 launcher: `ocx start` writes `openai_base_url`, and `ocx service install` provides autostart. Run
 `ocx status` to confirm — it reports the active routing, and warns when a running proxy is not the
 one Codex is pointed at.
@@ -781,15 +812,20 @@ one Codex is pointed at.
 | Subcommand | Action |
 | --- | --- |
 | `install` | Install the shim (or repair if stale). |
-| `uninstall` | Remove the shim and restore the original Codex binary. |
+| `uninstall` | Remove private Unix artifacts, leaving native Codex untouched; on Windows, restore the original launcher. |
 | `remove` | Alias of `uninstall`. |
-| `status` | Report shim state (installed, stale, or missing). |
+| `status` | Report shim state and whether the private wrapper is active on PATH. |
 
 ```bash
 ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+After Unix uninstall, remove the source line from your shell startup file and restart the shell or
+remove the private bin entry from its PATH. Uninstall removes the owned wrapper, shell environment
+file, and state; it leaves the package-manager launcher untouched. An older in-place Unix shim is
+released using its recorded restoration data.
 
 :::note[Windows token environment]
 Newly generated Windows CMD and PowerShell shims restore the caller's `OPENCODEX_API_AUTH_TOKEN` after execution. Codex and its child processes can still inherit the token.
@@ -823,10 +859,13 @@ directly as a systemd `EnvironmentFile=`.
 An `EnvironmentFile=` or `OCX_API_TOKEN_FILE` on `opencodex-proxy.service` configures the proxy process
 only and never flows into an independently launched `codex exec`.
 
-A Codex upgrade that replaces the launcher removes the shim; the next ordinary `ocx` command restores
+Unix package-manager upgrades leave the private wrapper intact. A runnable wrapper that is **not
+active** does not inject the token: source the printed activation file in the launching shell.
+On Windows or with an older in-place shim, a Codex upgrade that replaces the launcher removes the shim;
+on Windows the next ordinary `ocx` command restores
 it (see above), but a `codex exec` that runs before that fails. `ocx doctor` reports this exact
 state under "Codex env_key launch readiness" (env_key configured, variable unset, shim missing or
-unhealthy, token file present) with the repair command, and never prints the token. Reading the token
+unhealthy, token file present) with repair or activation guidance, and never prints the token. Reading the token
 file is not part of the injected `env_key` contract; the launching process must supply that variable.
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`

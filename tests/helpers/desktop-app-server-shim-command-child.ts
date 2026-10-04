@@ -55,6 +55,9 @@ mock.module("node:child_process", () => ({ ...childProcess, spawnSync(command: s
   return { status: 0, stdout: "", stderr: "" };
 } }));
 mock.module("../../src/config", () => ({ loadConfig: () => ({ chatgptDesktop: { appServerShim: scenario.flag === true } }) }));
+// A refused launch explains a dropped chatgptDesktop block from the config file; never read this
+// machine's config here.
+mock.module("../../src/config/diagnostics", () => ({ readConfigFileSnapshot: () => ({ raw: scenario.configRaw }) }));
 mock.module("../../src/codex/desktop-app/darwin", () => ({
   darwinDefaultExec: () => "",
   darwinDesktopAppAdapter: { discover: () => scenario.noInstall ? null : { id: "com.openai.codex", root, relaunch: "com.openai.codex" } },

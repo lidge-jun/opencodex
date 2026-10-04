@@ -16,6 +16,8 @@ export type IntegrationTab =
   | "overview"
   | "keys"
   | "codex"
+  | "claude"
+  | "claudeDesktop"
   | "grok"
   | "cursor"
   | FileIntegrationClientId;
@@ -30,6 +32,10 @@ export const TABS: readonly TabDefinition[] = [
   { id: "overview", hash: "integrations", labelKey: "integrations.tab.overview" },
   { id: "keys", hash: "integrations/keys", labelKey: "integrations.tab.keys" },
   { id: "codex", hash: "integrations/codex", labelKey: "integrations.tab.codex" },
+  // Claude keeps its own #claude/* hashes; Integrations maps that family onto this tab.
+  { id: "claude", hash: "claude", labelKey: "nav.claude" },
+  // Its own Connect tab; the hash is the one the Desktop sub-tab always had.
+  { id: "claudeDesktop", hash: "claude/desktop", labelKey: "claudeDesktop.title" },
   { id: "grok", hash: "integrations/grok", labelKey: "integrations.tab.grok" },
   { id: "cursor", hash: "integrations/cursor", labelKey: "integrations.tab.cursor" },
   { id: "opencode", hash: "integrations/opencode", labelKey: "integrations.tab.opencode" },

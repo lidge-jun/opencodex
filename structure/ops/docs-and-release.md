@@ -28,7 +28,7 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 Human-readable connect and sync-refresh diagnostics follow the [terminal rendering contract](../runtime.md#cli-readiness-diagnostics), with regression coverage for both paths in `tests/cli/cli-connect-readiness.test.ts`.
 
-`tests/cli/cli-config-show-client.test.ts` covers the separate read-only config annotation path:
+`tests/cli/cli-config-default-show.test.ts` covers optional-show parsing, offline display and explicit-action preservation; `tests/cli/cli-config-show-client.test.ts` covers the separate read-only config annotation path:
 `src/cli/config-command.ts` derives token ownership without importing the connect command or
 triggering catalog, lifecycle, or ACL-hardening work.
 
@@ -366,7 +366,7 @@ observed at startup. Replacing that manifest under a live process fences `/healt
 stability timer; if the same new manifest identity remains readable and distinct, the timer enters the existing
 drain-and-restart handoff without waiting for another request. A temporarily unreadable manifest
 is polled until readable and then receives a fresh full stability interval, while a return to the
-startup identity cancels the pending restart. Failed restart admission retries after the same
+startup identity cancels the pending restart. The replacement spawns `process.execPath`, which an in-place npm install leaves as the `bun` package's small placeholder until its postinstall runs, so while that path fails the `REAL_BUN_MIN_BYTES` gate the restart waits the same way and then debounces afresh; meanwhile `installedVersion` stays unreported, so a manual restart is refused as unsettled. Failed restart admission retries after the same
 bounded delay. Stopping the server before the accepted restart begins vetoes it, and a service child
 restarts only while it still owns the service home. Source checkouts and standalone binaries remain outside this fence.
 
