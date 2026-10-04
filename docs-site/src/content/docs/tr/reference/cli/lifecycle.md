@@ -441,9 +441,15 @@ age exceeds 30 seconds and the recorded PID is no longer alive; status only insp
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-PATH üzerindeki betik tabanlı bir `codex` başlatıcısını hafif bir otomatik
-başlatma betiği ile sarın. Tam yürütülebilir çağrıları bozmaktan kaçınmak için
-gerçek `codex.exe` hedefleri dokunulmadan bırakılır.
+macOS ve Linux'ta `ocx codex-shim install`, çözümlenen OpenCodex dizininde özel `<OPENCODEX_HOME>/bin/codex` sarmalayıcısını ve kabuğa yüklenecek `<OPENCODEX_HOME>/codex-shell-env.sh` dosyasını oluşturur. Yerel başlatıcı brew, npm veya fnm'nin kurduğu yerde kalır; paket yöneticisi güncellemeleri ve önceki sürüme dönüşler yeniden sarmalama gerektirmez. Windows'ta betik başlatıcıları mevcut konumlarında sarılmaya devam eder, gerçek `codex.exe` değiştirilmez. Yalnızca `codex.exe` varsa `ocx service install` kullanın.
+
+brew/fnm PATH ayarlarından sonra kurulumun yazdırdığı etkinleştirme komutunu çalıştırın. Varsayılan dizinde:
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+Özel bir dizin için yazdırılan tırnaklı yolu kullanın. Dosyayı tekrar yüklemek özel bin tekrarlarını kaldırıp dizini PATH'in başına koyar. Gelecekteki kabuklar için bu satırı başlangıç dosyasındaki PATH ayarlarından sonra kendiniz ekleyin; OpenCodex kabuk başlangıç dosyalarını düzenlemez. Kurulum üst kabuğun PATH'ini değiştiremez. Sarmalayıcı çalıştırılabiliyorsa geçerli kabukta henüz etkin olmasa da kurulum başarılıdır; reddedilen kurulum veya çalışmayan sarmalayıcı hata verir. `ocx status`, `ocx codex-shim status`, `ocx doctor` ve `ocx connect`, PATH sarmalayıcıyı seçmiyorsa **not active** durumunu ve etkinleştirme komutunu gösterir. connect uyarıları çıkış kodunu değiştirmez. Takma adlar, işlevler, masaüstü ve servis başlatmaları ayrıca ayarlanmalıdır.
 
 Bir kurulum veya onarım uygulanmadan önce OpenCodex servis başlangıcı atlanırken
 kaydedilen başlatıcıyı `--version` ile çalıştırır. Başlatıcı `codex`'i tekrar
@@ -453,13 +459,12 @@ temizlenemediğinde değişikliği reddeder ve geri alır. Bu nedenle `codex-shi
 install` koşulsuz değildir. Reddedilirse PATH girdisinin somut bir yürütülebilir
 dosya veya başlatıcı olması için Codex'i yeniden yükleyin ve yeniden deneyin;
 dinamik bir komut yöneticisi başlatıcısı bu denetimleri karşılayamadığında bunun
-yerine `ocx service install` kullanın. Yükseltmeler sırasında geçerli doğrulama
-korumasından yoksun kurulu bir Unix dolgusu yeniden oluşturulur ve araştırılır.
-Kaydedilen başlatıcısı güvenli değilse OpenCodex güvensiz sarmalayıcıyı kurulu
-bırakmak yerine eski dolguyu kaldırır ve orijinal başlatıcıyı geri yükler.
+yerine `ocx service install` kullanın.
+
+Eski, yerinde kurulu Unix shim yalnızca açıkça çalıştırılan `ocx codex-shim install` ile taşınır. Kaydedilen yerel başlatıcı, mevcut daha yeni başlatıcının üzerine yazılmadan geri yüklenir; ardından özel sarmalayıcı kurulur. Geri yüklemeden sonra özel kurulum başarısız olsa da yerel başlatıcı geri yüklenmiş kalır ve işlem yeniden denenebilir. Kayıtlı başlatıcı yoksa veya çalışmıyorsa paket yöneticisiyle onarın; OpenCodex başka bir kurulumu tahmin etmez ve yöneticinin yolunu yeniden sarmalamaz.
 
 Yalnızca başlatıcı kurulumu Codex isteklerinin OpenCodex kullanacağını
-kanıtlamaz. Sağlıklı bir kurulumdan sonra komut geçerli Codex yönlendirmesini
+kanıtlamaz. Çalıştırılabilir bir sarmalayıcı kurulduktan sonra komut geçerli Codex yönlendirmesini
 kontrol eder ve yönlendirme harici, kullanıcıya ait veya doğrulanamaz olduğunda
 yeşil bir sonuç yerine bir uyarı bildirir. Ayrıca giden proxy değişkenleri
 yalnızca geçerli süreçte mevcutken `config.proxy` ayarlanmadığında veya
@@ -468,27 +473,22 @@ ortamı devralmayabilir. Bu denetimler salt okunurdur ve asla proxy değerlerini
 yazdırmaz; otomatik başlatmaya güvenmeden önce bildirilen devri çözün ve `ocx
 doctor` çalıştırın.
 
-Tamamlanan harici bir Codex güncellemesi kurulu bir dolgunun üzerine yazarsa
-sonraki sıradan `ocx` komutu kararlı yeni başlatıcıyı yedekler ve dağıtımdan
-önce dolguyu geri yükler. Sıfır etkili `ocx system codex-cli-update check` denetim
-komutu ile ayrılmış `ocx system codex-cli-update` ad alanındaki hatalı çağrılar bu onarımı asla yapmaz. Hala değişmekte olan bir başlatıcı dokunulmadan
-bırakılır ve daha sonra yeniden denenir. Onarım arızaları talep edilen komutu
-başarısız kılmadan uyarır; manuel geri dönüş: `ocx codex-shim install`. Süreç
-düzeyinde bir vazgeçme için `codexShimAutoRestore`'u `false` olarak ayarlayın
-veya `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` ayarlayın.
+Unix'te otomatik onarım yalnızca özel sarmalayıcıyı yeniler; paket yöneticisinin başlatıcılarını yeniden yazmaz veya eski yerinde shim'i taşımaz. Windows'ta tamamlanan harici güncelleme shim'i değiştirirse sonraki sıradan `ocx` komutu kararlı yeni başlatıcıyı yedekleyip shim'i geri yükler. Değişmekte olan başlatıcıya dokunulmaz ve daha sonra yeniden denenir. `ocx status`, `ocx doctor`, `ocx codex-shim status`, `ocx system codex-cli-update check` ve ayrılmış ad alanındaki hatalı çağrılar bu onarımı yapmaz. Onarım hataları istenen komutun çıkış kodunu değiştirmeden uyarı verir. Elle onarım: `ocx codex-shim install`. Devre dışı bırakmak için `codexShimAutoRestore` değerini `false` yapın veya süreç için `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` ayarlayın.
 
 | Alt komut | Eylem |
 | --- | --- |
 | `install` | Dolguyu kurun (veya eskiyse onarın). |
-| `uninstall` | Dolguyu kaldırın ve orijinal Codex ikili dosyasını geri yükleyin. |
+| `uninstall` | Unix özel dosyalarını kaldırır, yerel Codex kalır; Windows’ta özgün başlatıcıyı geri yükler. |
 | `remove` | `uninstall`'ın takma adıdır. |
-| `status` | Dolgu durumunu bildirin (kurulu, eski veya eksik). |
+| `status` | shim durumunu ve özel sarmalayıcının PATH üzerinde etkin olup olmadığını bildirir. |
 
 ```bash
 ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+Unix'te kaldırdıktan sonra başlangıç dosyasındaki yükleme satırını silin ve kabuğu yeniden başlatın veya özel bin girdisini PATH'ten çıkarın. Yalnızca sahip olunan sarmalayıcı, kabuk ortam dosyası ve durum kaldırılır; paket yöneticisinin başlatıcısına dokunulmaz. Eski yerinde Unix shim kayıtlı geri yükleme bilgileriyle kaldırılır.
 
 :::tip[Servis mi Dolgu mu?]
 Her zaman açık bir arka plan proxy'si için `ocx service` kullanın (önerilir).

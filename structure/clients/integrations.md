@@ -71,6 +71,10 @@ default. The single-client status projects the owned defaults and the current
 export roster's declared effort choices into `droidReasoning`. Defaults use the
 same path and competing-settings checks as status, including pre-resolved paths;
 an ambiguous legacy model ID or managed endpoint suppresses the projected map.
+Factory Droid may add top-level `id` and `index` while normalizing `customModels`.
+`ownership-policy.ts` drops only those two fields from observations when matching an existing record, so
+legacy rows preserve their saved `extraHeaders` default while the endpoint, `apiKey`, other
+headers, effort values, and unknown row fields remain protected.
 
 Preview and apply accept optional `droidReasoningDefaults`. Omission preserves
 compatible owned defaults; an empty map clears them. A supplied map is validated against the
@@ -379,7 +383,7 @@ observed. Naming the store without the last three would be naming a file we cann
 file this operation reads, writes, journals and records, and whether a write there reaches the
 client. It decides from three facts, in order:
 
-1. No declared store, or no store on disk — the config file, unchanged. A client that has never run
+1. No declared store, or no store on disk — the config file, unchanged, unless the declaration's `missingStore` says the client still reads the absent store; that is an ineffective write carrying its remedy. A client that has never run
    still imports what we write there, which is why the rule keys on the store's presence rather
    than on a client version.
 2. This project's own block already in one of the two files — that file. Disable removes what we
@@ -423,6 +427,16 @@ notice appears only when the client reads some other file than the one the state
 
 Deleting the client's store to re-trigger its own import is not implemented and must not be. It
 discards every provider the client keeps there.
+
+DSH is the second instance: from 0.1.7 it imports `$DSH_HOME/settings.yaml` once into the first
+booted profile and hot reloads routes from the `llm-pi-ai` row of the store, the Desktop profile's
+`profiles/desktop/cordis.patch.yml` (a home patch row would replace that row's whole `config`). The
+file is a top-level list of loader rows, so the managed path starts with `[id=llm-pi-ai]`: `merge.ts`
+keeps a sequence root, the source patcher rewrites that entry with its `- ` and indent restored byte
+for byte, `[]` is the only flow form adopted or written back, and a created row pruned to its selector
+is removed. `IntegrationTarget` carries its own `sourcePreservingYaml`. Writes hold `settings.yaml.lock`,
+then the profile's `package.json.lock`, re-probing the profile after each revalidation await; refresh
+keeps the selected row in place, and restore refuses to recreate a missing profile directory unlocked. A profile with `package.json` but no patch is refused: DSH renames `settings.yaml` to `settings.yaml.imported` on startup, which would orphan the ownership record.
 
 ## Verification
 

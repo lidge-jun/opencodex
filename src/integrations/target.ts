@@ -37,6 +37,12 @@ export interface IntegrationTarget {
   /** The contribution shape that file's reader understands. */
   readonly buildContribution: BuildContribution;
   /**
+   * The one YAML leaf patched in place in that file, or null when the writer
+   * re-renders the document. A client's config file and its store have
+   * different shapes, so this belongs to the target rather than the client.
+   */
+  readonly sourcePreservingYaml: { readonly path: readonly string[] } | null;
+  /**
    * Set when a write to the file above would not reach the client.
    *
    * `why` is carried rather than re-derived because the cases have different
@@ -60,8 +66,14 @@ export interface IneffectiveWrite {
    * with the store itself as the target: a client that bumps its schema after
    * we wrote the store leaves our block there, removable, and the file no
    * longer one we may merge into.
+   *
+   * `missing-store` — the store does not exist, but the client already manages it
+   * (DSH: a Desktop profile manifest is present). DSH renames `settings.yaml` to
+   * `settings.yaml.imported` and imports it on startup, so a config-file write would
+   * orphan our ownership record. `remedy` says how to bring the store back.
    */
-  readonly why: "owned-config-file" | "unestablished-schema";
+  readonly why: "owned-config-file" | "unestablished-schema" | "missing-store";
+  readonly remedy?: string;
 }
 
 function configFileTarget(
@@ -74,6 +86,7 @@ function configFileTarget(
     configPath,
     format: exportSpec.format,
     buildContribution: exportSpec.buildContribution,
+    sourcePreservingYaml: INTEGRATION_CLIENTS[clientId].sourcePreservingYaml ?? null,
     ineffective,
   };
 }
@@ -87,6 +100,7 @@ function storeTarget(
     configPath,
     format: declared.format,
     buildContribution: declared.buildContribution,
+    sourcePreservingYaml: declared.sourcePreservingYaml ?? null,
     ineffective,
   };
 }
@@ -141,7 +155,12 @@ export function resolveIntegrationTarget(args: {
   if (!declared) return configFileTarget(clientId, configPath, null);
   const storePath = declared.path(args.env, args.home);
   const kind = io.statKind(storePath);
-  if (kind === "missing") return configFileTarget(clientId, configPath, null);
+  if (kind === "missing") {
+    const missing = declared.missingStore;
+    return missing?.readsStore(storePath, path => io.statKind(path)) === true
+      ? configFileTarget(clientId, configPath, { store: storePath, why: "missing-store", remedy: missing.remedy })
+      : configFileTarget(clientId, configPath, null);
+  }
   // Only proven absence permits a legacy write. Unreadable or non-file stores
   // cannot establish what the client reads; preserve the recorded removal target.
   if (kind !== "file") {

@@ -610,7 +610,7 @@ role, `tool_use_id` 없는 `tool_result`, id/name 없는 `tool_use`, name 없는
 
 ## GUI(Claude 페이지)
 
-대시보드 사이드바에는 API 아래에 전용 **Claude** 페이지와 **Claude ON** 토글이 있어요. 토글
+대시보드 사이드바에는 연결 아래에 전용 **Claude** 페이지와 **Claude ON** 토글이 있어요. 토글
 레이블은 모든 언어에서 의도적으로 같아요. 페이지에는 다음 항목이 표시돼요.
 
 - 입력 차단 스위치(사용 토글)

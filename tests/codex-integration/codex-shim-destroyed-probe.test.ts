@@ -11,10 +11,10 @@ describe("version-manager shim destruction (#2412)", () => {
   test("a destroyed shim diagnostic does not open a non-file launcher", () => {
     if (process.platform === "win32") return;
     setCodexShimProbeObservationMsForTests(20);
-    withInstalledShim(({ home, wrappers, backups }) => {
+    withInstalledShim(({ home, wrappers, launchers }) => {
       rmSync(wrappers[0]);
       expect(spawnSync("mkfifo", [wrappers[0]]).status).toBe(0);
-      rmSync(backups[0]);
+      rmSync(launchers[0]);
       const shimModule = repoPath("src", "codex", "shim.ts");
       const script = `
         const { autoRestoreCodexShim } = await import(${JSON.stringify(shimModule)});

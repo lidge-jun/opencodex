@@ -22,16 +22,18 @@ test("Codex Set is always present in the sidebar, never filtered by view mode", 
    * one line. Pinning the exact destructuring made this fail the moment an
    * entry gained a field — a change it was never written to catch.
    */
-  expect(src).toContain("NAV.map(");
+  expect(src).toContain("NAV_GROUPS.map(");
 
   /*
    * It stays in the nav table and remains routable for deep links. The icon
    * component is deliberately not part of the assertion — for the same reason
    * the destructuring above is not. Pinning `Icon: IconKey` made this test fail
    * when the row was given its actual Codex mark, which is a change it was never
-   * written to catch. The entry's identity is its id and its label key.
+   * written to catch. The entry's identity is its id and its label key, and the table
+   * now lives in nav-groups.ts.
    */
-  expect(src).toContain('{ id: "codex-set", tkey: "nav.codexSet", Icon:');
+  const groups = await Bun.file(new URL("../src/nav-groups.ts", import.meta.url)).text();
+  expect(groups).toContain('{ id: "codex-set", tkey: "nav.codexSet", Icon:');
   expect(src).toContain('{page === "codex-set" && <CodexSet apiBase={sharedBase} />}');
 });
 

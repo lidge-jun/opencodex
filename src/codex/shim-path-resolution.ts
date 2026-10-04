@@ -1,4 +1,4 @@
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { isWslRuntime, wslAutomountRoot } from "./home";
 import { SHIM_MARKER } from "./shim-templates";
@@ -24,6 +24,7 @@ export type CodexPathScanDeps = {
   isShimFile?: (path: string) => boolean;
   isDirectory?: (path: string) => boolean;
   realpath?: (path: string) => string;
+  executableEligible?: (path: string) => boolean;
 };
 
 export type CodexPathCandidate = {
@@ -41,9 +42,20 @@ export function realIsDirectory(path: string): boolean {
 
 const SHIM_HEADER_MAX_BYTES = 16 * 1024;
 
-function inspectShimFile(path: string): boolean | null {
+/** Shared POSIX eligibility, following launcher symlinks without opening special files. */
+export function isExecutableCodexCandidate(path: string): boolean {
+  try {
+    if (process.platform !== "win32") accessSync(path, constants.X_OK);
+    return statSync(path).isFile();
+  } catch { return false; }
+}
+
+export function inspectShimFile(path: string): boolean | null {
   let fd: number | undefined;
   try {
+    if (process.platform !== "win32") {
+      try { accessSync(path, constants.X_OK); } catch { return null; }
+    }
     // Follow npm launcher symlinks, but never read a known special file.
     if (!statSync(path).isFile()) return null;
     const flags = constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NONBLOCK);

@@ -16,12 +16,13 @@ import { Select } from "../src/ui";
 
 const NAV_TKEYS = [
   "nav.dashboard",
+  "nav.connect",
+  "nav.codexSet",
   "nav.providers",
   "nav.models",
   "nav.subagents",
-  "nav.usage",
-  "nav.storage",
-  "nav.integrations",
+  "nav.usageLogs",
+  "nav.remote",
 ] as const;
 
 function NavRows() {
@@ -161,19 +162,20 @@ describe("zh-TW language switch on the real GUI surface", () => {
     expect(navLabels()).toContain("Dashboard");
     expect(navLabels()).toContain("Providers");
     expect(navLabels()).toContain("Subagents");
-    expect(navLabels()).toContain("Usage");
-    expect(navLabels()).toContain("Integrations");
+    expect(navLabels()).toContain("Usage & Logs");
+    expect(navLabels()).toContain("Connect");
+    expect(navLabels()).toContain("Remote Link");
 
     await choose(["繁體中文"]);
 
     expect(navLabels()).toContain("儀表板");
     expect(navLabels()).toContain("供應商");
     expect(navLabels()).toContain("子代理");
-    expect(navLabels()).toContain("用量");
-    expect(navLabels()).toContain("整合");
+    expect(navLabels()).toContain("用量與日誌");
+    expect(navLabels()).toContain("連線");
     expect(navLabels()).not.toContain("Providers");
     expect(navLabels()).not.toContain("Subagents");
-    expect(navLabels()).not.toContain("Integrations");
+    expect(navLabels()).not.toContain("Connect");
 
     expect(localStorage.getItem("ocx-lang")).toBe("zh-TW");
     expect(testWindow.document.documentElement.lang).toBe("zh-TW");
@@ -222,12 +224,13 @@ describe("French language switch on the real GUI surface", () => {
 
     expect(navLabels()).toEqual([
       "Tableau de bord",
+      "Connexion",
+      "Codex",
       "Fournisseurs",
       "Modèles",
       "Sous-agents",
-      "Utilisation",
-      "Stockage",
-      "Intégrations",
+      "Utilisation et journaux",
+      "Lien distant",
     ]);
     expect(localStorage.getItem("ocx-lang")).toBe("fr");
     expect(testWindow.document.documentElement.lang).toBe("fr");

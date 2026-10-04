@@ -374,6 +374,9 @@ client applies its own defaults for those).
 The managed DSH export requires DSH 0.1.0-rc.6 or newer and owns only
 `llm-pi-ai.providers.opencodex`. DSH hot reloads that provider; the user's default model and
 `deepseek-official` remain untouched. This export is loopback-only and carries no real credential.
+DSH 0.1.7 and newer import `settings.yaml` once into the first profile that boots and then rename
+it, so the dashboard integration writes the same provider into the `llm-pi-ai` row of the Desktop
+profile's `$DSH_HOME/profiles/desktop/cordis.patch.yml` once that profile exists.
 
 opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. The generated Pi and OMP exports do
 not require an environment variable: each carries the literal `opencodex-loopback` placeholder.
@@ -479,7 +482,9 @@ Native handles hold the ancestor directories and files during bounded reads. Uns
 
 An observed identity or digest describes those files during this observation. It is not a durable update permit and does not prove the selected runtime, the past installer, effective npm configuration, or tool authenticity. The supplied Node is observed only, not proven to be the Node a launcher would select. No target is executed; no registry request, installation, configuration write, or process control occurs. The existing Windows `check` command still performs no candidate/configuration filesystem I/O.
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]` displays the local configuration without a running proxy. Omitting `show` also works with either flag or both, in either order. `--source` includes diagnostic source, error, and warning fields and is only accepted for display. `--json` may precede an explicit action; it does not change which action runs. Repeated `--json` or `--source` flags and unknown arguments are rejected.
 
 Inspect and safely modify validated OpenCodex configuration. `show` and `get` mask secrets. Import
 validates before writing and requires `--yes`.
