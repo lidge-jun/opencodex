@@ -13,8 +13,10 @@ export { acquireOwnershipMutationLease, withOwnershipMutationLease } from "./ser
 export type { ManagingCliRole, ManagingCliObservation, RegisteredManagingCliInvocation, ServiceTakeoverCompatibilityInput, ServiceTakeoverCompatibility } from "./service/ownership-compatibility";
 export { registeredManagingCliInvocation, assessServiceTakeoverCompatibility, sameServiceTakeoverCompatibility } from "./service/ownership-compatibility";
 export type { ServiceApiTokenOrigin, ProvisionedServiceApiToken } from "./service/guards";
-export { ServiceOwnershipError, isServiceOwnershipError, serviceEnvironmentOwnedHere, assertServiceEnvironmentMatchesInstall, serviceRetryCommand, assertNotAdminToken, assertServiceAuthEnvironment, writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./service/guards";
-export { resolveServiceListenPort, installedServiceListenPort, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, confirmServiceServing, reportServiceServing, resolvedProxyEnv } from "./service/health";
+export { ServiceOwnershipError, isServiceOwnershipError, serviceEnvironmentOwnedHere, assertServiceEnvironmentMatchesInstall, assertNotAdminToken, writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./service/guards";
+export { serviceRetryCommand, assertServiceAuthEnvironment } from "./service/auth-preflight";
+export { resolveServiceListenPort, resolvedProxyEnv } from "./service/definition";
+export { installedServiceListenPort, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, confirmServiceServing, reportServiceServing } from "./service/health";
 export type { LaunchdLoadState, LaunchdLoadProbe, LaunchdInstallOutcome } from "./service/launchd";
 export { buildPlist, reusePreviousPlistPathVariable, expectedLaunchdCommand, launchdListenPort, runLaunchctl, launchctlLoadFailed, launchdJobMatchesPlist, launchdEvictionTargets, probeLaunchdLoadState, installLaunchd, restartLaunchdJob, startLaunchd } from "./service/launchd";
 export { systemdListenPort, buildUnit, systemdNeedsDaemonReload, uninstallSystemd, systemdServiceInstallCleanupOps } from "./service/systemd";

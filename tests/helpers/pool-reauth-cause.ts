@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import {
   clearAccountNeedsReauth,
-  handleCodexAuthAPI,
   setAccountQuotaFromParsed,
 } from "../../src/codex/auth-api";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import { readCodexAccountRecord } from "../../src/codex/account-store";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import type { OcxConfig } from "../../src/types";

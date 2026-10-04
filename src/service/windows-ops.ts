@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { win32 } from "node:path";
 import { winswXmlPath } from "../lib/winsw";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
-import { parseBakedListenPort } from "./health";
+import { parseBakedListenPort } from "./definition";
 import { windowsServiceScriptPath } from "./state";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmdirSync, unlinkSync } from "node:fs";

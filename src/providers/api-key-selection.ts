@@ -4,7 +4,7 @@ import { publishAccountSelection } from "../lib/account-selection-events";
 import { clearModelCache } from "../codex/model-cache";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderApiKeySelection } from "../types/provider";
-import { routedProviderConfig } from "../router";
+import { routedProviderConfig } from "./routed-config";
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, XAI_GROK_COMPATIBILITY, type OcxProviderTransport } from "./xai-transport";
 import { captureProviderApiKeySelection } from "./api-key-selection-capture";

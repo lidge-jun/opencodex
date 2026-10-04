@@ -289,13 +289,8 @@ function isConfigLockError(error: unknown): boolean {
  */
 let grokToggleFlight: Promise<Response> | null = null;
 
-/**
- * Dynamic import, never static: management-api.ts statically imports THIS
- * module, so a static import of fetchAllModels back from it would close a
- * cycle. sync.ts:18-21 dodges the same cycle the same way.
- */
 async function defaultFetchAllModels(config: OcxConfig) {
-  const { fetchAllModels } = await import("../management-api");
+  const { fetchAllModels } = await import("./shared");
   return fetchAllModels(config);
 }
 

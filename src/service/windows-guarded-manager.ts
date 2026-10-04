@@ -29,7 +29,8 @@ import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_P
 import { statusWinswRaw, winswExePath, WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
 import type { GuardedManagerStopped, GuardedManagerTarget } from "./guarded-manager-target";
 import { TASK, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
-import { probeWindowsSchedulerTask, querySchtasks, windowsWscript, type WindowsSchedulerTaskProbe } from "./windows-scheduler";
+import { probeWindowsSchedulerTask, querySchtasks, type WindowsSchedulerTaskProbe } from "./windows-scheduler";
+import { windowsWscript } from "./windows-wscript";
 import { windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
 
 /** Runtime table of one Win32 process; a null parent means the chain is unreadable. */

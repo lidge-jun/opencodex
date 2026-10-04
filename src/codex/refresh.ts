@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
-import { invalidateCodexModelsCache, syncCatalogModels } from "./catalog";
+import { invalidateCodexModelsCache, syncCatalogModels } from "./catalog/retained-sync";
 import type { ComboCatalogOmission } from "./catalog/aggregation";
 import { CODEX_MODELS_CACHE_PATH } from "./paths";
 import { atomicWriteFile } from "../config";
 import type { OcxConfig } from "../types";
-import type { CodexCatalogSyncOptions } from "./catalog/sync";
+import type { CodexCatalogSyncOptions } from "./catalog/retained-sync";
 
 export interface CodexCatalogRefreshResult {
   added: number;

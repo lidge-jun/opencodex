@@ -114,15 +114,19 @@ describe("ChatGPT OAuth JWT helpers", () => {
 });
 
 describe("ChatGPT OAuth constants", () => {
+  // The client id and the token endpoint live in `chatgpt-shared.ts` now, so the grant's
+  // constants are read across both halves of the pair.
   test("uses auth.openai.com endpoints (not auth0.openai.com)", async () => {
-    const source = await Bun.file("src/oauth/chatgpt.ts").text();
+    const source = await Bun.file("src/oauth/chatgpt.ts").text()
+      + await Bun.file("src/oauth/chatgpt-shared.ts").text();
     expect(source).toContain('auth.openai.com/oauth/authorize');
     expect(source).toContain('auth.openai.com/oauth/token');
     expect(source).not.toContain("auth0.openai.com");
   });
 
   test("uses official Codex client_id", async () => {
-    const source = await Bun.file("src/oauth/chatgpt.ts").text();
+    const source = await Bun.file("src/oauth/chatgpt.ts").text()
+      + await Bun.file("src/oauth/chatgpt-shared.ts").text();
     expect(source).toContain("app_EMoamEEZ73f0CkXaXp7hrann");
     expect(source).not.toContain("DRivsnm2Mu42T3KOpqdtwB3NYviHYzwD");
   });

@@ -1,9 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { atomicWriteFile, expandUserPath, getConfigDir, loadConfig, ultraFastTierEnabled, websocketsEnabled } from "../../config";
-import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
+import { atomicWriteFile, getConfigDir, loadConfig, ultraFastTierEnabled, websocketsEnabled } from "../../config";
+import {
+  activeCodexConfigPath,
+  activeCodexModelsCachePath,
+  isDefaultCatalogPath,
+  readCodexCatalogPath,
+  readRootTomlString,
+} from "../paths";
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
@@ -48,46 +54,22 @@ export function catalogBackupPathFor(catalogPath: string): string {
   return join(getConfigDir(), `catalog-backup-${id}.json`);
 }
 
-export function samePath(a: string, b: string): boolean {
-  const left = resolve(a);
-  const right = resolve(b);
-  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
-}
-
-export function activeCodexHome(): string | null {
-  const raw = process.env.CODEX_HOME?.trim();
-  if (!raw) return null;
-  const path = resolve(expandUserPath(raw));
-  try {
-    return realpathSync.native(path);
-  } catch {
-    return path;
-  }
-}
-
-export function activeCodexConfigPath(): string {
-  const home = activeCodexHome();
-  return home ? join(home, "config.toml") : CODEX_CONFIG_PATH;
-}
-
-export function activeDefaultCatalogPath(): string {
-  const home = activeCodexHome();
-  return home ? join(home, "opencodex-catalog.json") : DEFAULT_CATALOG_PATH;
-}
-
-export function activeCodexModelsCachePath(): string {
-  const home = activeCodexHome();
-  return home ? join(home, "models_cache.json") : CODEX_MODELS_CACHE_PATH;
-}
-
-export function resolveActiveCodexConfigPath(path: string): string {
-  const home = activeCodexHome();
-  return home ? resolve(home, path) : resolveCodexConfigPath(path);
-}
-
-export function isDefaultCatalogPath(path: string): boolean {
-  return samePath(path, activeDefaultCatalogPath());
-}
+/**
+ * Active-home path resolution now lives in `../paths`, next to the constants it
+ * falls back to. It is re-exported here so existing importers keep working; new
+ * code that only needs a path should import from `../paths` directly.
+ */
+export {
+  samePath,
+  activeCodexHome,
+  activeCodexConfigPath,
+  activeDefaultCatalogPath,
+  activeCodexModelsCachePath,
+  resolveActiveCodexConfigPath,
+  isDefaultCatalogPath,
+  readCodexCatalogPath,
+  readCodexCatalogPathForHome,
+} from "../paths";
 
 /** Stable nonsemantic ownership marker for rows projected from config.customModels. */
 export const CODEX_CUSTOM_MODEL_CATALOG_KIND = "custom-model-v1";
@@ -246,40 +228,6 @@ export function shouldExposeRoutedModel(model: CatalogModel): boolean {
   if (isRoutedModelCompatibilityExcluded(`${model.provider}/${model.id}`)) return false;
   if (isGeminiImageChatModel(model.id)) return true;
   return !isMediaGenerationModelId(model.id);
-}
-
-export function readCodexCatalogPath(): string {
-  const home = activeCodexHome();
-  if (home) return readCodexCatalogPathForHome(home);
-  try {
-    const configPath = activeCodexConfigPath();
-    if (existsSync(configPath)) {
-      const toml = readFileSync(configPath, "utf-8");
-      const path = readRootTomlString(toml, "model_catalog_json");
-      if (path) return resolveActiveCodexConfigPath(path);
-    }
-  } catch { /* ignore */ }
-  return activeDefaultCatalogPath();
-}
-
-/**
- * Resolve the configured catalog without consulting ambient CODEX_HOME again.
- *
- * `configText` is for a caller that has already read that same `config.toml` under
- * its own constraints - the prompt-text probe reads it bounded, on the request
- * thread - so resolving the catalog does not cost a second, unbounded read of the
- * file the caller is holding. Omitting it keeps the original behaviour.
- */
-export function readCodexCatalogPathForHome(codexHome: string, configText?: string): string {
-  try {
-    const configPath = join(codexHome, "config.toml");
-    if (configText !== undefined || existsSync(configPath)) {
-      const toml = configText ?? readFileSync(configPath, "utf-8");
-      const path = readRootTomlString(toml, "model_catalog_json");
-      if (path) return resolve(codexHome, path);
-    }
-  } catch { /* ignore */ }
-  return join(codexHome, "opencodex-catalog.json");
 }
 
 /**

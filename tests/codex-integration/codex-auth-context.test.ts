@@ -53,11 +53,11 @@ import {
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
-  handleCodexAuthAPI,
   isAccountNeedsReauth,
   markAccountNeedsReauth,
   setAccountQuotaFromParsed,
 } from "../../src/codex/auth-api";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import { __resetGuardianState, guardianSweep } from "../../src/oauth/token-guardian";
 import {
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
