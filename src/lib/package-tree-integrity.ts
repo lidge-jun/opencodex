@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRealBunBinary } from "./bun-binary-validator.mjs";
 import { isStandaloneBinary } from "./standalone";
 
 export interface PackageTreeObservation {
@@ -56,6 +57,14 @@ export interface PackageTreeIntegrityOptions {
   schedule?: (callback: () => void, delayMs: number) => (() => void) | void;
   /** Test seam for `installedVersion()`; production reads the package manifest. */
   readInstalledVersion?: () => string | undefined;
+  /**
+   * Whether the runtime a restart would spawn is complete. An in-place npm install writes
+   * package.json and extracts the `bun` package's small placeholder before its postinstall
+   * swaps the real binary in, and the replacement spawns `process.execPath`, that same path.
+   * While this answers false the replacement is treated like an unreadable tree: no restart,
+   * then a fresh full debounce once the runtime is ready.
+   */
+  runtimeReady?: () => boolean;
 }
 
 export type ObservePackageTree = () => PackageTreeObservation | null;
@@ -195,6 +204,12 @@ export function createPackageTreeIntegrityGuard(
         replacementCandidate = null;
         return;
       }
+      if (options.runtimeReady && !options.runtimeReady()) {
+        resetRestartTimer();
+        waitingForReadableTree = true;
+        armRestartTimer(PACKAGE_TREE_RECHECK_MS);
+        return;
+      }
       if (waitingForReadableTree) {
         waitingForReadableTree = false;
         replacementCandidate = current;
@@ -292,5 +307,9 @@ export function createRuntimePackageTreeIntegrityGuard(
     if (installer === "source" || isStandaloneBinary()) {
       return { status: () => ({ ok: true }), dispose: () => {} };
     }
-    return createPackageTreeIntegrityGuard(observe, now, options);
+    // The restart replacement spawns process.execPath, the bundled Bun in an npm install.
+    return createPackageTreeIntegrityGuard(observe, now, {
+      runtimeReady: () => isRealBunBinary(process.execPath),
+      ...options,
+    });
   }

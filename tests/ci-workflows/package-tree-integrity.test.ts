@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import {
@@ -252,6 +252,77 @@ describe("package tree integrity", () => {
       clock += 10_000;
       guard.status();
       expect(calls).toBe(1);
+    });
+
+    test("waits for the runtime a restart would spawn, then debounces afresh", async () => {
+      let observation: PackageTreeObservation | null = base;
+      let clock = 0;
+      let calls = 0;
+      let runtimeReady = false;
+      const scheduler = createScheduler();
+      const guard = createPackageTreeIntegrityGuard(
+        () => observation,
+        () => clock,
+        {
+          onReplaced: () => { calls += 1; },
+          replacedRestartDelayMs: 5_000,
+          schedule: scheduler.schedule,
+          runtimeReady: () => runtimeReady,
+        },
+      );
+
+      expect(guard.status()).toEqual({ ok: true });
+      // npm wrote the new package.json; bun's postinstall has not replaced its placeholder yet.
+      observation = { ...base, inode: 11n, contentTimeNs: 200n };
+      clock += 2_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      await scheduler.runNext();
+      await scheduler.runNext();
+      expect(calls).toBe(0);
+      expect(scheduler.pending).toHaveLength(1);
+
+      runtimeReady = true;
+      await scheduler.runNext();
+      expect(calls).toBe(0);
+      await scheduler.runNext();
+      expect(calls).toBe(1);
+    });
+
+    test("the installed guard reads process.execPath as the runtime", async () => {
+      // A child Bun runs from a disposable copy, then that path is swapped for a placeholder the
+      // way an in-place npm install leaves node_modules/bun/bin/bun.exe before its postinstall.
+      const dir = join(TEST_DIR, "runtime-placeholder");
+      mkdirSync(dir, { recursive: true });
+      const runtime = join(dir, process.platform === "win32" ? "bun.exe" : "bun");
+      copyFileSync(process.execPath, runtime);
+      chmodSync(runtime, 0o755);
+      const script = join(dir, "probe.ts");
+      const guardModule = join(import.meta.dir, "../../src/lib/package-tree-integrity.ts").replaceAll("\\", "/");
+      writeFileSync(script, `
+import { renameSync, writeFileSync } from "node:fs";
+import { createRuntimePackageTreeIntegrityGuard } from ${JSON.stringify(guardModule)};
+const base = { device: 1n, inode: 10n, contentTimeNs: 100n, size: 500n };
+let observation = base;
+const pending = [];
+let calls = 0;
+let clock = 0;
+const guard = createRuntimePackageTreeIntegrityGuard("npm", () => observation, () => clock, {
+  onReplaced: () => { calls += 1; },
+  replacedRestartDelayMs: 5_000,
+  schedule: callback => { pending.push(callback); },
+});
+guard.status();
+renameSync(process.execPath, process.execPath + ".old");
+writeFileSync(process.execPath, "placeholder replaced by the bun package postinstall\\n");
+observation = { ...base, inode: 11n };
+clock += 2_000;
+if (guard.status().ok) throw new Error("replacement not detected");
+for (let k = 0; k < 3 && pending.length; k += 1) { pending.shift()(); await Promise.resolve(); await Promise.resolve(); }
+console.log(JSON.stringify({ calls }));
+`);
+      const child = Bun.spawnSync([runtime, script], { stdout: "pipe", stderr: "pipe" });
+      expect(child.exitCode).toBe(0);
+      expect(JSON.parse(child.stdout.toString().trim())).toEqual({ calls: 0 });
     });
 
     test("retries when restart acceptance throws", async () => {
