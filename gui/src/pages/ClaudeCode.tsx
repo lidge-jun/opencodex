@@ -187,9 +187,15 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const setRows = (nextRows: MapRow[]) => {
     setEdit(current => current && { ...current, draft: { ...current.draft, rows: nextRows }, adoptNextRead: false });
   };
-  /** Fields committed by their own control land in draft AND baseline: they are not edits. */
+  /**
+   * Fields committed by their own control land in draft AND baseline, since they are not
+   * edits, and in the confirmed state and session copy right away, so a reread that fails
+   * afterwards cannot leave the page or a revisit showing the old value.
+   */
   const applyLive = (fields: Partial<ClaudeCodeState>) => {
     if (confirmedState.current) confirmedState.current = { ...confirmedState.current, ...fields };
+    const stored = readSessionListCacheEntry<CachedClaudeCode>(cacheKey)?.data;
+    if (stored) writeSessionListCacheEntry(cacheKey, { ...stored, state: { ...stored.state, ...fields } });
     setEdit(current => current && {
       ...current,
       draft: { ...current.draft, state: { ...current.draft.state, ...fields } },
@@ -245,11 +251,12 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     firstPartyInFlight.current = true;
     setFirstPartyPending(true);
     setStatus("");
+    const requested = !state.cliFirstParty;
     try {
       const response = await fetch(`${apiBase}/api/claude-code`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cliFirstParty: !state.cliFirstParty }),
+        body: JSON.stringify({ cliFirstParty: requested }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { code?: string; port?: number; bound?: number; configured?: number } | null;
@@ -269,7 +276,10 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       }
       await readJsonOrThrow(response, t("claude.saveFailed"));
       writeEpoch.current += 1;
-      await fetchCode(new AbortController().signal);
+      // The PUT is the commit: show it now. The reread only refreshes derived diagnostics
+      // (applied state, notices), and its failure must not leave the switch showing the old value.
+      applyLive({ cliFirstParty: requested });
+      await fetchCode(new AbortController().signal).catch(() => undefined);
       codeResource.refresh();
     } catch (error) {
       setOk(false);

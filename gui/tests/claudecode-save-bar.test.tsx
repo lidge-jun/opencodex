@@ -33,6 +33,47 @@ beforeEach(() => {
 });
 
 for (const control of ["first-party", "connection"] as const) {
+  test(`a successful ${control} switch survives a failed reread, on screen and in the session copy`, async () => {
+    const server = { cliFirstParty: false, enabled: true };
+    let offline = false;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (init?.method === "PUT") {
+        if (url.endsWith("/api/native-integrations/claude")) {
+          server.enabled = (JSON.parse(String(init.body)) as { enabled: boolean }).enabled;
+          offline = true;
+          return Response.json({ desiredEnabled: server.enabled });
+        }
+        server.cliFirstParty = (JSON.parse(String(init.body)) as { cliFirstParty: boolean }).cliFirstParty;
+        offline = true;
+        return Response.json({ ok: true });
+      }
+      if (!url.endsWith("/api/claude-code")) return new Response(null, { status: 404 });
+      if (offline) return Response.json({ error: "offline" }, { status: 503 });
+      return Response.json({ ...SERVER, ...server, modelMap: {} });
+    }) as typeof fetch;
+    const page = await mount();
+    try {
+      const label = control === "first-party" ? "Toggle Claude Code CLI first-party" : "Toggle Claude connection";
+      await page.click(page.button(label));
+      const cached = readSessionListCacheEntry<{ state: typeof server }>("ocx.claude-code.v1:http://localhost");
+      if (control === "first-party") {
+        expect(server.cliFirstParty).toBe(true);
+        expect(page.button(label).getAttribute("aria-pressed")).toBe("true");
+        expect(cached?.data?.state.cliFirstParty).toBe(true);
+      } else {
+        expect(server.enabled).toBe(false);
+        expect(page.button(label).getAttribute("aria-pressed")).toBe("false");
+        expect(cached?.data?.state.enabled).toBe(false);
+      }
+    } finally {
+      await act(async () => page.root.unmount());
+      page.testWindow.close();
+    }
+  });
+}
+
+for (const control of ["first-party", "connection"] as const) {
   test(`a ${control} switch confirmed during Save survives in the session copy`, async () => {
     let releaseSave!: () => void;
     const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
