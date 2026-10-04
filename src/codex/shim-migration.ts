@@ -28,6 +28,15 @@ function identity(path: string): Identity | null {
 function same(left: Identity | null, right: Identity | null): boolean {
   return !!left && !!right && JSON.stringify(left) === JSON.stringify(right);
 }
+/** Drop a journal this run created before any migration step, never a replacement at that path. */
+function discardCreatedJournal(journal: string, created: { dev: number; ino: number }): void {
+  try {
+    const now = lstatSync(journal);
+    if (now.isFile() && now.dev === created.dev && now.ino === created.ino) unlinkSync(journal);
+  } catch {
+    // An unreadable or vanished path is left for the next run's ownership checks.
+  }
+}
 function binding(path: string, backup: string): boolean {
   const probe = stableShimPathProbe(path);
   return !!probe && probe.fingerprint.kind === "file" && probe.prefix.includes(SHIM_MARKER)
@@ -92,6 +101,11 @@ export function migrateLegacyUnixShim(state: ShimState): UnixShimMigrationResult
           journalIdentity = identity(journal);
           if (journalIdentity?.ino !== created.ino || journalIdentity.dev !== created.dev
             || journalIdentity.size !== written.size || journalIdentity.mtimeMs !== written.mtimeMs) throw new Error("Journal replaced");
+        } catch (error) {
+          // Nothing has moved yet, so a partial journal of ours would only block every retry.
+          discardCreatedJournal(journal, created);
+          journalIdentity = null;
+          throw error;
         } finally { closeSync(fd); }
       }
       if (!same(current, record.wrapper) || !same(saved, record.saved)) return refused("Migration inputs changed; preserving all generations.");

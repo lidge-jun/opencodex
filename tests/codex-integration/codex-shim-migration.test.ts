@@ -194,4 +194,47 @@ describe.skipIf(process.platform === "win32")("legacy Unix shim migration", () =
     if (kind === "missing") expect(fs.readFileSync(f.native, "utf8")).toBe(f.legacyBytes);
     else expect(lexical(f.native)?.isSymbolicLink()).toBe(true);
   }));
+
+  test("a partially written journal is discarded so the next install can migrate", () => fixture(f => {
+    const realWrite = fs.writeFileSync;
+    const journal = join(f.home, "codex-shim.migration.json");
+    const hook = spyOn(fs, "writeFileSync").mockImplementation(((target: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+      if (typeof target === "number" && String(data).includes('"original"')) {
+        fs.writeSync(target, "{");
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+      }
+      return realWrite(target, data, options);
+    }) as typeof fs.writeFileSync);
+    expect(installCodexShim().installed).toBe(false);
+    expect(hook).toHaveBeenCalled();
+    hook.mockRestore();
+    expect(lexical(journal)).toBeNull();
+    expect(fs.readFileSync(f.native, "utf8")).toBe(f.legacyBytes);
+    expect(lexical(f.backup)?.isSymbolicLink()).toBe(true);
+    expect(lexical(f.quarantine)).toBeNull();
+    const retry = installCodexShim();
+    expect(retry.installed, retry.message).toBe(true);
+    expect(lexical(journal)).toBeNull();
+    expect(readState()).toMatchObject({ schema: 2, launcherPath: f.native });
+  }));
+
+  test("a journal replaced during creation is preserved and migration refuses", () => fixture(f => {
+    const realWrite = fs.writeFileSync;
+    const journal = join(f.home, "codex-shim.migration.json");
+    const foreign = join(f.root, "foreign-journal");
+    realWrite(foreign, "foreign journal\n", { mode: 0o600 });
+    const hook = spyOn(fs, "writeFileSync").mockImplementation(((target: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+      realWrite(target, data, options);
+      if (typeof target === "number" && String(data).includes('"original"')) fs.renameSync(foreign, journal);
+    }) as typeof fs.writeFileSync);
+    expect(installCodexShim().installed).toBe(false);
+    expect(hook).toHaveBeenCalled();
+    hook.mockRestore();
+    expect(fs.readFileSync(journal, "utf8")).toBe("foreign journal\n");
+    expect(fs.readFileSync(f.native, "utf8")).toBe(f.legacyBytes);
+    expect(lexical(f.backup)?.isSymbolicLink()).toBe(true);
+    expect(lexical(f.quarantine)).toBeNull();
+    expect(installCodexShim().installed).toBe(false);
+    expect(fs.readFileSync(journal, "utf8")).toBe("foreign journal\n");
+  }));
 });
