@@ -3,6 +3,7 @@
   "cli-update-restart-child.test.ts": "cli",
   "cli-update-restart-transport.test.ts": "cli",
   "cli-update-restart-home.test.ts": "cli",
+  "droid-normalized-reasoning-defaults.test.ts": "clients",
   "responses-combo-exhausted-error.test.ts": "responses",
   "cli-config-default-show.test.ts": "cli",
   "ollama-native-tool-continuations.test.ts": "providers/ollama",

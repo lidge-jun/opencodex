@@ -650,6 +650,8 @@ Run Droid once to create `~/.factory`, then explicitly enable this integration w
 Chat Completions endpoint. Choose a row from Droid's `/model` picker. Disable
 removes the managed rows; Undo restores the exact saved file. Other settings and
 custom models remain yours.
+If Droid normalizes a `customModels` row by adding `id` or `index`, OpenCodex ignores those two
+client fields when checking ownership so saved reasoning defaults remain available.
 
 Open **Integrations → Factory Droid** (`/#integrations/droid`) to set a reasoning
 default for each connected model. Choose from the model's supported efforts,

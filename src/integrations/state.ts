@@ -25,6 +25,8 @@ import {
 } from "./merge";
 import { canonicalContribution, fingerprint, semanticContribution, type OwnershipRecord } from "./ownership";
 import {
+  droidNormalizedContributionMatchesRecord,
+  droidNormalizedFileMatchesRecord,
   isHermesAffinityUpgrade,
   protectedContributionFingerprint,
   refreshablePathsOf,
@@ -208,6 +210,18 @@ function recordedContribution(
   };
 }
 
+function observedContributionMatchesRecord(
+  observed: ManagedContribution,
+  record: OwnershipRecord,
+): boolean {
+  if (fingerprint(canonicalContribution(observed)) === record.blockFingerprint) return true;
+  if (
+    typeof record.semanticBlockFingerprint === "string"
+    && fingerprint(semanticContribution(observed)) === record.semanticBlockFingerprint
+  ) return true;
+  return droidNormalizedContributionMatchesRecord(observed, record);
+}
+
 /**
  * Prove that every protected field still matches what OpenCodex wrote.
  *
@@ -223,13 +237,8 @@ function recordedBlockIsOwned(
 ): boolean {
   const observed = recordedContribution(doc, record);
   if (!observed) return false;
-  if (fingerprint(canonicalContribution(observed)) === record.blockFingerprint) return true;
-
+  if (observedContributionMatchesRecord(observed, record)) return true;
   const observedSemanticFingerprint = fingerprint(semanticContribution(observed));
-  if (
-    typeof record.semanticBlockFingerprint === "string"
-    && observedSemanticFingerprint === record.semanticBlockFingerprint
-  ) return true;
 
   const desiredFingerprint = fingerprint(canonicalContribution(desired));
   if (
@@ -406,11 +415,15 @@ export function classifyIntegration(input: {
     return { state: "conflict", reason: "foreign-edit" };
   }
   if (!INTEGRATION_CLIENTS[clientId].sourcePreservingYaml
-    && fingerprint(input.fileText ?? "") !== input.record.fileFingerprint) {
+    && fingerprint(input.fileText ?? "") !== input.record.fileFingerprint
+    && !droidNormalizedFileMatchesRecord(input.parsed, input.record)) {
     /*
-     * The file changed since we wrote it, but every fragment we own is still
-     * byte-for-byte what we put there — a sibling edit, not tampering. Apply
-     * rewrites the WHOLE document, so for comment-capable formats (yaml,
+     * The file changed since we wrote it. Every fragment we own is still
+     * byte-for-byte what we put there, so this is a sibling edit rather than
+     * tampering. Known Droid row normalization is accepted before this branch
+     * only when removing its two client fields reproduces the recorded file.
+     * Other drift reaches this branch. Apply rewrites the WHOLE document, so
+     * for comment-capable formats (yaml,
      * json5, toml) it would drop comments the user wrote next to us: fail
      * closed there. Strict JSON cannot carry comments — a commented file
      * never reaches this branch because parsing already failed — so the only
@@ -500,14 +513,8 @@ export function buildIntegrationContribution(
 
 function recordedDroidContributionMatches(document: unknown, record: OwnershipRecord): boolean {
   try {
-    const fragments = record.fragmentPaths.flatMap(path => {
-      const value = readPath(document, path);
-      return value === undefined ? [] : [{ path, value }];
-    });
-    if (fragments.length !== record.fragmentPaths.length) return false;
-    const observed: ManagedContribution = { clientId: "droid", fragments };
-    return record.semanticBlockFingerprint === fingerprint(semanticContribution(observed))
-      || record.blockFingerprint === fingerprint(canonicalContribution(observed));
+    const observed = recordedContribution(document, record);
+    return observed !== null && observedContributionMatchesRecord(observed, record);
   } catch {
     return false;
   }
