@@ -209,6 +209,7 @@ export function createPackageTreeIntegrityGuard(
       if (sameObservation(boot, current)) {
         resetRestartTimer();
         waitingForReadableTree = false;
+        waitingForRuntime = false;
         replacementCandidate = null;
         return;
       }
@@ -217,6 +218,9 @@ export function createPackageTreeIntegrityGuard(
           waitingForRuntime = true;
           console.warn("Package tree replaced; waiting for its Bun runtime to finish installing before restarting");
         }
+        // A replacement settled before a failed admission is no longer restart-ready: withdraw
+        // it so installedVersion() stays silent until the fresh debounce settles it again.
+        settledReplacement = null;
         resetRestartTimer();
         waitingForReadableTree = true;
         armRestartTimer(PACKAGE_TREE_RECHECK_MS);
@@ -267,6 +271,7 @@ export function createPackageTreeIntegrityGuard(
   return {
     installedVersion: () => {
       if (settledReplacement === null) return undefined;
+      if (options.runtimeReady && !options.runtimeReady()) return undefined;
       const current = observe();
       if (current === null || !sameObservation(settledReplacement, current)) return undefined;
       return readInstalledVersion();
@@ -299,6 +304,7 @@ export function createPackageTreeIntegrityGuard(
       lastOkAt = at;
       resetRestartTimer();
       waitingForReadableTree = false;
+      waitingForRuntime = false;
       replacementCandidate = null;
       return { ok: true };
     },

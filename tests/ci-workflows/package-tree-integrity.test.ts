@@ -355,6 +355,51 @@ console.log(JSON.stringify({ calls }));
       expect(scheduler.pending).toHaveLength(0);
     });
 
+    test("a runtime that stops being ready withdraws a settled replacement until it settles again", async () => {
+      let observation: PackageTreeObservation | null = base;
+      let clock = 0;
+      let attempts = 0;
+      let runtimeReady = true;
+      const scheduler = createScheduler();
+      const guard = createPackageTreeIntegrityGuard(
+        () => observation,
+        () => clock,
+        {
+          onReplaced: () => {
+            attempts += 1;
+            if (attempts === 1) throw new Error("restart unavailable");
+          },
+          replacedRestartDelayMs: 5_000,
+          schedule: scheduler.schedule,
+          readInstalledVersion: () => "9.9.9",
+          runtimeReady: () => runtimeReady,
+        },
+      );
+
+      expect(guard.status()).toEqual({ ok: true });
+      observation = { ...base, inode: 11n };
+      clock += 2_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      await scheduler.runNext();
+      expect(attempts).toBe(1);
+      expect(guard.installedVersion()).toBe("9.9.9");
+
+      // A second install puts the bun placeholder back before the admission retry.
+      runtimeReady = false;
+      expect(guard.installedVersion()).toBeUndefined();
+      await scheduler.runNext();
+      expect(attempts).toBe(1);
+      runtimeReady = true;
+      expect(guard.installedVersion()).toBeUndefined();
+
+      await scheduler.runNext();
+      expect(attempts).toBe(1);
+      expect(guard.installedVersion()).toBeUndefined();
+      await scheduler.runNext();
+      expect(attempts).toBe(2);
+      expect(guard.installedVersion()).toBe("9.9.9");
+    });
+
     test("baseline recovery cancels the old timer and starts a fresh debounce", async () => {
       let observation: PackageTreeObservation | null = base;
       let clock = 0;
