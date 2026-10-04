@@ -15,7 +15,7 @@ import { computeCodexUsageScore } from "../../src/codex/routing/cooldown-math";
 import type { WhamUsageResponse } from "../../src/codex/quota";
 
 describe("consumable credits at an included usage limit", () => {
-  const wham = (credits: unknown, allowed = true): WhamUsageResponse => ({
+  const wham = (credits: unknown, allowed = false): WhamUsageResponse => ({
     plan_type: "pro",
     rate_limit: { allowed, primary_window: { used_percent: 100, limit_window_seconds: 604800 } },
     rate_limit_reset_credits: { available_count: 0 },
@@ -63,8 +63,8 @@ describe("consumable credits at an included usage limit", () => {
     expect(computeCodexUsageScore(quota, "pro", Date.now(), true)).toBe(100);
   });
 
-  it("honors an explicit upstream refusal even with a positive balance", () => {
-    expect(isCodexQuotaExhausted(parseUsageQuota(wham(available, false)), "pro", true)).toBe(true);
+  it("keeps an account with spendable credits selectable when the included limit is exhausted (#6571)", () => {
+    expect(isCodexQuotaExhausted(parseUsageQuota(wham(available, false)), "pro", true)).toBe(false);
   });
 
   it("reset tickets alone do not grant automatic spending headroom", () => {

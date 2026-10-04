@@ -30,7 +30,6 @@ export interface CodexSpendableCredits {
   unlimited?: boolean;
   balance?: number;
   overageLimitReached?: boolean;
-  allowed?: boolean;
   observedAt: number;
 }
 
@@ -42,7 +41,7 @@ export function hasSpendableCodexCredits(
   if (!credits || !Number.isFinite(credits.observedAt)) return false;
   const age = now - credits.observedAt;
   if (age < 0 || age > CODEX_CREDITS_FRESHNESS_MS
-    || credits.allowed === false || credits.overageLimitReached === true || credits.hasCredits === false) return false;
+    || credits.overageLimitReached === true || credits.hasCredits === false) return false;
   return credits.unlimited === true || (credits.hasCredits === true
     && typeof credits.balance === "number" && Number.isFinite(credits.balance) && credits.balance > 0);
 }

@@ -17,7 +17,7 @@ import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTra
 import * as mainAccount from "../../src/codex/main-account";
 import * as authCollision from "../../src/codex/auth-collision";
 import { captureMainQuotaWriter, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
-import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { clearAccountQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { clearCodexUpstreamHealth, clearThreadAccountMap, pickLowestUsageCodexAccount } from "../../src/codex/routing";
 import { setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
@@ -118,6 +118,24 @@ test("a full main login allowed to use credits keeps serving", async () => {
   const cfg = config();
   setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
   mainWeekly(100, Date.now() + DAY_MS);
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+    .resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
+});
+
+test("main account with spendable credits parsed from WHAM with rate_limit.allowed false keeps serving (#6571)", async () => {
+  const cfg = config();
+  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
+  const writer = captureMainQuotaWriter(accountId)!;
+  const parsed = parseUsageQuota({
+    plan_type: "pro",
+    rate_limit: {
+      allowed: false,
+      limit_reached: true,
+      primary_window: { used_percent: 100, limit_window_seconds: 604800, reset_at: Math.floor((Date.now() + DAY_MS) / 1000) },
+    },
+    credits: { has_credits: true, unlimited: false, overage_limit_reached: false, balance: "42.5" },
+  });
+  setAccountQuotaFromParsed(MAIN, parsed, undefined, writer);
   await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
     .resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
 });

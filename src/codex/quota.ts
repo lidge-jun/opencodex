@@ -722,7 +722,7 @@ function readMainPolicyQuota(value: unknown): MainPolicyQuota | null {
     const stored = raw.credits as Record<string, unknown>;
     if (typeof stored.observedAt === "number" && Number.isFinite(stored.observedAt) && stored.observedAt >= 0) {
       quota.credits = { observedAt: stored.observedAt };
-      for (const key of ["hasCredits", "unlimited", "overageLimitReached", "allowed"] as const) {
+      for (const key of ["hasCredits", "unlimited", "overageLimitReached"] as const) {
         if (typeof stored[key] === "boolean") quota.credits[key] = stored[key];
       }
       if (typeof stored.balance === "number" && Number.isFinite(stored.balance) && stored.balance >= 0) {
@@ -926,7 +926,6 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
         ...(parsed.hasCredits !== undefined ? { hasCredits: parsed.hasCredits } : {}),
         ...(parsed.unlimited !== undefined ? { unlimited: parsed.unlimited } : {}),
         ...(parsed.overageLimitReached !== undefined ? { overageLimitReached: parsed.overageLimitReached } : {}),
-        ...(typeof data.rate_limit?.allowed === "boolean" ? { allowed: data.rate_limit.allowed } : {}),
         ...(balance !== undefined && Number.isFinite(balance) ? { balance } : {}),
       };
     }
