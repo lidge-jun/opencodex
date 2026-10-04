@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import ClaudeCode from "../src/pages/ClaudeCode";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
+import { readSessionListCacheEntry } from "../src/session-list-cache";
 
 /**
  * The single-page Claude Code settings have one Save bar. These mount the page because the
@@ -19,7 +20,7 @@ beforeEach(() => {
   clearClientResourceStoresForTests();
   const language = Object.getOwnPropertyDescriptor(globalThis.navigator, "language");
   Object.defineProperty(globalThis.navigator, "language", { configurable: true, value: "en-US" });
-  const previous = (["document", "window", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const)
+  const previous = (["document", "window", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const)
     .map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   restoreGlobals = () => {
     for (const [key, descriptor] of previous) {
@@ -29,6 +30,32 @@ beforeEach(() => {
     if (language) Object.defineProperty(globalThis.navigator, "language", language);
     else delete (globalThis.navigator as { language?: string }).language;
   };
+});
+
+test("a successful Save replaces the session copy even when its refresh fails", async () => {
+  const server = { systemEnv: false };
+  let offline = false;
+  globalThis.fetch = (async (input, init) => {
+    if (!String(input).endsWith("/api/claude-code")) return new Response(null, { status: 404 });
+    if (init?.method === "PUT") {
+      Object.assign(server, JSON.parse(String(init.body)));
+      offline = true;
+      return Response.json({ ok: true });
+    }
+    if (offline) return Response.json({ error: "offline" }, { status: 503 });
+    return Response.json({ ...SERVER, autoConnectSupported: true, ...server, modelMap: {} });
+  }) as typeof fetch;
+  const page = await mount();
+  try {
+    await page.click(page.container.querySelector<HTMLInputElement>('input[aria-label="Auto-connect"]')!);
+    await page.click(page.button("Save"));
+    expect(server.systemEnv).toBe(true);
+    const cached = readSessionListCacheEntry<{ state: { systemEnv: boolean } }>("ocx.claude-code.v1:http://localhost");
+    expect(cached?.data?.state.systemEnv).toBe(true);
+  } finally {
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
 });
 
 test("a read begun before a successful Save cannot undo it", async () => {
@@ -139,6 +166,7 @@ async function mount() {
     document: { configurable: true, value: testWindow.document },
     window: { configurable: true, value: testWindow },
     localStorage: { configurable: true, value: testWindow.localStorage },
+    sessionStorage: { configurable: true, value: testWindow.sessionStorage },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
   const { createRoot } = await import("react-dom/client");

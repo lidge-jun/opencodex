@@ -103,6 +103,17 @@ export function applyServerRead(current: ClaudeCodeEditState | null, next: Claud
 }
 
 /**
+ * What the server holds after a successful Save: the last server copy with the submitted
+ * editable fields, and the normalized map (trimmed, no blanks, last duplicate wins).
+ */
+export function savedCopy(serverState: ClaudeCodeState, submitted: ClaudeCodeEditable): ClaudeCodeEditable {
+  return {
+    state: { ...serverState, ...pickEditable(submitted.state) },
+    rows: Object.entries(normalizedModelMap(submitted.rows)).map(([from, to]) => ({ id: newClientId(), from, to })),
+  };
+}
+
+/**
  * A successful PUT makes the submitted draft the new baseline right away, before the
  * refresh lands. Otherwise two things go wrong in that window: an edit that happens to
  * return to the OLD baseline reads as clean and is replaced by the saved value, and Revert
@@ -111,13 +122,9 @@ export function applyServerRead(current: ClaudeCodeEditState | null, next: Claud
  */
 export function acknowledgeSave(current: ClaudeCodeEditState | null, submitted: ClaudeCodeEditable): ClaudeCodeEditState | null {
   if (!current) return current;
-  // The server stores the normalized map (trimmed, no blanks, last duplicate wins), so that is
-  // the baseline, even if the refresh that would show it fails.
-  const rows = Object.entries(normalizedModelMap(submitted.rows)).map(([from, to]) => ({ id: newClientId(), from, to }));
-  const baseline: ClaudeCodeEditable = {
-    state: { ...current.baseline.state, ...pickEditable(submitted.state) },
-    rows,
-  };
+  // The saved copy is the baseline even if the refresh that would show it fails.
+  const baseline = savedCopy(current.baseline.state, submitted);
+  const rows = baseline.rows;
   const unchanged = claudeCodeDraftKey(current.draft) === claudeCodeDraftKey(submitted);
   // Untouched since submission: show what was stored. Edited meanwhile: keep the edits, dirty.
   return { draft: unchanged ? { state: current.draft.state, rows } : current.draft, baseline, adoptNextRead: unchanged };

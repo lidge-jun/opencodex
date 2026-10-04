@@ -25,6 +25,7 @@ import {
   claudeCodeSaveBody,
   isClaudeCodeDraftDirty,
   revertEditable,
+  savedCopy,
   type ClaudeCodeEditState,
 } from "./claude-code-save";
 
@@ -273,8 +274,11 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const save = async () => {
     if (!state || !edit || saving) return;
     const submitted = edit.draft;
+    const serverState = edit.baseline.state;
     setStatus("");
     setSaving(true);
+    // Reads already in flight predate this Save; none of them may reach the draft or cache.
+    writeEpoch.current += 1;
     try {
       const r = await fetch(`${apiBase}/api/claude-code`, {
         method: "PUT",
@@ -284,6 +288,8 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       });
       await readJsonOrThrow(r, t("claude.saveFailed"));
       writeEpoch.current += 1;
+      // Replace the session copy now, so a failed refresh cannot leave pre-Save values to reseed a revisit.
+      writeSessionListCacheEntry(cacheKey, savedCopy(serverState, submitted));
       // The submitted draft is what the server now holds; edits made meanwhile stay dirty.
       setEdit(current => acknowledgeSave(current, submitted));
       setOk(true);
