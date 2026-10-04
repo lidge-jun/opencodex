@@ -93,6 +93,18 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     expect(await response.text()).toContain("No available targets for combo: fan");
   });
 
+  test("a cooldown this request created does not replace the fallback's own refusal", async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const host = new URL(input instanceof Request ? input.url : String(input)).host;
+      return host.startsWith("primary")
+        ? Response.json({ error: { message: "bad gateway", type: "server_error" } }, { status: 502 })
+        : Response.json({ error: { message: "invalid api key", type: "authentication_error" } }, { status: 401 });
+    }) as typeof fetch;
+    const response = await handleResponses(request(), config, { model: "", provider: "" } as RequestLogContext);
+    expect(response.status).toBe(401);
+    expect(await response.text()).toContain("invalid api key");
+  });
+
   test("a fallback 5xx is still the answer", async () => {
     upstream(502, "bad gateway");
     const response = await handleResponses(request(), config, { model: "", provider: "" } as RequestLogContext);

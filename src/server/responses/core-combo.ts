@@ -682,12 +682,15 @@ export async function executeComboResponses(
   // request failed: the primary target ran out. Returning that fallback refusal told clients
   // "OpenAI account pool has no usable account credential" while every Claude account was spent.
   let quotaFailure: Response | undefined;
+  // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
+  // fresh cooldown is not a reason the request found no target.
+  const cooledBeforeDispatch = remainingComboCooldownMs(comboId) !== undefined;
   const exhaustedFailure = (): Response => {
     if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return lastFailure!;
     if (quotaFailure) return quotaFailure;
     // The quota-refused target was cooled before this request picked, so the ladder never saw
     // its refusal. The cooldown, with its Retry-After, is still the honest answer.
-    return remainingComboCooldownMs(comboId) !== undefined ? comboUnavailable(comboId) : lastFailure;
+    return cooledBeforeDispatch ? comboUnavailable(comboId) : lastFailure;
   };
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
