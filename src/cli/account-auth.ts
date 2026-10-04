@@ -1,4 +1,6 @@
 import { writeSync } from "node:fs";
+import { isValidProviderName } from "../config/provider-name";
+import { runCatalogAction } from "./catalog-command-result";
 import { modelSelectionGuidance, modelSelectionNextSteps } from "./model-selection-guidance";
 import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import { isCodexResetCreditOperationId } from "../codex/reset-credit-recovery";
@@ -10,6 +12,8 @@ import {
   rejectArgs,
   runCliAction,
   runtimeRequest,
+  runtimeBaseUrl,
+  terminalSafeText,
   takeFlag,
   takeOption,
   takeOptionWithSyntax,
@@ -34,7 +38,7 @@ function writeStdoutFully(text: string): void {
 }
 
 const USAGE = `Usage:
-  ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method builder-id|google|github] [--code -] [--no-wait] [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method builder-id|google|github] [--open-browser on|off] [--add-account on|off] [--code -] [--no-wait] [--json]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json] (--flow required for codex)
   ocx account reset-credits <account-id|main> [--consume --yes [--operation-id <uuid>]] [--json]
@@ -79,6 +83,62 @@ interface LoginStart {
   expiresAt?: number;
   state?: string;
   warning?: string;
+}
+
+/** Public handoff only. Never spread runtime bodies into terminal or JSON output. */
+function loginObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid login reply");
+  return value as Record<string, unknown>;
+}
+function publicLoginStart(value: unknown, kiro = false): LoginStart {
+  const data = loginObject(value);
+  const out: LoginStart = {};
+  const strings = kiro
+    ? ["flowId", "userCode", "verificationUri", "verificationUriComplete"] as const
+    : ["url", "flowId", "instructions", "deviceCode"] as const;
+  for (const key of strings) {
+    if (data[key] !== undefined && typeof data[key] !== "string") throw new Error("Invalid login handoff field");
+    if (typeof data[key] === "string") out[key] = data[key];
+  }
+  if (typeof data.browserLaunch === "string" && ["started", "failed", "skipped"].includes(data.browserLaunch)) out.browserLaunch = data.browserLaunch as LoginStart["browserLaunch"];
+  if (typeof data.method === "string" && ["builder-id", "google", "github"].includes(data.method)) out.method = data.method as LoginStart["method"];
+  if (typeof data.state === "string" && ["pending", "done", "failed", "expired", "cancelled"].includes(data.state)) out.state = data.state as string;
+  if (typeof data.warning === "string" && ["duplicate_profile_arn", "manual_review_required"].includes(data.warning)) out.warning = data.warning as string;
+  if (typeof data.expiresAt === "number" && Number.isFinite(data.expiresAt)) out.expiresAt = data.expiresAt;
+  return out;
+}
+function publicLoginStatus(value: unknown): Record<string, unknown> {
+  const data = loginObject(value);
+  const out: Record<string, unknown> = {};
+  for (const key of ["accountId", "activeAccountId", "email"]) if (typeof data[key] === "string") out[key] = data[key];
+  for (const key of ["loggedIn", "done", "needsReauth", "validationPending", "catalogRefreshPending"]) {
+    if (data[key] !== undefined && typeof data[key] !== "boolean") throw new Error("Invalid login completion field");
+    if (typeof data[key] === "boolean") out[key] = data[key];
+  }
+  if (typeof data.status === "string" && ["starting", "pending", "done", "error", "expired", "cancelled", "idle"].includes(data.status)) out.status = data.status;
+  if (typeof data.source === "string" && ["oauth", "local-cli", "credential-file", "environment", "manual"].includes(data.source)) out.source = data.source;
+  if (data.hint && typeof data.hint === "object" && !Array.isArray(data.hint)) out.hint = publicLoginStart(data.hint);
+  if (Array.isArray(data.accounts)) out.accounts = data.accounts.map(value => {
+    const row = loginObject(value);
+    const account: Record<string, unknown> = {};
+    for (const key of ["id", "alias", "email"]) if (typeof row[key] === "string") account[key] = row[key];
+    for (const key of ["active", "needsReauth"]) if (typeof row[key] === "boolean") account[key] = row[key];
+    if (row.needsReauthReason === "verify_account") account.needsReauthReason = "verify_account";
+    if (typeof row.expiresAt === "number" && Number.isFinite(row.expiresAt)) account.expiresAt = row.expiresAt;
+    if (row.plan === null) account.plan = null;
+    return account;
+  });
+  return out;
+}
+function loginBoolean(args: string[], flag: string): boolean | undefined {
+  const option = takeOptionWithSyntax(args, flag);
+  if (!option) return undefined;
+  if (option.value !== "on" && option.value !== "off") throw new CliUsageError(`${flag} must be on or off`, USAGE);
+  return option.value === "on";
+}
+function writeLoginInstructions(lines: readonly string[]): void {
+  const block = lines.filter(line => line !== "").flatMap(line => line.split("\n")).map(terminalSafeText).join("\n");
+  if (block) writeStdoutFully(`${block}\n`);
 }
 
 /**
@@ -136,7 +196,7 @@ async function resolveCode(
   return await readSecretLine(deps, "authorization code");
 }
 
-async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | void> {
   const args = [...argv];
   const provider = args.shift()?.trim().toLowerCase();
   const wantsJson = takeFlag(args, "--json");
@@ -146,34 +206,39 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const method = takeOption(args, "--method");
   const id = takeOption(args, "--id");
   const suppliedCode = takeOptionWithSyntax(args, "--code");
+  const openBrowser = loginBoolean(args, "--open-browser");
+  const addAccount = loginBoolean(args, "--add-account");
+  if (provider && !isValidProviderName(provider)) throw new CliUsageError("invalid provider name", USAGE);
   if (!provider) throw new CliUsageError("provider is required", USAGE);
   if (method !== undefined) {
     if (provider !== "kiro" || !["builder-id", "google", "github"].includes(method)) {
       throw new CliUsageError("--method requires kiro and builder-id, google, or github", USAGE);
     }
     if (reauth || id) throw new CliUsageError("native Kiro device login only adds accounts; remove and re-add to reauthenticate", USAGE);
+    if (openBrowser !== undefined || addAccount !== undefined) throw new CliUsageError("native Kiro --method does not accept --open-browser or --add-account", USAGE);
     if (device || suppliedCode) throw new CliUsageError("--method cannot be combined with --device or --code", USAGE);
   }
-  // A bare leftover here is plausibly the authorization code itself: this flow takes one
-  // through --code, and a user who pastes it as a positional would otherwise see it echoed
-  // back in the usage error. `ocx login codex` reaches this parser too, so the paste lands
-  // one word away from a command people run constantly. Flag-shaped leftovers stay visible,
-  // because a mistyped flag is exactly what the message has to name.
-  rejectArgs(args, USAGE, { redactValues: true });
+  // A malformed leftover may contain pasted authorization input, even inside an
+  // unknown flag. New login parsing reports only a fixed usage diagnostic.
+  if (args.length) throw new CliUsageError("Unexpected arguments or repeated options", USAGE);
   // kimi, nous, and github-copilot are already device flows, so --device is a
   // true statement about them and is accepted as a no-op rather than an error.
   // Anything else has no device grant at all and must fail loudly.
   if (device && !CODEX_NAMES.has(provider) && !DEVICE_NATIVE_PROVIDERS.has(provider)) {
-    throw new CliUsageError(`--device is not supported for provider '${provider}'`, USAGE);
+    throw new CliUsageError("--device is not supported for this provider", USAGE);
   }
+  if (addAccount !== undefined && (reauth || CODEX_NAMES.has(provider))) throw new CliUsageError("--add-account is only valid for fresh provider OAuth login", USAGE);
+  if (openBrowser !== undefined && (device || DEVICE_NATIVE_PROVIDERS.has(provider))) throw new CliUsageError("--open-browser is not supported for device login", USAGE);
+  if (!CODEX_NAMES.has(provider) && id && !reauth) throw new CliUsageError("--id is only valid with --reauth for provider OAuth accounts", USAGE);
   // Only resolve when --code was actually given: a plain `ocx account login`
   // opens the browser flow and polls, and must not block on stdin.
   const code = await resolveCode(suppliedCode, deps, false);
+  const pinned = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
 
   if (method) {
-    const start = await runtimeRequest<LoginStart>("/api/oauth/login", {
-      method: "POST", body: JSON.stringify({ provider: "kiro", method }),
-    }, deps);
+    const start = publicLoginStart(await runtimeRequest<unknown>("/api/oauth/login", {
+      method: "POST", redirect: "error", body: JSON.stringify({ provider: "kiro", method }),
+    }, pinned), true);
     if (!wantsJson) {
       const block = formatKiroDeviceInstructions(start);
       if (block) writeStdoutFully(`${block}\n`);
@@ -182,7 +247,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     if (!start.flowId) throw new CliUsageError("Kiro device login did not return a flow id");
     for (let attempt = 0; attempt < 450; attempt++) {
       await Bun.sleep(2_000);
-      const state = await runtimeRequest<LoginStart>(`/api/oauth/status?provider=kiro&flowId=${encodeURIComponent(start.flowId)}`, {}, deps);
+      const state = publicLoginStart(await runtimeRequest<unknown>(`/api/oauth/status?provider=kiro&flowId=${encodeURIComponent(start.flowId)}`, { redirect: "error" }, pinned), true);
       if (state.state === "done") {
         printData(state, wantsJson, ["Logged in to kiro.", ...(state.warning ? [`Warning: ${state.warning}`] : [])]);
         return;
@@ -195,31 +260,33 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }
 
   if (CODEX_NAMES.has(provider)) {
-    const start = await runtimeRequest<LoginStart>("/api/codex-auth/login", {
-      method: "POST",
+    const start = publicLoginStart(await runtimeRequest<unknown>("/api/codex-auth/login", {
+      method: "POST", redirect: "error",
       body: JSON.stringify({
         ...(id ? { id } : {}),
         ...(reauth ? { reauth: true } : {}),
         ...(device ? { device: true } : {}),
+        ...(openBrowser === undefined ? {} : { openBrowser }),
       }),
-    }, deps);
+    }, pinned));
     if (!wantsJson) {
       // One atomic pre-poll block, flushed synchronously so a piped parent
       // reads the URL before the polling window starts (#1007).
-      const block = [
+      writeLoginInstructions([
         start.url ? `Open this URL to sign in:\n${start.url}` : "",
         start.deviceCode ? `Device code: ${start.deviceCode}` : "",
         start.instructions ?? "",
         start.browserLaunch === "failed" ? BROWSER_LAUNCH_FAILED_HINT : "",
         start.flowId ? `Flow: ${start.flowId}` : "",
-      ].filter(line => line !== "").join("\n");
-      if (block) writeStdoutFully(`${block}\n`);
+      ]);
     }
+    if (code && !start.flowId) throw new Error("Code submission requires a returned flow id");
     if (code && start.flowId) {
-      await runtimeRequest("/api/codex-auth/login/code", {
-        method: "POST",
+      const submitted = await runtimeRequest("/api/codex-auth/login/code", {
+        method: "POST", redirect: "error",
         body: JSON.stringify({ flowId: start.flowId, input: code }),
-      }, deps);
+      }, pinned);
+      if (loginObject(submitted).ok !== true) throw new Error("Code submission was not accepted");
     }
     if (noWait) {
       printData({ ...start, modelSelection: modelSelectionNextSteps("openai", true) }, wantsJson, modelSelectionGuidance("openai", true));
@@ -233,10 +300,11 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     const maxAttempts = device ? 480 : 150;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await Bun.sleep(2_000);
-      const state = await runtimeRequest<Record<string, unknown>>(
+      const state = publicLoginStatus(await runtimeRequest<unknown>(
         `/api/codex-auth/login-status?flowId=${encodeURIComponent(start.flowId)}${id ? `&accountId=${encodeURIComponent(id)}` : ""}${reauth ? "&reauth=1" : ""}`,
-        {}, deps,
-      );
+        { redirect: "error" }, pinned,
+      ));
+      if (start.flowId) state.flowId = start.flowId;
       if (state.status === "done") {
         if (state.validationPending === true) {
           printData({ ...state, recoveryCommand: "ocx gui", recoveryAction: "After quota recovers, click Refresh quotas in the dashboard Codex account pool." }, wantsJson, [
@@ -247,33 +315,32 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
           printData({ ...state, modelSelection: modelSelectionNextSteps("openai") }, wantsJson, [`Logged in${state.email ? ` as ${String(state.email)}` : ""}.`, ...modelSelectionGuidance("openai")]);
         }
         if (!wantsJson) warnIfCodexCatalogRefreshPending(state);
-        return;
+        return state.validationPending === true || state.catalogRefreshPending === true ? 1 : 0;
       }
-      if (state.status === "error" || state.status === "expired") {
-        throw new CliUsageError(String(state.error ?? `login ${state.status}`));
+      if (state.status === "error" || state.status === "expired" || state.status === "cancelled") {
+        throw new Error("Login failed or expired");
       }
     }
     throw new CliUsageError("login timed out");
   }
 
-  if (id && !reauth) throw new CliUsageError("--id is only valid with --reauth for provider OAuth accounts", USAGE);
-  const start = await runtimeRequest<LoginStart>("/api/oauth/login", {
-    method: "POST",
-    body: JSON.stringify({ provider, addAccount: !reauth, ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
-  }, deps);
+  const start = publicLoginStart(await runtimeRequest<unknown>("/api/oauth/login", {
+    method: "POST", redirect: "error",
+    body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
+  }, pinned));
   if (!wantsJson) {
-    const block = [
+    writeLoginInstructions([
       start.url ? `Open this URL to sign in:\n${start.url}` : "",
       start.instructions ?? "",
       start.deviceCode ? `Device code: ${start.deviceCode}` : "",
-    ].filter(line => line !== "").join("\n");
-    if (block) writeStdoutFully(`${block}\n`);
+    ]);
   }
   if (code) {
-    await runtimeRequest("/api/oauth/login/code", {
-      method: "POST",
+    const submitted = await runtimeRequest("/api/oauth/login/code", {
+      method: "POST", redirect: "error",
       body: JSON.stringify({ provider, input: code }),
-    }, deps);
+    }, pinned);
+    if (loginObject(submitted).ok !== true) throw new Error("Code submission was not accepted");
   }
   if (noWait) {
     printData({ ...start, modelSelection: modelSelectionNextSteps(provider, true) }, wantsJson, modelSelectionGuidance(provider, true));
@@ -281,8 +348,10 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }
   for (let attempt = 0; attempt < 100; attempt++) {
     await Bun.sleep(2_000);
-    const state = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}`, {}, deps);
-    if (state.error) throw new CliUsageError(String(state.error));
+    const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}`, { redirect: "error" }, pinned);
+    if (loginObject(raw).error) throw new Error("Provider login failed");
+    const state = publicLoginStatus(raw);
+    if (state.done === true && state.loggedIn !== true) throw new Error("Provider login ended without authentication");
     if (state.loggedIn === true) {
       printData({ ...state, modelSelection: modelSelectionNextSteps(provider) }, wantsJson, [`Logged in to ${provider}.`, ...modelSelectionGuidance(provider)]);
       return;
@@ -413,7 +482,7 @@ async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<v
 
 export async function handleAccountAuthCommand(sub: string, argv: string[], deps: RuntimeApiDeps = {}): Promise<number | null> {
   let action: (() => Promise<void>) | undefined;
-  if (sub === "login" || sub === "reauth") action = () => login(sub === "reauth" ? [...argv, "--reauth"] : argv, deps);
+  if (sub === "login" || sub === "reauth") return runCatalogAction(() => login(sub === "reauth" ? [...argv, "--reauth"] : argv, deps));
   else if (sub === "code") action = () => code(argv, deps);
   else if (sub === "cancel") action = () => cancel(argv, deps);
   else if (sub === "reset-credits") action = () => resetCredits(argv, deps);

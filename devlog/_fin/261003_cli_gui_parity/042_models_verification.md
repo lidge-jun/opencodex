@@ -1,0 +1,29 @@
+# wp4 — Exact model identities and routing edits from the terminal
+
+Six task rows now have direct model/routing workflows: custom models on the selected proxy, display-name overrides, picker order, combo target policy, JEV statistics and routing-profile writes. Existing cost overrides and local behavior remain available. The declared CLI index reaches 300 entries; capability and route metadata describe the actual conditional transports.
+
+## What changed
+
+Live custom removal uses the complete target roster and exact stored IDs or unambiguous provider/raw selection. Display-name writes use raw upstream IDs, while picker commands use observed public identities. Manual picker lists are complete permutations with the fixed featured prefix; a pre-save reread refuses observed drift. Native-inclusive saved orders require explicit reset before routed replacement. This is an intentional CLI guard, not a claim that the GUI has the same extra step or that the server provides ordering CAS.
+
+Routing profile files contain editable fields only, update requires the caller's revision, and create/update/remove remain distinct operations. The server retains contextual validation and may activate already-enabled Lab automation. New errors use safe fixed diagnostics and distinct status exits; no current-revision substitution or retry is hidden.
+
+Combo structured target files preserve order/metadata, explicit false and default values. A file replaces targets without resetting unrelated strategy, public identity or effort policy; legacy CSV behavior remains compatible. Presence-based native-alias off, image auto and reasoning strict survive both merge stages. JEV statistics report actual decision/token/coverage and nullable/incomplete observations; source revalidation corrected the inventory's unsupported savings wording.
+
+Local custom-model JSON preserves opportunistic sync semantics. No proxy means saved/pending success; attempted nonconvergence is nonzero. The pure safe sync projection is shared with the previous provider layer without changing provider's explicit-sync requirement. New write DTOs remain domain-owned; a small shared helper only normalizes catalog evidence and numeric output.
+
+## Verification and review
+
+Same-architect reflection, independent A and security A accepted the exact executable amendment. Independent functional and security code reviews ended PASS; final targeted re-reviews also passed after a real-handler regression exposed unrelated settings being reset by a targets-file replacement. The failing test was retained, the narrow file-only merge was corrected, and 66 combo/partial-update tests passed. Review receipts are `.tmp/cli-parity/wp4-code-review.md` and `wp4-security-code.md`; prior/intermediate results are retained as history.
+
+The domain slices passed 82 custom-model tests, 119 order/display tests, 80 profile tests and 95 combo/statistics tests before the final additional preservation case. Independent review ran 419 focused tests and ten isolated root-dispatch scenarios. Main's outcome tests passed 24 cases. Actual server fixtures cover custom persistence/deletion, display-name saved HTTP503, ordering fields, profile conflicts/alias changes/deletion and combo false/carry semantics. GUI conformance tests are accompanied by independent expected-order cases; matching duplicate implementations is not the only proof.
+
+Existing headless/partial-update fixtures were updated to actual mutation receipts, and documented workflow tests now understand the explicit shell-redirection/placeholder examples without evaluating a shell. Their 50-case contract run passed. Local CLI fixture subprocesses isolate Codex homes and stub liveness rather than depending on whether the developer's real proxy is running. Final source-bound checks and exact commit are archived with the work-phase receipt and published on the PR.
+
+Twenty-five actual CLI scenarios passed against a management fixture with all sockets forbidden. They cover live add, ambiguous/confirmed deletion, raw display-name set and saved HTTP503, order status/most-used/manual/fixed-prefix/drift/native reset, profile create/update/stale/delete confirmation, combo target-file explicit false, empty JEV observations, local pending JSON save/removal and malformed profile input. Main inspected the partial receipt, native-order recovery message and exact combo body retaining strategy/sticky/effort while transmitting false/auto/strict. Application file hashes stay unchanged for live actions; only owned local-write scenarios alter their fixture config. All subprocesses ended and the fixture tree was removed. This is CLI/transport/output proof, not live provider proof; real isolated handler tests supply the persistence authority. Evidence: `.codexclaw/evidence/01a10024-8d6f-7500-b528-38212c4bc396/qa/parity-wp4/`.
+
+## Limits and falsification
+
+The full local suite was not repeated across concurrent worktrees. Relevant parsers, indirect source assertions, actual server/backend fixtures, help/docs generation, type/structure/privacy/file-size gates and exact-head hosted CI supply the scoped and broad proof; pending/skipped CI is not a pass. No live user configuration, credential, paid inference, service restart or deployment was used.
+
+Picker and combo edits do not gain server CAS; profile DELETE is not revision protected. A valid stored receipt does not prove every client has converged. Most-used rejects incomplete observations; missing JEV measurements are not measured zeros. Any opposite result must reopen the corresponding task. The rejected implementation hypothesis was that target-file replacement could reuse the legacy full replacement constructor without carrying unrelated state. The next cycle is wp5 accounts/runtime settings, started from its own P/A source revalidation.

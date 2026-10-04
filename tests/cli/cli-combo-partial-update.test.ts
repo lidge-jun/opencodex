@@ -11,7 +11,11 @@ function runtime(row: Record<string, unknown> | undefined = original) {
   const deps: RuntimeApiDeps = { baseUrl: "http://localhost:10100", fetchImpl: (async (_input, init) => {
     const method = init?.method ?? "GET";
     requests.push({ method, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
-    return Response.json(method === "GET" ? { combos: row ? [row] : [] } : { success: true });
+    if (method === "GET") return Response.json({ combos: row ? [row] : [] });
+    const saved = JSON.parse(String(init?.body)) as { id: string; combo: Record<string, unknown> };
+    const combo = Object.fromEntries(Object.entries(saved.combo).filter(([key, value]) => value !== null || key === "defaultEffort"));
+    return Response.json({ success: true, id: saved.id, model: typeof combo.alias === "string" && combo.alias.trim() ? combo.alias.trim() : `combo/${saved.id}`, combo,
+      catalogRefresh: { status: "committed", changed: true, degraded: false, notices: [] } });
   }) as typeof fetch };
   return { requests, deps, body: () => requests.find(request => request.method === "PUT")?.body };
 }

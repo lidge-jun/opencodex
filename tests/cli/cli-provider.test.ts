@@ -15,8 +15,16 @@ const isolatedCodexHome = mkdtempSync(join(tmpdir(), "ocx-prov-codex-home-"));
 // routinely blow the 5s default before --help returns; the spawn IS the assertion.
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
-function runCli(args: string[], env: Record<string, string> = {}) {
-  return spawnSync(process.execPath, [cliPath, ...args], {
+function runCli(args: string[], env: Record<string, string> = {}, noProxy = false) {
+  const preload = noProxy ? join(env.OPENCODEX_HOME!, "no-proxy.ts") : undefined;
+  if (preload) writeFileSync(preload, `
+    import { mock } from "bun:test";
+    const path = ${JSON.stringify(join(repoRoot, "src/server/proxy-liveness.ts"))};
+    const original = await import(path);
+    mock.module(path, () => ({ ...original, findLiveProxy: async () => null }));
+    globalThis.fetch = () => { throw new Error("fixture network forbidden"); };
+  `);
+  return spawnSync(process.execPath, [...(preload ? ["--preload", preload] : []), cliPath, ...args], {
     cwd: repoRoot,
     // ALWAYS isolate CODEX_HOME: `provider add --sync` runs syncModelsToCodex, which rewrites the
     // catalog under CODEX_HOME. With the real ~/.codex and a config.port matching the live proxy,
@@ -665,25 +673,26 @@ describe("ocx provider mutating --json", () => {
 });
 
 describe("ocx provider add --sync", () => {
-  test("provider add --sync flag is accepted without error", () => {
+  test("provider add --sync preserves save but fails honestly without a proxy", () => {
     const { dir } = freshConfig();
     try {
-      // --sync without a running proxy should still succeed (sync silently skipped)
-      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--sync"], { OPENCODEX_HOME: dir });
-      expect(result.status).toBe(0);
+      // A requested sync cannot succeed without a running proxy; the local save survives.
+      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--sync"], { OPENCODEX_HOME: dir }, true);
+      expect(result.status).toBe(1);
       expect(result.stdout).toContain("deepseek");
     } finally {
       removeTreeWithRetry(dir);
     }
   }, 15_000);
 
-  test("provider add --sync --json reports needsSync false", () => {
+  test("provider add --sync --json attempts sync and reports unavailable", () => {
     const { dir } = freshConfig();
     try {
-      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--sync", "--json"], { OPENCODEX_HOME: dir });
-      expect(result.status).toBe(0);
+      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test", "--sync", "--json"], { OPENCODEX_HOME: dir }, true);
+      expect(result.status).toBe(1);
       const parsed = JSON.parse(result.stdout);
-      expect(parsed.needsSync).toBe(true); // JSON mode skips sync, always reports needsSync=true
+      expect(parsed.needsSync).toBe(true);
+      expect(parsed.sync).toEqual({ status: "not-running", ok: false });
     } finally {
       removeTreeWithRetry(dir);
     }

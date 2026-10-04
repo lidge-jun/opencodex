@@ -147,9 +147,9 @@ added only to a writer would let a mutation bypass the state users saw.
 
 ## Read-only mutation plans
 
-An operator confirming apply, overwrite, disable or undo is agreeing to consequences they were
-never shown. A plan is what shows them, and it is only trustworthy if it describes the operation
-that will actually run.
+The CLI owner `src/cli/integration-preview.ts` exposes the same preview and optional flat operation/planFingerprint binding. `src/cli/integration-plan-dto.ts` validates structural plans at the wire boundary; `src/cli/integration-input.ts` preserves exact profile/default-map intent. Droid map omission inherits, explicit entries replace, and clear sends an empty map. `src/cli/integration-journal.ts` retires confirmed history entries through existing owners and reports snapshot cleanup separately; `src/cli/integration-aside-sync.ts` uses the established attested sync helper unchanged. Neither command creates new management authority.
+
+An operator confirming apply, overwrite, disable or undo is agreeing to consequences they were never shown. A plan is what shows them, and it is only trustworthy if it describes the operation that will actually run.
 
 One observation serves both. `mutation-plan.ts` owns the read, parse, contribution build, record
 selection and classification that the writer used to perform itself, so a preview and the mutation

@@ -593,7 +593,7 @@ Subagent account previews and live routing share the [priority failback](provide
 
 ## Reasoning metadata refresh
 
-Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the optional
+The sync result in `src/codex/sync.ts` preserves the catalog owner's optional refreshOutcome even when config injection reports applied; injection success alone does not prove catalog convergence. [Provider CLI receipts](cli-management.md#provider-live-operations-and-bounded-editor-input) keep that distinction. Startup and explicit catalog synchronization refresh the optional
 `src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
 gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
 `src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh

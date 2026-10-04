@@ -1171,7 +1171,7 @@ describe("login routes the Codex account names instead of printing the provider 
     for (const name of ["codex", "chatgpt", "openai", "CODEX", " codex "]) {
       const result = await runLogin([name]);
       expect(result.code, `${name} must route to the account login`).toBe(1);
-      expect(result.err).toContain("Proxy is not running");
+      expect(result.err).toContain("Management API is unavailable");
       expect(result.err).not.toContain("Usage: ocx login <provider>");
     }
   });
@@ -1215,7 +1215,8 @@ describe("login routes the Codex account names instead of printing the provider 
   test("an unsupported flag is still rejected as a usage error", async () => {
     const result = await runLogin(["codex", "--nope"]);
     expect(result.code).toBe(2);
-    expect(result.err).toContain("Unexpected argument(s): --nope");
+    expect(result.err).toContain("Unexpected arguments or repeated options");
+    expect(result.err).toContain("ocx account login");
   });
 
   test("a name that is not a Codex spelling still gets the provider wall, not the account path", async () => {
