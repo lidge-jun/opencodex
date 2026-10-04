@@ -358,12 +358,12 @@ export async function prepareAdapterExchange(
       const compactPrepaid = options.compactionRecoveryAttempted ? sendBudgetState.pendingHopPermit : undefined;
       if (compactPrepaid) sendBudgetState.pendingHopPermit = undefined;
       let compactPrepaidUsed = false;
-      // Combo admission already books this child and derives its target allowance from the
-      // shared ledger. Its initial ceiling is target-local; subtracting the ledger again
-      // would discard the booking and starve later declared targets.
+      // Combo and emergency compaction admission already book this target's first send.
+      // Its configured initial ceiling is target-local; the shared remainder below still
+      // accounts for earlier targets without deducting their sends from this target twice.
       const initialSendCap = transientPolicy || resetReplayPolicyFor(route.provider)
         ? transientSendCapFor(transientPolicy?.attempts,
-          options.comboAttempt ? 0 : sendBudgetState.sendsUsed - (compactPrepaid ? 1 : 0))
+          (options.comboAttempt || compactPrepaid) ? 0 : sendBudgetState.sendsUsed)
         : 1;
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry

@@ -12,7 +12,7 @@ self-contained routed v1/v2 compaction in `core.ts` and `compact.ts`; normal and
 requests keep their original route. One configured emergency target shares the original send
 and translation budgets. Physical-send receipts and explicit retry-helper reports reconcile legacy
 fetch sends without double charging external reservations; one prepaid emergency permit is shared
-with adapter dispatch, and only additional retries draw from the remainder. Adapter observers retain partial-output and structured denial evidence
+with adapter dispatch, and only additional retries draw from the remainder. The emergency target's configured initial allowance is intersected with that shared remainder plus its prepaid send; source-provider sends are not deducted from the emergency target's allowance a second time. Adapter observers retain partial-output and structured denial evidence
 before response projection. Native encrypted compaction, uploaded files, stored continuations,
 and policy/combo routes are excluded. Emergency output must contain one readable portable
 compaction item; recent original user messages are retained verbatim, and recovery failure keeps
