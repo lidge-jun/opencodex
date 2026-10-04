@@ -2,6 +2,11 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "codex-shim-overlay.test.ts": "codex-integration",
+    "codex-shim-migration.test.ts": "codex-integration",
+    "codex-shim-overlay-transaction.test.ts": "codex-integration",
+    "codex-shim-overlay-readiness.test.ts": "codex-integration",
+    "codex-shim-overlay-candidates.test.ts": "codex-integration",
     "usage-antigravity-55.test.ts": "usage",
     "provider-antigravity-wire-snapshot.test.ts": "providers",
     "antigravity-discovered-families.test.ts": "adapters/google",

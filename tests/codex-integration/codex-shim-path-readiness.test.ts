@@ -29,6 +29,77 @@ function fixture() {
 }
 
 describe("connect readiness PATH inspection", () => {
+  test.skipIf(process.platform === "win32").each([
+    { kind: "ordinary file", shim: false, symlink: false, executable: false },
+    { kind: "shim file", shim: true, symlink: false, executable: false },
+    { kind: "ordinary symlink", shim: false, symlink: true, executable: false },
+    { kind: "shim symlink", shim: true, symlink: true, executable: false },
+    { kind: "ordinary executable", shim: false, symlink: false, executable: true },
+    { kind: "shim executable", shim: true, symlink: false, executable: true },
+  ])("$kind agrees with shell command lookup", ({ shim, symlink, executable }) => {
+    const f = fixture();
+    const content = (isShim: boolean) => `#!/bin/sh\n${isShim ? `# ${marker}\n` : ""}exit 0\n`;
+    const target = symlink ? join(f.root, "package-codex") : f.command;
+    fs.writeFileSync(target, content(shim), { mode: executable ? 0o755 : 0o644 });
+    if (symlink) fs.symlinkSync(target, f.command);
+    fs.writeFileSync(f.fallback, content(!shim));
+    const env = { ...process.env, PATH: f.pathValue, OPENCODEX_HOME: join(f.root, "home") };
+    const shell = spawnSync("/bin/sh", ["-c", "command -v codex"], { env, encoding: "utf8", timeout: 3000 });
+    expect(shell.error).toBeUndefined();
+    expect(shell.status).toBe(0);
+    const expectedPath = executable ? f.command : f.fallback;
+    const expectedShim = executable ? shim : !shim;
+    expect(shell.stdout.trim()).toBe(expectedPath);
+    const scanner = new URL("../../src/codex/shim-path-resolution.ts", import.meta.url).href;
+    const readiness = new URL("../../src/cli/codex-shim-readiness.ts", import.meta.url).href;
+    const script = `
+      const { findFirstCodexOnPath } = await import(${JSON.stringify(scanner)});
+      const { inspectCodexShimForConnect } = await import(${JSON.stringify(readiness)});
+      console.log(JSON.stringify({
+        candidate: findFirstCodexOnPath({ wsl: false }),
+        result: inspectCodexShimForConnect({
+          diagnose: () => ({ installed: true, healthy: true, summary: "fixture" }),
+        }),
+      }));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      env, encoding: "utf8", timeout: 3000, killSignal: "SIGKILL",
+    });
+    expect(child.error).toBeUndefined();
+    expect(child.status).toBe(0);
+    const output = JSON.parse(child.stdout);
+    expect(output.candidate).toEqual({ path: shell.stdout.trim(), isShim: expectedShim });
+    expect(output.result.status).toBe(expectedShim ? "ready" : "missing");
+  });
+
+  test.skipIf(process.platform === "win32")("a non-executable shim alone is not a PATH command", () => {
+    const f = fixture();
+    fs.writeFileSync(f.command, `#!/bin/sh\n# ${marker}\n`, { mode: 0o644 });
+    const shell = spawnSync("/bin/sh", ["-c", "command -v codex"], {
+      env: { ...process.env, PATH: f.first }, timeout: 3000,
+    });
+    expect(shell.error).toBeUndefined();
+    expect(shell.status).not.toBe(0);
+    expect(findFirstCodexOnPath({ pathValue: f.first, wsl: false })).toBeNull();
+  });
+
+  test.skipIf(process.platform !== "win32")("Windows PATHEXT lookup does not require POSIX execute access", () => {
+    const f = fixture();
+    const cmd = `${f.command}.cmd`;
+    fs.writeFileSync(cmd, `@echo off\r\nREM ${marker}\r\n`, { mode: 0o644 });
+    fs.writeFileSync(`${f.command}.exe`, "ordinary launcher", { mode: 0o644 });
+    const previous = process.env.PATHEXT;
+    const access = spyOn(fs, "accessSync").mockImplementation(() => { throw new Error("POSIX access check"); });
+    try {
+      process.env.PATHEXT = ".CMD;.EXE";
+      expect(findFirstCodexOnPath({ pathValue: f.pathValue, wsl: false })).toEqual({ path: cmd, isShim: true });
+      expect(access).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = previous;
+    }
+  });
+
   test("a real healthy tracked shim outside PATH does not imply connect readiness", () => {
     const f = fixture();
     const home = join(f.root, "home");
@@ -71,7 +142,7 @@ describe("connect readiness PATH inspection", () => {
       expect(spawnSync("mkfifo", [fifo], { timeout: 3000 }).status).toBe(0);
       if (mode === "fifo") fs.renameSync(fifo, f.command);
       else if (mode === "symlink") fs.symlinkSync(fifo, f.command);
-      else fs.writeFileSync(f.command, "ordinary launcher");
+      else fs.writeFileSync(f.command, "ordinary launcher", { mode: 0o755 });
       const scanner = new URL("../../src/codex/shim-path-resolution.ts", import.meta.url).href;
       const readiness = new URL("../../src/cli/codex-shim-readiness.ts", import.meta.url).href;
       const script = `
@@ -154,14 +225,14 @@ describe("connect readiness PATH inspection", () => {
 
   test("does not search beyond the 16 KiB header or skip that first command", () => {
     const f = fixture();
-    fs.writeFileSync(f.command, `${" ".repeat(16 * 1024)}${marker}`);
+    fs.writeFileSync(f.command, `${" ".repeat(16 * 1024)}${marker}`, { mode: 0o755 });
     expect(findFirstCodexOnPath({ pathValue: f.pathValue, wsl: false }))
       .toEqual({ path: f.command, isShim: false });
   });
 
   test("handles short reads and closes the descriptor", () => {
     const f = fixture();
-    fs.writeFileSync(f.command, `#!/bin/sh\n# ${marker}\n`);
+    fs.writeFileSync(f.command, `#!/bin/sh\n# ${marker}\n`, { mode: 0o755 });
     const realRead = fs.readSync;
     const read = spyOn(fs, "readSync").mockImplementation(((fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: number | null) =>
       realRead(fd, buffer, offset, Math.min(length, 3), position)) as typeof fs.readSync);
@@ -174,7 +245,7 @@ describe("connect readiness PATH inspection", () => {
 
   test("a failed regular-file read preserves shadowing and closes its descriptor", () => {
     const f = fixture();
-    fs.writeFileSync(f.command, "ordinary launcher");
+    fs.writeFileSync(f.command, "ordinary launcher", { mode: 0o755 });
     spyOn(fs, "readSync").mockImplementation(() => { throw new Error("synthetic read failure"); });
     const close = spyOn(fs, "closeSync");
     expect(findFirstCodexOnPath({ pathValue: f.pathValue, wsl: false }))
