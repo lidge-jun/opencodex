@@ -76,7 +76,7 @@ describe("loopback listener policy view", () => {
       'await handleClaudeCountTokens(req, config, policy, { claudeIntercept: ingress === "claude-intercept" })',
     );
     expect(source.slice(messagesStart, chatStart)).toContain(
-      'await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" })',
+      'await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" })',
     );
     for (const branch of [
       source.slice(countTokensStart, messagesStart),

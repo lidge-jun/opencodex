@@ -1,0 +1,25 @@
+# Devin conversation trajectory replacement
+
+Depends on roadmap; serial execution follows caller publication solely for checkout ownership. Branch `codex/next-release-261004-cache-devin` starts independently at refreshed dev. Implements #6488 with DT-01..04 refinements.
+
+## File delta
+
+NEW `src/adapters/devin/trajectory.ts`: small provider-local claim/release API and bounded process-local store. Key = fixed digest of structured tuple [devinCacheIdentity(resolvedApiKey,resolvedHost), conversation], retaining no raw token/conversation. Map holds at most 256 entries {id,active}; insertion order is recency. Existing inactive key becomes active and is refreshed. Matching active key -> unretained fresh request trajectory. For a new key evict oldest inactive entry; if all 256 active, return unretained fresh trajectory. Never evict active entries. Release closure marks only its entry inactive, safely repeatable. Unnamed turns return no override and keep per-request wire UUID fallback. No timers, persistence or new dependency.
+
+MODIFY `src/adapters/devin.ts`: import claim helper; derive conversation from own thread-id, then session_id/session-id/x-session-affinity, then parsed._clientThreadId only when no parent header identifies it as a shared parent. Preserve source direct internal _clientThreadId behavior without coalescing explicit siblings. Claim inside outer try after credential, tenant host, catalog and cancellation guards; pass trajectoryId into the existing chat request; release in finally after all returns/errors/retries. Claim remains live through reset/signature retry.
+
+MODIFY `src/adapters/devin/cloud-direct/chat.ts`: add optional trajectoryId to BuildArgs and CloudChatRequest, forward in streamChatEvents to buildGetChatMessageRequest, replace #15.1 randomUUID with `args.trajectoryId ?? crypto.randomUUID()`. Creation: adapter claim; serialization: protobuf #15.1; deserialization: none (outbound-only); consumer: remote Cognition plus local wire-decoding tests. No external support or hit-rate claim beyond original author report.
+
+MODIFY `tests/providers/devin-prompt-cache.test.ts`: preserve source wire override/default tests and named reuse/unnamed/overlap/HTTP400-release cases. NEW `tests/providers/devin-trajectory.test.ts`: pure store isolation/bounds plus adapter cases as appropriate. Cases: new request-scoped adapters reuse named ID; changed credential/host/conversation separates; own sibling thread IDs outrank shared parent; three overlapping turns distinct; later sequential turn reuses original; post-claim abort and failure release; >256 inactive names evict oldest; 256 active entries never evict, overflow unretained and distinct. Use deterministic barriers with bounded failure deadline and finally teardown. Public claim API is production API, no test-only reset export.
+
+MODIFY both test layout registries for the new providers test. MODIFY `structure/providers-and-adapters.md` and `docs-site/src/content/docs/reference/adapters.md`: describe credential/host/conversation scope, overlap, bounded process-local lifetime and no guarantee of upstream cache savings. Review other owning structure docs for affected semantics.
+
+## Verification and source coverage
+
+Carry all source runtime and regression behavior, with deliberate replacement of raw delimiter key, uncapped live set, and parent-first identity. Preserve optional field fallback and all existing reset/signature handling. Scoped implementation leaf owns runtime/tests/layout; main owns docs and verification.
+
+Run `bun test tests/providers/devin-*.test.ts tests/adapters/adapter-inner-send-budget-wiring.test.ts`, including new tests and existing originals, then typecheck, structure/privacy/layout/ratchet and docs build. Each conditional path above has a fixture that activates it and checks wire UUIDs or claim IDs. Actual native/live cache-hit measurements remain unrun. Publish draft pending broader hosted/native evidence, inspect exact-head checks and repair in-scope defects.
+
+Reflection refinements: parent-only request with populated parsed._clientThreadId must remain unnamed; direct fallback without a parent and each alias are exercised. Double release after reacquisition must not deactivate the new claim (release closure has a released flag). Named reset/signature retry wire requests retain the same trajectory within the live claim.
+
+Implementation record: `trajectory.ts` contains the bounded claim owner; adapter resolves own identity (including existing `_codexOwnThreadId` for internal handoffs) and releases in `finally`; chat serializes the optional #15.1 field. Source regression tests were run before implementation (20 pass, four expected failures) and passed after implementation. Final focused Devin family plus adapter send-budget suite: 444 pass, zero fail across 21 files. Existing reset/signature tests now assert named wire-ID continuity. Typecheck, structure, privacy and 27 layout/ratchet checks passed; docs build passed 561 pages. No full/changed suite, native client or live cache experiment was run.
