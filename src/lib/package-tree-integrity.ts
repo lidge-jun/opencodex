@@ -163,6 +163,8 @@ export function createPackageTreeIntegrityGuard(
   let timerScheduled = false;
   let cancelScheduled: (() => void) | null = null;
   let waitingForReadableTree = false;
+  /** Logged once per wait, so a postinstall that never runs is visible rather than silent. */
+  let waitingForRuntime = false;
   let replacementCandidate: PackageTreeObservation | null = null;
   /** The replacement identity that survived a full stability interval (see installedVersion). */
   let settledReplacement: PackageTreeObservation | null = null;
@@ -205,11 +207,16 @@ export function createPackageTreeIntegrityGuard(
         return;
       }
       if (options.runtimeReady && !options.runtimeReady()) {
+        if (!waitingForRuntime) {
+          waitingForRuntime = true;
+          console.warn("Package tree replaced; waiting for its Bun runtime to finish installing before restarting");
+        }
         resetRestartTimer();
         waitingForReadableTree = true;
         armRestartTimer(PACKAGE_TREE_RECHECK_MS);
         return;
       }
+      waitingForRuntime = false;
       if (waitingForReadableTree) {
         waitingForReadableTree = false;
         replacementCandidate = current;
@@ -307,9 +314,12 @@ export function createRuntimePackageTreeIntegrityGuard(
     if (installer === "source" || isStandaloneBinary()) {
       return { status: () => ({ ok: true }), dispose: () => {} };
     }
-    // The restart replacement spawns process.execPath, the bundled Bun in an npm install.
+    // The restart replacement spawns process.execPath, the bundled Bun in an npm install. Read it
+    // now: Linux Bun resolves it lazily, and after npm swaps the package directory a first read
+    // reports the retired binary as "(deleted)"; reading it once pins the boot path.
+    const runtimePath = process.execPath;
     return createPackageTreeIntegrityGuard(observe, now, {
-      runtimeReady: () => isRealBunBinary(process.execPath),
       ...options,
+      runtimeReady: options.runtimeReady ?? (() => isRealBunBinary(runtimePath)),
     });
   }
