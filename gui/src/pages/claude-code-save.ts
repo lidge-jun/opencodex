@@ -1,5 +1,6 @@
 import { serializeSidecarOverride } from "./claude-code-sidecar";
 import type { ClaudeCodeState, MapRow } from "./claude-code-types";
+import { newClientId } from "./claude-code-types";
 
 /**
  * The Claude Code fields the Save bar owns. Everything else on ClaudeCodeState is either
@@ -110,9 +111,14 @@ export function applyServerRead(current: ClaudeCodeEditState | null, next: Claud
  */
 export function acknowledgeSave(current: ClaudeCodeEditState | null, submitted: ClaudeCodeEditable): ClaudeCodeEditState | null {
   if (!current) return current;
+  // The server stores the normalized map (trimmed, no blanks, last duplicate wins), so that is
+  // the baseline, even if the refresh that would show it fails.
+  const rows = Object.entries(normalizedModelMap(submitted.rows)).map(([from, to]) => ({ id: newClientId(), from, to }));
   const baseline: ClaudeCodeEditable = {
     state: { ...current.baseline.state, ...pickEditable(submitted.state) },
-    rows: submitted.rows,
+    rows,
   };
-  return { draft: current.draft, baseline, adoptNextRead: claudeCodeDraftKey(current.draft) === claudeCodeDraftKey(submitted) };
+  const unchanged = claudeCodeDraftKey(current.draft) === claudeCodeDraftKey(submitted);
+  // Untouched since submission: show what was stored. Edited meanwhile: keep the edits, dirty.
+  return { draft: unchanged ? { state: current.draft.state, rows } : current.draft, baseline, adoptNextRead: unchanged };
 }

@@ -103,3 +103,16 @@ test("after a successful Save, Revert restores the saved values", () => {
   expect(isClaudeCodeDraftDirty(acked.draft, acked.baseline)).toBe(false);
   expect(revertEditable(editable({ authMode: "subscription" }).state, acked.baseline.state).authMode).toBe("auto");
 });
+
+test("a successful Save shows the normalized rows even if the refresh never lands", () => {
+  const submitted = editable({}, [row(" a ", " b "), row("", ""), row("c", "d"), row("c", "e")]);
+  const acked = acknowledgeSave({ draft: submitted, baseline: editable(), adoptNextRead: false }, submitted)!;
+  expect(acked.draft.rows.map(r => [r.from, r.to])).toEqual([["a", "b"], ["c", "e"]]);
+  expect(acked.baseline.rows.map(r => [r.from, r.to])).toEqual([["a", "b"], ["c", "e"]]);
+  expect(isClaudeCodeDraftDirty(acked.draft, acked.baseline)).toBe(false);
+  // An edit made while the PUT was in flight stays on screen and stays dirty.
+  const edited = editable({}, [row(" a ", " b "), row("x", "y")]);
+  const kept = acknowledgeSave({ draft: edited, baseline: editable(), adoptNextRead: false }, submitted)!;
+  expect(kept.draft).toBe(edited);
+  expect(isClaudeCodeDraftDirty(kept.draft, kept.baseline)).toBe(true);
+});
