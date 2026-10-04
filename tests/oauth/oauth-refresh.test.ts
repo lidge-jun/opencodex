@@ -602,7 +602,6 @@ describe("oauth refresh hardening", () => {
           status, headers: { Location: "https://other.invalid/token" },
         }),
       })),
-      { name: "structured token-host DNS", outcome: "retry", first: async () => { throw dns; } },
       { name: "timeout", outcome: "blocked", first: async () => { throw new DOMException("timeout", "TimeoutError"); } },
       { name: "invalid_grant", outcome: "reauth", first: async () => Response.json({ error: "invalid_grant" }, { status: 400 }) },
       { name: "wrong-host DNS", outcome: "blocked", first: async () => { throw { ...dns, hostname: "other.invalid" }; } },
@@ -662,43 +661,69 @@ describe("oauth refresh hardening", () => {
       }
     });
 
-    for (const current of [undefined, ""]) test(`startup proxy with current HTTPS_PROXY ${current === undefined ? "deleted" : "empty"}`, async () => {
-      const child = Bun.spawn([process.execPath, "--eval", `
-        import assert from "node:assert/strict";
-        import { OAUTH_PROVIDERS, OAuthLoginRequiredError, refreshAnthropicAccountWithLock } from "./src/oauth";
-        import { credentialGeneration, getAccountCredential, getAccountSet, readOAuthRefreshIntent, saveCredential } from "./src/oauth/store";
-        import { outboundProxyConfigured, startupOutboundProxyConfigured } from "./src/lib/proxy-env";
-        for (const key of ${JSON.stringify(proxyKeys)}) delete process.env[key];
-        ${current === undefined ? "" : 'process.env.HTTPS_PROXY = "";'}
-        assert.equal(startupOutboundProxyConfigured, true);
-        assert.equal(outboundProxyConfigured(), false);
-        let calls = 0;
-        const dns = ${JSON.stringify(dns)};
-        globalThis.fetch = async input => {
-          if (String(input) === "https://api.anthropic.com/api/oauth/profile") {
-            return Response.json({ account: { uuid: "synthetic-account-a" } });
-          }
-          assert.equal(String(input), "https://api.anthropic.com/v1/oauth/token");
-          calls++;
-          throw dns;
-        };
-        await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
-        const id = getAccountSet("anthropic").activeAccountId;
-        const credential = getAccountCredential("anthropic", id);
-        const refresh = () => refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic, credential);
-        await assert.rejects(refresh, error => error === dns);
-        const pending = readOAuthRefreshIntent("anthropic", id);
-        assert.equal(pending?.generation, credentialGeneration(credential));
-        assert.equal(pending?.cleanupPending, undefined);
-        assert.equal(getAccountSet("anthropic").accounts[0].needsReauth, undefined);
-        await assert.rejects(refresh, OAuthLoginRequiredError);
-        assert.deepEqual(readOAuthRefreshIntent("anthropic", id), pending);
-        assert.equal(calls, 1);
-        process.exit(0);
-      `], { cwd: repoRoot(), env: { ...process.env, HTTPS_PROXY: "http://proxy.invalid:8080" }, stdout: "pipe", stderr: "pipe" });
+    // The startup proxy snapshot is taken at module evaluation, so each startup environment
+    // runs in its own child process instead of depending on how this runner was launched.
+    const childPrelude = `
+      import assert from "node:assert/strict";
+      import { OAUTH_PROVIDERS, OAuthLoginRequiredError, refreshAnthropicAccountWithLock } from "./src/oauth";
+      import { credentialGeneration, getAccountCredential, getAccountSet, readOAuthRefreshIntent, saveCredential } from "./src/oauth/store";
+      import { outboundProxyConfigured, startupOutboundProxyConfigured } from "./src/lib/proxy-env";
+      const dns = ${JSON.stringify(dns)};
+      const inits = [];
+      globalThis.fetch = async (input, init) => {
+        if (String(input) === "https://api.anthropic.com/api/oauth/profile") {
+          return Response.json({ account: { uuid: "synthetic-account-a" } });
+        }
+        assert.equal(String(input), "https://api.anthropic.com/v1/oauth/token");
+        inits.push(init);
+        if (inits.length === 1) throw dns;
+        return Response.json({ access_token: "fresh", refresh_token: "rt-fresh", expires_in: 3600 });
+      };
+      await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+      const id = getAccountSet("anthropic").activeAccountId;
+      const credential = getAccountCredential("anthropic", id);
+      const refresh = () => refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic, credential);
+    `;
+    const runChild = async (startupProxy: string | undefined, body: string) => {
+      const env: Record<string, string | undefined> = { ...process.env };
+      for (const key of proxyKeys) delete env[key];
+      if (startupProxy !== undefined) env.HTTPS_PROXY = startupProxy;
+      const child = Bun.spawn([process.execPath, "--eval", `${childPrelude}${body}\nprocess.exit(0);`], {
+        cwd: repoRoot(), env, stdout: "pipe", stderr: "pipe",
+      });
       const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
       expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
-    });
+    };
+
+    test("structured token-host DNS from a proxy-free startup", () => runChild(undefined, `
+      assert.equal(startupOutboundProxyConfigured, false);
+      assert.equal(outboundProxyConfigured(), false);
+      await assert.rejects(refresh, error => error.name === "AnthropicTokenError" && error.requestNotSent === true
+        && error.httpStatus === undefined);
+      assert.equal(readOAuthRefreshIntent("anthropic", id), undefined);
+      assert.equal(getAccountSet("anthropic").accounts[0].needsReauth, undefined);
+      assert.equal(await refresh(), "fresh");
+      assert.equal(getAccountCredential("anthropic", id)?.refresh, "rt-fresh");
+      assert.equal(readOAuthRefreshIntent("anthropic", id), undefined);
+      assert.equal(getAccountSet("anthropic").accounts[0].needsReauth, undefined);
+      assert.equal(inits.length, 2);
+      for (const init of inits) assert.deepEqual([init.redirect, init.keepalive, init.protocol], ["manual", false, "http1.1"]);
+    `));
+
+    for (const current of [undefined, ""]) test(`startup proxy with current HTTPS_PROXY ${current === undefined ? "deleted" : "empty"}`, () => runChild("http://proxy.invalid:8080", `
+      for (const key of ${JSON.stringify(proxyKeys)}) delete process.env[key];
+      ${current === undefined ? "" : 'process.env.HTTPS_PROXY = "";'}
+      assert.equal(startupOutboundProxyConfigured, true);
+      assert.equal(outboundProxyConfigured(), false);
+      await assert.rejects(refresh, error => error === dns);
+      const pending = readOAuthRefreshIntent("anthropic", id);
+      assert.equal(pending?.generation, credentialGeneration(credential));
+      assert.equal(pending?.cleanupPending, undefined);
+      assert.equal(getAccountSet("anthropic").accounts[0].needsReauth, undefined);
+      await assert.rejects(refresh, OAuthLoginRequiredError);
+      assert.deepEqual(readOAuthRefreshIntent("anthropic", id), pending);
+      assert.equal(inits.length, 1);
+    `));
   });
 
   test("a pre-dispatch Anthropic abort clears its unconsumed refresh intent", async () => {
