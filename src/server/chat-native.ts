@@ -17,7 +17,7 @@ import {
   isCyberPolicyMessage,
   SEND_BUDGET_EXHAUSTED_CODE,
 } from "../lib/errors";
-import type { RequestExecutionBudget } from "../lib/request-execution-budget";
+import { reportDispatchSends, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../lib/request-execution-budget";
 import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
@@ -198,6 +198,7 @@ export interface NativeChatExecution extends HandleNativeChatOptions {
    * the parent row, replace the one the final log settles.
    */
   sendBudget?: RequestExecutionBudget;
+  comboDispatchPermit?: SingleUseDispatchPermit;
   /** Replaces the request-relative first-output mark; a combo child records its own. */
   onFirstOutput?: () => void;
   /** The lease a streamed body holds; defaults to `logIds.turnAdmissionLease`. */
@@ -254,6 +255,7 @@ export function createNativeChatComboSource(input: {
       translatorBudget: input.translatorBudget,
       finishLog: child.finishLog,
       sendBudget: child.sendBudget,
+      comboDispatchPermit: child.comboDispatchPermit,
       onFirstOutput: child.onFirstOutput,
       ...(child.turnAdmissionLease ? { turnAdmissionLease: child.turnAdmissionLease } : {}),
     }, child.attemptHandle),
@@ -457,7 +459,7 @@ export async function runNativeChatAttempt(
                   throw new SendBudgetExhaustedError(safeHostLabel(request.url));
                 }
                 physicalSends += 1;
-                sendBudget.used += 1;
+                reportDispatchSends(sendBudget, 1, execution.comboDispatchPermit);
               } else if (!spendTracker?.charge()) throw new NativeChatSpendRefusal();
               noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
               // A reselected provider transport is still a physical send: the connection policy

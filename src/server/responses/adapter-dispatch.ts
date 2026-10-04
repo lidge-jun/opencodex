@@ -149,7 +149,7 @@ export async function prepareAdapterExchange(
     | "noteAdapterPhysicalSend"
     | "noteAdapterRecoveryWithheld"
     | "remainingTransientSendBudget"
-    | "noteTransientSends"
+    | "transientSendReporter"
     | "recoverySendAllowance"
     | "recoveryClassFor"
     | "sendBudgetExhausted"
@@ -184,7 +184,7 @@ export async function prepareAdapterExchange(
     noteAdapterPhysicalSend,
     noteAdapterRecoveryWithheld,
     remainingTransientSendBudget,
-    noteTransientSends,
+    transientSendReporter,
     recoverySendAllowance,
     recoveryClassFor,
     sendBudgetExhausted,
@@ -367,6 +367,9 @@ export async function prepareAdapterExchange(
         {
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
+          // Even the reset-only combo leg must settle its named prepaid receipt.
+          ...(options.comboDispatchPermit
+            ? { onSendsConsumed: transientSendReporter(options.comboDispatchPermit) } : {}),
           ...(transientPolicy || compactPrepaid
             // Draws the remainder, not the raw policy. A combo child inherits the parent's
             // holder but used to take a fresh full allowance on its own first send, so the
@@ -376,7 +379,7 @@ export async function prepareAdapterExchange(
               // remaining allowance; treating the booking as unavailable blocks a cap of two.
               attempts: Math.min(transientPolicy?.attempts ?? 1,
                 remainingTransientSendBudget(transientPolicy?.attempts ?? 1) + (compactPrepaid ? 1 : 0)),
-              onSendsConsumed: noteTransientSends,
+              onSendsConsumed: transientSendReporter(compactPrepaid),
             }
             : {}),
         },
@@ -583,7 +586,7 @@ export async function prepareAdapterExchange(
                 ...(refetchAllowance
                   ? {
                     attempts: refetchAllowance.attempts,
-                    onSendsConsumed: noteTransientSends,
+                    onSendsConsumed: transientSendReporter(refetchAllowance.permit),
                   }
                   : {}),
               },

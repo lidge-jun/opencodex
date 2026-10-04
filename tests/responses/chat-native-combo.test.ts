@@ -168,6 +168,7 @@ describe("native Chat candidates in a combo", () => {
     expect(b.bodies).toHaveLength(0);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.status).toBe(200);
+    expect(rows[0]!.spend).toMatchObject({ sends: 1, unresolved: 0 });
     expect(rows[0]!.provider).toBe("combo");
     expect(rows[0]!.protocolTrace).toMatchObject({
       inbound: "chat", mode: "native", requestPath: ["chat", "chat"],
@@ -201,6 +202,7 @@ describe("native Chat candidates in a combo", () => {
     expect(b.bodies[0]).not.toHaveProperty("messages");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.attempts?.map(attempt => attempt.status)).toEqual([503, 200]);
+    expect(rows[0]!.spend).toMatchObject({ sends: 4, unresolved: 0 });
     expect(rows[0]!.protocolTrace).toMatchObject({
       inbound: "chat",
       requestPath: ["chat", "responses"],

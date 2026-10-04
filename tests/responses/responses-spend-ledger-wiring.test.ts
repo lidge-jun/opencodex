@@ -7,11 +7,19 @@ import {
   DEFAULT_SPEND_RESERVATION_POLICY,
   type SpendJournal,
 } from "../../src/lib/spend-reservation-ledger";
-import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { createRequestExecutionBudget, reportDispatchSends } from "../../src/lib/request-execution-budget";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { SpendLedgerOwnerError, type SpendLedgerOwnerErrorCode } from "../../src/lib/spend-ledger-owner";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { parseRequest } from "../../src/responses/parser";
+import { routeModel } from "../../src/router";
+import { applyFinalRouteRequestNormalization } from "../../src/server/responses/core-normalize";
+import type { RequestLogContext } from "../../src/server/request-log";
+import type { OcxConfig } from "../../src/types";
+import { executeComboResponses } from "../../src/server/responses/core-combo";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 
 /**
  * The durable spend ledger had no production caller (#4707).
@@ -86,6 +94,122 @@ describe("the request path books every physical send on the durable ledger", () 
     expect(root?.reserved).toBe(0);
     expect(root?.settled).toBe(0);
     expect(root?.unresolved).toBe(1000);
+  });
+
+  test("a canonical pool identity is independent of an account-specific display label", () => {
+    const ledger = createSpendReservationLedger({ journal: memoryJournal() });
+    const tracker = createRequestSpendTracker(logContext({
+      provider: "anthropic-p123abc",
+      spendPoolId: "anthropic",
+    }), undefined, ledger);
+
+    expect(tracker.charge()).toBe(true);
+    expect(ledger.snapshot("pool", "anthropic")?.reserved).toBe(500);
+    expect(ledger.snapshot("pool", "anthropic-p123abc")).toBeUndefined();
+  });
+
+  test("resolved Responses routes share a pool ceiling across account display labels", async () => {
+    const config: OcxConfig = { port: 0, defaultProvider: "pool", providers: {
+      pool: { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://pool.example.test/v1" },
+    } };
+    const ledger = createSpendReservationLedger({ journal: memoryJournal(), policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 500 },
+    } });
+    for (const [account, allowed] of [["account-a", true], ["account-b", false]] as const) {
+      const logCtx: RequestLogContext = { model: "", provider: "", usageLogInputTokens: 100,
+        spendOutputCeilingTokens: 300, accountLogLabel: account };
+      const parsed = parseRequest({ model: "pool/model", input: [] });
+      await applyFinalRouteRequestNormalization({ parsed, route: routeModel(config, parsed.modelId),
+        config, req: new Request("http://localhost/v1/responses"), logCtx, inboundWire: "responses" });
+      // Credential resolution gives each request its own account-qualified log label.
+      logCtx.provider = `pool-${account}`;
+      const tracker = createRequestSpendTracker(logCtx, `root-${account}`, ledger);
+      expect(tracker.charge()).toBe(allowed);
+      if (allowed) tracker.settle({ inputTokens: 100, outputTokens: 300 });
+      expect(ledger.snapshot("pool", logCtx.provider)).toBeUndefined();
+    }
+    expect(ledger.snapshot("pool", "pool")?.settled).toBe(400);
+    expect(ledger.snapshot("identity", "account-a")?.settled).toBe(400);
+    expect(ledger.snapshot("identity", "account-b")).toBeUndefined();
+    expect(ledger.snapshot("root", "root-account-a")?.settled).toBe(400);
+    expect(ledger.snapshot("root", "root-account-b")).toBeUndefined();
+  });
+
+  test("a fallback updates the pool for new sends without moving earlier spend", async () => {
+    const config: OcxConfig = { port: 0, defaultProvider: "first", providers: {
+      first: { adapter: "openai-chat", baseUrl: "https://first.example.test/v1" },
+      second: { adapter: "openai-chat", baseUrl: "https://second.example.test/v1" },
+    } };
+    const ledger = createSpendReservationLedger({ journal: memoryJournal(), policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 500 },
+    } });
+    const logCtx: RequestLogContext = { model: "", provider: "", spendPoolId: "stale-route",
+      usageLogInputTokens: 100, spendOutputCeilingTokens: 300 };
+    const tracker = createRequestSpendTracker(logCtx, "fallback-root", ledger);
+    for (const provider of ["first", "second"]) {
+      const parsed = parseRequest({ model: `${provider}/model`, input: [] });
+      await applyFinalRouteRequestNormalization({ parsed, route: routeModel(config, parsed.modelId),
+        config, req: new Request("http://localhost/v1/responses"), logCtx, inboundWire: "responses" });
+      logCtx.provider = `${provider}-account`;
+      expect(tracker.charge()).toBe(true);
+      expect(ledger.snapshot("pool", provider)?.reserved).toBe(400);
+    }
+    tracker.settle({ inputTokens: 100, outputTokens: 300 });
+    expect(ledger.snapshot("pool", "first")?.unresolved).toBe(400);
+    expect(ledger.snapshot("pool", "second")?.settled).toBe(400);
+    expect(ledger.snapshot("pool", "stale-route")).toBeUndefined();
+    expect(ledger.snapshot("root", "fallback-root")?.unresolved).toBe(400);
+    expect(ledger.snapshot("root", "fallback-root")?.settled).toBe(400);
+  });
+
+  test.each(["first", "second"])("combo reservations charge the resolved %s provider pool", async next => {
+    const config: OcxConfig = { port: 0, defaultProvider: "first", providers: {
+      first: { adapter: "openai-chat", apiKey: "fixture-first", baseUrl: "https://first.example.test/v1" },
+      second: { adapter: "openai-chat", apiKey: "fixture-second", baseUrl: "https://second.example.test/v1" },
+    }, combos: { spend: { strategy: "failover", targets: [
+      { provider: "first", model: "model-a" }, { provider: next, model: "model-b" },
+    ] } } };
+    const ledger = createSpendReservationLedger({ journal: memoryJournal(), policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 500 },
+    } });
+    const logCtx: RequestLogContext = { model: "", provider: "", spendPoolId: "stale-route",
+      usageLogInputTokens: 100, spendOutputCeilingTokens: 300 };
+    const tracker = createRequestSpendTracker(logCtx, "combo-root", ledger);
+    const sendBudget = createRequestExecutionBudget(undefined, "combo-spend", tracker);
+    const translatorBudget = createTranslatorBudget();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => { throw new Error("unexpected external fetch"); }) as typeof fetch;
+    clearComboSelectionState();
+    clearComboTargetCooldowns();
+    let children = 0;
+    try {
+      const body = { model: "combo/spend", input: [] };
+      const response = await executeComboResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      }), body, "spend", config, logCtx, { sendBudget, translatorBudget }, {
+        handleResponses: async (_req, _config, childLog, options) => {
+          children += 1;
+          reportDispatchSends(options!.sendBudget!, 1, options!.comboDispatchPermit);
+          childLog.provider += `-account-${children}`;
+          return children === 1
+            ? Response.json({ error: { message: "fixture outage" } }, { status: 503 })
+            : Response.json({ id: "fixture-response", output: [] });
+        },
+        handleComboResponses: async () => { throw new Error("unexpected nested combo"); },
+      });
+      expect(response.status).toBe(next === "first" ? 503 : 200);
+      expect(children).toBe(next === "first" ? 1 : 2);
+      expect(sendBudget.used).toBe(children);
+      expect(ledger.snapshot("pool", "first")?.reserved).toBe(400);
+      expect(ledger.snapshot("pool", "second")?.reserved).toBe(next === "second" ? 400 : undefined);
+      expect(ledger.snapshot("pool", "combo")).toBeUndefined();
+      expect(ledger.snapshot("pool", "stale-route")).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+      translatorBudget.dispose();
+      clearComboSelectionState();
+      clearComboTargetCooldowns();
+    }
   });
 
   test("a reservation the budget hands back releases its tokens instead of booking spend", () => {

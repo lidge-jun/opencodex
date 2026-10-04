@@ -3,6 +3,7 @@ import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
   deriveRequestExecutionBudget,
+  reportDispatchSends,
   type RequestExecutionBudgetPolicy,
 } from "../../src/lib/request-execution-budget";
 
@@ -102,7 +103,7 @@ describe("atomic dispatch permits", () => {
     expect(leg.permit.use()).toBe(true);
     // `onSendsConsumed` reporting one physical send settles the pending booking instead of
     // charging a second time. Charging both is how a four-send cap became a two-send cap.
-    budget.used += 1;
+    reportDispatchSends(budget, 1, leg.permit);
     expect(budget.used).toBe(1);
 
     // Sends the helper made beyond the reserved one are still charged in full.
@@ -118,7 +119,7 @@ describe("atomic dispatch permits", () => {
       countedExternally: true,
     });
     if (!leg.allowed) throw new Error("unreachable");
-    budget.used += 1;
+    reportDispatchSends(budget, 1, leg.permit);
     expect(budget.used).toBe(1);
     // The send physically happened. A refund here would hand the request a free one back.
     leg.permit.release();
@@ -293,7 +294,8 @@ describe("a credential hop is settled by whichever layer dispatches its replay",
     expect(budget.used).toBe(1);
 
     // The helper names the same physical send the hop already booked.
-    budget.used += 1;
+    if (!hop.allowed) throw new Error("unreachable");
+    reportDispatchSends(budget, 1, hop.permit);
     expect(budget.used).toBe(1);
     // A genuinely second send is charged in full.
     budget.used += 1;
@@ -373,7 +375,8 @@ describe("derived policy scopes", () => {
 
     const target = deriveRequestExecutionBudget(scope, wide);
     // The reporter names the send that the booking above already paid for.
-    target.used += 1;
+    if (!hop.allowed) throw new Error("unreachable");
+    reportDispatchSends(target, 1, hop.permit);
     expect(parent.used).toBe(1);
     // Anything beyond it is a genuinely new send.
     target.used += 2;
@@ -455,8 +458,10 @@ describe("derived scopes and the durable spend observer", () => {
     const spy = recordingObserver();
     const parent = createRequestExecutionBudget(wide, "lr-once", spy.observer);
     const scope = deriveRequestExecutionBudget(parent, wide);
-    expect(scope.reserveDispatch({ sendClass: "initial", targetKey: "a/m", countedExternally: true }).allowed).toBe(true);
-    deriveRequestExecutionBudget(scope, wide).used += 1;
+    const hop = scope.reserveDispatch({ sendClass: "initial", targetKey: "a/m", countedExternally: true });
+    expect(hop.allowed).toBe(true);
+    if (!hop.allowed) throw new Error("unreachable");
+    reportDispatchSends(deriveRequestExecutionBudget(scope, wide), 1, hop.permit);
     expect(spy.events).toEqual(["charge"]);
     expect(parent.used).toBe(1);
   });
@@ -558,4 +563,16 @@ test("a validated rebase remains admissible after alternate-target spend and ref
   expect(budget.reserveDispatch({ ...intent, targetKey: "e" })).toEqual({ allowed: false, reason: "total-exhausted" });
   expect(budget.alternateTargetSends).toBe(1);
   expect(budget.targetTransitions).toBe(1);
+});
+
+test("a reported external receipt cannot be taken over by an adapter", () => {
+  const budget = createRequestExecutionBudget();
+  const decision = budget.reserveDispatch({ sendClass: "initial", targetKey: "same", countedExternally: true });
+  if (!decision.allowed) throw new Error("synthetic reservation refused");
+  reportDispatchSends(budget, 1, decision.permit);
+  expect(decision.permit.assumeCharge()).toBe(false);
+  expect(decision.permit.use()).toBe(true); // reset helper reports before its dispatch thunk
+  expect(decision.permit.use()).toBe(false);
+  decision.permit.release();
+  expect(budget.used).toBe(1);
 });

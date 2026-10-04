@@ -1689,6 +1689,7 @@
     "spend-ledger-lifecycle.test.ts": "server",
     "spend-ledger-owner-startup.test.ts": "server",
     "spend-ledger-owner.test.ts": "lib",
+    "spend-pool-continuity.test.ts": "lib",
     "spend-reservation-ledger.test.ts": "lib",
     "sponsor-presets.test.ts": "providers",
     "sse-carriage-return.test.ts": "responses",

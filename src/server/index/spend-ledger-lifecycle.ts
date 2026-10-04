@@ -26,7 +26,7 @@ export function waitForFailedStartRollback(error: unknown): Promise<void> {
 }
 
 export interface SpendLedgerServerLifecycle {
-  configure(spend: OcxSpendConfig | undefined): void;
+  configure(spend: OcxSpendConfig | undefined, poolAliases?: unknown): void;
   track<T extends { stop(closeActiveConnections?: boolean): void | Promise<void> }>(server: T): T;
   release(): void;
   releaseAfterFailedStart(): Promise<void>;
@@ -49,8 +49,8 @@ export function acquireSpendLedgerServerLifecycle(configDir: string): SpendLedge
     owner.release();
   };
   return {
-    configure(spend): void {
-      configureSharedSpendLedger(spendPolicyFromConfig(spend));
+    configure(spend, poolAliases): void {
+      configureSharedSpendLedger(spendPolicyFromConfig(spend, poolAliases));
     },
     track<T extends { stop(closeActiveConnections?: boolean): void | Promise<void> }>(server: T): T {
       // Capture the raw stop before startServer replaces the public method with full teardown.

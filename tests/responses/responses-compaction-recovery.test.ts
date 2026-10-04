@@ -322,10 +322,16 @@ describe("routed compaction emergency integration", () => {
     const budget = createRequestExecutionBudget({ maxTotalModelSends: 2, baseSendAllowance: 2, finalRecoveryAllowance: 0, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
     const reservation = budget.reserveDispatch({ sendClass: "initial", targetKey: "source/swe-2", countedExternally: true });
     expect(reservation.allowed).toBe(true);
-    const response = await handleResponses(request(), config, { model: "", provider: "" }, { sendBudget: budget });
+    if (!reservation.allowed) throw new Error("synthetic source reservation refused");
+    const response = await handleResponses(request(), config, { model: "", provider: "" }, {
+      sendBudget: budget, comboDispatchPermit: reservation.permit,
+    });
     expect((await response.json()).status).toBe("completed");
     expect(sourceRequests).toBe(1);
     expect(calls.map(call => call.model)).toEqual(["rescue"]);
+    expect(budget.used).toBe(2);
+    expect(reservation.permit.assumeCharge()).toBe(false);
+    reservation.permit.release();
     expect(budget.used).toBe(2);
   });
 

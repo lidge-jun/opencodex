@@ -16,7 +16,7 @@ import {
   validateConfigCandidate,
 } from "../../src/config";
 import { configDiagnosticsFromRaw } from "../../src/config/diagnostics";
-import { spendCeilingsConfigured, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
+import { createSpendReservationLedger, spendCeilingsConfigured, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let home = "";
@@ -124,4 +124,25 @@ test("a ceiling on any one scope is enough to turn enforcement on", () => {
   expect(spendCeilingsConfigured(spendPolicyFromConfig({ identity: { maxTokens: 1 } }))).toBe(true);
   expect(spendCeilingsConfigured(spendPolicyFromConfig({ pool: { maxTokens: 1 } }))).toBe(true);
   expect(spendCeilingsConfigured(spendPolicyFromConfig({ retentionDays: 30 }))).toBe(false);
+});
+
+
+test("top-level pool aliases preserve all ceilings and malformed hand edits fail closed", () => {
+  const alias = "a".repeat(32);
+  const spend = { root: { maxTokens: 200 }, identity: { maxTokens: 150 }, pool: { maxTokens: 100 } };
+  const valid = { ...candidate(spend), spendPoolAliases: { [alias]: "fixture-provider" } };
+  expect(validateConfigCandidate(valid).ok).toBe(true);
+  for (const aliases of [null, [], { wrong: "fixture-provider" }, { [alias]: 1 }]) {
+    const raw = { ...valid, spendPoolAliases: aliases };
+    expect(validateConfigCandidate(raw).ok).toBe(false);
+    writeFileSync(getConfigPath(), JSON.stringify(raw), "utf8");
+    const loaded = loadConfig();
+    expect(loaded.spend).toEqual(spend);
+    const resolved = spendPolicyFromConfig(loaded.spend, loaded.spendPoolAliases);
+    expect(resolved.pool.maxTokens).toBe(100);
+    expect(createSpendReservationLedger({ policy: resolved }).checkPoolContinuity()?.reason).toBe("pool-history-unresolved");
+  }
+  // The old schema's passthrough top level retains this key without routing it through
+  // the strict spend object. A nested spelling remains rejected rather than blessed.
+  expect(validateConfigCandidate(candidate({ ...spend, poolAliases: { [alias]: "fixture-provider" } })).ok).toBe(false);
 });

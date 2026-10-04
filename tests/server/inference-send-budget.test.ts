@@ -64,7 +64,7 @@ describe("createInferenceSendBudget", () => {
         if (sends === 0) hop.permit?.use();
         sends++;
         return new Response("", { status: sends === 3 ? 200 : 503 });
-      }, { attempts: allowance.attempts, onSendsConsumed: owner.noteTransientSends });
+      }, { attempts: allowance.attempts, onSendsConsumed: owner.transientSendReporter(allowance.permit) });
       expect(response.status).toBe(200);
       expect(sends).toBe(3);
       expect(budget.used).toBe(12);

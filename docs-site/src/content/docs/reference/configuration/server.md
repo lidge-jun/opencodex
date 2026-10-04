@@ -42,6 +42,7 @@ runs helper features around provider requests.
 | `codexMainAccountHardLockThresholds?` | `{ short?: number; long?: number }` | `{ short: 90, long: 98 }` | Independent 5h and weekly/monthly thresholds. Integers 80–100, with `short <= long`. Invalid persisted fields fall back to defaults; the settings API rejects invalid writes before mutation. |
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Servers sharing this configuration directory coordinate reservations and settlements so one process does not replace another's request record. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
+| `spendPoolAliases?` | `Record<string, string>` | unset | Explicit historical salted pool-alias to canonical provider mappings. Keep this key at the top level, outside `spend`. See [Historical pool continuity](#historical-pool-continuity). |
 | `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefixes are `gpt-6-luna` and `gpt-5.6-luna`; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
 | `memoryModels?` | `{ extract?: { model: string; reasoningEffort?: string }; consolidation?: { model: string; reasoningEffort?: string } }` | off | Route Codex's two memory phases to a chosen model, with an optional reasoning effort per phase. See [Memory routing](#memory-routing). |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
@@ -939,3 +940,60 @@ This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+## Historical pool continuity
+
+Provider-pool ceilings use the canonical routed provider, while request logs keep account-specific
+display labels. Older journals may hold spend under those display labels. A journal stores salted
+aliases, not the original provider/account names, so OpenCodex does not guess a mapping from a
+current account roster, a label prefix, or a shortened account ID.
+
+If `spend.pool.maxTokens` is configured and positive historical pool balances remain unidentified,
+inference admission returns local HTTP 429 with
+`x-opencodex-local-refusal: workflow_pool_history_unresolved` before contacting a provider.
+This can temporarily block otherwise valid requests, including requests without a workflow root.
+After routing, preflight also refuses a canonical pool that is already exhausted by its combined
+balances. A recovery or combo send already admitted by a reservation does not count that same
+reservation against itself a second time; all other reservations remain counted.
+This check does not turn post-reported passthrough sends into atomic reservations:
+a crossing send, concurrent admissions or retries reported afterwards retain their existing limits.
+Observe-only installs remain observe-only. Root and identity ceilings remain in force independently.
+
+To resolve it, an operator must verify which canonical provider each historical salted pool alias
+belongs to, using their own retained evidence. Add a top-level `spendPoolAliases` object in
+`config.json`: each key is the exact 32-character lowercase hexadecimal pool alias from that same
+installation's journal; each value is its verified canonical provider ID. An old alias that already
+represents the canonical provider still needs an explicit entry when it lacks identity metadata.
+A positive alias that cannot be identified stays blocked. Do not infer a match from similar names,
+account deletion, or a short-label collision, and do not share the journal or salt publicly.
+
+Keep `spendPoolAliases` outside `spend`: older versions reject unknown keys inside `spend` and can
+disable the entire section. Invalid top-level mappings are rejected on configuration writes;
+malformed `spendPoolAliases` hand edits retain existing ceilings and fail pool admission closed. Correct the mapping
+and restart through the ordinary configuration workflow. Empty/removing mappings does not erase
+links already recorded durably. A previously redirected alias cannot be reassigned to a different
+group; verified canonical renames can join groups without splitting existing spend. The complete
+mapping is checked together, so a valid group merge does not depend on alias-key order.
+
+Each original balance is counted once. Settled usage, in-flight reservations and unresolved usage
+all count; unknown usage is never treated as a refund. Original reservation targets are retained.
+New requests continue to record the canonical provider pool, and checkpoints retain salted identity
+evidence without adding raw account/provider names. Unknown positive history and active or exhausted
+groups are protected from cleanup; the existing dormant, under-limit retention rule still applies.
+Identity evidence remains bounded; if its capacity is exhausted, pool admission stops rather than
+forgetting it. No automatic tool reconstructs unverifiable history.
+
+### Safe rollback requirements
+
+A supported rollback must retain or backport both canonical request attribution and the
+continuity-aware ledger reader/writer, with the same journal, salt and verified mappings.
+Keep the latest journal: restoring a pre-upgrade copy would omit later spend. Do not remove records,
+change the salt, raise ceilings, or disable enforcement to make a downgrade appear compatible.
+
+An unmodified older binary is **not a supported rollback**. It can read the v1 raw balances but
+does not enforce the cross-alias provider total, may create a new account-label pool, and may discard
+optional identity metadata when compacting. There is no automatic downgrade barrier. If such an old
+writer has run, the new reader refuses unidentified positive history until the operator explicitly
+verifies all remaining mappings again. Storage or journal-integrity denials are separate from an
+alias problem and keep `workflow_spend_undurable`; unsafe-file/ownership failures may instead
+propagate as storage errors, without admitting the request.

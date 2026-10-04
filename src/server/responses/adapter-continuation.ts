@@ -102,7 +102,7 @@ export function createAdapterContinuations(
     | "noteAdapterPhysicalSend"
     | "noteAdapterRecoveryWithheld"
     | "remainingTransientSendBudget"
-    | "noteTransientSends"
+    | "transientSendReporter"
     | "reserveCredentialHop"
     | "pendingHopPermit"
     | "sendBudgetExhausted"
@@ -135,7 +135,7 @@ export function createAdapterContinuations(
     noteAdapterPhysicalSend,
     noteAdapterRecoveryWithheld,
     remainingTransientSendBudget,
-    noteTransientSends,
+    transientSendReporter,
     reserveCredentialHop,
     sendBudgetExhausted,
   } = sendBudgetState;
@@ -264,7 +264,7 @@ export function createAdapterContinuations(
             ...(continuationTransientPolicy
               ? {
                 attempts: remainingTransientSendBudget(continuationTransientPolicy.attempts),
-                onSendsConsumed: noteTransientSends,
+                onSendsConsumed: transientSendReporter(),
               }
               : {}),
           },
@@ -513,9 +513,9 @@ export function createAdapterContinuations(
               recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
               // The replay goes out on the next iteration. An adapter that owns its ladder
               // reserves for that send itself, so hand this reservation down rather than let it
-              // take a second one for the same replay. A helper-routed replay needs no handoff:
-              // its reporter settles the booking made above.
-              if (adapterOwnsDispatch) sendBudgetState.pendingHopPermit = hop.permit;
+              // take a second one for the same replay. A helper-routed replay carries the
+              // same permit so its reporter settles only this booking.
+              sendBudgetState.pendingHopPermit = hop.permit;
               nextContinuationRecoveryKind = "oauth-account-429";
               kiroRefusalPendingReplay = response;
               continue;
@@ -604,9 +604,9 @@ export function createAdapterContinuations(
               recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
               // The replay goes out on the next iteration. An adapter that owns its ladder
               // reserves for that send itself, so hand this reservation down rather than let it
-              // take a second one for the same replay. A helper-routed replay needs no handoff:
-              // its reporter settles the booking made above.
-              if (adapterOwnsDispatch) sendBudgetState.pendingHopPermit = hop.permit;
+              // take a second one for the same replay. A helper-routed replay carries the
+              // same permit so its reporter settles only this booking.
+              sendBudgetState.pendingHopPermit = hop.permit;
               nextContinuationRecoveryKind = "oauth-account-429";
               continue;
             }

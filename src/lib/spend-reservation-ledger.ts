@@ -62,6 +62,7 @@ import { getConfigDir } from "../config/paths";
 // Type-only, so it is erased before this module has a runtime import graph at all. The
 // config SHAPE is what this file needs; the config loader is what the note above keeps out.
 import type { OcxSpendConfig, OcxSpendScopeConfig } from "../types/config";
+import { createPoolContinuity, parsePoolContinuityRecord, type PoolContinuityRecord } from "./spend-pool-continuity";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 // Windows chmod does not remove inherited ACEs; this is the repository's icacls path.
 import { hardenSecretPath } from "./windows-secret-acl";
@@ -93,6 +94,8 @@ export interface SpendScopeLimit {
 }
 
 export interface SpendReservationPolicy {
+  /** Exact historical salted pool alias -> canonical provider. Malformed input fails closed. */
+  readonly poolAliases?: unknown;
   readonly root: SpendScopeLimit;
   readonly identity: SpendScopeLimit;
   readonly pool: SpendScopeLimit;
@@ -181,6 +184,7 @@ export interface SpendReservationRequest {
  * to buy an unlimited number of physical sends while the scope totals never moved.
  */
 export type SpendDenial =
+  | { readonly reason: "pool-history-unresolved" }
   | {
       readonly reason: "spend-limit-exceeded";
       readonly scope: SpendScope;
@@ -258,6 +262,7 @@ type JournalRecord =
       v: 1;
       kind: "checkpoint";
       at: number;
+      poolContinuity?: PoolContinuityRecord;
       scopes: { scope: SpendScope; alias: string; settled: number; unresolved: number; seenAt: number }[];
       sends: { send: string; status: ReservationStatus; targets: ScopeRef[]; tokens: number; at: number; resolvedAt: number }[];
     };
@@ -350,7 +355,9 @@ export function parseSpendJournalRecord(line: string): JournalRecord | undefined
         if (!isCountable(e.tokens) || !isCountable(e.at) || !isCountable(e.resolvedAt)) return undefined;
         sends.push({ send: e.send, status: e.status, targets, tokens: e.tokens, at: e.at, resolvedAt: e.resolvedAt });
       }
-      return { v: 1, kind: "checkpoint", at, scopes, sends };
+      const poolContinuity = record.poolContinuity === undefined ? undefined : parsePoolContinuityRecord(record.poolContinuity);
+      if (record.poolContinuity !== undefined && !poolContinuity) return undefined;
+      return { v: 1, kind: "checkpoint", at, scopes, sends, ...(poolContinuity ? { poolContinuity } : {}) };
     }
     default:
       return undefined;
@@ -606,8 +613,16 @@ export interface ScopeSpendSnapshot {
   readonly exhausted: boolean;
 }
 
+/** In-memory proof of one booked send; never journaled or exposed in request logs. */
+export interface SpendReservationProof {
+  readonly ledger: SpendReservationLedger;
+  readonly sendId: string;
+}
+
 export interface SpendReservationLedger {
   reserve(request: SpendReservationRequest): SpendReservationDecision;
+  /** Pre-dispatch guard, including transports which report their sends after dispatch. */
+  checkPoolContinuity(): SpendDenial | undefined;
   /**
    * The send left for upstream. Until this is called the reservation may be abandoned for
    * free; after it, a missing usage frame becomes unresolved spend. Returns false when the
@@ -632,7 +647,8 @@ export interface SpendReservationLedger {
    */
   markLost(sendId: string): boolean;
   snapshot(scope: SpendScope, scopeId: string): ScopeSpendSnapshot | undefined;
-  exhausted(scope: SpendScope, scopeId: string): boolean;
+  /** Exclude only a proven current dispatch's still-open reservation in this scope. */
+  exhausted(scope: SpendScope, scopeId: string, excludingSendId?: string): boolean;
   /**
    * Drop dormant scopes per the retention rule in SpendReservationPolicy. Cleanup also runs
    * automatically on every reservation, so nothing depends on a caller remembering this.
@@ -701,6 +717,7 @@ export function createSpendReservationLedger(options: {
   const compactAfterRecords = (): number => policy.compactAfterRecords ?? DEFAULT_COMPACT_AFTER_RECORDS;
   const scopes = new Map<string, ScopeState>();
   const reservations = new Map<string, Reservation>();
+  const poolContinuity = createPoolContinuity();
   let persistFailures = 0;
   let corruptRecords = 0;
   let recordsOnDisk = 0;
@@ -723,6 +740,26 @@ export function createSpendReservationLedger(options: {
     }
     return state;
   };
+
+  const historicalPools = (): Set<string> => new Set([...scopes].filter(([key, state]) =>
+    key.startsWith("pool\0") && state.settled + state.reserved + state.unresolved > 0,
+  ).map(([key]) => key.slice(5)));
+  const unknownPoolHistory = (): boolean => [...historicalPools()].some(alias => !poolContinuity.known(alias));
+  const poolState = (alias: string): ScopeState | undefined => {
+    const group = poolContinuity.resolve(alias);
+    let total: ScopeState | undefined;
+    for (const [key, state] of scopes) {
+      if (!key.startsWith("pool\0") || poolContinuity.resolve(key.slice(5)) !== group) continue;
+      total ??= { settled: 0, reserved: 0, unresolved: 0, lastSeenAt: 0 };
+      total.settled += state.settled;
+      total.reserved += state.reserved;
+      total.unresolved += state.unresolved;
+      total.lastSeenAt = Math.max(total.lastSeenAt, state.lastSeenAt);
+    }
+    return total;
+  };
+  const stateFor = (scope: SpendScope, alias: string): ScopeState | undefined =>
+    scope === "pool" ? poolState(alias) : scopes.get(scopeKey(scope, alias));
 
   const limitFor = (scope: SpendScope): number | undefined => policy[scope].maxTokens;
 
@@ -811,6 +848,7 @@ export function createSpendReservationLedger(options: {
   };
 
   const applyCheckpoint = (record: Extract<JournalRecord, { kind: "checkpoint" }>): void => {
+    if (record.poolContinuity && !poolContinuity.restore(record.poolContinuity)) corruptRecords += 1;
     scopes.clear();
     reservations.clear();
     for (const entry of record.scopes) {
@@ -848,12 +886,13 @@ export function createSpendReservationLedger(options: {
       const line = lines[index] as string;
       const record = parseSpendJournalRecord(line);
       if (!record) {
-        // A rejected FINAL line is a torn tail write -- the process died between the write
-        // and its newline -- and is dropped quietly, because that record never completed and
-        // therefore never authorised anything. A rejected line ANYWHERE ELSE is different:
-        // the records after it did complete, so skipping it silently undercounts a scope and
-        // hands back budget. It is counted, and a configured limit refuses on it below.
-        if (index < lines.length - 1) corruptRecords += 1;
+        // A malformed final JSON line can be an incomplete tail write. Rejected records
+        // elsewhere cannot be skipped: later complete writes may have authorized spend.
+        // Only malformed JSON can be a torn tail. A complete unknown/invalid final
+        // record is evidence of an unsupported format, not permission to forget accounting.
+        let completeJson = false;
+        try { JSON.parse(line); completeJson = true; } catch { /* torn tail */ }
+        if (completeJson || index < lines.length - 1) corruptRecords += 1;
         continue;
       }
       switch (record.kind) {
@@ -900,13 +939,29 @@ export function createSpendReservationLedger(options: {
    */
   const evictScopes = (at: number, force: boolean): number => {
     const cutoff = at - policy.retentionMs;
+    // Candidate selection uses one snapshot of each pool group for the whole pass.
+    // Re-scanning all scopes per pool member repeats work on every reservation.
+    const pools = new Map<string, ScopeState>();
+    for (const [key, state] of scopes) {
+      if (!key.startsWith("pool\0")) continue;
+      const group = poolContinuity.resolve(key.slice(5));
+      let total = pools.get(group);
+      if (!total) pools.set(group, total = { settled: 0, reserved: 0, unresolved: 0, lastSeenAt: 0 });
+      total.settled += state.settled;
+      total.reserved += state.reserved;
+      total.unresolved += state.unresolved;
+      total.lastSeenAt = Math.max(total.lastSeenAt, state.lastSeenAt);
+    }
     const candidates: { key: string; scope: SpendScope; alias: string; seenAt: number }[] = [];
     for (const [key, state] of scopes) {
       const separator = key.indexOf("\0");
       const scope = key.slice(0, separator) as SpendScope;
-      if (state.reserved > 0) continue;
-      if (isExhausted(scope, state)) continue;
-      if (!force && state.lastSeenAt >= cutoff) continue;
+      const effective = scope === "pool" ? pools.get(poolContinuity.resolve(key.slice(separator + 1)))! : state;
+      if (effective.reserved > 0) continue;
+      if (scope === "pool" && state.settled + state.unresolved > 0
+        && !poolContinuity.known(key.slice(separator + 1))) continue;
+      if (isExhausted(scope, effective)) continue;
+      if (!force && effective.lastSeenAt >= cutoff) continue;
       candidates.push({ key, scope, alias: key.slice(separator + 1), seenAt: state.lastSeenAt });
     }
     if (force) {
@@ -949,10 +1004,7 @@ export function createSpendReservationLedger(options: {
    * Bounded maps are not enough on their own: the file behind them is what replay reads, and
    * an uncompacted file grows forever on unique root and send ids.
    */
-  const compact = (at: number): void => {
-    const rewrite = journal?.rewrite;
-    if (!journal || !rewrite || recordsOnDisk < compactAfterRecords()) return;
-    const checkpoint: JournalRecord = {
+  const checkpointRecord = (at: number, evidence = poolContinuity.record(at)): Extract<JournalRecord, { kind: "checkpoint" }> => ({
       v: 1,
       kind: "checkpoint",
       at,
@@ -974,9 +1026,15 @@ export function createSpendReservationLedger(options: {
         at: reservation.at,
         resolvedAt: reservation.resolvedAt,
       })),
-    };
+      ...(evidence.bindings.length > 0 ? { poolContinuity: evidence } : {}),
+  });
+
+  const compact = (at: number): void => {
+    const rewrite = journal?.rewrite;
+    // A checkpoint must never erase evidence of replay corruption.
+    if (!journal || !rewrite || corruptRecords > 0 || recordsOnDisk < compactAfterRecords()) return;
     try {
-      rewrite.call(journal, [JSON.stringify(checkpoint)]);
+      rewrite.call(journal, [JSON.stringify(checkpointRecord(at))]);
       recordsOnDisk = 1;
     } catch (error) {
       if (error instanceof SpendLedgerOwnerError) throw error;
@@ -984,6 +1042,19 @@ export function createSpendReservationLedger(options: {
       // journal intact and every figure in it still replayable.
       persistFailures += 1;
     }
+  };
+
+  const preparePoolContinuity = (at: number, requested?: string): SpendDenial | undefined => {
+    const evidence = poolContinuity.prepare(policy.poolAliases, requested, historicalPools(),
+      provider => aliasFor("pool", provider), at, maxTrackedScopes());
+    if (evidence === false) return { reason: "pool-history-unresolved" };
+    if (evidence) {
+      // A v1 checkpoint atomically carries the unchanged balances AND salted identity
+      // evidence. Older parsers can still read its balances; no unknown-record fence.
+      if (!append(checkpointRecord(at, evidence))) return { reason: "reserve-not-durable", sendId: "" };
+      if (!poolContinuity.restore(evidence)) return { reason: "pool-history-unresolved" };
+    }
+    return unknownPoolHistory() ? { reason: "pool-history-unresolved" } : undefined;
   };
 
   /** The denial when tracking cannot fit this request, or undefined when it can. */
@@ -1011,6 +1082,13 @@ export function createSpendReservationLedger(options: {
     get degraded() { assertOwnedAccounting?.(); return persistFailures > 0 || corruptRecords > 0; },
     get policy() { assertOwnedAccounting?.(); return policy; },
 
+    checkPoolContinuity(): SpendDenial | undefined {
+      assertOwnedAccounting?.();
+      if (policy.pool.maxTokens === undefined) return undefined;
+      if (corruptRecords > 0) return { reason: "journal-corrupt", corruptRecords };
+      return preparePoolContinuity(now());
+    },
+
     reserve(request: SpendReservationRequest): SpendReservationDecision {
       assertOwnedAccounting?.();
       const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
@@ -1030,6 +1108,11 @@ export function createSpendReservationLedger(options: {
       if (enforced && corruptRecords > 0) {
         return { reserved: false, denial: { reason: "journal-corrupt", corruptRecords } };
       }
+      const poolRef = refs.find(ref => ref.scope === "pool");
+      const continuityDenial = preparePoolContinuity(at, poolRef?.alias);
+      if (continuityDenial && policy.pool.maxTokens !== undefined && request.alreadySent !== true) {
+        return { reserved: false, denial: continuityDenial };
+      }
       const capacity = makeRoom(refs, at);
       if (capacity) return { reserved: false, denial: capacity };
 
@@ -1041,7 +1124,7 @@ export function createSpendReservationLedger(options: {
         // it is to let the total go OVER the ceiling so the next request can be refused.
         const limit = request.alreadySent === true ? undefined : limitFor(ref.scope);
         if (limit === undefined) continue;
-        const state = scopes.get(scopeKey(ref.scope, ref.alias));
+        const state = stateFor(ref.scope, ref.alias);
         const projected = (state ? state.settled + state.reserved + state.unresolved : 0) + tokens;
         if (projected > limit) {
           const scopeId = ref.scope === "root"
@@ -1122,7 +1205,7 @@ export function createSpendReservationLedger(options: {
       // Reading accounting from a handle whose ownership has ended is as wrong as writing it:
       // the figures describe a journal this process no longer owns.
       assertOwnedAccounting?.();
-      const state = scopes.get(scopeKey(scope, aliasFor(scope, scopeId)));
+      const state = stateFor(scope, aliasFor(scope, scopeId));
       if (!state) return undefined;
       return {
         settled: state.settled,
@@ -1132,10 +1215,15 @@ export function createSpendReservationLedger(options: {
       };
     },
 
-    exhausted(scope: SpendScope, scopeId: string): boolean {
+    exhausted(scope: SpendScope, scopeId: string, excludingSendId?: string): boolean {
       assertOwnedAccounting?.();
-      const state = scopes.get(scopeKey(scope, aliasFor(scope, scopeId)));
-      return state !== undefined && isExhausted(scope, state);
+      const alias = aliasFor(scope, scopeId);
+      const state = stateFor(scope, alias);
+      if (!state) return false;
+      const own = excludingSendId === undefined ? undefined : reservations.get(aliasFor("send", excludingSendId));
+      const matches = own?.status === "open" && own.targets.some(target => target.scope === scope
+        && (scope === "pool" ? poolContinuity.resolve(target.alias) === poolContinuity.resolve(alias) : target.alias === alias));
+      return isExhausted(scope, matches ? { ...state, reserved: Math.max(0, state.reserved - own.tokens) } : state);
     },
 
     prune(at: number = now()): void {
@@ -1152,6 +1240,11 @@ export function createSpendReservationLedger(options: {
       policy = next;
     },
   };
+}
+
+/** Does no I/O for installations without a pool ceiling. */
+export function sharedPoolContinuityDenial(): SpendDenial | undefined {
+  return sharedPolicy.pool.maxTokens === undefined ? undefined : sharedSpendLedger().checkPoolContinuity();
 }
 
 let sharedLedger: SpendReservationLedger | undefined;
@@ -1189,9 +1282,10 @@ const spendScopeLimitFromConfig = (scope: OcxSpendScopeConfig | undefined): Spen
  * ceiling would start refusing real traffic on the first upgrade that ran this code, against
  * a number nobody chose. There is deliberately no default figure here at all.
  */
-export function spendPolicyFromConfig(spend: OcxSpendConfig | undefined): SpendReservationPolicy {
+export function spendPolicyFromConfig(spend: OcxSpendConfig | undefined, poolAliases?: unknown): SpendReservationPolicy {
   const retentionDays = spend?.retentionDays;
   return {
+    ...(poolAliases !== undefined ? { poolAliases } : {}),
     root: spendScopeLimitFromConfig(spend?.root),
     identity: spendScopeLimitFromConfig(spend?.identity),
     pool: spendScopeLimitFromConfig(spend?.pool),

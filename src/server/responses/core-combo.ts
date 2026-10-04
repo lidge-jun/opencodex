@@ -679,6 +679,9 @@ export async function executeComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
+    const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+    // The inherited spend tracker observes this parent log, before the child has its own label.
+    logCtx.spendPoolId = targetRoute.providerName;
     // The first target seeds the ledger's target identity and charges nothing; every later one
     // is a real transition, refused once the declared hops, the alternate-target ledger or the
     // request total are spent. `countedExternally` is required: the child charges its own
@@ -711,7 +714,6 @@ export async function executeComboResponses(
       ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     };
-    const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
     const targetReasoningEfforts = supportedLadderFor({
       provider: targetRoute.provider,
       modelId: targetRoute.modelId,
@@ -828,6 +830,7 @@ export async function executeComboResponses(
       response = nativeChild ? await dispatchNativeComboChild({
         source: options.protocolSource!,
         plan: nativeChild,
+        comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         logCtx,
         childLog,
         attempt,
@@ -853,6 +856,7 @@ export async function executeComboResponses(
         // parent arrived with.
         sendBudget: targetSendBudget,
         comboAttempt: true,
+        comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later

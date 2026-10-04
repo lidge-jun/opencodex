@@ -203,6 +203,8 @@ export interface RequestLogContext {
   spendOutputCeilingTokens?: number;
   /** Pre-send input estimate reserved for spend only; unlike usageLogInputTokens it never enters usage. */
   spendInputEstimateTokens?: number;
+  /** Canonical provider-pool spend identity; independent of mutable, account-specific log labels. */
+  spendPoolId?: string;
   /** Settles this request's durable spend entries from `addFinalRequestLog`. */
   spendTracker?: RequestSpendSettlement;
   attempts?: PersistedUsageAttempt[];

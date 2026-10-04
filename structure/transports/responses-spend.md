@@ -32,11 +32,21 @@ single target transition nor the alternate-target allowance: it was authorized w
 decision, and the endpoint fallback keeps ownership of the one transition it may still need.
 Admission, reservation and refund use the same alternate-target charging predicate. A validated
 rebase remains eligible after that allowance is spent, while replay safety and the total-send cap still apply.
+An externally reported rebase retains its exact pending receipt and prepaid proof. Releasing it
+refunds only charges it made; reporting or assuming that receipt prevents a later refund.
 
 The hop pays for a replay that some *other* layer dispatches, so which layer settles the
 reservation follows the dispatcher, not the ladder. A helper-routed replay reports the same
 physical send back through `onSendsConsumed`; that is what `countedExternally: true` names, and the
-reporter's first send settles the pending booking instead of adding a second charge. An adapter
+reporter's first send settles only its named pending permit instead of adding a second charge.
+`transientSendReporter` captures that permit before entering a helper; a later handoff cannot
+replace it. `reportDispatchSends` verifies shared-ledger ownership and consumes one receipt only.
+Native Chat combo children carry the same exact permit to their physical-send boundary.
+Reset-only generic combo helpers report their named prepaid receipt too, without changing
+the selected retry cap; compaction reconciliation therefore does not count that source again.
+Numeric `used` updates and unnamed, foreign, released or already-reported permits charge actual
+sends without consuming another reservation. Extra retries remain full charges. Reports may arrive
+out of reservation order; no FIFO ordering is required. An adapter
 that owns its transport — Kiro's reset ladder, Cursor's transport ladder, or Devin's bounded
 pre-output stated-reset replay — reserves once per physical send instead, so no reporter ever
 arrives. Those ladders are handed
@@ -109,9 +119,70 @@ so one ledger entry per increment is one entry per send, and a dispatch path add
 forget to book. The previous attempt at this wiring shipped the whole reserve/dispatch/settle
 vocabulary with no caller at all (#4707), which is the failure mode this shape rules out.
 
-A booking is confirmed dispatched only once a LATER send exists, because that later send proves
-the earlier one left. The newest booking stays open, so a reservation the budget hands back
-during this process's lifetime can still be released for free.
+Provider-pool accounting uses the canonical routed provider identity, not the mutable display label
+that may identify an OAuth account in request logs. Responses final-route normalization captures
+that identity before credential selection labels the account, and replaces it when a fallback
+selects another provider. Earlier reservations retain the pool they originally charged. Native
+Messages therefore shares the same pool ceiling as Responses even when its Anthropic log label
+includes an account ordinal; root and account identity scopes remain independent.
+Before reserving each combo hop, `core-combo.ts` updates the parent tracker's pool to the resolved
+target provider; child account labels and the logical `combo` label do not create separate pools.
+
+### Historical pool continuity and rollback
+
+`src/lib/spend-pool-continuity.ts` accepts only explicit operator mappings from exact salted
+historical pool aliases to canonical provider IDs, configured in top-level `spendPoolAliases`.
+Current account rosters, label prefixes, short IDs, and renamed/deleted providers are not evidence
+for automatically assigning old balances. Old canonical-looking aliases also need explicit
+mapping when their positive history predates identity metadata. Zero-balance history needs none.
+
+The ledger retains original scope balances and reservation targets. The canonical view adds each
+member once, keeping settled, reserved and unresolved buckets separate. Explicit links can join
+previously canonical groups for a verified rename; an already redirected alias cannot be assigned
+to a different group. The complete proposed graph is validated atomically, so a verified merge
+that repeats existing member aliases is independent of salted-key order. A removed config entry
+never removes a journaled link. Group activity,
+last-seen time and exhaustion govern retention; unidentified positive balances cannot be evicted.
+Identity evidence is bounded and retained even when dormant under-limit scopes are evicted.
+Each eviction pass aggregates pool groups once before choosing candidates. Retention uses the
+group's newest activity; capacity pressure still removes only the oldest eligible individual
+scope per pass, and every removal journals its original scope alias.
+
+Before a mapping authorizes admission, a v1 checkpoint durably carries both unchanged accounting
+and optional salted `poolContinuity` metadata. No raw provider/account names are added to the
+journal. New reservations still use the routed canonical pool ID. Replays and compaction preserve
+the links; complete invalid metadata fails closed, including at the final line, and corruption is
+never compacted away. Unparseable torn final JSON keeps the existing conservative replay rule.
+
+With a configured pool ceiling, any remaining unidentified positive pool history or invalid/
+conflicting mapping refuses admission. HTTP workflow admission and the Responses pre-dispatch
+seam check this even without a root ID, before passthrough transports that report sends afterwards.
+After routing, that seam also refuses an already-exhausted canonical pool, including mapped historical totals.
+A prepaid child excludes only its own open reservation, proven by its exact permit, shared send
+ledger and still-pending receipt. Proof is single-use; unrelated reservations and other pool groups
+remain counted. HTTP continuity refusals record one rooted workflow event; rootless ones record none.
+It is a snapshot check, not a new atomic reservation for report-only transports: crossing sends,
+concurrent preflight admissions and retries reported afterwards retain their existing limitations.
+`workflow_pool_history_unresolved` identifies the local 429 without disclosing aliases; storage
+or replay failures keep `workflow_spend_undurable`. Already-sent reports still book actual spend.
+Observe-only mode has no new token refusal, and root/identity accounting remains independent.
+
+Supported rollback retains/backports **both** canonical route attribution and the continuity-aware
+reader/writer, using the same journal, salt and verified bindings. Restoring an older journal or
+salt loses newer spend and is not a supported rollback. Unmodified older binaries are unsupported:
+they can read v1 counters but do not enforce the canonical aggregate, can introduce fresh account
+label pools, and can discard optional identity metadata during compaction. There is no automatic
+downgrade barrier and no unknown-record fence. If that unsupported write has happened, the current
+reader requires explicit mappings for the remaining unidentified balances rather than assuming
+zero. `tests/lib/spend-pool-continuity.test.ts` exercises this using the frozen pre-change reader,
+as well as exact aggregation, active/unresolved sends, retention, failures and rootless preflight.
+
+Budget reservations retain their exact durable proof until their own dispatch/report confirms
+them. A later reservation does not confirm an earlier pending send. Refunds remove the exact
+send and original pool, and releasing an older permit preserves the latest surviving target.
+Legacy direct charges still infer dispatch from a later charge and leave their newest booking
+open. Report order updates terminal attribution; unrelated pending reservations remain independent.
+`tests/lib/spend-pool-continuity.test.ts` covers reversed child reports and exact-pool cancellation.
 
 Settlement follows what the request learned. The terminal usage belongs to the last send that
 left, so that one settles with the real figure; every earlier send failed without reporting usage
