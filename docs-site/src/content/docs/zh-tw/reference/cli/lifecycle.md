@@ -235,22 +235,34 @@ age exceeds 30 seconds and the recorded PID is no longer alive; status only insp
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-在 PATH 上以輕量自動啟動腳本包裝基於腳本的 `codex` 啟動器。真實的 `codex.exe` 目標保持不動，以避免破壞精確的可執行檔呼叫。
+在 macOS 與 Linux 上，`ocx codex-shim install` 會在解析後的 OpenCodex 主目錄安裝私有 wrapper `<OPENCODEX_HOME>/bin/codex` 與可由 shell 載入的 `<OPENCODEX_HOME>/codex-shell-env.sh`。原生啟動器保留在 brew、npm 或 fnm 安裝的位置，套件管理器升級及版本回復不需重新包裝。Windows 仍依原方式就地包裝指令碼啟動器，真實的 `codex.exe` 保持不動。若 Windows 安裝只提供 `codex.exe`，請使用 `ocx service install`。
 
-若已完成的外部 Codex 更新覆寫了已安裝的 shim，下一個普通 `ocx` 指令會備份穩定的新啟動器並在分派前還原 shim。零副作用的檢查指令 `ocx system codex-cli-update check` 與保留的 `ocx system codex-cli-update` 命名空間中的無效呼叫都不會執行此修復。仍在變動中的啟動器保持不動並稍後重試。修復失敗會發出警告但不會使請求的指令失敗；手動後備：`ocx codex-shim install`。將 `codexShimAutoRestore` 設為 `false`，或設定 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` 以進行行程層級的退出。
+完成 brew/fnm 等 PATH 設定後，執行安裝時顯示的啟用指令。預設主目錄對應：
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+自訂主目錄請使用顯示的含引號路徑。重複載入會移除私有 bin 的重複項目，並將其放在 PATH 最前面。要在之後的 shell 啟用，請自行把這一行加在啟動檔的 PATH 設定之後；OpenCodex 從不編輯 shell 啟動檔，安裝指令也無法變更父 shell 的 PATH。只要 wrapper 可以執行，即使目前 shell 尚未啟用，安裝仍算成功；遭拒或無法執行則失敗。`ocx status`、`ocx codex-shim status`、`ocx doctor` 與 `ocx connect` 會將未被 PATH 選取的 wrapper 回報為 **not active**，並提供啟用指令。connect 警告不會改變結束狀態。別名、函式、桌面或服務的啟動環境需要另外設定。
+
+舊的 Unix 就地 shim 只會透過明確執行 `ocx codex-shim install` 移轉。移轉會還原記錄的原生啟動器，但不覆寫已存在的較新啟動器，之後才安裝私有 wrapper。若還原後私有安裝失敗，原生啟動器會維持已還原狀態，操作可以重試。記錄的啟動器遺失或無法執行時，請透過套件管理器修復；OpenCodex 不會猜測其他安裝位置，也不會重新包裝套件管理器路徑。
+
+Unix 自動修復只更新私有 wrapper，絕不重寫套件管理器啟動器，也不移轉舊的就地 shim。Windows 上，完成的外部更新覆寫 shim 後，下一個普通 `ocx` 指令會備份穩定的新啟動器並還原 shim。仍在變動的啟動器保持不動，稍後重試。`ocx status`、`ocx doctor`、`ocx codex-shim status`、`ocx system codex-cli-update check` 與其保留命名空間中的無效呼叫都不觸發這項修復。修復失敗只發出警告，不改變請求指令的結束狀態；手動修復：`ocx codex-shim install`。將 `codexShimAutoRestore` 設為 `false`，或為行程設定 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`，即可關閉自動修復。
 
 | 子指令 | 動作 |
 | --- | --- |
 | `install` | 安裝 shim（若過時則修復）。 |
-| `uninstall` | 移除 shim 並還原原始 Codex 二進位檔。 |
+| `uninstall` | 移除 Unix 私有檔案，保留原生 Codex；Windows 上還原原始啟動器。 |
 | `remove` | `uninstall` 的別名。 |
-| `status` | 回報 shim 狀態（已安裝、過時或缺失）。 |
+| `status` | 回報 shim 狀態及私有 wrapper 是否在 PATH 中啟用。 |
 
 ```bash
 ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+Unix 解除安裝後，請從 shell 啟動檔移除載入行，並重新啟動 shell 或從 PATH 移除私有 bin。只移除屬於 OpenCodex 的 wrapper、shell 環境檔與狀態，套件管理器啟動器保持不動。舊的 Unix 就地 shim 會利用已記錄的還原資訊解除包裝。
 
 :::tip[服務 vs Shim]
 使用 `ocx service` 作為常駐背景代理（推薦）。使用 `ocx codex-shim` 作為輕量、按需啟動而無 daemon——代理僅在 `codex` 啟動時才啟動。

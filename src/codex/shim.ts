@@ -55,6 +55,8 @@ import {
 import { tryAcquireShimRestoreLock } from "./shim-restore-lock";
 import {
   isWindowsInteropDir,
+  isExecutableCodexCandidate,
+  inspectShimFile,
   realIsDirectory,
   resolveStableFnmCodexPath,
   type CodexPathScanDeps,
@@ -68,6 +70,10 @@ export type { CodexShimBackingForCommand } from "./shim-inspect";
 export type { CodexPathScanDeps } from "./shim-path-resolution";
 export { isWindowsInteropDir } from "./shim-path-resolution";
 export { isLocalAbsoluteInspectionPath, inspectCodexShimBackingForCommand } from "./shim-inspect";
+
+import { isShim, diagnoseCodexShim } from "./shim-diagnostics";
+import { installUnixOverlay, autoRestoreUnixOverlay, uninstallUnixCodexShim, overlayPaths } from "./shim-overlay";
+export { diagnoseCodexShim, codexShimStatus, type CodexShimDiagnostic } from "./shim-diagnostics";
 
 export const CODEX_SHIM_REPLACEMENT_STABLE_MS = 100;
 
@@ -114,31 +120,12 @@ function commandNames(name: string): string[] {
   return [name, ...exts.flatMap(ext => [`${name}${ext.toLowerCase()}`, `${name}${ext.toUpperCase()}`])];
 }
 
-function isShim(path: string): boolean {
-  try {
-    return readFileSync(path, "utf8").includes(SHIM_MARKER);
-  } catch {
-    return false;
-  }
-}
-
-function isHealthyShim(path: string, platform: NodeJS.Platform): boolean {
-  try {
-    const content = readFileSync(path, "utf8");
-    if (content.length < 180 || !content.includes(SHIM_MARKER) || !content.includes("ensure")) return false;
-    if (platform !== "win32" && !content.includes(UNIX_SHIM_REVISION_MARKER)) return false;
-    if (platform !== "win32" && (lstatSync(path).mode & 0o111) === 0) return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function findCodexOnPath(deps: CodexPathScanDeps = {}): string | null {
   lastShimDiscoveryError = null;
   const exists = deps.exists ?? existsSync;
-  const shimFile = deps.isShimFile ?? isShim;
+  const shimFile = deps.isShimFile ?? (process.platform === "win32" ? isShim : (path: string) => inspectShimFile(path) !== false);
   const isDir = deps.isDirectory ?? realIsDirectory;
+  const eligible = deps.executableEligible ?? (deps.exists ? () => true : isExecutableCodexCandidate);
   const wsl = deps.wsl ?? (process.platform === "linux" && isWslRuntime());
   const usePosix = deps.posixPaths ?? (wsl || process.platform !== "win32");
   // The injected path flavour governs join and separator alike; host-native `join` and
@@ -166,7 +153,9 @@ export function findCodexOnPath(deps: CodexPathScanDeps = {}): string | null {
     const names = isWindowsInteropDir(dir, automountRoot) ? interopNames : commandNames("codex");
     for (const name of names) {
       const path = joinPath(dir, name);
-      if (!exists(path) || shimFile(path)) continue;
+      if (!exists(path)) continue;
+      if (usePosix && (path === overlayPaths().wrapper || !eligible(path))) continue;
+      if (shimFile(path)) continue;
       if (!isDir(path)) {
         const resolved = discoveredCodexPath(path, usePosix, deps.realpath);
         if (resolved !== null) return resolved;
@@ -1072,7 +1061,8 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
   };
 }
 
-export function installCodexShim(): { installed: boolean; message: string } {
+export function installCodexShim(): { installed: boolean; message: string; refused?: boolean; runnable?: boolean } {
+  if (process.platform !== "win32") return installUnixOverlay(findCodexOnPath);
   return installCodexShimInternal({ allowFreshInstall: true });
 }
 
@@ -1086,6 +1076,7 @@ export function autoRestoreCodexShim(options: {
   /** Narrow deterministic race seam for the guarded transaction tests. */
   beforeGuardedRefresh?: (wrapperPath: string, index: number) => void;
 }): CodexShimAutoRestoreResult {
+  if (process.platform !== "win32") return autoRestoreUnixOverlay(options);
   const stateRead = readStateResult();
   const state = stateRead.state;
   if (!state) {
@@ -1181,6 +1172,7 @@ export function autoRestoreCodexShim(options: {
 }
 
 export function uninstallCodexShim(): { removed: boolean; message: string } {
+  if (process.platform !== "win32") return uninstallUnixCodexShim();
   const state = readState();
   if (!state) return { removed: false, message: "Codex autostart shim is not installed." };
   const files = stateFiles(state);
@@ -1198,49 +1190,4 @@ export function uninstallCodexShim(): { removed: boolean; message: string } {
 /** True if a Codex autostart shim is currently installed (state file present). */
 export function isCodexShimInstalled(): boolean {
   return diagnoseCodexShim().installed;
-}
-
-export interface CodexShimDiagnostic {
-  installed: boolean;
-  healthy: boolean;
-  summary: string;
-}
-
-/** Structured, secret-free shim state for CLI/GUI lifecycle diagnostics. */
-export function diagnoseCodexShim(): CodexShimDiagnostic {
-  const state = readState();
-  if (!state) {
-    if (existsSync(statePath())) {
-      return {
-        installed: true,
-        healthy: false,
-        summary: `Codex autostart shim state is invalid or corrupt at ${statePath()}. Reinstall or remove the shim.`,
-      };
-    }
-    return {
-      installed: false,
-      healthy: false,
-      summary: "Codex autostart shim is not installed.",
-    };
-  }
-  const files = stateFiles(state);
-  const healthy = files.length > 0 && files.every(file => file.preserveOnly
-    ? existsSync(file.backupPath) && !existsSync(file.originalPath)
-    : existsSync(file.wrapperPath)
-      && (existsSync(file.backupPath) || (file.realPath ? existsSync(file.realPath) : false))
-      && isHealthyShim(file.wrapperPath, state.platform));
-  const summary = files.map(file => {
-    const wrapper = existsSync(file.wrapperPath)
-      ? isShim(file.wrapperPath)
-        ? "shim present"
-        : "present but not an opencodex shim"
-      : "missing";
-    const backup = existsSync(file.backupPath) ? "present" : "missing";
-    return `Codex autostart shim: wrapper ${wrapper} at ${file.wrapperPath}; original backup ${backup} at ${file.backupPath}.`;
-  }).join("\n");
-  return { installed: true, healthy, summary };
-}
-
-export function codexShimStatus(): string {
-  return diagnoseCodexShim().summary;
 }

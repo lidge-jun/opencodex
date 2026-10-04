@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { findCodexOnPath, installCodexShim, lastCodexDiscoveryError, setCodexShimProbeObservationMsForTests } from "../../src/codex/shim";
 import { SHIM_MARKER } from "../../src/codex/shim-templates";
-import { prependPath } from "../helpers/codex-shim-install-fixture";
+import { isolateCodexShimEnvironment, prependPath } from "../helpers/codex-shim-install-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+isolateCodexShimEnvironment();
 
 describe("fnm Codex shim discovery", () => {
   test.skipIf(process.platform === "win32")(
@@ -45,10 +47,15 @@ describe("fnm Codex shim discovery", () => {
         expect(state).toContain(stableCodex);
         expect(state).not.toContain("fnm_multishells");
         expect(state).not.toContain(packageCodex);
-        expect(readFileSync(stableCodex, "utf8")).toContain(SHIM_MARKER);
-        expect(readFileSync(multishellCodex, "utf8")).toContain(SHIM_MARKER);
+        expect(readFileSync(join(home, "bin", "codex"), "utf8")).toContain(SHIM_MARKER);
+        expect(readFileSync(stableCodex, "utf8")).toContain("fnm-stable-codex");
+        expect(readFileSync(multishellCodex, "utf8")).toContain("fnm-stable-codex");
         expect(readFileSync(packageCodex, "utf8")).toContain("fnm-stable-codex");
-        expect(lstatSync(`${stableCodex}.opencodex-real`).isSymbolicLink()).toBe(true);
+        expect(lstatSync(stableCodex).isSymbolicLink()).toBe(true);
+        expect(existsSync(`${stableCodex}.opencodex-real`)).toBe(false);
+        removeTreeWithRetry(join(root, "fnm_multishells"));
+        expect(JSON.parse(state)).toMatchObject({ schema: 2, launcherPath: join(realpathSync(stableBin), "codex") });
+        expect(readFileSync(stableCodex, "utf8")).toContain("fnm-stable-codex");
       } finally {
         setCodexShimProbeObservationMsForTests(null);
         if (oldPath === undefined) delete process.env.PATH;

@@ -905,7 +905,7 @@ Claude debug immediately clears the ring.
 
 ## GUI (Claude page)
 
-The dashboard sidebar has a dedicated **Claude** page (below API) and a **Claude ON** toggle
+The dashboard sidebar has a dedicated **Claude** page (under Connect) and a **Claude ON** toggle
 (label intentionally identical in every language). The page shows:
 
 - Desktop tab: **Connection mode** selector — gateway (default) or first-party — with the

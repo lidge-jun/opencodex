@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { IconPlus, IconX } from "../icons";
 import { useT } from "../i18n/shared";
 import { Trans } from "../i18n/provider";
@@ -29,21 +30,28 @@ export function ClaudeCodeSettingsCard({
   autoCompactOptions,
   availableModels,
   onStateChange,
+  footer,
 }: {
   state: ClaudeCodeState;
   autoCompactOptions: { value: string; label: string }[];
   availableModels: string[];
   onStateChange: (next: ClaudeCodeState) => void;
+  /**
+   * The last row of the card. ClaudeCode puts the master Claude connection switch here:
+   * it commits immediately through the native-integration route, unlike the Save-gated
+   * rows above, so the parent owns it and this card only places it.
+   */
+  footer?: ReactNode;
 }) {
   const t = useT();
 
   return (
     <div className="card" style={{ overflow: "hidden" }}>
       {/*
-        The connection toggle lives in the Claude Code header, where it commits
-        immediately. Keeping a copy here as a Save-gated draft row meant one
-        setting with two controls and two different commit semantics — a user
-        who flipped this one and navigated away had changed nothing.
+        The connection toggle is the footer row, and it commits immediately. A
+        Save-gated draft copy once lived here too: one setting with two controls and
+        two commit semantics, so a user who flipped it and navigated away had changed
+        nothing. Keep exactly one control, owned by ClaudeCode.
       */}
       <div className="setting-row">
         <div className="setting-label">
@@ -209,6 +217,7 @@ export function ClaudeCodeSettingsCard({
           </div>
         );
       })}
+      {footer}
     </div>
   );
 }
