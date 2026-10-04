@@ -96,6 +96,7 @@ import { providerCodexAccountMode } from "../providers/registry";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import {
+  auditRefusedCatalogReplacement,
   publishHashedCodexCatalogBackup,
   publishLegacyCodexCatalogBackup,
   replaceActiveCodexCatalog,
@@ -671,6 +672,7 @@ export async function commitCodexCatalogCandidate(
         // Read under K, so a config that fell back to defaults during a transient read failure,
         // or that belongs to another OPENCODEX_HOME, cannot publish a native-only catalog (#6529).
         if (state.routedRemoval !== null && !routedRemovalBackedByConfigFile(state.routedRemoval)) {
+          auditRefusedCatalogReplacement(permit, state.home, state.catalog, "unbacked-routed-removal");
           console.warn(`[opencodex] ${unbackedRoutedRemovalMessage(state.routedRemoval.namespaces.length)}`);
           return { kind: "refused", reason: "unbacked-routed-removal" } as const;
         }

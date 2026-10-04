@@ -66,6 +66,7 @@ import {
 } from "../catalog-write-serialization";
 import {
   preparedBytesDifferFromDisk,
+  auditRefusedCatalogReplacement,
   publishHashedCodexCatalogBackup,
   publishLegacyCodexCatalogBackup,
   replaceActiveCodexCatalog,
@@ -591,6 +592,9 @@ function writeRetainedCatalogSync({
       if (!(error instanceof ConfigMutationLockError)) throw error;
     }
     if (!backed) {
+      if (replacement?.kind !== "refused") {
+        auditRefusedCatalogReplacement(permit, owningCodexHome, preparedCatalog, "unbacked-routed-removal");
+      }
       return refused(removal.namespaces.length);
     }
   } else {

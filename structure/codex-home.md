@@ -402,6 +402,14 @@ Each `withCatalogWriteSerialization` call supplies `refresh`, `cache`, `pull` or
 
 These checks coordinate cooperating processes running as the same OS user. They do not isolate files from an arbitrary process with that user's direct filesystem access.
 
+## Catalog write audit
+
+Catalog and cache writes and admission refusals leave bounded diagnostic records through `src/codex/catalog/write-audit.ts`. The catalog serialization owner coordinates every append and compaction under K; denied writers never receive a publication permit. Identical bytes produce no event. Audit failure preserves the catalog operation's outcome.
+
+Records contain fixed categories, time and process identifiers, redacted bounded home identity, routed counts and config provenance. They contain no model/provider names or raw command arguments. Each event is at most 2 KiB; retention keeps complete newest records within both 256 KiB and 400 records. Reads are bounded to the tail. Owner creation is private and regular-file-only; a foreign writer can append only to an existing valid file within capacity, without creating or compacting it.
+
+The audit artifact is `opencodex-catalog-audit.jsonl` under the Codex home. New owner-created files with file-backed config attempt existing uninstall registration. A separate Codex home lies outside the config manifest's ownership root, so its audit remains an explicit cleanup residual; this does not broaden uninstall deletion authority.
+
 ## Codex-home diagnostics
 
 Desktop executable membership uses the [discovered installation root](runtime.md#codex-desktop-process-membership), independently of the Codex state directory resolved here.
