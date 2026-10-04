@@ -203,6 +203,7 @@ import { readyProtocolMetadata } from "../../remote/protocol";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
+import { withCallerSessionIdentity } from "../caller-session-identity";
 
 export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
 
@@ -1474,10 +1475,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           logged = true;
           addFinalRequestLog(requestId, start, logCtx, status, meta);
         };
-        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
+        const sessionReq = withCallerSessionIdentity(withGrokSessionIdentity(req), admission);
+        return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
           let response: Response;
           try {
-            response = await handleResponses(withGrokSessionIdentity(req), config, logCtx, {
+            response = await handleResponses(sessionReq, config, logCtx, {
               turnAdmissionLease,
               admission,
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
@@ -1554,8 +1556,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // Logging is finalized inside handleClaudeMessages (Responses-vocab tap on the
         // pre-translation stream + native passthrough callbacks) — do not re-wrap the
         // translated Anthropic stream here.
-        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
-          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" }),
+        const sessionReq = withCallerSessionIdentity(req, admission);
+        return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => withCors(
+          await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" }),
           req,
           policy,
         ), { requestId, start, logCtx });

@@ -9,6 +9,8 @@
     "provider-antigravity-family-catalog.test.ts": "providers",
     "claude-subagent-model-force.test.ts": "claude-integration",
     "subagent-model-force-api.test.ts": "server",
+    "caller-session-identity.test.ts": "server",
+    "caller-session-ingress.test.ts": "server",
     "agent-subagent-force.test.ts": "cli",
     "compaction-event-ownership.test.ts": "responses",
     "zed-retained-budget.test.ts": "providers",
