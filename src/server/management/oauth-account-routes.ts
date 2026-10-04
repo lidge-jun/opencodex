@@ -700,7 +700,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         if (Object.keys(next).length > 0) prov.oauthAccountFailover = next;
         else delete prov.oauthAccountFailover;
       }
-      if (kind !== "anthropic") saveConfigPreservingClaudeCode(config);
+      saveConfigPreservingClaudeCode(config);
       reconcileLiveStateStores();
     }
     return jsonResponse(unifiedPoolSettingsDto(config, provider, kind));
