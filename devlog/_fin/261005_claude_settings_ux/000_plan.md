@@ -66,3 +66,17 @@ The user approved two designs on 2026-10-05 from the visual drafts in
   assignment: ACCEPT.
 - D8 lanes stay mounted inside a closed `<details>`; summary carries warnings: ACCEPT.
 - D9 tests for draft/read race and select invariants: ACCEPT.
+
+## Outcome (2026-10-05)
+
+Implemented as planned. Claude Code settings render as one page with a sticky Save bar;
+Save no longer sends `enabled`, and a successful Save becomes the baseline before its
+refresh (`gui/src/pages/claude-code-save.ts`). Claude Desktop leads with Default model and
+Quick task model (`gui/src/pages/claude-desktop-roles.ts`), a compact model list, and the
+family lanes under a folded Advanced disclosure; the profile wire contract is unchanged.
+Reviews: architect, auditor and two code reviewers (gpt-6.1-sol); findings folded
+(save-acknowledgement races, import/export with an empty catalog, stale guide navigation).
+Verification: `gui` full tests 2889 pass, lint, lint:i18n, build; root typecheck,
+structure:check, privacy:scan, full `bun run test`; docs-site build; in-app browser QA of both
+tabs. What did not change: the subtitle on the Desktop tab still speaks of model families,
+and the Quick task label rests on the Haiku tier mapping rather than observed Desktop behavior.
