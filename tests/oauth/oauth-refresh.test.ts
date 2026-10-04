@@ -23,6 +23,7 @@ import {
 import * as storeModule from "../../src/oauth/store";
 import * as configModule from "../../src/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoRoot } from "../helpers/repo-root";
 
 const origHome = process.env.HOME;
 const origLocalAppData = process.env.LOCALAPPDATA;
@@ -593,12 +594,14 @@ describe("oauth refresh hardening", () => {
     const dns = { code: "ENOTFOUND", syscall: "getaddrinfo", hostname: "api.anthropic.com" };
     const scenarios: Array<{
       name: string; outcome: "retry" | "blocked" | "reauth";
-      first: () => Promise<Response>; proxy?: string;
+      first: () => Promise<Response>; proxy?: string; redirectStatus?: number;
     }> = [
       { name: "HTTP 503", outcome: "retry", first: async () => new Response("unavailable", { status: 503 }) },
-      { name: "manual redirect", outcome: "retry", first: async () => new Response("", {
-        status: 302, headers: { Location: "https://other.invalid/token" },
-      }) },
+      ...[302, 303].map(status => ({ name: `manual redirect ${status}`, outcome: "blocked" as const, redirectStatus: status,
+        first: async () => new Response("redirect body must stay private", {
+          status, headers: { Location: "https://other.invalid/token" },
+        }),
+      })),
       { name: "structured token-host DNS", outcome: "retry", first: async () => { throw dns; } },
       { name: "timeout", outcome: "blocked", first: async () => { throw new DOMException("timeout", "TimeoutError"); } },
       { name: "invalid_grant", outcome: "reauth", first: async () => Response.json({ error: "invalid_grant" }, { status: 400 }) },
@@ -629,7 +632,12 @@ describe("oauth refresh hardening", () => {
         }) as typeof fetch;
         const refresh = () => refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic!, credential);
         if (scenario.outcome === "reauth") await expect(refresh()).rejects.toBeInstanceOf(OAuthLoginRequiredError);
-        else await expect(refresh()).rejects.toBeDefined();
+        else if (scenario.redirectStatus) {
+          await expect(refresh()).rejects.toMatchObject({
+            name: "AnthropicTokenError", httpStatus: undefined, oauthError: undefined, requestNotSent: false,
+            message: `Anthropic OAuth redirect HTTP ${scenario.redirectStatus}: outcome unknown`,
+          });
+        } else await expect(refresh()).rejects.toBeDefined();
         const pending = readOAuthRefreshIntent("anthropic", id);
         expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBe(scenario.outcome === "reauth" ? true : undefined);
         if (scenario.outcome === "blocked") {
@@ -652,6 +660,44 @@ describe("oauth refresh hardening", () => {
           if (value === undefined) delete process.env[key]; else process.env[key] = value;
         }
       }
+    });
+
+    for (const current of [undefined, ""]) test(`startup proxy with current HTTPS_PROXY ${current === undefined ? "deleted" : "empty"}`, async () => {
+      const child = Bun.spawn([process.execPath, "--eval", `
+        import assert from "node:assert/strict";
+        import { OAUTH_PROVIDERS, OAuthLoginRequiredError, refreshAnthropicAccountWithLock } from "./src/oauth";
+        import { credentialGeneration, getAccountCredential, getAccountSet, readOAuthRefreshIntent, saveCredential } from "./src/oauth/store";
+        import { outboundProxyConfigured, startupOutboundProxyConfigured } from "./src/lib/proxy-env";
+        for (const key of ${JSON.stringify(proxyKeys)}) delete process.env[key];
+        ${current === undefined ? "" : 'process.env.HTTPS_PROXY = "";'}
+        assert.equal(startupOutboundProxyConfigured, true);
+        assert.equal(outboundProxyConfigured(), false);
+        let calls = 0;
+        const dns = ${JSON.stringify(dns)};
+        globalThis.fetch = async input => {
+          if (String(input) === "https://api.anthropic.com/api/oauth/profile") {
+            return Response.json({ account: { uuid: "synthetic-account-a" } });
+          }
+          assert.equal(String(input), "https://api.anthropic.com/v1/oauth/token");
+          calls++;
+          throw dns;
+        };
+        await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+        const id = getAccountSet("anthropic").activeAccountId;
+        const credential = getAccountCredential("anthropic", id);
+        const refresh = () => refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic, credential);
+        await assert.rejects(refresh, error => error === dns);
+        const pending = readOAuthRefreshIntent("anthropic", id);
+        assert.equal(pending?.generation, credentialGeneration(credential));
+        assert.equal(pending?.cleanupPending, undefined);
+        assert.equal(getAccountSet("anthropic").accounts[0].needsReauth, undefined);
+        await assert.rejects(refresh, OAuthLoginRequiredError);
+        assert.deepEqual(readOAuthRefreshIntent("anthropic", id), pending);
+        assert.equal(calls, 1);
+        process.exit(0);
+      `], { cwd: repoRoot(), env: { ...process.env, HTTPS_PROXY: "http://proxy.invalid:8080" }, stdout: "pipe", stderr: "pipe" });
+      const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
     });
   });
 

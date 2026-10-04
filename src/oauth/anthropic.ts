@@ -3,7 +3,7 @@ import { OAuthCallbackFlow } from "./callback-server";
 import { bindAnthropicIdentity, resolveAnthropicAccountIdentity } from "./anthropic-identity";
 import { generatePKCE } from "./pkce";
 import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
-import { outboundProxyConfigured } from "../lib/proxy-env";
+import { outboundProxyConfigured, startupOutboundProxyConfigured } from "../lib/proxy-env";
 
 const CLIENT_ID = atob("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
@@ -49,7 +49,7 @@ export class AnthropicTokenError extends Error {
 }
 
 async function postJson(url: string, body: Record<string, string | number>): Promise<string> {
-  const direct = !outboundProxyConfigured();
+  const direct = !startupOutboundProxyConfigured && !outboundProxyConfigured();
   const init: RequestInit & { protocol: "http1.1" } = {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -72,6 +72,10 @@ async function postJson(url: string, body: Record<string, string | number>): Pro
       throw new AnthropicTokenError("Anthropic OAuth DNS lookup failed before connection", undefined, undefined, true);
     }
     throw error;
+  }
+  if (response.status >= 300 && response.status < 400) {
+    // A redirect can follow a completed POST and token rotation; it is not a rejection.
+    throw new AnthropicTokenError(`Anthropic OAuth redirect HTTP ${response.status}: outcome unknown`, undefined, undefined);
   }
   const responseBody = await response.text();
   if (!response.ok) {
