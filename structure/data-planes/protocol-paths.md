@@ -257,7 +257,8 @@ transport side (send budget, failover, logging) is in
 
 ## Managed native Messages
 
-Behind `protocols.rollout.managedMessagesNative` (default off). A Messages request whose settled
+Behind `protocols.rollout.managedMessagesNative` (explicit policy defaults off). An enabled Anthropic
+pool supplies absent native flags for its settled provider under the [pool native preference](../providers/anthropic-account-pool.md#native-request-preference); explicit false/malformed flags remain off. A Messages request whose settled
 route is a direct, key-auth `anthropic` provider is sent as Messages instead of replaying through
 Responses; with `managedMessagesNativeOAuth` also on, so is an Anthropic OAuth account, including pooled accounts
 (below). `nativeMessagesDeclineReason` names the first rule that keeps a route off the lane:

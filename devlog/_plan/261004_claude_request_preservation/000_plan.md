@@ -37,3 +37,6 @@ Architect reflection on amended roadmap: ALIGNED; all CL-A02/A03/A04/A06/A07 and
 
 ## wp1 outcome
 Published draft [#6552](https://github.com/lidge-jun/opencodex/pull/6552) at b89935ce3071bc8b1b34517d2e8e07c81d2f0612. Deferred and inline naming carried with collision/opaque refinements; source #6533 fully accounted, #6534/#6547 partial. Focused tests 38 passed; layout/ratchet 27 passed; typecheck, structure, privacy and docs build passed. Independent implementation/security review found no actionable defects. Hosted checks were running at the initial exact-head inspection, with native jobs skipped; draft remains, no live acceptance claimed. Next: wp2 native compatibility and pooled dispatch. No source PR/issue closed.
+
+## wp2 outcome
+Published draft [#6559](https://github.com/lidge-jun/opencodex/pull/6559) at18fbd99c4d26397cf9e2d55b1d8d562773fe7cde as manual child of#6552. Native compatibility and shared pooled dispatch carried;333 focused tests and27layout/ratchet checks pass, plus typecheck/structure/privacy/docs. Independent client/server review PASS with exact source bindings. Three extra end-to-end cases remain nonblocking gaps; live upstream acceptance unverified. Current-head CI initially running, no all-green claim. Next wp3 settings/API/GUI/defaults.

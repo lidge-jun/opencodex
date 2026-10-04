@@ -95,11 +95,17 @@ See [Configuration](/reference/configuration/providers/#anthropicaccountpool-exp
 
 ### Native Messages with account pooling
 
-With both `protocols.rollout.managedMessagesNative` and
-`protocols.rollout.managedMessagesNativeOAuth` enabled, eligible direct Anthropic OAuth routes
-can use the stored account pool while preserving native message history and cache breakpoints.
-Session affinity, model routes, pause/cooldown exclusions and bounded pre-output account recovery
-follow the shared pool policy. Both switches remain opt-in.
+An enabled Anthropic account pool prefers native Messages for eligible direct Anthropic routes
+when neither native rollout flag explicitly disables that path. In Providers → Anthropic →
+Account pooling → **How account selection works**, **Preserve native Claude requests** stores
+`anthropicAccountPool.nativeMessages` (default true). Turning it off selects the legacy bridge
+for pooled requests. With pooling off, the explicit native rollout settings keep their behavior.
+
+Explicit `protocols.rollout.managedMessagesNative: false` disables both native paths;
+`managedMessagesNativeOAuth: false` disables native OAuth. Invalid present settings fail closed.
+The checkbox shows the saved preference, so an enabled checkbox does not override these flags
+or a route that requires proxy translation. Native requests retain history/cache breakpoints,
+session affinity, model routes, pause/cooldown exclusions and bounded pre-output recovery.
 
 Recognized native CLI and Desktop Code requests retain their billing/identity preamble and
 supported feature beta headers. Generated requests keep the SDK identity shape. Declared custom
