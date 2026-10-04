@@ -297,7 +297,9 @@ Des handles natifs maintiennent les répertoires parents et les fichiers pendant
 
 L’identité ou le condensat décrit les fichiers au moment de l’observation, sans autorisation durable de mise à jour. Cela ne prouve ni le runtime sélectionné, ni l’installateur passé, ni la configuration npm effective, ni l’authenticité des outils. Le Node fourni est seulement observé, pas identifié comme celui que choisirait le lanceur. Aucune cible n’est exécutée ; aucune requête au registre, installation, écriture de configuration ou commande de processus n’a lieu. Le `check` Windows existant ne réalise toujours aucune E/S de fichiers candidats ou de configuration.
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]` affiche la configuration locale sans proxy en cours d’exécution. Vous pouvez omettre `show` avec l’un ou les deux indicateurs, dans n’importe quel ordre. `--source` inclut la source, les erreurs et les avertissements de diagnostic et n’est accepté que pour l’affichage. `--json` peut précéder une action explicite sans changer l’action exécutée. Les indicateurs `--json` ou `--source` répétés et les arguments inconnus sont refusés.
 
 Inspectez et modifiez en toute sécurité la configuration OpenCodex validée. `show` et `get` masquent les secrets. Importer
 valide avant d'écrire et nécessite `--yes`.

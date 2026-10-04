@@ -256,7 +256,9 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 
 관측한 식별값·해시는 관측 시점의 파일을 설명할 뿐 지속적인 업데이트 허가가 아닙니다. 선택된 런타임, 과거 설치 주체, 실제 npm 설정, 도구 진위를 증명하지 않습니다. 명시한 Node도 관측만 하며 런처가 그 Node를 선택한다는 뜻은 아닙니다. 대상을 실행하거나 레지스트리에 요청하거나 설치·설정 쓰기·프로세스 제어를 하지 않습니다. 기존 Windows `check`의 후보·설정 파일 시스템 I/O 없음 계약은 유지됩니다.
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]`는 실행 중인 프록시 없이 로컬 설정을 표시합니다. `show`를 생략해도 두 플래그를 각각 또는 순서와 관계없이 함께 사용할 수 있습니다. `--source`는 진단 출처, 오류, 경고를 포함하며 표시 작업에서만 허용됩니다. `--json`은 명시적 작업 앞에 올 수 있으며 실행할 작업을 바꾸지 않습니다. 중복된 `--json` 또는 `--source` 플래그와 알 수 없는 인수는 거부됩니다.
 
 검증된 OpenCodex configuration을 검사하고 안전하게 수정합니다. `show`와 `get`은 비밀 값을 가립니다. import는 쓰기 전에 검증하며 `--yes`가 필요합니다.
 

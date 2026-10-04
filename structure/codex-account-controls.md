@@ -42,6 +42,7 @@ held while a usage window reads 100%: the long window (weekly, or monthly on 30-
 while its reset is still ahead, the burst window through `isTerminalShortWindow`. A held account
 receives no traffic and therefore no new observation, so the reading has to end on its own; a long
 window without a reset is not trusted.
+Fresh spendable-credit evidence follows the [WHAM credit contract](providers/openai-tiers.md#spendable-codex-credits); included-plan refusal is not a credit-spending veto.
 
 The hold is checked wherever plan exclusion is checked in `src/codex/routing/selection.ts`: the
 eligible list (its pool filter and its main branch), `isCodexAccountSelectable`, and
