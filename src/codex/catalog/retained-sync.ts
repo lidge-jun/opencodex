@@ -2,7 +2,7 @@ import { projectAntigravitySelectedModels } from "../../providers/antigravity-ef
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { initializeConfigOwnership } from "../../lib/config-ownership";
-import { getConfigDir, loadConfig, websocketsEnabled } from "../../config";
+import { getConfigDir, loadConfig, websocketsEnabled, withConfigMutationLockSync } from "../../config";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { legacyCustomModelCatalogSlugs } from "../custom-model-catalog-migration";
 import { getCodexHome } from "../paths";
@@ -40,6 +40,8 @@ import {
   nativeMultiAgentDefaults,
 } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
+import { routedRemovalBackedByConfigFile, unconfiguredRoutedRemoval } from "./routed-removal";
+import { ConfigMutationLockError } from "../../config/mutation-lock";
 import {
   accountBoundNativeOpenAiSlugsBySelector,
   desktopAllowlistSuppressedNativeSlugs,
@@ -105,8 +107,14 @@ interface RetainedCatalogSyncResult {
   comboOmissions: ComboCatalogOmission[];
   /** Validated catalog commit (including identical bytes), or a refused refresh. */
   refreshOutcome?: "committed" | "refused";
-  /** `desired_disabled` observed under K after the provider await; nothing was written. */
-  skippedReason?: "desired_disabled";
+  /**
+   * `desired_disabled`: observed under K after the provider await. `unbacked_routed_removal`: the
+   * catalog would lose routed namespaces config.json still enables, or config.json is missing or
+   * unreadable (#6529). Nothing was written in either case.
+   */
+  skippedReason?: "desired_disabled" | "unbacked_routed_removal";
+  /** With `unbacked_routed_removal`: how many routed namespaces the refused write would have emptied. */
+  protectedRoutedNamespaces?: number;
 }
 
 /**
@@ -554,8 +562,36 @@ function writeRetainedCatalogSync({
   if (!preparedBytesDifferFromDisk(preparedCatalog)) {
     return { added, path: catalogPath, catalogWritten: false, comboOmissions };
   }
-
-  replaceActiveCodexCatalog(permit, owningCodexHome, preparedCatalog);
+  // A refresh may drop a provider's rows only when config.json on disk agrees the provider is gone.
+  // Without that, a config that is not the user's (missing or unreadable file read as defaults,
+  // another OPENCODEX_HOME) would publish a native-only catalog and exit cleanly (#6529).
+  const removal = unconfiguredRoutedRemoval(onDiskCatalog, catalog, config);
+  if (removal !== null) {
+    // Hold C (K -> C) from the config read through the replacement, so a save that enables one of
+    // these providers cannot land between the check and the write. A held C is a refusal too.
+    let backed = false;
+    try {
+      backed = withConfigMutationLockSync(() => {
+        if (!routedRemovalBackedByConfigFile(removal)) return false;
+        replaceActiveCodexCatalog(permit, owningCodexHome, preparedCatalog);
+        return true;
+      });
+    } catch (error) {
+      if (!(error instanceof ConfigMutationLockError)) throw error;
+    }
+    if (!backed) {
+      return {
+        added: 0,
+        path: catalogPath,
+        catalogWritten: false,
+        comboOmissions,
+        skippedReason: "unbacked_routed_removal",
+        protectedRoutedNamespaces: removal.namespaces.length,
+      };
+    }
+  } else {
+    replaceActiveCodexCatalog(permit, owningCodexHome, preparedCatalog);
+  }
   return {
     added,
     path: catalogPath,
