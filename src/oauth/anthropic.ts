@@ -75,6 +75,7 @@ async function postJson(url: string, body: Record<string, string | number>): Pro
   }
   if (response.status >= 300 && response.status < 400) {
     // A redirect can follow a completed POST and token rotation; it is not a rejection.
+    await response.body?.cancel().catch(() => {});
     throw new AnthropicTokenError(`Anthropic OAuth redirect HTTP ${response.status}: outcome unknown`, undefined, undefined);
   }
   const responseBody = await response.text();
