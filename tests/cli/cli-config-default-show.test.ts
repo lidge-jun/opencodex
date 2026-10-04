@@ -170,3 +170,24 @@ process.on("exit", () => { if (attempts) process.exitCode = 97; });\n`);
     });
   }, SPAWN_BUDGET_MS,
 );
+
+
+test.each([["config", "--help"], ["help", "config"]])(
+  "config help %j documents optional show and display flags",
+  async (...args) => {
+    await withConfig(async ({ root, configPath }) => {
+      const result = spawnSync(process.execPath, [repoPath("src", "cli", "index.ts"), ...args], {
+        cwd: repoRoot(), env: { ...process.env, OPENCODEX_HOME: root, CODEX_HOME: join(root, "codex") },
+        encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("ocx config [show|get|set|unset|validate|export|import]");
+      expect(result.stdout).toContain("show is the default");
+      expect(result.stdout).toContain("ocx config [show] [--json] [--source]");
+      expect(result.stdout).toContain("--source is only supported for show");
+      expect(readFileSync(configPath, "utf8")).toBe(CONFIG_BYTES);
+    });
+  }, SPAWN_BUDGET_MS,
+);
