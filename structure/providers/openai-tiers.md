@@ -302,9 +302,10 @@ headers retain its original clock. A positive balance with `has_credits`, or unl
 can keep an account selectable at 100% included usage for five minutes only when its id is in
 `creditCodexAccountIds`. Balance evidence never grants permission: unlisted accounts retain the
 default 100% hold, and opted-in accounts require fresh evidence. Included-plan `rate_limit.allowed`
-does not grant or veto credit spending; a declared `spend_control.reached` must be explicitly false,
-and a reached or malformed verdict or an overage limit defeats that credit evidence. Missing
-spending-control evidence does not invent a refusal. Existing cached refusal flags are retained
+does not grant or veto credit spending; a present non-null `spend_control` must be an object with
+`reached: false`, and a reached or malformed control or an overage limit defeats that credit evidence.
+Absent/null controls impose no veto. A refusing control retracts cached credits even without a
+credits field or usage windows. Existing cached refusal flags are retained
 until a fresh WHAM credits observation replaces them. Selection caps its usage score
 at 99 so accounts with more included headroom remain preferred; observed percentage bars stay
 unchanged. Bulk pause and complete-snapshot recovery use the same credit decision. Credits-only

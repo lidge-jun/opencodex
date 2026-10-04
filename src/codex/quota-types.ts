@@ -148,7 +148,8 @@ export type WhamUsageResponse = {
     balance?: unknown;
     overage_limit_reached?: unknown;
   } | null;
-  spend_control?: { reached?: unknown } | null;
+  /** Absent/null imposes no veto; present raw controls require an object with reached:false. */
+  spend_control?: unknown;
   rate_limit_reset_credits?: { available_count: number } | null;
   additional_rate_limits?: WhamAdditionalRateLimit[] | null;
 };
