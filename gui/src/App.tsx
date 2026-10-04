@@ -186,6 +186,23 @@ export default function App() {
   // Claude is a tab inside Connect: both pages render one Integrations shell under one
   // boundary, so moving between Claude and another Connect tab keeps drafts and focus.
   const shellPage: Page = page === "claude" ? "integrations" : page;
+  /*
+   * The section switcher hides once only one member is left (Remote Workspace becoming
+   * unavailable). If a switcher button had focus, hand it to this page's sidebar row when
+   * that row is on screen, else to the main region, so keyboard focus never drops to <body>.
+   */
+  const focusAfterSwitcher = () => {
+    const row = document.querySelector<HTMLElement>(".sidebar .nav-item.active");
+    const box = row?.getBoundingClientRect();
+    if (row && box && box.width > 0 && box.right > 0 && box.left < window.innerWidth) {
+      row.focus({ preventScroll: true });
+      return;
+    }
+    const main = document.querySelector<HTMLElement>("main.main");
+    if (!main) return;
+    main.tabIndex = -1;
+    main.focus({ preventScroll: true });
+  };
   // A standalone/hub dashboard exposed through an authenticated non-loopback origin can need a
   // consent-bearing GUI session even though it is not a connected client. Remote Link requires
   // that stronger principal, so offer the existing one-time pairing flow instead of a dead-end
@@ -545,6 +562,7 @@ export default function App() {
               currentPage={page}
               onNavigate={navigateToPage}
               ariaLabel={t("nav.sectionNavigation")}
+              onFocusOrphaned={focusAfterSwitcher}
             />
           )}
           <ErrorBoundary

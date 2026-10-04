@@ -8,7 +8,7 @@ export interface SectionSwitcherItem {
 }
 
 /**
- * Moves between the pages of one sidebar group (Connect, Usage & Logs).
+ * Moves between the pages of one sidebar group (Usage & Logs, Remote Link).
  *
  * This is page navigation, so it is a named <nav> whose current entry carries
  * aria-current="page" - not a tablist, which would claim a tabpanel relationship and
@@ -18,16 +18,30 @@ export interface SectionSwitcherItem {
  * App renders it outside the page-keyed error boundary so it survives navigation
  * between members and the activated button keeps focus. When the item set shrinks
  * under a focused button (Remote Workspace going away), focus moves to a survivor
- * instead of falling to <body>.
+ * instead of falling to <body>. When it shrinks to one item, App hides the switcher
+ * altogether; if focus was inside at that moment, `onFocusOrphaned` lets App put it
+ * somewhere meaningful, since there is no surviving button left to receive it.
  */
-export function SectionSwitcher({ items, currentPage, onNavigate, ariaLabel }: {
+export function SectionSwitcher({ items, currentPage, onNavigate, ariaLabel, onFocusOrphaned }: {
   items: readonly SectionSwitcherItem[];
   currentPage: Page;
   onNavigate: (page: Page) => void;
   ariaLabel: string;
+  onFocusOrphaned?: () => void;
 }) {
   const navRef = useRef<HTMLElement>(null);
   const focusedPage = useRef<Page | null>(null);
+  const orphanedRef = useRef(onFocusOrphaned);
+  useLayoutEffect(() => { orphanedRef.current = onFocusOrphaned; });
+
+  // Unmount with focus still inside: React runs this cleanup before it removes the nav,
+  // so the check sees the focused button and the handler can move focus before it drops.
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    return () => {
+      if (nav && nav.contains(nav.ownerDocument.activeElement)) orphanedRef.current?.();
+    };
+  }, []);
 
   // Runs after any item change; every branch below is a cheap check, so a new array
   // identity from the parent on each render costs nothing.

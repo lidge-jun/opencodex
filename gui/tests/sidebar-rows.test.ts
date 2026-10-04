@@ -73,6 +73,8 @@ test("the section switcher lives outside the page-keyed error boundary", () => {
   expect(src).toContain('const shellPage: Page = page === "claude" ? "integrations" : page;');
   expect(switcherAt).toBeGreaterThan(mainInnerAt);
   expect(switcherAt).toBeLessThan(boundaryAt);
+  // Hiding the switcher under a focused button must not drop focus to <body>.
+  expect(src).toContain("onFocusOrphaned={focusAfterSwitcher}");
 });
 
 test("the sidebar is navigation only", () => {

@@ -40,7 +40,7 @@ beforeEach(() => {
       : url.endsWith("/api/config") ? { providers: configured ? { anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" } } : {}, port: 10100 }
       : url.includes("/api/oauth/accounts?") ? { accounts: [{ id: "test-account", email: "test@example.test", active: true, quotaMode: "probe" }], activeAccountId: "test-account" }
       : url.endsWith("/api/claude-desktop/status") ? { firstParty: { interceptRunning: false, interceptEnabled: false, proxyPort: 10102 } }
-      // Code is now one of only two sub-tabs, so the keyboard test mounts it: answer like the server.
+      // Claude renders the Code content directly, so every mount reads this: answer like the server.
       : url.endsWith("/api/claude-code") ? CLAUDE_CODE_OK : {};
     return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
   }) as typeof fetch;

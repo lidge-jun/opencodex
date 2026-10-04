@@ -43,6 +43,11 @@
   outline-offset: 1px;
 }
 
+/* App moves focus here when the switcher hides under a focused button; main is a landmark, not a control. */
+main.main:focus {
+  outline: none;
+}
+
 @media (max-width: 760px) {
   .section-switcher { display: flex; }
   .section-switcher-btn { flex: 1 1 auto; justify-content: center; min-height: var(--control-touch); }

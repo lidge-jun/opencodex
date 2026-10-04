@@ -40,7 +40,8 @@ afterEach(async () => {
   await win.happyDOM?.close?.();
 });
 
-const CONNECT: SectionSwitcherItem[] = [
+// Arbitrary members: the component does not care which group they come from.
+const ITEMS: SectionSwitcherItem[] = [
   { page: "claude", label: "Claude" },
   { page: "integrations", label: "Integrations" },
   { page: "remote", label: "Remote Link" },
@@ -63,7 +64,7 @@ const buttons = () => [...win.document.querySelectorAll<HTMLButtonElement>(".sec
 const focusedLabel = () => (win.document.activeElement as HTMLElement | null)?.textContent ?? null;
 
 test("renders a named nav with only the current page marked", async () => {
-  await render(CONNECT, "integrations");
+  await render(ITEMS, "integrations");
   const nav = win.document.querySelector("nav.section-switcher");
   expect(nav?.getAttribute("aria-label")).toBe("Section pages");
   expect(buttons().map(b => b.getAttribute("aria-current"))).toEqual([null, "page", null, null]);
@@ -73,14 +74,14 @@ test("renders a named nav with only the current page marked", async () => {
 
 test("click navigates to another member and ignores the current one", async () => {
   const calls: Page[] = [];
-  await render(CONNECT, "claude", page => calls.push(page));
+  await render(ITEMS, "claude", page => calls.push(page));
   await act(async () => buttons()[0]!.click());
   await act(async () => buttons()[2]!.click());
   expect(calls).toEqual(["remote"]);
 });
 
 test("arrow keys, Home and End move focus along the row and wrap", async () => {
-  await render(CONNECT, "claude");
+  await render(ITEMS, "claude");
   const press = async (key: string) => {
     await act(async () => {
       win.document.activeElement!.dispatchEvent(new win.KeyboardEvent("keydown", { key, bubbles: true }) as never);
@@ -116,14 +117,42 @@ test("the activated button keeps focus across the page change it causes", async 
 });
 
 test("focus moves to a survivor when the focused member disappears", async () => {
-  await render(CONNECT, "remote");
+  await render(ITEMS, "remote");
   buttons()[3]!.focus();
   expect(focusedLabel()).toBe("Remote Workspace");
-  await render(CONNECT.slice(0, 3), "remote");
+  await render(ITEMS.slice(0, 3), "remote");
   expect(buttons()).toHaveLength(3);
   // The current page's button is the natural place to land.
   expect(focusedLabel()).toBe("Remote Link");
 });
+
+test("hiding the switcher under a focused button hands focus back to the parent", async () => {
+  const orphaned: string[] = [];
+  const { createRoot } = await import("react-dom/client");
+  const host = win.document.createElement("div");
+  win.document.body.appendChild(host as never);
+  root = createRoot(host as never);
+  const show = async (visible: boolean) => {
+    await act(async () => {
+      root!.render(visible
+        ? <SectionSwitcher items={ITEMS.slice(2)} currentPage="remote" onNavigate={() => {}} ariaLabel="Section pages" onFocusOrphaned={() => orphaned.push("moved")} />
+        : null);
+    });
+  };
+  await show(true);
+  buttons()[1]!.focus();
+  expect(focusedLabel()).toBe("Remote Workspace");
+  // Remote Workspace went away, one member is left, and App stops rendering the switcher.
+  await show(false);
+  expect(orphaned).toEqual(["moved"]);
+
+  // Unmounting while focus is elsewhere leaves focus alone.
+  await show(true);
+  (win.document.activeElement as HTMLElement | null)?.blur();
+  await show(false);
+  expect(orphaned).toEqual(["moved"]);
+});
+
 
 test("Remote offers Remote Workspace only while it is available; Connect has no switcher", () => {
   const remote = NAV_GROUPS.find(group => group.id === "remote")!;
