@@ -66,6 +66,7 @@ import {
   runtimeRoleSchema,
   spendSchema,
   chatgptDesktopSchema,
+  chatgptDesktopConfigIssue,
   compactionRoutingSchema,
   skillsConfigSchema,
   memoryModelsSchema,
@@ -109,6 +110,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (normalized.chatgptDesktop?.appServerShim === true && process.platform !== "darwin") {
     warnings.push("chatgptDesktop.appServerShim is experimental and macOS only; ignored on this platform");
   }
+  const chatgptDesktopIssue = chatgptDesktopConfigIssue(rawParsed);
+  if (chatgptDesktopIssue) warnings.push(`${chatgptDesktopIssue}; the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
   warnings.push(...inheritedFastWireConflictProviderNames(normalized).map(inheritedFastWireConflictWarning));
   warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
   warnings.push(...degradedListenerWarnings(rawParsed, normalized));
