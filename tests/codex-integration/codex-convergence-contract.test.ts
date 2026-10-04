@@ -155,6 +155,17 @@ test("generation drift rejects before every catalog target write", async () => {
   expect(manifest(codexHome)).toEqual(before);
 });
 
+test("a fresh identical candidate reports unchanged receipts and preserves artifacts", async () => {
+  expect((await commitCodexCatalogCandidate(await candidate(), 1_000)).kind).toBe("committed");
+  const gathered = await candidate();
+  const before = manifest(codexHome);
+  expect(await commitCodexCatalogCandidate(gathered, 1_000)).toEqual({
+    kind: "committed", changed: false,
+    writes: { keyedBackup: "preserved", legacyBackup: "preserved", catalog: "unchanged", cache: "unchanged" },
+  });
+  expect(manifest(codexHome)).toEqual(before);
+});
+
 test("home-selection drift rejects before every catalog target write", async () => {
   const gathered = await candidate();
   const other = join(root, "other-codex");

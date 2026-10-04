@@ -392,6 +392,16 @@ to drop routed rows. Coverage: `tests/codex-integration/codex-catalog-routed-rem
 `tests/codex-integration/codex-catalog-sync-hardening.test.ts`, and
 `tests/codex-integration/codex-convergence-contract.test.ts`.
 
+## Catalog writer ownership and intent
+
+`src/codex/codex-home-owner.ts` reads the injection journal's `opencodexHome` binding without modifying recovery evidence. A readable legacy journal has no binding; the next injection records its owner. Canonical aliases of the same physical OpenCodex home remain owned. A proven vanished home is stale and can be adopted, while foreign active or unknown ownership refuses writes. Every acquisition rechecks ownership under K before issuing its live permit; later calls re-evaluate the evidence.
+
+Injection and both native-restore paths check ownership before cleanup and at publication. Successful deliberate config/profile restoration releases ownership at the native restoration boundary. Exact restoration removes the journal; successful field-level restoration preserves its recovery data and releases only the home binding. Catalog-only restore retains the binding. A later catalog failure remains a failed artifact. This does not add a new transaction across native and catalog restoration or guarantee custom-path recovery after the original journal was released.
+
+Each `withCatalogWriteSerialization` call supplies `refresh`, `cache`, `pull` or `restore` intent and a writer label. The existing permit registry binds that context to one live acquisition. `src/codex/internal/catalog-writer.ts` skips identical catalog/cache bytes and preserves their mtime. A refresh cannot clear all routed rows without readable file-backed config; restore deliberately clears them, pull keeps the hub's authority, and a cache permit cannot replace the catalog. Remote pull accepts an unchanged derived cache as success. Sync and sync-cache report owner refusals without private paths.
+
+These checks coordinate cooperating processes running as the same OS user. They do not isolate files from an arbitrary process with that user's direct filesystem access.
+
 ## Codex-home diagnostics
 
 Desktop executable membership uses the [discovered installation root](runtime.md#codex-desktop-process-membership), independently of the Codex state directory resolved here.

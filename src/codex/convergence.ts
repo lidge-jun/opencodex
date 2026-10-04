@@ -84,6 +84,8 @@ import {
 } from "./model-entitlements";
 import { resolveAdmittedCodexModelEntitlements } from "./model-entitlement-admission";
 import {
+  FOREIGN_CODEX_HOME_OWNER_MESSAGE,
+  UNKNOWN_CODEX_HOME_OWNER_MESSAGE,
   routedRemovalBackedByConfigFile,
   unbackedRoutedRemovalMessage,
   unconfiguredRoutedRemoval,
@@ -115,14 +117,20 @@ import type {
 export interface CatalogWriteReceipt {
   readonly keyedBackup: "written" | "preserved" | "not-requested";
   readonly legacyBackup: "written" | "preserved" | "not-requested";
-  readonly catalog: "written" | "not-written";
-  readonly cache: "written" | "not-written";
+  /** `unchanged`: the bytes on disk already matched, so nothing was rewritten. */
+  readonly catalog: "written" | "unchanged" | "not-written";
+  readonly cache: "written" | "unchanged" | "not-written";
 }
 
 export type CodexCatalogCommitResult =
   | { readonly kind: "committed"; readonly changed: boolean; readonly writes: CatalogWriteReceipt }
   | { readonly kind: "stale"; readonly reason: "generation" | "home-selection" | "source-observation" | "process-local" | "target-identity" | "candidate-consumed" | "account-entitlement" }
-  | { readonly kind: "refused"; readonly reason: "source-unreadable" | "source-ambiguous" | "target-unsafe" | "unbacked-routed-removal" }
+  /**
+   * `unbacked-routed-removal`: the candidate drops routed namespaces config.json does not back, or
+   * clears every routed row while config.json is unreadable. `foreign-owner`: this Codex home is
+   * bound to another OPENCODEX_HOME (#6529).
+   */
+  | { readonly kind: "refused"; readonly reason: "source-unreadable" | "source-ambiguous" | "target-unsafe" | "unbacked-routed-removal" | "foreign-owner" | "owner-unknown" }
   | { readonly kind: "failed"; readonly surface: "disk"; readonly writes: CatalogWriteReceipt };
 
 declare const catalogCandidateBrand: unique symbol;
@@ -146,7 +154,6 @@ interface CandidateState {
   readonly cache: PreparedCatalogFileWrite;
   readonly keyedBackup?: PreparedCatalogFileWrite;
   readonly legacyBackup?: PreparedCatalogFileWrite;
-  readonly changed: boolean;
   readonly notices: readonly CatalogNotice[];
   readonly modelEntitlements: CodexModelEntitlementSnapshot;
   readonly discoveryConfig?: OcxConfig;
@@ -545,8 +552,6 @@ export async function gatherCodexCatalogCandidate(
       ...(pristineBytes ? { keyedBackup: { path: paths.keyedBackup, content: pristineBytes } } : {}),
       ...(pristineBytes && paths.legacyBackup
         ? { legacyBackup: { path: paths.legacyBackup, content: pristineBytes } } : {}),
-      changed: Buffer.from(activeBytes ?? []).toString("utf8") !== preparedCatalogBytes
-        || Buffer.from(cacheBytes ?? []).toString("utf8") !== preparedCacheBytes,
       notices: Object.freeze([...notices]),
       modelEntitlements,
       ...(discoveryChanged ? { discoveryConfig } : {}),
@@ -635,11 +640,14 @@ function fixedCommit(state: CandidateState, permit: Parameters<typeof replaceAct
     if (state.legacyBackup) {
       writes = { ...writes, legacyBackup: publishLegacyCodexCatalogBackup(permit, state.home, state.legacyBackup) };
     }
-    replaceActiveCodexCatalog(permit, state.home, state.catalog);
-    writes = { ...writes, catalog: "written" };
-    replaceCodexModelsCache(permit, state.home, state.cache);
-    writes = { ...writes, cache: "written" };
-    return { kind: "committed", changed: state.changed, writes };
+    const catalog = replaceActiveCodexCatalog(permit, state.home, state.catalog);
+    // The funnel's backstop: every routed row would go while config.json is not a readable file.
+    // Nothing past the pristine backups was written, and the cache must not describe a catalog
+    // that was never published.
+    if (catalog.kind === "refused") return { kind: "refused", reason: "unbacked-routed-removal" };
+    writes = { ...writes, catalog: catalog.kind };
+    writes = { ...writes, cache: replaceCodexModelsCache(permit, state.home, state.cache).kind };
+    return { kind: "committed", changed: writes.catalog === "written" || writes.cache === "written", writes };
   } catch {
     return { kind: "failed", surface: "disk", writes };
   }
@@ -671,8 +679,15 @@ export async function commitCodexCatalogCandidate(
       if (guarded.kind === "conflict") return { kind: "stale", reason: "generation" } as const;
       if (guarded.kind === "unavailable") return { kind: "busy" } as const;
       return guarded.value;
-    });
+    }, { intent: "refresh", writer: "convergence" });
     if (acquired.kind === "completed") return acquired.value;
+    if (acquired.reason === "foreign-owner" || acquired.reason === "owner-unknown") {
+      // Not retryable: another OPENCODEX_HOME owns this Codex home until it restores (#6529).
+      state.consumed = true;
+      console.warn(`[opencodex] ${acquired.reason === "foreign-owner"
+        ? FOREIGN_CODEX_HOME_OWNER_MESSAGE : UNKNOWN_CODEX_HOME_OWNER_MESSAGE}`);
+      return { kind: "refused", reason: acquired.reason };
+    }
     if (acquired.reason !== "busy" || Date.now() >= deadline) return { kind: "busy" };
     await Bun.sleep(Math.min(10, Math.max(1, deadline - Date.now())));
   }

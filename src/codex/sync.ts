@@ -1,5 +1,5 @@
 import { currentExternalCodexModelProvider, injectCodexConfig } from "./inject";
-import { unbackedRoutedRemovalMessage } from "./catalog/routed-removal";
+import { FOREIGN_CODEX_HOME_OWNER_MESSAGE, UNKNOWN_CODEX_HOME_OWNER_MESSAGE, unbackedRoutedRemovalMessage } from "./catalog/routed-removal";
 import { printProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath, type ProjectCodexConfigWarning } from "./project-config-warnings";
 import { refreshCodexModelCatalog } from "./refresh";
 import { applyProxyEnv, loadConfig } from "../config";
@@ -273,10 +273,13 @@ export async function syncModelsToCodex(
     catalogPathForInjection = cat.catalogExists ? cat.path : null;
     catalogPath = catalogPathForInjection;
     comboOmissions = cat.comboOmissions ?? [];
-    if (cat.skippedReason === "unbacked_routed_removal") {
+    if (cat.skippedReason === "unbacked_routed_removal" || cat.skippedReason === "foreign_owner" || cat.skippedReason === "owner_unknown") {
       // The catalog on disk is kept as it was; say so, or a native-only refresh refused for safety
       // reads exactly like a successful sync (#6529).
-      warning = unbackedRoutedRemovalMessage(cat.protectedRoutedNamespaces ?? 1);
+      warning = cat.skippedReason === "foreign_owner"
+        ? FOREIGN_CODEX_HOME_OWNER_MESSAGE
+        : cat.skippedReason === "owner_unknown" ? UNKNOWN_CODEX_HOME_OWNER_MESSAGE
+        : unbackedRoutedRemovalMessage(cat.protectedRoutedNamespaces ?? 1);
       log?.error(`[opencodex] ${warning}`);
     } else if (cat.added > 0) {
       log?.log(`   + ${cat.added} models appended to Codex catalog (${cat.path})`);
@@ -376,10 +379,13 @@ async function refreshCatalogForSync(
     cacheSynced = cat.cacheSynced;
     catalogPath = cat.catalogExists ? cat.path : null;
     comboOmissions = cat.comboOmissions ?? [];
-    if (cat.skippedReason === "unbacked_routed_removal") {
+    if (cat.skippedReason === "unbacked_routed_removal" || cat.skippedReason === "foreign_owner" || cat.skippedReason === "owner_unknown") {
       // The catalog on disk is kept as it was; say so, or a native-only refresh refused for safety
       // reads exactly like a successful sync (#6529).
-      warning = unbackedRoutedRemovalMessage(cat.protectedRoutedNamespaces ?? 1);
+      warning = cat.skippedReason === "foreign_owner"
+        ? FOREIGN_CODEX_HOME_OWNER_MESSAGE
+        : cat.skippedReason === "owner_unknown" ? UNKNOWN_CODEX_HOME_OWNER_MESSAGE
+        : unbackedRoutedRemovalMessage(cat.protectedRoutedNamespaces ?? 1);
       log?.error(`[opencodex] ${warning}`);
     } else if (cat.added > 0) {
       log?.log(`   + ${cat.added} models appended to Codex catalog (${cat.path})`);
