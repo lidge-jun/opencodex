@@ -2355,6 +2355,10 @@ export const de: Record<TKey, string> = {
   // Claude Code inbound
   "claude.subtitle": "Leitet ocx claude über OpenCodex, damit Claude Code GPT, Gemini und andere Modelle nutzen kann. Beim Ausschalten werden auch das Abfangen (einschließlich First-Party) und die Modellliste von Claude Desktop deaktiviert. Dieselbe Einstellung wie der Claude-Schalter in der Übersicht unter „Verbinden“.",
   "claude.enabledLabel": "Claude-Verbindung",
+  "claude.saveBar.label": "Claude Code-Einstellungen speichern",
+  "claude.saveBar.dirty": "Nicht gespeicherte Änderungen",
+  "claude.saveBar.clean": "Keine Änderungen",
+  "claude.saveBar.revert": "Zurücksetzen",
   "claude.enabledHint": "Wenn aus, kann Claude Code diesen Proxy nicht verwenden.",
   "claude.authMode": "Auth-Modus",
   "claude.authModeHint": "Subscription erfordert Claude-Konto, Proxy funktioniert ohne Anthropic-Konto",

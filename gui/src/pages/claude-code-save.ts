@@ -1,0 +1,102 @@
+import { serializeSidecarOverride } from "./claude-code-sidecar";
+import type { ClaudeCodeState, MapRow } from "./claude-code-types";
+
+/**
+ * The Claude Code fields the Save bar owns. Everything else on ClaudeCodeState is either
+ * server-derived (aliases, availability, diagnostics) or committed immediately by its own
+ * control (`enabled`, the CLI 1P switch), so a read may always refresh it.
+ */
+export const EDITABLE_KEYS = [
+  "authMode",
+  "systemEnv",
+  "fastMode",
+  "autoContext",
+  "autoCompactWindow",
+  "injectAgents",
+  "smallFastModel",
+  "webSearchSidecar",
+  "visionSidecar",
+] as const satisfies readonly (keyof ClaudeCodeState)[];
+
+export type ClaudeCodeEditable = { state: ClaudeCodeState; rows: MapRow[] };
+
+/** Trimmed, non-empty rows; the last duplicate wins, as the server would apply it. Sorted keys. */
+export function normalizedModelMap(rows: readonly MapRow[]): Record<string, string> {
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    const from = row.from.trim();
+    const to = row.to.trim();
+    if (from && to) map.set(from, to);
+  }
+  return Object.fromEntries([...map.entries()].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/**
+ * The PUT body for Save. `enabled` is deliberately absent: the connection switch commits on
+ * its own, and the server only writes `enabled` when the body carries it, so a Save built
+ * from a stale draft can no longer switch Claude back on or off.
+ */
+export function claudeCodeSaveBody(state: ClaudeCodeState, rows: readonly MapRow[]) {
+  return {
+    authMode: state.authMode,
+    systemEnv: state.systemEnv,
+    fastMode: state.fastMode,
+    autoContext: state.autoContext,
+    autoCompactWindow: state.autoCompactWindow,
+    injectAgents: state.injectAgents,
+    smallFastModel: state.smallFastModel,
+    modelMap: normalizedModelMap(rows),
+    webSearchSidecar: serializeSidecarOverride(state.webSearchSidecar),
+    visionSidecar: serializeSidecarOverride(state.visionSidecar),
+  };
+}
+
+/**
+ * A comparable identity for an editable draft: the Save body plus the raw row text, so a
+ * blank or half-typed row keeps Revert available instead of vanishing on the next read.
+ */
+export function claudeCodeDraftKey(draft: ClaudeCodeEditable): string {
+  return JSON.stringify([claudeCodeSaveBody(draft.state, draft.rows), draft.rows.map(row => [row.from, row.to])]);
+}
+
+/** Whether the draft differs from what the server last confirmed. */
+export function isClaudeCodeDraftDirty(draft: ClaudeCodeEditable, baseline: ClaudeCodeEditable): boolean {
+  return claudeCodeDraftKey(draft) !== claudeCodeDraftKey(baseline);
+}
+
+function pickEditable(state: ClaudeCodeState): Partial<ClaudeCodeState> {
+  return Object.fromEntries(EDITABLE_KEYS.map(key => [key, state[key]])) as Partial<ClaudeCodeState>;
+}
+
+/** A fresh server read with the user's unsaved editable fields laid back on top. */
+export function mergeServerRead(draft: ClaudeCodeState, next: ClaudeCodeState): ClaudeCodeState {
+  return { ...next, ...pickEditable(draft) };
+}
+
+/** The draft with every editable field restored from the baseline; live fields stay. */
+export function revertEditable(draft: ClaudeCodeState, baseline: ClaudeCodeState): ClaudeCodeState {
+  return { ...draft, ...pickEditable(baseline) };
+}
+
+export type ClaudeCodeEditState = {
+  draft: ClaudeCodeEditable;
+  baseline: ClaudeCodeEditable;
+  /**
+   * Set when a Save succeeded and nothing was edited since it was sent. The next read is that
+   * Save's acknowledgement and replaces the draft outright, so rows the server normalized
+   * (trimmed, blank, duplicate) settle instead of reading as unsaved forever.
+   */
+  adoptNextRead: boolean;
+};
+
+/** Fold a successful read into the edit state. */
+export function applyServerRead(current: ClaudeCodeEditState | null, next: ClaudeCodeEditable): ClaudeCodeEditState {
+  if (!current || current.adoptNextRead || !isClaudeCodeDraftDirty(current.draft, current.baseline)) {
+    return { draft: next, baseline: next, adoptNextRead: false };
+  }
+  return {
+    draft: { state: mergeServerRead(current.draft.state, next.state), rows: current.draft.rows },
+    baseline: next,
+    adoptNextRead: false,
+  };
+}

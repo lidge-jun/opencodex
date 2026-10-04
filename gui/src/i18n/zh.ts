@@ -2375,6 +2375,10 @@ export const zh: Record<TKey, string> = {
   // Claude Code inbound
   "claude.subtitle": "将 ocx claude 通过 OpenCodex 路由，让 Claude Code 可以使用 GPT、Gemini 等其他模型。关闭后，拦截（包括第一方模式）和 Claude Desktop 的模型列表也会一并停用。此设置与连接概览中的 Claude 开关相同。",
   "claude.enabledLabel": "Claude 连接",
+  "claude.saveBar.label": "保存 Claude Code 设置",
+  "claude.saveBar.dirty": "有未保存的更改",
+  "claude.saveBar.clean": "没有更改",
+  "claude.saveBar.revert": "还原",
   "claude.enabledHint": "关闭后 Claude Code 无法使用此代理。",
   "claude.authMode": "认证模式",
   "claude.authModeHint": "Subscription 需要 Claude 账户，Proxy 无需 Anthropic 账户即可使用",

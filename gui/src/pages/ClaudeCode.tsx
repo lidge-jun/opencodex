@@ -1,5 +1,5 @@
 import ClaudeInterceptStart from "../components/ClaudeInterceptStart";
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaudeConnection } from "./use-claude-connection";
 import { Notice, Switch } from "../ui";
 import { useI18n, useT, LOCALES, type TKey } from "../i18n/shared";
@@ -16,10 +16,17 @@ import {
   ClaudeCodeQuickstartSection,
   ClaudeCodeSettingsCard,
 } from "./claude-code-sections";
-import { serializeSidecarOverride } from "./claude-code-sidecar";
 import { AUTO_COMPACT_WINDOW_DEFAULT, formatCompactWindow, newClientId, type ClaudeCodeState, type MapRow } from "./claude-code-types";
 import { SmallFastModelSetting } from "./claude-code-settings";
 import { interceptReasonKey, normalizeSharedProxy, selectFirstPartyNotice, type FirstPartyNotice } from "./claude-code-first-party";
+import {
+  applyServerRead,
+  claudeCodeDraftKey,
+  claudeCodeSaveBody,
+  isClaudeCodeDraftDirty,
+  revertEditable,
+  type ClaudeCodeEditState,
+} from "./claude-code-save";
 
 export { AutoConnectSetting, SmallFastModelSetting } from "./claude-code-settings";
 
@@ -50,6 +57,23 @@ const firstPartyNoticeKeys: Record<Exclude<FirstPartyNotice, null>, TKey> = {
   shared: "claude.firstParty.shared",
 };
 
+/**
+ * One titled block of the single-page layout. The page used to show one of these at a time
+ * behind an inner section rail; inside Connect that made a second sidebar next to the app's.
+ */
+function CcwSection({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
+  const headingId = useId();
+  return (
+    <section className="ccw-section" aria-labelledby={headingId}>
+      <h3 className="ccw-section-title" id={headingId}>
+        {title}
+        {count != null ? <span className="count">{count}</span> : null}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
 export default function ClaudeCode({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
   const t = useT();
   const { locale } = useI18n();
@@ -64,12 +88,18 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       state: normalizeFirstPartyState(cachedEntry.data.state),
     };
   }, [cachedEntry]);
-  const [draftState, setState] = useState<ClaudeCodeState | null>(() => cached?.state ?? null);
-  const [draftRows, setRows] = useState<MapRow[]>(() => cached?.rows ?? []);
-  const [hasDraftRows, setHasDraftRows] = useState(Boolean(cached));
+  /*
+   * Draft and the server copy it is compared against live in ONE state object, so a read can
+   * never update one without the other. A read replaces a clean draft and only refreshes the
+   * server-owned fields of a dirty one (applyServerRead): the 1P toggle and the post-Save
+   * refresh both re-read, and neither may throw away an edit the user has not saved.
+   */
+  const [edit, setEdit] = useState<ClaudeCodeEditState | null>(
+    () => cached ? { draft: cached, baseline: cached, adoptNextRead: false } : null,
+  );
+  const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
-  const [selectedSection, setSelectedSection] = useState("settings");
   /*
    * The connection switch moved here from the sidebar's Claude nav row, which
    * had made a navigation entry the owner of a mutation — and left it homeless
@@ -107,11 +137,9 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     const nextRows = Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ id: newClientId(), from, to: String(to) }));
     const next = { state: nextState, rows: nextRows };
     if (signal.aborted) throw new Error("Claude Code request aborted");
-    // This is the only server-owned draft replacement. Keeping it at the successful read
-    // boundary preserves the existing save→reload behavior without a synchronization effect.
-    setState(nextState);
-    setRows(nextRows);
-    setHasDraftRows(true);
+    // The only place a read reaches the draft, at the successful read boundary, without a
+    // synchronization effect.
+    setEdit(current => applyServerRead(current, next));
     writeSessionListCacheEntry(cacheKey, next);
     return next;
   }, [apiBase, cacheKey, t]);
@@ -130,8 +158,24 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   );
   const loadState = codeResource.state;
   const data = loadState.data ?? cached;
-  const state = draftState ?? data?.state ?? null;
-  const rows = hasDraftRows ? draftRows : data?.rows ?? draftRows;
+  const state = edit?.draft.state ?? data?.state ?? null;
+  const rows = edit?.draft.rows ?? data?.rows ?? [];
+  const dirty = edit !== null && isClaudeCodeDraftDirty(edit.draft, edit.baseline);
+
+  const setState = (nextState: ClaudeCodeState) => {
+    setEdit(current => current && { ...current, draft: { ...current.draft, state: nextState }, adoptNextRead: false });
+  };
+  const setRows = (nextRows: MapRow[]) => {
+    setEdit(current => current && { ...current, draft: { ...current.draft, rows: nextRows }, adoptNextRead: false });
+  };
+  /** Fields committed by their own control land in draft AND baseline: they are not edits. */
+  const applyLive = (fields: Partial<ClaudeCodeState>) => {
+    setEdit(current => current && {
+      ...current,
+      draft: { ...current.draft, state: { ...current.draft.state, ...fields } },
+      baseline: { ...current.baseline, state: { ...current.baseline.state, ...fields } },
+    });
+  };
 
   const modelOptions = useMemo(
     () => backgroundHelperOptions(state?.available, t("claude.smallFastModelUnsetOption")),
@@ -167,7 +211,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     if (!state) return;
     setStatus("");
     await changeConnection(!state.enabled, enabled => {
-      setState({ ...state, enabled });
+      applyLive({ enabled });
       codeResource.refresh();
     }, error => {
       setOk(false);
@@ -215,38 +259,37 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   };
 
   const save = async () => {
-    if (!state) return;
+    if (!state || !edit || saving) return;
+    const submitted = claudeCodeDraftKey(edit.draft);
     setStatus("");
-    const modelMap: Record<string, string> = {};
-    for (const row of rows) {
-      if (row.from.trim() && row.to.trim()) modelMap[row.from.trim()] = row.to.trim();
-    }
+    setSaving(true);
     try {
       const r = await fetch(`${apiBase}/api/claude-code`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          enabled: state.enabled,
-          authMode: state.authMode,
-          systemEnv: state.systemEnv,
-          fastMode: state.fastMode,
-          autoContext: state.autoContext,
-          autoCompactWindow: state.autoCompactWindow,
-          injectAgents: state.injectAgents,
-          smallFastModel: state.smallFastModel,
-          modelMap,
-          webSearchSidecar: serializeSidecarOverride(state.webSearchSidecar),
-          visionSidecar: serializeSidecarOverride(state.visionSidecar),
-        }),
+        body: JSON.stringify(claudeCodeSaveBody(state, rows)),
       });
       await readJsonOrThrow(r, t("claude.saveFailed"));
+      // The next read acknowledges this Save, unless the user kept editing while it was in flight.
+      setEdit(current => current && claudeCodeDraftKey(current.draft) === submitted ? { ...current, adoptNextRead: true } : current);
       setOk(true);
       setStatus(t("claude.saved"));
       codeResource.refresh();
     } catch (error) {
       setOk(false);
       setStatus(error instanceof Error && error.message ? error.message : t("claude.networkError"));
+    } finally {
+      setSaving(false);
     }
+  };
+
+  const revert = () => {
+    setStatus("");
+    setEdit(current => current && {
+      draft: { state: revertEditable(current.draft.state, current.baseline.state), rows: current.baseline.rows },
+      baseline: current.baseline,
+      adoptNextRead: false,
+    });
   };
 
   // A hidden Code tab remains mounted for draft preservation, but must not advertise a
@@ -267,9 +310,10 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   if (!state) return null;
 
   /*
-   * The master switch closes the General list. It is the same claudeCode.enabled the
+   * The master switch is the last control on the page. It is the same claudeCode.enabled the
    * Claude card on the Connect overview toggles (default on), so turning Claude on there
-   * already routes ocx claude through OpenCodex; this row is where you turn it all off.
+   * already routes ocx claude through OpenCodex; this row is where you turn it all off. It
+   * commits immediately, so it sits outside every section the Save bar owns.
    */
   const connectionRow = (
     <div className="setting-row claudecode-connection-row">
@@ -285,60 +329,9 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       />
     </div>
   );
-  const sections: Array<{ id: string; label: string; meta?: string; body: ReactNode }> = [
-    {
-      id: "settings",
-      label: t("claude.workspace.settings"),
-      body: (
-        <ClaudeCodeSettingsCard
-          state={state}
-          autoCompactOptions={autoCompactOptions}
-          availableModels={state.available ?? []}
-          onStateChange={setState}
-          footer={connectionRow}
-        />
-      ),
-    },
-    {
-      id: "quickstart",
-      label: t("claude.quickstart"),
-      body: <ClaudeCodeQuickstartSection manualEnv={buildManualEnv(state)} />,
-    },
-    {
-      id: "smallFast",
-      label: t("claude.smallFastModel"),
-      body: (
-        <SmallFastModelSetting
-          value={state.smallFastModel}
-          tierHaikuModel={state.tierModels?.haiku}
-          options={modelOptions}
-          onChange={smallFastModel => setState({ ...state, smallFastModel })}
-        />
-      ),
-    },
-    {
-      id: "modelMap",
-      label: t("claude.modelMap"),
-      meta: String(rows.length),
-      body: <ClaudeCodeModelMapSection rows={rows} onRowsChange={(nextRows) => {
-        setHasDraftRows(true);
-        setRows(nextRows);
-      }} />,
-    },
-    {
-      id: "aliases",
-      label: t("claude.aliases"),
-      meta: String(state.aliases.length),
-      body: <ClaudeCodeAliasesSection aliases={state.aliases} />,
-    },
-  ];
-  const selected = sections.find(s => s.id === selectedSection) ?? sections[0]!;
-  const sectionEditable = selectedSection === "settings"
-    || selectedSection === "smallFast"
-    || selectedSection === "modelMap";
 
   return (
-    <div className="claudecode-workspace-shell">
+    <div className="claudecode-workspace-shell claudecode-doc">
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {loadState.showError && <Notice tone="err">{t("claude.loadFail")}</Notice>}
       <div className="card claudecode-connection-card">
@@ -364,46 +357,51 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
         const key = notice && firstPartyNoticeKeys[notice];
         return key ? <Notice tone="warn">{t(key)}</Notice> : null;
       })()}
-      <div className="claudecode-workspace-root">
-        <aside className="claudecode-workspace-rail" aria-label={t("claude.pageTitle")}>
-          <div className="claudecode-workspace-rail-list">
-            {sections.map(s => (
-              <button
-                key={s.id}
-                type="button"
-                className={`claudecode-workspace-rail-row${selectedSection === s.id ? " claudecode-workspace-rail-row--selected" : ""}`}
-                onClick={() => setSelectedSection(s.id)}
-                aria-current={selectedSection === s.id ? "true" : undefined}
-              >
-                <span className="claudecode-workspace-rail-name">{s.label}</span>
-              </button>
-            ))}
-          </div>
-        </aside>
-        <section className="claudecode-workspace-main" aria-label={selected.label}>
-          <div className="ccw-main-head">
-            <h3 className="ccw-main-title">
-              {selected.label}
-              {selected.meta != null ? <span className="count">{selected.meta}</span> : null}
-            </h3>
-            <div
-              className="claudecode-workspace-save"
-              data-visible={sectionEditable ? "true" : "false"}
-            >
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={!sectionEditable}
-                tabIndex={sectionEditable ? 0 : -1}
-                aria-hidden={!sectionEditable}
-                onClick={() => { void save(); }}
-              >
-                {t("common.save")}
-              </button>
-            </div>
-          </div>
-          <div className="ccw-body">{selected.body}</div>
-        </section>
+
+      <CcwSection title={t("claude.quickstart")}>
+        <ClaudeCodeQuickstartSection manualEnv={buildManualEnv(state)} />
+      </CcwSection>
+
+      <CcwSection title={t("claude.workspace.settings")}>
+        <ClaudeCodeSettingsCard
+          state={state}
+          autoCompactOptions={autoCompactOptions}
+          availableModels={state.available ?? []}
+          onStateChange={setState}
+        />
+      </CcwSection>
+
+      <CcwSection title={t("claude.smallFastModel")}>
+        <SmallFastModelSetting
+          value={state.smallFastModel}
+          tierHaikuModel={state.tierModels?.haiku}
+          options={modelOptions}
+          onChange={smallFastModel => setState({ ...state, smallFastModel })}
+        />
+      </CcwSection>
+
+      <CcwSection title={t("claude.modelMap")} count={rows.length}>
+        <ClaudeCodeModelMapSection rows={rows} onRowsChange={setRows} />
+      </CcwSection>
+
+      <CcwSection title={t("claude.aliases")} count={state.aliases.length}>
+        <ClaudeCodeAliasesSection aliases={state.aliases} />
+      </CcwSection>
+
+      <div className="card claudecode-master-card">
+        {connectionRow}
+      </div>
+
+      <div className="ccw-savebar" role="region" aria-label={t("claude.saveBar.label")}>
+        <span className={`ccw-savebar-state${dirty ? " dirty" : ""}`} aria-live="polite" aria-atomic="true">
+          {dirty ? t("claude.saveBar.dirty") : t("claude.saveBar.clean")}
+        </span>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={!dirty || saving} onClick={revert}>
+          {t("claude.saveBar.revert")}
+        </button>
+        <button type="button" className="btn btn-primary btn-sm" disabled={saving} onClick={() => { void save(); }}>
+          {t("common.save")}
+        </button>
       </div>
     </div>
   );

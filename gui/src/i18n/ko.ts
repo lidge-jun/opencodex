@@ -2402,6 +2402,10 @@ export const ko: Record<TKey, string> = {
   // Claude Code inbound
   "claude.subtitle": "ocx claude가 OpenCodex를 거쳐 GPT, Gemini 등 다른 모델을 쓰게 합니다. 끄면 가로채기(1P 포함)와 Claude Desktop 모델 목록도 함께 꺼집니다. 연결 개요의 Claude 스위치와 같은 설정입니다.",
   "claude.enabledLabel": "Claude 연결",
+  "claude.saveBar.label": "Claude Code 설정 저장",
+  "claude.saveBar.dirty": "저장하지 않은 변경 사항",
+  "claude.saveBar.clean": "바뀐 설정 없음",
+  "claude.saveBar.revert": "되돌리기",
   "claude.enabledHint": "끄면 Claude Code가 이 프록시를 사용할 수 없습니다.",
   "claude.authMode": "인증 모드",
   "claude.authModeHint": "subscription은 Claude 계정 필요, proxy는 opencodex 프록시만으로 사용 가능",
