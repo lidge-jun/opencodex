@@ -9,6 +9,7 @@ import {
   createLocalAttestationSecret,
 } from "../../src/lib/local-management-attestation";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../../src/lib/system-restart-contract";
+import { repoPath } from "../helpers/repo-root";
 
 const FAILURE = "update_restart_stop_failed";
 const ADMIN = "loopback-test-management-credential";
@@ -189,16 +190,25 @@ describe("attested update stop transport over real loopback", () => {
     const proxy = await fixture();
     const f = await fixture();
     const names = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"];
-    const saved = names.map(name => process.env[name]);
     try {
-      for (const name of names) process.env[name] = name.toLowerCase() === "no_proxy" ? "" : `http://127.0.0.1:${proxy.options.target.port}`;
-      await stopAttestedUpdateTarget(f.options);
+      // The proxied environment exists only in a child: Bun cannot unset an exported variable, so
+      // `delete process.env.X` would leave the proxy for later spawns and the next file in a worker.
+      const env: Record<string, string | undefined> = { ...process.env };
+      for (const name of names) env[name] = name.toLowerCase() === "no_proxy" ? "" : `http://127.0.0.1:${proxy.options.target.port}`;
+      const { beforeStop: _beforeStop, ...options } = f.options;
+      env.OCX_TEST_UPDATE_TRANSPORT_OPTIONS = JSON.stringify({ ...options, deadlineAt: Date.now() + 10_000 });
+      const transport = repoPath("src", "cli", "update-restart-transport.ts").replaceAll("\\", "/");
+      const child = Bun.spawn([process.execPath, "-e", [
+        `import { stopAttestedUpdateTarget } from ${JSON.stringify(transport)};`,
+        "await stopAttestedUpdateTarget({ ...JSON.parse(process.env.OCX_TEST_UPDATE_TRANSPORT_OPTIONS), beforeStop: () => {} });",
+      ].join("\n")], { env, stdout: "pipe", stderr: "pipe" });
+      const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+      expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect(f.requests).toHaveLength(2);
       expect(f.connections()).toBe(1);
       expect(proxy.connections()).toBe(0);
       expect(proxy.wire()).toBe("");
     } finally {
-      names.forEach((name, i) => { if (saved[i] === undefined) delete process.env[name]; else process.env[name] = saved[i]; });
       await f.close();
       await proxy.close();
     }
