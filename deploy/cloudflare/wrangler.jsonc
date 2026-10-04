@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "opencodex",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-27",
+  // A second deployment in the same account needs its own "name" and "bucket_name" below.
+  "workers_dev": true,
+  "preview_urls": false,
+  // Invocation logs record request metadata, which can include the client's key headers.
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
+  "containers": [
+    {
+      "class_name": "OpencodexHub",
+      // The root image, unchanged: its last stage is `runtime`.
+      "image": "../../Dockerfile",
+      "image_build_context": "../..",
+      "instance_type": "basic",
+      // The spend ledger and several stores assume one writer per OPENCODEX_HOME.
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "OpencodexHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["OpencodexHub"] }],
+  "r2_buckets": [{ "binding": "STATE", "bucket_name": "opencodex-state" }]
+}
