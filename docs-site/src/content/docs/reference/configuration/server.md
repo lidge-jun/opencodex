@@ -600,8 +600,9 @@ modes, the preview, and the per-request trace.
 | `protocols.rollout.directEncoders?` | `boolean` | `false` | Encode Chat and Messages answers from a non-Responses upstream directly from adapter events. |
 | `protocols.rollout.shadowPlan?` | `boolean` | `false` | Compare each Chat or Messages request's path with the plan a preview predicts and mark a disagreement as `planMismatch` on its log row. Sends nothing extra. |
 
-A malformed `protocols` block is dropped to these defaults, because each default is the
-conservative one. Only `true` turns a switch on.
+Malformed protocol blocks retain a conservative disabled native policy when loaded from disk.
+Valid absent native flags may inherit eligible Anthropic pool defaults; explicit false or malformed
+flags stay off. Validated writes reject malformed input.
 
 ```json
 {
