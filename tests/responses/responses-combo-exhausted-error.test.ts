@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { handleResponses } from "../../src/server/responses/core";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -103,6 +104,33 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     const response = await handleResponses(request(), config, { model: "", provider: "" } as RequestLogContext);
     expect(response.status).toBe(401);
     expect(await response.text()).toContain("invalid api key");
+  });
+
+  test("a send budget refused before the third target still reports the primary's 429", async () => {
+    const budget = createRequestExecutionBudget();
+    const three = {
+      ...config,
+      providers: { ...config.providers, third: provider("third") },
+      combos: {
+        fan: {
+          strategy: "failover",
+          targets: [...config.combos!.fan!.targets, { provider: "third", model: "model-third" }],
+        },
+      },
+    } as unknown as OcxConfig;
+    const hosts = upstream(401, "OpenAI account pool has no usable account credential");
+    const fetchUpstream = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const response = await fetchUpstream(input, init);
+      if (hosts.length === 2) budget.used = 1_000;
+      return response;
+    }) as typeof fetch;
+    const response = await handleResponses(
+      request(), three, { model: "", provider: "" } as RequestLogContext, { sendBudget: budget },
+    );
+    expect(hosts).toEqual(["primary.example", "fallback.example"]);
+    expect(response.status).toBe(429);
+    expect(await response.text()).toContain("weekly usage limit reached");
   });
 
   test("a fallback 5xx is still the answer", async () => {
