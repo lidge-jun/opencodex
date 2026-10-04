@@ -1032,18 +1032,16 @@ export async function refreshAnthropicAccountWithLock(
         // OAuthLoginRequiredError. One 503 locked the account out of refresh until manual
         // re-auth even after upstream recovered.
         //
-        // Only clear the intent when the server DEFINITIVELY answered and rejected the
-        // request. The adapter attaches an HTTP status only to that explicit non-success
-        // response. A timeout, a dropped connection, or an unreadable/unparseable body
-        // carries no status: the server may already have
-        // rotated the token, and replaying it could trip refresh-token-reuse revocation.
-        // Those outcomes keep the intent so the guard still refuses a blind replay.
-        if ((!refreshMayHaveReachedProvider || definitivelyAnswered(error)) && attemptIntent) {
+        // Clear only for proven pre-dispatch failure or an explicit HTTP rejection.
+        // Other transport/body failures may follow rotation and keep the replay guard.
+        const requestNotSent = !refreshMayHaveReachedProvider
+          || (error instanceof AnthropicTokenError && error.requestNotSent);
+        if ((requestNotSent || definitivelyAnswered(error)) && attemptIntent) {
           await clearAnthropicRefreshIntentForKnownFailure(
             provider,
             accountId,
             attemptIntent,
-            refreshMayHaveReachedProvider ? "definitive-rejection" : "pre-dispatch",
+            requestNotSent ? "pre-dispatch" : "definitive-rejection",
             error,
           );
         }

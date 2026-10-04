@@ -22,7 +22,8 @@ import {
 export const REMOTE_WORKSPACE_USAGE = `Usage:
   ocx remote-workspace pair <hub-url> --pairing-code-stdin --root <absolute-path> [--root <absolute-path> ...] [--toolchain-root <absolute-directory> ...] [--executor-helper <absolute-file>] [--name <device-name>] [--json]
   ocx remote-workspace agent
-  ocx remote-workspace status [--json]`;
+  ocx remote-workspace status [--json]
+  ocx remote-workspace hub [status|runtimes|sessions] [--json]`;
 
 export interface RemoteWorkspaceCliDeps extends RuntimeApiDeps {
   store?: RemoteWorkspaceDeviceStateStore;
@@ -76,6 +77,10 @@ function publicStatus(state: RemoteWorkspaceDeviceState | null): Record<string, 
 export async function runRemoteWorkspaceCommand(rawArgs: string[], deps: RemoteWorkspaceCliDeps = {}): Promise<number> {
   const args = [...rawArgs];
   const command = args.shift();
+  if (command === "hub") {
+    const { handleRemoteWorkspaceHubCommand } = await import("./remote-workspace-hub");
+    return handleRemoteWorkspaceHubCommand(args, deps);
+  }
   const store = deps.store ?? new RemoteWorkspaceDeviceFileStore();
   if (command === "status") {
     const wantsJson = takeJsonFlag(args);

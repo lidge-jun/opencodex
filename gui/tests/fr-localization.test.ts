@@ -26,6 +26,7 @@ function carriesTranslatableWords(value: string): boolean {
 
 const INTENTIONAL_ENGLISH = new Set<TKey>([
   "nav.claude", // Product name.
+  "nav.codexSet", // Product name: the sidebar row reads "Codex" in every locale.
   // Units, symbols, protocol values, machine labels, and product names.
   "integrations.cursor.noControl",
   "uptime.hour",
@@ -59,8 +60,6 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "nav.grok",
   "grok.title",
   "claude.pageTitle",
-  "claude.tabCode",
-  "claude.tabDesktop",
   // A literal Claude Desktop picker model id shown as the input placeholder; model ids are
   // identical in every locale.
   "claudeDesktop.firstParty.bindings.pickerPlaceholder",

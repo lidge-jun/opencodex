@@ -129,12 +129,15 @@ les valeurs par défaut du débogage sont `OPENCODEX_USAGE_DEBUG=1`.
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-Gérez les clés d'admission OpenCodex et examinez les points de terminaison et les modèles externes. `ocx api-key
-<list|create|remove> ...` est un alias de `ocx access key`.
+Consultez la liste des clés API d’accès à OpenCodex, les points de terminaison externes et les modèles. `ocx api-key` est un alias de la famille de commandes `ocx access key`.
+
+La création d’une clé et le lancement d’une rotation renvoient un secret en clair, affiché une seule fois, aussi bien en texte qu’en JSON. Les agents doivent confier ces étapes à une personne utilisant directement un terminal en dehors de la session de l’agent. Ne demandez jamais la clé dans la conversation : demandez uniquement la confirmation de la configuration et du test de connexion, ainsi que les identifiants non secrets de la clé et de la rotation.
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+La confirmation du fonctionnement de la nouvelle clé n’autorise pas la révocation de l’ancienne. Pour finaliser la rotation ou supprimer l’ancienne clé, obtenez une autorisation explicite distincte pour révoquer cette clé. Consultez à nouveau la liste après l’opération autorisée. Ne contournez pas cette procédure par un appel direct à l’API.
 
 ## Intégrations client
 
@@ -251,8 +254,7 @@ config détruit les autres fournisseurs, agents et entrées MCP déjà présents
 :::
 
 Aucune clé n'est jamais sérialisée. Les configurations portent soit une référence d'environnement documentée, soit un
-Espace réservé de bouclage non secret. Un proxy de bouclage (`127.0.0.1`, la valeur par défaut) ne nécessite aucun
-clé d'admission du tout. Définissez une variable référencée uniquement lorsque le schéma client la prend en charge et
+Espace réservé de bouclage non secret. Une adresse de bouclage (`127.0.0.1`) ne prouve pas que l’accès est sans clé : vérifiez la politique et le point de terminaison. Les commandes de modèle/audio avec clé sélectionnée exigent une entrée explicite même en bouclage. Définissez une variable référencée uniquement lorsque le schéma client la prend en charge et
 le proxy se lie au-delà du bouclage ; voir
 [Accès à distance](/fr/reference/configuration/server/#accès-à-distance) pour savoir comment les clés d'admission sont délivrées. Clés pour
 les fournisseurs en amont eux-mêmes sont une chose entièrement distincte, configurée par
@@ -297,7 +299,9 @@ Des handles natifs maintiennent les répertoires parents et les fichiers pendant
 
 L’identité ou le condensat décrit les fichiers au moment de l’observation, sans autorisation durable de mise à jour. Cela ne prouve ni le runtime sélectionné, ni l’installateur passé, ni la configuration npm effective, ni l’authenticité des outils. Le Node fourni est seulement observé, pas identifié comme celui que choisirait le lanceur. Aucune cible n’est exécutée ; aucune requête au registre, installation, écriture de configuration ou commande de processus n’a lieu. Le `check` Windows existant ne réalise toujours aucune E/S de fichiers candidats ou de configuration.
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]` affiche la configuration locale sans proxy en cours d’exécution. Vous pouvez omettre `show` avec l’un ou les deux indicateurs, dans n’importe quel ordre. `--source` inclut la source, les erreurs et les avertissements de diagnostic et n’est accepté que pour l’affichage. `--json` peut précéder une action explicite sans changer l’action exécutée. Les indicateurs `--json` ou `--source` répétés et les arguments inconnus sont refusés.
 
 Inspectez et modifiez en toute sécurité la configuration OpenCodex validée. `show` et `get` masquent les secrets. Importer
 valide avant d'écrire et nécessite `--yes`.

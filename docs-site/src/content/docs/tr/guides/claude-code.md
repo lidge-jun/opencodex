@@ -789,7 +789,7 @@ hemen temizler.
 
 ## GUI (Claude sayfası)
 
-Kontrol paneli kenar çubuğunda özel bir **Claude** sayfası (API altında) ve bir
+Kontrol paneli kenar çubuğunda özel bir **Claude** sayfası (Bağlantı altında) ve bir
 **Claude ON** geçiş anahtarı (etiket kasıtlı olarak her dilde aynıdır) bulunur.
 Sayfa şunları gösterir:
 

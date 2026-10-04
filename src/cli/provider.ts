@@ -19,6 +19,15 @@ import { findLiveProxy } from "../server/proxy-liveness";
 import { syncModelsToCodex } from "../codex/sync";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import { modelSelectionGuidance, modelSelectionNextSteps } from "./model-selection-guidance";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
+import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
+import type { RuntimeApiDeps } from "./runtime-api";
+import { projectLocalSyncResult, type LocalSyncResult } from "./local-sync-result";
+import { providerManagementConfigError } from "../server/auth-cors";
+
+export interface ProviderCommandDeps extends RuntimeApiDeps {
+  syncModels?: typeof syncModelsToCodex;
+}
 
 // ---------------------------------------------------------------------------
 // Arg helpers
@@ -139,9 +148,9 @@ function handleList(args: string[]): void {
 // provider add
 // ---------------------------------------------------------------------------
 
-const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <model>] [--model <id> --text-only] [--google-tool-schema-policy <compatible|reject-lossy>] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
+const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--responses-path <path>] [--auth-mode <key|forward|oauth|local>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <model>] [--model <id> --text-only] [--google-tool-schema-policy <compatible|reject-lossy>] [--allow-private-network] [--set-default] [--force] [--json] [--sync | --live]";
 
-async function handleAdd(args: string[]): Promise<void> {
+async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<void> {
   const name = args[0];
   if (!name || name.startsWith("-")) {
     console.error(ADD_USAGE);
@@ -164,12 +173,20 @@ async function handleAdd(args: string[]): Promise<void> {
   const adapter = consumeFlagValue(restArgs, "--adapter");
   const baseUrl = consumeFlagValue(restArgs, "--base-url");
   const defaultModel = consumeFlagValue(restArgs, "--default-model");
+  const responsesPath = consumeFlagValue(restArgs, "--responses-path");
+  const authMode = consumeFlagValue(restArgs, "--auth-mode");
   const googleToolSchemaPolicy = consumeFlagValue(restArgs, "--google-tool-schema-policy");
   const textOnly = consumeFlag(restArgs, "--text-only");
   const capabilityModel = consumeFlagValue(restArgs, "--model");
   rejectUnknownArgs(restArgs, ADD_USAGE);
   if (capabilityModel !== undefined && !textOnly) {
     console.error("Error: --model requires --text-only for provider add.");
+    process.exit(1);
+  }
+
+  const pathError = providerRelativeSendPathConfigError("responsesPath", responsesPath);
+  if (pathError || (authMode !== undefined && !["key", "forward", "oauth", "local"].includes(authMode))) {
+    console.error(pathError ? `Error: ${pathError}.` : "Error: --auth-mode must be key, forward, oauth, or local.");
     process.exit(1);
   }
 
@@ -192,9 +209,9 @@ async function handleAdd(args: string[]): Promise<void> {
   if (registryEntry) {
     provConfig = providerConfigSeed(registryEntry);
     if (apiKey) {
-      if (registryEntry.authKind === "forward") {
+      if ((authMode ?? registryEntry.authKind) === "forward") {
         console.warn(`Warning: provider "${name}" uses ChatGPT login (forward auth); --api-key is ignored.`);
-      } else if (registryEntry.authKind === "oauth") {
+      } else if ((authMode ?? registryEntry.authKind) === "oauth") {
         console.warn(`Warning: provider "${name}" uses OAuth auth; --api-key is ignored. Run: ocx login ${name}`);
       } else {
         provConfig.apiKey = apiKey;
@@ -215,6 +232,15 @@ async function handleAdd(args: string[]): Promise<void> {
       ...(apiKey ? { apiKey } : {}),
       ...(defaultModel ? { defaultModel } : {}),
     };
+  }
+
+  if (responsesPath !== undefined) provConfig.responsesPath = responsesPath;
+  if (authMode !== undefined) provConfig.authMode = authMode as OcxProviderConfig["authMode"];
+  if (name === "openai" && (authMode !== undefined || responsesPath !== undefined)
+    && !isCanonicalOpenAiForwardProvider(provConfig)) {
+    console.error("Error: Canonical OpenAI must keep its built-in forward destination and authentication. Use a separate provider name for a custom endpoint.");
+    process.exitCode = 2;
+    return;
   }
 
   if (apiKeyTransport !== undefined) {
@@ -259,9 +285,6 @@ async function handleAdd(args: string[]): Promise<void> {
     if (error) { console.error(`Error: ${error}.`); process.exit(1); }
     provConfig.modelCapabilities = mergeModelCapabilities(provConfig.modelCapabilities, declaration);
   }
-  const { initializeProviderModelSelection } = await import("../providers/initial-model-selection");
-  initializeProviderModelSelection(name, provConfig, existingProvider, config);
-  config.providers[name] = provConfig;
   // A --force overwrite rotates the key/endpoint but must not drop a
   // user-configured price overlay (same rule as the /api/providers path and
   // the login paths); there is no explicit clear/replace flag yet.
@@ -269,10 +292,38 @@ async function handleAdd(args: string[]): Promise<void> {
     provConfig.modelCosts = existingProvider.modelCosts;
   }
   if (allowPrivateNetwork) provConfig.allowPrivateNetwork = true;
+  // New auth/path overrides use the management owner's completed-row contract.
+  // Validate before registration state changes; legacy local adds without these
+  // options keep their existing config semantics.
+  if ((authMode !== undefined || responsesPath !== undefined)
+    && providerManagementConfigError(name, provConfig)) {
+    console.error("Error: Invalid provider configuration. Authentication, destination and provider options must satisfy the provider's management rules.");
+    process.exitCode = 2;
+    return;
+  }
+  const { initializeProviderModelSelection } = await import("../providers/initial-model-selection");
+  initializeProviderModelSelection(name, provConfig, existingProvider, config);
+  config.providers[name] = provConfig;
   if (setDefault) config.defaultProvider = name;
 
   validateAndSave(config);
 
+  let sync: LocalSyncResult | undefined;
+  if (wantsSync) {
+    try {
+      const live = await (deps.findLiveProxy ?? findLiveProxy)();
+      if (!live) sync = { status: "not-running", ok: false };
+      else {
+        const result = await (deps.syncModels ?? syncModelsToCodex)(live.port, config, null);
+        sync = projectLocalSyncResult(result);
+      }
+    } catch {
+      // Dependency errors can contain keys, paths or request details. Keep a fixed outcome.
+      sync = { status: "failed", ok: false };
+    }
+    if (!sync.ok || sync.status === "refused") process.exitCode = 1;
+  }
+  const synced = sync?.status === "applied" && sync.ok;
   if (wantsJson) {
     console.log(JSON.stringify({
       action: "added",
@@ -283,26 +334,13 @@ async function handleAdd(args: string[]): Promise<void> {
       defaultModel: provConfig.defaultModel ?? null,
       isDefault: config.defaultProvider === name,
       source: registryEntry ? "registry" : "custom",
-      needsSync: true,
+      needsSync: !synced,
+      ...(sync ? { sync } : {}),
     }, null, 2));
     return;
   }
 
-  let codexSyncSkipped = false;
-  if (wantsSync) {
-    const live = await findLiveProxy();
-    if (live) {
-      const synced = await syncModelsToCodex(live.port).catch(e => {
-        console.error(`Warning: sync failed: ${e instanceof Error ? e.message : String(e)}`);
-        return null;
-      });
-      if (synced?.status === "skipped") {
-        codexSyncSkipped = true;
-        console.log("Provider saved; Codex integration is OFF, so Codex sync was skipped.");
-      }
-    }
-  }
-
+  if (sync?.warning) console.log(`   Warning: ${sync.warning}`);
   const registryLabel = registryEntry ? ` (${registryEntry.label})` : "";
   console.log(`✅ Provider "${name}"${registryLabel} added.`);
   for (const line of modelSelectionGuidance(name)) console.log(line);
@@ -315,10 +353,15 @@ async function handleAdd(args: string[]): Promise<void> {
     console.log(`   Set API key with: ocx provider add ${name} --api-key <key> --force`);
     console.log(`   Or set env var: ${envKey}`);
   }
-  if (wantsSync && !codexSyncSkipped) {
-    console.log(`   Models synced to Codex.`);
-  } else {
-    console.log(`   Apply to Codex: ocx sync`);
+  if (synced) console.log("   Models synced to Codex.");
+  else {
+    if (sync) {
+      console.log(sync.configApplied && !sync.ok
+        ? "   Provider saved; sync remains incomplete despite config injection."
+        : `   Provider saved; client sync outcome: ${sync.status}.`);
+      if (sync.catalog && !sync.catalog.converged) console.log("   Model catalog did not converge; inspect the target before retrying.");
+    }
+    console.log("   Apply to Codex: ocx sync");
   }
 }
 
@@ -473,7 +516,7 @@ function handleSetDefault(args: string[]): void {
 // ---------------------------------------------------------------------------
 
 
-export async function handleProviderCommand(args: string[]): Promise<void> {
+export async function handleProviderCommand(args: string[], deps: ProviderCommandDeps = {}): Promise<void> {
   const sub = args[0];
 
   if (!sub || sub === "help" || hasHelpFlag(args)) {
@@ -482,13 +525,35 @@ export async function handleProviderCommand(args: string[]): Promise<void> {
   }
 
   const subArgs = args.slice(1);
+  const liveArgs = subArgs.filter(arg => arg === "--live" || arg.startsWith("--live="));
+  if (liveArgs.length) {
+    if (liveArgs.length !== 1 || liveArgs[0] !== "--live" || !["add", "remove", "set-default"].includes(sub)) {
+      console.error("Error: --live is a single boolean flag for provider add, remove, or set-default.");
+      process.exitCode = 2;
+      return;
+    }
+    subArgs.splice(subArgs.indexOf("--live"), 1);
+    const { handleProviderLifecycleRuntimeCommand } = await import("./provider-lifecycle-runtime");
+    process.exitCode = await handleProviderLifecycleRuntimeCommand(sub as "add" | "remove" | "set-default", subArgs, deps);
+    return;
+  }
+  if (sub === "snapshot" || sub === "apply") {
+    const { handleProviderBatchCommand } = await import("./provider-batch");
+    process.exitCode = await handleProviderBatchCommand(sub, subArgs, deps);
+    return;
+  }
+  if (sub === "pacing") {
+    const { handleProviderPacingCommand } = await import("./provider-settings");
+    process.exitCode = await handleProviderPacingCommand(subArgs, deps);
+    return;
+  }
 
   switch (sub) {
     case "list":
       handleList(subArgs);
       break;
     case "add":
-      await handleAdd(subArgs);
+      await handleAdd(subArgs, deps);
       break;
     case "remove":
       handleRemove(subArgs);
@@ -501,7 +566,7 @@ export async function handleProviderCommand(args: string[]): Promise<void> {
       break;
     default: {
       const { handleProviderRuntimeCommand } = await import("./provider-runtime");
-      const code = await handleProviderRuntimeCommand(sub, subArgs);
+      const code = await handleProviderRuntimeCommand(sub, subArgs, deps);
       if (code !== null) {
         process.exitCode = code;
         break;

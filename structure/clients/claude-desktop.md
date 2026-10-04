@@ -409,6 +409,8 @@ data-token ownership, so displaying configuration cannot enter Desktop or client
 
 ## Claude Desktop config-library resolution
 
+`src/cli/claude-desktop-profile.ts` provides explicit runtime profile show/import through GET/PUT `/api/claude-desktop`. Bounded JSON input uses the canonical profile validator and the server retains unavailable-model, applied-marker and concurrent-save guards. Import saves desired state only; existing local show/import/apply commands retain their separate targets. The profile branch is dispatched before apply-mode aliases and never falls back to a local write.
+
 The Desktop profile writer and the management status probe share
 `resolveDesktop3pConfigLibraryPath`. The resolver reproduces Desktop's own rule rather than a guess:
 an explicit `CLAUDE_USER_DATA_DIR` (or the opencodex override) wins; on Windows

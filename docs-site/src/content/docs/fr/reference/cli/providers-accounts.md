@@ -15,7 +15,7 @@ Gestion des fournisseurs non interactive. Les entrées de registre sont classée
 | Sous-commande | Drapeaux pris en charge | Actions |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | Répertoriez les fournisseurs configurés et les entrées de registre restantes. `--jsonl` émet un objet JSON par fournisseur configuré et par ligne. |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Ajoutez un fournisseur registry/custom. `--force` écrase ; `--sync` actualise un proxy en cours d'exécution en mode sortie humaine. |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Enregistre localement. `--force` autorise le remplacement ; `--sync` tente la synchronisation en sortie JSON comme en sortie texte. |
 | `edit <name>` | indicateurs de champ du fournisseur, `--headers <json>`, `--json` | Modifiez les champs de fournisseur en direct validés sans remplacer les pools de clés. `--headers` fusionne les en-têtes de requête personnalisés ; passez `{}` ou `-` pour les effacer. |
 | `test <name>` | `--json` | Sondez le véritable point de terminaison du modèle en amont. |
 | `show <name>` | `--json` | Afficher la configuration avec les clés API masquées. |
@@ -25,6 +25,8 @@ Gestion des fournisseurs non interactive. Les entrées de registre sont classée
 | `quota` | `--refresh`, `--json` | Lire les rapports sur les quotas des fournisseurs. |
 | `presets` | `--json` | Répertoriez les préréglages du fournisseur de tableau de bord. |
 | `account-mode` | `pool`, `direct`, `--json` | Sélectionnez le routage de compte mutualisé ou direct Codex. |
+
+Par défaut, `add`, `remove` et `set-default` modifient la configuration locale. Ajoutez `--live` pour modifier le proxy actif, et `--yes` pour une suppression en direct. `--sync --json` tente aussi la synchronisation après enregistrement ; en cas d’échec, la sauvegarde reste acquise, avec un code non nul et `needsSync: true`. `--live` et `--sync` sont incompatibles. Voir le [guide anglais](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline) pour pacing et snapshot/apply.
 
 ```bash
 ocx provider list --json
@@ -290,11 +292,7 @@ identifiant de compte inconnu, ou une valeur en dehors de l'ensemble accepté ex
 
 ### `ocx account login|reauth|code|cancel ...`
 
-Exécutez l’authentification de compte basée sur un navigateur ou par code manuel à partir d’un shell sans tête. Utiliser
-`ocx account --help` pour la forme de commande spécifique au fournisseur. Si une connexion au compte Codex est enregistrée mais
-l'actualisation de son catalogue de modèles reste en attente, la sortie humaine se termine toujours avec succès et les impressions sont corrigées
-`ocx sync` conseils de récupération sur stderr. `--json` garde la sortie standard analysable et transporte
-`catalogRefreshPending: true` dans l'état de connexion terminé sans avertissement humain.
+Exécutez l’authentification du compte dans un navigateur ou avec un code manuel depuis un shell sans interface graphique. Consultez `ocx account --help` pour la syntaxe propre au fournisseur. Si la connexion Codex est enregistrée mais que sa validation ou l’actualisation du catalogue reste en attente, les modes texte et `--json` se terminent avec le code 1. La connexion enregistrée reste visible : ne recommencez pas l’authentification pour cette seule raison. En mode texte, un catalogue en attente entraîne une indication `ocx sync` sur stderr. Avec `--json`, stdout reste analysable et conserve les indicateurs d’attente, sans avertissement textuel.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
@@ -420,18 +418,15 @@ entrées de catalogue ; `enable`, `disable` et `provider` contrôlent la visibi
 liste d'autorisation des fournisseurs ; `context` contrôle les plafonds de contexte du fournisseur ; et `shadow` gère l'arrière-plan
 interception d'appel fantôme.
 
-Chaque opération par modèle proposée par le tableau de bord est disponible ici, donc une installation sans tête n'est jamais nécessaire
-appuyez sur GUI pour gérer un catalogue. `add`, `remove` et `list-custom` fonctionnent sur le fichier de configuration et appliquent
-à un proxy en cours d'exécution via une synchronisation de catalogue ; les autres parlent à la direction en direct API et exigent le
-proxy en cours d'exécution (`ocx start` ou un service installé).
+`add` et `remove` enregistrent localement par défaut ; `--live` modifie le proxy actif. Sans proxy, un enregistrement local `--json` renvoie `sync.status: "not-attempted"`, `needsSync: true` et le code 0. Une synchronisation tentée mais échouée conserve la sauvegarde et renvoie un code non nul. `list-custom` reste local. `display-name` prend l’ID amont brut ; `order` prend les IDs publics du sélecteur. Voir les contraintes de permutation complète, de préfixe featured et de réinitialisation native dans le [guide anglais](/reference/cli/providers-accounts/#display-names-and-picker-identities).
 
 | Sous-commande | Drapeaux pris en charge | Actions |
 | --- | --- | --- |
 | `list` (par défaut) | `--provider <name>`, `--json` | Répertoriez les modèles prédéfinis dans les fournisseurs configurés. |
 | `live` | `--provider <name>`, `--json` | Lisez le catalogue en cours d'exécution, y compris les modèles découverts lors de l'exécution. Les lignes sont marquées `native`/`routed`, `custom` et `enabled`/`disabled`. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Enregistrez un modèle dont le catalogue du fournisseur n’annonce pas. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Enregistre un modèle personnalisé localement, ou sur le proxy actif avec `--live`. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Modifiez un modèle personnalisé. `-` libère un champ ; `0` efface la fenêtre contextuelle. |
-| `remove <custom-id\|provider/modelId>` | `--yes` | Supprimez un modèle personnalisé. Nécessite `--yes` lorsque stdin n'est pas un terminal interactif. |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | Supprime un modèle personnalisé ; `--live` ou `--json` exige `--yes`. |
 | `list-custom` | `--json` | Affichez tous les modèles personnalisés avec le `custom-id` que prennent les autres sous-commandes. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Rendre un modèle visible à Codex. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Masquez un modèle de Codex. |

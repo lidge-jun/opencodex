@@ -14,7 +14,7 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | 立即，在執行中的 gateway 上 | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | 重新啟動時，或 `/reload` | loopback 佔位符 |
 | gjc | `~/.gjc/agent/models.yml` | YAML | 新 sessions，或當你開啟 `/model` 時 | non-secret loopback placeholder |
-| DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml`（預設 `~/.dsh/settings.yaml`） | YAML | 熱重載 | 非秘密的 loopback bearer 佔位符 |
+| DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml`（預設 `~/.dsh/profiles/desktop/cordis.patch.yml`）；DSH Desktop 建立該 profile 之前為 `$DSH_HOME/settings.yaml` | YAML | 熱重載 | 非秘密的 loopback bearer 佔位符 |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | 新 sessions，或開啟模型選擇器後 | loopback 佔位符 |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | 新 sessions | loopback 佔位符 |
 | ZCode | `~/.zcode/v2/config.json` | JSON | 重新啟動時 | loopback 佔位符 |

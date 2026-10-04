@@ -506,6 +506,9 @@ describe("provider outbound GET transport", () => {
       },
       stdout: "pipe",
       stderr: "pipe",
+      // Terminate and reap the fixture before the existing 15s test deadline.
+      timeout: 12_000,
+      killSignal: "SIGKILL",
     });
 
     try {
@@ -518,6 +521,7 @@ describe("provider outbound GET transport", () => {
         throw new Error(`provider outbound fixture exited ${exitCode}: ${stderr.trim()}`);
       }
       const result = JSON.parse(stdout.trim()) as {
+        dnsLookups: string[];
         outbound: { status: number; body: string };
         allProxy: { status: number; body: string };
         managementProxy: Record<string, unknown>;
@@ -529,6 +533,12 @@ describe("provider outbound GET transport", () => {
         providerRequests: string[];
       };
 
+      expect(result.dnsLookups).toEqual([
+        "proxy-only.invalid",
+        "connection-proxy.invalid",
+        "proxy-models.invalid",
+        "all-proxy-only.invalid",
+      ]);
       expect(result.outbound).toEqual({
           status: 200,
           body: '{"data":[{"id":"proxied-model"}]}',
@@ -555,7 +565,7 @@ describe("provider outbound GET transport", () => {
       expect(result.providerRequests).toEqual(["/v1/models", "/v1/models", "/v1/models"]);
       expect(stderr).toContain("cannot be pinned locally");
     } finally {
-      if (child.exitCode === null) child.kill();
+      if (child.exitCode === null) child.kill("SIGKILL");
       await child.exited;
       removeTreeWithRetry(childHome);
     }

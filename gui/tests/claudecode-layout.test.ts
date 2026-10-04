@@ -15,13 +15,19 @@ test("ClaudeCode renders the denser workspace rail layout", async () => {
   // Save stays in the pane head (visibility-toggled) so the Code/Desktop chrome does not jump.
   expect(page).toContain('data-visible={sectionEditable ? "true" : "false"}');
 
-  expect(app).toContain("<Claude apiBase={sharedBase} />");
-  // One stable page head above the tab strip; the panels carry no titles of their own.
+  // Claude lives as a tab inside Connect (Integrations), not as its own App slot.
+  expect(app).not.toContain("<Claude ");
+  const integrations = await Bun.file(new URL("../src/pages/Integrations.tsx", import.meta.url)).text();
+  expect(integrations).toContain("<Claude apiBase={apiBase} active={active} embedded />");
+  // Standalone, one page head; embedded in Connect, the Connect strip names the page instead.
   expect(claude).toContain('<h2>{t("nav.claude")}</h2>');
   expect(claude).toContain("claude.pageSub");
-  expect(claude).toContain('className="page-tabs" role="tablist"');
-  expect(claude).toContain("<ClaudeCode key={apiBase} apiBase={apiBase} active={active && tab === value} />");
-  expect(claude).toContain("<ClaudeDesktop key={apiBase} apiBase={apiBase} active={active && tab === value} />");
+  // No sub-tab strip: Claude renders the Code content directly.
+  expect(claude).not.toContain('role="tablist"');
+  expect(claude).toContain("<ClaudeCode key={apiBase} apiBase={apiBase} active={active} />");
+  // Claude Desktop is its own Connect tab, rendered by Integrations rather than by Claude.
+  expect(claude).not.toContain("<ClaudeDesktop");
+  expect(integrations).toContain("<ClaudeDesktop key={apiBase} apiBase={apiBase} active={active} />");
 });
 
 test("ClaudeCode workspace sections remain available in source order", async () => {
