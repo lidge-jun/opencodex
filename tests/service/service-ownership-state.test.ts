@@ -8,7 +8,7 @@
  * doctor suggestion — and nothing said it had gone.
  */
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
 import {
@@ -38,7 +38,10 @@ import {
 import { assessServiceTakeoverCompatibility, type ManagingCliObservation } from "../../src/service/ownership-compatibility";
 import {
   OWNERSHIP_MUTATION_LEASE_TOKEN_ENV,
+  acquireOwnershipMutationLease,
+  inspectOwnershipMutationLease,
   ownershipMutationLeaseChildEnvironment,
+  ownershipMutationLeaseStatusLine,
   unprivilegedOwnershipMutationEnvironment,
 } from "../../src/service/ownership-mutation-lease.mjs";
 
@@ -608,4 +611,83 @@ describe("the anchor lock", () => {
     expect(existsSync(`${lockPath}/v1-888-${successorInstance}-${successorToken}.json`)).toBe(true);
   });
 
+});
+
+describe("a busy runtime mutation lease names its holder (#6492)", () => {
+  const instance = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const token = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const lockDir = () => `${serviceStatePath()}.mutation.lock`;
+  /** A lease written at epoch second 1, file mtime included, so `now` alone sets its age. */
+  const hold = (pid: number, body?: string) => {
+    mkdirSync(lockDir(), { recursive: true });
+    const owner = `${lockDir()}/v1-${pid}-${instance}-${token}.json`;
+    writeFileSync(owner, body ?? JSON.stringify({ version: 1, pid, processInstance: instance, token, createdAt: 1_000 }));
+    utimesSync(owner, 1, 1);
+  };
+  const busyError = (options: Parameters<typeof acquireOwnershipMutationLease>[1]) => {
+    try {
+      acquireOwnershipMutationLease([serviceStatePath()], { waitMs: 0, ...options }).release();
+    } catch (error) {
+      return error as Error & { code?: string; holder?: unknown };
+    }
+    throw new Error("the lease was granted");
+  };
+
+  test("the timeout error carries the holder's pid, liveness, image, age and the reclaim rule", () => {
+    hold(6236);
+    const error = busyError({ now: () => 213_000, processAlive: () => true, processImage: () => "python.exe" });
+    expect(error.message).toContain("another process owns the runtime mutation lease at ");
+    expect(error.message).toContain("(holder pid 6236 [alive, python.exe], held 212s; "
+      + "stale leases are reclaimed after 30s once the holder exits)");
+    expect(error.code).toBe("OWNERSHIP_MUTATION_LEASE_BUSY");
+    expect(error.holder).toMatchObject({ pid: 6236, alive: true, image: "python.exe", ageMs: 212_000, record: "complete" });
+  });
+
+  test("an exited holder inside the stale grace is named as exited, without an image lookup", () => {
+    hold(6236);
+    const error = busyError({
+      now: () => 6_000,
+      processAlive: () => false,
+      processImage: () => { throw new Error("a dead pid must not be looked up"); },
+    });
+    expect(error.message).toContain("(holder pid 6236 [exited], held 5s; ");
+  });
+
+  test("a failed image lookup still names a live holder", () => {
+    hold(6236);
+    expect(busyError({ now: () => 2_000, processAlive: () => true, processImage: () => null }).message)
+      .toContain("(holder pid 6236 [alive], held 1s; ");
+  });
+
+  test("an incomplete owner file is named by the pid in its file name", () => {
+    hold(6236, "{}");
+    expect(busyError({ now: () => 2_000, processAlive: () => true, processImage: () => "helper.exe" }).message)
+      .toContain("(holder pid 6236 [alive, helper.exe, owner record incomplete], held 1s; ");
+  });
+
+  test("an empty lock directory and an ambiguous one say so instead of naming a pid", () => {
+    mkdirSync(lockDir(), { recursive: true });
+    expect(busyError({ now: () => Date.now(), processAlive: () => true }).message).toContain("(no owner file written yet, held ");
+    writeFileSync(`${lockDir()}/one.json`, "{}");
+    writeFileSync(`${lockDir()}/two.json`, "{}");
+    expect(busyError({ now: () => Date.now(), processAlive: () => true }).message)
+      .toContain("(holder unknown: the lock directory does not hold exactly one owner file; ");
+  });
+
+  test("the status line is absent while the lease is free and names the holder while it is held", () => {
+    const options = { now: () => 213_000, processAlive: () => true, processImage: () => "python.exe" };
+    expect(ownershipMutationLeaseStatusLine([serviceStatePath()], options)).toBeNull();
+    hold(6236);
+    const line = ownershipMutationLeaseStatusLine([serviceStatePath()], options);
+    expect(line).toContain("Runtime mutation lease busy at ");
+    expect(line).toContain("(holder pid 6236 [alive, python.exe], held 212s); ");
+    expect(line).toContain("stale leases are reclaimed after 30s once the holder exits.");
+  });
+
+  test("inspection only reads: a dead, stale holder is reported, not reclaimed", () => {
+    hold(6236);
+    const holder = inspectOwnershipMutationLease([serviceStatePath()], { now: () => 600_000, processAlive: () => false });
+    expect(holder).toMatchObject({ pid: 6236, alive: false, image: null, record: "complete" });
+    expect(existsSync(`${lockDir()}/v1-6236-${instance}-${token}.json`)).toBe(true);
+  });
 });
