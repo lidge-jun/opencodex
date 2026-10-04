@@ -16,6 +16,7 @@ const report: CodexCliInstallReport = {
   selectionAttested: false,
   versionEvidence: { kind: "unavailable" },
   provenance: "unknown", managed: false, reason: "candidate_unavailable", location: null,
+  installDigest: null,
   packageVersion: null,
   shim: { status: "not-tracked", backingKind: null }, evidence: [],
 };
@@ -198,9 +199,9 @@ describe("Codex CLI update CLI", () => {
   });
 
   test("parses the shared JSON flag spellings within the exact check grammar", () => {
-    expect(parseCodexCliUpdateArgs(["check"])).toEqual({ json: false });
+    expect(parseCodexCliUpdateArgs(["check"])).toEqual({ action: "check", json: false });
     for (const flag of ["--json", "--json=true", "-json", "—json"]) {
-      expect(parseCodexCliUpdateArgs(["check", flag])).toEqual({ json: true });
+      expect(parseCodexCliUpdateArgs(["check", flag])).toEqual({ action: "check", json: true });
     }
     for (const args of [
       ["check", "--channel", "latest"],
@@ -217,7 +218,7 @@ describe("Codex CLI update CLI", () => {
    */
   test("the JSON flag is accepted before the check action", () => {
     for (const flag of ["--json", "--json=true", "-json", "—json"]) {
-      expect(parseCodexCliUpdateArgs([flag, "check"])).toEqual({ json: true });
+      expect(parseCodexCliUpdateArgs([flag, "check"])).toEqual({ action: "check", json: true });
     }
     // Duplicate detection and positional validation still hold in that order.
     expect(() => parseCodexCliUpdateArgs(["--json", "check", "--json"])).toThrow();
@@ -267,6 +268,12 @@ describe("Codex CLI update CLI", () => {
           received = deps;
           return report;
         },
+        // The command asks the resolver which executable it would select; the
+        // inspector then requires it to match the attested candidate.
+        resolveSelectedRuntime: () => ({
+          runtime: { command: "C:\\managed\\codex.cmd", version: null, source: "environment" },
+          failures: [],
+        }),
       })).toBe(0);
       expect(received?.env).toEqual({
         FNM_DIR: "C:\\custom-manager",
@@ -275,6 +282,7 @@ describe("Codex CLI update CLI", () => {
         PATHEXT: ".CMD",
       });
       expect(received?.configDir).toBe("C:\\opencodex");
+      expect(received?.selectedCommand).toBe("C:\\managed\\codex.cmd");
     } finally {
       initializeNodeLauncherContext(["bun", "cli"], {});
     }
@@ -374,5 +382,44 @@ describe("Codex CLI update CLI", () => {
     } finally {
       console.log = oldLog;
     }
+  });
+});
+
+/**
+ * Phase 2 verb. The dry-run plan is the entire surface added here: it resolves an exact
+ * registry target and reports the decision, and this slice deliberately adds no apply.
+ */
+describe("Codex CLI update plan grammar", () => {
+  test("plan defaults to the stable channel and accepts both option spellings", () => {
+    expect(parseCodexCliUpdateArgs(["plan"])).toEqual({ action: "plan", json: false, channel: "latest" });
+    expect(parseCodexCliUpdateArgs(["plan", "--channel", "latest"])).toEqual({ action: "plan", json: false, channel: "latest" });
+    expect(parseCodexCliUpdateArgs(["plan", "--channel=latest", "--json"])).toEqual({ action: "plan", json: true, channel: "latest" });
+  });
+
+  test("unsupported actions and plan arguments are rejected", () => {
+    for (const args of [
+      ["apply", "--plan", "0".repeat(32)],
+      ["plan", "--plan", "0".repeat(32)],
+      ["plan", "--channel", "preview"],
+      ["plan", "extra"],
+    ]) expect(() => parseCodexCliUpdateArgs(args)).toThrow();
+  });
+
+  test("a refused dry-run is a normal answer and still exits 0", async () => {
+    let inspected = 0;
+    const code = await handleCodexCliUpdateCommand(["plan", "--json"], {
+      inspectInstall: async () => { inspected += 1; return report; },
+      createPlan: async () => ({
+        schemaVersion: 1, package: "@openai/codex", channel: "latest",
+        applicable: false, refusal: "not_managed", planId: null,
+        provenance: "app-bundle", managed: false, installedVersion: null,
+        versionEvidence: "unavailable", location: null,
+        targetVersion: null, targetIntegrity: null,
+        session: { state: "not-evaluated", matches: null }, command: null,
+      }),
+    });
+    expect(code).toBe(0);
+    // The plan engine owns inspection; the command must not run a second one.
+    expect(inspected).toBe(0);
   });
 });

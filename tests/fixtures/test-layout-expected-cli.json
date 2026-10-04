@@ -1,0 +1,5 @@
+{
+  "cli-head.test.ts": "cli",
+  "cli-headless-parity.test.ts": "cli",
+  "cli-help.test.ts": "cli"
+}
