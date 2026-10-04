@@ -474,6 +474,7 @@ function FileIntegrationControls({
           plan={plannedMutation.plan}
           planLoading={plannedMutation.loading}
           planFailure={plannedMutation.failure}
+          missingStorePath={status.supersededReason === "missing-store" ? status.supersededBy : undefined}
           onClose={closePlannedMutation}
           onConfirm={async plan => { if (plan) await mutate(plan); }}
         />

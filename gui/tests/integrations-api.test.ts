@@ -176,6 +176,8 @@ test.each([
   { ...missingStorePlan, missingStoreDocument: "[]\n- id: injected" },
   { ...missingStorePlan, missingStoreDocument: "x".repeat(65) },
   { ...missingStorePlan, missingStoreDocument: 0 },
+  { ...missingStorePlan, missingStoreDocument: "\u001b[31m[]" },
+  { ...missingStorePlan, supersededReason: ["missing-store"] },
 ])("superseded-store details are rejected outside their refusal", body => {
   expect(() => parseIntegrationMutationPlan(body)).toThrow(IntegrationApiError);
 });

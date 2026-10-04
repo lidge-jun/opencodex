@@ -95,6 +95,13 @@ test("a missing provider store names the document to create instead of the gener
   expect(container.textContent).toContain("Create the file containing [], then press Apply again.");
   expect(container.textContent).not.toContain("a file opencodex does not write");
 
+  // The open dialog covers the page's status notice, so a caller that knows the path passes it.
+  const patch = "/tmp/home/.dsh/profiles/desktop/cordis.patch.yml";
+  await act(async () => {
+    root?.render(<LanguageProvider><IntegrationPlanDetails plan={refused} missingStorePath={patch} /></LanguageProvider>);
+  });
+  expect(container.textContent).toContain(`Create ${patch} containing [], then press Apply again.`);
+
   // Any other superseded store keeps the generic refusal: there is nothing to create.
   const { missingStoreDocument: _document, ...schemaOnly } = refused;
   await act(async () => {

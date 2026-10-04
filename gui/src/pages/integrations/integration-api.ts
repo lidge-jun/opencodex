@@ -266,8 +266,8 @@ const PLAN_CHANGE_KINDS: readonly IntegrationPlanChangeKind[] = ["add", "replace
 const PLAN_FOREIGN_EDITS: readonly IntegrationPlanForeignEdit[] = ["none", "unowned", "foreign-edit", "drift"];
 const PLAN_KEYS = new Set(["version", "clientId", "operation", "state", "foreignEdit", "changes", "fingerprint", "canApply", "willChange", "refusalReason", "supersededReason", "missingStoreDocument", "profileId"]);
 const SUPERSEDED_REASONS: ReadonlySet<string> = new Set<IntegrationSupersededReason>(["owned-config-file", "unestablished-schema", "missing-store"]);
-/** The document is shown verbatim; a short single line is all a store's empty form ever is. */
-const MISSING_STORE_DOCUMENT_LIMIT = 64;
+/** Shown verbatim (and echoed by the CLI): one short printable-ASCII line, as a store's empty form is. */
+const MISSING_STORE_DOCUMENT = /^[\x20-\x7e]{1,64}$/;
 const PLAN_CHANGE_KEYS = new Set(["kind", "path"]);
 const PLAN_PSEUDO_PATHS = new Set(["$snapshot", "$ownership", "$journal"]);
 const PLAN_SCHEMA_PATHS = new Set([
@@ -326,11 +326,11 @@ export function parseIntegrationMutationPlan(value: unknown): IntegrationMutatio
     || (value.profileId !== undefined && value.clientId !== "aside")
     || (value.refusalReason !== undefined && !REFUSAL_REASONS.has(String(value.refusalReason)))
     || (value.supersededReason !== undefined
-      && (value.refusalReason !== "superseded_store" || !SUPERSEDED_REASONS.has(String(value.supersededReason))))
+      && (value.refusalReason !== "superseded_store" || typeof value.supersededReason !== "string"
+        || !SUPERSEDED_REASONS.has(value.supersededReason)))
     || (value.missingStoreDocument !== undefined
       && (value.supersededReason !== "missing-store" || typeof value.missingStoreDocument !== "string"
-        || value.missingStoreDocument.length === 0 || value.missingStoreDocument.length > MISSING_STORE_DOCUMENT_LIMIT
-        || /[\r\n]/.test(value.missingStoreDocument)))) {
+        || !MISSING_STORE_DOCUMENT.test(value.missingStoreDocument)))) {
     throw invalidPreviewResponse();
   }
   const changes: IntegrationPlanChange[] = [];

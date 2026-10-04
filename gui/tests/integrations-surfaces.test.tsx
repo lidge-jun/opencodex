@@ -313,6 +313,23 @@ test("a DSH profile without its patch tells the operator which file to create an
   expect(text).toContain(`This client keeps its providers in ${patch}, which is missing.`);
   expect(text).toContain(`Create ${patch} containing [], then press Apply again.`);
   expect(text).not.toContain("which opencodex does not write");
+
+  // The apply preview refuses; its dialog covers that notice, so it names the path itself.
+  previewResponse = () => json(previewPlan("apply", {
+    clientId: "dsh",
+    changes: [],
+    fingerprint: "p7:unbound",
+    canApply: false,
+    willChange: false,
+    refusalReason: "superseded_store",
+    supersededReason: "missing-store",
+    missingStoreDocument: "[]",
+  }));
+  await act(async () => { toggleSwitch().click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+  const dialog = container.querySelector("dialog")?.textContent ?? "";
+  expect(dialog).toContain(`Create ${patch} containing [], then press Apply again.`);
+  expect(requests.some(request => request.method === "PUT")).toBe(false);
 });
 
 test("Droid reasoning defaults use one frozen snapshot for review and commit", async () => {
