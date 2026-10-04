@@ -204,9 +204,12 @@ describe("package tree integrity", () => {
     };
     const createScheduler = () => {
       const pending: Array<() => void> = [];
+      const delays: number[] = [];
       return {
         pending,
-        schedule: (callback: () => void) => {
+        delays,
+        schedule: (callback: () => void, delayMs: number) => {
+          delays.push(delayMs);
           pending.push(callback);
           return () => {
             const index = pending.indexOf(callback);
@@ -286,6 +289,8 @@ describe("package tree integrity", () => {
       expect(calls).toBe(0);
       await scheduler.runNext();
       expect(calls).toBe(1);
+      // Debounce, two 1s runtime polls, then a fresh full debounce once the runtime is ready.
+      expect(scheduler.delays).toEqual([5_000, 1_000, 1_000, 5_000]);
     });
 
     test("the installed guard reads process.execPath as the runtime", async () => {
