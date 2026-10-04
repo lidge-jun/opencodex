@@ -28,7 +28,9 @@ import { chmodSync, lstatSync, realpathSync } from "node:fs";
 
 import { Database } from "bun:sqlite";
 
-import { inspectCodexHomeOwner } from "./codex-home-owner";
+import { currentOpencodexHome, inspectCodexHomeOwner } from "./codex-home-owner";
+import { appendCatalogWriteAudit } from "./catalog/write-audit";
+import type { CatalogWriteAuditDetails, CatalogWriteIntent } from "./catalog/write-audit-contract";
 import {
   CodexUserIdentityRefusal,
   resolveCodexCatalogSerializationDatabasePath,
@@ -52,8 +54,7 @@ export interface CatalogWritePermit {
 
 declare const catalogWritePermitBrand: unique symbol;
 
-/** Refresh derives from config; pull uses hub authority; restore deliberately returns to native. */
-export type CatalogWriteIntent = "refresh" | "cache" | "pull" | "restore";
+export type { CatalogWriteIntent } from "./catalog/write-audit-contract";
 
 export interface CatalogWriteOptions {
   readonly intent: CatalogWriteIntent;
@@ -139,6 +140,22 @@ export function catalogWritePermitContext(permit: CatalogWritePermit): CatalogWr
   return { intent: registration.intent, writer: registration.writer };
 }
 
+/** Audit mutation is subject to the same live-home proof as catalog publication. */
+export function auditCatalogWriteWithPermit(
+  permit: CatalogWritePermit,
+  canonicalCodexHome: string,
+  details: CatalogWriteAuditDetails,
+): "appended" | "created" | "skipped" {
+  assertCatalogWritePermit(permit, canonicalCodexHome);
+  const context = catalogWritePermitContext(permit);
+  try { return appendCatalogWriteAudit(canonicalCodexHome, {
+    target: details.target, outcome: details.outcome, reason: details.reason,
+    routedBefore: details.routedBefore, routedAfter: details.routedAfter,
+    configSource: details.configSource, intent: context.intent, writer: context.writer,
+    opencodexHome: currentOpencodexHome(),
+  }, { create: true }); } catch { return "skipped"; }
+}
+
 function ownerRefusal(canonicalCodexHome: string): "foreign-owner" | "owner-unknown" | null {
   const owner = inspectCodexHomeOwner(canonicalCodexHome);
   return owner.kind === "foreign" ? "foreign-owner" : owner.kind === "unknown" ? "owner-unknown" : null;
@@ -162,7 +179,7 @@ export function withCatalogWriteSerialization<T>(
 ): CatalogSerializationOutcome<T> {
   // Re-evaluate on every acquisition; unknown evidence cannot authorize a takeover.
   const refusedOwner = ownerRefusal(canonicalCodexHome);
-  if (refusedOwner) return { kind: "unavailable", reason: refusedOwner };
+  // A precheck refusal may still acquire K for append-only diagnostics; it never gets a permit.
   let databasePath: string;
   try {
     databasePath = resolveCodexCatalogSerializationDatabasePath(
@@ -171,9 +188,9 @@ export function withCatalogWriteSerialization<T>(
     );
   } catch (error) {
     if (error instanceof CodexUserIdentityRefusal) {
-      return { kind: "unavailable", reason: "unsafe-path" };
+      return { kind: "unavailable", reason: refusedOwner ?? "unsafe-path" };
     }
-    return { kind: "unavailable", reason: "database" };
+    return { kind: "unavailable", reason: refusedOwner ?? "database" };
   }
 
   let database: Database | undefined;
@@ -186,12 +203,12 @@ export function withCatalogWriteSerialization<T>(
     try {
       const before = lstatSync(databasePath);
       if (before.isSymbolicLink() || !before.isFile()) {
-        return { kind: "unavailable", reason: "unsafe-path" };
+        return { kind: "unavailable", reason: refusedOwner ?? "unsafe-path" };
       }
       if (process.platform !== "win32") {
         const uid = process.getuid?.();
         if (uid === undefined || before.uid !== uid || (before.mode & 0o777) !== 0o600) {
-          return { kind: "unavailable", reason: "unsafe-path" };
+          return { kind: "unavailable", reason: refusedOwner ?? "unsafe-path" };
         }
       }
     } catch (cause) {
@@ -209,15 +226,20 @@ export function withCatalogWriteSerialization<T>(
     const opened = lstatSync(databasePath);
     if (opened.isSymbolicLink() || !opened.isFile()
       || !samePathIdentity(realpathSync.native(databasePath), databasePath)) {
-      return { kind: "unavailable", reason: "unsafe-path" };
+      return { kind: "unavailable", reason: refusedOwner ?? "unsafe-path" };
     }
 
     database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     transactionOpen = true;
 
     // Ownership may have changed while opening K. Refuse before minting a permit or invoking work.
-    const lockedOwnerRefusal = ownerRefusal(canonicalCodexHome);
+    const lockedOwnerRefusal = refusedOwner ?? ownerRefusal(canonicalCodexHome);
     if (lockedOwnerRefusal) {
+      try { appendCatalogWriteAudit(canonicalCodexHome, {
+        target: options.intent === "cache" ? "cache" : "catalog",
+        outcome: "refused", reason: lockedOwnerRefusal,
+        intent: options.intent, writer: options.writer, opencodexHome: currentOpencodexHome(),
+      }, { create: false }); } catch { /* Diagnostic metadata cannot mask the owner refusal. */ }
       database.exec("ROLLBACK");
       transactionOpen = false;
       return { kind: "unavailable", reason: lockedOwnerRefusal };
@@ -261,8 +283,9 @@ export function withCatalogWriteSerialization<T>(
       if (permit) activePermits.delete(permit as unknown as object);
     }
     if (error instanceof CodexUserIdentityRefusal) {
-      return { kind: "unavailable", reason: "unsafe-path" };
+      return { kind: "unavailable", reason: refusedOwner ?? "unsafe-path" };
     }
+    if (refusedOwner) return { kind: "unavailable", reason: refusedOwner };
     if (isBusy(error)) return { kind: "unavailable", reason: "busy" };
     // A callback failure is the caller's error, not a lock outcome: K acquired
     // fine. Reporting it as `unavailable` would tell the caller to retry
