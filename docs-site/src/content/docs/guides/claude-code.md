@@ -266,6 +266,11 @@ picker lists Anthropic's own models until the removal succeeds. OpenCodex rememb
 still needs removal and retries on the next restart; `ocx claude desktop picker status` shows the
 picker as unavailable meanwhile.
 
+Picker mode allows up to 64 KiB of headers on incoming requests and ordinary HTTP
+responses, preserving browser session cookies. Larger upstream response headers return
+502 and log `upstream:headers-too-large`, without cookie values or request paths.
+Upgraded connections continue to relay bytes directly after the request handshake.
+
 While picker mode is on, Claude Desktop reaches the network through OpenCodex. If OpenCodex stops,
 Desktop is offline until you fully restart it or turn picker mode off. Check the state with
 `ocx claude desktop picker status`; use `ocx claude desktop picker trust` to repeat the trust step,
