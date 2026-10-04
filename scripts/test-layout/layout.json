@@ -404,6 +404,7 @@
     "cli-companion.test.ts": "cli",
     "cli-config-bom.test.ts": "cli",
     "cli-config-command.test.ts": "cli",
+    "cli-config-default-show.test.ts": "cli",
     "cli-config-show-client.test.ts": "cli",
     "cli-connect-readiness.test.ts": "cli",
     "cli-dispatch.test.ts": "cli",
