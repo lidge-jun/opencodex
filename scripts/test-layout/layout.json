@@ -54,7 +54,7 @@
     "low-quota-protection.test.ts": "codex-integration",
     "responses-compaction-recovery.test.ts": "responses", "responses-canonical-nonstream.test.ts": "responses", "compaction-recovery-settings.test.ts": "config", "responses-compaction-recovery-policy.test.ts": "responses", "plugin-loader.test.ts": "lib", "plugin-upstream-hooks.test.ts": "lib",
     "cli-kiro-auto-selection.test.ts": "cli", "codebuddy-live-models.test.ts": "providers", "kiro-auto-selection.test.ts": "providers/kiro", "kiro-quota-metrics.test.ts": "providers/kiro", "management-provider-request-pacing.test.ts": "server",
-    "desktop-supervised-restart.test.ts": "clients", "cli-restart-handoff.test.ts": "cli",
+    "desktop-supervised-restart.test.ts": "clients", "cli-restart-handoff.test.ts": "cli", "restart-update-coordinator.test.ts": "cli",
     "restart-replacement.test.ts": "server", "deepseek-artifact-tool-schema.test.ts": "providers",
     "client-config-export-output-limit.test.ts": "config", "responses-skills-snapshot.test.ts": "responses", "responses-code-mode-mcp-direct.test.ts": "responses", "local-read-response-proof.test.ts": "server",
     "link-relay-bound-transport.test.ts": "clients", "claude-desktop-system-proxy.test.ts": "claude-integration", "codex-config-drift-heal.test.ts": "codex-integration",

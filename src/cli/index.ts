@@ -89,6 +89,7 @@ import {
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
+import { runRestartUpdate, readResolveJson, type RestartUpdateResult } from "./restart-update-coordinator";
 import { installCrashGuards } from "../lib/crash-guard";
 import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
 import { redactUrlForLog } from "../lib/redact";
@@ -919,46 +920,47 @@ function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>
 }
 /** Update restart: the CLI is newer than the attested proxy, so stop the old build
  * and start the current installation instead of respawning the old one in place.
- * Other skew directions keep refusing in reportRestartFailure. */
-async function restartViaStopStartForUpdate(
-  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
-): Promise<boolean> {
-  const cliVersion = packageVersion();
-  console.log(`🔄 Running proxy is older than this CLI (${cliVersion}); restarting via stop/start from the current installation...`);
-  try {
-    await handleStop();
-  } catch (error) {
-    console.error(`❌ Update restart failed to stop the old proxy: ${error instanceof Error ? error.message : String(error)}`);
-    return false;
+ * The attested PID/port travels into runRestartUpdate, which revalidates it under
+ * the ownership lease through the guarded-stop mechanism and refuses on any
+ * owner change instead of stopping blindly. Other skew directions keep refusing
+ * in reportRestartFailure. */
+function reportRestartUpdateRefusal(result: Extract<RestartUpdateResult, { ok: false }>): void {
+  switch (result.reason) {
+    case "target-changed":
+      console.error(`❌ Refusing the update restart: the attested proxy changed before the stop (${result.detail ?? "identity mismatch"}); nothing was stopped.`);
+      break;
+    case "stop-refused":
+      console.error(`❌ Refusing the update restart: the guarded stop declined (${result.detail ?? "ownership changed"}); nothing was stopped.`);
+      break;
+    case "stop-failed":
+      console.error(`❌ Update restart failed while stopping the old proxy (${result.detail ?? "unknown error"}).`);
+      break;
+    case "target-not-confirmed-stopped":
+      console.error("❌ Refusing the update restart: the old proxy did not confirm stopped; not starting a second proxy over it.");
+      break;
+    case "start-failed":
+      console.error("❌ Update restart stopped the old proxy but the new proxy did not start. Run `ocx start` to recover.");
+      break;
+    case "replacement-unverified":
+      console.error(`❌ Update restart could not verify a replacement serving this CLI (${result.detail ?? "unhealthy"}). Check ocx status before retrying.`);
+      break;
   }
-  const startOutcome = await startWhenStopped(true);
-  if (startOutcome.status !== "started") {
-    console.error("❌ Update restart stopped the old proxy but the new proxy did not start.");
-    return false;
-  }
-  const live = await findLiveProxy({ deadlineAt: Date.now() + 15_000, attempts: 2 }).catch(() => null);
-  if (!live) {
-    console.error("❌ Update restart started a proxy but it did not become healthy.");
-    return false;
-  }
-  if (live.version && live.version !== cliVersion) {
-    console.error(`❌ Update restart is still serving ${live.version} instead of ${cliVersion}.`);
-    return false;
-  }
-  console.log(`✅ Proxy updated and running${live.version ? ` on ${live.version}` : ""} (PID ${live.pid ?? "unknown"}).`);
-  return true;
 }
 async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
+  const stashed: { previous: ProxyRestartLive | null } = { previous: null };
   const result = await runProxyRestart({
     findLive: () => discoverStableProxyForRestart({
       findLive: () => findLiveProxy({ deadlineAt, attempts: 2, acceptPackageTreeFenced: true }),
       expired: () => Date.now() >= deadlineAt,
     }),
     startWhenStopped,
-    requestInPlaceRestart: previous => requestBoundSystemRestart(previous, deadlineAt),
+    requestInPlaceRestart: previous => {
+      stashed.previous = previous;
+      return requestBoundSystemRestart(previous, deadlineAt);
+    },
     waitForReplacement: previous => waitForProxyReplacement(previous, deadlineAt - RESTART_REOBSERVE_RESERVE_MS, end => findLiveProxy({ deadlineAt: end })),
     reobserveAfterReplacement: previous => reobserveRestartReplacement(previous, deadlineAt, end =>
       discoverStableProxyForRestart({
@@ -972,10 +974,29 @@ async function handleProxyRestart(
   });
   if (!result.ok) {
     const code = result.phase === "request" && result.error instanceof Error ? result.error.message : "";
-    if (result.phase === "request" && code === "restart_version_skew_cli_newer") {
-      const updated = await restartViaStopStartForUpdate(startWhenStopped);
-      process.exitCode = updated ? 0 : 1;
-      return updated;
+    const previous = stashed.previous;
+    if (result.phase === "request" && code === "restart_version_skew_cli_newer"
+      && previous !== null && previous.pid !== null) {
+      console.log(`🔄 Running proxy is older than this CLI (${packageVersion()}); restarting via guarded stop/start from the current installation...`);
+      const updated = await runRestartUpdate(
+        { pid: previous.pid, port: previous.port },
+        deadlineAt,
+        {
+          findLive: () => findLiveProxy({ deadlineAt, attempts: 2 }),
+          resolve: readResolveJson,
+          stopGuarded: approval => handleStop(approval),
+          startWhenStopped,
+          cliVersion: packageVersion(),
+        },
+      );
+      if (updated.ok) {
+        console.log(`✅ Proxy updated and running on ${updated.live.version ?? packageVersion()} (PID ${updated.live.pid ?? "unknown"}).`);
+        process.exitCode = 0;
+        return true;
+      }
+      reportRestartUpdateRefusal(updated);
+      process.exitCode = 1;
+      return false;
     }
     reportRestartFailure(result);
   }
