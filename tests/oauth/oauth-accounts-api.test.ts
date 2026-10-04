@@ -69,8 +69,8 @@ function writeAccounts(): void {
     anthropic: {
       activeAccountId: "aaaa1111",
       accounts: [
-        { id: "aaaa1111", credential: { access: "t1", refresh: "r1", expires: 9999999999999, email: "first@example.com", accountId: "acct-1" } },
-        { id: "bbbb2222", credential: { access: "t2", refresh: "r2", expires: 9999999999999, email: "second@example.com", accountId: "acct-2" } },
+        { id: "aaaa1111", credential: { access: "t1", refresh: "r1", expires: 9999999999999, email: "first@example.com", accountId: "acct-1", source: "oauth" } },
+        { id: "bbbb2222", credential: { access: "t2", refresh: "r2", expires: 9999999999999, email: "second@example.com", accountId: "acct-2", source: "oauth" } },
       ],
     },
   }), { mode: 0o600 });

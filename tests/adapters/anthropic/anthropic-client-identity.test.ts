@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { captureAnthropicClientIdentity, type AnthropicClientIdentity } from "../../../src/adapters/anthropic/client-identity";
+import { captureAnthropicClientIdentity, hasObservedAnthropicClientIdentity, type AnthropicClientIdentity } from "../../../src/adapters/anthropic/client-identity";
+import { shouldPreserveNativeClientPreamble } from "../../../src/adapters/anthropic/native-client-preamble";
 import { buildAnthropicMessagesPassthroughRequest } from "../../../src/adapters/anthropic/passthrough";
 import { createAnthropicAdapter } from "../../../src/adapters/anthropic";
 import { claudeCodeSessionId } from "../../../src/adapters/client-fingerprint";
@@ -22,6 +23,19 @@ const build = (clientIdentity: AnthropicClientIdentity | undefined, overrides: P
   buildAnthropicMessagesPassthroughRequest({ ...provider, ...overrides }, "m", body, undefined, { clientIdentity });
 
 describe("observed Claude Code identity", () => {
+  test("known CLI and SDK entrypoints carry the coherent observed bundle", () => {
+    for (const entrypoint of ["cli", "sdk-cli", "sdk"]) {
+      const userAgent = `claude-cli/2.1.288 (external, ${entrypoint})`;
+      const identity = captureAnthropicClientIdentity(new Headers({ ...observed, "User-Agent": userAgent }));
+      expect(hasObservedAnthropicClientIdentity(identity)).toBe(true);
+      const built = new Headers(build(identity).headers);
+      expect(built.get("user-agent")).toBe(userAgent);
+      expect(built.get("x-claude-code-session-id")).toBe(SESSION);
+      expect(built.get("authorization")).toBe("Bearer fixture-a-access");
+    }
+    expect(hasObservedAnthropicClientIdentity(undefined)).toBe(false);
+    expect(hasObservedAnthropicClientIdentity({} as AnthropicClientIdentity)).toBe(false);
+  });
   test("account switch and refresh change only serving auth, not genuine session headers", () => {
     const identity = captureAnthropicClientIdentity(new Headers(observed));
     expect(identity).toBeDefined();
@@ -51,9 +65,9 @@ describe("observed Claude Code identity", () => {
     expect(built.get("x-stainless-os")).not.toBe("fixture-os");
     expect(built.get("anthropic-beta")).not.toContain("fixture-unlisted-beta");
   });
-  test("UA alone, non-CLI, malformed, oversized and duplicate required values fall back", () => {
+  test("UA alone, unknown clients, malformed, oversized and duplicate required values fall back", () => {
     expect(captureAnthropicClientIdentity(new Headers({ "User-Agent": UA }))).toBeUndefined();
-    for (const [name, value] of [["User-Agent", "third-party/1.0"], ["User-Agent", "claude-cli/2.1.282 (external, claude-desktop)"],
+    for (const [name, value] of [["User-Agent", "third-party/1.0"], ["User-Agent", "claude-cli/2.1.288 (external, arbitrary-token)"], ["User-Agent", "claude-cli/2.1.282 (external, claude desktop)"],
       ["User-Agent", "x".repeat(513)], ["X-App", "web"], ["X-Claude-Code-Session-Id", "fixture-not-uuid"], ["X-Stainless-Runtime", "python"]]) {
       expect(captureAnthropicClientIdentity(new Headers({ ...observed, [name!]: value! }))).toBeUndefined();
     }
@@ -101,4 +115,96 @@ describe("observed Claude Code identity", () => {
     expect(built.headers["User-Agent"]).toBe("@anthropic-ai/sdk/0.74.0");
     expect(built.headers["X-Claude-Code-Session-Id"]).toBe(claudeCodeSessionId(provider.apiKey));
   });
+});
+
+
+describe("native Claude system preamble", () => {
+  const nativeIdentities = [
+    "You are Claude Code, Anthropic's official CLI for Claude.",
+    "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+  ];
+  const preamble = (identity = nativeIdentities[0]!) => [
+    { type: "text", text: "x-anthropic-billing-header: cc_version=2.1.288.fixture; cc_entrypoint=sdk-cli; cch=fixture-observed-value;" },
+    { type: "text", text: identity },
+    { type: "text", text: "fixture stable prefix", cache_control: { type: "ephemeral" } },
+  ];
+  test("observed native Claude preambles preserve system block order and cache markers", () => {
+    for (const identityText of nativeIdentities) {
+      const system = preamble(identityText);
+      const before = JSON.stringify(system);
+      const clientIdentity = captureAnthropicClientIdentity(new Headers(observed));
+      const built = buildAnthropicMessagesPassthroughRequest(provider, "m", { ...body, system }, undefined, { clientIdentity });
+      expect(JSON.parse(built.body).system).toEqual(system);
+      expect(JSON.stringify(system)).toBe(before);
+    }
+  });
+  test("the pure helper recognizes all native variants without changing caller blocks", () => {
+    const handle = captureAnthropicClientIdentity(new Headers(observed));
+    for (const identityText of nativeIdentities) {
+      const system = preamble(identityText);
+      const before = JSON.stringify(system);
+      expect(shouldPreserveNativeClientPreamble(system, handle)).toBe(true);
+      expect(JSON.stringify(system)).toBe(before);
+    }
+  });
+  test("missing, foreign and forged identities cannot select preamble preservation", () => {
+    const system = preamble();
+    for (const handle of [undefined, {} as AnthropicClientIdentity,
+      captureAnthropicClientIdentity(new Headers({ ...observed, "User-Agent": "third-party/1.0" })),
+      captureAnthropicClientIdentity(new Headers({ "User-Agent": UA }))]) {
+      expect(shouldPreserveNativeClientPreamble(system, handle)).toBe(false);
+    }
+  });
+  test("unrecognized, displaced and malformed prefix blocks keep generated SDK behavior", () => {
+    const handle = captureAnthropicClientIdentity(new Headers(observed));
+    const system = preamble();
+    for (const candidate of [system.slice(1), [system[1], system[0]], preamble("fixture foreign identity"),
+      [{ type: "text", text: "x-anthropic-billing-header: fixture" }, system[1]],
+      [{ type: "text", text: system[0]!.text + "\nfixture" }, system[1]],
+      [{ type: "text", text: system[0]!.text + "x".repeat(4096) }, system[1]],
+      [{ type: "image", text: system[0]!.text }, system[1]], "fixture system"]) {
+      expect(shouldPreserveNativeClientPreamble(candidate, handle)).toBe(false);
+    }
+  });
+
+});
+
+ test("native Desktop Code entrypoints preserve their observed body and required feature betas", () => {
+  for (const entrypoint of ["claude-desktop", "claude-desktop-3p", "local-agent"]) {
+    const headers = new Headers({ ...observed, "User-Agent": `claude-cli/2.1.288 (external, ${entrypoint})` });
+    const clientIdentity = captureAnthropicClientIdentity(headers);
+    expect(clientIdentity).toBeDefined();
+    const system = [
+      { type:"text", text:"x-anthropic-billing-header: cc_version=2.1.288.fixture; cc_entrypoint=claude-desktop; cch=fixture;" },
+      { type:"text", text:"You are Claude Code, Anthropic's official CLI for Claude." },
+      { type:"text", text:"fixture static", cache_control:{type:"ephemeral", ttl:"1h"} },
+    ];
+    const built = buildAnthropicMessagesPassthroughRequest(provider,"m",{...body,system},undefined,{clientIdentity,callerAnthropicBeta:"inline-tools-2026-09-15,thinking-display-updates-2026-08-18"});
+    expect(built.wireBody.system).toBe(system);
+    expect(new Headers(built.headers).get("user-agent")).toBe(headers.get("user-agent"));
+    expect(new Headers(built.headers).get("x-claude-code-session-id")).toBe(SESSION);
+    expect(built.headers["anthropic-beta"]).toContain("inline-tools-2026-09-15");
+    expect(built.headers["anthropic-beta"]).toContain("thinking-display-updates-2026-08-18");
+  }
+  expect(captureAnthropicClientIdentity(new Headers({ ...observed, "User-Agent":"Mozilla/5.0" }))).toBeUndefined();
+});
+
+test("the builder excludes native feature betas for absent, forged and compatible identities", () => {
+  const callerAnthropicBeta = "inline-tools-2026-09-15,thinking-display-updates-2026-08-18";
+  for (const clientIdentity of [undefined, {} as AnthropicClientIdentity,
+    captureAnthropicClientIdentity(new Headers({ ...observed, "User-Agent": "third-party/1.0" }))]) {
+    const built = buildAnthropicMessagesPassthroughRequest(provider, "m", body, undefined, { clientIdentity, callerAnthropicBeta });
+    expect(built.headers["anthropic-beta"]).not.toContain("inline-tools-2026-09-15");
+    expect(built.headers["anthropic-beta"]).not.toContain("thinking-display-updates-2026-08-18");
+    expect(built.droppedBetas).toBe(true);
+  }
+  const clientIdentity = captureAnthropicClientIdentity(new Headers(observed));
+  const compatible = buildAnthropicMessagesPassthroughRequest({ ...provider, authMode: "key", baseUrl: "https://compatible.example" },
+    "m", body, undefined, { clientIdentity, callerAnthropicBeta });
+  expect(compatible.headers).not.toHaveProperty("anthropic-beta");
+  expect(compatible.droppedBetas).toBe(true);
+  const noHeader = buildAnthropicMessagesPassthroughRequest(provider, "m", body, undefined, { clientIdentity });
+  expect(noHeader.headers["anthropic-beta"]).not.toContain("inline-tools-2026-09-15");
+  expect(noHeader.droppedBetas).toBe(false);
 });

@@ -12,7 +12,7 @@ import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTra
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, getMainAccountInfoCache, setMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
-import { setMainAccountPlan } from "../../src/codex/main-account";
+import { isMainAccountRefreshGrantRejected, setMainAccountPlan } from "../../src/codex/main-account";
 import { clearAccountQuota, getAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { clearCodexUpstreamHealth, getCodexQuotaHealthSnapshot, recordCodexUpstreamOutcome } from "../../src/codex/routing";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
@@ -547,7 +547,7 @@ describe("main hard-lock background recovery", () => {
             } else {
               expect(getMainAccountInfoCache()).toBeNull();
               expect(isAccountNeedsReauth(MAIN)).toBe(true);
-              expect(snapshot.quotaRefresh).toEqual({ status: "http_error", httpStatus: status });
+              expect(snapshot.quotaRefresh).toEqual({ status: "http_error", httpStatus: status, code: "invalid_workspace_selected" });
             }
           } else {
             expect(getMainAccountInfoCache()).toEqual(cached);
@@ -610,7 +610,7 @@ describe("main hard-lock background recovery", () => {
             expect(reads).toBe(1);
             expect(getMainAccountInfoCache()).toBeNull();
             expect(isAccountNeedsReauth(MAIN)).toBe(true);
-            expect(result.quotaRefresh).toEqual({ status: "http_error", httpStatus: status });
+            expect(result.quotaRefresh).toEqual({ status: "http_error", httpStatus: status, code: "invalid_workspace_selected" });
           } else {
             expect(getMainAccountInfoCache()).toEqual(info);
             expect(getMainPolicyQuota()).toEqual(policy);
@@ -810,7 +810,8 @@ describe("main hard-lock background recovery", () => {
     await runMainAccountHardLockRecovery(config());
     expect(calls).toEqual([tokenUrl]);
     expect(getMainPolicyQuota()).toEqual(retained);
-    expect(isAccountNeedsReauth(MAIN)).toBe(kind === "terminal");
+    expect(isMainAccountRefreshGrantRejected()).toBe(kind === "terminal");
+    expect(isAccountNeedsReauth(MAIN)).toBe(false);
     expect(getNativeMainProfileRequestCount()).toBe(0);
     if (kind === "terminal") {
       await runMainAccountHardLockRecovery(config());

@@ -1,4 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { saveConfig } from "../../src/config";
+import { startServer } from "../../src/server";
+import type { OcxConfig } from "../../src/types";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   anthropicErrorBody,
   anthropicErrorType,
@@ -928,7 +936,7 @@ describe("claude outbound SSE", () => {
     const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
     expect(events.at(-1)!.data).toEqual({
       type: "error",
-      error: { type: "invalid_request_error", message: "Cursor context limit exceeded" },
+      error: { type: "invalid_request_error", message: "Cursor context limit exceeded", code: "context_length_exceeded" },
     });
   });
 
@@ -1793,5 +1801,136 @@ describe("deferred Claude thinking order", () => {
       await reader.cancel();
       reader.releaseLock();
     }
+  });
+});
+
+describe("Messages ingress context errors", () => {
+  let home: string;
+  let previousHome: string | undefined;
+  let isolated: IsolatedCodexHome;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    home = mkdtempSync(join(tmpdir(), "ocx-messages-context-"));
+    process.env.OPENCODEX_HOME = home;
+    isolated = installIsolatedCodexHome("ocx-messages-context-codex-");
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    isolated.restore();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(home);
+  });
+
+  const contextError = {
+    type: "invalid_request_error", code: "context_length_exceeded", message: "Synthetic input context limit exceeded",
+  };
+  function failedSse(error: Record<string, unknown>): Response {
+    const frame = { type: "response.failed", response: { status: "failed", error } };
+    return new Response(`event: response.failed\ndata: ${JSON.stringify(frame)}\n\n`, {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  }
+
+  async function withMessages(upstreamResponse: () => Response, stream: boolean, check: (response: Response, hits: () => number) => Promise<void>, canonical = false) {
+    let hits = 0;
+    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { hits++; return upstreamResponse(); } });
+    let server: ReturnType<typeof startServer> | undefined;
+    try {
+      let canonicalSends = 0;
+      const config = { port: 0, hostname: "127.0.0.1", defaultProvider: "native", providers: {
+        native: { adapter: "openai-responses", baseUrl: `${upstream.url.origin}/v1`, authMode: "forward", allowPrivateNetwork: true },
+      } } as OcxConfig;
+      if (canonical) {
+        config.providers.native!.baseUrl = "https://chatgpt.com/backend-api/codex";
+        globalThis.fetch = ((input, init) => {
+          const url = input instanceof Request ? input.url : String(input);
+          if (url === "https://chatgpt.com/backend-api/codex/responses") {
+            canonicalSends++;
+            return originalFetch(new URL("/v1/responses", upstream.url), init);
+          }
+          // A fixture must never make an unmocked external call.
+          if (!url.startsWith("http://127.0.0.1:") && !url.startsWith("http://localhost:")) {
+            throw new Error("unexpected external request in context fixture");
+          }
+          return originalFetch(input, init);
+        }) as typeof fetch;
+      }
+      saveConfig(config);
+      server = startServer(0);
+      const response = await fetch(new URL("/v1/messages", server.url), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "native/gpt-test", stream, max_tokens: 32, messages: [{ role: "user", content: "synthetic input" }] }),
+      });
+      await check(response, () => hits);
+      if (canonical) expect(canonicalSends).toBe(1);
+    } finally {
+      try { await server?.stop(true); }
+      finally { await upstream.stop(true); }
+    }
+  }
+
+  async function expectContext(response: Response, stream: boolean) {
+    expect(response.headers.has("retry-after")).toBe(false);
+    const text = await response.text();
+    expect(text).not.toContain("private-413-marker");
+    if (stream && response.headers.get("content-type")?.includes("text/event-stream")) {
+      expect(response.status).toBe(200);
+      const frames = text.split("\n\n").filter(frame => frame.includes("event: error"));
+      expect(frames).toHaveLength(1);
+      expect(text).not.toContain("event: message_start");
+      expect(text).not.toContain("event: message_stop");
+      const line = frames[0]!.split("\n").find(line => line.startsWith("data:"))!;
+      expect(JSON.parse(line.slice(5))).toMatchObject({ type: "error", error: { type: "invalid_request_error", code: "context_length_exceeded" } });
+    } else {
+      expect(response.status, text).toBe(400);
+      expect(JSON.parse(text)).toMatchObject({ type: "error", error: { type: "invalid_request_error", code: "context_length_exceeded" } });
+    }
+  }
+
+  describe("Messages context failures preserve terminal semantics", () => {
+    for (const stream of [false, true]) {
+      test(`canonical native terminal reaches the Messages wire (stream=${stream})`, async () => {
+        await withMessages(() => failedSse(contextError), stream, async (response, hits) => {
+          await expectContext(response, stream);
+          expect(hits()).toBe(1);
+        }, true);
+      });
+      test(`classified terminal SSE stays terminal (stream=${stream})`, async () => {
+        await withMessages(() => failedSse(contextError), stream, async (response, hits) => {
+          await expectContext(response, stream);
+          expect(hits()).toBe(1);
+        });
+      });
+      test(`provider 413 becomes a safe context error (stream=${stream})`, async () => {
+        await withMessages(() => Response.json({ message: "private-413-marker" }, { status: 413 }), stream, async (response, hits) => {
+          await expectContext(response, stream);
+          expect(hits()).toBe(1);
+        });
+      });
+      test(`non-2xx context error preserves code and suppresses retry hint (stream=${stream})`, async () => {
+        await withMessages(() => Response.json({ error: contextError }, { status: 400, headers: { "Retry-After": "7" } }), stream, async (response, hits) => {
+          await expectContext(response, stream);
+          expect(hits()).toBe(1);
+        });
+      });
+      test(`failed Responses JSON retains context identity (stream=${stream})`, async () => {
+        await withMessages(() => Response.json({ id: "resp_context", object: "response", status: "failed", error: contextError, output: [] }), stream, async (response, hits) => {
+          await expectContext(response, stream);
+          expect(hits()).toBe(1);
+        });
+      });
+    }
+    test("unknown collected failure remains 502 and does not gain context identity", async () => {
+      await withMessages(() => failedSse({ type: "server_error", code: "upstream_server_error", message: "synthetic upstream failure" }), false, async (response, hits) => {
+        expect(response.status).toBe(502);
+        const body = await response.json();
+        expect(body.error.type).toBe("overloaded_error");
+        expect(body.error.code).toBeUndefined();
+        expect(hits()).toBe(1);
+      });
+    });
   });
 });

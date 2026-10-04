@@ -40,6 +40,7 @@ let tmp: string;
 beforeEach(() => {
   tmp = join(tmpdir(), `oauth-refresh-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(tmp, { recursive: true });
+  globalThis.fetch = (async () => Response.json({ account: { uuid: "synthetic-account-a" } })) as typeof fetch;
   process.env.HOME = tmp;
   // Native kiro-cli store resolves per-platform (issue #710); win32 prefers these over HOME.
   process.env.LOCALAPPDATA = join(tmp, "AppData", "Local");
@@ -50,6 +51,8 @@ beforeEach(() => {
   delete process.env.KIROCLI_DB_PATH;
   delete process.env.KIROCLI_TOKEN_KEY;
   process.env.CLAUDE_CONFIG_DIR = join(tmp, ".claude");
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR);
+  writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, ".credentials.json"), "{}");
 });
 
 afterEach(() => {
@@ -140,7 +143,11 @@ function mockXaiRefreshFetch(access = "xai-fresh", refresh = "rt-fresh") {
 function mockRefreshFetch(responses: Array<Response | Error>): { count: () => number } {
   let calls = 0;
   let i = 0;
-  globalThis.fetch = (async () => {
+  globalThis.fetch = (async (input) => {
+    // Profile proof is separate from the token endpoint; these assertions count refresh requests.
+    if (String(input) === "https://api.anthropic.com/api/oauth/profile") {
+      return Response.json({ account: { uuid: "synthetic-account-a" } });
+    }
     calls++;
     const next = responses[i++] ?? responses[responses.length - 1];
     if (next instanceof Error) throw next;

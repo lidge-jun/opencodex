@@ -1,3 +1,4 @@
+import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
@@ -231,6 +232,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   process.env.CODEX_HOME = testDir;
   Date.now = () => NOW;
+  clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
@@ -265,6 +267,7 @@ afterEach(() => {
   readSpy = undefined;
   if (blockedHomeId !== null) completeNativeMainRecovery(blockedHomeId);
   blockedHomeId = null;
+  clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
@@ -341,8 +344,9 @@ describe("preview and final authentication agree on the native-main read fence",
    * main here -- so only a read count can distinguish a closed fence from a lucky outcome. The
    * stacks are asserted rather than the number so a failure names the caller that reopened it.
    */
-  test("caller-owned preview reads no physical main credential through pool eligibility", async () => {
+  test.each([false, true])("caller-owned preview reads no physical main credential through pool eligibility (ordinary reauth=%s)", async ordinaryReauth => {
     seedMainDenial();
+    if (ordinaryReauth) markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     calibrateMainReadCounter();
     const upstreamAuth: Array<string | null> = [];
     globalThis.fetch = (async (input, init) => {

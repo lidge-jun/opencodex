@@ -66,17 +66,17 @@ describe("CLI subcommand help", () => {
     expect(result.stdout).toContain("Start the proxy server and sync models to Codex.");
   });
 
-  test("top-level help counts every export client and export help names them", () => {
-    const topLevel = runCli([]);
-    expectSpawnFinished(topLevel, "ocx help");
-    expect(topLevel.status).toBe(0);
+  test("full help counts every export client and export help names them", () => {
+    const full = runCli(["help", "--all"]);
+    expectSpawnFinished(full, "ocx help --all");
+    expect(full.status).toBe(0);
     // Derived, not frozen: a hard-coded literal here agreed with a stale
     // literal in help.ts, so the pair stayed self-consistent and wrong
     // while the registry grew. help.ts keeps its literal on purpose —
     // importing the export registry there would load node:os/node:path
     // machinery on the `ocx --help` path — so this assertion is what
     // holds the two in lockstep.
-    expect(topLevel.stdout).toContain(`(${EXPORT_CLIENT_IDS.length} clients)`);
+    expect(full.stdout).toContain(`(${EXPORT_CLIENT_IDS.length} clients)`);
 
     const exportHelp = runCli(["help", "export"]);
     expectSpawnFinished(exportHelp, "ocx help export");
@@ -158,7 +158,9 @@ describe("CLI subcommand help", () => {
     expectSpawnFinished(result, "ocx foobar --help");
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Unknown command: foobar");
-    expect(result.stdout).toContain("opencodex (ocx)");
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("ocx help --all");
+    expect(result.stderr.trim().split("\n").length).toBeLessThan(10);
   });
 
   test("status prints diagnostics without starting the proxy", () => {

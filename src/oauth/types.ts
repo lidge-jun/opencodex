@@ -62,6 +62,8 @@ export type OAuthCredentials = {
   email?: string;
   accountId?: string;
   source?: OAuthCredentialSource;
+  /** Private authenticated account proof; never projected into account summaries. */
+  anthropicIdentity?: { v: 1; accountUuid: string; bearerSha256: string };
   /** Google Antigravity (Cloud Code Assist) discovered project id; injected into the CCA envelope. */
   projectId?: string;
   /**

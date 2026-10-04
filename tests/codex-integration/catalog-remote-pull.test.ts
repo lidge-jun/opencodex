@@ -15,6 +15,9 @@ import { resolveCodexCatalogSerializationDatabasePath, resolveEffectiveUserIdent
 import { withCatalogWriteSerialization } from "../../src/codex/catalog-write-serialization";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
+/** Every K acquisition states its intent (#6529); these tests exercise the lock, not the intent. */
+const TEST_CATALOG_WRITE = { intent: "refresh", writer: "test" } as const;
+
 const homes: string[] = [];
 afterEach(() => { while (homes.length) removeTreeWithRetry(homes.pop()!); });
 
@@ -302,6 +305,32 @@ describe("remote catalog validation", () => {
 });
 
 describe("remote catalog coordinated installation", () => {
+  for (const ownership of ["foreign", "unknown"] as const) {
+    test(`an identical remote pull still refuses ${ownership} ownership`, async () => {
+      const codexHome = home();
+      const opencodexHome = home();
+      const foreignHome = home();
+      const previous = process.env.OPENCODEX_HOME;
+      process.env.OPENCODEX_HOME = opencodexHome;
+      try {
+        const first = await pullRemoteCatalog("https://hub.example/v1/catalog", {
+          codexHome, fetchImpl: async () => response(catalog),
+        });
+        writeFileSync(join(codexHome, "opencodex-journal.json"), ownership === "unknown"
+          ? "invalid evidence" : JSON.stringify({ version: 1, originalConfig: "", originalProfile: null,
+            pid: 1, timestamp: "2026-10-04T00:00:00Z", opencodexHome: foreignHome }));
+        const cachePath = join(codexHome, "models_cache.json");
+        const before = [readFileSync(first.catalogPath), readFileSync(cachePath)];
+        await expect(pullRemoteCatalog("https://hub.example/v1/catalog", {
+          codexHome, fetchImpl: async () => response(catalog),
+        })).rejects.toMatchObject({ code: ownership === "foreign" ? "foreign_owner" : "owner_unknown" });
+        expect([readFileSync(first.catalogPath), readFileSync(cachePath)]).toEqual(before);
+      } finally {
+        if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+      }
+    });
+  }
+
   test("updates catalog and cache under the shared writer even when desired integration is disabled", async () => {
     const codexHome = home();
     const opencodexHome = home();
@@ -335,7 +364,7 @@ describe("remote catalog coordinated installation", () => {
   test("lock contention is typed and preserves last-known-good files", async () => {
     const codexHome = home();
     // Materialize K, then hold BEGIN IMMEDIATE from a separate connection while pull attempts it.
-    expect(withCatalogWriteSerialization(codexHome, () => null).kind).toBe("completed");
+    expect(withCatalogWriteSerialization(codexHome, () => null, TEST_CATALOG_WRITE).kind).toBe("completed");
     const lockPath = resolveCodexCatalogSerializationDatabasePath(resolveEffectiveUserIdentity(), codexHome);
     const holder = new Database(lockPath);
     holder.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
@@ -348,6 +377,24 @@ describe("remote catalog coordinated installation", () => {
     } finally {
       holder.exec("ROLLBACK"); holder.close();
     }
+  });
+
+  test("a changed catalog with unchanged derived cache is a successful pull", async () => {
+    const codexHome = home();
+    const first = await pullRemoteCatalog("https://hub.example/v1/catalog", {
+      codexHome, fetchImpl: async () => response(catalog),
+    });
+    const cachePath = join(codexHome, "models_cache.json");
+    const cacheBefore = readFileSync(cachePath);
+    const mtimeBefore = statSync(cachePath).mtimeMs;
+    const next = { ...catalog, source_revision: "second" };
+    const second = await pullRemoteCatalog("https://hub.example/v1/catalog", {
+      codexHome, fetchImpl: async () => response(next),
+    });
+    expect(second).toMatchObject({ status: "updated", catalogWritten: true, cacheSynced: false });
+    expect(JSON.parse(readFileSync(first.catalogPath, "utf8"))).toEqual(next);
+    expect(readFileSync(cachePath)).toEqual(cacheBefore);
+    expect(statSync(cachePath).mtimeMs).toBe(mtimeBefore);
   });
 
   test("fetch and validation failures preserve last-known-good files", async () => {

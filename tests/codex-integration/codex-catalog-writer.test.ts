@@ -49,6 +49,9 @@ import {
 } from "../../src/lib/config-ownership";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
+/** Every K acquisition states its intent (#6529); these tests exercise the lock, not the intent. */
+const TEST_CATALOG_WRITE = { intent: "refresh", writer: "test" } as const;
+
 interface MutatorCase {
   readonly name: string;
   readonly invoke: (
@@ -170,7 +173,7 @@ function expectRefusedBeforeFilesystemEffect(
 }
 
 function withLivePermit<T>(callback: (permit: CatalogWritePermit) => T): T {
-  const outcome = withCatalogWriteSerialization(codexHome, callback);
+  const outcome = withCatalogWriteSerialization(codexHome, callback, TEST_CATALOG_WRITE);
   expect(outcome.kind).toBe("completed");
   if (outcome.kind !== "completed") throw new Error(`K unavailable: ${outcome.reason}`);
   return outcome.value;
@@ -227,7 +230,7 @@ test("every mutator refuses leaked and revoked permits before temp creation", ()
   expect(() => withCatalogWriteSerialization(codexHome, (permit) => {
     revoked = permit;
     throw new Error("revoke this acquisition");
-  })).toThrow("revoke this acquisition");
+  }, TEST_CATALOG_WRITE)).toThrow("revoke this acquisition");
 
   for (const mutator of mutators) {
     expectRefusedBeforeFilesystemEffect(mutator, leaked!);
@@ -290,6 +293,7 @@ for (const mutator of mutators) {
     expect(publishIndex).toBeGreaterThanOrEqual(0);
     expect(hardenIndex).toBeLessThan(publishIndex);
     if (isBackup) expect(result).toBe("written");
+    else expect(result).toEqual({ kind: "written" });
   });
 }
 

@@ -9,13 +9,13 @@ import type { OcxConfig } from "../types";
 import type { AnthropicRouteDecision } from "./anthropic-model-routes";
 import { recordAnthropicAccountRefusal, rotateAnthropicAccountOnRefusal, hasAnthropicFailoverQuorum, isAnthropicAccountPoolEnabled, pickAlternateAnthropicAccount } from "./anthropic-routing";
 
-const responseCredentials = new WeakMap<Response, Pick<OAuthAccessSnapshot, "accountId" | "generation">>();
+const responseCredentials = new WeakMap<Response, Pick<OAuthAccessSnapshot, "accountId" | "generation"> & { providerAccountUuid?: string; checkProviderUuid: boolean }>();
 const retryStates = new WeakMap<object, { firstAccountId: string; sameAccount: boolean; detour: boolean }>();
 const verdicts = new WeakMap<Response, Promise<boolean>>();
 
 /** Called only when the outgoing headers prove ownership of the selected stored bearer. */
-export function bindAnthropicRefusalCredential(response: Response, snapshot: OAuthAccessSnapshot): void {
-  responseCredentials.set(response, { accountId: snapshot.accountId, generation: snapshot.generation });
+export function bindAnthropicRefusalCredential(response: Response, snapshot: OAuthAccessSnapshot, providerAccountUuid?: string): void {
+  responseCredentials.set(response, { accountId: snapshot.accountId, generation: snapshot.generation, providerAccountUuid, checkProviderUuid: arguments.length >= 3 });
 }
 
 async function isAccountRefusal(response: Response, signal?: AbortSignal): Promise<boolean> {
@@ -55,6 +55,10 @@ export async function rotateAnthropicAccountOnResponse(
     requestKey?: object;
     allow429Recovery?: boolean;
     allowAccountRefusal?: boolean;
+    /** Applies to alternate ranking only; the shared same-account throttle remains allowed. */
+    excludedAccountIds?: ReadonlySet<string>;
+    /** Native dispatch re-reads operator policy after asynchronous classification/waits. */
+    currentDecision?: () => AnthropicRouteDecision | null;
   },
 ): Promise<string | null> {
   if (options.signal?.aborted || isNonReplayableResponse(response)) return null;
@@ -62,11 +66,13 @@ export async function rotateAnthropicAccountOnResponse(
     const sent = responseCredentials.get(response);
     const current = sent && getAccountCredentialWithStatus("anthropic", sent.accountId);
     if (!sent || sent.accountId !== options.accountId || !current || current.needsReauth
-      || credentialGeneration(current.credential) !== sent.generation) return null;
+      || credentialGeneration(current.credential) !== sent.generation
+      || sent.checkProviderUuid && current.credential.accountId !== sent.providerAccountUuid) return null;
+    options.currentDecision?.();
     const kind = classifyAnthropic429(response.headers);
     if (kind === "family-quota") {
       if (anthropicModelFamily(options.model) !== "Fable" || !options.canRetry || options.allow429Recovery === false) return null;
-      return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(), options.decision ?? null, options.model);
+      return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(), (options.currentDecision ? options.currentDecision() : options.decision ?? null), options.model, options.excludedAccountIds);
     }
     if (kind !== "shared-quota") {
       if (!isAnthropicAccountPoolEnabled(options.config) && !hasAnthropicFailoverQuorum() && !current.paused) return null;
@@ -87,16 +93,19 @@ export async function rotateAnthropicAccountOnResponse(
         const live = getAccountCredentialWithStatus("anthropic", sent.accountId);
         if (!live || live.paused || live.needsReauth || options.signal?.aborted
           || credentialGeneration(live.credential) !== sent.generation
+          || sent.checkProviderUuid && live.credential.accountId !== sent.providerAccountUuid
           || anthropicRatePauseUntil(sent.accountId, Math.max(Date.now(), retryAt))) return null;
+        options.currentDecision?.();
         return sent.accountId;
       }
       if (kind === "transient-rate" && !state.detour) {
         state.detour = true;
-        return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(), options.decision ?? null, options.model);
+        return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(), (options.currentDecision ? options.currentDecision() : options.decision ?? null), options.model, options.excludedAccountIds);
       }
       return null;
     }
     if (options.allow429Recovery === false) {
+      options.currentDecision?.();
       recordAnthropicAccountRefusal(options.config, options.accountId, 429, response.headers.get("retry-after"), Date.now(), response.headers);
       return null;
     }
@@ -112,8 +121,10 @@ export async function rotateAnthropicAccountOnResponse(
     if (!await verdict || options.signal?.aborted) return null;
     // A late refusal must not cool a new credential stored while its body was being read.
     const current = getAccountCredentialWithStatus("anthropic", sent.accountId);
-    if (!current || current.paused || current.needsReauth || credentialGeneration(current.credential) !== sent.generation) return null;
+    if (!current || current.paused || current.needsReauth || credentialGeneration(current.credential) !== sent.generation
+      || sent.checkProviderUuid && current.credential.accountId !== sent.providerAccountUuid) return null;
   }
+  const decision = options.currentDecision ? options.currentDecision() : options.decision;
   const status = response.status === 429 ? 429 : 403;
   if (!options.canRetry) {
     recordAnthropicAccountRefusal(options.config, options.accountId, status,
@@ -121,5 +132,5 @@ export async function rotateAnthropicAccountOnResponse(
     return null;
   }
   return rotateAnthropicAccountOnRefusal(options.config, options.accountId, status,
-    response.headers.get("retry-after"), options.sessionKey, Date.now(), response.headers, options.decision, options.model);
+    response.headers.get("retry-after"), options.sessionKey, Date.now(), response.headers, decision, options.model, options.excludedAccountIds);
 }

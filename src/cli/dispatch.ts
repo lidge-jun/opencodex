@@ -17,6 +17,7 @@ import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import type { OwnedIntegrationRefreshOutcome } from "../integrations/owned-refresh";
 import { hasHelpFlag, printSubcommandUsage, printUsage } from "./help";
+import { printUnknownCommand } from "./help-recovery";
 import {
   HUB_GATED_SKIP_MESSAGE,
   localClientSkipMessage,
@@ -569,7 +570,8 @@ const commandRunners: Record<string, CommandRunner> = {
     const cacheGateSnapshot = deps.loadConfig();
     const desiredDisabled = !shouldSyncCodexOnStart(cacheGateSnapshot);
     const invalidated = withCatalogWriteSerialization(owningCodexHome, permit =>
-      invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, { allowWhenDesiredDisabled: true }));
+      invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, { allowWhenDesiredDisabled: true }),
+    { intent: "cache", writer: "sync-cache" });
     const cacheJson = cacheArgs.includes("--json");
     const jsonSafeLog = cacheJson
       ? { log: (...values: unknown[]) => console.error(...values), error: (...values: unknown[]) => console.error(...values) }
@@ -632,6 +634,10 @@ const commandRunners: Record<string, CommandRunner> = {
       console.log("No Codex catalog to derive a cache from; nothing to sync.");
     } else if (unchanged) {
       console.log("Codex model cache is already current; nothing to sync.");
+    } else if (invalidated.kind === "unavailable"
+      && (invalidated.reason === "foreign-owner" || invalidated.reason === "owner-unknown")) {
+      const { FOREIGN_CODEX_HOME_OWNER_MESSAGE, UNKNOWN_CODEX_HOME_OWNER_MESSAGE } = await import("../codex/catalog/routed-removal");
+      console.error(invalidated.reason === "foreign-owner" ? FOREIGN_CODEX_HOME_OWNER_MESSAGE : UNKNOWN_CODEX_HOME_OWNER_MESSAGE);
     } else if (!ok) {
       console.error(`Cache refresh did not complete (${invalidated.kind}). The Codex model cache was not rewritten.`);
     }
@@ -1167,8 +1173,7 @@ export async function dispatchCommand(head: CliHead, deps: CliDispatchDeps): Pro
   }
   const runner = commandRunners[resolveDispatchCommand(command) ?? ""];
   if (!runner) {
-    console.error(`Unknown command: ${command}`);
-    printUsage();
+    printUnknownCommand(command);
     return 1;
   }
   return await runner(deps);

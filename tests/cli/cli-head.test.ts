@@ -3,6 +3,44 @@ import { parseCliHead } from "../../src/cli/root";
 import { DEFAULT_READY_WAIT_TIMEOUT_SECONDS } from "../../src/cli/ready";
 
 describe("parseCliHead (pure CLI head, Phase 1)", () => {
+  test("preserves explicit nested help paths and original argv", () => {
+    for (const args of [["help", "models", "context"], ["models", "context", "--help"], ["models", "context", "-h"]]) {
+      const head = parseCliHead(args);
+      expect(head).toMatchObject({ kind: "help", helpTarget: "models", helpPath: ["models", "context"] });
+      expect(head.args).toBe(args);
+    }
+  });
+
+  test("full-reference help is explicit", () => {
+    for (const args of [["help", "--all"], ["--help", "--all"]]) {
+      expect(parseCliHead(args)).toEqual({ kind: "help", command: args[0], args, helpAll: true });
+    }
+  });
+
+  test("help-valued operands and passthrough flags remain ordinary argv", () => {
+    for (const args of [
+      ["alias", "set", "demo", "help"], ["config", "set", "defaultModel", "help"],
+      ["claude", "--", "--help"], ["claude", "--", "help"], ["models", "--all"],
+    ]) {
+      expect(parseCliHead(args)).toEqual({ kind: "command", command: args[0], args });
+      expect(parseCliHead(args).args).toBe(args);
+    }
+  });
+
+  test("head scanning stops at the delimiter and the first option ends the topic", () => {
+    expect(parseCliHead(["help", "models", "context", "--", "shadow"]))
+      .toMatchObject({ helpPath: ["models", "context"] });
+    expect(parseCliHead(["models", "--provider", "help", "--help"]))
+      .toEqual({ kind: "help", command: "models", args: ["models", "--provider", "help", "--help"], helpTarget: "models" });
+    expect(parseCliHead(["help", "--", "--all"])).not.toHaveProperty("helpAll");
+  });
+
+  test("unknown option-like roots retain their error target", () => {
+    for (const args of [["--nosuch", "--help"], ["help", "--nosuch"]]) {
+      expect(parseCliHead(args)).toEqual({ kind: "help", command: args[0], args, helpTarget: "--nosuch" });
+    }
+  });
+
   test("version flags exit as version", () => {
     expect(parseCliHead(["--version"])).toEqual({ kind: "version", command: "--version", args: ["--version"] });
     expect(parseCliHead(["-v"])).toEqual({ kind: "version", command: "-v", args: ["-v"] });

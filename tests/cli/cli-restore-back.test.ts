@@ -179,7 +179,7 @@ describe("ocx restore back", () => {
         OPENCODEX_HOME: ocxHome,
         CI: "1",
       };
-      const usage = runCli(["help"], env);
+      const usage = runCli(["help", "--all"], env);
       expect(usage.status).toBe(0);
       expect(`${usage.stdout}\n${usage.stderr}`).toContain("ocx restore back");
       const restoreHelp = runCli(["help", "restore"], env);

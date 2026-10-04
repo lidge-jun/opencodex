@@ -320,7 +320,11 @@ export function installApiAuthFetch(): void {
     if (!classified) return originalFetch(input, init);
     const state = runtime(classified.plane);
     const token = state.session.token;
-    const [firstInput, firstInit] = withAuth(classified.plane, input, init);
+    const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+    // Pairing exchanges must not carry the old shared-plane credential. The relay's
+    // separate machine-session headers are still attached by sessionHeaders().
+    const pairingExchange = classified.bootstrap && method === "POST";
+    const [firstInput, firstInit] = withAuth(classified.plane, input, init, pairingExchange ? null : undefined);
     const response = await originalFetch(firstInput, firstInit);
     if (classified.bootstrap || response.status !== 401) return response;
     const refreshed = state.session.token;

@@ -10,7 +10,7 @@
  */
 import { hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig } from "../config";
 import { apiKeyTransportConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../config/provider-validation";
-import { hasHelpFlag } from "./help";
+import { hasHelpFlag, printSubcommandUsage } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import { dropProviderCustomModels } from "../providers/provider-id-rewrite";
@@ -472,38 +472,12 @@ function handleSetDefault(args: string[]): void {
 // Router (F2 fix: handle help flags internally, like service/codex-shim)
 // ---------------------------------------------------------------------------
 
-const PROVIDER_USAGE = `Usage: ocx provider <subcommand>
-
-Subcommands:
-  list                  List configured and available providers
-  add <name>            Add a provider (registry or custom)
-  edit <name>           Edit live provider fields
-  test <name>           Test the provider's upstream model endpoint
-  remove <name>         Remove a configured provider
-  show <name>           Show provider config details
-  set-default <name>    Change the default provider
-  selected <name>       Show or set the provider model allowlist
-  quota                 Show provider quota reports
-  resets                Show recently detected quota resets
-  presets               List GUI provider presets
-  account-mode <mode>   Set OpenAI Codex pool/direct mode
-
-Examples:
-  ocx provider list
-  ocx provider list --jsonl
-  ocx provider add anthropic --api-key sk-ant-...
-  ocx provider add my-ollama --adapter openai-chat --base-url http://localhost:11434/v1
-  ocx provider show anthropic --json
-  ocx provider set-default anthropic
-  ocx provider edit xai --xai-chat on   # opt Grok 4.5/4.6 into Chat Completions
-  ocx provider edit xai --xai-chat off  # use Responses again
-  ocx provider remove my-ollama`;
 
 export async function handleProviderCommand(args: string[]): Promise<void> {
   const sub = args[0];
 
   if (!sub || sub === "help" || hasHelpFlag(args)) {
-    console.log(PROVIDER_USAGE);
+    printSubcommandUsage("provider");
     process.exit(0);
   }
 
@@ -533,7 +507,7 @@ export async function handleProviderCommand(args: string[]): Promise<void> {
         break;
       }
       console.error(`Unknown provider subcommand: ${sub}`);
-      console.error(PROVIDER_USAGE);
+      printSubcommandUsage("provider", undefined, { write: console.error });
       process.exit(1);
     }
   }

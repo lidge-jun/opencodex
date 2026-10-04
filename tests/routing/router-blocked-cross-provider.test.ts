@@ -77,12 +77,12 @@ describe("blocked-model redirect compatibility and provider changes", () => {
     });
     const options = { admission: { kind: "environment", source: "dedicated" } } as HandleResponsesOptions;
     const redirected = routeModel(config({ m1: "google/g1" }), "openai/m1");
-    const scoped = codexRouteCredentialDomainHeaders(req, redirected, options, false);
+    const scoped = codexRouteCredentialDomainHeaders(req, redirected, options, false, config({ m1: "google/g1" }));
     expect(scoped.get("authorization")).toBeNull();
     expect(scoped.get("chatgpt-account-id")).toBeNull();
     expect(scoped.get("x-extra")).toBe("kept");
     const legacy = routeModel(config({ m1: "m2" }), "openai/m1");
-    expect(codexRouteCredentialDomainHeaders(req, legacy, options, false).get("authorization"))
+    expect(codexRouteCredentialDomainHeaders(req, legacy, options, false, config({ m1: "m2" })).get("authorization"))
       .toBe("Bearer source-route-token");
   });
 

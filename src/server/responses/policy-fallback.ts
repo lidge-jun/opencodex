@@ -111,7 +111,7 @@ async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal
   if (isPolicyCandidateRefusal(response)) return true;
   try {
     const inspected = await readBoundedResponseBody(response.clone(), { signal });
-    const text = inspected.displaySafe ? inspected.text : "";
+    const text = inspected.displaySafe && !inspected.truncated ? inspected.text : "";
     return comboFailureDecision(response.status, text, { code: errorCodeFromText(text) }) === "hop";
   } catch {
     return false;
