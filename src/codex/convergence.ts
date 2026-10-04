@@ -39,6 +39,7 @@ import {
   legacyCatalogBackupPath,
   nativeMultiAgentDefaults,
   parseCatalogJson,
+  samePath,
   type RawCatalog,
   type RawEntry,
   } from "./catalog/parsing";
@@ -657,6 +658,7 @@ function fixedCommit(state: CandidateState, permit: Parameters<typeof replaceAct
 export async function commitCodexCatalogCandidate(
   candidate: CodexCatalogCandidate,
   deadlineMs: number,
+  lifecycle: Readonly<{ beforeCommit?: () => boolean; expectedCatalogPath?: string }> = {},
 ): Promise<CommitAttempt> {
   const state = candidateStates.get(candidate as object);
   if (!state) return { kind: "refused", reason: "source-ambiguous" };
@@ -668,6 +670,10 @@ export async function commitCodexCatalogCandidate(
       const guarded = withExpectedConfigGenerationSync(state.generation, () => {
         const invalid = revalidateCandidate(state);
         if (invalid) return invalid;
+        if (lifecycle.expectedCatalogPath !== undefined && !samePath(state.catalog.path, lifecycle.expectedCatalogPath)) {
+          return { kind: "stale", reason: "target-identity" } as const;
+        }
+        if (lifecycle.beforeCommit && lifecycle.beforeCommit() !== true) return { kind: "stale", reason: "process-local" } as const;
         // A refresh may empty a routed namespace only when config.json on disk agrees it is gone.
         // Read under K, so a config that fell back to defaults during a transient read failure,
         // or that belongs to another OPENCODEX_HOME, cannot publish a native-only catalog (#6529).
@@ -710,7 +716,7 @@ function projectCommit(result: CommitAttempt, notices: readonly CatalogNotice[])
 export async function convergeCodexCatalog(
   snapshot: CatalogAdmissionSnapshot,
   request: ConvergeRequest,
-  lifecycle: Readonly<{ onCommitBegin?: () => void }> = {},
+  lifecycle: Readonly<{ onCommitBegin?: () => void; beforeCommit?: () => boolean; expectedCatalogPath?: string }> = {},
 ): Promise<Readonly<{ changed: boolean; catalogRefresh: CatalogDisposition }>> {
   if (request.scope !== "catalog" || request.action !== "converge") {
     return {
@@ -722,7 +728,7 @@ export async function convergeCodexCatalog(
   if (gathered.kind === "disposition") return { changed: false, catalogRefresh: gathered.disposition };
   const state = candidateStates.get(gathered.candidate as object)!;
   lifecycle.onCommitBegin?.();
-  const committed = await commitCodexCatalogCandidate(gathered.candidate, request.deadlineMs);
+  const committed = await commitCodexCatalogCandidate(gathered.candidate, request.deadlineMs, lifecycle);
   if (committed.kind === "committed" && state.discoveryConfig) {
     const mutable = snapshot.config as OcxConfig;
     mutable.modelDiscovery = state.discoveryConfig.modelDiscovery;

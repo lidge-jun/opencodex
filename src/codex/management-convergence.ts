@@ -143,6 +143,7 @@ export function projectCatalogOnlyOutcome({
  */
 export function createManagementConvergeCodex(
   config: Readonly<OcxConfig>,
+  options: Readonly<{ beforeCommit?: () => boolean; expectedCatalogPath?: string }> = {},
 ): ConvergeCodex {
   const retainedConfig = config;
   return async request => {
@@ -167,6 +168,8 @@ export function createManagementConvergeCodex(
       const snapshot = captureCatalogAdmissionSnapshot(retainedConfig);
       const result = await convergeCodexCatalog(snapshot, request, {
         onCommitBegin: () => { commitBegan = true; },
+        beforeCommit: options.beforeCommit,
+        expectedCatalogPath: options.expectedCatalogPath,
       });
       return projectCatalogOnlyOutcome(result);
     } catch (error) {
