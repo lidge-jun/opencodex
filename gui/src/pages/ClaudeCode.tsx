@@ -266,6 +266,25 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   }
   if (!state) return null;
 
+  /*
+   * The master switch closes the General list. It is the same claudeCode.enabled the
+   * Claude card on the Connect overview toggles (default on), so turning Claude on there
+   * already routes ocx claude through OpenCodex; this row is where you turn it all off.
+   */
+  const connectionRow = (
+    <div className="setting-row claudecode-connection-row">
+      <div className="setting-label">
+        <span className="title" id="claudecode-connection-label">{t("claude.enabledLabel")}</span>
+        <span className="desc">{t("claude.subtitle")}</span>
+      </div>
+      <Switch
+        on={state.enabled}
+        onClick={() => void toggleConnection()}
+        disabled={connectionPending}
+        label={t("claude.toggleAria")}
+      />
+    </div>
+  );
   const sections: Array<{ id: string; label: string; meta?: string; body: ReactNode }> = [
     {
       id: "settings",
@@ -276,6 +295,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
           autoCompactOptions={autoCompactOptions}
           availableModels={state.available ?? []}
           onStateChange={setState}
+          footer={connectionRow}
         />
       ),
     },
@@ -322,18 +342,6 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {loadState.showError && <Notice tone="err">{t("claude.loadFail")}</Notice>}
       <div className="card claudecode-connection-card">
-        <div className="setting-row">
-          <div className="setting-label">
-            <span className="title" id="claudecode-connection-label">{t("claude.enabledLabel")}</span>
-            <span className="desc">{t("claude.subtitle")}</span>
-          </div>
-          <Switch
-            on={state.enabled}
-            onClick={() => void toggleConnection()}
-            disabled={connectionPending}
-            label={t("claude.toggleAria")}
-          />
-        </div>
         <div className="setting-row">
           <div className="setting-label">
             <span className="title" id="claudecode-first-party-label">{t("claude.firstParty.label")}</span>
