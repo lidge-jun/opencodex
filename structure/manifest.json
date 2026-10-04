@@ -322,6 +322,13 @@
       ]
     },
     {
+      "path": "providers/oauth-code-display-login.md",
+      "tier": 4,
+      "title": "OAuth Code-Display Login",
+      "scope": "Headless code-display OAuth login: flow ownership, expiry, unsupported providers, single-operator store.",
+      "documents": ["src/oauth/", "src/server/management/"]
+    },
+    {
       "path": "providers/openai-tiers.md",
       "tier": 4,
       "title": "OpenAI Provider Account Modes",

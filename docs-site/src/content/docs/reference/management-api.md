@@ -553,9 +553,9 @@ outcome fields from an older server do not establish successful recovery.
 | --- | --- | --- |
 | `GET /api/oauth/providers` | List providers with public OAuth login flows | — |
 | `GET /api/key-providers` | List providers configured through API-key login | — |
-| `POST /api/oauth/login` | Start an OAuth login or account-add flow | 400 unknown/invalid provider; `oauth_mutation_busy` |
-| `POST /api/oauth/login/code` | Submit a manual callback URL or authorization code | 400 invalid provider/code; `oauth_mutation_busy` |
-| `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow | 400 unknown provider |
+| `POST /api/oauth/login` | Start an OAuth login or account-add flow. `mode: "code"` starts a code-display login (Anthropic only) and returns `mode`, `flowId`, `expiresAt` | 400 unknown/invalid provider, invalid `mode`, `code_mode_unsupported`; `oauth_mutation_busy` |
+| `POST /api/oauth/login/code` | Submit a manual callback URL or authorization code. For a code-display flow (with `flowId`) returns the token-exchange outcome `{ok, account}` / `{ok:false, error}` | 400 invalid provider/code, `state_mismatch`, `invalid_or_expired_code`, `provider_unreachable`, `malformed_input`; 409 `no_pending_login`; `oauth_mutation_busy` |
+| `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow; an optional `flowId` names one code-display flow (a flow of another provider is refused) | 400 unknown provider |
 | `GET /api/oauth/status` | Poll one provider's OAuth flow | 400 unknown provider |
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
 | `GET /api/oauth/accounts` | List masked accounts; Anthropic and generic OAuth account rows include their `paused` state. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider |

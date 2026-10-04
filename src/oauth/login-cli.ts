@@ -9,7 +9,7 @@ import {
   requestBoundLocalProviderReload,
   type LocalProviderReloadResult,
 } from "../server/local-provider-reload-client";
-import { DEPRECATED_OAUTH_PROVIDER_ALIASES, isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
+import { DEPRECATED_OAUTH_PROVIDER_ALIASES, isPublicOAuthProvider, listOAuthProviders, runLogin, supportsCodeLoginMode } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
@@ -112,14 +112,21 @@ export function warnIfLiveReloadSkipped(result: LocalProviderReloadResult | null
  * that used to be their only pointer to it.
  */
 export function loginUsageMessage(): string {
-  return `Usage: ocx login <provider>\n`
+  return `Usage: ocx login <provider> [--code]\n`
+    + `  --code:        no browser and no local port — approve in any browser, paste the code\n`
+    + `                 (${listCodeLoginProviders().join(", ")})\n`
     + `  Codex / ChatGPT: ocx login codex   (account pool, needs a running proxy; 'chatgpt' and\n`
     + `                   'openai' are the same route. An OpenAI platform key is 'openai-apikey'.)\n`
     + `  OAuth login:   ${listOAuthProviders().join(", ")}\n`
     + `  API-key login: ${Object.keys(KEY_LOGIN_PROVIDERS).join(", ")}`;
 }
 
-export async function handleLogin(provider?: string, deps: LoginCliDeps = {}): Promise<void> {
+export interface LoginCliOptions {
+  /** `--code`: no callback server, no browser launch — print the URL and read back the code. */
+  codeMode?: boolean;
+}
+
+export async function handleLogin(provider?: string, deps: LoginCliDeps = {}, opts: LoginCliOptions = {}): Promise<void> {
   const name = (provider ?? "").trim().toLowerCase();
   // A removed provider id reached through its alias still logs in — the merged
   // successor owns the flow. Warn rather than silently reroute so scripts and
@@ -127,15 +134,51 @@ export async function handleLogin(provider?: string, deps: LoginCliDeps = {}): P
   const alias = DEPRECATED_OAUTH_PROVIDER_ALIASES[name];
   if (alias) {
     console.error(`${name} is deprecated; logging in as ${alias}`);
-    return handleOAuthLogin(alias, deps);
+    return handleOAuthLogin(alias, deps, opts);
   }
-  if (isPublicOAuthProvider(name)) return handleOAuthLogin(name, deps);
+  if (isPublicOAuthProvider(name)) return handleOAuthLogin(name, deps, opts);
+  if (opts.codeMode) {
+    console.error(`--code needs a provider with a code-display login: ${listCodeLoginProviders().join(", ")}`);
+    process.exit(1);
+  }
   if (isKeyLoginProvider(name)) return handleKeyLogin(name, deps);
   console.error(loginUsageMessage());
   process.exit(1);
 }
 
-export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}): Promise<void> {
+/** OAuth providers that accept `ocx login <provider> --code`. */
+export function listCodeLoginProviders(): string[] {
+  return listOAuthProviders().filter(supportsCodeLoginMode);
+}
+
+/**
+ * `--code`: the provider displays the authorization code instead of redirecting anywhere, so
+ * nothing is launched and nothing listens. Used where the browser is on another machine.
+ */
+async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> {
+  const login = deps.runLogin ?? runLogin;
+  if (!supportsCodeLoginMode(name)) {
+    console.error(`${name} has no code-display login. Providers that do: ${listCodeLoginProviders().join(", ")}`);
+    process.exit(1);
+  }
+  await withPrompt(deps.ask, async (ask) => {
+    await login(name, {
+      onAuth: ({ url, instructions }) => {
+        console.log(`\n🔐 Open this URL in any browser to approve ${name}:\n${url}\n`);
+        if (instructions) console.log(instructions);
+      },
+      onProgress: (m) => console.log(`   ${m}`),
+      onManualCodeInput: async () => await ask("Paste the code shown after approval: "),
+    }, { codeMode: true });
+  });
+  const reload = await notifyRunningProxyAfterOAuthLogin(name);
+  console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
+  for (const line of modelSelectionGuidance(name)) console.log(line);
+  warnIfLiveReloadSkipped(reload);
+}
+
+export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}, opts: LoginCliOptions = {}): Promise<void> {
+  if (opts.codeMode) return handleCodeLogin(name, deps);
   const login = deps.runLogin ?? runLogin;
   const launch = deps.openUrl ?? openUrl;
   const browser = createBrowserLaunchReport(deps.warn);
