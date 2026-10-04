@@ -1,4 +1,5 @@
 {
+  "cli-config-default-show.test.ts": "cli",
   "ollama-native-tool-continuations.test.ts": "providers/ollama",
   "usage-antigravity-55.test.ts": "usage",
   "provider-antigravity-wire-snapshot.test.ts": "providers",
@@ -1988,5 +1989,5 @@
   "cli-start-routing-heal-wiring.test.ts": "cli",
   "cli-status-codex-routing-drift.test.ts": "cli",
   "restart-update-coordinator.test.ts": "cli",
-  "cli-config-default-show.test.ts": "cli"
+  "responses-combo-exhausted-error.test.ts": "responses"
 }
