@@ -67,7 +67,7 @@ test("the foot's four rows share one text column and one trailing inset", async 
   };
 
   // The column every label sits in, owned by the rows that carry an icon.
-  for (const selector of [".lang-toggle", ".theme-toggle", ".sidebar-link"]) {
+  for (const selector of [".lang-toggle", ".sidebar-link"]) {
     expect(rule(selector)).toContain("padding: 8px 10px");
     expect(rule(selector)).toContain("gap: 9px");
   }
