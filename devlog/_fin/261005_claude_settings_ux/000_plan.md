@@ -80,3 +80,18 @@ Verification: `gui` full tests 2889 pass, lint, lint:i18n, build; root typecheck
 structure:check, privacy:scan, full `bun run test`; docs-site build; in-app browser QA of both
 tabs. What did not change: the subtitle on the Desktop tab still speaks of model families,
 and the Quick task label rests on the Haiku tier mapping rather than observed Desktop behavior.
+
+### Review hardening (PR #6596)
+
+Maintainer review (Ingwannu), CodeRabbit, Codex and a gpt-6.1-sol adversarial reviewer drove the
+Claude Code save path through seven rounds of ordering bugs, each reproduced as a mounted test in
+`gui/tests/claudecode-save-bar.test.tsx` that fails on the previous head. The resulting rules:
+
+- A per-cache-key write epoch, shared by every mount, marks reads that a write overtook as
+  `superseded`; they never reach a draft or the session cache.
+- Each mount folds new shared resource reads into its own draft during render, so a refresh
+  started by another (even unmounted) page reaches the page on screen.
+- Immediate switch results and Save confirmations are published per cache key; every mounted page
+  merges them, and the session copy is the shared record of confirmed server state.
+- A successful Save writes the normalized saved copy to the cache and baseline at once, and while
+  a Save is out (`savePending`) no read replaces the draft wholesale.
