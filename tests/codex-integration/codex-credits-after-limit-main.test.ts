@@ -17,7 +17,8 @@ import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTra
 import * as mainAccount from "../../src/codex/main-account";
 import * as authCollision from "../../src/codex/auth-collision";
 import { captureMainQuotaWriter, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
-import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { clearAccountQuota, getAccountQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { hasSpendableCodexCredits } from "../../src/codex/quota-types";
 import { clearCodexUpstreamHealth, clearThreadAccountMap, pickLowestUsageCodexAccount } from "../../src/codex/routing";
 import { setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
@@ -120,6 +121,44 @@ test("a full main login allowed to use credits keeps serving", async () => {
   mainWeekly(100, Date.now() + DAY_MS);
   await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
     .resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
+});
+
+test.each([false, true])("WHAM included-plan refusal respects the main spending control (%j)", async reached => {
+  const cfg = config();
+  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
+  const quota = parseUsageQuota({
+    plan_type: "pro",
+    rate_limit: { allowed: false, primary_window: {
+      used_percent: 100, limit_window_seconds: 604_800, reset_at: Date.now() + DAY_MS,
+    } },
+    credits: { has_credits: true, balance: "42.5", overage_limit_reached: false },
+    spend_control: { reached },
+  });
+  setAccountQuotaFromParsed(MAIN, quota, undefined, captureMainQuotaWriter(accountId)!);
+  const result = resolveCodexAuthContext(new Headers(), cfg, "pool");
+  if (reached) await expect(result).rejects.toBeInstanceOf(CodexMainAccountCreditsOffError);
+  else await expect(result).resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
+});
+
+test.each([{ reached: true }, {}])("a control-only refusal retracts cached main credit permission (%j)", async spend_control => {
+  const cfg = config();
+  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
+  mainWeekly(100, Date.now() + DAY_MS);
+  const writer = captureMainQuotaWriter(accountId)!;
+  setAccountQuotaFromParsed(MAIN, parseUsageQuota({
+    credits: { has_credits: true, balance: "42.5" }, spend_control: { reached: false },
+  }), undefined, writer);
+  expect(hasSpendableCodexCredits(getAccountQuota(MAIN))).toBe(true);
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+    .resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
+
+  const retraction = parseUsageQuota({ spend_control });
+  expect(retraction).toEqual({ credits: null });
+  setAccountQuotaFromParsed(MAIN, retraction, undefined, writer);
+  expect(getAccountQuota(MAIN)?.credits).toBeNull();
+  expect(hasSpendableCodexCredits(getAccountQuota(MAIN))).toBe(false);
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+    .rejects.toBeInstanceOf(CodexMainAccountCreditsOffError);
 });
 
 test("main credit consent without a fresh balance cannot release a full window", async () => {
