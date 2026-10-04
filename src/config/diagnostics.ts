@@ -746,6 +746,8 @@ export function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
     if (salvaged) {
       const config = normalizeApiKeyIds(salvaged.parsed);
       const warnings = degradedListenerWarnings(parsed, config);
+      const chatgptDesktopIssue = chatgptDesktopConfigIssue(parsed);
+      if (chatgptDesktopIssue) warnings.push(`${chatgptDesktopIssue}; the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
       return {
         config,
         source: "fallback",

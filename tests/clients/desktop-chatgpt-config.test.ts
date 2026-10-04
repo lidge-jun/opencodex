@@ -51,6 +51,25 @@ describe("experimental ChatGPT desktop config", () => {
       warn.mockRestore();
     }
   });
+  test("salvaged configs retain the dropped desktop block reason and fallback error", () => {
+    const candidate = { ...base, port: 12345, routingProfiles: { bad: { candidates: [] } } };
+    const fallback = configDiagnosticsFromRaw(JSON.stringify(candidate));
+    expect(fallback.source).toBe("fallback");
+    expect(fallback.error).toContain("routingProfiles.bad");
+    for (const chatgptDesktop of [{ appServerShim: true, unblockSend: true }, { appServerShim: "true" }]) {
+      const normal = configDiagnosticsFromRaw(JSON.stringify({ ...base, chatgptDesktop }));
+      const diagnostics = configDiagnosticsFromRaw(JSON.stringify({ ...candidate, chatgptDesktop }));
+      expect(normal.warnings?.join(" ")).toContain("the whole chatgptDesktop block is ignored");
+      expect(diagnostics.warnings).toEqual(normal.warnings);
+      expect(diagnostics.source).toBe(fallback.source);
+      expect(diagnostics.error).toBe(fallback.error);
+      expect(diagnostics.config.chatgptDesktop).toBeUndefined();
+      expect(diagnostics.config.providers).toEqual(fallback.config.providers);
+      expect(diagnostics.config.providers.xai).toEqual(base.providers.xai);
+      expect(diagnostics.config.port).toBe(12345);
+      expect(diagnostics.config.routingProfiles?.bad).toBeUndefined();
+    }
+  });
   test("enabled shim warns on other platforms", () => {
     const diagnostics = configDiagnosticsFromRaw(JSON.stringify({ ...base, chatgptDesktop: { appServerShim: true } }));
     expect(diagnostics.error).toBeNull();
