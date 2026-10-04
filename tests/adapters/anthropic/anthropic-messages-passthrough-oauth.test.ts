@@ -5,6 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createAnthropicAdapter } from "../../../src/adapters/anthropic";
+import { captureAnthropicClientIdentity } from "../../../src/adapters/anthropic/client-identity";
 import {
   anthropicMessagesNativeWireBody,
   anthropicOAuthWireBody,
@@ -137,6 +138,44 @@ describe("buildAnthropicMessagesPassthroughRequest with OAuth", () => {
   test("an identity block already present is not repeated", () => {
     const system = [{ type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION }, { type: "text", text: "more" }];
     expect(anthropicOAuthWireBody({ system, messages: [] }).body.system).toBe(system);
+  });
+
+  test("request-local identity selects the same preamble for direct shaping, counting and sending", () => {
+    const clientIdentity = captureAnthropicClientIdentity(new Headers({
+      "User-Agent": "claude-cli/2.1.288 (external, sdk-cli)",
+      "X-App": "cli",
+      "X-Claude-Code-Session-Id": "11111111-1111-4111-8111-111111111111",
+      "X-Stainless-Lang": "js",
+      "X-Stainless-Runtime": "node",
+    }));
+    expect(clientIdentity).toBeDefined();
+    const system = [
+      { type: "text", text: "x-anthropic-billing-header: cc_version=2.1.288.fixture; cc_entrypoint=sdk-cli; cch=fixture;" },
+      { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK." },
+      { type: "text", text: "fixture stable prefix", cache_control: { type: "ephemeral", ttl: "1h" } },
+    ];
+    const source = { ...DEFERRED_SOURCE, system };
+    const before = JSON.stringify(source);
+    const shaped = anthropicOAuthWireBody(source, clientIdentity);
+    const counted = anthropicMessagesNativeWireBody(oauthProvider(), "claude-wire", source, { clientIdentity });
+    const built = buildAnthropicMessagesPassthroughRequest(oauthProvider(), "claude-wire", source, undefined, { clientIdentity });
+    expect(shaped.body.system).toBe(system);
+    expect(counted.wireBody.system).toBe(system);
+    expect(built.wireBody.system).toBe(system);
+    expect(counted.wireBody).toEqual(built.wireBody);
+    expect([...counted.oauthToolNames!]).toEqual([["custom_lookup", "lookup"]]);
+    expect([...shaped.toolNames]).toEqual([...counted.oauthToolNames!]);
+    expect(JSON.stringify(source)).toBe(before);
+    // Omitting the new options keeps the existing synthesized SDK prefix.
+    const generic = anthropicMessagesNativeWireBody(oauthProvider(), "m", source);
+    expect(generic.wireBody.system).toEqual([{ type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION }, ...system]);
+    // Even a captured handle cannot select first-party behavior for a compatible destination.
+    const foreign = anthropicMessagesNativeWireBody(oauthProvider({ baseUrl: "https://compatible.example" }), "m", source, { clientIdentity });
+    expect(foreign.wireBody.system).toEqual(generic.wireBody.system);
+    const key = anthropicMessagesNativeWireBody(oauthProvider({ authMode: "key" }), "m", source, { clientIdentity });
+    expect(key.wireBody.system).toBe(system);
+    expect(key.wireBody.messages).toBe(source.messages);
+    expect(key.oauthToolNames).toBeUndefined();
   });
 
   test("two caller names that meet under the prefix are refused", () => {

@@ -27,8 +27,9 @@ import {
   applyAnthropicOAuthAuth,
   resolveAnthropicMessagesUrl,
 } from "../anthropic";
-import { applyAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
+import { applyAnthropicClientIdentity, hasObservedAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
 import { bindAnthropicAccountMetadata } from "./account-metadata";
+import { shouldPreserveNativeClientPreamble } from "./native-client-preamble";
 import { allowlistAnthropicBetas } from "./beta-allowlist";
 
 /**
@@ -137,7 +138,7 @@ function mapOAuthContentBlocks(blocks: unknown[], mapBlock: (block: Rec) => Rec)
  * Copy-on-write; arguments, schemas, unknown containers and cache markers stay opaque.
  * Ambiguous original or wire names are refused before any history is rewritten.
  */
-export function anthropicOAuthWireBody(body: Rec): { body: Rec; toolNames: Map<string, string> } {
+export function anthropicOAuthWireBody(body: Rec, clientIdentity?: AnthropicClientIdentity): { body: Rec; toolNames: Map<string, string> } {
   const out: Rec = { ...body };
   const toolNames = new Map<string, string>();
   const owners = new Map<string, string>();
@@ -150,7 +151,9 @@ export function anthropicOAuthWireBody(body: Rec): { body: Rec; toolNames: Map<s
     return wire;
   };
   const identity = { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION };
-  if (typeof body.system === "string" && body.system.length > 0) {
+  if (shouldPreserveNativeClientPreamble(body.system, clientIdentity)) {
+    out.system = body.system;
+  } else if (typeof body.system === "string" && body.system.length > 0) {
     out.system = [identity, { type: "text", text: body.system }];
   } else if (Array.isArray(body.system)) {
     const first = body.system[0];
@@ -232,11 +235,12 @@ export function anthropicMessagesNativeWireBody(
   provider: Pick<OcxProviderConfig, "baseUrl" | "authMode">,
   modelId: string,
   body: Readonly<Record<string, unknown>>,
+  options: Pick<AnthropicMessagesPassthroughOptions, "clientIdentity"> = {},
 ): { wireBody: Rec; strippedOpaqueState: boolean; oauthToolNames?: Map<string, string> } {
   const allowlisted = anthropicMessagesPassthroughBody(body, modelId);
   const opaque = opaqueStateForDestination(allowlisted, credentialDomainFor(provider));
   if (provider.authMode !== "oauth") return { wireBody: opaque.body, strippedOpaqueState: opaque.stripped };
-  const oauth = anthropicOAuthWireBody(opaque.body);
+  const oauth = anthropicOAuthWireBody(opaque.body, credentialDomainFor(provider)?.firstPartyAnthropic ? options.clientIdentity : undefined);
   return { wireBody: oauth.body, strippedOpaqueState: opaque.stripped, oauthToolNames: oauth.toolNames };
 }
 
@@ -267,7 +271,7 @@ export function buildAnthropicMessagesPassthroughRequest(
       : "anthropic provider requires a non-empty apiKey (authMode: key)");
   }
   const url = resolveAnthropicMessagesUrl(provider);
-  const native = anthropicMessagesNativeWireBody(provider, modelId, body);
+  const native = anthropicMessagesNativeWireBody(provider, modelId, body, options);
   const { strippedOpaqueState, oauthToolNames } = native;
   const wireBody = oauth ? bindAnthropicAccountMetadata(native.wireBody, options.providerAccountUuid) : native.wireBody;
   const headers = anthropicBaseRequestHeaders(wireBody.stream === true);
@@ -286,7 +290,8 @@ export function buildAnthropicMessagesPassthroughRequest(
     }
   }
   if (domain?.firstPartyAnthropic) applyAnthropicClientIdentity(headers, options.clientIdentity, provider.headers);
-  const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible");
+  const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible",
+    hasObservedAnthropicClientIdentity(options.clientIdentity));
   mergeAnthropicBetaHeader(headers, betas.betas);
   return {
     url,
