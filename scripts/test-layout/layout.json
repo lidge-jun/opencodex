@@ -828,6 +828,7 @@
     "devin-quota.test.ts": "providers",
     "devin-output-budget.test.ts": "providers",
     "devin-prompt-cache.test.ts": "providers",
+    "devin-trajectory.test.ts": "providers",
     "devin-provider-merge-migration.test.ts": "providers",
     "devin-stated-reset-hardening.test.ts": "providers",
     "devin-stated-reset-retry.test.ts": "providers",
