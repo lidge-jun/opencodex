@@ -28,6 +28,7 @@
     "codex-shim-fnm.test.ts": "codex-integration",
     "claude-intercept-cleanup.test.ts": "claude-integration",
     "droid-managed-reasoning-defaults.test.ts": "clients",
+    "droid-normalized-reasoning-defaults.test.ts": "clients",
     "management-droid-reasoning-defaults.test.ts": "server",
     "droid-reasoning-defaults.test.ts": "responses",
     "claude-intercept-on-demand.test.ts": "claude-integration",

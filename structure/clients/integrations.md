@@ -71,6 +71,10 @@ default. The single-client status projects the owned defaults and the current
 export roster's declared effort choices into `droidReasoning`. Defaults use the
 same path and competing-settings checks as status, including pre-resolved paths;
 an ambiguous legacy model ID or managed endpoint suppresses the projected map.
+Factory Droid may add top-level `id` and `index` while normalizing `customModels`.
+`ownership-policy.ts` drops only those two fields from observations when matching an existing record, so
+legacy rows preserve their saved `extraHeaders` default while the endpoint, `apiKey`, other
+headers, effort values, and unknown row fields remain protected.
 
 Preview and apply accept optional `droidReasoningDefaults`. Omission preserves
 compatible owned defaults; an empty map clears them. A supplied map is validated against the
