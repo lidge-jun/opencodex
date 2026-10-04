@@ -55,12 +55,13 @@ export function assignFamily(profile: DesktopProfile, route: string, family: Fam
 
 /** Stored default when it is an available member, else the first available member (sorted). */
 export function effectiveFamilyDefaults(models: readonly RoleModel[], profile: DesktopProfile): Record<Family, string | null> {
+  const activeByFamily = Object.fromEntries(FAMILIES.map(family => [family, [] as string[]])) as Record<Family, string[]>;
+  for (const model of models) {
+    if (model.available) activeByFamily[profile.assignments[model.route]?.family ?? "opus"].push(model.route);
+  }
   const result = {} as Record<Family, string | null>;
   for (const family of FAMILIES) {
-    const active = models
-      .filter(model => model.available && (profile.assignments[model.route]?.family ?? "opus") === family)
-      .map(model => model.route)
-      .sort();
+    const active = activeByFamily[family].toSorted();
     const stored = profile.defaults[family];
     result[family] = stored && active.includes(stored) ? stored : (active[0] ?? null);
   }
@@ -90,5 +91,5 @@ export function roleOptions(models: readonly RoleModel[], exclude: string | null
 /** The compact list: default first, quick second, the rest by label. A GUI overview only. */
 export function roleListOrder<T extends RoleModel>(models: readonly T[], defaultRoute: string | null, quickRoute: string | null): T[] {
   const rank = (route: string) => (route === defaultRoute ? 0 : route === quickRoute ? 1 : 2);
-  return [...models].sort((a, b) => rank(a.route) - rank(b.route) || a.label.localeCompare(b.label) || a.route.localeCompare(b.route));
+  return models.toSorted((a, b) => rank(a.route) - rank(b.route) || a.label.localeCompare(b.label) || a.route.localeCompare(b.route));
 }
