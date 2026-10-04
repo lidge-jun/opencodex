@@ -28,7 +28,7 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 Human-readable connect and sync-refresh diagnostics follow the [terminal rendering contract](../runtime.md#cli-readiness-diagnostics), with regression coverage for both paths in `tests/cli/cli-connect-readiness.test.ts`.
 
-`tests/cli/cli-config-show-client.test.ts` covers the separate read-only config annotation path:
+`tests/cli/cli-config-default-show.test.ts` covers optional-show parsing, offline display and explicit-action preservation; `tests/cli/cli-config-show-client.test.ts` covers the separate read-only config annotation path:
 `src/cli/config-command.ts` derives token ownership without importing the connect command or
 triggering catalog, lifecycle, or ACL-hardening work.
 

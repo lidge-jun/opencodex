@@ -358,7 +358,7 @@ readiness, then reads that runtime's effort ladder without persisting its select
 preferred candidates still fall back in priority order. General `ocx status` retains full runtime
 discovery and passes its resolved command into readiness, avoiding a second version probe without adding cache state. `ocx connect` also prints a secret-free Codex shim readiness line from `src/cli/codex-shim-readiness.ts`: ready when the healthy shim is active on PATH, unhealthy when its tracked files fail diagnosis, missing when no shim is active, or unverified when the PATH scan throws.
 
-`ocx config show` stays outside that lifecycle path. `src/cli/config-command.ts` reads the validated
+`ocx config [show]`, including flags-only display, stays outside that lifecycle path. Argument selection follows the [config reader contract](config.md). `src/cli/config-command.ts` reads the validated
 config snapshot and the bounded service-token observation needed for its `_remoteHub` annotation;
 it does not import the connect command, inspect catalog readiness, acquire lifecycle locks, or run
 config/secret ACL hardening.

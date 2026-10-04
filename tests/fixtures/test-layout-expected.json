@@ -1,4 +1,5 @@
 {
+  "ollama-native-tool-continuations.test.ts": "providers/ollama",
   "usage-antigravity-55.test.ts": "usage",
   "provider-antigravity-wire-snapshot.test.ts": "providers",
   "antigravity-discovered-families.test.ts": "adapters/google",
@@ -1987,5 +1988,5 @@
   "cli-start-routing-heal-wiring.test.ts": "cli",
   "cli-status-codex-routing-drift.test.ts": "cli",
   "restart-update-coordinator.test.ts": "cli",
-  "ollama-native-tool-continuations.test.ts": "providers/ollama"
+  "cli-config-default-show.test.ts": "cli"
 }
