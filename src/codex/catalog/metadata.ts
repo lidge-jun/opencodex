@@ -912,6 +912,28 @@ export function observedAccountBoundNativeOpenAiSlugs(
   return all.filter(slug => !SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug));
 }
 
+/** Whether Desktop has published an account-native model absent from OpenCodex's catalog. */
+export function codexDesktopNativeModelsNeedSync(
+  config: Pick<OcxConfig, "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
+): boolean {
+  if (visibleCodexAccountSelectors(config).length === 0) return false;
+  const cache = readCurrentCodexModelsCache();
+  if (!cache || cache.client_version === "0.0.0") return false;
+  const observed = observedAccountBoundNativeEntries(cache.models ?? []);
+  if (observed.length === 0) return false;
+
+  const catalog = readCurrentCodexCatalog();
+  const knownSlugs = new Set((catalog?.models ?? []).flatMap(entry => {
+    const slug = trustedAccountBoundNativeCatalogSlug(entry)
+      ?? (typeof entry.slug === "string" && !entry.slug.includes("/") ? entry.slug : undefined);
+    return slug === undefined ? [] : [slug];
+  }));
+  return observed.some(entry => {
+    const slug = observedAccountBoundNativeSlug(entry);
+    return slug !== undefined && !knownSlugs.has(slug);
+  });
+}
+
 function catalogNativeSlugs(): string[] {
   const cat = readCurrentCatalogOrCache();
   const models = cat?.models ?? [];

@@ -8,6 +8,7 @@ import {
   accountBoundNativeModelSlugs,
   applyNativeVisibility,
   buildCatalogEntries,
+  codexDesktopNativeModelsNeedSync,
   CODEX_ACCOUNT_BOUND_CATALOG_KIND,
   desktopAllowlistSuppressedNativeSlugs,
   disabledNativeSlugs,
@@ -34,6 +35,7 @@ import {
   seedCodexModelEntitlementsForTests,
 } from "../../src/codex/model-entitlements";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 
 afterEach(() => resetCodexModelEntitlementCacheForTests());
 
@@ -462,6 +464,38 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
       opencodex_account_observed_native: true,
     }])).toHaveLength(1);
     expect(observedAccountBoundNativeOpenAiSlugs(observedEntries)).toEqual(["gpt-future-unlisted"]);
+  });
+
+  test("Desktop cache watcher detects new account-native models and ignores OpenCodex invalidation", () => {
+    const isolatedHome = installIsolatedCodexHome("ocx-native-cache-watch-");
+    try {
+      const config = makeConfig({
+        codexAccountNamespaces: { desktop: "@main" },
+        codexAccountPickerEnabled: true,
+      });
+      const observed = {
+        ...nativeTemplate(),
+        slug: "gpt-future-unlisted",
+        visibility: "list",
+        supported_in_api: true,
+      };
+      const cachePath = join(isolatedHome.path, "models_cache.json");
+      writeFileSync(cachePath, JSON.stringify({ client_version: "1.2.3", models: [observed] }), "utf8");
+      expect(codexDesktopNativeModelsNeedSync(config)).toBe(true);
+      expect(codexDesktopNativeModelsNeedSync(makeConfig())).toBe(false);
+
+      writeFileSync(
+        join(isolatedHome.path, "opencodex-catalog.json"),
+        JSON.stringify({ models: [observed] }),
+        "utf8",
+      );
+      expect(codexDesktopNativeModelsNeedSync(config)).toBe(false);
+
+      writeFileSync(cachePath, JSON.stringify({ client_version: "0.0.0", models: [observed] }), "utf8");
+      expect(codexDesktopNativeModelsNeedSync(config)).toBe(false);
+    } finally {
+      isolatedHome.restore();
+    }
   });
 
   test("gpt-daybreak-blue-latest has one native capability template when selected for emission", () => {

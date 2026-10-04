@@ -182,6 +182,9 @@ Codex 显示的模型来自一个磁盘上的 catalog（默认是 `$CODEX_HOME/o
 4. **过滤** `config.disabledModels` 和每个 provider 的非空 `selectedModels` allowlist。
 5. **重新排序**，让 featured models 排在最前（见下文），然后把合并后的 catalog 写回去。
 
+OpenCodex 守护进程运行且 Codex 集成已启用时，会监视 `$CODEX_HOME/models_cache.json`。发现 Desktop 新发布的
+账号原生模型后，会自动重新同步目录；这些动态模型仍按已配置的 Codex 账号 selector 隔离，不会加入全局静态原生模型名单。
+
 路由目录条目还会把 GPT-5 身份文案改为真实的上游模型名称。reasoning 选项会依据提供商和模型元数据，
 使用 Codex 的 `low | medium | high | xhigh | max | ultra` 档位；上游不支持的值会在发送请求前完成
 映射或下调。
