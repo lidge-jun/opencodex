@@ -269,3 +269,16 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 The registered Devin implementation in `src/adapters/devin.ts` maps data URLs to its native image field. Its textual fallback accepts only bounded HTTPS references and emits a fixed-size omission marker for unsupported or oversized values.
 
 A [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) selects its target before adapter resolution and uses the existing registry factory.
+
+## Devin streamed tool results
+
+`mapOcxMessagesToDevin` in `src/adapters/devin.ts` folds successive results for one tool
+invocation into the first result's history slot, with an additional-output separator between
+chunks. Late results can cross intervening user or assistant messages; those messages stay in
+place, while the result chunks retain arrival order inside the first slot. A new assistant call
+declaration resets that call ID's slot, so reused IDs remain separate invocations. Parallel call
+IDs stay independent. Text, image parts, the in-band error marker and any error flag survive the
+merge without mutating the input history or inventing a missing assistant call.
+`tests/providers/devin-stream-results.test.ts` checks both the mapped history and encoded tool
+prompts, including image and error fields. This normalization prevents duplicate-result request
+shapes; it does not classify every upstream `invalid_argument` as a duplicate-result failure.

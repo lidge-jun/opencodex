@@ -1,5 +1,9 @@
 # Providers And Adapters
 
+Devin consolidates progress and final results for each tool invocation before encoding the
+outbound history. The [streamed tool-result contract](adapters/registry.md#devin-streamed-tool-results)
+defines late-output placement, reused call IDs, and preservation of images and errors.
+
 Anthropic account pause, model routes, and quota labels follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
 
 Managed native Anthropic serving UUID and observed CLI header continuity follow [native Messages](data-planes/protocol-paths.md#managed-native-messages); generated Responses retain the adapter's compatibility fingerprint.

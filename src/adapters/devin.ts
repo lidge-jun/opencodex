@@ -507,6 +507,7 @@ export function mapOcxMessagesToDevin(
   options: { withholdAnthropicSignatures?: boolean } = {},
 ): ChatHistoryItem[] {
   const items: ChatHistoryItem[] = [];
+  const toolResultIndices = new Map<string, number>();
   // Cognition is not an OpenAI host, and this adapter does advertise a real
   // client tool catalog (proto #10 via `mapOcxToolsToDevin`), so the same
   // contract paragraph the other non-OpenAI adapters inject belongs here. The
@@ -525,7 +526,36 @@ export function mapOcxMessagesToDevin(
 
   for (const message of parsed.context.messages) {
     const mapped = mapOneMessage(message, parsed.modelId, options);
-    if (mapped) items.push(mapped);
+    if (!mapped) continue;
+    // Code-mode notifications can append several outputs to one invocation, even
+    // after a new user turn. Cognition can reject repeated tool prompts with the
+    // same call id. Preserve every chunk in one result rather than dropping the
+    // later progress/final output. A newly declared invocation resets the slot.
+    for (const call of mapped.tool_calls ?? []) toolResultIndices.delete(call.id);
+    if (mapped.role === "tool" && mapped.tool_call_id) {
+      const previousIndex = toolResultIndices.get(mapped.tool_call_id);
+      if (previousIndex !== undefined) {
+        const previous = items[previousIndex]!;
+        const separator = "\n\n[Additional output for this tool call]\n";
+        const content = typeof previous.content === "string" && typeof mapped.content === "string"
+          ? previous.content + separator + mapped.content
+          : [
+              ...(typeof previous.content === "string"
+                ? [{ type: "text" as const, text: previous.content }] : previous.content),
+              { type: "text" as const, text: separator },
+              ...(typeof mapped.content === "string"
+                ? [{ type: "text" as const, text: mapped.content }] : mapped.content),
+            ];
+        items[previousIndex] = {
+          ...previous,
+          content,
+          ...(previous.is_error || mapped.is_error ? { is_error: true } : {}),
+        };
+        continue;
+      }
+      toolResultIndices.set(mapped.tool_call_id, items.length);
+    }
+    items.push(mapped);
   }
   return items;
 }
