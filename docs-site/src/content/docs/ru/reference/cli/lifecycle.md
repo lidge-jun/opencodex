@@ -352,6 +352,15 @@ scheduler-error. Чужие задачи и чужие операции нико
 Либо подтвердите UAC через дашборд, либо заново выполните `ocx service install` в elevated
 окне PowerShell.
 
+If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
+`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
+proxy is not running. The message includes the lock path, recorded PID, current liveness,
+executable name when available, and lease age. The process identity is unverified: the PID
+may have been reused, so liveness and executable name describe whichever process occupies
+that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
+process based only on this PID. A later mutation attempt can reclaim a stale lease once its
+age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
 Обернуть script-based launcher `codex` на `PATH` лёгким автозапусковым скриптом. Настоящие
