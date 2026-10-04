@@ -557,6 +557,17 @@ holds the single ownership record. Committing the older row's prior record would
 ownership back at the old file and leave the active block on disk with nothing to
 disable it.
 
+## Command Code
+
+Command Code owns one block in `~/.commandcode/providers.json`. The published
+`command-code@1.66.0` client resolves `env.HOME ?? env.USERPROFILE` plus that path and
+reads no relocation variable, so `commandCodeHomeDir` takes no override. Its reader is
+`e.provider ?? e.providers`: `commandCodeProviderRoot` mirrors that against the parsed
+target and the block is written under the root the file already uses (singular for a
+fresh file); both roots are in `CLIENT_MANAGED_PATHS` so Disable removes either. The
+provider uses the documented keyless `apiKey: false`; no service-token file is read or
+exported. Contract: `tests/clients/command-code-client-contract.test.ts`.
+
 ## Cline paired files
 
 Cline CLI uses `providers.json` for connection settings and sibling `models.json` for its

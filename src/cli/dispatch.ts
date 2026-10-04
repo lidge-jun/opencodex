@@ -515,7 +515,7 @@ const commandRunners: Record<string, CommandRunner> = {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline", "droid", "opencode", "kilo"]));
+          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -987,6 +987,14 @@ const commandRunners: Record<string, CommandRunner> = {
   zcode: async deps => {
     const { handleZcodeCommand } = await import("./integrations");
     return await handleZcodeCommand(deps.args.slice(1));
+  },
+  commandcode: async deps => {
+    const { handleCommandcodeCommand } = await import("./integrations");
+    return await handleCommandcodeCommand(deps.args.slice(1));
+  },
+  cmd: async deps => {
+    const { handleCommandcodeCommand } = await import("./integrations");
+    return await handleCommandcodeCommand(deps.args.slice(1));
   },
   help: async () => {
     printUsage();

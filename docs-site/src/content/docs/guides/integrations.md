@@ -642,6 +642,37 @@ ocx integration client enable --client kilo
 ocx export --client kilo --out ./kilo.jsonc
 ```
 
+## Command Code
+
+Command Code keeps its custom providers in `~/.commandcode/providers.json`. This
+integration writes `provider.opencodex` into that file and is loopback-only.
+
+**Which root it writes.** Command Code resolves its provider map as
+`document.provider ?? document.providers`, so the singular root wins whenever it
+exists. The integration therefore reads the target file first and writes into the
+root that file already uses: a document that already carries a `providers` map keeps
+it, and your other providers stay readable. A fresh file gets the singular `provider`
+root. Both roots are declared as managed paths, so Disable removes the block from
+whichever one it was written into.
+
+**The credential form.** The provider is written with `apiKey: false`, the documented
+form for an endpoint that needs no key. A raw string is refused by Command Code, and
+no service-token file is read, referenced, or exported by this integration.
+
+**Home resolution.** There is no `COMMANDCODE_HOME` override here. The published
+client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.json`;
+it does not consult that variable. An override this integration honoured but the
+client ignored would make Apply report success at a path Command Code never opens, so
+the path is always `~/.commandcode/providers.json`.
+
+Paste the key yourself if you later move the provider off loopback: Command Code
+stores keys in `~/.commandcode/auth.json` (via `/connect`), not in `providers.json`.
+
+```bash
+ocx integration client enable --client commandcode
+ocx export --client commandcode --out ./providers.json
+```
+
 ## Factory Droid
 
 Run Droid once to create `~/.factory`, then explicitly enable this integration with

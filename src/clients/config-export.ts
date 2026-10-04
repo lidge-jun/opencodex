@@ -68,6 +68,17 @@ import { buildKiloClientConfig, summarizeKilo, buildKiloContribution, kiloConfig
 export { kiloConfigPath, kiloHomeDir, kiloCandidatePath, KILO_CONFIG_CANDIDATES } from "./config-export/kilo";
 export type { KiloGeneratedConfig, KiloProviderBlock, KiloModelEntry } from "./config-export/kilo";
 import { droidConfigPath, buildDroidClientConfig, summarizeDroid, buildDroidContribution } from "./config-export/droid";
+import {
+  buildCommandCodeClientConfig,
+  summarizeCommandCode,
+  buildCommandCodeContribution,
+  type CommandCodeGeneratedConfig,
+  type CommandCodeModelEntry,
+  type CommandCodeProviderBlock,
+} from "./config-export/commandcode";
+
+export type { CommandCodeGeneratedConfig, CommandCodeModelEntry, CommandCodeProviderBlock };
+export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution };
 
 
 
@@ -466,6 +477,30 @@ export function zcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string 
 
 export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   return join(zcodeHomeDir(env, home), "v2", "config.json");
+}
+
+/**
+ * Command Code's provider store directory — `~/.commandcode`, with no override.
+ *
+ * There is deliberately no `COMMANDCODE_HOME` here, unlike the other clients in this
+ * file. The published client (`command-code@1.66.0`) resolves its store as
+ * `homeDir15() + "/.commandcode/providers.json"`, and `homeDir15` is exactly
+ * `env.HOME ?? env.USERPROFILE` — `grep -c COMMANDCODE_HOME` over the shipped
+ * `dist/cli.mjs` and `dist/index.mjs` returns 0.
+ *
+ * An override we honour but the client ignores is worse than none: `enable` would
+ * report success and write a provider block at a path no Command Code process ever
+ * opens, and the user would see an empty model list with no error anywhere. Every
+ * other client in this file earns its override because that client documents it;
+ * this one does not, so an apply against a relocated home is refused by `detectDir`
+ * simply not existing rather than being silently written to the wrong place.
+ */
+export function commandCodeHomeDir(_env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(home, ".commandcode");
+}
+
+export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(commandCodeHomeDir(env, home), "providers.json");
 }
 
 /**
@@ -1479,6 +1514,20 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // ZCode persists the credential in its own file and has no dedicated
     // proxy-admission header field, so real keys are never serialized and
     // remote binds refuse — same reasoning as MCode.
+    loopbackOnly: true,
+  },
+  commandcode: {
+    id: "commandcode",
+    filename: "providers.json",
+    destination: env => commandCodeConfigPath(env),
+    // No env var exists behind this integration: buildCommandCodeClientConfig
+    // writes `apiKey: false`, the documented keyless form for a loopback endpoint.
+    apiKeyEnv: "",
+    exportHint: "The provider is written with `apiKey: false` — Command Code treats a keyless loopback endpoint as already authenticated. No key is stored or referenced.",
+    build: buildCommandCodeClientConfig,
+    format: "json",
+    summarize: summarizeCommandCode,
+    buildContribution: buildCommandCodeContribution,
     loopbackOnly: true,
   },
   prime: {
