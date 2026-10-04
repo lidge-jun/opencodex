@@ -309,6 +309,9 @@ admission or account-snapshot pairing. The forwarding contract is covered in
 
 `src/config/proxy-env.ts` activates configured SOCKS5 through `src/lib/proxy-env.ts`;
 the compatibility config facade does not own a second activation path.
+The library captures `startupOutboundProxyConfigured` at module evaluation, before config
+mutates proxy environment keys. Anthropic token-host DNS failure proves an unsent request
+only when both this immutable startup snapshot and the current environment are proxy-free.
 `src/server/responses/fetch-helpers.ts` routes the built-in HTTP executor through
 configured outbound fetch, preserving physical-send admission and dispatch override.
 Native WebSocket selection stays on HTTP SSE while SOCKS5 is configured.
