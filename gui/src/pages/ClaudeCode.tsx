@@ -121,6 +121,13 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
    * values back into the draft, the baseline and the session cache.
    */
   const writeEpoch = useRef(0);
+  /*
+   * The latest server-owned state the page has confirmed: the last accepted read with any
+   * immediate switch result laid on top. Save publishes its session copy from this, not from
+   * the baseline it captured before the PUT, because the 1P and connection switches stay
+   * usable while a Save is in flight and may confirm newer values in the meantime.
+   */
+  const confirmedState = useRef<ClaudeCodeState | null>(cached?.state ?? null);
 
   const fetchCode = useCallback(async (signal: AbortSignal): Promise<CachedClaudeCode> => {
     const epoch = writeEpoch.current;
@@ -148,6 +155,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     if (signal.aborted) throw new Error("Claude Code request aborted");
     // Superseded by a write: return it to the resource, but never let it reach the draft or cache.
     if (epoch !== writeEpoch.current) return next;
+    confirmedState.current = nextState;
     // The only place a read reaches the draft, at the successful read boundary, without a
     // synchronization effect.
     setEdit(current => applyServerRead(current, next));
@@ -181,6 +189,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   };
   /** Fields committed by their own control land in draft AND baseline: they are not edits. */
   const applyLive = (fields: Partial<ClaudeCodeState>) => {
+    if (confirmedState.current) confirmedState.current = { ...confirmedState.current, ...fields };
     setEdit(current => current && {
       ...current,
       draft: { ...current.draft, state: { ...current.draft.state, ...fields } },
@@ -274,7 +283,6 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const save = async () => {
     if (!state || !edit || saving) return;
     const submitted = edit.draft;
-    const serverState = edit.baseline.state;
     setStatus("");
     setSaving(true);
     // Reads already in flight predate this Save; none of them may reach the draft or cache.
@@ -288,8 +296,9 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       });
       await readJsonOrThrow(r, t("claude.saveFailed"));
       writeEpoch.current += 1;
-      // Replace the session copy now, so a failed refresh cannot leave pre-Save values to reseed a revisit.
-      writeSessionListCacheEntry(cacheKey, savedCopy(serverState, submitted));
+      // Replace the session copy now, so a failed refresh cannot leave pre-Save values to reseed a
+      // revisit: the latest confirmed server fields plus exactly what this Save submitted.
+      writeSessionListCacheEntry(cacheKey, savedCopy(confirmedState.current ?? submitted.state, submitted));
       // The submitted draft is what the server now holds; edits made meanwhile stay dirty.
       setEdit(current => acknowledgeSave(current, submitted));
       setOk(true);

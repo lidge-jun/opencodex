@@ -32,6 +32,53 @@ beforeEach(() => {
   };
 });
 
+for (const control of ["first-party", "connection"] as const) {
+  test(`a ${control} switch confirmed during Save survives in the session copy`, async () => {
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+    const server = { systemEnv: false, cliFirstParty: false, enabled: true };
+    let offline = false;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/native-integrations/claude")) {
+        server.enabled = (JSON.parse(String(init?.body)) as { enabled: boolean }).enabled;
+        return Response.json({ desiredEnabled: server.enabled });
+      }
+      if (!url.endsWith("/api/claude-code")) return new Response(null, { status: 404 });
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        if ("cliFirstParty" in body) {
+          server.cliFirstParty = body.cliFirstParty as boolean;
+          return Response.json({ ok: true });
+        }
+        await saveGate;
+        Object.assign(server, { systemEnv: body.systemEnv });
+        offline = true;
+        return Response.json({ ok: true });
+      }
+      if (offline) return Response.json({ error: "offline" }, { status: 503 });
+      return Response.json({ ...SERVER, autoConnectSupported: true, ...server, modelMap: {} });
+    }) as typeof fetch;
+    const page = await mount();
+    try {
+      await page.click(page.container.querySelector<HTMLInputElement>('input[aria-label="Auto-connect"]')!);
+      await act(async () => { page.button("Save").click(); });
+      await page.click(page.button(control === "first-party" ? "Toggle Claude Code CLI first-party" : "Toggle Claude connection"));
+      expect(control === "first-party" ? server.cliFirstParty : server.enabled).toBe(control === "first-party");
+      releaseSave();
+      await settle(page.testWindow);
+      const cached = readSessionListCacheEntry<{ state: { systemEnv: boolean; cliFirstParty: boolean; enabled: boolean } }>("ocx.claude-code.v1:http://localhost");
+      expect(cached?.data?.state.systemEnv).toBe(true);
+      if (control === "first-party") expect(cached?.data?.state.cliFirstParty).toBe(true);
+      else expect(cached?.data?.state.enabled).toBe(false);
+    } finally {
+      releaseSave();
+      await act(async () => page.root.unmount());
+      page.testWindow.close();
+    }
+  });
+}
+
 test("a successful Save replaces the session copy even when its refresh fails", async () => {
   const server = { systemEnv: false };
   let offline = false;
