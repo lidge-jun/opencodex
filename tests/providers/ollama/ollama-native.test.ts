@@ -553,11 +553,31 @@ describe("ollama-native commentary validation and replay ownership", () => {
     const second = call("second");
     const batch = { ...first, content: [...first.content, ...second.content] };
     const adapter = createOllamaNativeAdapter(ollamaProvider());
-    const { body } = adapter.buildRequest(parsedWith([batch, result("first"), commentary, result("first")]));
+    const { body } = adapter.buildRequest(parsedWith([
+      batch, result("first"), { ...result("first"), content: "additional A" },
+      commentary, { ...result("second"), content: "done B" },
+    ]));
     const messages = JSON.parse(body).messages;
-    expect(messages[1].content).toBe("done\ndone");
-    expect(messages[2].content).toContain("execution status unknown");
-    expect(messages[3].content).toBe("Working.");
+    expect(messages.map((message: { role: string }) => message.role)).toEqual(["assistant", "tool", "tool", "assistant"]);
+    expect(messages[0].tool_calls.map((entry: { id: string }) => entry.id)).toEqual(["first", "second"]);
+    expect(messages[1]).toMatchObject({ tool_call_id: "first", content: "done\nadditional A" });
+    expect(messages[2]).toMatchObject({ tool_call_id: "second", content: "done B" });
+    expect(messages[3]).toMatchObject({ role: "assistant", content: "Working." });
+  });
+
+  test("late output after completed commentary uses an attributed conversation carrier", () => {
+    const { body } = createOllamaNativeAdapter(ollamaProvider()).buildRequest(parsedWith([
+      call("settled"), result("settled"), commentary,
+      { ...result("settled"), content: "late fragment" }, { role: "user", content: "next" },
+    ]));
+    const messages = JSON.parse(body).messages;
+    expect(messages.map((message: { role: string }) => message.role)).toEqual(["assistant", "tool", "assistant", "user", "user"]);
+    expect(messages[1]).toMatchObject({ tool_call_id: "settled", content: "done" });
+    expect(messages[2]).toMatchObject({ role: "assistant", content: "Working." });
+    expect(messages[3]).toEqual({ role: "user",
+      content: '[ocx] additional output for previously issued tool "ops__exec" (settled):\nlate fragment',
+    });
+    expect(messages[4]).toMatchObject({ role: "user", content: "next" });
   });
 
   test("known late output follows the subsequent batch without reopening its old call", () => {
