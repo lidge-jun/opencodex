@@ -101,6 +101,16 @@ Missing or unreadable evidence blocks the guarded stop.
 
 ### `ocx restart`
 
+When this CLI is newer than an attested standalone POSIX proxy, restart can stop the old
+installation and launch this one. This guarded update requires an unclaimed physical home,
+a detached proxy whose parent is PID 1, no installed or active service, and a known CLI version.
+The stop uses the same connection that proved the old proxy's identity. The command launches
+once only after confirmed shutdown, then requires the exact child PID, endpoint, fresh identity
+proof and matching version. Missing version, uncertain stop, timeout or an unexpected replacement
+reports failure without another stop or start. Windows, foreground, desktop-supervised, service,
+connected-client and sibling runtimes do not use this update path; use their owning lifecycle
+controls. A newer proxy or incomparable version still refuses an in-place downgrade.
+
 When a proxy is running, ask that exact attested PID and port to restart in place, wait for its
 normal drain, and verify a different runtime PID on the same port. Managed routing and service
 supervision stay installed throughout; an uncertain request is observed rather than replayed as a
@@ -122,7 +132,7 @@ the previous attempt never launched a child or the launched child is known to ha
 If a launch may still be running, restart reports the original failure without starting
 a second proxy, even when a health probe finds nothing. When an accepted restart never publishes a replacement, the command re-observes
 once before giving up — a proxy that crashed mid-restart reads absent and is started fresh,
-while a replacement that landed just past the shortened replacement wait still proves success within the overall observation deadline. A live target is
+while a replacement that landed just past the shortened replacement wait still proves success within the overall observation deadline. Outside the guarded newer-CLI update path, a live target is
 never stopped to make room, so a stale-but-listening process can not be replaced by a second
 proxy racing it for the port.
 Every failed start attempt is followed by a beat and a strong re-observation before the

@@ -2,6 +2,10 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "cli-update-restart.test.ts": "cli",
+    "cli-update-restart-child.test.ts": "cli",
+    "cli-update-restart-transport.test.ts": "cli",
+    "cli-update-restart-home.test.ts": "cli",
     "usage-antigravity-55.test.ts": "usage",
     "provider-antigravity-wire-snapshot.test.ts": "providers",
     "antigravity-discovered-families.test.ts": "adapters/google",
