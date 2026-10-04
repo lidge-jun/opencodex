@@ -706,8 +706,8 @@ export default function ClaudeDesktop({
         </section>
       )}
 
-      {data.models.length > 0 && (
-        <section className="claude-desktop-list" aria-labelledby="claude-desktop-list-title">
+      {/* Always mounted: Import/Export must stay reachable with an empty catalog, as they were in the toolbar. */}
+      <section className="claude-desktop-list" aria-labelledby="claude-desktop-list-title">
           <div className="claude-desktop-list-head">
             <h3 className="claude-desktop-section-title" id="claude-desktop-list-title">
               {t("claudeDesktop.roles.listTitle")}
@@ -719,7 +719,8 @@ export default function ClaudeDesktop({
               <button type="button" className="btn btn-ghost btn-sm" onClick={exportProfile}>{t("claudeDesktop.exportJson")}</button>
             </div>
           </div>
-          <p className="claude-desktop-list-hint">{t("claudeDesktop.roles.listHint")}</p>
+          {data.models.length > 0 && <p className="claude-desktop-list-hint">{t("claudeDesktop.roles.listHint")}</p>}
+          {data.models.length > 0 && (
           <ul className="card claude-desktop-list-rows">
             {listed.slice(0, listLimit).map(model => {
               const context = formatContextWindow(model.contextWindow, t);
@@ -738,13 +739,13 @@ export default function ClaudeDesktop({
               );
             })}
           </ul>
+          )}
           {listed.length > listLimit && (
             <button type="button" className="btn btn-ghost btn-sm claude-lane-more" onClick={() => setListLimit(limit => limit + LANE_PAGE)}>
               {t("models.showMore", { n: listed.length - listLimit })}
             </button>
           )}
-        </section>
-      )}
+      </section>
 
       {/* The family lanes stay mounted while folded: drag, move, search and per-family defaults
           keep working, and the summary carries every warning so nothing actionable hides. */}
