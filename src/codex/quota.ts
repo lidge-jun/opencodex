@@ -904,10 +904,17 @@ function isMeasuredLongWindow(window: WhamUsageWindow | null | undefined): boole
   return isExplicitLongWindow(window) && normalizeUsagePercent(window?.used_percent) !== undefined;
 }
 
+/** Absent/null controls impose no veto; a present control requires reached:false. */
+function spendControlAllowsCredits(control: unknown): boolean | undefined {
+  if (control === undefined || control === null) return undefined;
+  return typeof control === "object" && !Array.isArray(control)
+    && "reached" in control && control.reached === false;
+}
+
 /**
  * Normalize WHAM windows into the display snapshot, preserving declared short-window shape.
  * Finite percentages are clamped for compatibility; policy callers must validate raw readings
- * separately. Return null when neither a quota value/window nor reset credits are available.
+ * separately. Return null when no usage window or credit observation/retraction is available.
  */
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {
   const resetCredits = typeof data.rate_limit_reset_credits?.available_count === "number"
@@ -915,6 +922,7 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
     : undefined;
 
   const quota: Omit<StoredAccountQuota, "updatedAt"> = {};
+  const creditsAllowed = spendControlAllowsCredits(data.spend_control);
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
   if (data.credits !== undefined) {
     quota.credits = null;
@@ -926,11 +934,13 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
         ...(parsed.hasCredits !== undefined ? { hasCredits: parsed.hasCredits } : {}),
         ...(parsed.unlimited !== undefined ? { unlimited: parsed.unlimited } : {}),
         ...(parsed.overageLimitReached !== undefined ? { overageLimitReached: parsed.overageLimitReached } : {}),
-        ...(typeof data.rate_limit?.allowed === "boolean" ? { allowed: data.rate_limit.allowed } : {}),
+        // Included-plan refusal is precisely when opted-in credits take over, not a credit veto.
+        // A declared spending control permits credits only with an explicit unreached verdict.
+        ...(creditsAllowed !== undefined ? { allowed: creditsAllowed } : {}),
         ...(balance !== undefined && Number.isFinite(balance) ? { balance } : {}),
       };
     }
-  } else if (data.rate_limit?.allowed === false) quota.credits = null;
+  } else if (data.rate_limit?.allowed === false || creditsAllowed === false) quota.credits = null;
   if (!data.rate_limit) return snapshotHasCredits(quota) ? quota : null;
   const thirtyDayOnly = codexQuotaWindowForPlan(data.plan_type) === "monthly";
   const primaryWindow = data.rate_limit.primary_window;
