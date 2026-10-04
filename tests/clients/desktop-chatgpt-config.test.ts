@@ -15,7 +15,7 @@ describe("experimental ChatGPT desktop config", () => {
     }
   });
   test("malformed reads disable only the experimental feature; writes reject unknown and malformed fields", () => {
-    for (const chatgptDesktop of [null, true, [], "yes", { appServerShim: "true" }, { appServerShim: true, unblockSend: true }, { port: 1234 }]) {
+    for (const chatgptDesktop of [null, true, [], "yes", { appServerShim: "true" }, { appServerShim: true, unblocksend: true }, { port: 0 }]) {
       const candidate = { ...base, port: 12345, chatgptDesktop };
       const parsed = configSchema.parse(candidate);
       expect(parsed.chatgptDesktop).toBeUndefined();
@@ -31,7 +31,11 @@ describe("experimental ChatGPT desktop config", () => {
     if (process.platform !== "darwin") expect(diagnostics.warnings?.join(" ")).toContain("macOS only");
   });
   test("all operations reject non-macOS without app side effects", async () => {
-    for (const sub of ["launch", "restore", "status"]) expect(await handleChatgptCommand([sub], "linux")).toBe(1);
+    for (const sub of ["launch", "restore", "status", "install-watcher", "uninstall-watcher"]) expect(await handleChatgptCommand([sub], "linux")).toBe(1);
+  });
+  test("unexpected watcher arguments are rejected before app side effects", async () => {
+    expect(await handleChatgptCommand(["install-watcher", "--unknown"], "darwin")).toBe(64);
+    expect(await handleChatgptCommand(["uninstall-watcher", "--yes"], "darwin")).toBe(64);
   });
   test("hidden self-test works and rejects extra options", async () => {
     expect(await handleInternalCommand(["chatgpt-app-server-filter", "--self-test"])).toBe(0);

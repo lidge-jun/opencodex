@@ -199,6 +199,14 @@ describe("restore validates the discovered app before any quit or open", () => {
       expect(result.calls.filter(call => ["pgrep", "ps", "/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toEqual([]);
     });
   }
+  test("restore refuses while the intercept watcher is loaded, before quit or open", () => {
+    // The watcher would put the intercept switches straight back on the relaunched app.
+    const result = run({ flag: false, missingBinary: true, running: true, watcherLoaded: true });
+    expect(result.code).toBe(1);
+    expect(result.launcherExists).toBe(true);
+    expect(result.stderr).toContain("Uninstall the launch watcher");
+    expect(result.calls.filter(call => ["pgrep", "ps", "/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toEqual([]);
+  });
   test("valid restore works with the flag off and no bundled app-server", () => {
     const result = run({ flag: false, missingBinary: true, running: true });
     expect(result.code).toBe(0);

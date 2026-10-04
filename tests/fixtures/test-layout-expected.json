@@ -23,7 +23,7 @@
   "main-account-hard-lock-thresholds.test.ts": "codex-integration",
   "main-account-external-usage.test.ts": "codex-integration",
   "jev-decision-model-config.test.ts": "routing",
-  "cli-combo-partial-update.test.ts": "cli",
+  "cli-combo-partial-update.test.ts": "cli", "desktop-unblock-ws-frame.test.ts": "clients", "desktop-unblock-watcher-install.test.ts": "clients", "desktop-unblock-ws-relay.test.ts": "clients", "desktop-unblock-ws-upstream.test.ts": "clients", "desktop-unblock-runtime.test.ts": "clients", "desktop-unblock-listener.test.ts": "clients", "desktop-unblock-launch-script.test.ts": "clients", "desktop-unblock-config-boundary.test.ts": "clients", "desktop-unblock-ca-trust.test.ts": "clients", "desktop-rewrite.test.ts": "clients", "socks5-handshake.test.ts": "lib",
   "desktop-app-server-shim.test.ts": "clients",
   "desktop-app-server-shim-launcher.test.ts": "clients",
   "desktop-chatgpt-config.test.ts": "clients",
