@@ -299,9 +299,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
   const requestMetrics = metricsExportEnabled(config)
     ? createRequestMetricsOwner(Date.now() / 1000, cachedKiroQuotaMetricRows) : undefined;
   const requestMetricsLogContext = requestMetrics ? { requestMetricsRecorder: requestMetrics } : {};
-  const requestManagementApiDeps: ManagementApiDeps = requestMetrics
-    ? { ...managementApiDeps, requestMetrics: { snapshot: () => requestMetrics.snapshot() } }
-    : managementApiDeps;
+  const requestManagementApiDeps: ManagementApiDeps = {
+    ...managementApiDeps,
+    liveListenPort: () => ctx.boundPort ?? listenPort,
+    ...(requestMetrics ? { requestMetrics: { snapshot: () => requestMetrics.snapshot() } } : {}),
+  };
   const serveOptions = {
       idleTimeout: 255,
       // Bun rejects an oversized body before `fetch` runs, so the listener has to be raised

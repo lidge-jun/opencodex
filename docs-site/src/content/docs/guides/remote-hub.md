@@ -23,6 +23,10 @@ public-internet surface and is outside this deployment model.
 
 With management ingress enabled, the local dashboard command opens `http://127.0.0.1:<management port>` so the address matches the IPv4-only listener without resolving `localhost`.
 
+Client configurations exported or applied through that dashboard still target the inference
+listener, not the management port. Local clients use the configured loopback companion port
+(or the actual public listener port when the companion has no explicit port).
+
 ## Trust and consent boundaries
 
 - Provider and OAuth credentials stay on the hub. Never copy them into a client, image layer,

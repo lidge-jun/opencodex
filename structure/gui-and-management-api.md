@@ -74,6 +74,10 @@ the web route. The native panel introduces no management endpoint or credential 
 
 ## Dashboard serving
 
+Management exports, integration write/preview/refresh inputs and Claude port projections use `managementInferencePort` in `src/server/management/context.ts`, never the request URL port. `src/server/index/serve-options.ts` supplies the public runtime-bound port through `liveListenPort`; direct route fixtures fall back to config. The existing inference resolver still selects an explicit companion port. Request identity, management authentication and ingress restrictions are unchanged.
+
+> Decision record: [ADR-6598](decisions/ADR-6598-management-inference-port.md)
+
 The Factory Droid integration page edits the
 [owned model defaults](clients/integrations.md#droid-reasoning-defaults). Its draft
 is included in the existing preview and confirmation request, with editing
