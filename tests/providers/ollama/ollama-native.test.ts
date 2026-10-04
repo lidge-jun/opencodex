@@ -511,9 +511,9 @@ describe("ollama-native — request shape", () => {
     ]))).toThrow(/orphan tool result/);
   });
 
-  test("a duplicate result for the same call is still refused", () => {
+  test("additional results for the same call preserve every fragment", () => {
     const adapter = createOllamaNativeAdapter(ollamaProvider());
-    expect(() => adapter.buildRequest(parsedWith([
+    const { body } = adapter.buildRequest(parsedWith([
       { role: "user", content: "hi" },
       {
         role: "assistant",
@@ -522,7 +522,9 @@ describe("ollama-native — request shape", () => {
       },
       { role: "toolResult", toolCallId: "call_once", toolName: "exec", content: "once", isError: false, timestamp: 2 },
       { role: "toolResult", toolCallId: "call_once", toolName: "exec", content: "twice", isError: false, timestamp: 3 },
-    ]))).toThrow(/duplicate tool result/);
+    ]));
+    const messages = JSON.parse(body).messages;
+    expect(messages[2]).toMatchObject({ role: "tool", tool_call_id: "call_once", content: "once\ntwice" });
   });
 });
 
@@ -546,17 +548,26 @@ describe("ollama-native commentary validation and replay ownership", () => {
     });
   }
 
-  test("duplicate results remain rejected while commentary holds an unresolved batch", () => {
+  test("additional output does not consume another call's unresolved count", () => {
     const first = call("first");
     const second = call("second");
     const batch = { ...first, content: [...first.content, ...second.content] };
     const adapter = createOllamaNativeAdapter(ollamaProvider());
-    expect(() => adapter.buildRequest(parsedWith([batch, result("first"), commentary, result("first")]))).toThrow(/duplicate tool result/);
+    const { body } = adapter.buildRequest(parsedWith([batch, result("first"), commentary, result("first")]));
+    const messages = JSON.parse(body).messages;
+    expect(messages[1].content).toBe("done\ndone");
+    expect(messages[2].content).toContain("execution status unknown");
+    expect(messages[3].content).toBe("Working.");
   });
 
-  test("a result cannot cross a subsequent tool-call batch", () => {
+  test("known late output follows the subsequent batch without reopening its old call", () => {
     const adapter = createOllamaNativeAdapter(ollamaProvider());
-    expect(() => adapter.buildRequest(parsedWith([call("old"), commentary, call("new"), result("old")]))).toThrow(/has no originating call/);
+    const { body } = adapter.buildRequest(parsedWith([call("old"), commentary, call("new"), result("old")]));
+    const messages = JSON.parse(body).messages;
+    expect(messages[4]).toMatchObject({ role: "tool", tool_call_id: "new" });
+    expect(messages[5].role).toBe("user");
+    expect(messages[5].content).toContain("[ocx] additional output");
+    expect(messages[5].content).toContain("old");
   });
 
   for (const id of ["", "call_guard"]) {
