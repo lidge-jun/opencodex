@@ -57,7 +57,22 @@ export function readPageFromHash(hash?: string): Page {
   if (pageId === ("api" as Page)
     || pageId === ("grok" as Page)) return "integrations";
   if (raw === "integrations/claude" || raw === "integrations/claude/desktop") return "claude";
+  // Claude accounts live on Providers now; the old Account sub-tab bookmark opens them there.
+  if (raw === "claude/account") return "providers";
   return VALID_PAGES.has(pageId) ? pageId : "dashboard";
+}
+
+/**
+ * The hash a page will end up on once the resolver's passive rewrite lands. The route
+ * hook applies that rewrite with replaceState, which emits no event, so a component that
+ * reads the hash during the same mount (Connect's tab strip, the Providers deep link) has
+ * to read the destination rather than the legacy spelling: #integrations/claude/desktop
+ * must select the Claude Desktop tab on a cold load, not Overview, and #claude/account
+ * must open Anthropic's Accounts tab.
+ */
+export function canonicalHashPath(hash: string): string {
+  const raw = normalizeHashPath(hash);
+  return resolveAppHashChange(raw).replaceTo ?? raw;
 }
 
 /**
@@ -140,9 +155,12 @@ export const INTEGRATION_TAB_HASHES = [
  */
 export const QUERY_HASH_PATHS: readonly string[] = ["providers", "models/compatibility", JEV_AUTO_CREATE_HASH];
 
+/** Where the retired `#claude/account` bookmark lands: Anthropic's Accounts tab on Providers. */
+export const CLAUDE_ACCOUNT_REDIRECT = "providers?provider=anthropic&tab=accounts";
+
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
-    || (page === "claude" && ["claude/account", "claude/code", "claude/desktop", "claude/settings"].includes(rawHash))
+    || (page === "claude" && ["claude/code", "claude/desktop"].includes(rawHash))
     || (page === "logs" && rawHash === "logs/debug")
     || (page === "usage" && rawHash === "usage/companion")
     || (page === "codex-set" && rawHash === "codex-set/prompt")
@@ -204,6 +222,10 @@ export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
   if (rawHash === "api") return { page: "integrations", replaceTo: "integrations/keys" };
   if (rawHash === "integrations/claude") return { page: "claude", replaceTo: "claude/code" };
   if (rawHash === "integrations/claude/desktop") return { page: "claude", replaceTo: "claude/desktop" };
+  // The Claude page lost its Account sub-tab; Anthropic's Accounts tab on Providers replaces it.
+  if (rawHash === "claude/account") return { page: "providers", replaceTo: CLAUDE_ACCOUNT_REDIRECT };
+  // The read-only Settings sub-tab folded into Code, which already holds its controls.
+  if (rawHash === "claude/settings") return { page: "claude", replaceTo: "claude/code" };
   if (rawHash === "grok") return { page: "integrations", replaceTo: "integrations/grok" };
 
   // Legacy deep link from the removed dual-layout era.

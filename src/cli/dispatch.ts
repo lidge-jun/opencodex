@@ -702,15 +702,20 @@ const commandRunners: Record<string, CommandRunner> = {
     switch (deps.args[1]) {
       case "install": {
         const r = installCodexShim();
-        const { healthy, summary } = diagnoseCodexShim();
+        const { healthy, runnable, active, summary } = diagnoseCodexShim();
+        const success = !r.refused && (runnable ?? healthy);
         const { collectCodexShimReadinessWarnings } = await import("./codex-shim-readiness");
-        const warnings = healthy
+        const warnings = success
           ? collectCodexShimReadinessWarnings()
           : [];
-        console.log(`${r.installed && warnings.length === 0 ? "✅ " : "⚠️  "}${r.message}`);
+        console.log(`${success && healthy && warnings.length === 0 ? "✅ " : "⚠️  "}${r.message}`);
         for (const warning of warnings) console.warn(`   ${warning}`);
-        if (!healthy) console.error(`Codex shim installation is unhealthy: ${summary}`);
-        return healthy ? 0 : 1;
+        if (success && active !== undefined && active !== true) {
+          const { overlayActivationHint } = await import("../codex/shim-overlay");
+          console.warn(`   ${overlayActivationHint()}`);
+        }
+        if (!success) console.error(`${r.refused ? "Codex shim installation was refused" : "Codex shim installation is unhealthy"}: ${summary}`);
+        return success ? 0 : 1;
       }
       case "status":
         console.log(codexShimStatus());
