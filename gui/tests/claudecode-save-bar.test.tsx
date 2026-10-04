@@ -32,6 +32,40 @@ beforeEach(() => {
   };
 });
 
+test("a late connection acknowledgement from an unmounted page reaches the page on screen", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let enabled = true;
+  let offline = false;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/native-integrations/claude")) {
+      await gate;
+      enabled = (JSON.parse(String(init?.body)) as { enabled: boolean }).enabled;
+      offline = true;
+      return Response.json({ desiredEnabled: enabled });
+    }
+    if (!url.endsWith("/api/claude-code")) return new Response(null, { status: 404 });
+    if (offline) return Response.json({ error: "offline" }, { status: 503 });
+    return Response.json({ ...SERVER, enabled, modelMap: {} });
+  }) as typeof fetch;
+  const page = await mount();
+  try {
+    await act(async () => { page.button("Toggle Claude connection").click(); });
+    await act(async () => { page.root.render(<LanguageProvider><ClaudeCode key="new" apiBase="http://localhost" /></LanguageProvider>); });
+    await settle(page.testWindow);
+    release();
+    await settle(page.testWindow);
+    expect(enabled).toBe(false);
+    expect(readSessionListCacheEntry<{ state: { enabled: boolean } }>("ocx.claude-code.v1:http://localhost")?.data?.state.enabled).toBe(false);
+    expect(page.button("Toggle Claude connection").getAttribute("aria-pressed")).toBe("false");
+  } finally {
+    release();
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
+});
+
 test("a late Save refresh from an unmounted page reaches the page on screen", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });

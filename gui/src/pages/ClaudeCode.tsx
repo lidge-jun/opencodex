@@ -1,5 +1,5 @@
 import ClaudeInterceptStart from "../components/ClaudeInterceptStart";
-import { useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaudeConnection } from "./use-claude-connection";
 import { Notice, Switch } from "../ui";
 import { useI18n, useT, LOCALES, type TKey } from "../i18n/shared";
@@ -56,6 +56,17 @@ function normalizeFirstPartyState(state: ClaudeCodeState): ClaudeCodeState {
 const writeEpochs = new Map<string, number>();
 const writeEpoch = (key: string) => writeEpochs.get(key) ?? 0;
 const bumpWriteEpoch = (key: string) => { writeEpochs.set(key, writeEpoch(key) + 1); };
+
+/*
+ * Immediate switch acknowledgements, per session-cache key. A switch can be confirmed after
+ * the page that flipped it unmounted; publishing here lets whichever page is on screen take
+ * the new value even when the refresh after it fails.
+ */
+type LiveFields = Partial<Pick<ClaudeCodeState, "enabled" | "cliFirstParty">>;
+const liveListeners = new Map<string, Set<(fields: LiveFields) => void>>();
+function publishLive(key: string, fields: LiveFields) {
+  for (const listener of liveListeners.get(key) ?? []) listener(fields);
+}
 
 const firstPartyNoticeKeys: Record<Exclude<FirstPartyNotice, null>, TKey> = {
   unknown: "claude.firstParty.unknown",
@@ -197,15 +208,22 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
    * edits, and in the confirmed state and session copy right away, so a reread that fails
    * afterwards cannot leave the page or a revisit showing the old value.
    */
-  const applyLive = (fields: Partial<ClaudeCodeState>) => {
+  const applyLive = (fields: LiveFields) => {
     const stored = readSessionListCacheEntry<CachedClaudeCode>(cacheKey)?.data;
     if (stored) writeSessionListCacheEntry(cacheKey, { ...stored, state: { ...stored.state, ...fields } });
-    setEdit(current => current && {
+    publishLive(cacheKey, fields);
+  };
+  useEffect(() => {
+    const listener = (fields: LiveFields) => setEdit(current => current && {
       ...current,
       draft: { ...current.draft, state: { ...current.draft.state, ...fields } },
       baseline: { ...current.baseline, state: { ...current.baseline.state, ...fields } },
     });
-  };
+    const listeners = liveListeners.get(cacheKey) ?? new Set();
+    listeners.add(listener);
+    liveListeners.set(cacheKey, listeners);
+    return () => { listeners.delete(listener); };
+  }, [cacheKey]);
 
   const modelOptions = useMemo(
     () => backgroundHelperOptions(state?.available, t("claude.smallFastModelUnsetOption")),
