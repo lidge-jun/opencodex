@@ -146,8 +146,10 @@ export async function requestBoundSystemRestart(
   const skew = computeVersionSkew(deps.cliVersion ?? ownCliVersion(), proxyVersion);
   if (skew.skewed) {
     // cli-newer means this installation already holds the update the running proxy
-    // lacks: an in-place respawn would keep serving the old build (#4522), so the
-    // caller restarts via stop/start from here instead of refusing. Other skew
+    // lacks: an in-place respawn would keep serving the old build (#4522). The
+    // caller carries the attested identity into runRestartUpdate
+    // (restart-update-coordinator.ts), which revalidates it under the ownership
+    // lease through the guarded-stop mechanism instead of refusing. Other skew
     // directions (proxy-newer, incomparable) still refuse.
     return rejected(skew.relation === "cli-newer" ? "restart_version_skew_cli_newer" : "restart_version_skew");
   }
