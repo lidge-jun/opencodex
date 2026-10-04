@@ -21,7 +21,7 @@ import {
 } from "./shim-state-file";
 import { buildUnixCodexShim, SHIM_MARKER, UNIX_SHIM_REVISION_MARKER, shQuote } from "./shim-templates";
 
-type Snapshot = { identity: OverlayIdentity; mode: number; content: string };
+type Snapshot = { identity: OverlayIdentity; mode: number; content: string; uid?: number; gid?: number };
 type Publication = { path: string; staged: string; created: Snapshot; prior: Snapshot | null; rollback: string };
 type Journal = { version: 1; token: string; launcher: string; files: Publication[] };
 type InstallResult = { installed: boolean; message: string; refused?: boolean; runnable?: boolean };
@@ -63,12 +63,15 @@ function snapshot(path: string): Snapshot | null {
     || bounded.stat.size !== after.size || bounded.stat.mtimeMs !== after.mtimeMs || bounded.stat.ctimeMs !== after.ctimeMs) {
     throw new Error("Private Codex artifact changed");
   }
-  return { identity: { dev: after.dev, ino: after.ino }, mode: after.mode & 0o777, content: bounded.content };
+  return { identity: { dev: after.dev, ino: after.ino }, mode: after.mode & 0o7777,
+    content: bounded.content, uid: after.uid, gid: after.gid };
 }
 function unchanged(path: string, expected: Snapshot | null): boolean {
   const current = snapshot(path);
   return expected ? !!current && sameId(current.identity, expected.identity)
-    && current.content === expected.content && current.mode === expected.mode : current === null;
+    && current.content === expected.content && current.mode === expected.mode
+    && (expected.uid === undefined || current.uid === expected.uid)
+    && (expected.gid === undefined || current.gid === expected.gid) : current === null;
 }
 
 /** Validate the physical configured home alias; managed bin may never be a symlink. */
@@ -128,8 +131,15 @@ function requireOverlayIdentities(state: OverlayState): void {
 function ownedEnvironment(value: Snapshot, state: OverlayState): boolean {
   return sameId(value.identity, state.envIdentity) && value.content === shellEnvironment();
 }
+function revalidateOverlay(state: OverlayState, saved: Snapshot | null, wrapper: Snapshot | null, env: Snapshot | null): void {
+  if (!unchanged(statePath(), saved) || !unchanged(state.wrapperPath, wrapper) || !unchanged(overlayPaths().env, env)) {
+    throw new Error("Private Codex installation changed during inspection; preserving artifacts");
+  }
+}
 /** Validate the whole installation before endorsing either execution or activation. */
-function inspectOverlay(state: OverlayState): { wrapper: Snapshot | null; environmentPresent: boolean; complete: boolean } {
+function inspectOverlay(state: OverlayState): {
+  wrapper: Snapshot | null; environmentPresent: boolean; complete: boolean; revalidate: () => void;
+} {
   requireOverlayIdentities(state);
   const saved = snapshot(statePath());
   const recorded = saved ? decodeOverlayState(JSON.parse(saved.content), getConfigDir()) : null;
@@ -142,10 +152,9 @@ function inspectOverlay(state: OverlayState): { wrapper: Snapshot | null; enviro
   const env = snapshot(overlayPaths().env);
   if (wrapper && !ownedWrapper(wrapper, state)) throw new Error("Private Codex launcher was replaced; preserving it");
   if (env && !ownedEnvironment(env, state)) throw new Error("Codex shell environment file was replaced; preserving it");
-  if (!unchanged(statePath(), saved) || !unchanged(state.wrapperPath, wrapper) || !unchanged(overlayPaths().env, env)) {
-    throw new Error("Private Codex installation changed during inspection; preserving artifacts");
-  }
-  return { wrapper, environmentPresent: !!env, complete: saved.mode === 0o600 && !!env && env.mode === 0o600 };
+  const revalidate = () => revalidateOverlay(state, saved, wrapper, env);
+  revalidate();
+  return { wrapper, environmentPresent: !!env, complete: saved.mode === 0o600 && !!env && env.mode === 0o600, revalidate };
 }
 function nativeProbe(path: string) {
   if (!isExecutableCodexCandidate(path)) return null;
@@ -181,6 +190,7 @@ export function overlayDiagnostic(state: ShimState): CodexShimDiagnostic {
       } catch { active = null; }
     }
     check();
+    inspection?.revalidate();
   } catch (error) { active = null; runnable = false; integrityMessage = failure(error).message; }
   return { installed: true, healthy: complete && runnable && active === true, runnable, active,
     summary: `Codex PATH shim: ${complete && runnable ? "ready" : "unhealthy"} at ${state.wrapperPath}; launcher ${state.launcherPath}; PATH ${active === null ? "unverified" : active ? "active" : "inactive"}. ${complete && runnable ? overlayActivationHint() : integrityMessage || "Run ocx codex-shim install to repair the shim."}` };
@@ -214,7 +224,10 @@ function validSnapshot(value: unknown): value is Snapshot {
   if (!value || typeof value !== "object") return false;
   const item = value as Snapshot;
   return !!item.identity && Number.isSafeInteger(item.identity.dev) && Number.isSafeInteger(item.identity.ino)
-    && Number.isInteger(item.mode) && item.mode >= 0 && item.mode <= 0o777 && typeof item.content === "string";
+    && Number.isInteger(item.mode) && item.mode >= 0 && item.mode <= 0o7777 && typeof item.content === "string"
+    // Older journals have no owner fields; snapshot() still requires current-user ownership.
+    && (item.uid === undefined || Number.isSafeInteger(item.uid) && item.uid >= 0)
+    && (item.gid === undefined || Number.isSafeInteger(item.gid) && item.gid >= 0);
 }
 function readJournal(): { journal: Journal; saved: Snapshot } | null {
   const saved = snapshot(journalPath());
@@ -287,6 +300,8 @@ function publishOverlay(launcher: string, state: OverlayState | null, check: () 
   const script = scriptFor(launcher);
   if (state && wrapper?.content === script && isExecutableCodexCandidate(paths.wrapper) && env?.content === shellEnvironment()
     && env.mode === 0o600 && currentState?.mode === 0o600) {
+    check();
+    revalidateOverlay(state, currentState, wrapper, env);
     return { installed: false, runnable: true, message: `Codex PATH shim already installed. ${overlayActivationHint()}` };
   }
   const token = randomUUID();
@@ -430,7 +445,9 @@ export function autoRestoreUnixOverlay(options: RestoreOptions): CodexShimAutoRe
     const inspection = inspectOverlay(state);
     const runnable = overlayRunnable(state, inspection.wrapper);
     check();
-    if (inspection.complete && runnable && !lexical(journalPath())) return { status: "healthy" };
+    const pending = lexical(journalPath());
+    inspection.revalidate();
+    if (inspection.complete && runnable && !pending) return { status: "healthy" };
   } catch (error) { return { status: "ineligible", message: failure(error).message }; }
   if (!nativeProbe(state.launcherPath)) return { status: "ineligible", message: "Recorded native Codex launcher is unusable; repair it with its package manager" };
   if (!options.enabled()) return { status: "disabled" };

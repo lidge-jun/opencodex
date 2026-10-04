@@ -114,6 +114,69 @@ describe.skipIf(process.platform === "win32")("Codex overlay publication transac
     expect(saved(f.native)).toEqual(native);
   }));
 
+  for (const operation of ["diagnosis", "auto-restore", "install"] as const) {
+    test.each(["env-replace", "env-chmod", "state-chmod"])(`${operation} rejects late %s during executable inspection`, mutation => fixture(f => {
+      expect(installCodexShim().installed).toBe(true);
+      process.env.PATH = `${dirname(f.wrapper)}:${process.env.PATH}`;
+      const targets = [f.statePath, f.wrapper, f.envFile, f.native];
+      const before = targets.map(saved);
+      const path = mutation === "state-chmod" ? f.statePath : f.envFile;
+      let hit = false;
+      let changed: ReturnType<typeof saved> | undefined;
+      const change = () => {
+        hit = true;
+        if (mutation === "env-replace") {
+          // Keep bytes and mode identical so inode replacement alone must be rejected.
+          fs.renameSync(path, `${path}.original`);
+          fs.writeFileSync(path, before[2]!.bytes, { mode: 0o600 });
+        } else {
+          fs.chmodSync(path, 0o666);
+        }
+        changed = saved(path);
+      };
+      if (operation === "install") {
+        const access = fs.accessSync;
+        spyOn(fs, "accessSync").mockImplementation((candidate, mode) => {
+          if (!hit && String(candidate) === f.wrapper && mode === fs.constants.X_OK) change();
+          return access(candidate, mode);
+        });
+      } else {
+        const open = fs.openSync;
+        spyOn(fs, "openSync").mockImplementation((candidate, flags, mode) => {
+          if (!hit && String(candidate) === f.native) change();
+          return open(candidate, flags, mode);
+        });
+      }
+      let message: string;
+      if (operation === "diagnosis") {
+        const result = diagnoseCodexShim();
+        expect(result).toMatchObject({ healthy: false, runnable: false, active: null });
+        message = result.summary;
+      } else if (operation === "auto-restore") {
+        const result = autoRestoreCodexShim({ enabled: () => { throw new Error("unsafe artifact must not consult opt-in"); } });
+        expect(result.status).toBe("ineligible");
+        message = result.message ?? "";
+      } else {
+        const result = installCodexShim();
+        expect(result).toMatchObject({ installed: false, refused: true });
+        expect(result.runnable).not.toBe(true);
+        message = result.message;
+      }
+      mock.restore();
+      expect(hit).toBe(true);
+      expect(message).toMatch(/changed.*preserving|not an owned regular file/i);
+      expect(message).not.toMatch(/For sh\/bash\/zsh|run \. /);
+      targets.forEach((target, index) => expect(saved(target)).toEqual(target === path ? changed : before[index]));
+      expect(privateDebris(f.home)).toEqual([]);
+      if (mutation === "env-replace") {
+        expect(changed!.ino).not.toBe(before[2]!.ino);
+        expect(saved(`${path}.original`)).toEqual(before[2]);
+      } else {
+        expect(changed!.mode).toBe(0o666);
+      }
+    }));
+  }
+
   test("foreign replacement with identical marker-bearing bytes is preserved by install, repair and uninstall", () => fixture(f => {
     expect(installCodexShim().installed).toBe(true);
     const original = saved(f.wrapper);

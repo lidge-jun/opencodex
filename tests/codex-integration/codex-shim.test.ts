@@ -2127,8 +2127,9 @@ describe("version-manager shim destruction (#2412)", () => {
 
   test("a destroyed shim reports the paths instead of bailing silently", () => {
     withInstalledShim(({ wrappers, backups }) => {
-      writeFileSync(wrappers[0], "#!/bin/sh\necho version-manager codex\n", "utf8");
-      if (process.platform !== "win32") chmodSync(wrappers[0], 0o755);
+      // A version manager rewrites the entry it owns: the in-place wrapper on
+      // Windows, only the native launcher behind the private Unix overlay.
+      if (process.platform === "win32") writeFileSync(wrappers[0], "#!/bin/sh\necho version-manager codex\n", "utf8");
       rmSync(backups[0]);
       const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
       expect(result.status).toBe("ineligible");
