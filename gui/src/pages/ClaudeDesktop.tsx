@@ -3,7 +3,7 @@ import { useCallback, useMemo, useRef, useState, type ChangeEvent, type DragEven
 import { LANE_PAGE, defaultCollapsedFamilies, laneView, rowStartsOpen } from "./claude-desktop-lane";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { IconChevron } from "../icons";
-import { EmptyState, Notice } from "../ui";
+import { EmptyState, Notice, Select } from "../ui";
 import { LOCALES, useI18n, type TFn, type TKey } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { readSessionListCacheEntry, writeSessionListCacheEntry } from "../session-list-cache";
@@ -11,29 +11,23 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import ClaudeFirstPartyBindings from "../components/ClaudeFirstPartyBindings";
 import ClaudeDesktopPicker, { type DesktopPickerStatus } from "../components/ClaudeDesktopPicker";
-
-const FAMILIES = ["opus", "fable", "sonnet", "haiku"] as const;
-type Family = typeof FAMILIES[number];
+import {
+  FAMILIES,
+  assignFamily,
+  effectiveFamilyDefaults,
+  familySize,
+  roleListOrder,
+  roleOptions,
+  roleValue,
+  type DesktopProfile,
+  type Family,
+} from "./claude-desktop-roles";
 
 /**
  * Family collapse lives under its own key: the Models page collapses PROVIDERS, and a
  * shared key would make folding "opus" here fold a provider of the same name there.
  */
 const FAMILY_COLLAPSE = makeCollapseStore("ocx.claudeDesktop.collapsedFamilies.v2");
-
-interface Assignment {
-  family: Family;
-  alias: string;
-}
-
-interface DesktopProfile {
-  version: 1;
-  assignments: Record<string, Assignment>;
-  defaults: Record<Family, string | null>;
-  /** Written by the apply route; mirrors OcxClaudeDesktopProfile so a round-trip keeps them. */
-  appliedFingerprint?: string;
-  appliedAt?: string;
-}
 
 interface DesktopModel {
   route: string;
@@ -42,7 +36,7 @@ interface DesktopModel {
   contextWindow?: number;
   effortSupported?: boolean;
   supports1m?: boolean;
-  assignment: Assignment;
+  assignment: DesktopProfile["assignments"][string];
 }
 
 type DesktopMode = "first-party" | "gateway";
@@ -262,6 +256,9 @@ export default function ClaudeDesktop({
   // a family's fold is a durable preference, but which single model you were inspecting
   // is not, and restoring five open rows on reload would rebuild the wall this removes.
   const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
+  // The Advanced disclosure and the compact list's page are view state only.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [listLimit, setListLimit] = useState(LANE_PAGE);
   // The mode the user wants the next apply to use. null = follow whatever /status reports
   // (gateway by default), so a page load never silently changes an existing install.
   const [chosenMode, setChosenMode] = useState<DesktopMode | null>(null);
@@ -329,15 +326,12 @@ export default function ClaudeDesktop({
     return grouped;
   }, [data, profile]);
 
-  const effectiveDefaults = useMemo(() => {
-    const result = {} as Record<Family, string | null>;
-    for (const family of FAMILIES) {
-      const active = modelsByFamily[family].filter(model => model.available).map(model => model.route).sort();
-      const stored = profile?.defaults[family] ?? null;
-      result[family] = stored && active.includes(stored) ? stored : (active[0] ?? null);
-    }
-    return result;
-  }, [modelsByFamily, profile]);
+  const effectiveDefaults = useMemo(
+    () => data && profile
+      ? effectiveFamilyDefaults(data.models, profile)
+      : { opus: null, fable: null, sonnet: null, haiku: null } as Record<Family, string | null>,
+    [data, profile],
+  );
 
   // The status poll is a separate resource: visibility pauses it without unmounting the
   // profile editor, which keeps its drafts intact across Code/Desktop tab switches.
@@ -387,22 +381,15 @@ export default function ClaudeDesktop({
   const firstPartyBindings = bindingsOverride ?? statusBindings ?? {};
   const pickerSuggestions = useMemo(() => status?.firstParty?.pickerSuggestions ?? [], [status]);
 
-  const moveModel = (route: string, family: Family) => {
-    if (!profile || profile.assignments[route]?.family === family) return;
-    setProfile(current => {
-      if (!current) return current;
-      const previous = current.assignments[route];
-      if (!previous || previous.family === family) return current;
-      const assignments = { ...current.assignments, [route]: { ...previous, family } };
-      const defaults = { ...current.defaults };
-      if (defaults[previous.family] === route) {
-        defaults[previous.family] = Object.keys(assignments)
-          .filter(key => key !== route && assignments[key].family === previous.family)
-          .sort()[0] ?? null;
-      }
-      if (defaults[family] === null) defaults[family] = route;
-      return { ...current, assignments, defaults };
-    });
+  /**
+   * One path for both surfaces: the Advanced lanes move a model (makeDefault=false), the
+   * Models card makes it the family's default (makeDefault=true). Both update the lane's move
+   * target and announce, so Advanced never shows a stale destination after a role change.
+   */
+  const moveModel = (route: string, family: Family, makeDefault = false) => {
+    if (!profile) return;
+    if (!makeDefault && profile.assignments[route]?.family === family) return;
+    setProfile(current => current && assignFamily(current, route, family, makeDefault));
     setDestinations(current => ({ ...current, [route]: family }));
     setAnnouncement(t("claudeDesktop.moved", { route, family: t(FAMILY_KEYS[family]) }));
   };
@@ -516,15 +503,31 @@ export default function ClaudeDesktop({
   }
   if (!data || !profile) return null;
 
+  const defaultRoute = roleValue(profile, effectiveDefaults, "opus");
+  const quickRoute = roleValue(profile, effectiveDefaults, "haiku");
+  const modelByRoute = new Map(data.models.map(model => [model.route, model]));
+  /** Options for one role: available models minus the other role's route, plus a stored choice that went unavailable. */
+  const roleSelectOptions = (value: string, exclude: string, allowUnset: boolean) => {
+    const options: { value: string; label: string }[] = roleOptions(data.models, exclude || null)
+      .map(model => ({ value: model.route, label: model.label }));
+    if (value && !options.some(option => option.value === value)) {
+      const stale = modelByRoute.get(value);
+      options.unshift({
+        value,
+        label: stale?.available === false || !stale ? t("claudeDesktop.roles.unavailableOption", { route: value }) : value,
+      });
+    }
+    if (allowUnset) options.unshift({ value: "", label: t("claudeDesktop.roles.unset") });
+    else if (!value) options.unshift({ value: "", label: t("claudeDesktop.roles.pick") });
+    return options;
+  };
+  const listed = roleListOrder(data.models, defaultRoute || null, quickRoute || null);
+  const haikuEmpty = familySize(data.models, profile, "haiku") === 0;
+
   return (
     <>
       <div className="claude-desktop-toolbar">
         <p className="claude-panel-lead">{t("claudeDesktop.subtitle", { port: data.port })}</p>
-        <div className="claude-profile-tools">
-          <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={event => void importProfile(event)} />
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => importRef.current?.click()}>{t("claudeDesktop.importJson")}</button>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={exportProfile}>{t("claudeDesktop.exportJson")}</button>
-        </div>
       </div>
 
       <fieldset className="claude-mode-picker" disabled={pending !== null || !modePickable}>
@@ -660,6 +663,120 @@ export default function ClaudeDesktop({
         <EmptyState title={t("claudeDesktop.emptyTitle")}>{t("claudeDesktop.emptyHint")}</EmptyState>
       )}
 
+      {data.models.length > 0 && (
+        <section className="card claude-desktop-roles" aria-labelledby="claude-desktop-roles-title">
+          <h3 className="claude-desktop-section-title" id="claude-desktop-roles-title">{t("claudeDesktop.roles.title")}</h3>
+          {effectiveMode === "first-party" && <p className="claude-desktop-roles-scope">{t("claudeDesktop.roles.gatewayScope")}</p>}
+          <div className="setting-row">
+            <div className="setting-label">
+              <span className="title">{t("claudeDesktop.roles.default")}</span>
+              <span className="desc">{t("claudeDesktop.roles.defaultDesc")}</span>
+            </div>
+            <div className="setting-controls">
+              <Select
+                value={defaultRoute}
+                options={roleSelectOptions(defaultRoute, quickRoute, false)}
+                onChange={route => { if (route) moveModel(route, "opus", true); }}
+                label={t("claudeDesktop.roles.default")}
+                disabled={pending !== null}
+                style={{ minWidth: 240 }}
+                align="right"
+                portal
+              />
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="setting-label">
+              <span className="title">{t("claudeDesktop.roles.quick")}</span>
+              <span className="desc">{t("claudeDesktop.roles.quickDesc")}</span>
+            </div>
+            <div className="setting-controls">
+              <Select
+                value={quickRoute}
+                options={roleSelectOptions(quickRoute, defaultRoute, haikuEmpty)}
+                onChange={route => { if (route) moveModel(route, "haiku", true); }}
+                label={t("claudeDesktop.roles.quick")}
+                disabled={pending !== null}
+                style={{ minWidth: 240 }}
+                align="right"
+                portal
+              />
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Always mounted: Import/Export must stay reachable with an empty catalog, as they were in the toolbar. */}
+      <section className="claude-desktop-list" aria-labelledby="claude-desktop-list-title">
+          <div className="claude-desktop-list-head">
+            <h3 className="claude-desktop-section-title" id="claude-desktop-list-title">
+              {t("claudeDesktop.roles.listTitle")}
+              <span className="count">{data.models.length}</span>
+            </h3>
+            <div className="claude-profile-tools">
+              <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={event => void importProfile(event)} />
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => importRef.current?.click()}>{t("claudeDesktop.importJson")}</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={exportProfile}>{t("claudeDesktop.exportJson")}</button>
+            </div>
+          </div>
+          {data.models.length > 0 && <p className="claude-desktop-list-hint">{t("claudeDesktop.roles.listHint")}</p>}
+          {data.models.length > 0 && (
+          <ul className="card claude-desktop-list-rows">
+            {listed.slice(0, listLimit).map(model => {
+              const context = formatContextWindow(model.contextWindow, t);
+              return (
+                <li key={model.route} className="claude-desktop-list-row">
+                  <span className="claude-desktop-list-names">
+                    <strong title={model.label}>{model.label}</strong>
+                    {model.label !== model.route && <code title={model.route}>{model.route}</code>}
+                  </span>
+                  {model.route === defaultRoute && <span className="claude-row-default">{t("claudeDesktop.defaultBadge")}</span>}
+                  {model.route === quickRoute && <span className="claude-row-default claude-row-quick">{t("claudeDesktop.roles.quickBadge")}</span>}
+                  {context && <span className="claude-model-context">{context}</span>}
+                  {model.supports1m === true && <span className="claude-1m-chip">{t("claudeDesktop.supports1m")}</span>}
+                  {!model.available && <span className="badge badge-muted">{t("claudeDesktop.unavailable")}</span>}
+                </li>
+              );
+            })}
+          </ul>
+          )}
+          {listed.length > listLimit && (
+            <button type="button" className="btn btn-ghost btn-sm claude-lane-more" onClick={() => setListLimit(limit => limit + LANE_PAGE)}>
+              {t("models.showMore", { n: listed.length - listLimit })}
+            </button>
+          )}
+      </section>
+
+      {/* The family lanes stay mounted while folded: drag, move, search and per-family defaults
+          keep working, and the summary carries every warning so nothing actionable hides. */}
+      <details
+        className="claude-desktop-advanced"
+        open={advancedOpen}
+        onToggle={event => setAdvancedOpen((event.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary>
+          <span className="claude-desktop-advanced-title">
+            <IconChevron className="ocx-chevron" width={14} height={14} aria-hidden="true" style={{ transform: advancedOpen ? "rotate(90deg)" : "none" }} />
+            {t("claudeDesktop.advanced.title")}
+          </span>
+          <span className="claude-desktop-advanced-chips">
+            {FAMILIES.map(family => {
+              const count = modelsByFamily[family].length;
+              const stored = profile.defaults[family];
+              const shown = effectiveDefaults[family];
+              return (
+                <span key={family} className="claude-desktop-advanced-chip">
+                  <b>{t(FAMILY_KEYS[family])}</b>
+                  {shown ? <code title={shown}>{shown}</code> : <span>{t("claudeDesktop.advanced.empty")}</span>}
+                  {count > 0 && <span className="claude-desktop-advanced-count">{count}</span>}
+                  {count > 0 && stored === null && <span className="claude-default-needed">{t("claudeDesktop.chooseDefault")}</span>}
+                  {shown && stored !== null && shown !== stored && <span className="claude-default-needed">{t("claudeDesktop.temporaryDefault")}</span>}
+                </span>
+              );
+            })}
+          </span>
+        </summary>
+        <p className="claude-desktop-advanced-desc">{t("claudeDesktop.advanced.desc")}</p>
       <div className="ocx-group-stack" aria-label={t("claudeDesktop.assignmentsLabel")}>
         {FAMILIES.map(family => {
           // Render-only narrowing: the lane header, effectiveDefaults and every assignment keep
@@ -849,6 +966,7 @@ export default function ClaudeDesktop({
           );
         })}
       </div>
+      </details>
     </>
   );
 }

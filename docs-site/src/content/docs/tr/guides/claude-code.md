@@ -126,7 +126,7 @@ claude.ai girişinizi ve bağlayıcılarını da devre dışı bırakır. İkisi
 hangisini istediğiniz opencodex'in bakabileceği bir şeye bağlıdır, bu nedenle
 varsayılan olarak bunu yapar.
 
-**Claude → Claude Code** altında **Kimlik doğrulama modu**'nu **Otomatik**
+**Bağlantı → Claude** altında **Kimlik doğrulama modu**'nu **Otomatik**
 (varsayılan) olarak bırakın; opencodex her başlatmada karar verir:
 
 | Ne bulur? | Ne yapar? |
@@ -153,7 +153,7 @@ görüntüdür; `ocx claude` ise her zaman canlı olarak çözümler.
 
 ## Claude Desktop modları: ağ geçidi (varsayılan) ve first-party
 
-Birbirini dışlayan modlardan birini **Claude → Desktop → Bağlantı modu** bölümünden veya
+Birbirini dışlayan modlardan birini **Bağlantı → Claude Desktop → Bağlantı modu** bölümünden veya
 `ocx claude desktop apply --first-party|--gateway` komutuyla seçin.
 
 ### Ağ geçidi (varsayılan)
@@ -183,7 +183,7 @@ vekilin ayarları üzerine yazılmaz. Mod değiştirince Desktop'ı tamamen kapa
 
 ### Claude Code CLI first-party
 
-Claude → Code bölümünde CLI anahtarını açın veya `ocx claude config set --first-party on` çalıştırın; kapatmak için `off` kullanın. Yerel vekil kullanılamıyorsa, CA hazırlanamazsa, ayarlar okunamazsa veya anahtarlar başka bir programa aitse açma isteği reddedilir. Kapatma yine de kaydedilir. Yalnız Desktop first-party açıkken terminalde tamamen yerel bağlantı için kabukta `NO_PROXY='*'` ayarlayın. Yukarıdaki hesap riski CLI için de geçerlidir.
+Bağlantı → Claude bölümünde CLI anahtarını açın veya `ocx claude config set --first-party on` çalıştırın; kapatmak için `off` kullanın. Yerel vekil kullanılamıyorsa, CA hazırlanamazsa, ayarlar okunamazsa veya anahtarlar başka bir programa aitse açma isteği reddedilir. Kapatma yine de kaydedilir. Yalnız Desktop first-party açıkken terminalde tamamen yerel bağlantı için kabukta `NO_PROXY='*'` ayarlayın. Yukarıdaki hesap riski CLI için de geçerlidir.
 Claude yönlendirmesini kapatmak yönetilen vekil ayarlarını korur. Dinleyici çalışırken tüm Messages istekleri değiştirilmeden iletilir; durduğunda OpenCodex çalışana veya Desktop/CLI first-party kapatılana kadar doğrudan `claude` bağlanamaz. `ocx claude` yerel başlatması `NO_PROXY=*` değerini yalnızca yönetilen ayarlar varken ve yabancı bir HTTPS vekili miras alınmamışken ayarlar. Aksi halde yabancı vekili korur ve ayarlardaki kesmenin sürdüğünü bildirir: first-party özelliğini kapatın veya ayarı kaldırın.
 Arayüz okunamayan ayarları (unknown), opencodex belirteçli URL ile yabancı CA birleşimini (foreign: HTTPS_PROXY / NODE_EXTRA_CA_CERTS değerlerini elle düzeltin) ve Claude yönlendirmesi kapalıyken dinleyicinin istekleri değiştirmeden iletmeye devam etmesini (disabled: yeniden başlatmadan önce first-party modunu kapatın) ayırt eder. Dinleyici yoksa stopped; yönetilen CA ile port veya belirteç uyuşmuyorsa broken durumudur. First-party açıkken kesme kullanılamıyorsa stopped ve broken, routingOff uyarısını gösterir: Claude yönlendirmesi veya kesme kapalı ya da bu makine başka bir opencodex merkezinin istemcisidir; bu makinede yeniden etkinleştirin veya ayarları kaldırmak için first-party modunu kapatın. Kesme kullanılabilirken stopped opencodex uygulamasını başlatmayı, broken ise `ocx ensure` ya da yeniden başlatmayı önerir. Yalnız CLI açık ama vekil yoksa uygulanmadı, tek istemci açık ve vekil çalışıyorsa paylaşılan iletim, iki istemci kapalıyken vekil kalmışsa artık ayar uyarısı görünür.
 unknown, ayarların hâlâ opencodex vekiline işaret edip etmediğinin belirlenemediği anlamına gelir. Yabancı CA ile birlikte 127.0.0.1 üzerindeki belirteçsiz vekil local durumudur: sahipliği doğrulanamaz; artık kullanmıyorsanız ~/.claude/settings.json içindeki HTTPS_PROXY değerini kaldırın. disabled yalnızca ayarlar çalışan dinleyiciyle eşleşiyorsa geçerlidir; port veya belirteç farklıysa yönlendirme kapalı olsa bile broken görünür.
@@ -202,7 +202,7 @@ komutunu çalıştırın.
 Picker modu açıkken Claude Desktop ağa OpenCodex üzerinden çıkar. OpenCodex durursa Desktop, tamamen yeniden
 başlatılana veya picker modu kapatılana kadar çevrimdışı kalır. Durumu `ocx claude desktop picker status`
 ile görün, güven adımını `ocx claude desktop picker trust` ile tekrarlayın veya `ocx claude desktop picker off`
-ile kapatın. Aynı açma-kapama denetimi **Claude → Desktop** kontrol panelinde de bulunur. Picker profili
+ile kapatın. Aynı açma-kapama denetimi **Bağlantı → Claude Desktop** kontrol panelinde de bulunur. Picker profili
 seçildikten sonra Claude Desktop'ı tamamen kapatıp yeniden açın.
 
 Picker modu first-party'nin parçasıdır; bu nedenle [first-party hesap riski](#first-party-isteğe-bağlı)
@@ -214,7 +214,7 @@ Bu profil yalnızca ağ geçidi modunda Desktop'a yazılır.
 
 Claude Desktop, Claude Code'dan ayrı bir profil kullanır. Mevcut her rotayı dört
 aileden birine (Opus, Fable, Sonnet veya Haiku) yerleştirmek için kontrol
-panelinde **Claude → Desktop** sayfasını açın. Tüm rotalar yeni bir profilde
+panelinde **Bağlantı → Claude Desktop** sayfasını açın. Tüm rotalar yeni bir profilde
 Opus ile başlar. İlk Opus rotası genel varsayılan olur ve boş olmayan her
 ailenin her zaman bir aile varsayılanı vardır.
 
@@ -281,7 +281,7 @@ ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 
-veya kontrol panelinde **Claude → Desktop → Code sekmesi model bağlantıları**'nı kullanın. Bundan
+veya kontrol panelinde **Bağlantı → Claude Desktop → Code sekmesi model bağlantıları**'nı kullanın. Bundan
 sonra Code sekmesinde **Sonnet 4.6** seçildiğinde istek `xai/grok-4.7` tarafından sunulur. Seçicide
 Anthropic etiketi görünmeye devam eder ve Claude Code'un sistem istemi modelin kendisine hâlâ o
 Claude modeli olduğunu söyler; bu yüzden normalde kullanmadığınız satırları tercih edin
@@ -789,8 +789,8 @@ hemen temizler.
 
 ## GUI (Claude sayfası)
 
-Kontrol paneli kenar çubuğunda özel bir **Claude** sayfası (Bağlantı altında) ve bir
-**Claude ON** geçiş anahtarı (etiket kasıtlı olarak her dilde aynıdır) bulunur.
+Kontrol panelinde **Bağlantı** altında iki sekme bulunur: Claude Code için **Claude** ve **Claude Desktop**.
+Bağlantı genel görünümündeki Claude kartında da aynı bağlantı anahtarı bulunur.
 Sayfa şunları gösterir:
 
 - Gelen acil durdurma anahtarı (etkinleştirme geçişi)
