@@ -88,17 +88,23 @@ export type ClaudeCodeEditState = {
    * (trimmed, blank, duplicate) settle instead of reading as unsaved forever.
    */
   adoptNextRead: boolean;
+  /**
+   * A Save is out. Until it answers, a read never replaces the draft wholesale: an edit made
+   * after submission can equal the old baseline and would otherwise read as clean and vanish.
+   */
+  savePending?: boolean;
 };
 
 /** Fold a successful read into the edit state. */
 export function applyServerRead(current: ClaudeCodeEditState | null, next: ClaudeCodeEditable): ClaudeCodeEditState {
-  if (!current || current.adoptNextRead || !isClaudeCodeDraftDirty(current.draft, current.baseline)) {
-    return { draft: next, baseline: next, adoptNextRead: false };
+  if (!current || current.adoptNextRead || (!current.savePending && !isClaudeCodeDraftDirty(current.draft, current.baseline))) {
+    return { draft: next, baseline: next, adoptNextRead: false, savePending: current?.savePending };
   }
   return {
     draft: { state: mergeServerRead(current.draft.state, next.state), rows: current.draft.rows },
     baseline: next,
     adoptNextRead: false,
+    savePending: current.savePending,
   };
 }
 

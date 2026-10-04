@@ -32,6 +32,41 @@ beforeEach(() => {
   };
 });
 
+test("an edit back to the old value survives a read that lands before Save answers", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const server = { systemEnv: false, cliFirstParty: false };
+  globalThis.fetch = (async (input, init) => {
+    if (!String(input).endsWith("/api/claude-code")) return new Response(null, { status: 404 });
+    if (init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      Object.assign(server, body);
+      // The server commits the Save at once, but its answer is late.
+      if ("systemEnv" in body) await gate;
+      return Response.json({ ok: true });
+    }
+    return Response.json({ ...SERVER, autoConnectSupported: true, ...server, modelMap: {} });
+  }) as typeof fetch;
+  const page = await mount();
+  const autoConnect = () => page.container.querySelector<HTMLInputElement>('input[aria-label="Auto-connect"]')!;
+  try {
+    await page.click(autoConnect());
+    await act(async () => { page.button("Save").click(); });
+    await page.click(autoConnect());
+    await page.click(page.button("Toggle Claude Code CLI first-party"));
+    expect(autoConnect().checked).toBe(false);
+    release();
+    await settle(page.testWindow);
+    expect(server.systemEnv).toBe(true);
+    expect(autoConnect().checked).toBe(false);
+    expect(page.barState()).toBe("Unsaved changes");
+  } finally {
+    release();
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
+});
+
 test("a late Save from an unmounted page reaches the page on screen even when its refresh fails", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });

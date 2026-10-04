@@ -330,6 +330,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     const submitted = edit.draft;
     setStatus("");
     setSaving(true);
+    setEdit(current => current && { ...current, savePending: true });
     // Reads already in flight predate this Save; none of them may reach the draft or cache.
     bumpWriteEpoch(cacheKey);
     try {
@@ -358,6 +359,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       setStatus(t("claude.saved"));
       codeResource.refresh();
     } catch (error) {
+      setEdit(current => current && { ...current, savePending: false });
       setOk(false);
       setStatus(error instanceof Error && error.message ? error.message : t("claude.networkError"));
     } finally {
