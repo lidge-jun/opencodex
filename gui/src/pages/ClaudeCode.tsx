@@ -267,7 +267,8 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       const r = await fetch(`${apiBase}/api/claude-code`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(claudeCodeSaveBody(state, rows)),
+        // Built from the captured draft, so the request and its acknowledgement can never diverge.
+        body: JSON.stringify(claudeCodeSaveBody(submitted.state, submitted.rows)),
       });
       await readJsonOrThrow(r, t("claude.saveFailed"));
       // The submitted draft is what the server now holds; edits made meanwhile stay dirty.
