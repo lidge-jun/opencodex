@@ -22,6 +22,8 @@ import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
 import { isModelRerouted, modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
+import { decodeRateLabelKeys } from "./logs-decode-rate";
+import "./logs-decode-rate.css";
 import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
 import type { LogSurface } from "./logs-surface-filter";
@@ -82,6 +84,10 @@ type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
+type DecodeTokPerSecondResult =
+  | (Extract<TokPerSecondResult, { kind: "value" }> & { timingBasis?: string })
+  | Extract<TokPerSecondResult, { kind: "unavailable" }>;
+
 interface MatchedPriceInfo {
   provider: string;
   modelId: string;
@@ -112,7 +118,7 @@ interface LogDisplayMetrics {
    * Estimated decode throughput (#4038). Optional because a row cached by an older build has no
    * such field; absent renders nothing rather than an empty slot.
    */
-  decodeTokPerSecond?: TokPerSecondResult;
+  decodeTokPerSecond?: DecodeTokPerSecondResult;
   cost: CostResult;
 }
 
@@ -959,8 +965,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                         for delivery speed. Only rendered when it actually resolved — a row whose
                         decode window was too short shows the e2e rate alone rather than a blank. */}
                     {log.displayMetrics?.decodeTokPerSecond?.kind === "value" && (
-                      <span className="logs-stack-end muted" title={t("logs.detail.decodeTokPerSec")}>
-                        {formatTokPerSecond(log.displayMetrics.decodeTokPerSecond, localeTag)}
+                      <span className="logs-stack-end logs-decode-rate muted" title={t(decodeRateLabelKeys(log.displayMetrics.decodeTokPerSecond).detail)}>
+                        <span>{formatTokPerSecond(log.displayMetrics.decodeTokPerSecond, localeTag)}</span>
+                        <span className="text-caption">{t(decodeRateLabelKeys(log.displayMetrics.decodeTokPerSecond).short)}</span>
                       </span>
                     )}
                   </td>
@@ -1210,11 +1217,11 @@ function LogDetailDialog({
 
         <section className="log-detail-section" aria-labelledby="log-detail-performance">
           <h4 id="log-detail-performance" className="log-detail-section-title">{t("logs.detail.section.performance")}</h4>
-          <div className="log-detail-grid">
+          <div className="log-detail-grid log-detail-performance-grid">
             <span className="muted">{t("logs.col.duration")}</span><span className="mono">{detail.durationMs}ms</span>
-            <span className="muted">{t("logs.col.tokPerSec")}</span><span className="mono">{formatTokPerSecond(detail.displayMetrics?.tokPerSecond, localeTag)}</span>
+            <span className="muted">{t("logs.detail.endToEndTokPerSec")}</span><span className="mono">{formatTokPerSecond(detail.displayMetrics?.tokPerSecond, localeTag)}</span>
             {detail.displayMetrics?.decodeTokPerSecond?.kind === "value" && (
-              <><span className="muted">{t("logs.detail.decodeTokPerSec")}</span><span className="mono">{formatTokPerSecond(detail.displayMetrics.decodeTokPerSecond, localeTag)}</span></>
+              <><span className="muted">{t(decodeRateLabelKeys(detail.displayMetrics.decodeTokPerSecond).detail)}</span><span className="mono">{formatTokPerSecond(detail.displayMetrics.decodeTokPerSecond, localeTag)}</span></>
             )}
             {detail.firstOutputMs !== undefined && (
               <><span className="muted">{t("logs.detail.ttft")}</span><span className="mono">{detail.firstOutputMs}ms</span></>
@@ -1275,7 +1282,7 @@ function LogDetailDialog({
                   <th className="num">#</th>
                   <th>{t("logs.detail.attempt.target")}</th>
                   <th className="num">{t("logs.col.duration")}</th>
-                  <th className="num">{t("logs.col.tokPerSec")}</th>
+                  <th className="num" title={t("logs.detail.endToEndTokPerSec")}>{t("logs.col.tokPerSec")}</th>
                   <th className="num">{t("logs.col.estimatedCost")}</th>
                   <th>{t("logs.detail.attempt.reason")}</th>
                 </tr></thead>
@@ -1324,8 +1331,9 @@ function LogDetailDialog({
                             that attempt's own TTFT, so the attempt table stacks it the same way
                             the parent row and the list do. */}
                         {attempt.displayMetrics?.decodeTokPerSecond?.kind === "value" && (
-                          <span className="logs-stack-end muted" title={t("logs.detail.decodeTokPerSec")}>
-                            {formatTokPerSecond(attempt.displayMetrics.decodeTokPerSecond, localeTag)}
+                          <span className="logs-stack-end logs-decode-rate muted" title={t(decodeRateLabelKeys(attempt.displayMetrics.decodeTokPerSecond).detail)}>
+                            <span>{formatTokPerSecond(attempt.displayMetrics.decodeTokPerSecond, localeTag)}</span>
+                            <span className="text-caption">{t(decodeRateLabelKeys(attempt.displayMetrics.decodeTokPerSecond).short)}</span>
                           </span>
                         )}
                       </td>

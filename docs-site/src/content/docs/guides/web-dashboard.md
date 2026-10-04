@@ -154,11 +154,15 @@ fallback until a valid sample is available. Speed uses output tokens per second 
 full request duration: below 15, 15 to below 50, or at least 50. Unavailable speed values are
 excluded when a speed filter is active. Success means 2xx; errors mean 4xx or 5xx.
 
-The request detail also shows **Decode rate (est.)**. When the proxy observed both ends, it is
+Logs shows a timing-basis label beside each decode estimate in the list and attempt table,
+and uses **Generation-window rate (est.)** or **Legacy post-visible-output rate (est.)**
+in request details. Older cached responses without a basis show **Unknown basis**. When the proxy observed both ends, it is
 output tokens over the generation window: from the first output item or block, reasoning included,
 to the last output delta. Older rows without that window use the time after the first visible
 token instead. Both are proxy-side observations, not the provider's internal token timing, so the
-value is always an estimate, and a window under one second shows as unavailable. The end-to-end
+value is always an estimate, and a window under one second shows as unavailable. Both numerators
+include reported reasoning output tokens, so the two timing bases are not directly comparable.
+Historical logs are not rewritten and missing generation timestamps are not invented. The end-to-end
 tok/s column and speed filter above are not affected.
 
 Active filters show the matching count out of the loaded total. Reset filters restores all

@@ -290,6 +290,13 @@ the client window after edits, eviction, query changes or restart. Invalid curso
 for older servers. This reduces response bytes for stable windows; server projection remains bounded
 by the current window size.
 
+Successful `/api/logs` `displayMetrics.decodeTokPerSecond` values carry
+`timingBasis: "generation-window" | "legacy-post-visible-output"` alongside `kind`, `value`
+and `estimated: true`; attempt values identify their own window. Unavailable results keep their
+existing `reason` and no timing basis. The field is derived only at read time: stored JSONL,
+end-to-end `tokPerSecond`, request-history DTOs and aggregate throughput are unchanged.
+Older DTOs can omit the field; clients must treat the timing basis as unknown in that case.
+
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/logs` | Query filtered in-memory request logs | — |
