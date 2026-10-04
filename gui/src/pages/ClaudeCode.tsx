@@ -58,14 +58,17 @@ const writeEpoch = (key: string) => writeEpochs.get(key) ?? 0;
 const bumpWriteEpoch = (key: string) => { writeEpochs.set(key, writeEpoch(key) + 1); };
 
 /*
- * Immediate switch acknowledgements, per session-cache key. A switch can be confirmed after
- * the page that flipped it unmounted; publishing here lets whichever page is on screen take
- * the new value even when the refresh after it fails.
+ * Confirmed writes, per session-cache key. A switch or a Save can be confirmed after the page
+ * that started it unmounted, and the refresh after it can fail; publishing every confirmation
+ * here lets whichever page is on screen take it. `source` lets the writing page skip its own
+ * event, since it already applied the write with its own rules.
  */
 type LiveFields = Partial<Pick<ClaudeCodeState, "enabled" | "cliFirstParty">>;
-const liveListeners = new Map<string, Set<(fields: LiveFields) => void>>();
-function publishLive(key: string, fields: LiveFields) {
-  for (const listener of liveListeners.get(key) ?? []) listener(fields);
+type Confirmation = { kind: "live"; fields: LiveFields } | { kind: "saved"; copy: { state: ClaudeCodeState; rows: MapRow[] } };
+const liveSource = Symbol("claude-code-live");
+const confirmationListeners = new Map<string, Set<(event: Confirmation, source: symbol) => void>>();
+function publishConfirmation(key: string, event: Confirmation, source: symbol) {
+  for (const listener of confirmationListeners.get(key) ?? []) listener(event, source);
 }
 
 const firstPartyNoticeKeys: Record<Exclude<FirstPartyNotice, null>, TKey> = {
@@ -211,19 +214,30 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const applyLive = (fields: LiveFields) => {
     const stored = readSessionListCacheEntry<CachedClaudeCode>(cacheKey)?.data;
     if (stored) writeSessionListCacheEntry(cacheKey, { ...stored, state: { ...stored.state, ...fields } });
-    publishLive(cacheKey, fields);
+    // Live fields are not edits, so every page (this one included) takes them as-is.
+    publishConfirmation(cacheKey, { kind: "live", fields }, liveSource);
   };
+  const [pageSource] = useState(() => Symbol("claude-code-page"));
   useEffect(() => {
-    const listener = (fields: LiveFields) => setEdit(current => current && {
-      ...current,
-      draft: { ...current.draft, state: { ...current.draft.state, ...fields } },
-      baseline: { ...current.baseline, state: { ...current.baseline.state, ...fields } },
-    });
-    const listeners = liveListeners.get(cacheKey) ?? new Set();
+    const listener = (event: Confirmation, source: symbol) => {
+      if (event.kind === "live") {
+        const { fields } = event;
+        setEdit(current => current && {
+          ...current,
+          draft: { ...current.draft, state: { ...current.draft.state, ...fields } },
+          baseline: { ...current.baseline, state: { ...current.baseline.state, ...fields } },
+        });
+      } else if (source !== pageSource) {
+        // Another page's Save: fold it like a server read, so unsaved edits here survive.
+        const { copy } = event;
+        setEdit(current => applyServerRead(current, copy));
+      }
+    };
+    const listeners = confirmationListeners.get(cacheKey) ?? new Set();
     listeners.add(listener);
-    liveListeners.set(cacheKey, listeners);
+    confirmationListeners.set(cacheKey, listeners);
     return () => { listeners.delete(listener); };
-  }, [cacheKey]);
+  }, [cacheKey, pageSource]);
 
   const modelOptions = useMemo(
     () => backgroundHelperOptions(state?.available, t("claude.smallFastModelUnsetOption")),
@@ -335,7 +349,9 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
        * was out. Only the fields this Save submitted are laid on top.
        */
       const stored = readSessionListCacheEntry<CachedClaudeCode>(cacheKey)?.data;
-      writeSessionListCacheEntry(cacheKey, savedCopy(stored?.state ?? submitted.state, submitted));
+      const copy = savedCopy(stored?.state ?? submitted.state, submitted);
+      writeSessionListCacheEntry(cacheKey, copy);
+      publishConfirmation(cacheKey, { kind: "saved", copy }, pageSource);
       // The submitted draft is what the server now holds; edits made meanwhile stay dirty.
       setEdit(current => acknowledgeSave(current, submitted));
       setOk(true);
