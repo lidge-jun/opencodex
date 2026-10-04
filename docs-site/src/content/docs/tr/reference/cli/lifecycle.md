@@ -430,6 +430,15 @@ ve Codex yönlendirmesini yerinde bırakır. Mevcut veya çakışan zamanlayıc�
 kayıtları güvenli olmayan en iyi çaba geri alması olarak silinmek yerine kapalı
 olarak başarısız olmaya devam eder.
 
+If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
+`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
+proxy is not running. The message includes the lock path, recorded PID, current liveness,
+executable name when available, and lease age. The process identity is unverified: the PID
+may have been reused, so liveness and executable name describe whichever process occupies
+that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
+process based only on this PID. A later mutation attempt can reclaim a stale lease once its
+age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
 PATH üzerindeki betik tabanlı bir `codex` başlatıcısını hafif bir otomatik
