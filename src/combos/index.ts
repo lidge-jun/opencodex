@@ -28,6 +28,7 @@ export {
   pickComboTarget,
   pickComboTargetWithWait,
   quotaInactiveReason,
+  remainingComboQuotaCooldownMs,
   tryPickComboModel,
   UnknownComboError,
   type ComboPick,

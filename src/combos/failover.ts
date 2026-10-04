@@ -11,6 +11,7 @@ import {
 
 interface TargetCooldown {
   cooldownUntil: number;
+  status?: number;
 }
 
 const DEFAULT_COOLDOWN_MS = 60_000;
@@ -195,6 +196,28 @@ export function remainingComboCooldownMs(comboId: string, now = Date.now()): num
   return soonest;
 }
 
+/** Quota evidence only for targets the caller could select apart from their cooldown. */
+export function remainingComboQuotaCooldownMs(
+  comboId: string,
+  eligibleTargets: Iterable<Pick<OcxComboTarget, "provider" | "model">>,
+  now = Date.now(),
+): number | undefined {
+  let soonest: number | undefined;
+  for (const target of eligibleTargets) {
+    const key = cooldownMapKey(comboId, target);
+    const cooldown = targetCooldowns.get(key);
+    if (!cooldown) continue;
+    const remaining = cooldown.cooldownUntil - now;
+    if (remaining <= 0) {
+      targetCooldowns.delete(key);
+      continue;
+    }
+    if (cooldown.status !== 429 && cooldown.status !== 402) continue;
+    if (soonest === undefined || remaining < soonest) soonest = remaining;
+  }
+  return soonest;
+}
+
 export function comboCooldownRetryAfterSeconds(comboId: string, now = Date.now()): string | undefined {
   const remainingMs = remainingComboCooldownMs(comboId, now);
   if (remainingMs === undefined) return undefined;
@@ -244,6 +267,7 @@ export function coolComboTarget(
   targetCooldowns.set(cooldownMapKey(comboId, target), {
     // Local fallbacks are capped at ten minutes; explicit server delays at one day.
     cooldownUntil: now + (serverDelayMs ?? Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS)),
+    status: options?.status,
   });
   sweepExpiredOnWrite(now);
   return true;

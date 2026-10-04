@@ -28,7 +28,7 @@ import {
   concreteComboRequestBody,
   comboDefaultEffort,
   isComboTargetInCooldown,
-  remainingComboCooldownMs,
+  remainingComboQuotaCooldownMs,
   noteComboSuccess,
   comboFailureDecision,
   advanceComboAfterFailure,
@@ -73,6 +73,7 @@ import { isPlainObject } from "../../lib/plain-data";
 import {
   clientCancelledResponse,
   comboUnavailable,
+  comboUnavailableResponse,
   targetIncompatibleResponse,
   unreadableEncryptedAgentTaskResponse,
 } from "./core-errors";
@@ -413,8 +414,8 @@ export async function executeComboResponses(
     }
   };
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
-    // Attempts remain the complete physical history; the logical row mirrors the most recent
-    // failed target so an exhausted combo still has useful top-level reasoning diagnostics.
+    // Attempts remain the complete physical history; the logical row mirrors the failed
+    // target whose response is returned, including an earlier quota refusal on exhaustion.
     Object.assign(logCtx, childLog, {
       requestedModel,
       model: requestedModel,
@@ -682,15 +683,25 @@ export async function executeComboResponses(
   // request failed: the primary target ran out. Returning that fallback refusal told clients
   // "OpenAI account pool has no usable account credential" while every Claude account was spent.
   let quotaFailure: Response | undefined;
+  let quotaFailedChildLog: RequestLogContext | undefined;
   // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
   // fresh cooldown is not a reason the request found no target.
-  const cooledBeforeDispatch = remainingComboCooldownMs(comboId) !== undefined;
+  const cooldownSnapshotAt = Date.now();
+  const quotaCooldownMs = remainingComboQuotaCooldownMs(config, comboId, targetEligible, cooldownSnapshotAt);
+  const quotaCooldownUntil = quotaCooldownMs === undefined ? undefined : cooldownSnapshotAt + quotaCooldownMs;
   const exhaustedFailure = (): Response => {
+    const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
+    const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
+    if (failedChildLog) adoptFailedChildLog(failedChildLog);
     if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return lastFailure!;
     if (quotaFailure) return quotaFailure;
     // The quota-refused target was cooled before this request picked, so the ladder never saw
     // its refusal. The cooldown, with its Retry-After, is still the honest answer.
-    return cooledBeforeDispatch ? comboUnavailable(comboId) : lastFailure;
+    const remainingQuotaCooldownMs = quotaCooldownUntil === undefined ? 0 : quotaCooldownUntil - Date.now();
+    return remainingQuotaCooldownMs > 0
+      ? comboUnavailableResponse(`No available targets for combo: ${comboId}`, {
+        retryAfter: String(Math.max(1, Math.ceil(remainingQuotaCooldownMs / 1000))),
+      }) : lastFailure;
   };
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
@@ -714,7 +725,6 @@ export async function executeComboResponses(
       // return the last real upstream answer with its status, headers and any quota body
       // intact rather than to mint a synthetic error, and a later target only exists because
       // an earlier one already recorded one.
-      if (lastFailedChildLog) adoptFailedChildLog(lastFailedChildLog);
       return exhaustedFailure();
     }
     const targetSendBudget = comboSendScope
@@ -995,7 +1005,10 @@ export async function executeComboResponses(
     );
     attemptRetained = true;
     lastFailure = failure.response;
-    if (lastFailure.status === 429 || lastFailure.status === 402) quotaFailure ??= lastFailure;
+    if (!quotaFailure && (lastFailure.status === 429 || lastFailure.status === 402)) {
+      quotaFailure = lastFailure;
+      quotaFailedChildLog = childLog;
+    }
     lastFailedChildLog = childLog;
     // A replacement that answers 200 is unmarked, and its zero-output failure only exists once
     // preflight has rebuilt the stream as a fresh Response. A spent grant never hops: a status the
@@ -1158,9 +1171,9 @@ export async function executeComboResponses(
       }
       // Waiting or recovery may have observed cancellation after the check above.
       if (options.abortSignal?.aborted) return clientCancelledResponse();
-      adoptFailedChildLog(childLog);
     }
   }
+  const failure = exhaustedFailure();
   if (
     lastFailure?.status === 413
     && lastFailureClassifiesOverflow
@@ -1169,5 +1182,5 @@ export async function executeComboResponses(
       ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
       : jsonContextOverflowResponse();
   }
-  return exhaustedFailure();
+  return failure;
 }
