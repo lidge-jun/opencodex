@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import { existsSync } from "node:fs";
 import { getRuntimePortPath, readRuntimePort, readProcessCommandLine, isOcxStartCommandLine, type RuntimePortState } from "../config/process-state";
 import { configuredAdminToken } from "../lib/admin-secrets";
+import { isRealBunBinary } from "../lib/bun-binary-validator.mjs";
 import { isProcessAlive } from "../lib/process-control";
 import { parseStrictSemver } from "../lib/strict-semver";
 import { startArgv } from "../lib/self-launch-argv";
@@ -26,6 +27,8 @@ export interface UpdateRestartIo {
   checkHome(home: UpdateRestartHome): void;
   runtime(): RuntimePortState | null;
   standalone(target: UpdateRestartCandidate["target"]): boolean;
+  /** Whether the executable the replacement will run is complete (not the npm `bun` placeholder). */
+  runtimeReady(): boolean;
   stop(candidate: UpdateRestartCandidate, deadlineAt: number, beforeStop: () => void): Promise<void>;
   stopped(candidate: UpdateRestartCandidate, deadlineAt: number): Promise<boolean>;
   start(marker: UpdateRestartChildMarker): UpdateRestartChild;
@@ -45,6 +48,8 @@ function sameRuntime(candidate: UpdateRestartCandidate, current: RuntimePortStat
 export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadlineAt: number, io: UpdateRestartIo): Promise<UpdateRestartResult> {
   let phase = "eligibility";
   let lease: { release(): void } | undefined;
+  // Recorded here because the stop transport sanitizes anything thrown by beforeStop.
+  let runtimeRefused = false;
   try {
     if (!parseStrictSemver(candidate.cliVersion) || candidate.cliVersion === "0.0.0"
       || computeVersionSkew(candidate.cliVersion, candidate.target.version).relation !== "cli-newer") {
@@ -59,6 +64,10 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
       withinDeadline();
       io.checkHome(home);
       if (!sameRuntime(candidate, io.runtime()) || !io.standalone(candidate.target)) throw new Error("target");
+      if (!io.runtimeReady()) {
+        runtimeRefused = true;
+        throw new Error("runtime");
+      }
       withinDeadline();
     };
     revalidate();
@@ -67,6 +76,18 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
     withinDeadline();
     phase = "settle";
     if (!await io.stopped(candidate, deadlineAt)) throw new Error("stop_unconfirmed");
+    // Shutdown is confirmed from here on and nothing has launched yet.
+    phase = "prelaunch";
+    withinDeadline();
+    io.checkHome(home);
+    // An in-place npm install can still be swapping its Bun in; wait for it inside the deadline,
+    // then repeat the launch preconditions synchronously so the wait opens no gap before spawn.
+    phase = "runtime";
+    while (!io.runtimeReady()) {
+      withinDeadline();
+      await io.wait(Math.min(100, deadlineAt - io.now()));
+    }
+    phase = "prelaunch";
     withinDeadline();
     io.checkHome(home);
     phase = "start";
@@ -91,8 +112,34 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
       await io.wait(Math.min(100, deadlineAt - io.now()));
     }
     throw new Error("deadline");
-  } catch { return { ok: false, code: `update_restart_${phase}_failed` }; }
+  } catch {
+    return { ok: false, code: runtimeRefused ? "update_restart_runtime_incomplete" : `update_restart_${phase}_failed` };
+  }
   finally { lease?.release(); }
+}
+
+/** Sanitized, actionable text for each terminal update-restart code; it claims only what that phase proved. */
+export function describeUpdateRestartFailure(code: string): string {
+  switch (code) {
+    case "update_restart_runtime_incomplete":
+      return "This installation's Bun runtime is still being installed; nothing was stopped. Wait for the install to finish, then run `ocx restart` again.";
+    case "update_restart_eligibility_failed":
+      return "The running proxy is not eligible for an update restart from this CLI (it is supervised, shared, or changed); nothing was stopped.";
+    case "update_restart_stop_failed":
+      return "The guarded stop of the old proxy could not be confirmed; inspect `ocx status` before retrying.";
+    case "update_restart_settle_failed":
+      return "The old proxy was not confirmed stopped, so no second proxy was started; inspect `ocx status` before retrying.";
+    case "update_restart_prelaunch_failed":
+      return "The old proxy stopped, but its home, ownership or deadline changed before launch, so nothing was launched. Check `ocx status`; if no proxy is running, run `ocx start`.";
+    case "update_restart_runtime_failed":
+      return "The old proxy stopped, but this installation's Bun runtime did not finish installing in time, so nothing was launched. Run `ocx start` once the install completes.";
+    case "update_restart_start_failed":
+      return "The old proxy stopped, but the new proxy's launch could not be confirmed. Check `ocx status`; if no proxy is running, run `ocx start`.";
+    case "update_restart_replacement_failed":
+      return "The new proxy did not verify as the expected replacement in time; inspect `ocx status` before retrying.";
+    default:
+      return "Update restart could not be confirmed; inspect `ocx status` before retrying.";
+  }
 }
 
 function standalone(target: UpdateRestartCandidate["target"]): boolean {
@@ -118,6 +165,7 @@ export function restartFromCurrentInstallation(candidate: UpdateRestartCandidate
     now: Date.now,
     acquire: () => acquireOwnershipMutationLease(serviceStatePaths(), { waitMs: Math.max(0, Math.min(2000, deadlineAt - Date.now())) }),
     home: readUpdateRestartHome, checkHome: assertUpdateRestartHome, runtime: readRuntimePort, standalone,
+    runtimeReady: () => isRealBunBinary(executable),
     stop: async (target, deadline, beforeStop) => {
       const token = configuredAdminToken();
       if (!token) throw new Error("update_restart_credential_unavailable");

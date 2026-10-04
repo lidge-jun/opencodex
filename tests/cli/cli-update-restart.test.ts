@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runUpdateRestart, type UpdateRestartIo } from "../../src/cli/update-restart";
+import { describeUpdateRestartFailure, runUpdateRestart, type UpdateRestartIo } from "../../src/cli/update-restart";
 import type { UpdateRestartCandidate } from "../../src/cli/update-restart-candidate";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
 
@@ -17,7 +17,7 @@ function setup() {
   const io: UpdateRestartIo = {
     now: () => now, acquire: () => { calls.push("acquire"); return { release: () => { calls.push("release"); } }; },
     home: () => home, checkHome: () => {}, runtime: () => candidate.runtime,
-    standalone: () => true,
+    standalone: () => true, runtimeReady: () => true,
     stop: async (_target, _deadline, revalidate) => { revalidate(); calls.push("stop"); },
     stopped: async () => { calls.push("settle"); return true; },
     start: marker => { expect(marker).toEqual({ home, version: "2.77.0", port: 10100, hostname: "127.0.0.1", deadlineAt: 5000 }); calls.push("start"); return { pid: 456, exitCode: null, signalCode: null }; },
@@ -100,5 +100,51 @@ describe("CLI update restart transaction", () => {
       expect((await runUpdateRestart(candidate, 5000, s.io)).ok).toBe(false);
       expect(s.calls.filter(call => call === "start")).toHaveLength(1);
     }
+  });
+  test("an incomplete runtime refuses before any stop, even through a transport that sanitizes beforeStop errors", async () => {
+    const early = setup(); early.io.runtimeReady = () => false;
+    expect(await runUpdateRestart(candidate, 5000, early.io)).toEqual({ ok: false, code: "update_restart_runtime_incomplete" });
+    expect(early.calls).toEqual(["acquire", "release"]);
+    // The runtime turns into the npm placeholder between eligibility and the stop exchange.
+    const late = setup(); let checks = 0;
+    late.io.runtimeReady = () => ++checks === 1;
+    late.io.stop = async (_target, _deadline, beforeStop) => {
+      try { beforeStop(); } catch { throw new Error("update_restart_stop_failed"); }
+      late.calls.push("stop");
+    };
+    expect(await runUpdateRestart(candidate, 5000, late.io)).toEqual({ ok: false, code: "update_restart_runtime_incomplete" });
+    expect(late.calls).toEqual(["acquire", "release"]);
+  });
+  test("after a confirmed stop, waits for the runtime and launches once it is complete", async () => {
+    const s = setup(); let stopped = false;
+    s.io.stopped = async () => { s.calls.push("settle"); stopped = true; return true; };
+    let polls = 0;
+    s.io.runtimeReady = () => !stopped || ++polls > 3;
+    expect(await runUpdateRestart(candidate, 5000, s.io)).toEqual({ ok: true, live: s.live });
+    expect(s.calls).toEqual(["acquire", "stop", "settle", "start", "release", "observe"]);
+  });
+  test("runtime timeout, late readiness and home change during the wait never launch", async () => {
+    for (const mode of ["never", "at-deadline", "home"] as const) {
+      const s = setup(); let stopped = false;
+      s.io.stopped = async () => { s.calls.push("settle"); stopped = true; return true; };
+      s.io.runtimeReady = () => !stopped;
+      if (mode === "at-deadline") s.io.wait = async () => { s.expire(); s.io.runtimeReady = () => true; };
+      if (mode === "home") s.io.wait = async () => { s.io.runtimeReady = () => true; s.io.checkHome = () => { throw new Error("foreign claim"); }; };
+      const result = await runUpdateRestart(candidate, 5000, s.io);
+      expect(result).toEqual({ ok: false, code: mode === "never" ? "update_restart_runtime_failed" : "update_restart_prelaunch_failed" });
+      expect(s.calls).not.toContain("start"); expect(s.calls.at(-1)).toBe("release");
+    }
+  });
+  test("failure text claims only what each phase proved", () => {
+    for (const code of ["update_restart_runtime_incomplete", "update_restart_eligibility_failed"]) {
+      expect(describeUpdateRestartFailure(code)).toContain("nothing was stopped");
+    }
+    for (const code of ["update_restart_stop_failed", "update_restart_settle_failed", "update_restart_replacement_failed", "update_restart_unknown"]) {
+      expect(describeUpdateRestartFailure(code)).toContain("inspect `ocx status` before retrying");
+      expect(describeUpdateRestartFailure(code)).not.toContain("run `ocx start`");
+    }
+    expect(describeUpdateRestartFailure("update_restart_runtime_failed")).toContain("nothing was launched");
+    expect(describeUpdateRestartFailure("update_restart_prelaunch_failed")).toContain("nothing was launched");
+    expect(describeUpdateRestartFailure("update_restart_start_failed")).toContain("launch could not be confirmed");
   });
 });

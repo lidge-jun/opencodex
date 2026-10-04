@@ -107,7 +107,10 @@ a detached proxy whose parent is PID 1, no installed or active service, and a kn
 The stop uses the same connection that proved the old proxy's identity. The command launches
 once only after confirmed shutdown, then requires the exact child PID, endpoint, fresh identity
 proof and matching version. Missing version, uncertain stop, timeout or an unexpected replacement
-reports failure without another stop or start. Windows, foreground, desktop-supervised, service,
+reports failure without another stop or start. If the runtime this CLI would launch is still the
+small placeholder an in-place npm install leaves before its postinstall, restart refuses before
+stopping anything; after a confirmed stop it waits for the runtime within the same deadline and
+launches nothing if it does not arrive. Windows, foreground, desktop-supervised, service,
 connected-client and sibling runtimes do not use this update path; use their owning lifecycle
 controls. A newer proxy or incomparable version still refuses an in-place downgrade.
 

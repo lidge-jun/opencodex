@@ -10,7 +10,7 @@ import { currentServingCommand, deferServiceChildToNewerRuntime, markDelegatedSe
 import { packageVersion } from "../lib/package-version";
 import { admitUpdateRestartChild } from "./update-restart-child";
 import { UpdateRestartRequired } from "./update-restart-candidate";
-import { restartFromCurrentInstallation } from "./update-restart";
+import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 
@@ -956,9 +956,11 @@ async function handleProxyRestart(
     })),
   });
   if (!result.ok && result.phase === "request" && result.error instanceof UpdateRestartRequired) {
-    const update = await restartFromCurrentInstallation(result.error.candidate(), deadlineAt, detachedStartEnvironment());
+    const candidate = result.error.candidate();
+    console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
+    const update = await restartFromCurrentInstallation(candidate, deadlineAt, detachedStartEnvironment());
     if (update.ok) console.log(`✅ Proxy updated to ${update.live.version} (PID ${update.live.pid}).`);
-    else console.error(`❌ Update restart could not be confirmed (${update.code}); inspect status before retrying.`);
+    else console.error(`❌ ${describeUpdateRestartFailure(update.code)} (${update.code})`);
     process.exitCode = update.ok ? 0 : 1;
     return update.ok;
   }
