@@ -577,6 +577,13 @@ configuration that names the old id is rewritten at startup.
 - Uses `runTurn` rather than the ordinary fetch/parse path. Requests and server events are encoded
   with manual protobuf framing in `devin/cloud-direct/wire.ts`; the ordinary `buildRequest` /
   `parseStream` path is disabled.
+- Named conversations reuse a trajectory across sequential turns, scoped to the resolved credential
+  and tenant host. Own-thread identity takes precedence over session markers (`session_id`,
+  `session-id`, or `x-session-affinity`); a shared parent alone is not a conversation identity.
+  Overlapping turns receive distinct IDs. The proxy retains at most 256 entries in memory,
+  evicts only inactive entries, and releases claims after completion, failure, or cancellation.
+  Restarting the proxy clears retention. Unnamed calls continue allocating an ID per request.
+  This supports continuity but does not guarantee an upstream cache hit or a particular saving.
 - Reasoning continuity carries provider signatures across turns. If Cognition refuses a signed
   Anthropic replay before visible output, Devin retries once with the signature withheld and the
   thinking text preserved.

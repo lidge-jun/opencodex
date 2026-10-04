@@ -18,6 +18,7 @@ import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin"
 import { devinAssistantReasoning, encodeDevinSignature, hasAnthropicSignature } from "./devin/reasoning-signature";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { devinContextOverflowEvent, isDevinHistoryOverflow } from "./devin/context-overflow";
+import { claimDevinTrajectory, type DevinTrajectoryClaim } from "./devin/trajectory";
 
 /**
  * Combine two usage frames from one turn by keeping the larger count per field.
@@ -743,6 +744,7 @@ export function createDevinAdapter(
       let contextWindow: number | undefined;
       let messages: ChatHistoryItem[] = [];
       let tools: ToolDef[] | undefined;
+      let trajectory: DevinTrajectoryClaim | undefined;
 
       const closeOpenTool = () => {
         if (!openToolId) return;
@@ -751,6 +753,12 @@ export function createDevinAdapter(
       };
 
       try {
+        const conversation = incoming.headers.get("thread-id")?.trim() || parsed._codexOwnThreadId?.trim()
+          || incoming.headers.get("session_id")?.trim() || incoming.headers.get("session-id")?.trim()
+          || incoming.headers.get("x-session-affinity")?.trim()
+          || (!incoming.headers.has("x-codex-parent-thread-id") ? parsed._clientThreadId : undefined);
+        trajectory = claimDevinTrajectory(apiKey, host, conversation);
+        const trajectoryId = trajectory.trajectoryId;
         // Read the selected UID's catalog row, not the picker's collapsed base.
         contextWindow = resolveDevinContextWindow(provider, modelUid, catalog?.byUid.get(modelUid));
         messages = mapOcxMessagesToDevin(parsed);
@@ -780,6 +788,7 @@ export function createDevinAdapter(
           messages,
           tools,
           cascadeId,
+          trajectoryId,
           completionOpts: {
             ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
             ...(typeof parsed.options.temperature === "number" ? { temperature: parsed.options.temperature } : {}),
@@ -961,6 +970,8 @@ export function createDevinAdapter(
           ...(error instanceof CloudChatError && error.code ? { code: error.code } : {}),
           ...(usage ? { usage } : {}),
         });
+      } finally {
+        trajectory?.release();
       }
     },
   };
