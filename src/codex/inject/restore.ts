@@ -4,6 +4,8 @@ import { shouldSyncCodexOnStart } from "../desired-state";
 import { siblingOfLivePort, siblingSkipMessage } from "../sibling-start";
 import { withCatalogWriteSerialization } from "../catalog-write-serialization";
 import { restoreCodexCatalogWithPermit } from "../catalog/sync";
+import { readCodexCatalogPath } from "../catalog/parsing";
+import { notifyCatalogPublication } from "../catalog/publication-observer";
 import { withCodexWriteLock, CodexWriteLockSkipped } from "../codex-write-lock";
 import { inspectNativeCodexOwnership } from "../../integrations/native/ownership-preflight";
 import { resolveCodexHistoryTransition } from "../history-transition";
@@ -553,7 +555,7 @@ async function restoreNativeCodexAsyncImpl(
   // Captured before the config half: a successful journal restore DELETES the journal, and
   // restoring the config can drop `model_catalog_json`. Either one would hide the routed
   // catalog we actually wrote (#1798).
-  const journaledCatalogPath = journaledInjectedCatalogPath();
+  const journaledCatalogPath = journaledInjectedCatalogPath() ?? readCodexCatalogPath();
   let config: CodexRestoreConfigResult;
   let transitionReceipt: { nativeGeneration: number; currentTxId: string } | undefined;
 
@@ -641,6 +643,7 @@ async function restoreNativeCodexAsyncImpl(
   }
 
   if (config.state === "failed") return failedConfigRestoreEnvelope(config);
+  notifyCatalogPublication({ kind: "native-released", path: journaledCatalogPath });
   const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
   // Re-asked after the config half, because the store can paginate mid-transaction. Deciding
   // the history job from the pre-write answer alone would spawn a Worker whose own preflight
@@ -738,9 +741,10 @@ function restoreNativeCodexImpl(
   // Captured before the config half: a successful journal restore DELETES the journal, and
   // restoring the config can drop `model_catalog_json`. Either one would hide the routed
   // catalog we actually wrote (#1798).
-  const journaledCatalogPath = journaledInjectedCatalogPath();
+  const journaledCatalogPath = journaledInjectedCatalogPath() ?? readCodexCatalogPath();
   const config = restoreCodexConfigInline("sync", options);
   if (config.state === "failed") return failedConfigRestoreEnvelope(config);
+  notifyCatalogPublication({ kind: "native-released", path: journaledCatalogPath });
   // Same mid-transaction pagination re-check as the async path.
   const historyStoodDown = historyStandsDown
     || resolveRestoreHistoryDisposition(options.removeProviderTable).kind === "stand-down";

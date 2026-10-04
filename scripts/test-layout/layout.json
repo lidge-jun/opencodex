@@ -516,6 +516,8 @@
     "codex-catalog-routed-removal.test.ts": "codex-integration",
     "codex-catalog-intent.test.ts": "codex-integration",
     "codex-catalog-write-audit.test.ts": "codex-integration",
+    "codex-catalog-self-heal.test.ts": "codex-integration",
+    "codex-catalog-heal-integration.test.ts": "codex-integration",
     "codex-home-owner.test.ts": "codex-integration",
     "codex-home-owner-lifecycle.test.ts": "codex-integration",
     "codex-catalog-write-serialization.test.ts": "codex-integration",

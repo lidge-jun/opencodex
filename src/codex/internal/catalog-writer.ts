@@ -14,6 +14,7 @@ import { ConfigMutationLockError, withConfigMutationLockSync } from "../../confi
 import { codexCatalogAuditPath } from "../catalog/write-audit";
 import type { CatalogAuditConfigSource, CatalogAuditRefusalReason, CatalogWriteAuditDetails } from "../catalog/write-audit-contract";
 import { ocxRoutedRowCount } from "../catalog/routed-removal";
+import { notifyCatalogPublication } from "../catalog/publication-observer";
 import {
   assertCatalogWritePermit,
   auditCatalogWriteWithPermit,
@@ -270,7 +271,10 @@ export function replaceActiveCodexCatalog(
   if (intent === "cache") {
     throw new CatalogWritePermitRefusal("A models-cache permit cannot replace the Codex catalog.");
   }
-  if (!preparedBytesDifferFromDisk(prepared)) return { kind: "unchanged" };
+  if (!preparedBytesDifferFromDisk(prepared)) {
+    notifyCatalogPublication({ kind: "published", path: prepared.path, intent });
+    return { kind: "unchanged" };
+  }
   const routedBefore = routedRowsOnDisk(prepared.path);
   const routedAfter = routedRowsFromJson(prepared.content);
   const finish = (result: CatalogFileReplacement): CatalogFileReplacement => {
@@ -279,6 +283,7 @@ export function replaceActiveCodexCatalog(
       reason: result.kind === "refused" ? result.reason : undefined,
       routedBefore, routedAfter, configSource: configSourceNow(),
     }, io === undefined);
+    if (result.kind !== "refused") notifyCatalogPublication({ kind: "published", path: prepared.path, intent });
     return result;
   };
   if (intent === "refresh" && (routedBefore ?? 0) > 0 && routedAfter === 0) {
