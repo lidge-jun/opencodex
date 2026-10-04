@@ -770,6 +770,11 @@ const ANTIGRAVITY_USAGE_BASE_BY_ID: Record<string, string> = (() => {
   // onto a model that did not exist then, and away from the 3.6 price row that still
   // prices it correctly. Retirement changes what we CALL, not what we RECORD.
   for (const retired of Object.keys(RETIRED_FLASH_TIERS)) rev[retired] = retired;
+  // Usage identity is stable even before discovery; routing keeps its own live evidence.
+  for (const base of ["claude-sonnet-5-5", "claude-opus-5-5"]) {
+    rev[base] = base;
+    for (const effort of ANTIGRAVITY_DISCOVERY_EFFORTS) rev[`${base}-${effort}`] = base;
+  }
   // Visible aliases that only appear in ANTIGRAVITY_VISIBLE_MODEL_ALIASES are already
   // included via ANTIGRAVITY_MODEL_ALIASES. Identity bases without effort maps remain.
   return rev;

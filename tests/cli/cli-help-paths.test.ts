@@ -129,11 +129,13 @@ describe("explicit CLI help paths", () => {
     }
   });
 
-  test("unknown roots retain the existing error and root banner", () => {
+  test("unknown roots use stderr recovery and leave stdout empty", () => {
     const result = help(["help", "nosuch"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Unknown command: nosuch");
-    expect(result.stdout).toContain("opencodex (ocx)");
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("ocx help --all");
+    expect(result.stderr.trim().split("\n").length).toBeLessThan(10);
   });
 
   test("unavailable detail never echoes arbitrary operands or terminal controls", () => {

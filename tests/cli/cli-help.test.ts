@@ -158,7 +158,9 @@ describe("CLI subcommand help", () => {
     expectSpawnFinished(result, "ocx foobar --help");
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Unknown command: foobar");
-    expect(result.stdout).toContain("opencodex (ocx)");
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("ocx help --all");
+    expect(result.stderr.trim().split("\n").length).toBeLessThan(10);
   });
 
   test("status prints diagnostics without starting the proxy", () => {

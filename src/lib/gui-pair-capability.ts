@@ -65,6 +65,23 @@ export function canonicalHttpOrigin(value: unknown): string | null {
   }
 }
 
+/**
+ * Standalone pairing is only for this process's configured literal loopback origin.
+ * No CORS entry, public hub URL, wildcard bind, alias or client role can widen it.
+ * The CLI separately checks the attested runtime's actual port before requesting a grant.
+ */
+export function standaloneGuiPairingOrigin(config: {
+  runtimeRole?: string;
+  hostname?: string;
+  port: number;
+}): string | null {
+  if ((config.runtimeRole ?? "standalone") !== "standalone") return null;
+  const hostname = config.hostname ?? "127.0.0.1";
+  if (hostname !== "127.0.0.1" && hostname !== "::1") return null;
+  if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) return null;
+  return new URL(`http://${hostname === "::1" ? "[::1]" : hostname}:${config.port}`).origin;
+}
+
 function capabilityPayload(
   nonce: string,
   method: string,

@@ -1,3 +1,4 @@
+import { codexAccountModelRefusal, codexAccountModelRefusalHardStopCode, type CodexAccountModelRefusal } from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
 import type { OcxUsage } from "../../types";
@@ -36,6 +37,7 @@ export async function consumeComboFailure(
   const nonReplayable = isNonReplayableResponse(response);
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
+  let codexModelRefusal: CodexAccountModelRefusal | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
   let upstreamMessage: string | undefined;
@@ -60,10 +62,11 @@ export async function consumeComboFailure(
         && isRateLimitOrQuotaFailureMessage(quotaMessage);
     }
     if (body.displaySafe && !body.truncated) {
+      if (response.status === 400) codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
       if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
         classificationText = normalized.safeText;
-        upstreamCode = normalized.code;
+        upstreamCode = codexAccountModelRefusalHardStopCode(response.status, body.text) ?? normalized.code;
         upstreamMessage = normalized.message;
         upstreamType = normalized.type;
       }
@@ -116,6 +119,7 @@ export async function consumeComboFailure(
     response: failureResponse,
     ...(nonReplayable ? { nonReplayable: true } : {}),
     classificationText,
+    ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
     ...(upstreamType !== undefined ? { upstreamType } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),

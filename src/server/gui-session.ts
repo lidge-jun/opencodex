@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { OcxConfig } from "../types";
-import { canonicalGuiBrowserOrigin } from "../lib/gui-pair-capability";
+import { canonicalGuiBrowserOrigin, standaloneGuiPairingOrigin } from "../lib/gui-pair-capability";
 import {
   isAllowedManagementOrigin,
   isApiAuthRequired,
@@ -20,6 +20,8 @@ export interface GuiSessionRecord {
   csrfToken: string;
   expiresAt: number;
   issuance: GuiSessionIssuance;
+  /** Process-local marker; never accepted from a browser. */
+  localPairing?: true;
 }
 
 export interface GuiSessionBootstrap extends GuiSessionRecord {
@@ -31,6 +33,7 @@ export interface GuiPairingGrantRecord {
   browserOrigin: string;
   expiresAt: number;
   failedAttempts?: number;
+  localPairing?: true;
 }
 
 export interface PairingAttemptContext {
@@ -131,6 +134,7 @@ function mintSession(
   issuance: GuiSessionIssuance,
   state: GuiSessionState,
   now: number,
+  localPairing = false,
 ): GuiSessionBootstrap {
   pruneExpired(state, now);
   evictOldestSession(state);
@@ -142,8 +146,9 @@ function mintSession(
     serverOrigin,
     browserOrigin,
     csrfToken: randomBytes(32).toString("base64url"),
-    expiresAt: now + (issuance === "loopback" ? LOOPBACK_GUI_SESSION_TTL_MS : REMOTE_GUI_SESSION_TTL_MS),
+    expiresAt: now + (issuance === "loopback" || localPairing ? LOOPBACK_GUI_SESSION_TTL_MS : REMOTE_GUI_SESSION_TTL_MS),
     issuance,
+    ...(localPairing ? { localPairing: true as const } : {}),
   };
   state.sessions.set(token, session);
   return {
@@ -258,13 +263,16 @@ export function createGuiPairingGrant(
   now = Date.now(),
 ): { grant: string; browserOrigin: string; serverOrigin: string; expiresAt: number } {
   const canonicalBrowserOrigin = canonicalGuiBrowserOrigin(browserOrigin);
-  const serverOrigin = canonicalHttpOrigin(config.hub?.managementPublicOrigin);
+  const localOrigin = standaloneGuiPairingOrigin(config);
+  const localPairing = localOrigin !== null && canonicalBrowserOrigin === localOrigin;
+  const serverOrigin = config.runtimeRole === "hub"
+    ? canonicalHttpOrigin(config.hub?.managementPublicOrigin) : localOrigin;
   if (
-    config.runtimeRole !== "hub"
-    || !canonicalBrowserOrigin
+    !canonicalBrowserOrigin
     || canonicalBrowserOrigin !== browserOrigin
     || !serverOrigin
-    || !isRemoteGuiBrowserOriginAllowed(canonicalBrowserOrigin, config)
+    || (config.runtimeRole === "hub"
+      ? !isRemoteGuiBrowserOriginAllowed(canonicalBrowserOrigin, config) : !localPairing)
   ) throw new TypeError("remote GUI origin is not allowed");
   pruneExpired(state, now);
   consumeGrantRateSlot(state, now);
@@ -276,7 +284,8 @@ export function createGuiPairingGrant(
     digest = pairingGrantDigest(grant);
   } while (state.pairingGrants.has(digest));
   const expiresAt = now + GUI_PAIRING_GRANT_TTL_MS;
-  state.pairingGrants.set(digest, { browserOrigin: canonicalBrowserOrigin, serverOrigin, expiresAt });
+  state.pairingGrants.set(digest, { browserOrigin: canonicalBrowserOrigin, serverOrigin, expiresAt,
+    ...(localPairing ? { localPairing: true as const } : {}) });
   return { grant, browserOrigin: canonicalBrowserOrigin, serverOrigin, expiresAt };
 }
 
@@ -316,7 +325,8 @@ export function consumeGuiPairingGrant(
   now = Date.now(),
   attemptContext?: PairingAttemptContext,
 ): GuiSessionBootstrap | PairingAttemptRefusal | null {
-  if (req.method !== "POST" || hasAlternateCredential(req) || config.runtimeRole !== "hub") return null;
+  const localOrigin = standaloneGuiPairingOrigin(config);
+  if (req.method !== "POST" || hasAlternateCredential(req) || (config.runtimeRole !== "hub" && !localOrigin)) return null;
   // Scheme check FIRST, before the grant is parsed or looked up.
   //
   // A grant is single-use, so consuming one and then refusing to mint would burn the
@@ -333,6 +343,11 @@ export function consumeGuiPairingGrant(
   const grant = strictPairingGrantBody(body);
   const browserOrigin = canonicalGuiBrowserOrigin(req.headers.get("Origin"));
   if (!grant || !browserOrigin) return null;
+  // Unlike the hub path, standalone redemption never accepts a proxy-origin claim:
+  // both origins must be the configured loopback origin and the kernel peer must be local.
+  if (localOrigin && (destination !== localOrigin || browserOrigin !== localOrigin
+    || attemptContext?.ingress !== "public"
+    || !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(attemptContext.peerAddress ?? ""))) return null;
   const context = attemptContext ?? {
     ingress: "public",
     peerAddress: null,
@@ -344,11 +359,14 @@ export function consumeGuiPairingGrant(
   const found = findPairingGrant(grant, state);
   if (!found) {
     // Cross-origin browser requests must not create limiter state as a side effect.
-    if (!isRemoteGuiBrowserOriginAllowed(browserOrigin, config)) return null;
+    if (localOrigin ? browserOrigin !== localOrigin : !isRemoteGuiBrowserOriginAllowed(browserOrigin, config)) return null;
     const source = recordSourceFailure(state, context, now);
     return attemptContext && !source.allowed ? source : null;
   }
   const [digest, record] = found;
+  // A live role/config change must not turn a hub grant into local operator consent, or vice versa.
+  if (record.localPairing ? !localOrigin || record.serverOrigin !== localOrigin
+    : config.runtimeRole !== "hub") return null;
   if (record.expiresAt <= now) {
     state.pairingGrants.delete(digest);
     return null;
@@ -369,7 +387,7 @@ export function consumeGuiPairingGrant(
   // the session is actually minted from.
   if (!isPairingTransportPermitted(record.serverOrigin)) return null;
   state.pairingGrants.delete(digest);
-  return mintSession(record.serverOrigin, record.browserOrigin, "pairing", state, now);
+  return mintSession(record.serverOrigin, record.browserOrigin, "pairing", state, now, record.localPairing === true);
 }
 
 /**
@@ -420,6 +438,10 @@ export function authorizeGuiSessionRequest(
     state.sessions.delete(token);
     return { ok: false, reason: "expired" };
   }
+  if (session.localPairing && standaloneGuiPairingOrigin(config) !== session.serverOrigin) {
+    state.sessions.delete(token);
+    return { ok: false, reason: "server-origin" };
+  }
   if (managementRequestOrigin(req, config) !== session.serverOrigin) {
     return { ok: false, reason: "server-origin" };
   }
@@ -435,6 +457,6 @@ export function authorizeGuiSessionRequest(
     const csrf = req.headers.get("x-opencodex-csrf-token")?.trim();
     if (!csrf || !equalSecret(csrf, session.csrfToken)) return { ok: false, reason: "csrf" };
   }
-  if (session.issuance !== "loopback") session.expiresAt = now + REMOTE_GUI_SESSION_TTL_MS;
+  if (session.issuance !== "loopback" && !session.localPairing) session.expiresAt = now + REMOTE_GUI_SESSION_TTL_MS;
   return { ok: true, principal: "gui-session", session };
 }

@@ -49,8 +49,9 @@ Declared capability topics such as `account list` show their summary, known flag
 details, with a pointer to parent help. This metadata does not cover every operand or runtime
 subcommand, so a topic can show `Command: ocx ...` without claiming a complete `Usage:` grammar.
 A prefix such as `account main` lists its declared children and marks that coverage as incomplete.
-An undeclared explicit topic (`ocx help <path>`) exits nonzero with a detailed-help-unavailable
-message and a known-parent pointer; that does not establish whether the runtime command is valid.
+An undeclared explicit topic (`ocx help <path>`) exits 1 with a concise detailed-help-unavailable
+message and a known-parent or full-reference pointer on standard error. Standard output stays
+empty, and no full help banner is printed. Missing detail does not establish whether the runtime command is valid.
 Appended `--help`/`-h` preserves existing command-help behavior: when detailed metadata is unavailable,
 it displays known parent help successfully, without executing the command.
 
@@ -58,6 +59,25 @@ In the Bun CLI head, bare `help` is recognized only at the root or immediately a
 command. Use `--help` or `-h` for nested paths. Later values such as the `help` in
 `ocx alias set demo help` remain command arguments. An exact `--` ends head help scanning,
 so `ocx claude -- --help` preserves the arguments for command dispatch.
+
+## Recovering from command typos
+
+Unknown root commands and unresolved explicit help paths exit 1 with a short diagnostic and
+navigation guidance on standard error, leaving standard output empty. Close typos can receive
+conservative suggestions drawn from visible command names and the current help family's documented
+children. Suggestions are guidance only: the CLI never executes them or retries the command.
+
+| Input | Guidance |
+| --- | --- |
+| `ocx modles` or `ocx help modles` | Suggests `ocx help models`. |
+| `ocx help account lisst` | Suggests `ocx help account list` within the account family. |
+| `ocx help qzxv` | Offers `ocx help --all` without guessing a command. |
+| `ocx help service install` | Reports unavailable detailed help and points to `ocx help service`; the runtime install operation remains valid. |
+
+The Bun CLI rejects an unknown root before shim auto-restore or other command preflight.
+Recognized commands retain their existing preflight; hidden commands and the internal runner
+remain valid dispatch targets but are excluded from discovery and suggestions. Appended flag-help
+fallback, capability JSON, and provider-specific error handling retain their existing behavior.
 
 ## Command families
 

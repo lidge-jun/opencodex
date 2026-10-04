@@ -16,7 +16,7 @@ import {
 } from "../pool-rotation";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, resetAtToMs } from "../quota";
 import { codexPlanKey } from "../plan";
-import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan, hasMainAccountRefreshGrant } from "../main-account";
+import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
 import type { OcxConfig } from "../../types";
 import { CODEX_FAILURE_WINDOW_MS, computeCodexUsageScore } from "./cooldown-math";
 import {
@@ -220,7 +220,6 @@ export function getEligiblePoolAccounts(
   if (
     excludeId !== MAIN_CODEX_ACCOUNT_ID
     && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
-    && (!isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID) || hasMainAccountRefreshGrant())
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
     // The main login is not in `config.codexAccounts`, so it never passes through the
@@ -539,7 +538,7 @@ export function sharedStateSelectionOptions(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): Pick<
   CodexAccountUsabilityOptions,
-  "nativeMainSelectionOnly" | "isMainAccountTokenLive"
+  "nativeMainSelectionOnly" | "isMainAccountTokenLive" | "requestOwnedMainCredential"
 > | undefined {
   if (!selectionOptions) return undefined;
   return {
@@ -548,6 +547,9 @@ export function sharedStateSelectionOptions(
       : {}),
     ...(selectionOptions.isMainAccountTokenLive
       ? { isMainAccountTokenLive: selectionOptions.isMainAccountTokenLive }
+      : {}),
+    ...(selectionOptions.requestOwnedMainCredential !== undefined
+      ? { requestOwnedMainCredential: selectionOptions.requestOwnedMainCredential }
       : {}),
   };
 }

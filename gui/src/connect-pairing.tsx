@@ -7,9 +7,12 @@ import { useCopyFeedback } from "./components/use-copy-feedback";
 export function ConnectPairingForm({
   target,
   onConnected,
+  local = false,
 }: {
   target: ApiTarget;
   onConnected: () => void;
+  /** Explicit local pairing for a standalone link join; never an automatic bootstrap. */
+  local?: boolean;
 }) {
   const t = useT();
   const [grant, setGrant] = useState("");
@@ -40,15 +43,15 @@ export function ConnectPairingForm({
   };
 
   return <section className="card connect-pairing" aria-labelledby="connect-pairing-title">
-    <h2 id="connect-pairing-title">{t("connection.pairing.title")}</h2>
-    <p>{t("connection.pairing.hub")}: <code>{target.serverOrigin}</code></p>
-    <p>{t("connection.pairing.getCode")}</p>
+    <h2 id="connect-pairing-title">{t(local ? "connection.pairing.code" : "connection.pairing.title")}</h2>
+    <p>{!local && <>{t("connection.pairing.hub")}: </>}<code>{target.serverOrigin}</code></p>
+    {!local && <p>{t("connection.pairing.getCode")}</p>}
     <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}><code>{command}</code></pre>
     <button type="button" className="btn btn-ghost" onClick={() => copyFeedback.copy(command, command)}>
       {t(copied === "copied" ? "startup.copied" : "startup.copy")}
     </button>
     {copied === "unavailable" && <p role="status">{t("prov.linkCopyUnavailable")}</p>}
-    <p>{t("connection.pairing.askOperator")}</p>
+    {!local && <p>{t("connection.pairing.askOperator")}</p>}
     <p>{t("connection.pairing.notApiKey")}</p>
     <form onSubmit={submit} className="api-form-row">
       <label htmlFor="connect-pairing-code" className="field-label">{t("connection.pairing.code")}</label>

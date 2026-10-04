@@ -52,7 +52,7 @@ import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
 import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
-import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
+import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { clearManualCodeSlot, ensureManualCodeSlot, kiroLoginSettling, loginAbort, loginState, waitForManualLoginCode, type OAuthLoginHint } from "./login-flow-state";
@@ -82,7 +82,9 @@ export {
 export { OAUTH_REFRESH_LOCK_WAIT_MS, peekAuthStore, peekOAuthRefreshIntent } from "./store";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
-const REFRESH_SKEW_MS = 60_000;
+import { REFRESH_SKEW_MS } from "./refresh-policy";
+import { newerClaudeCredential, captureAnthropicCredentialOwner } from "./anthropic-continuity";
+import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 export interface OAuthAccessSnapshot {
   provider: string;
   accountId: string;
@@ -169,7 +171,7 @@ export function seedOAuthTokenRefreshFlightsForTests(rows: Array<{ key: string; 
 const XAI_PERMANENT_FAILURE_TTL_MS=30_000;
 const permanentRefreshFailures=new Map<string,number>();
 interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
-interface AnthropicRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal; flight?: OAuthRefreshFlightEvidence; replacedStaleFlight?: OAuthRefreshFlightEvidence }
+interface AnthropicRefreshDeps { resolveIdentity?: AnthropicIdentityResolver; intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal; flight?: OAuthRefreshFlightEvidence; replacedStaleFlight?: OAuthRefreshFlightEvidence }
 interface GenericRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
 function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${credentialGeneration(c)}`;}
 function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
@@ -866,6 +868,7 @@ function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OA
 function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
   return {
     ...fresh,
+    ...mergeAnthropicIdentity(fresh, previous),
     // Shared: a refresh function returns "local-cli" only when the credential it hands back
     // still is the local CLI's (Devin re-reading the CLI file, Meta Muse echoing its durable
     // CLI key). Relabelling that "oauth" would stop the next forced refresh from re-reading it.
@@ -880,12 +883,6 @@ function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCrede
 }
 export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const writerGeneration=captureConfigGeneration();const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const row=getAccountCredentialWithStatus(provider,accountId);if(!row)throw new OAuthLoginRequiredError(provider);if(row.paused)throw new OAuthAccountPausedError();const stored=row.credential;const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh,deps.signal),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(error instanceof OAuthMutationBusyError){permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));throw error;}if(!terminal(error))throw error;const failedAt=now();permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),failedAt+XAI_PERMANENT_FAILURE_TTL_MS);sweepExpiredOnWrite(failedAt);await markAccountNeedsReauthIfGeneration(provider,accountId,generation,writerGeneration);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
 
-function newerClaudeCredential(stored: OAuthCredentials, now: number): OAuthCredentials | undefined {
-  if (stored.source !== "local-cli") return undefined;
-  const disk = detectClaudeCodeToken();
-  if (!disk || disk.expires <= now + REFRESH_SKEW_MS) return undefined;
-  return credentialGeneration(disk) !== credentialGeneration(stored) ? disk : undefined;
-}
 
 /**
  * Preserve an already-rotated Nous refresh token (RT-B) after a terminal refresh
@@ -939,33 +936,42 @@ export async function refreshAnthropicAccountWithLock(
   const now = deps.now ?? Date.now;
   const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
   try {
-    const row = getAccountCredentialWithStatus(provider, accountId);
-    if (!row) throw new OAuthLoginRequiredError(provider);
-    if (row.paused) throw new OAuthAccountPausedError();
-    const stored = row.credential;
-    const account = getAccountSet(provider)?.accounts.find(candidate => candidate.id === accountId);
+    const accountSet = getAccountSet(provider);
+    const account = accountSet?.accounts.find(candidate => candidate.id === accountId);
+    if (!accountSet || !account) throw new OAuthLoginRequiredError(provider);
+    if (account.paused) throw new OAuthAccountPausedError();
+    const stored = account.credential;
+    const owns = captureAnthropicCredentialOwner(accountSet, accountId);
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
-    const disk = newerClaudeCredential(stored, now());
-    if (disk) {
-      const outcome = await mergeAccountCredential(provider, accountId, disk, {
-        expectedGeneration: credentialGeneration(stored),
-        afterPrePersistRead: deps.afterPrePersistRead,
-      });
-      if (outcome.superseded) {
-        // The disk credential is already durable here, so cleanup is secondary: an unlink
-        // failure must not mask a committed credential by throwing over the return below.
-        if (pendingIntent) clearAnthropicRefreshIntentBestEffort(provider, accountId, pendingIntent);
-        if (outcome.stored.expires > now() + REFRESH_SKEW_MS) return outcome.stored.access;
-        throw new OAuthLoginRequiredError(provider);
+    const observed = await newerClaudeCredential(stored, now(), deps.signal, deps.resolveIdentity);
+    const assertOwner = (store: AuthStore, checkDisk = true) => {
+      if (observed.kind !== "absent" && deps.signal?.aborted) throw new OAuthTokenRefreshStaleError();
+      if (!owns(store, checkDisk && observed.kind !== "absent" ? observed.diskGeneration : undefined)) {
+        if (store[provider]?.accounts.find(a => a.id === accountId)?.paused) throw new OAuthAccountPausedError();
+        throw new OAuthTokenRefreshStaleError();
       }
+    };
+    assertOwner({ [provider]: getAccountSet(provider)! }, observed.kind !== "adopt");
+    if (observed.kind === "adopt") {
+      const outcome = await mergeAccountCredential(provider, accountId, observed.credential, {
+        expectedGeneration: generation,
+        afterPrePersistRead: deps.afterPrePersistRead,
+        assertOwnership: assertOwner,
+      });
+      // A superseding write did not adopt our candidate. Its pending intent remains owned by it.
+      if (outcome.superseded) throw new OAuthTokenRefreshStaleError();
       if (pendingIntent) clearAnthropicRefreshIntentBestEffort(provider, accountId, pendingIntent);
-      return disk.access;
+      return observed.credential.access;
     }
+    // Unknown rotation may have consumed this refresh token. Refuse without replay or changing health.
+    if (observed.kind === "unresolved") throw new OAuthLoginRequiredError(provider);
     if (pendingIntent?.cleanupPending && pendingIntent.generation === generation) {
       resumeAnthropicRefreshIntentCleanup(provider, accountId, pendingIntent);
       pendingIntent = undefined;
     }
+    if (observed.kind === "different"
+      && (pendingIntent?.uncertain || pendingIntent?.generation === generation)) throw new OAuthLoginRequiredError(provider);
     if (!pendingIntent?.uncertain && pendingIntent?.generation === generation) {
       if (pendingIntent.staleOwner) throw new OAuthTokenRefreshStaleError();
       if (deps.replacedStaleFlight && pendingIntent.flightId === deps.replacedStaleFlight.flightId) {
@@ -1007,6 +1013,7 @@ export async function refreshAnthropicAccountWithLock(
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
         expectedGeneration: generation,
         afterPrePersistRead: deps.afterPrePersistRead,
+        assertOwnership: store => { if (!owns(store, undefined, true)) throw new OAuthTokenRefreshStaleError(); },
       });
       if (outcome.superseded) {
         if (attemptIntent) clearAnthropicRefreshIntentBestEffort(provider, accountId, attemptIntent);
@@ -1717,7 +1724,7 @@ export async function runLogin(
       });
     } else {
       const saveOptions = {
-        preserveIdentityless: opts?.forceLogin === true,
+        preserveIdentityless: opts?.forceLogin === true || (provider === "anthropic" && cred.source === "local-cli"),
         assertBeforePersist: deps.assertCurrentOwner,
       };
       if (shouldRollbackKiroAccounts && !deps.saveCredential) {

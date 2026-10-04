@@ -77,6 +77,7 @@ interface PendingToolCall {
 interface PendingToolBatch {
   calls: PendingToolCall[];
   byId: Map<string, PendingToolCall>;
+  unresolvedCount: number;
 }
 
 interface NativeStreamToolCall {
@@ -302,6 +303,12 @@ function assistantTextThinkingAndCalls(message: OcxAssistantMessage): {
   };
 }
 
+/**
+ * Build native replay messages without mutating the parsed history. Keep tool results
+ * beside their originating batch, deferring intervening conversation until settlement.
+ * Reserve replayed call IDs for response translation and mark missing results explicitly.
+ * @throws When call IDs are invalid or results are orphaned, duplicated, or mismatched.
+ */
 function buildNativeMessages(
   parsed: OcxParsedRequest,
   reservedToolCallIds: Set<string>,
@@ -323,12 +330,14 @@ function buildNativeMessages(
   // early. The openai-chat adapter defers them the same way; refusing the replay killed the turn.
   let deferred: OllamaNativeMessage[] = [];
 
+  /** Emit held conversation messages in their recorded arrival order after settlement. */
   const releaseDeferred = (): void => {
     if (deferred.length === 0) return;
     messages.push(...deferred);
     deferred = [];
   };
 
+  /** Settle the open batch with genuine results or unknown markers, then release deferred messages. */
   const flushPending = (): void => {
     if (!pending) return;
     for (const call of pending.calls) {
@@ -376,13 +385,14 @@ function buildNativeMessages(
         throw new Error(`ollama-native tool result ${message.toolCallId} names the wrong originating tool`);
       }
       call.result = message;
+      pending.unresolvedCount--;
       continue;
     }
 
     // Native Ollama requires the whole assistant tool-call turn followed by its tool results. A
     // conversational message that arrives while the batch is still open is held aside instead of
     // closing it, so the call keeps its results adjacent; it is released right after the batch
-    // flushes. Anything else (a new assistant turn) settles the batch first.
+    // flushes. A new assistant tool-call batch settles the preceding batch first.
     if (pending) {
       if (message.role === "user" || message.role === "developer") {
         const translated = message.role === "user"
@@ -392,6 +402,19 @@ function buildNativeMessages(
           ? { role: "user", content: translated.content, ...(translated.images ? { images: translated.images } : {}) }
           : { role: "system", content: translated.content });
         continue;
+      }
+      if (message.role === "assistant" && pending.unresolvedCount > 0) {
+        const extracted = assistantTextThinkingAndCalls(message);
+        if (extracted.calls.length === 0) {
+          // Commentary can follow the call items but precede their recorded results.
+          // Keep the batch open and release its text/thinking after the actual results.
+          deferred.push({
+            role: "assistant",
+            content: extracted.content,
+            ...(extracted.thinking ? { thinking: extracted.thinking } : {}),
+          });
+          continue;
+        }
       }
       flushPending();
     }
@@ -443,7 +466,11 @@ function buildNativeMessages(
         };
         messages.push(native);
         if (wireCalls.length > 0) {
-          pending = { calls: wireCalls, byId: new Map(wireCalls.map(call => [call.id, call])) };
+          pending = {
+            calls: wireCalls,
+            byId: new Map(wireCalls.map(call => [call.id, call])),
+            unresolvedCount: wireCalls.length,
+          };
         }
         break;
       }

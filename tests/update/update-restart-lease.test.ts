@@ -8,7 +8,7 @@
  * acquire deadline and every service-installed update restarted into an unmanaged
  * direct proxy beside a suppressed supervisor.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
@@ -16,12 +16,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import * as os from "node:os";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   OWNERSHIP_MUTATION_LEASE_TOKEN_ENV,
@@ -54,6 +55,7 @@ const ENV_KEYS = [
   "HOME",
   "USERPROFILE",
   "CODEX_HOME",
+  "CODEX_SQLITE_HOME",
   "XDG_RUNTIME_DIR",
   "OCX_TEST_HOME_GUARD",
   "OCX_REAL_HOME",
@@ -62,15 +64,30 @@ const ENV_KEYS = [
 
 let saved: Record<string, string | undefined> = {};
 let sandboxes: Sandbox[] = [];
-let children: ChildProcess[] = [];
+type FixtureChild = {
+  box: Sandbox;
+  process: Bun.Subprocess<"pipe", "pipe", "pipe">;
+  output: string[];
+  abort: AbortController;
+  drains: Promise<unknown>[];
+  reaped: boolean;
+  drained: boolean;
+  forced: boolean;
+  cleanupProven: boolean;
+  released?: string;
+  cleanup?: Promise<void>;
+  failureObserved?: boolean;
+};
+let children: FixtureChild[] = [];
 let childLogs: string[] = [];
 let childDrains: Promise<unknown>[] = [];
+let homeSpy: ReturnType<typeof spyOn<typeof os, "homedir">>;
 
 /** The real home this process was started under, for the spawned child's guard. */
 const realHome = dirname(protectedHomeForTests());
 
 function sandbox(): Sandbox {
-  const root = mkdtempSync(join(tmpdir(), "ocx-restart-lease-"));
+  const root = realpathSync.native(mkdtempSync(join(os.tmpdir(), "ocx-restart-lease-")));
   const home = join(root, "home");
   const codexHome = join(root, "codex");
   const ocxHome = join(root, "ocx");
@@ -82,27 +99,30 @@ function sandbox(): Sandbox {
   process.env.HOME = home;
   process.env.USERPROFILE = home;
   process.env.CODEX_HOME = codexHome;
+  process.env.CODEX_SQLITE_HOME = codexHome;
   process.env.XDG_RUNTIME_DIR = join(root, "runtime");
   process.env.OCX_TEST_HOME_GUARD = "1";
   process.env.OCX_REAL_HOME = realHome;
   delete process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
-  // The authority differs by platform: on Windows USERPROFILE tracks this sandbox so
-  // the kept last entry is home/.opencodex; on POSIX homedir() ignores $HOME and the
-  // armed home guard drops that legacy entry, leaving the OPENCODEX_HOME record.
-  const authority = serviceStatePaths().at(-1)!;
+  homeSpy.mockReturnValue(home);
+  const paths = serviceStatePaths();
+  for (const candidate of paths) assertContained(root, candidate);
+  const authority = paths.at(-1)!;
+  assertContained(root, authority);
   const box = { root, home, ocxHome, codexHome, authority, lockDir: leasePathFor(authority) };
+  assertContained(root, box.lockDir);
   sandboxes.push(box);
   return box;
 }
 
 /** The environment a Task Scheduler / launchd / systemd child actually gets: stored, no token. */
 function serviceManagerChildEnvironment(box: Sandbox): NodeJS.ProcessEnv {
-  const home = process.platform === "win32" ? box.home : realHome;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    HOME: home,
-    USERPROFILE: home,
+    HOME: box.home,
+    USERPROFILE: box.home,
     CODEX_HOME: box.codexHome,
+    CODEX_SQLITE_HOME: box.codexHome,
     OPENCODEX_HOME: box.ocxHome,
     XDG_RUNTIME_DIR: join(box.root, "runtime"),
     NO_PROXY: "127.0.0.1,localhost",
@@ -127,47 +147,176 @@ function freePort(): Promise<number> {
   return promise;
 }
 
-function spawnServiceChild(box: Sandbox, port: number): ChildProcess {
-  const child = Bun.spawn(
+function assertContained(root: string, candidate: string): void {
+  const rel = relative(root, candidate);
+  expect(rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel), candidate).toBe(true);
+}
+
+async function bounded<T>(work: Promise<T>, label: string, ms = isolationBudgetMs(5_000)): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(label)), ms);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+function trackChild(box: Sandbox, child: FixtureChild["process"]): FixtureChild {
+  const entry: FixtureChild = {
+    box, process: child, output: [], abort: new AbortController(), drains: [], reaped: false, drained: false, forced: false, cleanupProven: false,
+  };
+  children.push(entry);
+  for (const stream of [child.stdout, child.stderr]) {
+    const decoder = new TextDecoder();
+    entry.drains.push(stream.pipeTo(new WritableStream({ write(chunk: Uint8Array) {
+      const text = decoder.decode(chunk, { stream: true });
+      entry.output.push(text);
+      childLogs.push(text);
+    } }), { signal: entry.abort.signal }));
+  }
+  // Observe failures immediately, but keep the rejected originals for teardown.
+  void Promise.allSettled(entry.drains);
+  childDrains.push(...entry.drains);
+  return entry;
+}
+
+/** Startup probes the configured port before applying --port; keep both case-owned. */
+function writeServiceConfig(box: Sandbox, port: number): void {
+  writeFileSync(join(box.ocxHome, "config.json"), JSON.stringify({
+    port,
+    hostname: "127.0.0.1",
+    codexAutoStart: false,
+    clientIntegrations: { codex: false, grok: false, "claude-desktop": false },
+    claudeCode: { systemEnv: false },
+    providers: {},
+    defaultProvider: "openai",
+  }));
+}
+
+function spawnServiceChild(box: Sandbox, port: number): FixtureChild["process"] {
+  return trackChild(box, Bun.spawn(
     [process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(port)],
-    {
-      cwd: box.root,
-      env: serviceManagerChildEnvironment(box),
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  children.push(child as unknown as ChildProcess);
-  const decoder = new TextDecoder();
-  const tee = (chunk: Uint8Array) => childLogs.push(decoder.decode(chunk));
-  childDrains.push(
-    (child.stdout as ReadableStream).pipeTo(new WritableStream({ write: tee })).catch(() => {}),
-    (child.stderr as ReadableStream).pipeTo(new WritableStream({ write: tee })).catch(() => {}),
-  );
-  return child as unknown as ChildProcess;
+    { cwd: box.root, env: serviceManagerChildEnvironment(box), stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+  )).process;
 }
 
 const LEASE_MODULE_URL = pathToFileURL(repoPath("src/service/ownership-mutation-lease.mjs")).href;
 const SERVICE_STATE_MODULE_URL = pathToFileURL(repoPath("src/service/state.ts")).href;
 
 async function serviceManagerChildAuthority(box: Sandbox): Promise<string> {
-  const child = Bun.spawn([process.execPath, "-e", `
+  const child = trackChild(box, Bun.spawn([process.execPath, "-e", `
     const { serviceStatePaths } = await import(${JSON.stringify(SERVICE_STATE_MODULE_URL)});
-    process.stdout.write(serviceStatePaths().at(-1) ?? "");
+    process.stdout.write(JSON.stringify(serviceStatePaths()));
   `], {
-    cwd: box.root,
-    env: serviceManagerChildEnvironment(box),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  children.push(child as unknown as ChildProcess);
-  const [exitCode, authority, error] = await Promise.all([
-    child.exited,
-    new Response(child.stdout as ReadableStream<Uint8Array>).text(),
-    new Response(child.stderr as ReadableStream<Uint8Array>).text(),
-  ]);
-  if (exitCode !== 0) throw new Error(`service-state authority probe failed (${exitCode}): ${error.trim()}`);
-  return authority.trim();
+    cwd: box.root, env: serviceManagerChildEnvironment(box), stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  }));
+  const exitCode = await bounded(child.process.exited, "service-state authority probe timed out");
+  await bounded(Promise.all(child.drains), "authority probe drains timed out");
+  if (exitCode !== 0) throw new Error(`service-state authority probe failed (${exitCode}): ${child.output.join("")}`);
+  const paths: string[] = JSON.parse(child.output.join(""));
+  for (const candidate of paths) assertContained(box.root, candidate);
+  expect(paths).toEqual(serviceStatePaths());
+  return paths.at(-1)!;
+}
+
+function spawnHolder(box: Sandbox, behavior: "release" | "ignore-eof" | "missing-ack" = "release"): FixtureChild {
+  const ready = join(box.root, "holder-ready.json");
+  const released = join(box.root, "holder-released");
+  const child = trackChild(box, Bun.spawn([process.execPath, "-e", `
+    const { writeFileSync, renameSync } = await import("node:fs");
+    const { relative, isAbsolute, sep } = await import("node:path");
+    const { serviceStatePaths } = await import(${JSON.stringify(SERVICE_STATE_MODULE_URL)});
+    const paths = serviceStatePaths();
+    for (const candidate of paths) {
+      const rel = relative(${JSON.stringify(box.root)}, candidate);
+      if (!rel || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) throw new Error("holder authority escaped");
+    }
+    if (paths.at(-1) !== ${JSON.stringify(box.authority)}) throw new Error("holder authority mismatch");
+    const { acquireOwnershipMutationLease } = await import(${JSON.stringify(LEASE_MODULE_URL)});
+    const lease = acquireOwnershipMutationLease(paths);
+    writeFileSync(${JSON.stringify(ready + ".pending")}, JSON.stringify({ pid: process.pid, paths }));
+    renameSync(${JSON.stringify(ready + ".pending")}, ${JSON.stringify(ready)});
+    await Bun.stdin.text();
+    if (${JSON.stringify(behavior)} === "ignore-eof") await new Promise(() => { setInterval(() => {}, 1_000); });
+    lease.release();
+    if (${JSON.stringify(behavior)} !== "missing-ack") writeFileSync(${JSON.stringify(released)}, String(process.pid));
+  `], {
+    cwd: box.root, env: serviceManagerChildEnvironment(box), stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  }));
+  child.released = released;
+  const deadline = Date.now() + isolationBudgetMs(5_000);
+  while (!existsSync(ready) && Date.now() < deadline) Bun.sleepSync(20);
+  expect(existsSync(ready), "holder did not acknowledge acquisition").toBe(true);
+  const receipt = JSON.parse(readFileSync(ready, "utf8"));
+  expect(receipt).toEqual({ pid: child.process.pid, paths: serviceStatePaths() });
+  const owners = readdirSync(box.lockDir);
+  expect(owners).toHaveLength(1);
+  expect(JSON.parse(readFileSync(join(box.lockDir, owners[0]!), "utf8")).pid).toBe(child.process.pid);
+  return child;
+}
+
+function cleanupChild(child: FixtureChild, graceMs = isolationBudgetMs(5_000)): Promise<void> {
+  return child.cleanup ??= (async () => {
+    const failures: unknown[] = [];
+    try {
+      if (child.released) await bounded(Promise.resolve(child.process.stdin.end()), "fixture child stdin close timed out", graceMs);
+      else if (child.process.exitCode === null && child.process.signalCode === null) child.process.kill();
+      const exit = await bounded(child.process.exited, "fixture child graceful exit timed out", graceMs);
+      child.reaped = true;
+      if (child.released && (exit !== 0 || !existsSync(child.released)
+        || readFileSync(child.released, "utf8") !== String(child.process.pid) || existsSync(child.box.lockDir))) {
+        throw new Error("holder graceful release lacked acknowledgment, exit 0, or exact lock absence");
+      }
+    } catch (error) {
+      failures.push(error);
+      try {
+        if (!child.reaped) {
+          child.process.kill("SIGKILL");
+          child.forced = true;
+          await bounded(child.process.exited, "fixture child fallback reap timed out");
+          child.reaped = true;
+        }
+      } catch (fallbackError) { failures.push(fallbackError); }
+    } finally {
+      const outcomes: Array<PromiseSettledResult<unknown> | undefined> = child.drains.map(() => undefined);
+      const settled = Promise.all(child.drains.map((drain, index) => drain.then(
+        value => { outcomes[index] = { status: "fulfilled", value }; },
+        reason => { outcomes[index] = { status: "rejected", reason }; },
+      )));
+      const ownedCancellation = new Error("fixture-owned drain cancellation");
+      try {
+        await bounded(Promise.all(child.drains), "fixture child drains timed out");
+        child.drained = true;
+      } catch (error) {
+        // A drain rejection is collected by index below; only the wait's own error is added here.
+        if (!outcomes.some(result => result?.status === "rejected" && result.reason === error)) failures.push(error);
+        child.abort.abort(ownedCancellation);
+        try {
+          await bounded(settled, "fixture child drain cancellation timed out");
+          child.drained = true;
+        } catch (drainError) { failures.push(drainError); }
+      }
+      // Preserve late and same-object rejections from every drain, even after a bounded wait fails.
+      for (const result of outcomes) {
+        if (result?.status === "rejected" && result.reason !== ownedCancellation) failures.push(result.reason);
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, `fixture cleanup failed: ${failures.map(String).join("; ")}`);
+    child.cleanupProven = true;
+  })();
+}
+
+function canRemoveSandbox(box: Sandbox): boolean {
+  return children.filter(child => child.box === box).every(child =>
+    child.reaped && child.drained && (child.cleanupProven || child.failureObserved === true));
+}
+
+function expectOnlyCleanupFailure(error: unknown, message: string): void {
+  expect(error).toBeInstanceOf(AggregateError);
+  const failures = (error as AggregateError).errors;
+  expect(failures).toHaveLength(1);
+  expect(failures[0]).toBeInstanceOf(Error);
+  expect(failures[0].message).toBe(message);
 }
 
 /** Mirrors leasePath() in src/service/ownership-mutation-lease.mjs. */
@@ -251,31 +400,46 @@ function writeJob(ocxHome: string, partial: Partial<UpdateJobState> = {}): Updat
 beforeEach(() => {
   saved = {};
   for (const key of ENV_KEYS) saved[key] = process.env[key];
+  homeSpy = spyOn(os, "homedir");
 });
 
 afterEach(async () => {
-  for (const child of children) {
-    if (child.exitCode === null && child.pid) child.kill();
+  const failures: unknown[] = [];
+  try {
+    for (const child of children) {
+      try { await cleanupChild(child); }
+      catch (error) { if (!child.failureObserved) failures.push(error); }
+    }
+    for (const box of sandboxes) {
+      if (!canRemoveSandbox(box)) {
+        failures.push(new Error(`retaining fixture with unconfirmed child cleanup: ${box.root}`));
+      } else {
+        try { removeTreeWithRetry(box.root); }
+        catch (error) { failures.push(error); }
+      }
+    }
+  } finally {
+    try { homeSpy.mockRestore(); }
+    finally {
+      for (const key of ENV_KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+      children = [];
+      childDrains = [];
+      sandboxes = [];
+      childLogs = [];
+    }
   }
-  for (const child of children) {
-    if (child.exitCode === null) await child.exited.catch(() => {});
-  }
-  children = [];
-  childDrains = [];
-  for (const key of ENV_KEYS) {
-    if (saved[key] === undefined) delete process.env[key];
-    else process.env[key] = saved[key];
-  }
-  for (const box of sandboxes) removeTreeWithRetry(box.root);
-  sandboxes = [];
-  childLogs = [];
-});
+  if (failures.length) throw new AggregateError(failures, "lease fixture teardown failed");
+}, watchdogMs(90_000));
 
 describe("the restart veto lease frees a service-manager child (#5760)", () => {
   test("a supervised `ocx start` outside the process tree dies at a held lease — the mechanic the release exists for", async () => {
     const box = sandbox();
     expect(await serviceManagerChildAuthority(box)).toBe(box.authority);
     const port = await freePort();
+    writeServiceConfig(box, port);
     const { acquireOwnershipMutationLease } = await import("../../src/service/ownership-mutation-lease.mjs");
     const { serviceStatePaths } = await import("../../src/service/state");
     const lease = acquireOwnershipMutationLease(serviceStatePaths());
@@ -306,18 +470,11 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
 
   test("a GUI restart releases the lease before the service refresh so the managed child binds", async () => {
     const box = sandbox();
+    expect(await serviceManagerChildAuthority(box)).toBe(box.authority);
     const port = await freePort();
-    writeFileSync(join(box.ocxHome, "config.json"), JSON.stringify({
-      port,
-      hostname: "127.0.0.1",
-      codexAutoStart: false,
-      clientIntegrations: { codex: false, grok: false, "claude-desktop": false },
-      claudeCode: { systemEnv: false },
-      providers: {},
-      defaultProvider: "openai",
-    }));
+    writeServiceConfig(box, port);
     const job = writeJob(box.ocxHome);
-    let child: ChildProcess | undefined;
+    let child: FixtureChild["process"] | undefined;
     let directStarts = 0;
     const outcome = await runUpdateRestartWithOwnershipLease(
       () => ({ kind: "none", revision: 0 }),
@@ -483,19 +640,7 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
           // A claimant that acquired the freed lease during the refresh window and
           // keeps holding it past the bounded re-acquire deadline.
           runService: () => {
-            const holder = Bun.spawn([process.execPath, "-e", `
-              const { acquireOwnershipMutationLease } = await import(${JSON.stringify(LEASE_MODULE_URL)});
-              const lease = acquireOwnershipMutationLease([process.env.FIXTURE_AUTHORITY]);
-              await Bun.sleep(13_000);
-              lease.release();
-            `], {
-              env: { ...process.env, FIXTURE_AUTHORITY: authorityPath(box) },
-              stdout: "ignore",
-              stderr: "ignore",
-            });
-            children.push(holder as unknown as ChildProcess);
-            const deadline = Date.now() + 5_000;
-            while (!existsSync(box.lockDir) && Date.now() < deadline) Bun.sleepSync(20);
+            spawnHolder(box);
             return { status: 1, signal: null, timedOut: false };
           },
           releaseForServiceManagerFn: lease.releaseForServiceManager,
@@ -573,4 +718,139 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
     expect(ran).toBe(false);
     expect(existsSync(box.lockDir)).toBe(false);
   });
+});
+
+
+describe("lease fixture containment and cleanup controls", () => {
+  let previousAuthority: string;
+  for (const index of [0, 1]) {
+    test(`case ${index + 1} owns a distinct parent and child authority`, async () => {
+      const box = sandbox();
+      expect(await serviceManagerChildAuthority(box)).toBe(box.authority);
+      expect(box.authority).not.toBe(previousAuthority);
+      previousAuthority = box.authority;
+      expect(process.env.OCX_REAL_HOME).toBe(realHome);
+      expect(process.env.OCX_TEST_HOME_GUARD).toBe("1");
+      expect(process.env.CODEX_SQLITE_HOME).toBe(box.codexHome);
+    }, watchdogMs(15_000));
+  }
+
+  test("EOF releases the real lease with acknowledgment and a reaped child", async () => {
+    const box = sandbox();
+    const holder = spawnHolder(box);
+    expect(existsSync(box.lockDir)).toBe(true);
+    await cleanupChild(holder);
+    expect(holder.process.exitCode).toBe(0);
+    expect(holder.cleanupProven).toBe(true);
+    expect(canRemoveSandbox(box)).toBe(true);
+    expect(holder.reaped && holder.drained).toBe(true);
+    expect(readFileSync(holder.released!, "utf8")).toBe(String(holder.process.pid));
+    expect(existsSync(box.lockDir)).toBe(false);
+    expect(contenderAcquire(box)).toBe(0);
+  }, watchdogMs(20_000));
+
+  test("an additional drain error cannot be consumed as an expected graceful failure", async () => {
+    const box = sandbox();
+    const holder = spawnHolder(box, "ignore-eof");
+    holder.drains.push(Promise.reject(new Error("injected drain failure")));
+    void Promise.allSettled(holder.drains);
+    const error = await cleanupChild(holder, isolationBudgetMs(200)).catch(error => error);
+    expect(() => expectOnlyCleanupFailure(error, "fixture child graceful exit timed out")).toThrow();
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.errors.map((failure: Error) => failure.message)).toEqual([
+      "fixture child graceful exit timed out", "injected drain failure",
+    ]);
+    expect(holder.reaped && holder.drained && holder.forced).toBe(true);
+    expect(holder.cleanupProven).toBe(false);
+    expect(canRemoveSandbox(box)).toBe(false);
+    // This control consumes exactly its two deliberately injected failures, never arbitrary errors.
+    holder.failureObserved = true;
+    expect(canRemoveSandbox(box)).toBe(true);
+  }, watchdogMs(20_000));
+
+  test("a delayed second drain rejection cannot hide behind the expected cleanup pair", async () => {
+    const box = sandbox();
+    const holder = spawnHolder(box, "ignore-eof");
+    const late = new Promise<never>((_, reject) => {
+      holder.abort.signal.addEventListener("abort", () => {
+        void Promise.resolve().then(() => reject(new Error("unexpected delayed stdout failure")));
+      }, { once: true });
+    });
+    holder.drains.push(Promise.reject(new Error("injected drain failure")), late);
+    void Promise.allSettled(holder.drains);
+    const error = await cleanupChild(holder, isolationBudgetMs(200)).catch(error => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    const messages = error.errors.map((failure: Error) => failure.message);
+    expect(() => expect(messages).toEqual([
+      "fixture child graceful exit timed out", "injected drain failure",
+    ])).toThrow();
+    expect(messages).toEqual([
+      "fixture child graceful exit timed out", "injected drain failure", "unexpected delayed stdout failure",
+    ]);
+    expect(holder.reaped && holder.drained && holder.forced).toBe(true);
+    expect(canRemoveSandbox(box)).toBe(false);
+    holder.failureObserved = true;
+  }, watchdogMs(20_000));
+
+  test("drain cleanup excludes only its own cancellation reason", async () => {
+    const box = sandbox();
+    const holder = spawnHolder(box);
+    const cancellation = new Promise<never>((_, reject) => {
+      holder.abort.signal.addEventListener("abort", () => reject(holder.abort.signal.reason), { once: true });
+    });
+    const foreignAbort = new Promise<never>((_, reject) => {
+      holder.abort.signal.addEventListener("abort", () => reject(new DOMException("unrelated stream abort", "AbortError")), { once: true });
+    });
+    holder.drains.push(Promise.reject(new Error("first drain failure")), cancellation, foreignAbort);
+    void Promise.allSettled(holder.drains);
+    const error = await cleanupChild(holder).catch(error => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.errors.map((failure: Error) => failure.message)).toEqual(["first drain failure", "unrelated stream abort"]);
+    expect(holder.reaped && holder.drained).toBe(true);
+    expect(holder.forced).toBe(false);
+    expect(canRemoveSandbox(box)).toBe(false);
+    holder.failureObserved = true;
+  }, watchdogMs(20_000));
+
+  test("a drain timeout retains the later independent rejection", async () => {
+    const box = sandbox();
+    const holder = spawnHolder(box);
+    const independent = new Promise<never>((_, reject) => {
+      holder.abort.signal.addEventListener("abort", () => reject(new Error("late failure after drain timeout")), { once: true });
+    });
+    const cancellation = new Promise<never>((_, reject) => {
+      holder.abort.signal.addEventListener("abort", () => reject(holder.abort.signal.reason), { once: true });
+    });
+    holder.drains.push(independent, cancellation);
+    void Promise.allSettled(holder.drains);
+    const error = await cleanupChild(holder).catch(error => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.errors.map((failure: Error) => failure.message)).toEqual([
+      "fixture child drains timed out", "late failure after drain timeout",
+    ]);
+    expect(holder.reaped && holder.drained).toBe(true);
+    expect(canRemoveSandbox(box)).toBe(false);
+    holder.failureObserved = true;
+  }, watchdogMs(20_000));
+
+  for (const behavior of ["ignore-eof", "missing-ack"] as const) {
+    test(`${behavior} fails graceful cleanup even after bounded fallback`, async () => {
+      const box = sandbox();
+      const holder = spawnHolder(box, behavior);
+      const error = await cleanupChild(holder, isolationBudgetMs(200)).catch(error => error);
+      expectOnlyCleanupFailure(error, behavior === "ignore-eof"
+        ? "fixture child graceful exit timed out"
+        : "holder graceful release lacked acknowledgment, exit 0, or exact lock absence");
+      expect(holder.reaped && holder.drained).toBe(true);
+      expect(existsSync(holder.released!)).toBe(false);
+      expect(existsSync(box.lockDir)).toBe(behavior === "ignore-eof");
+      expect(holder.forced).toBe(behavior === "ignore-eof");
+      if (behavior === "missing-ack") expect(holder.process.exitCode).toBe(0);
+      expect(holder.cleanupProven).toBe(false);
+      expect(canRemoveSandbox(box)).toBe(false);
+      // Only this negative control consumes its expected rejection; ordinary teardown retains failures.
+      holder.failureObserved = true;
+      expect(canRemoveSandbox(box)).toBe(true);
+    }, watchdogMs(20_000));
+  }
 });

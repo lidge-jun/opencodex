@@ -35,6 +35,21 @@ const FIRST_PARTY_BETAS: readonly string[] = [
  * needed for the fields the lane forwards.
  */
 const COMPATIBLE_BETAS: readonly string[] = [];
+const INLINE_TOOLS_BETA = "inline-tools-2026-09-15";
+
+/** An observed Claude client already requested these native body schemas. Advisor may
+ * perform its explicitly requested model sub-inference; no feature or body is injected. */
+const NATIVE_CLIENT_BETAS: readonly string[] = [
+  ...FIRST_PARTY_BETAS,
+  "advisor-tool-2026-03-01",
+  "per-turn-control-2026-07-01",
+  "redact-thinking-2026-02-12",
+  "inline-tools-2026-09-15",
+  "thinking-display-updates-2026-08-18",
+  "prompt-caching-scope-2026-01-05",
+  "mid-conversation-system-2026-04-07",
+];
+const NATIVE_CLIENT_ALLOWLIST = new Map(NATIVE_CLIENT_BETAS.map(beta => [beta.toLowerCase(), beta]));
 
 const ALLOWLISTS: Readonly<Record<AnthropicProviderClass, ReadonlyMap<string, string>>> = {
   "first-party": new Map(FIRST_PARTY_BETAS.map(beta => [beta.toLowerCase(), beta])),
@@ -58,16 +73,18 @@ export interface AllowlistedAnthropicBetas {
 export function allowlistAnthropicBetas(
   callerHeader: string | null | undefined,
   providerClass: AnthropicProviderClass,
+  features: { inlineTools?: boolean; observedNativeClient?: boolean } = {},
 ): AllowlistedAnthropicBetas {
   if (typeof callerHeader !== "string" || callerHeader.trim() === "") return { betas: [], dropped: false };
   if (callerHeader.length > MAX_CALLER_BETA_HEADER_CHARS) return { betas: [], dropped: true };
-  const allowed = ALLOWLISTS[providerClass];
+  const allowed = providerClass === "first-party" && features.observedNativeClient ? NATIVE_CLIENT_ALLOWLIST : ALLOWLISTS[providerClass];
   const betas: string[] = [];
   let dropped = false;
   for (const part of callerHeader.split(",")) {
     const token = part.trim().toLowerCase();
     if (!token) continue;
-    const canonical = allowed.get(token);
+    const canonical = allowed.get(token) ?? (providerClass === "first-party" && features.inlineTools
+      && token === INLINE_TOOLS_BETA ? INLINE_TOOLS_BETA : undefined);
     if (canonical === undefined) dropped = true;
     else if (!betas.includes(canonical)) betas.push(canonical);
   }

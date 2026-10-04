@@ -416,6 +416,23 @@ same stale-`app-server` warning and optional restart flags as `ocx sync` apply.
 
 If the derived cache already has identical bytes, the command succeeds without rewriting it or restarting Codex. With `--json`, this is reported as `ok: true`, `wrote: false`, `skipped: true`, and `skippedReason: "unchanged"`; an invalid catalog or failed cache write still exits nonzero.
 
+### Catalog write diagnostics
+
+Catalog write auditing records bounded diagnostics in `opencodex-catalog-audit.jsonl` under
+`CODEX_HOME`. An unchanged catalog or cache produces no event; an audit failure does not fail
+catalog publication.
+
+On Windows, **at most the successful new-file creation event is recorded**. The file is created
+empty and hardened before diagnostic data is written. All later events skip the existing file,
+both in the same process and after restart. A hardening failure may leave an empty file, which
+later events also skip. Existing files and their ACLs are not changed for auditing, including
+when another OpenCodex home owns the catalog. This is a privacy-first fallback, not a complete
+Windows audit stream; native NTFS behavior for this audit path has not yet been validated.
+
+POSIX auditing continues to append and retain bounded records. The Windows limitation does not
+disable catalog protection or owner healing. Audit files in a separate `CODEX_HOME` remain
+cleanup residuals because the config uninstall manifest cannot claim paths outside its own root.
+
 ### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]`
 
 Install a complete catalog served by another OpenCodex instance's `/v1/catalog` endpoint, then

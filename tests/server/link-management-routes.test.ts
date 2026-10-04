@@ -184,7 +184,7 @@ describe("link management routes", () => {
 
     const status = await sessionCall(`${base}/api/link/status`, headers, state, cfg, deps, true);
     expect(status?.status).toBe(200);
-    expect(await status!.json()).toMatchObject({ role: "standalone", joinAvailable: true });
+    expect(await status!.json()).toMatchObject({ role: "standalone", joinAvailable: false, joinDenied: "pairing_required" });
     const listed = await sessionCall(`${base}/api/link/candidates`, headers, state, cfg, deps, true);
     expect(listed?.status).toBe(200);
     expect(await listed!.json()).toEqual({ candidates: [{ alias: "home", source: "ssh_config" }] });
@@ -193,14 +193,15 @@ describe("link management routes", () => {
     expect((await sessionCall(`${base}/api/link/probe`, headers, state, cfg, deps, true, "POST", { alias: "home" }))?.status).toBe(403);
     expect((await sessionCall(`${base}/api/link/confirm-host`, mutation, state, cfg, deps, true, "POST", { alias: "home", fingerprint: "SHA256:abcdefghijklmnop" }))?.status).toBe(200);
 
-    // The same session may also turn this computer into a Child: join reaches the join step.
+    // Credentialless loopback sessions may inspect and confirm a host, but cannot commit the
+    // durable routing change that turns this computer into a Child.
     let joins = 0;
     const joinDeps = { ...deps, joinHome: async () => { joins += 1; return { linkId: "lnk_0123456789abcdef", apiKeyId: "key-join" }; } } as ManagementApiDeps;
     const joined = await sessionCall(`${base}/api/link/join`, mutation, state, cfg, joinDeps, true, "POST", { alias: "home" });
-    expect(joined?.status).toBe(202);
-    expect(joins).toBe(1);
+    expect(joined?.status).toBe(403);
+    expect(joins).toBe(0);
     expect((await sessionCall(`${base}/api/link/join`, headers, state, cfg, joinDeps, true, "POST", { alias: "home" }))?.status).toBe(403);
-    expect(joins).toBe(1);
+    expect(joins).toBe(0);
 
     // The Home side runs end to end for this session: apply issues and connects, removal disconnects.
     const applied = await sessionCall(`${base}/api/link/apply`, mutation, state, cfg, deps, true, "POST", { alias: "home" });
@@ -242,26 +243,36 @@ describe("link management routes", () => {
     expect(await refused!.json()).toMatchObject({ error: { code: "tailscale_session_refused" } });
   });
 
-  test("status tells a dashboard session whether it may join and keeps the admin-token DTO exact", async () => {
+  test("status explains join gates without mutations and keeps the admin-token DTO exact", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-join-available-"));
     const h = harness();
     const standalone = { ...h.config, runtimeRole: "standalone" } as OcxConfig;
     const paired = await call("/api/link/status", "GET", undefined, h.deps, "gui-session", true, "pairing", true, standalone);
     expect(paired?.status).toBe(200);
-    expect(await paired!.json()).toMatchObject({ role: "standalone", joinAvailable: true });
+    expect(await paired!.json()).toMatchObject({ role: "standalone", joinAvailable: true, joinDenied: null });
+    expect(paired!.headers.get("cache-control")).toBe("no-store");
     const hub = await call("/api/link/status", "GET", undefined, h.deps, "gui-session", true, "pairing", true, { ...standalone, runtimeRole: "hub" } as OcxConfig);
-    expect(await hub!.json()).toMatchObject({ joinAvailable: false });
-    // The local dashboard session of a standalone may join, unless this runtime is not on its
-    // configured port: the client runtime a join restarts into binds only that port.
+    expect(await hub!.json()).toMatchObject({ joinAvailable: false, joinDenied: "standalone_required" });
+    const client = await call("/api/link/status", "GET", undefined, h.deps, "gui-session", true, "pairing", true, { ...standalone, runtimeRole: "client" } as OcxConfig);
+    expect(await client!.json()).toMatchObject({ joinAvailable: false, joinDenied: "standalone_required" });
+    // A credentialless local session cannot join even on the configured port.
     const loopback = await call("/api/link/status", "GET", undefined, h.deps, "gui-session", true, "loopback", false, standalone);
-    expect(await loopback!.json()).toMatchObject({ role: "standalone", joinAvailable: true });
+    expect(await loopback!.json()).toMatchObject({ role: "standalone", joinAvailable: false, joinDenied: "pairing_required" });
     const moved = await call("/api/link/status", "GET", undefined, { ...h.deps, liveListenPort: () => 10200 }, "gui-session", true, "loopback", false, standalone);
-    expect(await moved!.json()).toMatchObject({ joinAvailable: false });
+    expect(await moved!.json()).toMatchObject({ joinAvailable: false, joinDenied: "pairing_required" });
     const unknownPort = await call("/api/link/status", "GET", undefined, { ...h.deps, liveListenPort: () => undefined }, "gui-session", true, "loopback", false, standalone);
-    expect(await unknownPort!.json()).toMatchObject({ joinAvailable: false });
-    // `ocx link status` validates the admin-token answer key by key, so it never gains the field.
+    expect(await unknownPort!.json()).toMatchObject({ joinAvailable: false, joinDenied: "pairing_required" });
+    // Pairing takes precedence; only a paired standalone is told to fix the listening port.
+    for (const liveListenPort of [() => 10200, () => undefined]) {
+      const portDenied = await call("/api/link/status", "GET", undefined, { ...h.deps, liveListenPort }, "gui-session", true, "pairing", true, standalone);
+      expect(await portDenied!.json()).toMatchObject({ joinAvailable: false, joinDenied: "join_port_mismatch" });
+    }
+    // `ocx link status` validates the admin-token answer key by key, so it gains neither field.
     const admin = await call("/api/link/status", "GET", undefined, h.deps, "admin-token", true, null, true, standalone);
     expect(Object.keys(await admin!.json()).sort()).toEqual(["child", "links", "listener", "role"]);
+    expect(h.events).toEqual([]);
+    expect(standalone.apiKeys).toEqual([]);
+    expect(h.store.links).toEqual([]);
   });
 
   test("confirm-host keeps the parsed remote version to a bounded semver shape", async () => {

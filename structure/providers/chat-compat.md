@@ -122,13 +122,13 @@ and synthesizing explicit "no tool result was recorded" answers only when no rea
 (Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_fin/260718_dangling_toolcall_hardening`).
 
 The native Ollama wire carries the same contract. `src/adapters/ollama-native.ts`
-`buildNativeMessages` defers `user`/`developer` messages that arrive while a batch is open and
-releases them after the tool messages, and answers a call with no result anywhere in the replayed
-history with the same `[ocx] no tool result was recorded for "<name>"` marker. The shape it
-absorbs is ordinary Codex history, not a malformed one: Codex records mid-turn items (a
-`PostToolUse` hook verdict, a context notice) between an assistant `tool_calls` message and that
-call's own result. The strict pair checks (orphan result, duplicate result, result naming another
-tool) still throw on both wires (#4842).
+`buildNativeMessages` defers `user`/`developer` messages while a batch is open; assistant text/thinking
+with no new tool calls is also deferred while results remain outstanding. Deferred messages retain
+arrival order after recorded results. An unresolved counter avoids rescanning calls per message.
+A new tool-call batch settles its predecessor; completed batches keep subsequent messages in place.
+Codex can record hook notices or commentary between calls and results. Missing results keep the
+`[ocx] no tool result was recorded for "<name>"` marker; orphan IDs, duplicates, and mismatched names
+still throw (#4842). `tests/providers/ollama/ollama-native.test.ts` covers replay and compaction.
 
 Forward-mode OpenAI passthrough also repairs replayed `call_id` values longer than the Responses
 API's 64-character limit. Sidechat/fork replay can namespace routed-provider ids beyond that limit,

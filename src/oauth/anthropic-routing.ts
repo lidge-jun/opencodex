@@ -18,6 +18,7 @@ import { anthropicFamilyRejected, anthropicFamilyRetryAt, anthropicModelExhauste
  * Token refresh failures retain the existing store needsReauth policy.
  */
 import { anthropicRatePauseUntil, clearAnthropicRatePauses, classifyAnthropic429, anthropicRetryAfterMs, pauseAnthropicRateAdmission } from "./anthropic-rate-limit-policy";
+import { REFRESH_SKEW_MS } from "./refresh-policy";
 import { createHash } from "node:crypto";
 import { captureOAuthAccountSelection, commitOAuthAccountSelection, credentialGeneration, getAccountSet, getAccountCredential, getAccountCredentialWithStatus } from "./store";
 import type { OAuthAccessSnapshot } from "./index";
@@ -110,6 +111,9 @@ type OAuthAccountSelection = NonNullable<ReturnType<typeof captureOAuthAccountSe
 // Undefined means this runtime has not admitted a selection yet; null means consumed.
 // The startup baseline comes from the authoritative store, never a second persisted pin.
 let manualPreference: OAuthAccountSelection | null | undefined;
+let manualSelectionGeneration = 0;
+/** Automatic pointer moves preserve affinity; manual selection revokes older bindings. */
+export function captureAnthropicManualSelectionGeneration(): number { return manualSelectionGeneration; }
 
 function normalizeAffinityComponent(value: string | null | undefined): string {
   const normalized = value?.trim() ?? "";
@@ -284,6 +288,7 @@ export function clearAnthropicAccountPoolState(): void {
   clearAnthropicCooldownGenerations();
   sessionAffinity.clear();
   manualPreference = undefined;
+  manualSelectionGeneration++;
   quorumCache = null;
 }
 
@@ -353,7 +358,6 @@ function usageScore(config: OcxConfig, accountId: string, model?: string): numbe
   }
 }
 
-const TOKEN_SKEW_MS = 60_000;
 
 /** Background `local-cli` slots with expired access are not pool-eligible (identity adoption risk). */
 function isPoolCredentialUsable(accountId: string, now: number): boolean {
@@ -361,7 +365,7 @@ function isPoolCredentialUsable(accountId: string, now: number): boolean {
   if (!cred) return false;
   if (cred.source !== "local-cli") return true;
   if (canRefreshAnthropicPoolAccount(accountId)) return true;
-  return cred.expires > now + TOKEN_SKEW_MS;
+  return cred.expires > now + REFRESH_SKEW_MS;
 }
 
 export function getEligibleAnthropicAccounts(now = Date.now(), model?: string): string[] {
@@ -508,9 +512,9 @@ function compareScoredAccounts(a: ScoredAccount, b: ScoredAccount): number {
   return a.score - b.score || a.fiveHourTieBreak - b.fiveHourTieBreak;
 }
 
-function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: number, decision: AnthropicRouteDecision | null = null, model?: string): string | null {
+function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: number, decision: AnthropicRouteDecision | null = null, model?: string, excludedAccountIds?: ReadonlySet<string>): string | null {
   const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
-  const unfiltered = routeCandidates(getEligibleAnthropicAccounts(now, model), decision).filter(id => id !== excludeId);
+  const unfiltered = routeCandidates(getEligibleAnthropicAccounts(now, model), decision).filter(id => id !== excludeId && !excludedAccountIds?.has(id));
   const available = window === "weekly" ? unfiltered.filter(id => !exhausted5h(id)
     || isAnthropicAccountPoolEnabled(config) && anthropicAccountAutoSwitchThreshold(config, id) === 0) : unfiltered;
   const modelAvailable = model ? available.filter(id => !anthropicModelExhausted(id, model)) : available;
@@ -589,16 +593,17 @@ export function pickAlternateAnthropicAccount(
   now: number,
   decision: AnthropicRouteDecision | null,
   model?: string,
+  excludedAccountIds?: ReadonlySet<string>,
 ): string | null {
   const strategy = anthropicPoolStrategy(config);
-  const eligible = routeCandidates(getEligibleAnthropicAccounts(now, model), decision).filter(id => id !== excludeId);
+  const eligible = routeCandidates(getEligibleAnthropicAccounts(now, model), decision).filter(id => id !== excludeId && !excludedAccountIds?.has(id));
   if (strategy === "round-robin") {
     return peekRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, stickyLimitForPool(config));
   }
   if (strategy === "fill-first") {
     return pickNextFillFirstAnthropicAccount(config, excludeId, eligible, decision, model);
   }
-  return pickLowestUsage(config, excludeId, now, decision, model);
+  return pickLowestUsage(config, excludeId, now, decision, model, excludedAccountIds);
 }
 
 function pruneExpiredAffinity(now: number): void {
@@ -918,6 +923,7 @@ export function rotateAnthropicAccountOnRefusal(
   rateLimitHeaders?: AnthropicRateLimitHeaders | null,
   decision: AnthropicRouteDecision | null = null,
   model?: string,
+  excludedAccountIds?: ReadonlySet<string>,
 ): string | null {
   if (!recordAnthropicAccountRefusal(config, failedAccountId, status, retryAfterHeader, now, rateLimitHeaders)) return null;
 
@@ -926,8 +932,8 @@ export function rotateAnthropicAccountOnRefusal(
   // because those dormant values remain in config. The quota picker is the neutral
   // recovery policy already used by the default strategy.
   const next = isAnthropicAccountPoolEnabled(config)
-    ? pickAlternateAnthropicAccount(config, failedAccountId, now, decision, model)
-    : pickLowestUsage(config, failedAccountId, now, null, model);
+    ? pickAlternateAnthropicAccount(config, failedAccountId, now, decision, model, excludedAccountIds)
+    : pickLowestUsage(config, failedAccountId, now, null, model, excludedAccountIds);
   if (!next) {
     console.warn(`[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}no eligible replacement; returning ${status}`);
     return null;
@@ -1070,6 +1076,7 @@ export function commitAnthropicSelectionRouting(
  */
 export function resetAnthropicRoutingForManualSelection(accountId: string): void {
   sessionAffinity.clear();
+  manualSelectionGeneration++;
   manualPreference = captureOAuthAccountSelection(PROVIDER);
   seedPoolRotationAccount(POOL_KEY_ANTHROPIC, accountId);
   // A manual account selection is an operator statement about the roster; do not answer the
@@ -1093,7 +1100,7 @@ export async function getAnthropicPoolAccessToken(accountId: string): Promise<st
     const { OAuthLoginRequiredError } = await import("./index");
     throw new OAuthLoginRequiredError(PROVIDER);
   }
-  if (stored.expires > Date.now() + TOKEN_SKEW_MS) return stored.access;
+  if (stored.expires > Date.now() + REFRESH_SKEW_MS) return stored.access;
   if (!canRefreshAnthropicPoolAccount(accountId)) {
     throw new Error("background local-cli token expired; refuse CLI-adopting refresh for pool");
   }
@@ -1172,12 +1179,10 @@ export function anthropicSessionKeyFromParts(input: {
   /** When true, prompt_cache_key is a shared Desktop cohort — ignore it for affinity. */
   promptCacheKeyIsSharedCohort?: boolean;
 }): string | null {
-  const preferred = (
-    input.clientThreadId
-    ?? input.sessionIdHeader
-    ?? input.threadIdHeader
-    ?? ""
-  ).trim();
+  const preferred = input.clientThreadId?.trim()
+    || input.sessionIdHeader?.trim()
+    || input.threadIdHeader?.trim()
+    || "";
   if (preferred) {
     return preferred.length <= 128 ? preferred : createHash("sha256").update(preferred).digest("hex");
   }

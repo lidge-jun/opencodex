@@ -61,6 +61,84 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  for (const nested of [false, true]) {
+    test.each(["cyber_policy", "upstream_no_response", "upstream_reset_replay_refused"])(
+      `policy preserves explicit model code over diagnostic %s (nested=${nested})`, async type => {
+        let calls = 0;
+        const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {} as RequestLogContext, {}, {
+          runCore: async (req, _config, context, options) => {
+            calls++;
+            options.onRequestBodyParsed?.(await req.json());
+            context.routeDecision = policyTrace();
+            if (calls !== 1) return Response.json({ status: "completed" });
+            const record = { error: { code: "unsupported_model", type,
+              message: nested ? "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account."
+                : "fixture failure" } };
+            return Response.json(nested ? { response: record } : record, { status: 400 });
+          },
+        });
+        expect(calls).toBe(2);
+        expect(response.status).toBe(200);
+      },
+    );
+  }
+
+  test.each([undefined, "upstream_no_response", "origin_rejected", "cyber_policy"])(
+    "nested plan refusal preserves policy hard-stop code %s", async code => {
+      let calls = 0;
+      const refusal = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
+      const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {} as RequestLogContext, {}, {
+        runCore: async (req, _config, context, options) => {
+          calls++;
+          options.onRequestBodyParsed?.(await req.json());
+          context.routeDecision = policyTrace();
+          return calls === 1 ? Response.json({ response: { error: { code, message: refusal } } }, { status: 400 })
+            : Response.json({ status: "completed" });
+        },
+      });
+      expect(calls).toBe(code ? 1 : 2);
+      expect(response.status).toBe(code ? 400 : 200);
+    },
+  );
+
+  for (const hardCode of ["upstream_no_response", "origin_rejected", "origin-rejected", " ORIGIN-REJECTED ", "cyber_policy"]) {
+    test.each(["root", "nested"])(`policy preserves ${hardCode} at %s beside a competing code`, async location => {
+      let calls = 0;
+      const refusal = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
+      const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {} as RequestLogContext, {}, {
+        runCore: async (req, _config, context, options) => {
+          calls++;
+          options.onRequestBodyParsed?.(await req.json());
+          context.routeDecision = policyTrace();
+          return calls === 1 ? Response.json({
+            code: location === "root" ? hardCode : "invalid_request_error",
+            response: { error: { code: location === "root" ? "unsupported_model" : hardCode, message: refusal } },
+          }, { status: 400 }) : Response.json({ status: "completed" });
+        },
+      });
+      expect(calls).toBe(1);
+      expect(response.status).toBe(400);
+    });
+  }
+
+  test.each([undefined, "upstream_no_response", "origin_rejected", "cyber_policy"])(
+    "prefixed nested HTTP refusal retains policy code %s", async code => {
+      let calls = 0;
+      const message = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
+      const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {} as RequestLogContext, {}, {
+        runCore: async (req, _config, context, options) => {
+          calls++;
+          options.onRequestBodyParsed?.(await req.json());
+          context.routeDecision = policyTrace();
+          return calls === 1 ? new Response(`Provider error 400: ${JSON.stringify({ response: { error: { code, message } } })}`,
+            { status: 400 }) : Response.json({ status: "completed" });
+        },
+      });
+      expect(calls).toBe(code ? 1 : 2);
+      expect(response.status).toBe(code ? 400 : 200);
+    },
+  );
+
   test("a marked context overflow never tries another policy route", async () => {
     const failure = Response.json({ error: {
       type: "invalid_request_error", code: "context_length_exceeded", message: "Context window exceeded",

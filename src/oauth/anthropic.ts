@@ -1,5 +1,6 @@
 /** Anthropic OAuth flow (Claude Pro/Max). Ported from jawcode oauth/anthropic.ts. */
 import { OAuthCallbackFlow } from "./callback-server";
+import { bindAnthropicIdentity, resolveAnthropicAccountIdentity } from "./anthropic-identity";
 import { generatePKCE } from "./pkce";
 import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
 
@@ -96,6 +97,7 @@ function credsFrom(data: AnthropicTokenResponse, refreshFallback?: string): OAut
     refresh: data.refresh_token || refreshFallback || "",
     access: data.access_token,
     expires,
+    anthropicIdentity: bindAnthropicIdentity(data.access_token, accountUuid),
     accountId: typeof accountUuid === "string" && accountUuid.length > 0 ? accountUuid : undefined,
     email: typeof email === "string" && email.length > 0 ? email : undefined,
   };
@@ -159,7 +161,11 @@ export async function loginAnthropic(
     const local = detectClaudeCodeToken();
     if (local) {
       ctrl.onProgress?.("Found Claude Code token, importing automatically");
-      if (local.expires >= Date.now() + 60_000) return local;
+      if (local.expires >= Date.now() + 60_000) {
+        const identity = await resolveAnthropicAccountIdentity(local.access, ctrl.signal);
+        ctrl.signal?.throwIfAborted();
+        return { ...local, ...(identity ? { accountId: identity.accountUuid, anthropicIdentity: identity } : {}) };
+      }
       try {
         return { ...(await refreshAnthropicToken(local.refresh)), source: "local-cli" };
       } catch (error) {

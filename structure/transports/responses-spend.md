@@ -130,6 +130,14 @@ so a second restart has nothing to redo.
 booking, the settlement split, the refund, a ceiling that refuses a dispatch rather than
 describing it afterwards, and the restart.
 
+The request tracker checks the current policy against the exact root, identity and pool scopes
+on each charge. With an applicable ceiling, any refused booking prevents a new dispatch,
+including full tracking capacity or a duplicate send id; the log uses the existing specific
+workflow refusal reason. Requests without an applicable ceiling remain observe-only. Reports
+of sends that already left stay permissive and do not count as local refusals; this guard does
+not promise complete accounting when those post-dispatch bookings fail.
+`tests/responses/responses-spend-capacity-guard.test.ts` covers these boundaries.
+
 The default policy still sets no token ceiling on any scope, so an unconfigured install accounts
 and reports without refusing. An operator turns enforcement on with the `spend` section in
 config.json, which `src/lib/spend-reservation-ledger.ts` resolves through

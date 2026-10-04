@@ -2365,7 +2365,7 @@ describe("fetchProviderQuotaReports", () => {
         includedAccounts: 0,
         staleQuotaAccounts: 1,
         missingQuotaAccounts: 1,
-        unknownPlanAccounts: 1,
+        unknownPlanAccounts: 0, // A failed main read retains its previously observed Plus plan.
         incomplete: true,
         currentAccount: { plan: "prolite", quota: null },
       });

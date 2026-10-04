@@ -1218,6 +1218,8 @@ export interface OcxConfig {
    */
   anthropicAccountPool?: {
     enabled?: boolean;
+    /** Preserve native Claude Messages while the pool is enabled. Default true; false selects legacy translation. */
+    nativeMessages?: boolean;
     /** Usage % threshold for new-session auto-pick. Default 80. 0 = disabled (affinity/active only). */
     autoSwitchThreshold?: number;
     /** New-session rotation strategy. Default quota (today's behaviour). */

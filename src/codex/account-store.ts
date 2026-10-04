@@ -1,3 +1,6 @@
+import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure, type ChatgptRefreshDiagnosticCode } from "./chatgpt-refresh-failure";
+import { readBoundedResponseBody } from "../lib/bounded-body";
+export { classifyChatgptRefreshFailure } from "./chatgpt-refresh-failure";
 import { readOrcaAuthSource } from "./orca-auth-source";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, readFileSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -526,7 +529,8 @@ const CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 export class TokenRefreshError extends Error {
   reason: "expired" | "revoked" | "unknown";
-  constructor(reason: "expired" | "revoked" | "unknown", message: string) {
+  constructor(reason: "expired" | "revoked" | "unknown", message: string,
+    readonly status?: number, readonly code?: ChatgptRefreshDiagnosticCode) {
     super(message);
     this.name = "TokenRefreshError";
     this.reason = reason;
@@ -1322,52 +1326,12 @@ async function resolveCodexToken(
       signal,
     });
     if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      let errDesc: string;
-      let errCodeExact: string | undefined;
-      try {
-        const parsed = JSON.parse(errText) as {
-          error?: string | { code?: string; message?: string };
-          error_description?: string;
-        };
-        if (typeof parsed.error === "string") {
-          errCodeExact = parsed.error.trim();
-          errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ");
-        } else if (parsed.error && typeof parsed.error === "object") {
-          errCodeExact = typeof parsed.error.code === "string" ? parsed.error.code.trim() : undefined;
-          errDesc = [parsed.error.code, parsed.error.message, parsed.error_description].filter(Boolean).join(": ");
-        } else {
-          errDesc = parsed.error_description || `HTTP ${res.status}`;
-        }
-        if (!errDesc) errDesc = `HTTP ${res.status}`;
-      } catch { errDesc = `HTTP ${res.status}`; }
-      // `invalid_grant` is the standard OAuth code for a refresh token that is no longer
-      // usable, and upstream sends it bare with no description. Without it here the dead
-      // grant is classified "unknown", which callers treat as transient — so the account
-      // is never retired and every request repeats the same doomed refresh (#2887).
-      //
-      // Matched on the exact `error` CODE, not anywhere in the combined text: a transient
-      // `server_error` whose description happens to mention invalid_grant would otherwise
-      // retire a healthy account, which is the failure this whole change exists to remove.
-      //
-      // That rule binds the DESCRIPTION words too. "invalidated", "revoked" and "expired" read
-      // as terminal prose, but upstream puts arbitrary text there: a `server_error` whose
-      // description says "token was revoked" or "session expired" is still a 5xx blip, and
-      // retiring the account on it is exactly the false quarantine #2887 exists to prevent.
-      // So a body that carries a structured code is classified by that code ALONE. The
-      // substring fallback survives only where there is no structured code to read at all --
-      // a description-only body, or one this parser could not decode -- because there the
-      // prose is the only signal upstream gave us.
-      const structuredCode = errCodeExact ? errCodeExact : undefined;
-      const proseIsOnlySignal = structuredCode === undefined;
-      const reason = structuredCode === "invalid_grant"
-          || structuredCode === "refresh_token_invalidated"
-          || (proseIsOnlySignal
-            && (errDesc.includes("invalidated") || errDesc.includes("revoked"))) ? "revoked" as const
-        : structuredCode === "refresh_token_expired"
-          || (proseIsOnlySignal && errDesc.includes("expired")) ? "expired" as const
-        : "unknown" as const;
-      throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`);
+      const body = await readBoundedResponseBody(res, { signal, maxBytes: 16_384, fatalUtf8: true })
+        .catch(() => undefined);
+      const failure = classifyChatgptRefreshFailure(res.status, body?.displaySafe ? body.text : "");
+      const { reason } = failure;
+      noteChatgptRefreshFailure("pool", res.status, failure);
+      throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`, res.status, failure.code);
     }
     const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
     // Guard against a missing/non-finite/negative expires_in (malformed upstream

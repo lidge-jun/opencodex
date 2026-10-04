@@ -213,3 +213,7 @@ This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+## 令牌预留与额度限制
+
+如果请求受 `spend.root.maxTokens`、`spend.identity.maxTokens` 或 `spend.pool.maxTokens` 限制，无法记录令牌预留时会拒绝发送，包括跟踪容量已满的情况。没有适用额度限制的请求仍保持仅观察模式。

@@ -29,7 +29,7 @@ runs helper features around provider requests.
 | `usageLedgerMaxBytes?` | `number` | unset | Opt-in ceiling in bytes for `usage.jsonl`. Absent means the request history grows without limit, which stays the default. See [usage history size](#usage-history-size). |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Cap in MiB for evictable app-owned logs, caches, blobs, and continuation payloads. Range 64–4096; not an RSS cap. |
 | `metricsExport.enabled?` | `boolean` | `false` | Enable process-local aggregate request metrics at authenticated `GET /api/metrics`. Restart required; disabled mode returns 404 and starts no exporter activity. |
-| `spend?` | `{ root?: { maxTokens?: number }; identity?: { maxTokens?: number }; pool?: { maxTokens?: number }; retentionDays?: number }` | unset | Durable token ceilings, off unless you write one. Each scope bounds settled spend plus in-flight reservations plus unresolved spend: `root` is one task including its whole fan-out, `identity` is one account across every task it serves, and `pool` is one provider pool. They intersect, so a request is admitted only when all three have room — which is what holds a ceiling against a client that mints a new task id per request. A reservation is the request's whole input plus its enforceable output ceiling, counted as if every cached prefix misses. Observe-only mode still journals, so every server owns the state directory's single-writer lease; an explicit sibling must use a separate `OPENCODEX_HOME`. Spend survives an ordinary process restart when its writes reached the filesystem, but the journal does not promise survival across host power loss because each append is not fsynced. Raising or removing the value is what grants more. `maxTokens` must be a positive integer (0 would refuse everything), `retentionDays` is 1–365 and defaults to 7, and an unknown key in this section is rejected rather than ignored. A refusal is a local HTTP 429 carrying `x-opencodex-local-refusal: workflow_spend_exhausted`, and its message names the scope and the ceiling; no provider is contacted. |
+| `spend?` | `{ root?: { maxTokens?: number }; identity?: { maxTokens?: number }; pool?: { maxTokens?: number }; retentionDays?: number }` | unset | Durable token ceilings, off unless you write one. Each scope bounds settled spend plus in-flight reservations plus unresolved spend: `root` is one task including its whole fan-out, `identity` is one account across every task it serves, and `pool` is one provider pool. They intersect, so a request is admitted only when all three have room — which is what holds a ceiling against a client that mints a new task id per request. A reservation is the request's whole input plus its enforceable output ceiling, counted as if every cached prefix misses. Observe-only mode still journals, so every server owns the state directory's single-writer lease; an explicit sibling must use a separate `OPENCODEX_HOME`. Spend survives an ordinary process restart when its writes reached the filesystem, but the journal does not promise survival across host power loss because each append is not fsynced. Raising or removing the value is what grants more. `maxTokens` must be a positive integer (0 would refuse everything), `retentionDays` is 1–365 and defaults to 7, and an unknown key in this section is rejected rather than ignored. A refusal is a local HTTP 429 carrying `x-opencodex-local-refusal: workflow_spend_exhausted`, and its message names the scope and the ceiling; no provider is contacted. With an applicable ceiling, dispatch is also refused if its token reservation cannot be booked, including full tracking capacity. Requests without an applicable ceiling remain observe-only. |
 
 | `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. False makes ensure a no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
@@ -78,6 +78,12 @@ performs no key rotation, account failover or same-target replay on it, nor does
 refusal as rate-limit or quota evidence against the credential it was holding. Tool-call side
 requests such as vision and web search are replayed normally, because repeating them cannot
 duplicate a turn.
+
+Native ChatGPT Responses and compact HTTP requests whose serialized JSON strings are at least
+1 MiB in UTF-8 use byte-buffer uploads to avoid Bun resetting a large string upload before response
+headers arrive. This preserves the request
+contents and does not enable automatic retries. A genuine connection reset still follows the
+replay-refusal policy above.
 
 A native Responses provider can opt into replacing that send with
 [`retryOnReset`](/reference/configuration/providers/#provider-entries-ocxproviderconfig). The same grant covers the
@@ -156,7 +162,17 @@ only these fields when comparing network modes, rather than the full account lis
 | `internal_error` | An internal refresh step failed. |
 
 Only `http_error` includes `httpStatus`. Other statuses do not imply HTTP 0 or an
-account entitlement problem.
+account entitlement problem. An `http_error` may also include `code` when the provider
+named a reason that only a new sign-in fixes (`token_invalidated`, `invalid_refresh_token`,
+`invalid_workspace_selected`). A `token_invalidated` response indicates a revoked session;
+the row then shows `needsReauth: true` with the last-known plan.
+
+If the token endpoint rejects the stored main refresh grant, automatic requests stop retrying
+that same grant even if a usage refresh succeeds. Sign in again with `codex login` to replace
+the credential. The process keeps up to 64 profile-and-grant refusal records; restarting the
+proxy or evicting an old record permits a fresh check. Rate-limit and server failures remain
+retryable and do not retire the grant. Credentials supplied by the caller remain caller-owned.
+
 
 ### Which proxy path is used?
 
@@ -580,12 +596,13 @@ modes, the preview, and the per-request trace.
 | `protocols.unrepresentable?` | `"legacy" \| "reject"` | `"legacy"` | `legacy` sends a request whose path drops a feature and records the loss in the trace. `reject` refuses it with HTTP 400 before any send, naming only the feature keys. |
 | `protocols.rollout.nativeChatCombos?` | `boolean` | `false` | Send an eligible Chat candidate inside a combo natively from its own copy of the client body. |
 | `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to a direct, key-authenticated Anthropic provider instead of through the internal Responses bridge. |
-| `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Native Messages for the unpooled `anthropic` OAuth provider on `api.anthropic.com`. Read as off unless `managedMessagesNative` is on; a pooled account set stays on the bridge. Recognized JSON-string `metadata.user_id` account UUIDs are aligned with the serving OAuth credential; device and session fields are preserved. |
+| `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Native Messages for the `anthropic` OAuth provider on `api.anthropic.com`, including stored account pools. Requires `managedMessagesNative`. For the settled `anthropic` provider, an enabled pool supplies true for absent native flags when `anthropicAccountPool.nativeMessages` is absent or true. Explicit false/malformed flags and a false/malformed pool preference remain off. Other providers and pool-off keep explicit rollout behavior. Eligible pooled requests retain shared selection, affinity and bounded pre-output recovery. Recognized JSON-string `metadata.user_id` account UUIDs are aligned with the serving OAuth credential; device and session fields are preserved. |
 | `protocols.rollout.directEncoders?` | `boolean` | `false` | Encode Chat and Messages answers from a non-Responses upstream directly from adapter events. |
 | `protocols.rollout.shadowPlan?` | `boolean` | `false` | Compare each Chat or Messages request's path with the plan a preview predicts and mark a disagreement as `planMismatch` on its log row. Sends nothing extra. |
 
-A malformed `protocols` block is dropped to these defaults, because each default is the
-conservative one. Only `true` turns a switch on.
+Malformed protocol blocks retain a conservative disabled native policy when loaded from disk.
+Valid absent native flags may inherit eligible Anthropic pool defaults; explicit false or malformed
+flags stay off. Validated writes reject malformed input.
 
 ```json
 {
