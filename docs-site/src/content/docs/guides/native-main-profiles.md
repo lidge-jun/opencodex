@@ -36,6 +36,26 @@ before submitting. If that state changed, review the new state and confirm again
 The existing backend remains authoritative for locks, process checks, draining
 in-flight requests, activation and rollback.
 
+The confirmation shows three steps: close Codex on the server computer, confirm
+the change in the dashboard, then check the result and refreshed active profile
+before reopening or restarting Codex. Reopen guidance waits for the existing
+readback and account refresh to finish; a refresh failure asks you to refresh
+before continuing.
+
+If `CODEX_BUSY` blocks the change, close Codex using the displayed home, choose
+**Refresh status**, and review the active profile. Select **Switch** again and
+give a new stopped acknowledgement before confirming. The refresh only reads
+state; it does not retry the change. A process-check error asks you to check that
+Codex is closed and inspect server diagnostics, while active-request or lock
+errors ask you to wait for the existing work to finish. Other allowlisted errors
+identify profile, key-store, storage or recovery problems without displaying raw
+server messages. A lost response remains an unconfirmed outcome even if the
+refreshed active profile changed.
+
+Results are labelled **Last confirmed result**. A manual refresh clears the
+displayed error, but does not confirm an earlier lost-response transaction. An
+existing restart requirement from a prior confirmed change may remain visible.
+
 After success, follow the displayed restart requirement and reopen native Codex
 with that home. The panel rereads profile state and refreshes the existing account
 controller. It does not call Pool selection/configuration mutations or edit
