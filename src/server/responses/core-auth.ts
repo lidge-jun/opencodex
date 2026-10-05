@@ -507,6 +507,9 @@ export async function refreshPoolForwardAuth(args: {
         response: formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication"),
       };
     }
+    if (options.abortSignal?.aborted || req.signal.aborted) {
+      return { ok: false, quarantine: false, response: clientCancelledResponse() };
+    }
     // The credential itself refreshed; a policy refusal raised afterwards (a credit hold or an
     // opt-out that landed during the await) is not a refresh failure. Map it the same way the
     // admission path does — a reset-bound 429, never a 503 telling the caller to sign in — and

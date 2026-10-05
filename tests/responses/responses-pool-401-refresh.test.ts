@@ -700,6 +700,7 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
       // A policy refusal is not an incomplete refresh: the client gets the actionable 429,
       // the rotated grant stays stored, and nothing replays on the refreshed bearer.
       expect(response.status).toBe(429);
+      expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(0);
       expect(body).toContain("spending credits");
       expect(body).not.toContain("credential refresh did not complete");
       expect(harness.sends).toEqual(["Bearer rejected-access"]);
@@ -708,6 +709,52 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
       expect(readStoredGeneration()).toBe(4);
     },
   );
+
+  for (const [path, signalSource] of [
+    ["/v1/responses", "request"],
+    ["/v1/responses", "effective"],
+    ["/v1/responses/compact", "request"],
+  ] as const) {
+    test(`post-refresh credit refusal yields to cancellation (${path}, ${signalSource})`, async () => {
+      const client = new AbortController();
+      const cfg = config();
+      cfg.creditCodexAccountIds = [];
+      const harness = installHarness();
+      const materialize = authContextModule.materializeCodexUpstreamAuthAsync;
+      const materializeSpy = spyOn(authContextModule, "materializeCodexUpstreamAuthAsync")
+        .mockImplementation(async (...args) => {
+          if (args[1].kind !== "pool" || args[1].accessToken !== "refreshed-access") {
+            return materialize(...args);
+          }
+          // Refresh has settled; abort when the real materializer rejects the new hold.
+          expect(readStoredGeneration()).toBe(4);
+          updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+          try {
+            return await materialize(...args);
+          } catch (error) {
+            client.abort();
+            throw error;
+          }
+        });
+      try {
+        const req = signalSource === "request"
+          ? new Request(request(path), { signal: client.signal })
+          : request(path);
+        const response = path === "/v1/responses/compact"
+          ? await handleResponsesCompact(req, cfg, { model: "", provider: "" } as RequestLogContext)
+          : await handleResponses(req, cfg, { model: "", provider: "" } as RequestLogContext,
+            signalSource === "effective" ? { abortSignal: client.signal } : {});
+        expect(response.status).toBe(499);
+        expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
+        expect(harness.sends).toEqual(["Bearer rejected-access"]);
+        expect(harness.refreshes).toEqual(["refresh-grant"]);
+        expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+        expect(readStoredGeneration()).toBe(4);
+      } finally {
+        materializeSpy.mockRestore();
+      }
+    });
+  }
 
   test.each(["/v1/responses", "/v1/responses/compact"] as const)(
     "a credit hold while the initial request waits for pacing refuses without sending (%s)", async path => {
