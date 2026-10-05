@@ -100,7 +100,7 @@ describe("preview wire and failure contracts", () => {
     expect(out.mock.calls).toEqual([]); expect(JSON.stringify(err.mock.calls)).not.toContain("PRIVATE");
     if (status === 503) expect(JSON.stringify(err.mock.calls)).toContain("Management API is unavailable");
   });
-  test.each([previewArgs, ["restore", "--op", "op-one", "--preview"]])("no running proxy names ocx start and sends nothing: %j", async args => {
+  test.each([{ args: previewArgs }, { args: ["restore", "--op", "op-one", "--preview"] }])("no running proxy names ocx start and sends nothing: $args", async ({ args }) => {
     const f = fixture();
     const deps: RuntimeApiDeps = { ...f.deps, findLiveProxy: async () => null };
     expect(await command([...args, "--json"], deps)).toBe(1);
