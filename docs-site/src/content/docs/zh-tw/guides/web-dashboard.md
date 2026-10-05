@@ -118,7 +118,7 @@ Dashboard 的 **Sub-agent delegation** 選擇器會儲存 `injectionModel`，以
 
 ## Remote Hub 工作階段、金鑰與用量
 
-儀表板管理平面與 client→hub 模型流量彼此獨立。**Integrations → API Keys** 顯示待處理輪替，只顯示一次替代金鑰，並要求明確提交或中止。瀏覽器 logout 只會使目前工作階段失效。連線時從 hub 依 `apiKeyId` 篩選用量；中斷後使用本機記錄，兩者不會鏡像。
+儀表板管理平面與 client→hub 模型流量彼此獨立。**連線 → API 金鑰** 顯示待處理輪替，只顯示一次替代金鑰，並要求明確提交或中止。瀏覽器 logout 只會使目前工作階段失效。連線時從 hub 依 `apiKeyId` 篩選用量；中斷後使用本機記錄，兩者不會鏡像。
 
 選擇器會列出已啟用的原生與路由模型，以及全域 Codex reasoning 階梯。API 會先驗證所選強度是否
 屬於全域階梯；Codex 仍會根據目標目錄條目再次校驗該 spawn 強度。

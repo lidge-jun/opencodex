@@ -2,7 +2,7 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { autoRestoreCodexShim, buildUnixCodexShim, installCodexShim, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, uninstallCodexShim } from "../../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, codexShimStatus, diagnoseCodexShim, installCodexShim, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, uninstallCodexShim } from "../../src/codex/shim";
 import { readState, type ShimState } from "../../src/codex/shim-state-file";
 
 function fixture(run: (f: { root: string; home: string; native: string; backup: string; quarantine: string; wrapper: string; statePath: string; state: ShimState; legacyBytes: string; version: (name: string) => string }) => void): void {
@@ -46,6 +46,27 @@ function fixture(run: (f: { root: string; home: string; native: string; backup: 
 const lexical = (path: string) => { try { return fs.lstatSync(path); } catch { return null; } };
 
 describe.skipIf(process.platform === "win32")("legacy Unix shim migration", () => {
+  test("healthy legacy status advises explicit migration without changing health or files", () => fixture(f => {
+    const raw = fs.readFileSync(f.statePath, "utf8");
+    const diagnostic = diagnoseCodexShim();
+    expect(diagnostic).toMatchObject({ installed: true, healthy: true });
+    expect(codexShimStatus()).toBe(diagnostic.summary);
+    expect(diagnostic.summary).toContain("Legacy Unix shim installed in place; automatic repair does not migrate it.");
+    expect(diagnostic.summary).toContain("Run ocx codex-shim install, then source the printed codex-shell-env.sh path");
+    expect(diagnostic.summary).toContain("after PATH setup in your shell startup file");
+    expect(fs.readFileSync(f.statePath, "utf8")).toBe(raw);
+    expect(fs.readFileSync(f.native, "utf8")).toBe(f.legacyBytes);
+    expect(lexical(join(f.home, "codex-shell-env.sh"))).toBeNull();
+  }));
+
+  test("Windows legacy diagnostics omit Unix migration and sourcing advice", () => fixture(f => {
+    fs.writeFileSync(f.statePath, JSON.stringify({ ...f.state, platform: "win32" }));
+    const diagnostic = diagnoseCodexShim();
+    expect(diagnostic).toMatchObject({ installed: true, healthy: true });
+    expect(diagnostic.summary).not.toContain("Legacy Unix");
+    expect(diagnostic.summary).not.toContain("codex-shell-env.sh");
+  }));
+
   test("explicit install restores backup symlink and commits schema 2 without in-place wrapping", () => fixture(f => {
     const target = fs.readlinkSync(f.backup);
     expect(autoRestoreCodexShim({ enabled: () => true }).status).toBe("ineligible");
@@ -55,6 +76,7 @@ describe.skipIf(process.platform === "win32")("legacy Unix shim migration", () =
     expect(lexical(f.backup)).toBeNull();
     expect(lexical(f.quarantine)).toBeNull();
     expect(readState()).toMatchObject({ schema: 2, launcherPath: f.native });
+    expect(diagnoseCodexShim().summary).not.toContain("Legacy Unix");
     expect(installCodexShim()).toMatchObject({ installed: false, runnable: true });
   }));
 

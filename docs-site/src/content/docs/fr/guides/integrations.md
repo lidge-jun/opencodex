@@ -3,7 +3,7 @@ title: Intégrations
 description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo et Factory Droid depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
 ---
 
-L'onglet **Intégrations** écrit le bloc fournisseur d'opencodex dans le fichier de configuration du client,
+L'onglet **Connexion** écrit le bloc fournisseur d'opencodex dans le fichier de configuration du client,
 puis peut le retirer. Dix-sept clients fonctionnent ainsi, chacun avec son propre commutateur :
 
 | Client | Fichier de configuration | Format | Prise d'effet de la modification | Identifiant |
@@ -18,7 +18,7 @@ puis peut le retirer. Dix-sept clients fonctionnent ainsi, chacun avec son propr
 | DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml` (`~/.dsh/profiles/desktop/cordis.patch.yml` par défaut) ; `$DSH_HOME/settings.yaml` tant que DSH Desktop n’a pas créé ce profil | YAML | rechargement à chaud | jeton porteur fictif et non secret pour le bouclage |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | dans les nouvelles sessions ou après l’ouverture du sélecteur de modèles | valeur fictive de bouclage |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | dans les nouvelles sessions | valeur fictive de bouclage |
-| ZCode | `~/.zcode/v2/config.json` | JSON | au redémarrage | valeur fictive de bouclage |
+| ZCode | `~/.zcode/v2/provider_config.json` (schemaVersion 1) ; repli historique : `~/.zcode/v2/config.json` | JSON | au redémarrage | valeur fictive de bouclage |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | après avoir quitté complètement puis rouvert Aside | valeur fictive de bouclage |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immédiatement à l'enregistrement — Raycast surveille le fichier | aucun — bouclage uniquement |
 | omo | `~/.omo/agent/models.json` | JSON | nouvelles sessions | espace réservé de bouclage |
@@ -28,12 +28,7 @@ puis peut le retirer. Dix-sept clients fonctionnent ainsi, chacun avec son propr
 
 Les modèles GJC dotés d'une échelle d'effort de raisonnement prise en charge exportent `reasoning: true`, `thinking.levels` et `compat.supportsReasoningEffort`, afin que GJC propose le choix de l'effort. Les modèles Codex natifs reçoivent leur échelle standard même si le catalogue l'omet. Ces champs sont absents sans échelle connue ; `none` n'envoie pas d'effort et `ultra` devient `max` sur le réseau. Actualisez l'intégration pour mettre à jour ces options.
 
-La prise en charge gérée de DSH exige au minimum **DSH 0.1.0-rc.6**. OpenCodex ne possède que le fragment
-`llm-pi-ai.providers.opencodex` : **Appliquer** et **Actualiser** remplacent ce fragment, **Désactiver** ne
-supprime que ce fragment, et **Restaurer** rétablit un instantané enregistré. DSH recharge à chaud les
-modifications de fournisseurs. Ces opérations ne changent ni le modèle par défaut de l'utilisateur ni le
-fournisseur natif `deepseek-official`. L'intégration DSH gérée est actuellement limitée au bouclage et
-n'écrit jamais de véritable identifiant.
+La prise en charge gérée de DSH exige au minimum **DSH 0.1.0-rc.6**. Avec **DSH 0.1.7 et versions ultérieures**, DSH lit les routes dans le patch du profil Desktop, `$DSH_HOME/profiles/desktop/cordis.patch.yml`, qu’il recharge à chaud. Lorsque le profil Desktop et son patch existent, OpenCodex y écrit uniquement `[id=llm-pi-ai].config.providers.opencodex`. Si `$DSH_HOME/profiles/desktop/package.json` existe mais que `cordis.patch.yml` manque, Appliquer refuse : créez `cordis.patch.yml` contenant `[]` (le patch vide que DSH écrit pour un nouveau profil), puis activez à nouveau l’intégration. En l’absence du profil Desktop, il utilise uniquement `llm-pi-ai.providers.opencodex` dans `$DSH_HOME/settings.yaml` comme solution de repli. **Appliquer** et **Actualiser** remplacent ce fragment, **Désactiver** ne supprime que ce fragment, et **Restaurer** rétablit un instantané enregistré. Ces opérations ne changent ni le modèle par défaut de l’utilisateur ni le fournisseur natif `deepseek-official`. L’intégration DSH gérée est actuellement limitée au bouclage et n’écrit jamais de véritable identifiant.
 
 MiniMax Code recherche d’abord `MINIMAX_DATA_DIR`, puis `MAVIS_DATA_DIR`, avant de se rabattre sur
 `~/.minimax`. Son bloc géré ne possède que `custom_provider.opencodex`. Il ne modifie ni `defaultModel`, ni
@@ -45,7 +40,7 @@ qui appartient à la session MCode, est préservé.
 
 Raycast a deux prérequis. Les fournisseurs personnalisés (Custom Providers) sont une fonctionnalité
 **Raycast Pro** : avec un forfait gratuit, le fichier est tout de même écrit, mais
-`ocx integration client status --client raycast` et la page Intégrations signalent un avertissement,
+`ocx integration client status --client raycast` et la page **Connexion** signalent un avertissement,
 car Raycast ne le lira pas. Et Raycast ne crée son dossier `ai` que lorsque vous ouvrez une fois
 Raycast → Settings → AI → **Reveal Providers Config** ; opencodex utilise ce dossier comme signal
 d'installation et indique que le client n'est pas installé tant qu'il n'existe pas. Raycast lit
@@ -162,9 +157,7 @@ tous les profils** reste une action groupée distincte et n'est pas liée à un 
 
 **Le formatage n'est généralement pas préservé.** L'application analyse une configuration avant de la
 réécrire ; JSON, JSON5 et TOML peuvent donc être reformatés, et les commentaires JSON5 ou TOML sont perdus.
-OMP et DSH font exception : leurs outils d'écriture YAML ne modifient que `providers.opencodex` et
-`llm-pi-ai.providers.opencodex`, respectivement, tout en préservant octet par octet les commentaires et le
-formatage des fournisseurs sans rapport. Si la plage source exacte ne peut pas être identifiée de manière
+OMP et DSH font exception : leurs outils d’écriture YAML ne modifient que le fragment géré. Pour OMP, il s’agit de `providers.opencodex` ; pour DSH, de `[id=llm-pi-ai].config.providers.opencodex` dans le patch Desktop, ou de `llm-pi-ai.providers.opencodex` dans `settings.yaml` uniquement si le profil Desktop est absent. Ils préservent octet par octet les commentaires et le formatage des fournisseurs sans rapport. Si la plage source exacte ne peut pas être identifiée de manière
 sûre, l'opération est refusée. Pour les autres clients, utilisez **Restaurer** lorsque vous avez besoin des
 octets précédents du fichier : l'instantané en est une copie exacte.
 

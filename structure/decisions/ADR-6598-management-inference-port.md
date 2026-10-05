@@ -1,0 +1,11 @@
+# Decision recorded under "Dashboard serving"
+
+[Decision Log]
+- Purpose and intent: keep management-only ingress ports out of generated inference clients (#6598).
+- Prior implementation and constraints: routes used the request URL port as the public data-plane port; a hub dashboard on 10101 consequently exported 10101/v1 even though that listener rejects inference. Config alone can be stale or contain an ephemeral port.
+- Alternatives considered: substitute config.port at each site; read runtime-port.json on every request; rewrite the request URL; pass the lifecycle-owned public port.
+- Selected approach: supply liveListenPort from the shared server composition and resolve it in managementInferencePort, with config.port only for direct-dispatch fixtures.
+- Why: lifecycle already knows the actual public bind and CLI override. This keeps request identity/authentication intact, avoids additional private-state I/O, and gives every affected route one rule.
+- Consequences: standalone and hub management requests select the same inference endpoint. Explicit companion ports retain precedence through the existing inference resolver. Direct-dispatch tests requiring a bound override must inject it. Required independent boundary review remains separate from correctness fixtures.
+- Resolution boundary: `managementInferencePort` yields the PUBLIC bound port, not a final client destination. Explicit loopback companion precedence stays in `standaloneCodexRoutingTarget` (`src/codex/inject/routing-target.ts`), `effectiveLoopbackListenerPort` (`src/codex/loopback-target.ts`) and `localInferenceDestination` (`src/lib/local-destinations.ts`). Cursor status in `src/server/management/cursor-integration-routes.ts` uses live listener -> PID-matched runtime record -> config, then `localInferenceDestination`; it never selects the request URL port.
+- Known limitations: the Grok toggle does not resolve a loopback companion on a tailnet hub. `/api/keys` endpoint metadata on wildcard binds still derives host:port from Origin/URL/Host. The Codex toggle and Claude Desktop enable paths in `src/server/management/native-integration-routes.ts` use runtime -> config without the live port. A port-less companion with requested port 0 can receive a separately allocated ephemeral port. These paths are outside this port-selection fix.

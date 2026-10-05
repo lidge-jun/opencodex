@@ -41,9 +41,18 @@ const REFUSAL_KEYS: Partial<Record<string, TKey>> = {
   write_failed: "integrations.plan.refusal.writeFailed",
 };
 
-function Plan({ plan }: { plan: IntegrationMutationPlan }) {
+function Plan({ plan, missingStorePath }: { plan: IntegrationMutationPlan; missingStorePath?: string }) {
   const t = useT();
   const refusalKey = plan.refusalReason ? REFUSAL_KEYS[plan.refusalReason] : undefined;
+  // A missing store is the one superseded refusal the operator fixes by hand, so it names the fix.
+  // The plan names no file; a caller holding the status row passes its path, because the open
+  // dialog covers the status notice that would otherwise say where to create it.
+  const missingDocument = plan.supersededReason === "missing-store" ? plan.missingStoreDocument : undefined;
+  const refusal = missingDocument === undefined
+    ? t(refusalKey ?? "integrations.plan.refused")
+    : missingStorePath === undefined
+      ? t("integrations.plan.refusal.missingStore", { document: missingDocument })
+      : t("integrations.status.missingStore", { path: missingStorePath, document: missingDocument });
   return (
     <div className="integration-plan-details">
       <p className="integration-plan-operation">
@@ -56,7 +65,7 @@ function Plan({ plan }: { plan: IntegrationMutationPlan }) {
           {plan.profileId !== undefined && <p>{t("integrations.plan.noop.profilePreference")}</p>}
         </>
       )}
-      {!plan.canApply && <p>{t(refusalKey ?? "integrations.plan.refused")}</p>}
+      {!plan.canApply && <p>{refusal}</p>}
       {plan.changes.length > 0 && (
         <ul className="integration-plan-changes">
           {plan.changes.map(change => (
@@ -73,16 +82,19 @@ function Plan({ plan }: { plan: IntegrationMutationPlan }) {
 export default function IntegrationPlanDetails({
   plan,
   plans,
+  missingStorePath,
 }: {
   plan?: IntegrationMutationPlan | null;
   plans?: readonly LabeledIntegrationPlan[];
+  /** The single plan's client: where its missing store belongs, from the status row. */
+  missingStorePath?: string;
 }) {
   const t = useT();
   if (!plan && (!plans || plans.length === 0)) return null;
   return (
     <section className="integration-plan" aria-labelledby="integration-plan-heading">
       <h4 id="integration-plan-heading">{t("integrations.plan.heading")}</h4>
-      {plan && <Plan plan={plan} />}
+      {plan && <Plan plan={plan} missingStorePath={missingStorePath} />}
       {plans?.map(item => (
         <section key={`${item.clientId}:${item.plan.fingerprint}`} className="integration-plan-group">
           <h5>{item.label}</h5>

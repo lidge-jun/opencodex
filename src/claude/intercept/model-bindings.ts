@@ -113,7 +113,7 @@ export function parseInterceptBindingPatch(body: unknown): InterceptBindingPatch
     if (!set || typeof set !== "object" || Array.isArray(set)) return { error: "set must be an object of picker id to route" };
     const entries: Record<string, string> = {};
     for (const [id, route] of Object.entries(set as Record<string, unknown>)) {
-      if (!isInterceptBindingId(id)) return { error: `invalid picker id: ${id} (expected a claude- model id)` };
+      if (!isInterceptBindingId(id)) return { error: "invalid picker id (expected a claude- model id)" };
       if (!isInterceptBindingRoute(route)) return { error: `invalid route for ${id}` };
       entries[id] = route;
     }
@@ -137,7 +137,8 @@ export function applyInterceptBindingPatch(
 ): InterceptBindingPatchResult {
   const next: Record<string, string> = { ...current };
   for (const [id, route] of Object.entries(patch.set ?? {})) {
-    if (!availableRoutes.has(route)) return { ok: false, error: `route is not available: ${route}` };
+    // A rejected route is not echoed: whatever sits in that position may be a misplaced credential.
+    if (!availableRoutes.has(route)) return { ok: false, error: "route is not available (see ocx claude desktop show)" };
     next[id] = route;
   }
   for (const id of patch.remove ?? []) delete next[id];

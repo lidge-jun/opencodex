@@ -1,4 +1,4 @@
-import { CliUsageError, printData, rejectArgs, runtimeRequest, takeFlag, takeOption, type RuntimeApiDeps } from "./runtime-api";
+import { CliUsageError, printData, rejectArgs, runCliAction, runtimeRequest, takeFlag, takeOption, type RuntimeApiDeps } from "./runtime-api";
 
 const USAGE = `Usage:
   ocx alias list [--json]
@@ -14,6 +14,10 @@ function selector(value: string): { provider: string; model?: string } {
 
 /** Manage model aliases, consuming JSON output selection before the default list action. */
 export async function handleAliasCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  return runCliAction(async () => { await runAliasAction(argv, deps); });
+}
+
+async function runAliasAction(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
   const action = (args.shift() ?? "list").toLowerCase();
@@ -37,6 +41,7 @@ export async function handleAliasCommand(argv: string[], deps: RuntimeApiDeps = 
     printData(result, wantsJson, [`Default aliases ${state}${provider ? ` for ${provider}` : " globally"}.`]);
     return 0;
   }
+  if (action !== "set" && action !== "rm") throw new CliUsageError(`Unknown alias action: ${action}. See: ocx help alias`, USAGE);
   const target = args.shift()?.trim();
   if (!target) throw new CliUsageError("alias target is required", USAGE);
   const parsed = selector(target);
@@ -63,5 +68,5 @@ export async function handleAliasCommand(argv: string[], deps: RuntimeApiDeps = 
     printData(result, wantsJson, [`Removed alias for ${target}.`]);
     return 0;
   }
-  throw new CliUsageError(`unknown alias action '${action}'`, USAGE);
+  return 0;
 }
