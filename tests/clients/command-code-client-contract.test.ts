@@ -1,7 +1,7 @@
 /**
  * Client-contract regression for the Command Code integration.
  *
- * The two cases below were found by running the PUBLISHED consumer
+ * The cases below were found by running the PUBLISHED consumer
  * (`command-code@1.66.0`) against our exported provider, not by reading our own
  * output. Each test carries the client-side expression it is proving, taken from
  * `dist/cli.mjs` of that release:
@@ -18,21 +18,31 @@
  * (`grep -c COMMANDCODE_HOME dist/cli.mjs` → 0), which is why the path resolver
  * takes no override.
  */
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
   buildClientContribution,
   buildCommandCodeClientConfig,
   commandCodeConfigPath,
   commandCodeHomeDir,
+  commandCodeProviderRoot,
   type ExportContext,
 } from "../../src/clients/config-export";
 import { setPath } from "../../src/integrations/merge";
 import { OPENCODE_PROVIDER_ID } from "../../src/clients/config-export/constants";
 import { MANAGED_PATH_TEMPLATES } from "../../src/integrations/mutation-plan";
+import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
+import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
+import { readIntegrationState } from "../../src/integrations/state";
+import {
+  applyIntegration,
+  disableIntegration,
+  restoreIntegration,
+  type IntegrationWriteInput,
+} from "../../src/integrations/writer";
 
 /** `const o = e.provider ?? e.providers;` — verbatim from command-code@1.66.0. */
 function publishedCommandCodeRoot(document: unknown): Record<string, unknown> | undefined {
@@ -65,7 +75,7 @@ describe("Command Code client contract (published command-code@1.66.0)", () => {
     // BEFORE: the user's own plural-root document.
     const before = {
       providers: {
-        acme: { name: "Acme", api: "openai-completions", baseURL: "https://api.acme.test/v1", apiKey: "$ACME_KEY", models: { "acme/large": {} } },
+        acme: { name: "Acme", api: "openai-completions", baseURL: "https://api.acme.test/v1", apiKey: "secret", models: { "acme/large": {} } },
       },
     };
 
@@ -91,7 +101,7 @@ describe("Command Code client contract (published command-code@1.66.0)", () => {
   });
 
   test("a singular-root target keeps the singular root", () => {
-    const before = { provider: { legacy: { name: "Legacy", api: "openai-completions", baseURL: "https://legacy.test/v1", apiKey: false, models: {} } } };
+    const before = { provider: { legacy: { name: "Legacy", api: "openai-completions", baseURL: "https://legacy.test/v1", apiKey: "secret", models: {} } } };
     const contribution = buildClientContribution("commandcode", { ...CONTEXT, document: before });
     expect(contribution.fragments[0]!.path).toEqual(["provider", OPENCODE_PROVIDER_ID]);
 
@@ -138,19 +148,193 @@ describe("Command Code client contract (published command-code@1.66.0)", () => {
   test("a before/after write through the real path leaves the file parseable by the client", () => {
     const dir = mkdtempSync(join(tmpdir(), "cc-contract-"));
     const path = join(dir, "providers.json");
-    const before = { providers: { acme: { name: "Acme", api: "openai-completions", baseURL: "https://api.acme.test/v1", apiKey: "$ACME_KEY", models: { "acme/large": {} } } } };
+    const before = { providers: { acme: { name: "Acme", api: "openai-completions", baseURL: "https://api.acme.test/v1", apiKey: "secret", models: { "acme/large": {} } } } };
     writeFileSync(path, JSON.stringify(before, null, 2), "utf8");
 
-    const onDisk = JSON.parse(require("node:fs").readFileSync(path, "utf8")) as unknown;
+    const onDisk = JSON.parse(readFileSync(path, "utf8")) as unknown;
     const contribution = buildClientContribution("commandcode", { ...CONTEXT, document: onDisk });
     const after = contribution.fragments.reduce((doc, f) => setPath(doc, f.path, f.value), onDisk);
     writeFileSync(path, JSON.stringify(after, null, 2), "utf8");
 
     // Re-read exactly as the client does, and confirm nothing the user configured
     // was lost or shadowed.
-    const reloaded = publishedCommandCodeRoot(JSON.parse(require("node:fs").readFileSync(path, "utf8")));
+    const reloaded = publishedCommandCodeRoot(JSON.parse(readFileSync(path, "utf8")));
     expect(reloaded).toBeDefined();
     expect(reloaded!.acme).toEqual(before.providers.acme);
     expect(reloaded![OPENCODE_PROVIDER_ID]).toBeDefined();
+  });
+});
+
+describe("commandCodeProviderRoot nullish precedence (published command-code@1.66.0)", () => {
+  const cases: Array<[unknown, "provider" | "providers", string]> = [
+    [{}, "provider", "empty document defaults to singular creation root"],
+    [{ provider: {} }, "provider", "valid singular root"],
+    [{ providers: {} }, "providers", "valid plural root"],
+    [{ provider: null, providers: {} }, "providers", "null singular falls through to plural"],
+    [{ provider: undefined, providers: {} }, "providers", "undefined singular falls through to plural"],
+    [{ provider: {}, providers: {} }, "provider", "both roots present prefers singular"],
+    [{ provider: "invalid", providers: {} }, "provider", "non-nullish string singular does not fall through"],
+    [{ provider: [], providers: {} }, "provider", "non-nullish array singular does not fall through"],
+    [{ provider: "", providers: {} }, "provider", "empty string singular does not fall through"],
+    [{ provider: false, providers: {} }, "provider", "boolean false singular does not fall through"],
+    [{ provider: 0, providers: {} }, "provider", "numeric 0 singular does not fall through"],
+    [{ providers: "invalid" }, "providers", "plural string root remains selected for validation"],
+    [{ providers: [] }, "providers", "plural array root remains selected for validation"],
+    [{ provider: null, providers: "invalid" }, "providers", "null singular with invalid plural selects plural for validation"],
+    [{ provider: null }, "provider", "null singular without plural defaults to singular"],
+    [{ provider: null, providers: null }, "provider", "both null defaults to singular"],
+  ];
+
+  for (const [doc, expected, label] of cases) {
+    test(label, () => {
+      expect(commandCodeProviderRoot(doc)).toBe(expected);
+    });
+  }
+});
+
+describe("Command Code real integration writer root-precedence and lifecycle", () => {
+  let home: string;
+  let store: IntegrationStateStore;
+
+  function input(overrides: Partial<IntegrationWriteInput> = {}): IntegrationWriteInput {
+    return {
+      clientId: "commandcode",
+      models: [
+        { namespaced: "openai/gpt-5.6-sol", provider: "openai", id: "gpt-5.6-sol", contextWindow: 922_000 },
+      ],
+      config: { port: 10100, hostname: "127.0.0.1" } as unknown as IntegrationWriteInput["config"],
+      port: 10100,
+      env: {},
+      home,
+      store,
+      ...overrides,
+    };
+  }
+
+  function setupConfig(initialContent: string): string {
+    const spec = INTEGRATION_CLIENTS.commandcode;
+    const configPath = spec.configPath({}, home);
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, initialContent, "utf8");
+    return configPath;
+  }
+
+  beforeEach(() => {
+    const base = mkdtempSync(join(tmpdir(), "cc-real-writer-"));
+    home = join(base, "home");
+    const storeRoot = join(base, "store", "integrations");
+    mkdirSync(home, { recursive: true });
+    store = createIntegrationStateStore(storeRoot);
+  });
+
+  test("refuses when singular provider root is a string, leaves file untouched, appends no journal entry", async () => {
+    const rawContent = JSON.stringify({ provider: "invalid", providers: { acme: { models: {} } } }, null, 2);
+    const configPath = setupConfig(rawContent);
+
+    const state = readIntegrationState(input());
+    expect(state).toMatchObject({ state: "unsafe", reason: "blocked-container" });
+
+    const applyRes = await applyIntegration(input());
+    expect(applyRes.ok).toBe(false);
+    expect(applyRes.state).toBe("unsafe");
+    expect(applyRes.reason).toBe("unsafe");
+
+    // File must be byte-for-byte unchanged
+    expect(readFileSync(configPath, "utf8")).toBe(rawContent);
+    // Zero journal entries recorded
+    expect(store.listOperations("commandcode")).toHaveLength(0);
+    // State does not report current
+    expect(readIntegrationState(input()).state).not.toBe("current");
+  });
+
+  test("refuses when singular provider root is an array, leaves file untouched, appends no journal entry", async () => {
+    const rawContent = JSON.stringify({ provider: [], providers: { acme: { models: {} } } }, null, 2);
+    const configPath = setupConfig(rawContent);
+
+    const state = readIntegrationState(input());
+    expect(state).toMatchObject({ state: "unsafe", reason: "blocked-container" });
+
+    const applyRes = await applyIntegration(input());
+    expect(applyRes.ok).toBe(false);
+    expect(applyRes.state).toBe("unsafe");
+    expect(applyRes.reason).toBe("unsafe");
+
+    expect(readFileSync(configPath, "utf8")).toBe(rawContent);
+    expect(store.listOperations("commandcode")).toHaveLength(0);
+    expect(readIntegrationState(input()).state).not.toBe("current");
+  });
+
+  test("preserves provider: null fallback and writes under providers", async () => {
+    const rawContent = JSON.stringify({
+      provider: null,
+      providers: { acme: { name: "Acme", api: "openai-completions", baseURL: "https://acme.test/v1", apiKey: false, models: {} } },
+    }, null, 2);
+    const configPath = setupConfig(rawContent);
+
+    const state = readIntegrationState(input());
+    expect(state.state).toBe("absent");
+
+    const applyRes = await applyIntegration(input());
+    expect(applyRes.ok).toBe(true);
+    expect(applyRes.state).toBe("current");
+
+    const onDisk = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(onDisk.provider).toBeNull();
+    expect(onDisk.providers[OPENCODE_PROVIDER_ID]).toBeDefined();
+    expect(onDisk.providers.acme).toBeDefined();
+
+    const consumerResolved = publishedCommandCodeRoot(onDisk);
+    expect(consumerResolved).toBeDefined();
+    expect(consumerResolved![OPENCODE_PROVIDER_ID]).toBeDefined();
+    expect(consumerResolved!.acme).toBeDefined();
+  });
+
+  test("executes full lifecycle (Apply -> Disable -> Undo) on ordinary plural-root files", async () => {
+    const rawContent = JSON.stringify({
+      providers: { acme: { name: "Acme", api: "openai-completions", baseURL: "https://acme.test/v1", apiKey: false, models: {} } },
+    }, null, 2);
+    const configPath = setupConfig(rawContent);
+
+    // 1. Apply
+    const applyRes = await applyIntegration(input());
+    expect(applyRes.ok).toBe(true);
+    expect(applyRes.state).toBe("current");
+
+    const appliedDoc = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(appliedDoc.providers[OPENCODE_PROVIDER_ID]).toBeDefined();
+    expect(appliedDoc.providers.acme).toBeDefined();
+    expect(appliedDoc.provider).toBeUndefined();
+
+    // Consumer reads both
+    expect(publishedCommandCodeRoot(appliedDoc)![OPENCODE_PROVIDER_ID]).toBeDefined();
+    expect(publishedCommandCodeRoot(appliedDoc)!.acme).toBeDefined();
+
+    // 2. Undo the apply directly (restores original document byte-for-byte)
+    const undoApplyRes = await restoreIntegration({ ...input(), opId: (applyRes as any).opId });
+    expect(undoApplyRes.ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(rawContent);
+
+    // Re-apply for disable test
+    const reapplyRes = await applyIntegration(input());
+    expect(reapplyRes.ok).toBe(true);
+
+    // 3. Disable
+    const disableRes = await disableIntegration(input());
+    expect(disableRes.ok).toBe(true);
+
+    const disabledDoc = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(disabledDoc.providers[OPENCODE_PROVIDER_ID]).toBeUndefined();
+    expect(disabledDoc.providers.acme).toBeDefined();
+    expect(disabledDoc.provider).toBeUndefined();
+
+    // 4. Undo the disable (restores the active managed block under providers)
+    const undoDisableRes = await restoreIntegration({ ...input(), opId: (disableRes as any).opId });
+    expect(undoDisableRes.ok).toBe(true);
+
+    const restoredDoc = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(restoredDoc.providers[OPENCODE_PROVIDER_ID]).toBeDefined();
+    expect(restoredDoc.providers.acme).toBeDefined();
+    expect(restoredDoc.provider).toBeUndefined();
+    expect(publishedCommandCodeRoot(restoredDoc)![OPENCODE_PROVIDER_ID]).toBeDefined();
   });
 });

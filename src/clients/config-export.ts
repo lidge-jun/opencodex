@@ -73,13 +73,14 @@ import {
   buildCommandCodeClientConfig,
   summarizeCommandCode,
   buildCommandCodeContribution,
+  commandCodeProviderRoot,
   type CommandCodeGeneratedConfig,
   type CommandCodeModelEntry,
   type CommandCodeProviderBlock,
 } from "./config-export/commandcode";
 
 export type { CommandCodeGeneratedConfig, CommandCodeModelEntry, CommandCodeProviderBlock };
-export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution };
+export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution, commandCodeProviderRoot };
 
 
 

@@ -92,23 +92,21 @@ export function buildCommandCodeClientConfig(ctx: ExportContext): CommandCodeGen
  *
  * Verified against the published client (`command-code@1.66.0`, `dist/cli.mjs`):
  * `const o = e.provider ?? e.providers;` — singular wins, and the plural branch is
- * only reached when the singular root is `undefined`. Adding a singular root to a
- * document that already carries a plural one therefore does not merge the two: the
- * old entries stay on disk, byte for byte, and become invisible to the consumer.
+ * only reached when the singular root is nullish (`null` or `undefined`). Adding a
+ * singular root to a document that already carries a plural one therefore does not
+ * merge the two: the old entries stay on disk, byte for byte, and become invisible
+ * to the consumer.
  *
- * The grammar `isPlainRecord` check mirrors the client's own guard, so a `null` or
- * non-object root is treated as absent exactly as the client treats it.
+ * Evaluates nullish precedence before container validation so that non-nullish
+ * invalid singular values (such as strings or arrays) remain selected and are refused
+ * by the container guard rather than falling through to write an unreachable plural block.
  */
 export function commandCodeProviderRoot(document: unknown): "provider" | "providers" {
   const doc = document as { provider?: unknown; providers?: unknown } | null | undefined;
-  if (isPlainObject(doc?.provider)) return "provider";
-  if (isPlainObject(doc?.providers)) return "providers";
+  if (doc?.provider !== undefined && doc?.provider !== null) return "provider";
+  if (doc?.providers !== undefined && doc?.providers !== null) return "providers";
   // Nothing established yet: the singular root is the one this exporter writes.
   return "provider";
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function summarizeCommandCode(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
