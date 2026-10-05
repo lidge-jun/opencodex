@@ -26,9 +26,8 @@ When live target discovery finds no proxy, policy/catalog commands, key-scoped u
 Aside profile sync report: “Proxy is not running. Start the intended proxy with: ocx start.
 No request was sent.” A management request that was sent can still have an uncertain write
 outcome; read back from the intended target before retrying. Legacy client-integration
-refusals retain distinct writer recovery details, with secret/path redaction and a 300-character
-single-line limit. Known recovery reasons use fixed guidance; backup and residual-recovery
-notices remain available.
+refusals add fixed recovery guidance keyed on the refusal reason (never the writer's own text);
+backup and residual-recovery notices remain available.
 
 `ocx system update run --yes` prints the accepted job ID and observed job state. Follow it
 with `ocx system update status <job-id>`; acceptance does not establish successful installation

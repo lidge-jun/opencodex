@@ -204,16 +204,20 @@ describe("#2698 management errors carry reason and hint", () => {
     throw new Error("expected a RuntimeApiError");
   }
 
-  test("integration writer detail is bounded, redacted, single-line and keeps recovery fields", async () => {
-    const writer = "The change was rolled back.\nCause: api_key=fixture-credential\u001b\u0007\u009b\u2028 /Users/example/config " + "x".repeat(400);
+  test.each(["write_failed", "unsafe", "conflict"])("integration %s refusals render fixed guidance and never echo writer prose", async reason => {
+    const writer = "PRIVATE_CANARY Content-Disposition: form-data; name=\"authorization\"\r\n\r\nopaque /Users/Jane Doe/config";
     const message = await messageFor({ error: "integration mutation failed", message: writer,
-      reason: "write_failed", snapshotPath: "/fixture/backup.json", residual: true }, 500, "/api/client-integrations/hermes");
+      reason, snapshotPath: "/fixture/backup.json", residual: true }, 500, "/api/client-integrations/hermes");
     const detail = message.split("\n").find(line => line.startsWith("Details: "))!;
-    expect(detail).toContain("The change was rolled back"); expect(detail).toContain("[REDACTED]");
-    expect(detail).not.toContain("fixture-credential"); expect(detail).not.toContain("/Users/example/");
-    expect(detail.slice("Details: ".length).length).toBeLessThanOrEqual(300);
-    expect(detail).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
+    expect(detail).toContain("ocx integration client status");
+    for (const leaked of ["PRIVATE_CANARY", "opaque", "Jane", "Doe"]) expect(message).not.toContain(leaked);
     expect(message).toContain("Backup: /fixture/backup.json"); expect(message).toContain("Automatic recovery did not finish");
+  });
+
+  test("an unknown integration reason adds no writer detail", async () => {
+    const message = await messageFor({ error: "integration mutation failed", message: "PRIVATE_CANARY", reason: "novel_reason" },
+      500, "/api/client-integrations/hermes");
+    expect(message).not.toContain("PRIVATE_CANARY"); expect(message).not.toContain("Details:");
   });
 
   test("integration structured recovery reasons use fixed guidance instead of arbitrary writer text", async () => {

@@ -11,7 +11,6 @@
  */
 import { findLiveProxy, probeHostname, type LivenessIo, type LiveProxy } from "../server/proxy-liveness";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
-import { redactUserPath, sanitizeLogMetadataString } from "../lib/redact";
 
 export type CliStdin = NodeJS.ReadableStream & { isTTY?: boolean; readableEnded?: boolean };
 
@@ -99,6 +98,9 @@ function integrationRecoveryMessage(reason: string | undefined): string | undefi
     case "drift_requires_confirm": return "The client configuration changed. Run `ocx integration client status` before explicitly confirming restore.";
     case "snapshot_expired": return "The recovery snapshot expired. Run `ocx integration client status` before creating a new change.";
     case "superseded_store": return "The client uses a different configuration store. Run `ocx integration client status`, then disable and enable the selected client.";
+    case "unsafe": return "The client config path is unsafe to edit (for example a link or a competing file). Run `ocx integration client status` to see the affected path.";
+    case "conflict": return "The client config no longer matches the recorded ownership. Run `ocx integration client status`; add --overwrite-conflict to enable only if replacing it is intended.";
+    case "write_failed": return "The client config write failed. Run `ocx integration client status` before retrying.";
     default: return undefined;
   }
 }
@@ -114,14 +116,6 @@ function isIntegrationRoute(path: string, response: Response): boolean {
   try { pathname = new URL(path.startsWith("/") ? path : "/" + path, "http://cli.invalid").pathname; }
   catch { return false; }
   return /^\/api\/client-integrations(?:\/|$)/.test(pathname);
-}
-
-/** One bounded line: controls stripped, secret-shaped values redacted, home/sensitive path tokens masked. */
-function integrationWriterDetail(message: string): string | undefined {
-  const cleaned = sanitizeLogMetadataString(message.replace(/[\r\n\u2028\u2029]+/g, " "), 2000);
-  if (!cleaned) return undefined;
-  const masked = cleaned.split(/(\s+)/).map(token => /[\\/]/.test(token) ? redactUserPath(token) : token).join("");
-  return masked.slice(0, 300).trim() || undefined;
 }
 
 /**
@@ -158,15 +152,12 @@ function responseMessage(body: unknown, status: number, integrationRoute = false
     if (primary) break;
   }
   const parts = [primary ?? `Management request failed (${status})`];
-  // Only integration mutation routes carry a writer explanation beside a generic error.
-  // Keep other management bodies on their existing presentation contract.
-  if (integrationRoute) {
-    const writerMessage = stringField(record, "message");
-    if (writerMessage && writerMessage !== primary) {
-      const fixed = integrationRecoveryMessage(stringField(record, "reason"));
-      const explanation = fixed ?? integrationWriterDetail(writerMessage);
-      if (explanation) parts.push(`Details: ${explanation}`);
-    }
+  // Integration mutation routes carry a writer explanation beside a generic error. Its prose is
+  // server text (paths, upstream errors), so render fixed guidance keyed on the closed reason
+  // code instead of echoing it; other management bodies keep their presentation contract.
+  if (integrationRoute && stringField(record, "message") && stringField(record, "message") !== primary) {
+    const fixed = integrationRecoveryMessage(stringField(record, "reason"));
+    if (fixed) parts.push(`Details: ${fixed}`);
   }
   const reason = stringField(record, "reason");
   // A body of {ok:false, reason:"…"} with no `error` key used to degrade to the
