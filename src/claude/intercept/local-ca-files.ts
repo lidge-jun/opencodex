@@ -11,6 +11,8 @@ const MAX_PEM_BYTES = 64 * 1024;
 const KEY = "ca.key";
 const CERT = "ca.pem";
 type FileMode = 0o600 | 0o644;
+type AclLevel = "owner" | "inherited" | "private";
+type AclCheck = (path: string, stat: BigIntStats, level?: AclLevel) => void;
 type FileHooks = { beforeRead?: (path: string) => void; beforeWrite?: (path: string) => void; beforePublish?: (path: string) => void };
 let hooks: FileHooks = {};
 /** Boundary fault injection for substitution and zero-secret-write assertions. */
@@ -28,34 +30,48 @@ function owned(stat: BigIntStats, directory = false, mode: FileMode = 0o600): vo
     if ((Number(stat.mode) & forbidden) !== 0) throw unsafe();
   }
 }
-function same(path: string, expected: BigIntStats, directory = false, mode: FileMode = 0o600): void {
+function same(path: string, expected: BigIntStats, directory = false, mode: FileMode = 0o600): BigIntStats {
   const stat = lstatSync(path, { bigint: true });
   owned(stat, directory, mode);
   if (stat.dev !== expected.dev || stat.ino !== expected.ino || stat.ino === 0n) throw unsafe();
+  return stat;
 }
-function inspect(path: string, mode: FileMode, sqliteSidecar = false): BigIntStats | null {
+function inspect(path: string, mode: FileMode, checkAcl: AclCheck, sqliteSidecar = false): BigIntStats | null {
   let stat: BigIntStats;
   try { stat = lstatSync(path, { bigint: true }); } catch (error) { if (missing(error)) return null; throw error; }
   owned(stat, false, mode);
-  if (windowsSecretAclApplies()) assertLocalCaWindowsAcl(path, sqliteSidecar ? "inherited" : "private");
+  if (windowsSecretAclApplies()) {
+    if (sqliteSidecar) checkAcl(path, stat, "inherited");
+    else {
+      try { checkAcl(path, stat); }
+      catch {
+        // Legacy files may inherit only trusted grants; verify before narrowing.
+        checkAcl(path, stat, "inherited");
+        same(path, stat, false, mode);
+        hardenSecretPath(path, { required: true });
+        same(path, stat, false, mode);
+        checkAcl(path, stat);
+      }
+    }
+  }
   same(path, stat, false, mode);
   return stat;
 }
 
-function protectNew(path: string, fd: number, mode: FileMode): void {
+function protectNew(path: string, fd: number, mode: FileMode, checkAcl: AclCheck): void {
   const created = fstatSync(fd, { bigint: true });
   owned(created, false, mode);
   if (windowsSecretAclApplies()) {
     // Owner inspection precedes ACL mutation; inherited grants on a new EMPTY file
     // are removed by the existing hardener before the strict inspection and write.
-    assertLocalCaWindowsAcl(path, "owner");
+    checkAcl(path, created, "owner");
     hardenSecretPath(path, { required: true });
-    assertLocalCaWindowsAcl(path);
+    checkAcl(path, created);
   } else fchmodSync(fd, mode);
   same(path, created, false, mode);
 }
 
-function readPinned(path: string, expected: BigIntStats, mode: FileMode, assertDirectory: () => void): string {
+function readPinned(path: string, expected: BigIntStats, mode: FileMode, assertDirectory: () => void, checkAcl: AclCheck): string {
   hooks.beforeRead?.(path);
   assertDirectory();
   same(path, expected, false, mode);
@@ -64,7 +80,7 @@ function readPinned(path: string, expected: BigIntStats, mode: FileMode, assertD
     const opened = fstatSync(fd, { bigint: true });
     owned(opened, false, mode);
     if (opened.dev !== expected.dev || opened.ino !== expected.ino || opened.size > BigInt(MAX_PEM_BYTES)) throw unsafe();
-    if (windowsSecretAclApplies()) assertLocalCaWindowsAcl(path);
+    checkAcl(path, opened);
     same(path, opened, false, mode);
     const bytes = Buffer.alloc(MAX_PEM_BYTES + 1);
     let length = 0;
@@ -87,9 +103,9 @@ export interface LocalCaFiles {
   writePair(pair: { certPem: string; keyPem: string }): void;
 }
 
-function stage(path: string, contents: string, mode: FileMode, assertDirectory: () => void): { publish(): void; dispose(): void } {
+function stage(path: string, contents: string, mode: FileMode, assertDirectory: () => void, checkAcl: AclCheck): { publish(): void; dispose(): void } {
   assertDirectory();
-  const previous = inspect(path, mode);
+  const previous = inspect(path, mode, checkAcl);
   const temp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomBytes(16).toString("hex")}.tmp`);
   const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW | NONBLOCK, mode);
   let created: BigIntStats;
@@ -105,12 +121,12 @@ function stage(path: string, contents: string, mode: FileMode, assertDirectory: 
     if (removed) forgetEphemeralSecretPath(temp);
   };
   try {
-    protectNew(temp, fd, mode);
+    protectNew(temp, fd, mode, checkAcl);
     assertDirectory();
     hooks.beforeWrite?.(temp);
     same(temp, created, false, mode);
     assertDirectory();
-    if (windowsSecretAclApplies()) assertLocalCaWindowsAcl(temp);
+    checkAcl(temp, created);
     writeFileSync(fd, contents, { encoding: "utf8" });
     same(temp, created, false, mode);
     return {
@@ -118,8 +134,8 @@ function stage(path: string, contents: string, mode: FileMode, assertDirectory: 
         hooks.beforePublish?.(path);
         assertDirectory();
         same(temp, created, false, mode);
-        if (windowsSecretAclApplies()) assertLocalCaWindowsAcl(temp);
-        const current = inspect(path, mode);
+        checkAcl(temp, created);
+        const current = inspect(path, mode, checkAcl);
         if (previous ? !current || previous.dev !== current.dev || previous.ino !== current.ino : current !== null) throw unsafe();
         renameSync(temp, path);
         removed = true;
@@ -142,6 +158,22 @@ export function withLocalCaPublication<T>(dir: string, lockName: string, work: (
   let created = false;
   try { mkdirSync(dir, { mode: 0o700 }); created = true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  // Publication-local only: a private DACL can be changed only by the owner,
+  // SYSTEM or Administrators. Every memo hit still checks lstat dev/ino via same().
+  const verified = new Map<bigint, Map<bigint, AclLevel>>();
+  const strength = { owner: 0, inherited: 1, private: 2 };
+  const checkAcl: AclCheck = (path, stat, level = "private") => {
+    if (!windowsSecretAclApplies()) return;
+    const identity = same(path, stat, stat.isDirectory());
+    const identities = verified.get(identity.dev);
+    const prior = identities?.get(identity.ino);
+    if (prior !== undefined && strength[prior] >= strength[level]) return;
+    assertLocalCaWindowsAcl(path, level);
+    same(path, stat, stat.isDirectory());
+    const entries = identities ?? new Map<bigint, AclLevel>();
+    entries.set(identity.ino, level);
+    verified.set(identity.dev, entries);
+  };
   const directory = lstatSync(dir, { bigint: true });
   owned(directory, true);
   const dirFd = windowsSecretAclApplies() ? null : openSync(dir, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | NOFOLLOW);
@@ -152,30 +184,39 @@ export function withLocalCaPublication<T>(dir: string, lockName: string, work: (
       if (opened.dev !== directory.dev || opened.ino !== directory.ino) throw unsafe();
       owned(opened, true);
     } else {
-      assertLocalCaWindowsAcl(dir, created ? "owner" : "private");
-      hardenSecretDir(dir, { required: true });
-      assertLocalCaWindowsAcl(dir);
+      let needsHardening = created;
+      if (created) checkAcl(dir, directory, "owner");
+      else {
+        try { checkAcl(dir, directory); }
+        catch { checkAcl(dir, directory, "inherited"); needsHardening = true; }
+      }
+      if (needsHardening) {
+        same(dir, directory, true);
+        hardenSecretDir(dir, { required: true });
+        same(dir, directory, true);
+        checkAcl(dir, directory);
+      }
     }
     const assertDirectory = (): void => { same(dir, directory, true); };
     assertDirectory();
     const lockPath = join(dir, lockName);
     const assertEntries = (): void => {
       assertDirectory();
-      inspect(join(dir, KEY), 0o600);
-      inspect(join(dir, CERT), 0o644);
-      inspect(lockPath, 0o600);
+      inspect(join(dir, KEY), 0o600, checkAcl);
+      inspect(join(dir, CERT), 0o644, checkAcl);
+      inspect(lockPath, 0o600, checkAcl);
       // SQLite creates sidecars itself, inheriting only the protected directory's
       // current-user ACE. Inspect every grant and owner; an inherited DACL is valid here.
-      for (const suffix of ["-journal", "-wal", "-shm"]) inspect(`${lockPath}${suffix}`, 0o600, true);
+      for (const suffix of ["-journal", "-wal", "-shm"]) inspect(`${lockPath}${suffix}`, 0o600, checkAcl, true);
       assertDirectory();
     };
     assertEntries();
     try {
       lockFd = openSync(lockPath, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | NOFOLLOW | NONBLOCK, 0o600);
-      protectNew(lockPath, lockFd, 0o600);
+      protectNew(lockPath, lockFd, 0o600, checkAcl);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const existing = inspect(lockPath, 0o600);
+      const existing = inspect(lockPath, 0o600, checkAcl);
       if (!existing) throw unsafe();
       lockFd = openSync(lockPath, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
       const opened = fstatSync(lockFd, { bigint: true });
@@ -191,17 +232,17 @@ export function withLocalCaPublication<T>(dir: string, lockName: string, work: (
       const files: LocalCaFiles = {
         readPair() {
           assertEntries();
-          const cert = inspect(join(dir, CERT), 0o644);
-          const key = inspect(join(dir, KEY), 0o600);
+          const cert = inspect(join(dir, CERT), 0o644, checkAcl);
+          const key = inspect(join(dir, KEY), 0o600, checkAcl);
           if (!cert || !key) return null;
-          return { certPem: readPinned(join(dir, CERT), cert, 0o644, assertDirectory), keyPem: readPinned(join(dir, KEY), key, 0o600, assertDirectory) };
+          return { certPem: readPinned(join(dir, CERT), cert, 0o644, assertDirectory, checkAcl), keyPem: readPinned(join(dir, KEY), key, 0o600, assertDirectory, checkAcl) };
         },
         writePair(pair) {
           assertEntries();
-          const key = stage(join(dir, KEY), pair.keyPem, 0o600, assertDirectory);
+          const key = stage(join(dir, KEY), pair.keyPem, 0o600, assertDirectory, checkAcl);
           let cert: ReturnType<typeof stage> | undefined;
           try {
-            cert = stage(join(dir, CERT), pair.certPem, 0o644, assertDirectory);
+            cert = stage(join(dir, CERT), pair.certPem, 0o644, assertDirectory, checkAcl);
             assertEntries();
             key.publish();
             cert.publish();

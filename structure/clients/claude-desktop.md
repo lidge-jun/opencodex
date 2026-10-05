@@ -179,6 +179,7 @@ The shared CONNECT primitive accepts optional `allowedTargets` authorities. It s
 normalizes that list at startup; an empty list denies all, and other host/port pairs receive 403
 before tunnel selection or dialing. Authentication and loopback refusal remain in force.
 Existing Claude consumers omit this option and retain blind forwarding; it enables no new integration or certificate trust.
+Windows local-CA publication in `src/claude/intercept/local-ca-files.ts` hardens legacy inherited DACLs only after verifying the current owner and exclusively current-user, SYSTEM or Administrators grants; already private directories skip hardening. ACL verification is memoized by bigint device/inode only within one publication, while path and descriptor identity checks remain active on every access.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
 
 On macOS, when the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also

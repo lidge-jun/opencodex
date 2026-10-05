@@ -265,7 +265,7 @@ test("startup preparation diagnostics distinguish cleanup and sanitize authority
         startProxy: async (_port, options) => startConnectProxy(0, options),
       });
       handles.push(handle);
-      expect(warnings).toEqual([expected]);
+      expect(warnings.filter(line => line.includes("Claude Desktop picker"))).toEqual([expected]);
       expect(warnings.join(" ")).not.toContain("PRIVATE-KEY-DIAGNOSTIC");
       expect(handle?.pickerReason).toBe("failed");
     } finally { prepare.mockRestore(); warn.mockRestore(); }

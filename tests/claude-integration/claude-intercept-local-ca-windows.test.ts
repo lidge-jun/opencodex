@@ -1,10 +1,10 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as filesystem from "node:fs";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { claudeInterceptStateDir, ensureLocalInterceptCa } from "../../src/claude/intercept/local-ca";
-import { setLocalCaFileHooksForTests } from "../../src/claude/intercept/local-ca-files";
+import { setLocalCaFileHooksForTests, withLocalCaPublication } from "../../src/claude/intercept/local-ca-files";
 import { setLocalCaWindowsAclRunnerForTests } from "../../src/claude/intercept/local-ca-windows";
 import { resetHardenedStateForTests, setIcaclsRunnerForTests, setPlatformForTests, type IcaclsResult } from "../../src/lib/windows-secret-acl";
 import { setWindowsPrincipalRunnerForTests } from "../../src/lib/windows-user-principal";
@@ -83,7 +83,7 @@ test("Windows local CA protects and verifies empty temps before every PEM write"
 });
 
 for (const name of ["claude-intercept", "ca.key", "ca.pem", "ca-publication.sqlite"]) {
-  for (const failure of ["owner", "foreign read", "foreign tamper", "inspection error", "unprotected"] as const) {
+  for (const failure of ["owner", "foreign read", "foreign tamper", "inspection error", "unprotected after hardening"] as const) {
     test(`Windows local CA rejects ${failure} on ${name} before reads or writes`, () => {
       const f = setup();
       const first = ensureLocalInterceptCa(f.root);
@@ -97,7 +97,7 @@ for (const name of ["claude-intercept", "ca.key", "ca.pem", "ca-publication.sqli
         if (basename(path) !== name) return acl();
         if (failure === "owner") return acl(FOREIGN);
         if (failure === "inspection error") throw new Error("native inspection unavailable");
-        if (failure === "unprotected") return acl(CURRENT, undefined, false);
+        if (failure === "unprotected after hardening") return acl(CURRENT, undefined, false);
         return acl(CURRENT, [{ sid: CURRENT, type: 0, rights: FULL_CONTROL }, { sid: FOREIGN, type: 0, rights: failure === "foreign read" ? 1 : 262144 }]);
       });
       expect(() => { ensureLocalInterceptCa(f.root); }).toThrow("Windows owner/ACL");
@@ -174,4 +174,135 @@ test("Windows effective SID lookup failure occurs before any secret write", () =
   expect(() => { ensureLocalInterceptCa(f.root); }).toThrow("Windows owner/ACL");
   expect(f.writes).toEqual([]);
   expect(f.secretWrites).toEqual([]);
+});
+
+// Platform, principal and icacls seams exercise the Windows branch on POSIX CI too.
+test("Windows accepts and hardens an existing unprotected directory with only trusted grants", () => {
+  const f = setup();
+  const dir = claudeInterceptStateDir(f.root);
+  mkdirSync(dir, { mode: 0o700 });
+  let inspections = 0;
+  setLocalCaWindowsAclRunnerForTests(path => {
+    if (path !== dir) return acl();
+    inspections++;
+    return acl(CURRENT, undefined, f.hardened.has(dir));
+  });
+  const ca = ensureLocalInterceptCa(f.root);
+  expect(inspections).toBe(3); // strict, inherited, strict after hardening
+  expect(f.hardened.has(dir)).toBe(true);
+  expect(readFileSync(join(dir, "ca.key"), "utf8")).toBe(ca.keyPem);
+});
+
+for (const foreign of ["owner", "grant"] as const) {
+  test(`Windows refuses an existing inherited directory with a foreign ${foreign} without hardening`, () => {
+    const f = setup();
+    const dir = claudeInterceptStateDir(f.root);
+    mkdirSync(dir, { mode: 0o700 });
+    setLocalCaWindowsAclRunnerForTests(() => acl(foreign === "owner" ? FOREIGN : CURRENT,
+      [{ sid: foreign === "grant" ? FOREIGN : CURRENT, type: 0, rights: FULL_CONTROL }], false));
+    const mutations: string[] = [];
+    setIcaclsRunnerForTests(args => { mutations.push(args[0]!); return ok(); });
+    expect(() => { ensureLocalInterceptCa(f.root); }).toThrow("Windows owner/ACL");
+    expect(mutations).toEqual([]);
+    expect(readdirSync(dir)).toEqual([]);
+    expect(f.secretWrites).toEqual([]);
+  });
+}
+
+for (const name of ["ca.key", "ca.pem", "ca-publication.sqlite"]) {
+  test(`Windows hardens a legacy inherited ${name} and retains the authority`, () => {
+    const f = setup();
+    const first = ensureLocalInterceptCa(f.root);
+    const path = join(claudeInterceptStateDir(f.root), name);
+    resetHardenedStateForTests();
+    f.hardened.clear();
+    f.writes.length = 0;
+    let inspections = 0;
+    setLocalCaWindowsAclRunnerForTests(target => {
+      if (target !== path) return acl();
+      inspections++;
+      return acl(CURRENT, undefined, f.hardened.has(path));
+    });
+    const restored = ensureLocalInterceptCa(f.root);
+    expect(restored.certPem).toBe(first.certPem);
+    expect(restored.keyPem).toBe(first.keyPem);
+    expect(f.hardened.has(path)).toBe(true);
+    expect(inspections).toBe(3);
+    expect(f.writes).toEqual([]);
+  });
+}
+
+test("Windows memo verifies unchanged identities once per publication, including repeated pair reads", () => {
+  const f = setup();
+  const first = ensureLocalInterceptCa(f.root);
+  const dir = claudeInterceptStateDir(f.root);
+  const inspections: string[] = [];
+  setLocalCaWindowsAclRunnerForTests(path => { inspections.push(path); return acl(); });
+  withLocalCaPublication(dir, "ca-publication.sqlite", files => {
+    expect(files.readPair()).toEqual({ certPem: first.certPem, keyPem: first.keyPem });
+    expect(files.readPair()).toEqual({ certPem: first.certPem, keyPem: first.keyPem });
+  });
+  expect(inspections.map(path => basename(path)).sort()).toEqual(["ca-publication.sqlite", "ca.key", "ca.pem", "claude-intercept"]);
+  inspections.length = 0;
+  expect(ensureLocalInterceptCa(f.root).keyPem).toBe(first.keyPem);
+  expect(inspections).toHaveLength(4); // no memo survives a publication
+});
+
+test("Windows memo follows staged identities across rename without another ACL inspection", () => {
+  const f = setup();
+  const inspections: string[] = [];
+  setLocalCaWindowsAclRunnerForTests(path => { inspections.push(path); return acl(); });
+  ensureLocalInterceptCa(f.root);
+  expect(inspections.filter(path => path.endsWith(".tmp"))).toHaveLength(4); // owner + private for each temp
+  expect(inspections.filter(path => ["ca.key", "ca.pem"].includes(basename(path)))).toEqual([]);
+});
+
+test("Windows inherited SQLite sidecar is verified once without requiring protection or hardening", () => {
+  const f = setup();
+  ensureLocalInterceptCa(f.root);
+  const dir = claudeInterceptStateDir(f.root);
+  const sidecar = join(dir, "ca-publication.sqlite-shm");
+  writeFileSync(sidecar, "fixture", { mode: 0o600 });
+  let inspections = 0;
+  setLocalCaWindowsAclRunnerForTests(path => {
+    if (path !== sidecar) return acl();
+    inspections++;
+    return acl(CURRENT, undefined, false);
+  });
+  withLocalCaPublication(dir, "ca-publication.sqlite", files => { files.readPair(); files.readPair(); });
+  expect(inspections).toBe(1);
+  expect(f.hardened.has(sidecar)).toBe(false);
+});
+
+test("Windows re-inspects a substituted key identity and rejects foreign grants before reading it", () => {
+  const f = setup();
+  ensureLocalInterceptCa(f.root);
+  const dir = claudeInterceptStateDir(f.root);
+  const key = join(dir, "ca.key");
+  const original = statSync(key, { bigint: true });
+  const inspected: bigint[] = [];
+  let substituted = false;
+  setLocalCaWindowsAclRunnerForTests(path => {
+    if (path !== key) return acl();
+    inspected.push(statSync(path, { bigint: true }).ino);
+    return substituted ? acl(CURRENT, [{ sid: FOREIGN, type: 0, rights: FULL_CONTROL }]) : acl();
+  });
+  withLocalCaPublication(dir, "ca-publication.sqlite", files => {
+    files.readPair();
+    // Keep the original inode alive so this fixture cannot accidentally recycle it.
+    renameSync(key, join(f.root, "original-key"));
+    writeFileSync(key, "substituted fixture", { mode: 0o600 });
+    substituted = true;
+    f.reads.length = 0;
+    expect(() => { files.readPair(); }).toThrow("Windows owner/ACL");
+    expect(f.reads).toEqual([]);
+    // Restore before the publication's final entry guard.
+    renameSync(key, join(f.root, "substituted-key"));
+    renameSync(join(f.root, "original-key"), key);
+    substituted = false;
+  });
+  expect(inspected).toHaveLength(3); // original private, replacement private + inherited
+  expect(inspected[0]).toBe(original.ino);
+  expect(inspected[1]).not.toBe(original.ino);
+  expect(inspected[2]).toBe(inspected[1]);
 });
