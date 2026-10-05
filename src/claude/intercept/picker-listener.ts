@@ -1,11 +1,24 @@
 /**
- * HTTP/1.1 TLS terminator for claude.ai. Only the bounded bootstrap response is
- * held; all other HTTP bodies and upgraded sockets relay as streams.
+ * TLS terminator for claude.ai.
+ *
+ * The listener port is a plain TCP front that reads each connection's TLS ClientHello and splices
+ * it, unterminated, to one of two loopback servers. A client offering `h2` (Chromium's ordinary
+ * requests) reaches an HTTP/2 server, so Desktop multiplexes every claude.ai request over one
+ * connection as it does against Anthropic's own edge. When this listener spoke only HTTP/1.1,
+ * Desktop's long-lived SSE subscriptions took all six of Chromium's per-origin connections and every
+ * later claude.ai request queued in the client until it timed out (#6511). Everything else (no ALPN,
+ * HTTP/1.1 only, WebSocket connections, a ClientHello the front cannot read) reaches the native
+ * HTTP/1.1 server, unchanged. Upstream is one HTTP/1.1 request per client request on both paths.
+ * Only the bounded bootstrap response is held; other bodies and upgraded sockets relay as streams.
  */
+import { createSecureServer } from "node:http2";
+import type { Http2ServerRequest, Http2ServerResponse, ServerHttp2Session } from "node:http2";
 import { createServer, request as httpsRequest } from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer as createTcpServer, connect as tcpConnect, type Server as TcpServer, type Socket } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import type { Duplex } from "node:stream";
+import { clientHelloOffersH2 } from "./client-hello";
 import type { PemKeyPair } from "./local-ca";
 import {
   BOOTSTRAP_MAX_ENCODED_BYTES, isPickerBootstrapRequest, narrowBootstrapAcceptEncoding,
@@ -26,11 +39,16 @@ export interface PickerListenerHandle { port: number; close(): Promise<void> }
 // Browser session cookies can exceed the HTTP compatibility layer's 16 KiB default.
 // Keep both sides bounded, while allowing ordinary desktop session headers through.
 export const PICKER_MAX_HEADER_BYTES = 64 * 1024;
+/** A connection that has not sent a complete ClientHello by then is dropped. */
+const CLIENT_HELLO_TIMEOUT_MS = 10_000;
 
 const HOP_HEADERS = new Set([
   "connection", "keep-alive", "proxy-connection", "proxy-authenticate", "proxy-authorization",
   "te", "trailer", "transfer-encoding", "upgrade",
 ]);
+
+type RelayRequest = IncomingMessage | Http2ServerRequest;
+type RelayResponse = ServerResponse | Http2ServerResponse;
 
 function filteredHeaders(raw: readonly string[], omit: ReadonlySet<string> = new Set()): string[] {
   const named = new Set<string>();
@@ -65,13 +83,84 @@ function contentEncoding(raw: readonly string[]): string | undefined {
   return undefined;
 }
 
+/**
+ * Request headers for the HTTP/1.1 upstream. An HTTP/2 request has pseudo-headers instead of a
+ * request line, names its origin in `:authority` (which replaces any Host, RFC 9113 8.3.1) and
+ * may split Cookie into crumbs (8.2.3); HTTP/1.1 needs one Host and one Cookie header.
+ */
+function upstreamRequestHeaders(req: RelayRequest, omit: ReadonlySet<string>): string[] {
+  if (req.httpVersionMajor !== 2) return filteredHeaders(req.rawHeaders, omit);
+  const rest: string[] = [];
+  const cookies: string[] = [];
+  let authority: string | undefined;
+  let host: string | undefined;
+  for (let i = 0; i + 1 < req.rawHeaders.length; i += 2) {
+    const name = req.rawHeaders[i]!.toLowerCase();
+    const value = req.rawHeaders[i + 1]!;
+    if (name === ":authority") authority = value;
+    else if (name === "host") host = value;
+    else if (name === "cookie") cookies.push(value);
+    else if (!name.startsWith(":")) rest.push(req.rawHeaders[i]!, value);
+  }
+  const headers = filteredHeaders(rest, omit);
+  headers.unshift("Host", authority ?? host ?? "claude.ai");
+  if (cookies.length > 0) headers.push("Cookie", cookies.join("; "));
+  return headers;
+}
+
+function listenLoopback(server: TcpServer): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") reject(new Error("picker listener has no port"));
+      else resolve(address.port);
+    });
+  });
+}
+
+function closeServer(server: TcpServer): Promise<void> {
+  return new Promise(resolve => {
+    if (!server.listening) { resolve(); return; }
+    server.close(() => resolve());
+  });
+}
+
 export async function startPickerListener(options: PickerListenerOptions): Promise<PickerListenerHandle> {
   const upstream = options.upstream ?? { host: "claude.ai", port: 443, servername: "claude.ai" };
   const cap = options.maxEncodedBytes ?? BOOTSTRAP_MAX_ENCODED_BYTES;
   const upgrades = new Set<Duplex>();
+  const spliced = new Set<Socket>();
+  const h2Sockets = new Set<Duplex>();
+  const sessions = new Set<ServerHttp2Session>();
   const server = createServer({ cert: options.leaf.certPem, key: options.leaf.keyPem, ALPNProtocols: ["http/1.1"], maxHeaderSize: PICKER_MAX_HEADER_BYTES });
+  // ALPN h2 only; no enableConnectProtocol, so Chromium opens WebSockets as HTTP/1.1 connections,
+  // which the front sends to `server`. An over-budget header block is refused natively per stream
+  // (Bun counts name + value + 32 bytes per field) before the request handler runs.
+  const h2Server = createSecureServer({
+    cert: options.leaf.certPem, key: options.leaf.keyPem,
+    settings: { maxHeaderListSize: PICKER_MAX_HEADER_BYTES },
+  });
+  // Track sockets from accept (a handshake that never completes too) and after TLS, so a forced
+  // shutdown reaches every one of them.
+  for (const event of ["connection", "secureConnection"] as const) {
+    h2Server.on(event, (socket: Duplex) => {
+      h2Sockets.add(socket);
+      socket.once("close", () => h2Sockets.delete(socket));
+    });
+  }
+  h2Server.on("session", (session: ServerHttp2Session) => {
+    sessions.add(session);
+    session.once("close", () => sessions.delete(session));
+    options.log?.("picker session h2");
+  });
 
-  server.on("request", (req: IncomingMessage, res: ServerResponse) => {
+  const relay = (req: RelayRequest, relayRes: RelayResponse) => {
+    // The HTTP/2 compat response has every ServerResponse member used here; only writeHead's
+    // reason phrase differs, and sendHead branches on it.
+    const res = relayRes as ServerResponse;
+    const h2 = req.httpVersionMajor === 2;
     const method = req.method ?? "GET";
     const pathname = new URL(req.url ?? "/", "https://claude.ai").pathname;
     const bootstrap = isPickerBootstrapRequest(method, pathname);
@@ -86,7 +175,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       else { res.writeHead(502, { "Content-Length": "0" }); res.end(); log(502); }
     };
     const omit = bootstrap ? new Set(["accept-encoding"]) : new Set<string>();
-    const headers = filteredHeaders(req.rawHeaders, omit);
+    const headers = upstreamRequestHeaders(req, omit);
     if (bootstrap) headers.push("Accept-Encoding", narrowBootstrapAcceptEncoding());
     const upReq = httpsRequest({
       host: upstream.host, port: upstream.port, servername: upstream.servername,
@@ -97,7 +186,9 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       const originalHeaders = filteredHeaders(upRes.rawHeaders);
       const sendHead = (raw: string[]) => {
         if (res.headersSent) return;
-        res.writeHead(status, upRes.statusMessage, raw);
+        // HTTP/2 has no reason phrase; its compat writeHead takes the same flat raw header array.
+        if (h2) (relayRes as Http2ServerResponse).writeHead(status, raw as unknown as Record<string, string>);
+        else res.writeHead(status, upRes.statusMessage, raw);
         log(status);
       };
       upRes.on("error", fail);
@@ -144,8 +235,13 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     });
     req.on("error", () => upReq.destroy());
     res.on("close", () => { if (!res.writableEnded) upReq.destroy(); });
+    // Bun's compat response skips its close event for a HEAD reset before end(); the stream's own
+    // close always fires. Destroying an upstream request that already completed is a no-op.
+    if (h2) (req as Http2ServerRequest).stream.once("close", () => upReq.destroy());
     req.pipe(upReq);
-  });
+  };
+  server.on("request", relay);
+  h2Server.on("request", relay);
 
   server.on("upgrade", (req, client, head) => {
     const method = req.method ?? "GET";
@@ -199,24 +295,77 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     client.once("close", () => { upgrades.delete(client); target.destroy(); });
   });
 
+  let http1Port = 0;
+  let h2Port = 0;
+  // The front never terminates TLS: it reads the ClientHello, then splices the untouched bytes
+  // to the chosen server through a loopback socket, so both directions keep stream backpressure.
+  // Ownership: `spliced` holds every front and bridge socket from accept until close; close()
+  // destroys them, the h2 sessions and their TLS sockets, and the HTTP/1.1 server's connections.
+  let closing = false;
+  const front = createTcpServer(client => {
+    if (closing) { client.destroy(); return; }
+    spliced.add(client);
+    client.once("close", () => spliced.delete(client));
+    client.on("error", () => client.destroy());
+    // An absolute deadline: trickled bytes cannot hold an unfinished ClientHello open.
+    const deadline = setTimeout(() => client.destroy(), CLIENT_HELLO_TIMEOUT_MS);
+    client.once("close", () => clearTimeout(deadline));
+    let head: Buffer = Buffer.alloc(0);
+    const onData = (chunk: Buffer) => {
+      head = head.length === 0 ? chunk : Buffer.concat([head, chunk]);
+      const offersH2 = clientHelloOffersH2(head);
+      if (offersH2 === null) return;
+      client.off("data", onData);
+      // Paused, a FIN or later bytes wait in the readable buffer and follow `head` once piped.
+      client.pause();
+      clearTimeout(deadline);
+      const inner = tcpConnect({ host: "127.0.0.1", port: offersH2 ? h2Port : http1Port });
+      spliced.add(inner);
+      const teardown = () => { client.destroy(); inner.destroy(); };
+      inner.on("error", teardown);
+      client.on("error", teardown);
+      // pipe() forwards each FIN after the queued bytes; a side that closes without having ended
+      // its peer (reset, dial failure) tears the peer down instead of leaving it open.
+      inner.once("close", () => { spliced.delete(inner); if (!client.writableEnded) client.destroy(); });
+      client.once("close", () => { if (!inner.writableEnded) inner.destroy(); });
+      inner.once("connect", () => {
+        inner.setNoDelay(true);
+        client.setNoDelay(true);
+        // Every byte read during the peek (ClientHello and anything coalesced after it), once.
+        inner.write(head);
+        client.pipe(inner);
+        inner.pipe(client);
+        client.resume();
+      });
+    };
+    client.on("data", onData);
+  });
+
+  const servers: TcpServer[] = [server, h2Server, front];
+  // One forced shutdown for close() and for a failed start, shared by concurrent callers: destroy
+  // every tracked socket and session (a graceful HTTP/2 close would wait on open SSE streams
+  // forever), force the HTTP/1.1 server's connections closed while its native handle still exists
+  // (Bun's close() drops it), then stop accepting and wait for the servers to report closed.
+  let stopped: Promise<void> | null = null;
+  const shutdown = () => {
+    stopped ??= (async () => {
+      closing = true;
+      for (const socket of upgrades) socket.destroy();
+      for (const socket of spliced) socket.destroy();
+      for (const session of sessions) session.destroy();
+      for (const socket of h2Sockets) socket.destroy();
+      server.closeAllConnections();
+      await Promise.all(servers.map(closeServer));
+    })();
+    return stopped;
+  };
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => { server.off("error", reject); resolve(); });
-    });
+    http1Port = await listenLoopback(server);
+    h2Port = await listenLoopback(h2Server);
+    const port = await listenLoopback(front);
+    return { port, close: shutdown };
   } catch (error) {
-    server.close();
+    await shutdown();
     throw error;
   }
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("picker listener has no port");
-  return {
-    port: address.port,
-    async close() {
-      for (const socket of upgrades) socket.destroy();
-      const closed = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-      server.closeAllConnections();
-      await closed;
-    },
-  };
 }
