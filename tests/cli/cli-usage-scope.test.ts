@@ -139,3 +139,14 @@ test("real management usage owner preserves exact-key projection and unknown-key
     expect(body.filter.apiKeyId).toBe(key); expect(body.filter.matched).toBe(matched);
   }
 });
+
+
+test("key-scoped usage preserves the stopped-proxy prerequisite before transport", async () => {
+  let requests = 0;
+  expect(await handleObserveCommand(["usage", "--api-key-id", "Key-A", "--json"], {
+    findLiveProxy: async () => null,
+    fetchImpl: async () => { requests++; throw new Error("must not send"); },
+  })).toBe(1);
+  expect(requests).toBe(0); expect(out).not.toHaveBeenCalled();
+  expect(err.mock.calls.flat().join("\n")).toBe("Error: Proxy is not running. Start the intended proxy with: ocx start. No request was sent.");
+});

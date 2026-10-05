@@ -191,9 +191,9 @@ describe("#2696 doctor names the credential collision", () => {
 });
 
 describe("#2698 management errors carry reason and hint", () => {
-  async function messageFor(body: unknown, status: number): Promise<string> {
+  async function messageFor(body: unknown, status: number, path = "/api/config"): Promise<string> {
     try {
-      await runtimeRequest("/api/config", {}, {
+      await runtimeRequest(path, {}, {
         baseUrl: "http://127.0.0.1:10100",
         fetchImpl: async () => Response.json(body, { status }),
       });
@@ -203,6 +203,34 @@ describe("#2698 management errors carry reason and hint", () => {
     }
     throw new Error("expected a RuntimeApiError");
   }
+
+  test("integration writer detail is bounded, redacted, single-line and keeps recovery fields", async () => {
+    const writer = "The change was rolled back.\nCause: api_key=fixture-credential\u001b\u0007\u009b\u2028 /Users/example/config " + "x".repeat(400);
+    const message = await messageFor({ error: "integration mutation failed", message: writer,
+      reason: "write_failed", snapshotPath: "/fixture/backup.json", residual: true }, 500, "/api/client-integrations/hermes");
+    const detail = message.split("\n").find(line => line.startsWith("Details: "))!;
+    expect(detail).toContain("The change was rolled back"); expect(detail).toContain("[REDACTED]");
+    expect(detail).not.toContain("fixture-credential"); expect(detail).not.toContain("/Users/example/");
+    expect(detail.slice("Details: ".length).length).toBeLessThanOrEqual(300);
+    expect(detail).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
+    expect(message).toContain("Backup: /fixture/backup.json"); expect(message).toContain("Automatic recovery did not finish");
+  });
+
+  test("integration structured recovery reasons use fixed guidance instead of arbitrary writer text", async () => {
+    const message = await messageFor({ error: "integration mutation failed", message: "PRIVATE_CANARY",
+      reason: "superseded_store" }, 500, "/api/client-integrations/hermes");
+    expect(message).toContain("ocx integration client status"); expect(message).toContain("disable and enable");
+    expect(message).not.toContain("PRIVATE_CANARY");
+  });
+
+  test.each(["/api/config", "/api/client-integrations-other/hermes", "/api/settings?next=/api/client-integrations/hermes"])("distinct writer messages stay excluded outside integration routes: %s", async path => {
+    expect(await messageFor({ error: "refused", message: "PRIVATE_CANARY" }, 500, path)).not.toContain("PRIVATE_CANARY");
+  });
+
+  test("identical integration writer and primary messages are not repeated", async () => {
+    const message = await messageFor({ error: "refused", message: "refused" }, 500, "/api/client-integrations/hermes");
+    expect(message).toBe("refused");
+  });
 
   test("a 503 renders the primary message, the reason and the hint", async () => {
     const message = await messageFor(

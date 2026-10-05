@@ -22,6 +22,18 @@ invalid arguments with 64, while `doctor --json` is unsupported and exits 2.
 A successful local save or accepted restart request does not prove convergence;
 read the command receipt and re-check status after the requested operation.
 
+When live target discovery finds no proxy, policy/catalog commands, key-scoped usage and
+Aside profile sync report: “Proxy is not running. Start the intended proxy with: ocx start.
+No request was sent.” A management request that was sent can still have an uncertain write
+outcome; read back from the intended target before retrying. Legacy client-integration
+refusals retain distinct writer recovery details, with secret/path redaction and a 300-character
+single-line limit. Known recovery reasons use fixed guidance; backup and residual-recovery
+notices remain available.
+
+`ocx system update run --yes` prints the accepted job ID and observed job state. Follow it
+with `ocx system update status <job-id>`; acceptance does not establish successful installation
+or restart. `--json` retains the complete server response.
+
 ## Setup
 
 ### `ocx init` · `ocx setup`
@@ -129,7 +141,16 @@ small placeholder an in-place npm install leaves before its postinstall, restart
 stopping anything; after a confirmed stop it waits for the runtime within the same deadline and
 launches nothing if it does not arrive. Windows, foreground, desktop-supervised, service,
 connected-client and sibling runtimes do not use this update path; use their owning lifecycle
-controls. A newer proxy or incomparable version still refuses an in-place downgrade.
+controls. A newer proxy or incomparable version still refuses an in-place downgrade. Use the newer
+installation's `ocx` to restart; inspect `which -a ocx` and `ocx status` to identify it.
+Eligibility refusals name the reason and next action: use the owning installation's
+`ocx service restart` for a service, the owning terminal for a foreground proxy, or the
+owning service/desktop app on Windows. Unknown ancestry or a changed target calls for
+`ocx status` before any restart.
+
+If package files or the Bun runtime remain incomplete after the installer exited or failed,
+reinstall with the owning package manager before restarting. See
+[Update failed](/troubleshooting/update-failed).
 
 When a proxy is running, ask that exact attested PID and port to restart in place, wait for its
 normal drain, and verify a different runtime PID on the same port. Managed routing and service

@@ -137,3 +137,12 @@ describe("production default retains the attested Aside exchange", () => {
     } finally { await server.stop(true); }
   });
 });
+
+
+test("stopped proxy sync preserves discovery guidance without a request or fabricated outcome", async () => {
+  let requests = 0;
+  expect(await handleIntegrationAsideSync(args, { findLiveProxy: async () => null,
+    fetchImpl: async () => { requests++; throw new Error("must not send"); } })).toBe(1);
+  expect(requests).toBe(0); expect(output).not.toHaveBeenCalled();
+  expect(channels()).toBe("Error: Proxy is not running. Start the intended proxy with: ocx start. No request was sent.");
+});

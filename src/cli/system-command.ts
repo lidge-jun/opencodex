@@ -231,7 +231,14 @@ async function update(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (!yes) throw new CliUsageError("update run requires --yes", USAGE);
   rejectArgs(args, USAGE);
   const result = await runtimeRequest("/api/update/run", { method: "POST", body: JSON.stringify({ tag: channel, restart }) }, deps);
-  printData(result, wantsJson, [`Update started (${channel}).`]);
+  const job = recordValue(recordValue(result)?.job);
+  const jobId = typeof job?.id === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(job.id) ? job.id : undefined;
+  const jobStatus = ["running", "restarting", "succeeded", "failed"].find(state => state === job?.status);
+  const lines = jobId ? [
+    `Update job ${jobId}: ${jobStatus ?? "status unconfirmed"} (${channel}).`,
+    `Check progress: ocx system update status ${jobId}`,
+  ] : ["Update request returned no usable job ID. Check: ocx system update check."];
+  printData(result, wantsJson, lines);
 }
 
 export async function handleSystemCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {

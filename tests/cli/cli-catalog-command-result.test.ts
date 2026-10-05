@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { printCatalogResult, runCatalogAction } from "../../src/cli/catalog-command-result";
-import { CliUsageError, RuntimeApiError } from "../../src/cli/runtime-api";
+import { CliUsageError, RuntimeApiError, runtimeRequest } from "../../src/cli/runtime-api";
 
 let output: ReturnType<typeof spyOn>, errors: ReturnType<typeof spyOn>;
 beforeEach(() => {
@@ -47,4 +47,38 @@ test("static usage and human output escape terminal controls", async () => {
   expect(errors.mock.calls.flat().join(" ")).not.toContain("\u001b");
   expect(printCatalogResult({ ok: true }, { status: "committed", changed: false, degraded: false, notices: [] }, false, ["name\u001b[31m"])).toBe(0);
   expect(output.mock.calls.flat().join(" ")).not.toContain("\u001b");
+});
+
+
+test.each(["GET", "PUT"])("stopped proxy discovery names the next command without implying a sent %s", async method => {
+  let sent = 0;
+  expect(await runCatalogAction(async () => {
+    await runtimeRequest("/api/settings", { method }, { findLiveProxy: async () => null,
+      fetchImpl: async () => { sent++; throw new Error("must not send"); } });
+  })).toBe(1);
+  expect(sent).toBe(0);
+  expect(errors.mock.calls.flat().join(" ")).toBe("Error: Proxy is not running. Start the intended proxy with: ocx start. No request was sent.");
+  expect(output.mock.calls).toEqual([]);
+});
+
+test("client-role discovery refusal does not imply an uncertain write", async () => {
+  let sent = 0;
+  expect(await runCatalogAction(async () => {
+    await runtimeRequest("/api/settings", { method: "PUT" }, {
+      findLiveProxy: async () => ({ pid: 1, port: 10100, source: "runtime", role: "client" }),
+      fetchImpl: async () => { sent++; throw new Error("must not send"); },
+    });
+  })).toBe(1);
+  expect(sent).toBe(0); expect(errors.mock.calls.flat().join(" ")).toContain("No request was sent");
+  expect(errors.mock.calls.flat().join(" ")).toContain("Hub");
+});
+
+test("a sent request retains uncertain-outcome guidance without rendering its body", async () => {
+  let sent = 0;
+  expect(await runCatalogAction(async () => {
+    await runtimeRequest("/api/settings", { method: "PUT" }, { baseUrl: "http://fixture.invalid",
+      fetchImpl: async () => { sent++; return Response.json({ error: secret, code: "proxy_not_running" }, { status: 503 }); } });
+  })).toBe(1);
+  expect(sent).toBe(1); expect(errors.mock.calls.flat().join(" ")).toContain("A write outcome may be unknown");
+  expect(errors.mock.calls.flat().join(" ")).not.toContain(secret);
 });
