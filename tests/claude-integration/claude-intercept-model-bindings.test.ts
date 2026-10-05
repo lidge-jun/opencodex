@@ -99,10 +99,10 @@ test("binding errors never echo a rejected picker id or a non-route operand", ()
   const badId = parseInterceptBindingPatch({ set: { "--token=synthetic-secret": "xai/grok-4.7" } });
   expect(badId).toEqual({ error: "invalid picker id (expected a claude- model id)" });
   const routes = new Set(["xai/grok-4.7"]);
-  expect(applyInterceptBindingPatch({}, { set: { "claude-sonnet-4-6": "synthetic-secret-token" } }, routes))
-    .toEqual({ ok: false, error: "route is not available: (hidden)" });
-  expect(applyInterceptBindingPatch({}, { set: { "claude-sonnet-4-6": "nope/missing" } }, routes))
-    .toEqual({ ok: false, error: "route is not available: nope/missing" });
+  for (const route of ["synthetic-secret-token", "nope/missing"]) {
+    expect(applyInterceptBindingPatch({}, { set: { "claude-sonnet-4-6": route } }, routes))
+      .toEqual({ ok: false, error: "route is not available (see ocx claude desktop show)" });
+  }
 });
 
 test("config validation rejects a malformed intercept.modelMap", () => {

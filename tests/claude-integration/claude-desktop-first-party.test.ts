@@ -10,7 +10,6 @@ import {
   resolveClaudeDesktopMode,
 } from "../../src/claude/desktop-first-party";
 import { applyDesktop, parseDesktopApplyArgs } from "../../src/cli/claude-desktop";
-import { displayRouteOperand } from "../../src/claude/intercept/model-bindings";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } from "../../src/claude/desktop-3p";
 import { persistCommittedDesktopGateway } from "../../src/claude/desktop-gateway-state";
 import { armClaudeCodeBaseline, saveConfigPreservingClaudeCode } from "../../src/config";
@@ -120,16 +119,6 @@ test("CLI apply rejects unknown arguments without echoing option values or opera
     "--token", "--synthetic-dash-value", "--bogus\u001b[2Jsynthetic-escape"], config());
   expect(rejected).toEqual({ error: "알 수 없는 인자 6개 (값은 표시하지 않습니다). 사용 가능한 옵션: --first-party --gateway --static --hybrid --discovery-only" });
   expect(JSON.stringify(rejected)).not.toContain("synthetic");
-});
-
-test("CLI route errors show only plain provider/model operands", () => {
-  expect(displayRouteOperand("xai/grok-4.7")).toBe("xai/grok-4.7");
-  expect(displayRouteOperand("missing/old-model")).toBe("missing/old-model");
-  expect(displayRouteOperand(`a/${"b".repeat(192)}`)).toBe(`a/${"b".repeat(192)}`);
-  for (const operand of ["--token=synthetic-secret", "synthetic-bare-token", "-tsynthetic", "a/b\nsynthetic",
-    "a/b\n", "x/\u001b[2J", `a/${"b".repeat(193)}`]) {
-    expect(displayRouteOperand(operand, "(hidden)")).toBe("(hidden)");
-  }
 });
 
 test("first-party apply writes only the proxy env, creates the CA, and removes cleanly", () => {
