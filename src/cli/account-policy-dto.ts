@@ -8,6 +8,7 @@ export const threshold = z.number().int().min(0).max(100);
 const nullableThreshold = threshold.nullable();
 const row = z.object({
   id: accountId, alias: text.optional(), autoSwitchThresholdOverride: nullableThreshold.optional(),
+  useRemainingQuota: z.boolean().optional(),
   quota: z.object({ shortWindowSeconds: z.number().finite().optional(), shortResetAt: z.number().finite().optional(),
     weeklyResetAt: z.number().finite().optional() }).nullable().optional(),
   quotaAutoRefresh: z.object({ fiveHourAvailable: z.boolean(), weeklyAvailable: z.boolean(),
@@ -39,6 +40,11 @@ export const poolSchema = z.object({
 export const thresholdReceipt = z.object({ ok: z.literal(true), id: accountId,
   autoSwitchThresholdOverride: nullableThreshold, autoSwitchThreshold: threshold });
 export const creditReceipt = z.object({ ok: z.literal(true), id: accountId, creditsAfterLimit: z.boolean() });
+export const remainingQuotaReceipt = z.object({ ok: z.literal(true), id: accountId,
+  useRemainingQuota: z.boolean(), autoSwitchThreshold: threshold,
+  mainAccountHardLock: z.object({ enabled: z.boolean(), state: z.enum(["off", "unknown", "ready", "blocked"]),
+    thresholds: z.object({ short: threshold, long: threshold }) }).optional(),
+});
 export const creditAllReceipt = z.object({ ok: z.literal(true), all: z.boolean(),
   ids: z.array(accountId).refine(ids => new Set(ids).size === ids.length) });
 const window = z.enum(["five_hour", "seven_day", "seven_day_overage_included"]);

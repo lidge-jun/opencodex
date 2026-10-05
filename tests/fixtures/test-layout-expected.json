@@ -1,4 +1,5 @@
 {
+  "codex-use-remaining-quota.test.ts": "codex-integration",
   "cli-log-view-filter.test.ts": "cli",
   "cli-usage-model-search.test.ts": "cli",
   "cli-companion-usage.test.ts": "cli",

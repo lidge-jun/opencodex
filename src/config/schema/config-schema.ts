@@ -1,4 +1,5 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
+import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
@@ -283,6 +284,7 @@ export const configSchema = z.object({
   // so a hand-edited typo cannot trip the backup-and-defaults repair path; the write path rejects
   // it (creditCodexAccountIdsError in diagnostics).
   creditCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional().catch(undefined),
+  codexUseRemainingQuotaAccountIds: z.custom<string[]>(validRemainingQuotaAccountIds).optional().catch(undefined),
   // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
   // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.
   // Silently ignoring it would be its own trap, so the write path rejects it and loadConfig warns.

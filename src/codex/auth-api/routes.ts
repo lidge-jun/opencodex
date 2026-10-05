@@ -1,4 +1,5 @@
 import { CODEX_ACCOUNT_LOG_LABEL_RE, codexAccountLogLabel } from "../account-label";
+import { handleUseRemainingQuotaRoute } from "./use-remaining-route";
 import { poolQuotaHistoryIdentity, readCodexAccountRecord } from "../account-store";
 import { estimateCodexQuotaCapacity, insufficientCodexCapacity } from "../quota-capacity";
 import type { CodexCapacityResult } from "../quota-capacity";
@@ -32,6 +33,9 @@ export async function handleCodexAuthAPI(
   convergeCodexCatalog?: CodexAuthCatalogConvergence,
   principal?: import("../../server/management-auth").ManagementPrincipal,
 ): Promise<Response | null> {
+  if (url.pathname === "/api/codex-auth/accounts/use-remaining" && (req.method === "GET" || req.method === "PUT")) {
+    return handleUseRemainingQuotaRoute(req, url, config);
+  }
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
     return jsonResponse({ accounts: await listCodexAuthAccounts(config, forceRefresh) });

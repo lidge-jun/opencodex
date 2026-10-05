@@ -455,6 +455,16 @@ false. Exact-account and Direct routes are unchanged.
 
 ## Main-account policy observations
 
+`src/codex/account-use-remaining.ts` owns the persistent, default-off
+`codexUseRemainingQuotaAccountIds` opt-in. Effective auto-switch thresholds resolve to zero
+for listed accounts; main protection resolves to 100% in both governing windows.
+Underlying thresholds remain stored, and disabling restores their current values.
+Account deletion removes its opt-in. No cooldown, pause, eligibility or credit-spending
+permission is removed. Selected-main and caller-owned Direct materialization use the same policy.
+`src/codex/auth-api/use-remaining-route.ts` exposes authenticated GET/PUT and rolls back
+the live preference when persistence fails; GET never saves. Coverage is in
+`tests/codex-integration/codex-use-remaining-quota.test.ts` and the existing main-auth suite.
+
 The main-account admission policy defaults to 90% for short windows and 98% for long windows;
 `codexMainAccountHardLockThresholds` permits ordered integer thresholds from 80 through 100.
 Policy evidence retention uses the minimum configurable 80%, so a partial update or elapsed reset

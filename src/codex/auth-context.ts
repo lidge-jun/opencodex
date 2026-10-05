@@ -597,7 +597,7 @@ export class CodexRecoveryWithheldError extends CodexAccountCooldownError {
 
 export type CodexAuthPolicyConfig = Readonly<Pick<OcxConfig,
   "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "codexDesktopAuthless" | "runtimeRole" | "pausedCodexAccountIds"
-  | "creditCodexAccountIds"
+  | "creditCodexAccountIds" | "codexUseRemainingQuotaAccountIds"
 >>;
 
 interface CodexAuthMaterializationOptions {
@@ -732,7 +732,7 @@ function mainCreditsHoldResetAt(config: Pick<OcxConfig, "creditCodexAccountIds">
 }
 
 function assertMainAccountPolicy(
-  config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "creditCodexAccountIds"> | undefined,
+  config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "creditCodexAccountIds" | "codexUseRemainingQuotaAccountIds"> | undefined,
 ): void {
   if (config) {
     const status = getMainAccountHardLockStatus(config);

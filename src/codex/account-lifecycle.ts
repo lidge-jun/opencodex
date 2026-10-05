@@ -19,6 +19,7 @@ import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeM
 import { extractAccountIdClaims } from "../oauth/chatgpt";
 import { forgetCodexAccountPause } from "./account-pause";
 import { forgetCodexAccountCreditUse } from "./account-credit-use";
+import { setCodexAccountUseRemainingQuota } from "./account-use-remaining";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
 import { forgetCodexQuotaAutoRefreshAccount } from "./quota-auto-refresh-state";
 import { forgetCodexAccountAutoSwitchThreshold } from "./account-auto-switch";
@@ -183,6 +184,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
     forgetCodexAccountCreditUse(runtimeConfig, accountId);
     forgetCodexAccountPriority(runtimeConfig, accountId);
     forgetCodexAccountAutoSwitchThreshold(runtimeConfig, accountId);
+    setCodexAccountUseRemainingQuota(runtimeConfig, accountId, false);
     if (runtimeConfig.codexQuotaAutoRefresh?.[accountId]) {
       const retained = { ...runtimeConfig.codexQuotaAutoRefresh };
       delete retained[accountId];

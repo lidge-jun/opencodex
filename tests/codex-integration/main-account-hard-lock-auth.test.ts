@@ -412,6 +412,28 @@ describe("main quota policy at native admission", () => {
     expect(headersForCodexAuthContext(new Headers(), context, cfg).get("authorization")).toBe(`Bearer ${bearer()}`);
   });
 
+  test("use-remaining admits selected main at 95 and still blocks materialization at 100", async () => {
+    const cfg = accountZeroConfig();
+    cfg.codexUseRemainingQuotaAccountIds = [MAIN];
+    quota(95);
+    const context = await resolveCodexAuthContext(new Headers(), cfg, "pool", { accountId: MAIN });
+    expect(context.kind).toBe("main-pool");
+    expect(headersForCodexAuthContext(new Headers(), context, cfg).get("authorization")).toBe(`Bearer ${bearer()}`);
+    quota(100);
+    expect(() => headersForCodexAuthContext(new Headers(), context, cfg)).toThrow(CodexMainAccountHardLockError);
+    expect(cfg.creditCodexAccountIds).toBeUndefined();
+  });
+
+  test("use-remaining admits caller-owned Direct main until preference is revoked", async () => {
+    const cfg = accountZeroConfig();
+    cfg.codexUseRemainingQuotaAccountIds = [MAIN];
+    observeMainQuotaCredential(bearer(), accountId); quota(95);
+    forbidPhysicalReads();
+    await expect(resolveCodexAuthContext(caller(), cfg, "direct")).resolves.toMatchObject({ kind: "main" });
+    cfg.codexUseRemainingQuotaAccountIds = [];
+    await expect(resolveCodexAuthContext(caller(), cfg, "direct")).rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+  });
+
   test("short-only 99 blocks exact main and main-only Pool without probe or reauth", async () => {
     quota(99);
     const cfg = config();

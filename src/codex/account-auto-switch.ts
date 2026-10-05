@@ -1,6 +1,7 @@
 import type { OcxConfig } from "../types";
 import { deleteConfigObjectChildKey } from "../config/rebase-provenance";
 import { isValidCodexAccountId, MAIN_CODEX_ACCOUNT_ID } from "./account-id";
+import { codexAccountUsesRemainingQuota } from "./account-use-remaining";
 
 export const DEFAULT_CODEX_AUTO_SWITCH_THRESHOLD = 80;
 export const MIN_CODEX_AUTO_SWITCH_THRESHOLD = 0;
@@ -34,6 +35,7 @@ export function getEffectiveCodexAutoSwitchThreshold(
   config: OcxConfig,
   accountId: string,
 ): number {
+  if (codexAccountUsesRemainingQuota(config, accountId)) return 0;
   const override = getCodexAccountAutoSwitchThresholdOverride(config, accountId);
   if (override !== null) return override;
   return config.autoSwitchThreshold ?? DEFAULT_CODEX_AUTO_SWITCH_THRESHOLD;

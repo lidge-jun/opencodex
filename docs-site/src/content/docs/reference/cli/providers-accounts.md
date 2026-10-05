@@ -337,6 +337,32 @@ grant counts, nullable dates, cooldown, pending operation and journal availabili
 Empty grants are not the same as unavailable status. It never consumes a grant
 or resumes a pending spend. Consumption remains a human GUI operation.
 
+### Use remaining included quota
+
+To keep using a selected account past a proactive switching threshold or the main-account
+protection threshold, explicitly enable its remaining-quota preference:
+
+```bash
+ocx account use-remaining openai main on
+ocx account use openai main
+ocx account use-remaining openai main status --json
+ocx account use-remaining openai main off
+```
+
+Replace `main` with a unique pool-account ID or alias to target an added account.
+Enabling this disables proactive usage switching for that account. For the main login, it also
+moves both effective hard-lock thresholds to 100%, so a 95% reading can still admit a request.
+The preference persists across restarts until turned off; original threshold settings remain
+stored and resume applying when it is disabled. It does not select an account itself or override
+round-robin scheduling, manual/automatic pause, entitlement checks, reauthentication, or upstream
+cooldowns. Paid-credit permission remains a separate setting; enabling this never opts an account
+into credits or redeems a reset grant. The default-on main hard lock still refuses at 100%.
+
+`GET /api/codex-auth/accounts/use-remaining?id=<account-id>` reads the live policy.
+`PUT /api/codex-auth/accounts/use-remaining` accepts `{ id, useRemainingQuota: boolean }`.
+Both require the existing management authentication. This control is currently exposed through
+the CLI and API.
+
 ### Main-account quota protection
 
 In **Codex settings → Multi-auth → Advanced settings**, **Block main account**

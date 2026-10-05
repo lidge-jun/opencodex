@@ -1,5 +1,10 @@
 # CLI management and discovery
 
+`ocx account use-remaining openai <id-or-main> on|off|status` in `src/cli/account-policy.ts`
+resolves the selected runtime's roster and validates the authenticated API receipt. It controls
+the [remaining included-quota preference](providers/openai-accounts.md#main-account-policy-observations);
+status is read-only, and account selection is a separate command.
+
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
 ## CLI readiness diagnostics

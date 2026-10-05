@@ -329,6 +329,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "add-key <provider> [--label <label>]  Add a key read only from piped stdin.",
       "pool <provider>          Read/edit runtime-supported pool policy.",
       "credits openai ...       Explicit paid-credit-after-limit policy; separate from displaying balances.",
+      "use-remaining openai <id|main> <on|off|status>  Use included quota up to its limit.",
       "quota-activation openai  Enable/disable one account reset-window refresh policy.",
       "anthropic-reset-grants   Read grant status only; consumption remains in the dashboard.",
       "login supports explicit browser/add-account options only for applicable flows; human verification remains required.",

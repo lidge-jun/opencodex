@@ -1,4 +1,6 @@
 import type { OcxConfig } from "../types";
+import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
+import { codexAccountUsesRemainingQuota } from "./account-use-remaining";
 import { getMainPolicyQuota } from "./quota";
 import { MAIN_ACCOUNT_HARD_LOCK_PERCENT, MAIN_ACCOUNT_HARD_LOCK_SHORT_PERCENT, MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "./quota-types";
 
@@ -13,9 +15,10 @@ export interface MainAccountHardLockStatus {
   window?: "short" | "long";
 }
 
-type PolicyConfig = Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds">;
+type PolicyConfig = Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "codexUseRemainingQuotaAccountIds">;
 
 export function resolveMainAccountHardLockThresholds(config: PolicyConfig | undefined): { short: number; long: number } {
+  if (codexAccountUsesRemainingQuota(config, MAIN_CODEX_ACCOUNT_ID)) return { short: 100, long: 100 };
   const valid = (value: unknown, fallback: number): number => typeof value === "number"
     && Number.isInteger(value) && value >= MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT && value <= 100 ? value : fallback;
   const long = valid(config?.codexMainAccountHardLockThresholds?.long, MAIN_ACCOUNT_HARD_LOCK_PERCENT);

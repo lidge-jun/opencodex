@@ -1,4 +1,5 @@
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
+import { validRemainingQuotaAccountIds } from "../codex/account-use-remaining";
 import { protocolConfigSchema } from "./schema/config-schema";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
@@ -483,6 +484,12 @@ function creditCodexAccountIdsError(value: unknown): string | null {
   return "schema_invalid: creditCodexAccountIds: must be an array of account ids or omitted";
 }
 
+function remainingQuotaAccountIdsError(value: unknown): string | null {
+  const ids = rawConfigRecord(value)?.codexUseRemainingQuotaAccountIds;
+  return ids === undefined || validRemainingQuotaAccountIds(ids) ? null
+    : "schema_invalid: codexUseRemainingQuotaAccountIds: must be an array of Codex account ids or omitted";
+}
+
 function oauthOpenBrowserError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw || !Object.hasOwn(raw, "oauthOpenBrowser")) return null;
@@ -692,6 +699,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? oauthOpenBrowserError(value)
     ?? showCodexCreditsError(value)
     ?? creditCodexAccountIdsError(value)
+    ?? remainingQuotaAccountIdsError(value)
     ?? runtimeRoleError(value)
     ?? remoteGuiConfigError(value)
     ?? clientConnectionConfigError(value)

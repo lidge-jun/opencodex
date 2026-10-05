@@ -239,6 +239,8 @@ that disable back to disk.
 
 `src/server/index.ts` authenticates and routes `/api/*`, then delegates to
 `src/server/management-api.ts`, which composes the route modules under `src/server/management/`.
+Codex account routes include authenticated GET/PUT `/api/codex-auth/accounts/use-remaining`;
+the [main-account policy contract](providers/openai-accounts.md#main-account-policy-observations) owns its semantics.
 Codex account routes live in `src/codex/auth-api/routes.ts` because they own the credential store, not
 because they are a different plane. Upstream account response reads and OrcaRouter key exchange follow the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
