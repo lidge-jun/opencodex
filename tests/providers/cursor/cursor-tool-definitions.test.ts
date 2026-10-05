@@ -19,6 +19,7 @@ import {
   cursorToolWireName,
   isGenericToolUseCountDemoPrompt,
   nonEmptyShellBridgeCommandFromArgs,
+  responsesToolNameFromCursorWire,
 } from "../../../src/adapters/cursor/tool-definitions";
 import type { OcxTool } from "../../../src/types";
 
@@ -855,10 +856,9 @@ describe("Cursor code mode tool guidance", () => {
 
     // When no shell bridge is advertised, guidance should not warn about neighboring-agent tool names or ocx_client_*
     const note = buildCursorToolGuidanceSystemNote(claudeTools);
-    if (note) {
-      expect(note).not.toContain("neighboring-agent tool names");
-      expect(note).not.toContain("ocx_client_");
-    }
+    expect(note).toBeDefined();
+    expect(note).not.toContain("neighboring-agent tool names");
+    expect(note).not.toContain("ocx_client_");
   });
 
   test("aliases client tools when Codex shell bridge is present in catalog", () => {
@@ -878,6 +878,29 @@ describe("Cursor code mode tool guidance", () => {
       "ocx_client_Glob",
       "ocx_client_Read",
     ]);
+
+    const note = buildCursorToolGuidanceSystemNote(toolsWithBridge);
+    expect(note).toBeDefined();
+    if (!note) throw new Error("Expected Cursor tool guidance note");
+    expect(note).toContain("`ocx_client_Glob`");
+    expect(note).toContain("`ocx_client_Read`");
+    expect(note).toContain("neighboring-agent tool names");
+
+    // Both bare and prefixed response names map back to Read
+    const nameMap = new Map<string, string>([
+      [cursorToolWireName({ name: "Read" }, toolsWithBridge), "Read"],
+    ]);
+    expect(responsesToolNameFromCursorWire("ocx_client_Read", nameMap)).toBe("Read");
+    expect(responsesToolNameFromCursorWire("Read", nameMap)).toBe("Read");
+  });
+
+  test("preserves neighboring-agent tool warning for MCP-only catalogs without Claude bare tools", () => {
+    const mcpCatalog: OcxTool[] = [
+      { name: "read_file", namespace: "mcp__fs", description: "Read file", parameters: {} },
+    ];
+    const note = buildCursorToolGuidanceSystemNote(mcpCatalog);
+    expect(note).toBeDefined();
+    expect(note).toContain("neighboring-agent tool names");
   });
 });
 

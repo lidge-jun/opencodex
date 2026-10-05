@@ -67,11 +67,11 @@ function cursorToolChoiceMatches(
     if (catalogHasBareCodexShellBridge(catalog)) {
       return isBareCodexShellBridgeTool(tool);
     }
-    return tool.name === choiceName || cursorToolWireName(tool) === choiceName;
+    return tool.name === choiceName || cursorToolWireName(tool, catalog) === choiceName;
   }
   if (tool.name === choiceName) return true;
   if (cursorToolChoiceAliases(tool).includes(choiceName)) return true;
-  return cursorToolWireName(tool) === choiceName
+  return cursorToolWireName(tool, catalog) === choiceName
     && !catalog.some(candidate => candidate.name === choiceName);
 }
 
@@ -201,7 +201,7 @@ export const CLAUDE_CLIENT_BARE_TOOL_NAMES = new Set([
 ]);
 
 export function isClaudeClientBareToolName(name: string): boolean {
-  return CLAUDE_CLIENT_BARE_TOOL_NAMES.has(name) || /^[A-Z][a-zA-Z0-9_]*$/.test(name);
+  return CLAUDE_CLIENT_BARE_TOOL_NAMES.has(name);
 }
 
 /** Avoid collisions with Cursor's private bare-tool namespace. */

@@ -1,6 +1,6 @@
 import type { OcxRequestOptions, OcxTool } from "../../types";
 import { CODE_MODE_HOST_CONTRACT_SENTENCE, CODE_MODE_RESULT_ECHO_SENTENCE } from "../exec-tool-result-normalize";
-import { CODEX_SHELL_BRIDGE_TOOL_NAMES, CODEX_TOOL_SEARCH_TOOL, CODEX_UNIFIED_EXEC_TOOL, clientSemanticToolNameFromCursorWire, cursorRequestAdvertisesApplyPatch, cursorRequestHasExecutionPath, cursorRequestHasShellAlias, cursorRequestUsesCodeMode, cursorToolAllowedByChoice, cursorToolWireName, isBareCodexShellBridgeTool, isCodexShellBridgeToolName, isCursorExecutionPathTool, isCursorStructuredEditToolName } from "./tool-naming";
+import { CODEX_SHELL_BRIDGE_TOOL_NAMES, CODEX_TOOL_SEARCH_TOOL, CODEX_UNIFIED_EXEC_TOOL, clientSemanticToolNameFromCursorWire, cursorRequestAdvertisesApplyPatch, cursorRequestHasExecutionPath, cursorRequestHasShellAlias, cursorRequestUsesCodeMode, cursorToolAllowedByChoice, cursorToolWireName, isBareCodexShellBridgeTool, isClaudeClientBareToolName, isCodexShellBridgeToolName, isCursorExecutionPathTool, isCursorStructuredEditToolName } from "./tool-naming";
 
 export const CURSOR_SHELL_ALIAS_SYSTEM_NOTE =
   'Shell commands use the Codex shell bridge tool shown in this turn\'s catalog (`shell_command` or `exec_command`) with JSON arguments like {"cmd":"..."}. The long `mcp_opencodex-responses_*` display name is the same tool. Prefer it over Cursor-native Shell.';
@@ -133,7 +133,11 @@ function unavailableNeighborAgentToolNames(
   wireNames: readonly string[],
   catalog?: readonly Pick<OcxTool, "namespace" | "name">[],
 ): string[] {
-  if (catalog && !catalog.some(isBareCodexShellBridgeTool)) return [];
+  if (
+    catalog
+    && !catalog.some(isBareCodexShellBridgeTool)
+    && catalog.some(tool => !tool.namespace && isClaudeClientBareToolName(tool.name))
+  ) return [];
   return NEIGHBOR_AGENT_TOOL_NAMES.filter(name => !advertisedCoversNeighbor(wireNames, name));
 }
 
