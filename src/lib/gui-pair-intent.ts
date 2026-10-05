@@ -3,7 +3,9 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdi
 import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
-import { forgetEphemeralSecretPath, hardenSecretDir, hardenSecretPath } from "./windows-secret-acl";
+import { forgetEphemeralSecretPath, hardenSecretDir, hardenSecretPath, windowsSecretAclApplies } from "./windows-secret-acl";
+
+import { verifyWindowsPrivateEntries, WINDOWS_OWNER_ACL_TIMEOUT_MS } from "./windows-owner-acl";
 
 export const GUI_PAIR_INTENT_HEADER = "x-opencodex-gui-pair-intent";
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -144,7 +146,14 @@ export function consumeGuiPairIntent(capability: string | null, proof: string | 
     if (!same(opened, after) || !same(after, lstatSync(path, { bigint: true }))
       || parent.dev !== directory(dir).dev || parent.ino !== directory(dir).ino) return false;
     closeSync(fd); fd = undefined;
-    if (!same(after, lstatSync(path, { bigint: true }))) return false;
+    // Verify only a matching commitment, with its descriptor closed and lock held.
+    // Redemption must never harden an untrusted record into acceptable authority.
+    if (windowsSecretAclApplies() && !verifyWindowsPrivateEntries([
+      { path: dir, directory: true }, { path, directory: false },
+    ], WINDOWS_OWNER_ACL_TIMEOUT_MS)) return false;
+    const verifiedParent = directory(dir);
+    if (parent.dev !== verifiedParent.dev || parent.ino !== verifiedParent.ino
+      || !same(after, lstatSync(path, { bigint: true }))) return false;
     unlinkSync(path);
     forgetEphemeralSecretPath(path);
     return true;

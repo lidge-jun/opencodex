@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
@@ -10,6 +11,9 @@ import { consumeGuiPairIntent, createGuiPairIntent, GUI_PAIR_INTENT_HEADER } fro
 import { deliverGuiPairingGrant, GuiPairingIntentRequiredError } from "../../src/server/gui-pair-delivery";
 import { GuiPairingGrantRateLimitError } from "../../src/server/gui-session";
 import { resetHardenedStateForTests, setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests, setPlatformForTests } from "../../src/lib/windows-secret-acl";
+import { setWindowsOwnerAclRunnerForTests, windowsPrivateEntriesAclMatches, type WindowsPrivateEntry } from "../../src/lib/windows-owner-acl";
+import { resetWindowsPrincipalForTests, setWindowsPrincipalRunnerForTests, setAsyncWindowsPrincipalRunnerForTests, setWindowsPrincipalLocaleForTests } from "../../src/lib/windows-user-principal";
+import { resolveTrustedWindowsIcaclsExe } from "../../src/lib/windows-elevation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -26,6 +30,23 @@ const request = (proof?: string, origin = ORIGIN, capability = CAP) => new Reque
 let root: string;
 let previous: string | undefined;
 const recordPath = () => join(root, "gui-pair-intents", readdirSync(join(root, "gui-pair-intents"))[0]!);
+const USER_SID = "S-1-5-21-1-2-3-1001";
+const FOREIGN_SID = "S-1-5-21-1-2-3-1002";
+const ADMIN_SID = "S-1-5-32-544";
+const ACL_ENTRIES: WindowsPrivateEntry[] = [{ path: "directory", directory: true }, { path: "record", directory: false }];
+function compliantAcl(entries: readonly WindowsPrivateEntry[] = ACL_ENTRIES): string {
+  return [
+    `U|${USER_SID}|${USER_SID}|False`,
+    ...entries.flatMap((entry, index) => [
+      `E|${index}|${USER_SID}|4100|1`,
+      `A|${index}|0|${entry.directory ? 3 : 0}|2032127|${USER_SID}|False`,
+    ]), "END",
+  ].join("\n");
+}
+const aclResult = (stdout = compliantAcl()) => ({ success: true, timedOut: false, stdout });
+function changeAclLine(index: number, line: string): string {
+  const lines = compliantAcl().split("\n"); lines[index] = line; return lines.join("\n");
+}
 const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 
 beforeEach(() => {
@@ -34,8 +55,13 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = root;
   setIcaclsRunnerForTests(() => ICACLS_OK);
   setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
+  setWindowsOwnerAclRunnerForTests(entries => aclResult(compliantAcl(entries)));
 });
 afterEach(() => {
+  setWindowsOwnerAclRunnerForTests(null);
+  setPlatformForTests(null); resetHardenedStateForTests();
+  setWindowsPrincipalRunnerForTests(null); setAsyncWindowsPrincipalRunnerForTests(null);
+  setWindowsPrincipalLocaleForTests(null); resetWindowsPrincipalForTests();
   setIcaclsRunnerForTests(null); setAsyncIcaclsRunnerForTests(null);
   if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
   removeTreeWithRetry(root);
@@ -182,6 +208,7 @@ describe("one-use local CLI pairing intent", () => {
     if (process.platform === "win32") {
       setIcaclsRunnerForTests(null);
       setAsyncIcaclsRunnerForTests(null);
+      setWindowsOwnerAclRunnerForTests(null);
     }
     const intent = createGuiPairIntent(CAP), path = recordPath();
     const code = `import { consumeGuiPairIntent } from ${JSON.stringify(repoPath("src/lib/gui-pair-intent.ts"))};
@@ -346,4 +373,181 @@ describe("one-use local CLI pairing intent", () => {
     expect(result).toHaveProperty("grant");
     expect(existsSync(join(root, "gui-pair-intents"))).toBe(false);
   });
+});
+
+describe("Windows redemption owner and raw-DACL policy", () => {
+  beforeEach(() => { setPlatformForTests("win32"); resetHardenedStateForTests(); });
+
+  const refusals: [string, string][] = [
+    ["extra directory ACE", compliantAcl().replace("4100|1", "4100|2").replace("E|1|", `A|0|0|3|2032127|${FOREIGN_SID}|False\nE|1|`)],
+    ["extra record ACE", compliantAcl().replace(`E|1|${USER_SID}|4100|1`, `E|1|${USER_SID}|4100|2`).replace("\nEND", `\nA|1|0|0|2032127|${FOREIGN_SID}|False\nEND`)],
+    ["foreign directory owner", changeAclLine(1, `E|0|${FOREIGN_SID}|4100|1`)],
+    ["foreign record owner", changeAclLine(3, `E|1|${FOREIGN_SID}|4100|1`)],
+    ["unprotected DACL", changeAclLine(1, `E|0|${USER_SID}|4|1`)],
+    ["absent DACL", changeAclLine(1, `E|0|${USER_SID}|4096|1`)],
+    ["null DACL", changeAclLine(1, `E|0|${USER_SID}|4100|-1`)],
+    ["empty DACL", changeAclLine(1, `E|0|${USER_SID}|4100|0`)],
+    ["inherited ACE", changeAclLine(2, `A|0|0|19|2032127|${USER_SID}|False`)],
+    ["wrong mask", changeAclLine(2, `A|0|0|3|1179785|${USER_SID}|False`)],
+    ["foreign grantee", changeAclLine(2, `A|0|0|3|2032127|${FOREIGN_SID}|False`)],
+    ["Administrators grantee", changeAclLine(2, `A|0|0|3|2032127|${ADMIN_SID}|False`)],
+    ["deny ACE", changeAclLine(2, `A|0|1|3|2032127|${USER_SID}|False`)],
+    // AccessAllowedCallback is raw AceType 9, not an ordinary Allow ACE.
+    ["callback ACE", changeAclLine(2, `A|0|9|3|2032127|${USER_SID}|True`)],
+    ["callback marker on Allow", changeAclLine(2, `A|0|0|3|2032127|${USER_SID}|True`)],
+    ["object ACE", changeAclLine(2, "A|0|5|X")],
+    ["unknown ACE", changeAclLine(2, "A|0|255|X")],
+    ["file inheritance", changeAclLine(4, `A|1|0|3|2032127|${USER_SID}|False`)],
+    ["missing directory inheritance", changeAclLine(2, `A|0|0|0|2032127|${USER_SID}|False`)],
+    ["inherit-only flag", changeAclLine(2, `A|0|0|11|2032127|${USER_SID}|False`)],
+    ["malformed flags", changeAclLine(1, `E|0|${USER_SID}|4100junk|1`)],
+    ["malformed mask", changeAclLine(2, `A|0|0|3|2032127junk|${USER_SID}|False`)],
+    ["noncanonical flag number", changeAclLine(1, `E|0|${USER_SID}|04100|1`)],
+    ["out-of-range flags", changeAclLine(1, `E|0|${USER_SID}|69636|1`)],
+    ["extra field", changeAclLine(2, `A|0|0|3|2032127|${USER_SID}|False|extra`)],
+    ["invalid token role", changeAclLine(0, `U|${USER_SID}|${USER_SID}|true`)],
+    ["invalid token owner", changeAclLine(0, `U|${USER_SID}|name|False`)],
+    ["malformed SID", changeAclLine(1, "E|0|account-name|4100|1")],
+    ["duplicate token header", compliantAcl().replace("E|0|", `U|${USER_SID}|${USER_SID}|False\nE|0|`)],
+    ["missing token header", compliantAcl().split("\n").slice(1).join("\n")],
+    ["duplicate entry", changeAclLine(3, `E|0|${USER_SID}|4100|1`)],
+    ["out-of-order entry", changeAclLine(1, `E|1|${USER_SID}|4100|1`)],
+    ["out-of-range ACE index", changeAclLine(2, `A|2|0|3|2032127|${USER_SID}|False`)],
+    ["ACE before entry", compliantAcl().split("\n").map((line, index, lines) => index === 1 ? lines[2]! : index === 2 ? lines[1]! : line).join("\n")],
+    ["missing entry", compliantAcl().split("\n").filter((_, index) => index !== 3).join("\n")],
+    ["extra entry", compliantAcl().replace("END", `E|2|${USER_SID}|4100|1\nEND`)],
+    ["missing END", compliantAcl().replace("\nEND", "")],
+    ["trailing line", `${compliantAcl()}\nE|0|${USER_SID}|4100|1`],
+    ["two trailing newlines", `${compliantAcl()}\n\n`],
+    ["unknown output", changeAclLine(2, "garbled")],
+    ["BOM", `\ufeff${compliantAcl()}`],
+    ["bare CR", compliantAcl().replace("\n", "\r")],
+  ];
+  test.each(refusals)("refuses %s, retains the record and releases its lock", (_name, stdout) => {
+    const intent = createGuiPairIntent(CAP), path = recordPath(), s = state();
+    setWindowsOwnerAclRunnerForTests(() => aclResult(stdout));
+    expect(windowsPrivateEntriesAclMatches(stdout, ACL_ENTRIES)).toBe(false);
+    expect(() => deliverGuiPairingGrant(request(intent.proof), config(), s)).toThrow(GuiPairingIntentRequiredError);
+    expect(existsSync(path)).toBe(true);
+    expect(existsSync(`${path}.consuming`)).toBe(false);
+    expect(s.pairingGrants.size).toBe(0);
+    setWindowsOwnerAclRunnerForTests(entries => aclResult(compliantAcl(entries)));
+    expect(deliverGuiPairingGrant(request(intent.proof), config(), s)).toHaveProperty("grant");
+    expect(s.pairingGrants.size).toBe(1);
+  });
+
+  test.each(["failure", "timeout", "throw"])("runner %s fails closed without a grant", kind => {
+    const intent = createGuiPairIntent(CAP), path = recordPath(), s = state();
+    setWindowsOwnerAclRunnerForTests(() => {
+      if (kind === "throw") throw new Error("runner unavailable");
+      return { success: kind === "timeout", timedOut: kind === "timeout", stdout: compliantAcl() };
+    });
+    expect(() => deliverGuiPairingGrant(request(intent.proof), config(), s)).toThrow(GuiPairingIntentRequiredError);
+    expect(existsSync(path)).toBe(true); expect(existsSync(`${path}.consuming`)).toBe(false);
+    expect(s.pairingGrants.size).toBe(0);
+  });
+
+  test.each([
+    [USER_SID, USER_SID, false, true],
+    [USER_SID, ADMIN_SID, true, true],
+    [ADMIN_SID, ADMIN_SID, true, true],
+    [ADMIN_SID, ADMIN_SID, false, false],
+    [ADMIN_SID, USER_SID, true, false],
+    [ADMIN_SID, USER_SID, false, false],
+    [FOREIGN_SID, FOREIGN_SID, true, false],
+    ["S-1-5-21-1-2-3-513", "S-1-5-21-1-2-3-513", true, false],
+  ] as const)("owner %s with default %s and admin role %s yields %s", (owner, tokenOwner, enabled, allowed) => {
+    const intent = createGuiPairIntent(CAP), path = recordPath(), s = state();
+    const stdout = compliantAcl().replace(`U|${USER_SID}|${USER_SID}|False`, `U|${USER_SID}|${tokenOwner}|${enabled ? "True" : "False"}`)
+      .replaceAll(`|${USER_SID}|4100|1`, `|${owner}|4100|1`);
+    setWindowsOwnerAclRunnerForTests(() => aclResult(stdout));
+    expect(windowsPrivateEntriesAclMatches(stdout, ACL_ENTRIES)).toBe(allowed);
+    if (allowed) expect(deliverGuiPairingGrant(request(intent.proof), config(), s)).toHaveProperty("grant");
+    else expect(() => deliverGuiPairingGrant(request(intent.proof), config(), s)).toThrow(GuiPairingIntentRequiredError);
+    expect(existsSync(path)).toBe(!allowed); expect(existsSync(`${path}.consuming`)).toBe(false);
+    expect(s.pairingGrants.size).toBe(allowed ? 1 : 0);
+  });
+
+  test("ASCII byte output, CRLF and exactly one final newline are accepted", () => {
+    for (const stdout of [compliantAcl(), `${compliantAcl()}\n`, `${compliantAcl().replaceAll("\n", "\r\n")}\r\n`]) {
+      expect(windowsPrivateEntriesAclMatches(stdout.replaceAll("S-1-", "s-1-"), ACL_ENTRIES)).toBe(true);
+      expect(windowsPrivateEntriesAclMatches(Buffer.from(stdout, "ascii"), ACL_ENTRIES)).toBe(true);
+    }
+    expect(windowsPrivateEntriesAclMatches(compliantAcl().replaceAll("|4100|", "|36868|"), ACL_ENTRIES)).toBe(true);
+    expect(windowsPrivateEntriesAclMatches(Buffer.from(`\ufeff${compliantAcl()}`), ACL_ENTRIES)).toBe(false);
+    expect(windowsPrivateEntriesAclMatches(Buffer.from(compliantAcl(), "utf16le"), ACL_ENTRIES)).toBe(false);
+  });
+
+  test("verification follows close, holds the consume lock and never hardens at redemption", () => {
+    let hardens = 0, verifies = 0;
+    setIcaclsRunnerForTests(() => { hardens++; return ICACLS_OK; });
+    setWindowsOwnerAclRunnerForTests(() => { verifies++; return aclResult(); });
+    const intent = createGuiPairIntent(CAP), path = recordPath(), publishedHardens = hardens;
+    expect(verifies).toBe(0);
+    const close = spyOn(fs, "closeSync");
+    try {
+      setWindowsOwnerAclRunnerForTests((entries, timeoutMs) => {
+        verifies++;
+        expect(close).toHaveBeenCalled();
+        expect(existsSync(`${path}.consuming`)).toBe(true);
+        expect(entries).toEqual([{ path: join(root, "gui-pair-intents"), directory: true }, { path, directory: false }]);
+        expect(timeoutMs).toBe(5_000);
+        return aclResult();
+      });
+      expect(consumeGuiPairIntent(CAP, "B".repeat(43))).toBe(false);
+      expect(verifies).toBe(0);
+      close.mockClear();
+      expect(consumeGuiPairIntent(CAP, intent.proof)).toBe(true);
+      expect(verifies).toBe(1); expect(hardens).toBe(publishedHardens);
+    } finally { close.mockRestore(); }
+  });
+
+  test.each(["record", "directory"])("rechecks %s identity after the verifier returns", kind => {
+    const intent = createGuiPairIntent(CAP), path = recordPath(), dir = join(root, "gui-pair-intents"), s = state();
+    setWindowsOwnerAclRunnerForTests(() => {
+      if (kind === "record") {
+        fs.renameSync(path, join(root, "old-record"));
+        writeFileSync(path, `${createHash("sha256").update(intent.proof).digest("hex")}\n`, { mode: 0o600 });
+      } else {
+        fs.renameSync(dir, join(root, "old-directory")); mkdirSync(dir, { mode: 0o700 });
+        fs.renameSync(join(root, "old-directory", path.slice(dir.length + 1)), path);
+      }
+      return aclResult();
+    });
+    expect(() => deliverGuiPairingGrant(request(intent.proof), config(), s)).toThrow(GuiPairingIntentRequiredError);
+    expect(existsSync(path)).toBe(true); expect(s.pairingGrants.size).toBe(0);
+    const lock = kind === "record" ? `${path}.consuming` : join(root, "old-directory", `${path.slice(dir.length + 1)}.consuming`);
+    expect(existsSync(lock)).toBe(kind === "directory"); // replacement paths cannot authorize lock cleanup
+  });
+
+  test("an independently written matching record still requires private ownership", () => {
+    const dir = join(root, "gui-pair-intents"), proof = "D".repeat(43);
+    mkdirSync(dir, { mode: 0o700 });
+    const name = createHash("sha256").update(`opencodex-gui-pair-intent-v1\n${CAP}`).digest("hex"), path = join(dir, name);
+    writeFileSync(path, `${createHash("sha256").update(proof).digest("hex")}\n`, { mode: 0o600 });
+    const s = state();
+    setWindowsOwnerAclRunnerForTests(() => aclResult(changeAclLine(3, `E|1|${FOREIGN_SID}|4100|1`)));
+    expect(() => deliverGuiPairingGrant(request(proof), config(), s)).toThrow(GuiPairingIntentRequiredError);
+    expect(existsSync(path)).toBe(true); expect(existsSync(`${path}.consuming`)).toBe(false);
+    expect(s.pairingGrants.size).toBe(0);
+  });
+
+  test.skipIf(process.platform !== "win32")("native private ACLs grant, an additional ACE refuses, and recovery grants", () => {
+    setIcaclsRunnerForTests(null); setAsyncIcaclsRunnerForTests(null); setWindowsOwnerAclRunnerForTests(null);
+    const clean = createGuiPairIntent(CAP), cleanState = state();
+    expect(deliverGuiPairingGrant(request(clean.proof), config(), cleanState)).toHaveProperty("grant");
+    const capability = "C".repeat(43), intent = createGuiPairIntent(capability), path = recordPath();
+    const dir = join(root, "gui-pair-intents"), s = state();
+    const icacls = (...args: string[]) => Bun.spawnSync([resolveTrustedWindowsIcaclsExe(), dir, ...args], {
+      stdin: "ignore", stdout: "pipe", stderr: "ignore", windowsHide: true, timeout: 5_000,
+    });
+    try {
+      expect(icacls("/grant", "*S-1-5-4:(OI)(CI)(RX)").success).toBe(true);
+      expect(() => deliverGuiPairingGrant(request(intent.proof, ORIGIN, capability), config(), s)).toThrow(GuiPairingIntentRequiredError);
+      expect(existsSync(path)).toBe(true); expect(existsSync(`${path}.consuming`)).toBe(false);
+      expect(s.pairingGrants.size).toBe(0);
+    } finally { expect(icacls("/remove:g", "*S-1-5-4").success).toBe(true); }
+    expect(deliverGuiPairingGrant(request(intent.proof, ORIGIN, capability), config(), s)).toHaveProperty("grant");
+    expect(s.pairingGrants.size).toBe(1); expect(existsSync(path)).toBe(false);
+  }, 45_000);
 });

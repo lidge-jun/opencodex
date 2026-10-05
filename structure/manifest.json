@@ -568,6 +568,7 @@
       "documents": [
         "src/link/",
         "src/lib/gui-pair-intent.ts",
+        "src/lib/windows-owner-acl.ts",
         "src/server/gui-pair-delivery.ts"
       ]
     },
