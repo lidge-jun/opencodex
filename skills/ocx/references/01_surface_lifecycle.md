@@ -12,7 +12,7 @@ Declared capabilities: 12.
 
 ### `ocx chatgpt`
 
-Experimental ChatGPT app-server shim: launch, restore or status (macOS only).
+Experimental ChatGPT shim/intercept: launch, restore, status and watcher management (macOS only).
 
 State-changing: yes.
 
@@ -20,7 +20,7 @@ Drives no management route.
 
 JSON mode: `none`.
 
-- Default off; launch requires chatgptDesktop.appServerShim: true. Restore removes the generated launcher.
+- Default off; launch requires chatgptDesktop.appServerShim or unblockSend. Intercept needs the running proxy and manual CA trust. Watcher manages intercept launches only; restore removes the shim launcher.
 
 ### `ocx status`
 

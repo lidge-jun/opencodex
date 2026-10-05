@@ -1,0 +1,273 @@
+import { connect as connectSocket } from "node:net";
+import { connect as connectTls } from "node:tls";
+import { effectiveProxyFor } from "../../lib/proxy-env";
+import { socks5Credentials, socks5Handshake } from "../../lib/socks5-handshake";
+import type { Socket } from "node:net";
+import type { TLSSocket } from "node:tls";
+
+/**
+ * Upstream transport for the ChatGPT desktop intercept's WebSocket relay.
+ *
+ * Bun's WebSocket client ignores proxy environment variables and has no proxy option
+ * (verified on Bun 1.4.0), so the relay dials chatgpt.com itself over a raw socket it
+ * fully controls. The dial honors the same proxy selection as every other outbound
+ * request the server makes: `effectiveProxyFor` reads HTTP(S)_PROXY/ALL_PROXY, which
+ * `applyProxyEnv` populates from `config.proxy` at startup. A configured http(s) proxy
+ * is reached through an HTTP CONNECT tunnel; a SOCKS5 ALL_PROXY through a SOCKS5 CONNECT
+ * (sharing `src/lib/socks5-handshake.ts` with the fetch tunnel, so a credentialed
+ * `socks5://` proxy authenticates on both routes); no proxy means a direct TLS
+ * connection. The VPN's own mode (system proxy / TUN / off) therefore never has to be
+ * detected: the tunnel rides whatever egress opencodex already uses for provider traffic.
+ */
+
+export const CHATGPT_UPSTREAM_HOST = "chatgpt.com";
+export const CHATGPT_UPSTREAM_TLS_PORT = 443;
+
+/** How the tunnel reached chatgpt.com; surfaced for tests and diagnostics. */
+export interface UpstreamTunnel {
+  socket: TLSSocket;
+  route: "direct" | "http-connect" | "socks5";
+}
+
+export interface DialUpstreamOptions {
+  /** Override the proxy picked from the environment; tests use it to point at a local proxy. */
+  proxy?: string | null;
+  /** Connect timeout for the TCP dial and the proxy handshake, milliseconds. */
+  connectTimeoutMs?: number;
+  /** Test seam: dial this address instead of chatgpt.com:443 (SNI still names chatgpt.com). */
+  target?: { host: string; port: number };
+  /** Test seam: trust this CA for the upstream certificate instead of the system store. */
+  ca?: string;
+}
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+
+const CRLF = "\r\n";
+
+/**
+ * Establish the TLS connection to chatgpt.com the relay pipes frames through.
+ * Resolves null when the TCP dial, the proxy handshake, or the TLS handshake fails
+ * within the timeout, so the fetch handler can answer the app with a plain 502
+ * instead of hanging the upgrade.
+ */
+export async function dialUpstreamTunnel(options: DialUpstreamOptions = {}): Promise<UpstreamTunnel | null> {
+  const timeout = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+  const proxy = options.proxy !== undefined
+    ? options.proxy
+    : effectiveProxyFor(new URL(`https://${CHATGPT_UPSTREAM_HOST}`), process.env);
+  const route: UpstreamTunnel["route"] = socks5Route(proxy) ? "socks5" : proxy ? "http-connect" : "direct";
+  try {
+    const target = options.target ?? { host: CHATGPT_UPSTREAM_HOST, port: CHATGPT_UPSTREAM_TLS_PORT };
+    const raw = await dialRaw(target, proxy, route, timeout, options.ca);
+    const socket = await wrapTls(raw, timeout, options.ca);
+    return { socket, route };
+  } catch {
+    return null;
+  }
+}
+
+interface RawTarget {
+  host: string;
+  port: number;
+}
+
+function socks5Route(proxy: string | null): boolean {
+  return proxy !== null && /^socks5h?:\/\//i.test(proxy.trim());
+}
+
+function isIpLiteral(host: string): boolean {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(":");
+}
+
+/**
+ * Port to dial for a proxy URL. `URL.port` is empty both when the port is omitted and when it
+ * equals the scheme default, so `http://proxy:80` must fall back to 80, never to an invented
+ * 8080; that would diverge from the fetch tunnel, which honors the URL as written.
+ */
+export function proxyDialPort(proxyUrl: URL, route: UpstreamTunnel["route"]): number {
+  const explicit = Number(proxyUrl.port);
+  if (explicit) return explicit;
+  if (route === "socks5") return 1080;
+  return proxyUrl.protocol === "https:" ? 443 : 80;
+}
+
+async function dialRaw(target: RawTarget, proxy: string | null, route: UpstreamTunnel["route"], timeout: number, ca: string | undefined): Promise<Socket> {
+  if (route === "direct") return tcpConnect(target.host, target.port, timeout);
+  const proxyUrl = new URL(proxy!);
+  const proxyHost = proxyUrl.hostname.replace(/^\[|\]$/g, "");
+  const proxyPort = proxyDialPort(proxyUrl, route);
+  const proxySocket = await tcpConnect(proxyHost, proxyPort, timeout);
+  // An https:// proxy speaks TLS on its own port before any handshake, so the CONNECT
+  // request must ride that TLS session, with the proxy's hostname as the SNI.
+  const plain = proxyUrl.protocol === "https:" ? await wrapProxyTls(proxySocket, proxyHost, timeout, ca) : proxySocket;
+  if (plain !== proxySocket) {
+    plain.once("error", () => proxySocket.destroy());
+  }
+  const reader = new ProxyHandshakeReader(plain, timeout);
+  const socks5 = route === "socks5";
+  try {
+    // A socks5:// URL with credentials must authenticate here exactly as the fetch tunnel
+    // would with the same URL; refusing selection instead would disable voice and dictation
+    // for proxies fetch traffic handles fine. Credential decoding stays inside the try so a
+    // malformed URL destroys the proxy socket instead of leaking it.
+    const credentials = socks5 ? socks5Credentials(proxyUrl) : {};
+    if (!socks5) await httpConnectThrough(reader, target, proxyUrl);
+    else await socks5Handshake(reader, target, credentials);
+  } catch (error) {
+    reader.dispose();
+    plain.destroy();
+    throw error;
+  }
+  // Handshake done: hand leftover bytes and data events back to the socket so the TLS
+  // layer above starts from a clean stream.
+  reader.dispose();
+  return plain;
+}
+
+async function tcpConnect(host: string, port: number, timeout: number): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const socket = connectSocket({ host, port });
+    const onError = (error: Error) => { socket.destroy(); reject(error); };
+    socket.setTimeout(timeout, () => onError(new Error("tcp connect timeout")));
+    socket.once("error", onError);
+    socket.once("connect", () => {
+      socket.setTimeout(0);
+      socket.removeListener("error", onError);
+      resolve(socket);
+    });
+  });
+}
+
+/**
+ * Accumulates proxy-handshake bytes until each awaited step has what it needs, then
+ * hands any leftover bytes back to the socket so the TLS layer above sees a clean
+ * stream. A socket error, timeout, or a proxy that closes the connection before finishing
+ * its reply fails every pending step, so the upgrade answers 502 instead of hanging; after
+ * `dispose()` the reader no longer owns the socket's data, end, or close events.
+ */
+class ProxyHandshakeReader {
+  private buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  private pending: { ready: (buffer: Buffer) => boolean; resolve: () => void; reject: (error: Error) => void } | null = null;
+  private failure: Error | null = null;
+  private readonly onData = (chunk: Buffer) => this.feed(chunk);
+  private readonly onError = (error: Error) => this.fail(error);
+  private readonly onTimeout = () => this.fail(new Error("proxy handshake timeout"));
+  private readonly onClosed = () => this.fail(new Error("proxy closed the connection during the handshake"));
+
+  constructor(private readonly socket: Socket, timeout: number) {
+    socket.on("data", this.onData);
+    socket.on("error", this.onError);
+    socket.on("end", this.onClosed);
+    socket.on("close", this.onClosed);
+    socket.setTimeout(timeout, this.onTimeout);
+  }
+
+  write(bytes: Uint8Array | string): void {
+    this.socket.write(bytes);
+  }
+
+  /** Await until the buffer holds at least `bytes` bytes, then consume exactly that many. */
+  readExact(bytes: number): Promise<Buffer<ArrayBufferLike>> {
+    return this.wait(buffer => buffer.length >= bytes, () => this.consume(bytes));
+  }
+
+  /** Await the full HTTP response head (through the blank line), consuming it. */
+  readHttpHead(): Promise<string> {
+    return this.wait(
+      buffer => buffer.indexOf("\r\n\r\n") !== -1,
+      () => this.consume(this.buffer.indexOf("\r\n\r\n") + 4).toString("latin1"),
+    );
+  }
+
+  /** Only one handshake step is ever outstanding, so one pending slot suffices. */
+  private wait<T>(ready: (buffer: Buffer) => boolean, take: () => T): Promise<T> {
+    if (this.failure) return Promise.reject(this.failure);
+    if (ready(this.buffer)) return Promise.resolve(take());
+    return new Promise((resolve, reject) => {
+      this.pending = { ready, resolve: () => resolve(take()), reject };
+    });
+  }
+
+  private consume(bytes: number): Buffer<ArrayBufferLike> {
+    const consumed: Buffer<ArrayBufferLike> = this.buffer.subarray(0, bytes);
+    this.buffer = this.buffer.subarray(bytes);
+    return consumed;
+  }
+
+  private feed(chunk: Buffer): void {
+    this.buffer = this.buffer.length === 0 ? (chunk satisfies Buffer) : Buffer.concat([this.buffer, chunk]);
+    if (this.pending && this.pending.ready(this.buffer)) {
+      const waiter = this.pending;
+      this.pending = null;
+      waiter.resolve();
+    }
+  }
+
+  private fail(error: Error): void {
+    this.failure = error;
+    const waiter = this.pending;
+    this.pending = null;
+    waiter?.reject(error);
+  }
+
+  dispose(): void {
+    this.socket.removeListener("data", this.onData);
+    this.socket.removeListener("error", this.onError);
+    this.socket.removeListener("end", this.onClosed);
+    this.socket.removeListener("close", this.onClosed);
+    this.socket.setTimeout(0);
+    if (this.buffer.length > 0) this.socket.unshift(this.buffer);
+    this.buffer = Buffer.alloc(0);
+    this.fail(new Error("proxy handshake reader disposed"));
+  }
+}
+
+async function httpConnectThrough(reader: ProxyHandshakeReader, target: RawTarget, proxyUrl: URL): Promise<void> {
+  const authority = `${target.host}:${target.port}`;
+  const lines = [
+    `CONNECT ${authority} HTTP/1.1`,
+    `Host: ${authority}`,
+    `Proxy-Connection: Keep-Alive`,
+  ];
+  // Credentials in the proxy URL become Basic Proxy-Authorization; an unauthenticated
+  // proxy never sees the header.
+  if (proxyUrl.username) {
+    const credentials = Buffer.from(`${decodeURIComponent(proxyUrl.username)}:${decodeURIComponent(proxyUrl.password)}`).toString("base64");
+    lines.push(`Proxy-Authorization: Basic ${credentials}`);
+  }
+  reader.write([...lines, "", ""].join(CRLF));
+  const head = await reader.readHttpHead();
+  const statusLine = head.split(CRLF)[0]!;
+  if (!/^HTTP\/1\.[01] 2\d\d/.test(statusLine)) throw new Error(`proxy refused CONNECT: ${statusLine}`);
+}
+
+async function wrapTls(raw: Socket, timeout: number, ca: string | undefined): Promise<TLSSocket> {
+  return new Promise((resolve, reject) => {
+    const tls = connectTls({ socket: raw, servername: CHATGPT_UPSTREAM_HOST, ...(ca ? { ca } : {}) });
+    const onError = (error: Error) => { tls.destroy(); reject(error); };
+    tls.setTimeout(timeout, () => onError(new Error("TLS handshake timeout")));
+    tls.once("error", onError);
+    tls.once("secureConnect", () => {
+      tls.setTimeout(0);
+      tls.removeListener("error", onError);
+      resolve(tls);
+    });
+  });
+}
+
+/** TLS-wrap the proxy's own socket before the CONNECT handshake (https:// proxy URLs). */
+async function wrapProxyTls(raw: Socket, proxyHost: string, timeout: number, ca: string | undefined): Promise<TLSSocket> {
+  // An IP-literal proxy has no hostname to name in SNI; node:tls forbids it outright.
+  const servername = isIpLiteral(proxyHost) ? undefined : proxyHost;
+  return new Promise((resolve, reject) => {
+    const tls = connectTls({ socket: raw, ...(servername ? { servername } : {}), ...(ca ? { ca } : {}) });
+    const onError = (error: Error) => { tls.destroy(); reject(error); };
+    tls.setTimeout(timeout, () => onError(new Error("proxy TLS handshake timeout")));
+    tls.once("error", onError);
+    tls.once("secureConnect", () => {
+      tls.setTimeout(0);
+      tls.removeListener("error", onError);
+      resolve(tls);
+    });
+  });
+}

@@ -1,6 +1,7 @@
 import net, { type Socket } from "node:net";
 import tls, { type TLSSocket } from "node:tls";
 import { classifyContentCoding, isNullBodyStatus } from "./http-response-semantics";
+import { socks5Credentials, socks5Handshake } from "./socks5-handshake";
 
 const DEFAULT_SOCKS5_PORT = 1080;
 const SOCKS5_CONNECT_TIMEOUT_MS = 30_000;
@@ -9,35 +10,11 @@ const MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
 const MAX_BODY_SLICE_BYTES = 64 * 1024;
 const MAX_DECODED_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_STREAM_DECODE_EXPANSION_RATIO = 128;
-const SOCKS5_VERSION = 0x05;
-const SOCKS5_NO_AUTH = 0x00;
-const SOCKS5_USER_PASS = 0x02;
-const SOCKS5_CONNECT = 0x01;
-const SOCKS5_DOMAIN = 0x03;
-const SOCKS5_SUCCESS = 0x00;
 const CRLF = Buffer.from("\r\n");
 const HEADER_END = Buffer.from("\r\n\r\n");
 
 export class Socks5FetchError extends Error {
   override readonly name = "Socks5FetchError";
-}
-
-function proxyCredentials(proxy: URL): { username?: Uint8Array; password?: Uint8Array } {
-  if (!proxy.username && !proxy.password) return {};
-  let username: string;
-  let password: string;
-  try {
-    username = decodeURIComponent(proxy.username);
-    password = decodeURIComponent(proxy.password);
-  } catch {
-    throw new Socks5FetchError("SOCKS5 proxy credentials contain invalid percent encoding");
-  }
-  const usernameBytes = new TextEncoder().encode(username);
-  const passwordBytes = new TextEncoder().encode(password);
-  if (usernameBytes.byteLength > 255 || passwordBytes.byteLength > 255) {
-    throw new Socks5FetchError("SOCKS5 proxy credentials must each fit in 255 UTF-8 bytes");
-  }
-  return { username: usernameBytes, password: passwordBytes };
 }
 
 function validateProxy(proxy: string): URL {
@@ -55,7 +32,7 @@ function validateProxy(proxy: string): URL {
     throw new Socks5FetchError("SOCKS5 proxy port is invalid");
   }
   if (parsed.search || parsed.hash) throw new Socks5FetchError("SOCKS5 proxy URL must not contain a query or fragment");
-  proxyCredentials(parsed);
+  socks5Credentials(parsed);
   return parsed;
 }
 
@@ -128,6 +105,14 @@ class SocketReader {
     socket.once("end", this.onEnd);
     socket.once("close", this.onEnd);
     socket.resume();
+  }
+
+  write(bytes: Uint8Array): void {
+    this.socket.write(bytes);
+  }
+
+  readExact(bytes: number, signal?: AbortSignal): Promise<Buffer> {
+    return this.read(bytes, signal);
   }
 
   private readonly onData = (chunk: Buffer | string): void => {
@@ -263,7 +248,7 @@ class SocketReader {
 
 async function socks5Connect(proxy: string, target: URL, signal?: AbortSignal): Promise<Socket> {
   const parsedProxy = validateProxy(proxy);
-  const credentials = proxyCredentials(parsedProxy);
+  const credentials = socks5Credentials(parsedProxy);
   const proxyHost = parsedProxy.hostname.replace(/^\[|\]$/g, "");
   const socket = await connectSocket(proxyHost, Number(parsedProxy.port) || DEFAULT_SOCKS5_PORT, signal);
   socket.setTimeout(SOCKS5_CONNECT_TIMEOUT_MS, () => {
@@ -271,45 +256,7 @@ async function socks5Connect(proxy: string, target: URL, signal?: AbortSignal): 
   });
   const reader = new SocketReader(socket);
   try {
-    const methods = credentials.username ? Buffer.from([SOCKS5_NO_AUTH, SOCKS5_USER_PASS]) : Buffer.from([SOCKS5_NO_AUTH]);
-    socket.write(Buffer.from([SOCKS5_VERSION, methods.byteLength, ...methods]));
-    const greeting = await reader.read(2, signal);
-    if (greeting[0] !== SOCKS5_VERSION) throw new Socks5FetchError("SOCKS5 proxy returned an invalid greeting");
-    if (greeting[1] === SOCKS5_USER_PASS && credentials.username && credentials.password) {
-      socket.write(Buffer.from([
-        0x01,
-        credentials.username.byteLength,
-        ...credentials.username,
-        credentials.password.byteLength,
-        ...credentials.password,
-      ]));
-      const auth = await reader.read(2, signal);
-      if (auth[0] !== 0x01 || auth[1] !== 0x00) throw new Socks5FetchError("SOCKS5 proxy authentication failed");
-    } else if (greeting[1] !== SOCKS5_NO_AUTH) {
-      throw new Socks5FetchError("SOCKS5 proxy does not accept an offered authentication method");
-    }
-
-    const hostname = new TextEncoder().encode(target.hostname);
-    if (hostname.byteLength > 255) throw new Socks5FetchError("SOCKS5 target hostname is too long");
-    const port = targetPort(target);
-    socket.write(Buffer.from([
-      SOCKS5_VERSION,
-      SOCKS5_CONNECT,
-      0x00,
-      SOCKS5_DOMAIN,
-      hostname.byteLength,
-      ...hostname,
-      port >> 8,
-      port & 0xff,
-    ]));
-    const reply = await reader.read(4, signal);
-    if (reply[0] !== SOCKS5_VERSION) throw new Socks5FetchError("SOCKS5 proxy returned an invalid connect response");
-    if (reply[1] !== SOCKS5_SUCCESS) throw new Socks5FetchError(`SOCKS5 proxy refused the connection (code ${reply[1]})`);
-    if (reply[2] !== 0x00 || ![0x01, SOCKS5_DOMAIN, 0x04].includes(reply[3]!)) {
-      throw new Socks5FetchError("SOCKS5 proxy returned an invalid address type or reserved byte");
-    }
-    const addressLength = reply[3] === 0x01 ? 4 : reply[3] === SOCKS5_DOMAIN ? (await reader.read(1, signal))[0]! : 16;
-    await reader.read(addressLength + 2, signal);
+    await socks5Handshake(reader, { host: target.hostname, port: targetPort(target) }, credentials, signal);
     socket.setTimeout(0);
     return socket;
   } catch (error) {

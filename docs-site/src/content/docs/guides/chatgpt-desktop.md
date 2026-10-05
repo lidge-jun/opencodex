@@ -1,6 +1,6 @@
 ---
-title: ChatGPT Desktop app-server shim (experimental)
-description: An opt-in macOS experiment that rewrites plain-quota gate fields on the bundled app-server stdout pipe.
+title: ChatGPT Desktop integrations (experimental)
+description: Opt-in macOS app-server shim and local-CA TLS intercept experiments for plain-quota send gates.
 ---
 
 This experiment is **macOS only and off by default**. It filters the bundled ChatGPT
@@ -91,7 +91,7 @@ folders and trusted sticky folders retain their normal permissions behavior.
 These are ownership, POSIX-permission, and signature checks; native ACL and
 volume ownership-policy behavior has not been verified.
 
-This integration installs no certificate, network listener, PAC, or background
+The app-server shim alone installs no certificate, network listener, PAC, or background
 watcher. It does not log the app's messages or environment. Status reports whether
 the running ChatGPT bundle process carries the expected launcher override.
 
@@ -122,3 +122,134 @@ This standalone shim does not rewrite conversation metadata or route model calls
 Other app gates or upstream refusals can still prevent sending. Evidence reported
 on an exhausted Plus account also used an intercept, so it does not establish
 that this shim alone resolves every desktop send lock.
+
+## Local-CA TLS intercept (experimental candidate)
+
+The separate `chatgptDesktop.unblockSend` experiment terminates TLS for the
+`chatgpt.com` apex host on loopback, relays the account's cookies and credentials,
+and rewrites known quota send gates in conversation metadata and usage responses.
+It is **off by default**, macOS only, and independent of `appServerShim`:
+
+```json
+{
+  "chatgptDesktop": {
+    "unblockSend": true,
+    "port": 10300
+  }
+}
+```
+
+`port` is optional; its default is the running proxy's public port plus 200
+(`10100` → `10300`). A derived port outside the TCP range requires an explicit
+free port. Client-role processes do not start the intercept. A bind or certificate
+failure warns without stopping the proxy's other services.
+
+Start OpenCodex with this config, then run `ocx chatgpt status`. The listener
+creates or reuses the local authority shared with the Claude intercept. **You
+must trust this CA yourself** in the macOS login keychain before launching the
+intercepted app. Status prints the exact command; with the default config path:
+
+```bash
+security add-trusted-cert -r trustRoot -p ssl -k "$HOME/Library/Keychains/login.keychain-db" "$HOME/.opencodex/claude-intercept/ca.pem"
+ocx chatgpt launch
+ocx chatgpt status
+```
+
+Use the certificate path reported by status if your OpenCodex home differs. The
+CLI prints the trust command and never runs it. Trusting a local CA changes the
+login keychain's TLS trust: anyone controlling its private key can issue trusted
+certificates. The listener sees the decrypted account traffic, including cookies,
+authorization headers and message content that it relays. Protect the config
+directory and CA key. The relay does not log request bodies or credentials.
+`restore` removes launch overrides; it does **not** remove CA trust or delete the
+shared authority. Remove trust manually through Keychain Access when you no
+longer need it, accounting for other integrations using the same authority.
+
+Launch restarts ChatGPT with
+`--host-resolver-rules=MAP chatgpt.com 127.0.0.1:<port>`. Explicit system HTTP/SOCKS
+proxies get an apex-host bypass while other hosts retain the proxy with a direct
+fallback; TUN/direct networking needs only the resolver rule. An existing system
+PAC cannot be combined with that bypass, so it may prevent the intercept from
+seeing traffic. With `pacFallback` (below) the app is launched through a generated
+PAC instead of the resolver rule.
+
+If both flags are true, `ocx chatgpt launch` applies the existing app-server shim
+and the intercept together. The shim alone still works without a running proxy.
+The intercept requires OpenCodex's identity-confirmed listener. When OpenCodex
+stops, an app still carrying the resolver rule cannot reach `chatgpt.com`; run
+`ocx chatgpt restore` to relaunch with native networking, or use PAC fallback.
+
+### PAC fallback: keep the app working when OpenCodex stops
+
+PAC fallback launches the app with a generated PAC script instead of the resolver
+rule, so the app falls back on its own. The script is passed inline (a `data:` URL)
+because the app ignores a `file://` PAC and an `http://` one would need OpenCodex
+running to be fetched:
+
+```json
+{ "chatgptDesktop": { "unblockSend": true, "pacFallback": true } }
+```
+
+`pacFallback` only takes effect together with `unblockSend`. OpenCodex then also
+listens on the listener port plus one (`10301` by default), a CONNECT entry that
+splices onto the TLS listener, and rewrites `chatgpt-unblock.pac` in its home
+directory at every start, before the `chatgpt-unblock.ready` marker. The PAC sends
+`chatgpt.com` to that entry first, and every other host the way the system routes it:
+
+| Setup | Other hosts, and `chatgpt.com` while OpenCodex is stopped |
+|---|---|
+| No proxy, or VPN in TUN mode | Direct. |
+| VPN in system-proxy mode | The system proxy, then direct. |
+| PAC file | The system PAC, embedded in the generated file. |
+
+When OpenCodex stops, the app keeps working on that route without a restart; only
+the send unblock pauses until OpenCodex is back. The route is captured when
+OpenCodex starts: after changing the VPN mode, restart OpenCodex and run
+`ocx chatgpt launch`. If a system PAC is set but cannot be read at that moment, or
+is too large to pass to the app (the PAC travels inside one launch argument,
+limited to 512 KiB once encoded), other hosts follow the system proxy, if there is
+one, then go direct, and OpenCodex prints a warning. After turning `pacFallback` on
+or off, restart OpenCodex, run `ocx chatgpt launch`, and run
+`ocx chatgpt install-watcher` again if you use the watcher. `restore` undoes a PAC
+launch the same way as a resolver-rule one.
+
+### Intercept rewrite boundary
+
+Only `/backend-api/conversation/init`, `/backend-api/conversation` and
+`/backend-api/f/conversation` (including child paths), plus the exact
+`/backend-api/wham/usage` and `/backend-api/wham/usage/stream` paths are rewritten.
+Conversation metadata loses known quota `send` / `tpp_send` blocks and exhausted
+send progress entries. Unknown and subscription/policy/workspace reasons remain;
+status reports preserved reasons. Usage rewriting reuses the shim's gate helpers,
+keeping workspace, credit and spend-control gates and usage display intact. Other
+HTTP responses pass through; WebSocket upgrades, voice and dictation relay
+without rewriting through direct, HTTP CONNECT or shared SOCKS5 transport.
+
+### Optional intercept launch watcher
+
+```bash
+ocx chatgpt install-watcher --yes
+ocx chatgpt uninstall-watcher
+ocx chatgpt restore
+```
+
+Installation without `--yes` asks in an interactive terminal. The launchd agent
+watches the app's Electron `SingletonLock` and the `chatgpt-unblock.ready` marker. In watch
+mode, it restarts an app launched without intercept switches only while the listener answers as
+OpenCodex and the app is no more than five minutes old; a missing or unparseable process age
+counts as fresh, and explicit `ocx chatgpt launch` is not age-limited. This can interrupt
+startup work; it does nothing while the listener is unavailable. It manages
+**intercept launches only**; use explicit launch for the app-server shim. A loaded
+watcher must be uninstalled before `restore`, so it cannot put the switches back.
+In PAC-fallback mode the watcher also waits for the CONNECT entry and launches
+with the PAC switch instead of the resolver rule.
+
+### Evidence and decision limits
+
+[#6196](https://github.com/lidge-jun/opencodex/issues/6196) reported zero established
+listener connections over about 20 hours on current Desktop builds: the bundled
+app-server performs the gate reads and may bypass Chromium's resolver rule.
+The later exhausted-Plus-account report used the shim, intercept and restart
+together and does not isolate the intercept's effectiveness. This candidate
+conflicts with the maintainer's provider-aware admission design, which rejects
+local CA installation and quota-data rewriting; maintainers may close it.

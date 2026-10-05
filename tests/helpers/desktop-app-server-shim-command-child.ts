@@ -67,6 +67,27 @@ mock.module("../../src/chatgpt/app-server-shim/launcher", () => ({
   resolveChatgptCodexBinary: () => scenario.missingBinary ? null : binary,
   writeChatgptShimLauncher: () => { fs.writeFileSync(launcher, "new launcher"); },
 }));
+// The send-unblock intercept is out of scope here, and its live probes (listening port, launchd agent,
+// keychain trust, a running opencodex) must never reach this machine. Its watcher is absent unless
+// the scenario loads one.
+mock.module("../../src/chatgpt/desktop-unblock/launch-watcher", () => ({
+  chatgptAppCommandLine: () => null,
+  chatgptCommandLineHasPac: () => false,
+  chatgptCommandLineHasRule: () => false,
+  chatgptUnblockWatcherStatus: () => ({
+    scriptInstalled: false, plistInstalled: false, agentLoaded: scenario.watcherLoaded === true,
+    scriptUpToDate: false, plistUpToDate: false,
+  }),
+  installChatgptUnblockWatcher: () => { throw new Error("fixture: the watcher is out of scope"); },
+  launchChatgptWithRule: () => ({ ok: false, output: "fixture: the intercept launch is out of scope" }),
+  probeChatgptUnblockListener: async () => ({ state: "down" }),
+  uninstallChatgptUnblockWatcher: () => undefined,
+}));
+mock.module("../../src/server/proxy-liveness", () => ({ findLiveProxy: async () => null }));
+mock.module("../../src/chatgpt/desktop-unblock/ca-trust", () => ({
+  inspectChatgptCaTrust: async () => "missing",
+  chatgptCaTrustCommand: () => "",
+}));
 const { handleChatgptCommand } = await import("../../src/cli/chatgpt-command");
 const code = await handleChatgptCommand([scenario.sub ?? "restore"], "darwin");
 console.log(JSON.stringify({ code, calls, launcherExists: fs.existsSync(launcher), root, shell, binary }));

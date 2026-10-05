@@ -17,7 +17,7 @@ describe("experimental ChatGPT desktop config", () => {
     }
   });
   test("malformed reads disable only the experimental feature; writes reject unknown and malformed fields", () => {
-    for (const chatgptDesktop of [null, true, [], "yes", { appServerShim: "true" }, { appServerShim: true, unblockSend: true }, { port: 1234 }]) {
+    for (const chatgptDesktop of [null, true, [], "yes", { appServerShim: "true" }, { appServerShim: true, unblocksend: true }, { port: 0 }]) {
       const candidate = { ...base, port: 12345, chatgptDesktop };
       const parsed = configSchema.parse(candidate);
       expect(parsed.chatgptDesktop).toBeUndefined();
@@ -29,21 +29,21 @@ describe("experimental ChatGPT desktop config", () => {
   });
   test("a block the read path drops says why instead of reading as silently off", () => {
     // A key left over from an older or ported config is the usual cause (#6196).
-    const leftover = { ...base, chatgptDesktop: { appServerShim: true, unblockSend: true } };
+    const leftover = { ...base, chatgptDesktop: { appServerShim: true, unblockPort: true } };
     expect(configSchema.parse(leftover).chatgptDesktop).toBeUndefined();
-    expect(chatgptDesktopConfigIssue(leftover)).toContain("unblockSend");
+    expect(chatgptDesktopConfigIssue(leftover)).toContain("unblockPort");
     expect(chatgptDesktopConfigIssue({ ...base, chatgptDesktop: { appServerShim: "true" } })).toContain("chatgptDesktop.appServerShim");
     for (const fine of [base, { ...base, chatgptDesktop: { appServerShim: true } }, { ...base, chatgptDesktop: {} }, null, []]) {
       expect(chatgptDesktopConfigIssue(fine)).toBeNull();
     }
     const diagnostics = configDiagnosticsFromRaw(JSON.stringify(leftover));
     expect(diagnostics.error).toBeNull();
-    expect(diagnostics.warnings?.join(" ")).toContain("unblockSend");
+    expect(diagnostics.warnings?.join(" ")).toContain("unblockPort");
     expect(diagnostics.warnings?.join(" ")).toContain("the whole chatgptDesktop block is ignored");
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       warnDegradedTopLevelOptIns(leftover, configSchema.parse(leftover));
-      expect(warn.mock.calls.map(call => String(call[0])).join(" ")).toContain("unblockSend");
+      expect(warn.mock.calls.map(call => String(call[0])).join(" ")).toContain("unblockPort");
       warn.mockClear();
       warnDegradedTopLevelOptIns(base, configSchema.parse(base));
       expect(warn.mock.calls.length).toBe(0);
@@ -56,7 +56,7 @@ describe("experimental ChatGPT desktop config", () => {
     const fallback = configDiagnosticsFromRaw(JSON.stringify(candidate));
     expect(fallback.source).toBe("fallback");
     expect(fallback.error).toContain("routingProfiles.bad");
-    for (const chatgptDesktop of [{ appServerShim: true, unblockSend: true }, { appServerShim: "true" }]) {
+    for (const chatgptDesktop of [{ appServerShim: true, unblockPort: true }, { appServerShim: "true" }]) {
       const normal = configDiagnosticsFromRaw(JSON.stringify({ ...base, chatgptDesktop }));
       const diagnostics = configDiagnosticsFromRaw(JSON.stringify({ ...candidate, chatgptDesktop }));
       expect(normal.warnings?.join(" ")).toContain("the whole chatgptDesktop block is ignored");
@@ -76,7 +76,11 @@ describe("experimental ChatGPT desktop config", () => {
     if (process.platform !== "darwin") expect(diagnostics.warnings?.join(" ")).toContain("macOS only");
   });
   test("all operations reject non-macOS without app side effects", async () => {
-    for (const sub of ["launch", "restore", "status"]) expect(await handleChatgptCommand([sub], "linux")).toBe(1);
+    for (const sub of ["launch", "restore", "status", "install-watcher", "uninstall-watcher"]) expect(await handleChatgptCommand([sub], "linux")).toBe(1);
+  });
+  test("unexpected watcher arguments are rejected before app side effects", async () => {
+    expect(await handleChatgptCommand(["install-watcher", "--unknown"], "darwin")).toBe(64);
+    expect(await handleChatgptCommand(["uninstall-watcher", "--yes"], "darwin")).toBe(64);
   });
   test("hidden self-test works and rejects extra options", async () => {
     expect(await handleInternalCommand(["chatgpt-app-server-filter", "--self-test"])).toBe(0);
