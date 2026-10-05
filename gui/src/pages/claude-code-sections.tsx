@@ -157,12 +157,12 @@ export function ClaudeCodeSettingsCard({
         const hintKey = key === "webSearchSidecar" ? "claude.webSearchSidecarHint" : "claude.visionSidecarHint";
         const listId = `claude-sidecar-models-${key}`;
         return (
-          <div className="setting-row" key={key} style={{ alignItems: "flex-start" }}>
-            <div className="setting-label setting-copy" style={{ flex: 1 }}>
+          <div className="setting-row claudecode-sidecar-row" key={key}>
+            <div className="setting-label setting-copy">
               <span className="title">{t(titleKey)}</span>
               <span className="desc">{t(hintKey)}</span>
             </div>
-            <div className="setting-controls" style={{ display: "flex", gap: 8 }}>
+            <div className="setting-controls">
               <Select
                 value={sidecarSelectValue(override)}
                 options={[
@@ -195,7 +195,6 @@ export function ClaudeCodeSettingsCard({
                 disabled={!override}
                 list={override ? listId : undefined}
                 aria-label={t("dash.sidecarModel")}
-                style={{ minWidth: 210 }}
                 autoComplete="off"
               />
               {override && (

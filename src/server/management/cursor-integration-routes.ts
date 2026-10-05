@@ -53,9 +53,9 @@ export async function buildCursorIntegrationStatus(
   const privateInference = pick(installs, "private-inference");
   const regular = pick(installs, "regular");
   const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
-  // The port the browser reached is the one Cursor on the same machine will reach too; the
-  // runtime record and config.port are fallbacks for a request that carries no port.
-  const port = runtime?.port ?? (Number(ctx.url?.port) || config.port);
+  // The lifecycle-bound public port wins, then the PID-matched runtime record, then config.
+  // A management-only ingress port must never become the Cursor gateway (#6598).
+  const port = deps.liveListenPort?.() ?? runtime?.port ?? config.port;
   // Cursor runs on this machine, so the gateway URL it is told to paste is the LOCAL one: the
   // unauthenticated loopback listener when one is enabled, and otherwise the bind address on the
   // public port — 127.0.0.1 for a loopback or wildcard bind exactly as before, and the tailnet

@@ -10,7 +10,7 @@ import type { ProxyRestartStartOutcome } from "./tray-proxy";
  * never needs to import the entry module back (no cycle).
  */
 import { CLI_COMMANDS } from "./registry";
-import type { CliHead } from "./root";
+import { uninstallArgsError, type CliHead } from "./root";
 import type { ReadyArgs } from "./ready";
 import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
@@ -299,6 +299,11 @@ const commandRunners: Record<string, CommandRunner> = {
     return Number(process.exitCode ?? 0);
   },
   uninstall: async deps => {
+    const error = uninstallArgsError("uninstall", deps.args);
+    if (error) {
+      console.error(error);
+      return 2;
+    }
     await deps.handleUninstall();
     return Number(process.exitCode ?? 0);
   },

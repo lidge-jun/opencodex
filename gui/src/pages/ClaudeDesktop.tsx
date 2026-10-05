@@ -1,5 +1,5 @@
 import ClaudeInterceptStart from "../components/ClaudeInterceptStart";
-import { useCallback, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import { LANE_PAGE, defaultCollapsedFamilies, laneView, rowStartsOpen } from "./claude-desktop-lane";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { IconChevron } from "../icons";
@@ -188,6 +188,24 @@ function normalizeProfile(data: DesktopResponse): DesktopProfile {
 function errorMessage(value: unknown, fallback: string): string {
   if (value && typeof value === "object" && "error" in value && typeof value.error === "string") return value.error;
   return fallback;
+}
+
+/** Stands in for the route inside the translated template so the status text can be split out. */
+const ROUTE_SLOT = "\u2063route\u2063";
+
+/**
+ * A stored role choice that went unavailable, as the select shows it: the route may truncate,
+ * the translated status around it never does, so a narrow trigger still says it is unavailable.
+ */
+function UnavailableRouteLabel({ route, t }: { route: string; t: TFn }) {
+  const [before = "", after = ""] = t("claudeDesktop.roles.unavailableOption", { route: ROUTE_SLOT }).split(ROUTE_SLOT);
+  return (
+    <span className="claude-role-option">
+      {before && <span className="claude-role-option__status">{before}</span>}
+      <span className="claude-role-option__route">{route}</span>
+      {after && <span className="claude-role-option__status">{after}</span>}
+    </span>
+  );
 }
 
 function formatContextWindow(value: number | undefined, t: TFn): string | null {
@@ -508,18 +526,24 @@ export default function ClaudeDesktop({
   const modelByRoute = new Map(data.models.map(model => [model.route, model]));
   /** Options for one role: available models minus the other role's route, plus a stored choice that went unavailable. */
   const roleSelectOptions = (value: string, exclude: string, allowUnset: boolean) => {
-    const options: { value: string; label: string }[] = roleOptions(data.models, exclude || null)
+    const options: { value: string; label: ReactNode }[] = roleOptions(data.models, exclude || null)
       .map(model => ({ value: model.route, label: model.label }));
     if (value && !options.some(option => option.value === value)) {
       const stale = modelByRoute.get(value);
       options.unshift({
         value,
-        label: stale?.available === false || !stale ? t("claudeDesktop.roles.unavailableOption", { route: value }) : value,
+        label: stale?.available === false || !stale ? <UnavailableRouteLabel route={value} t={t} /> : value,
       });
     }
     if (allowUnset) options.unshift({ value: "", label: t("claudeDesktop.roles.unset") });
     else if (!value) options.unshift({ value: "", label: t("claudeDesktop.roles.pick") });
     return options;
+  };
+  /** The full text of a role's current choice, for the trigger's tooltip when it is truncated. */
+  const roleTitle = (value: string): string | undefined => {
+    if (!value) return undefined;
+    const model = modelByRoute.get(value);
+    return model?.available ? model.label : t("claudeDesktop.roles.unavailableOption", { route: value });
   };
   const listed = roleListOrder(data.models, defaultRoute || null, quickRoute || null);
   const haikuEmpty = familySize(data.models, profile, "haiku") === 0;
@@ -678,6 +702,7 @@ export default function ClaudeDesktop({
                 options={roleSelectOptions(defaultRoute, quickRoute, false)}
                 onChange={route => { if (route) moveModel(route, "opus", true); }}
                 label={t("claudeDesktop.roles.default")}
+                title={roleTitle(defaultRoute)}
                 disabled={pending !== null}
                 style={{ minWidth: 240 }}
                 align="right"
@@ -696,6 +721,7 @@ export default function ClaudeDesktop({
                 options={roleSelectOptions(quickRoute, defaultRoute, haikuEmpty)}
                 onChange={route => { if (route) moveModel(route, "haiku", true); }}
                 label={t("claudeDesktop.roles.quick")}
+                title={roleTitle(quickRoute)}
                 disabled={pending !== null}
                 style={{ minWidth: 240 }}
                 align="right"

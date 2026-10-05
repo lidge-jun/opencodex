@@ -87,6 +87,23 @@ describe("CLI dispatch aliases", () => {
 });
 
 describe("dispatchCommand exit codes", () => {
+  test("uninstall aliases reject arguments without calling teardown", async () => {
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    let teardowns = 0;
+    try {
+      for (const command of ["uninstall", "remove"]) {
+        for (const trailing of [["--dry-run"], ["extra"], ["--token=synthetic-private-value"]]) {
+          const args = [command, ...trailing];
+          expect(await dispatchCommand({ kind: "command", command, args }, {
+            ...fakeDeps, args, command, handleUninstall: async () => { teardowns++; },
+          })).toBe(2);
+        }
+      }
+      expect(teardowns).toBe(0);
+      expect(JSON.stringify(error.mock.calls)).not.toContain("synthetic-private-value");
+    } finally { error.mockRestore(); }
+  });
+
   test("Aside sync refuses a marker-only configured-port listener before sending credentials", async () => {
     const { refreshAsideProfilesThroughServer } = await import("../../src/cli/aside-profiles");
     const requests: Array<{ input: string; headers: Headers }> = [];

@@ -3,7 +3,7 @@ title: 연동
 description: 대시보드에서 OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo와 Factory Droid를 opencodex에 연결합니다. 클라이언트마다 스위치가 하나씩 있으며 기록 전마다 백업합니다.
 ---
 
-**Integrations** 탭은 클라이언트의 설정 파일에 opencodex 프로바이더 블록을 쓰고 다시 제거합니다. 다음 17개 클라이언트는 각각 스위치로 관리합니다.
+**연결** 페이지는 클라이언트의 설정 파일에 opencodex 프로바이더 블록을 쓰고 다시 제거합니다. 다음 17개 클라이언트는 각각 스위치로 관리합니다.
 
 | 클라이언트 | 설정 파일 | 형식 | 변경 적용 시점 | 자격 증명 |
 |---|---|---|---|---|
@@ -41,7 +41,7 @@ modelProfile:
 
 관리형 OpenCode 연동은 `provider.opencodex`(opencode V1)와 `providers.opencodex`(opencode V2) 두 조각을 소유합니다. 두 블록 모두 선언된 모델별 추론 선택지와 기본값을 같은 내용으로 가집니다. 레거시 블록은 모델 options의 기본값과 변형 맵으로, V2 블록은 모델 settings와 네이티브 변형 배열로 표현하며 둘 다 기록하고 동기화합니다. 두 블록은 같은 프로바이더와 모델 ID를 가리키고 opencode V2는 이를 프로바이더 항목 하나로 병합합니다. Apply, Refresh, Disable, Restore는 두 조각 모두에 작용하며 다른 프로바이더, 에이전트, 단축키, MCP 항목은 유지됩니다. 이 모델 정의는 Kilo 내보내기와 `ocx opencode` 런처와 같은 유효 정규 모델 메타데이터에서 만들어집니다. 명시적 사용자 지정 오버라이드는 항상 우선하고 비워 둔 단계는 그대로 유지되며, 단계나 기본값을 지어내지 않습니다. 신뢰할 수 있는 컨텍스트 한도는 출력 한도와 함께 전달됩니다. 출력은 알려진 값(명시적 또는 카탈로그 메타데이터)이 우선하고, 알려지지 않았으면 스키마 필수 32000 폴백(컨텍스트로 상한)이 사용되며, 신뢰할 수 있는 컨텍스트가 없으면 limit 블록 전체가 생략됩니다. 기능, 강도 단계, 기본값, 선택적 입력 한도는 알려진 경우에만 기록됩니다. V2 블록의 네이티브 capabilities 객체에는 알려진 tools 값이 필요해서 도구 지원 여부를 알 수 없으면 일부만 쓰지 않고 객체 전체를 생략하며, 레거시 쪽 모달리티 선언은 그대로 남습니다. 단계를 지어내는 대신 제어만 기록합니다. V2 블록은 항상 명시적인 변형 배열을 가지며 선언이 없으면 비어 있는데, 생략하면 OpenCode가 low/medium/high를 합성하기 때문입니다. 고정된 추론은 알려졌지만 조절 가능한 단계가 없는 모델에는 선택 가능한 강도 대신 비활성 전용 억제가 기록됩니다. 레거시 OpenCode 블록과 Kilo 모두 클라이언트가 그냥 생성했을 각 단계 ID를 전부 비활성화합니다. 어느 쪽도 선택 가능한 강도를 추가하지 않습니다. 선택 가능한 변형(모델 자신의 단계가 `none`을 선언한 경우의 `none` 포함)은 알려진 경우에 기록되는 기본 추론 강도를 덮어쓸 수 있습니다. 클라이언트가 무엇을 선택하든 프록시의 업스트림 고정 정책은 계속 실제 요청에 적용됩니다.
 
-관리형 DSH 지원의 최저 호환 버전은 **DSH 0.1.0-rc.6**입니다. opencodex는 `llm-pi-ai.providers.opencodex`만 소유합니다. Apply와 Refresh는 해당 조각을 교체하고, Disable은 그 조각만 제거하며, Restore는 기록된 스냅샷을 되돌립니다. DSH는 프로바이더 변경을 즉시 다시 읽습니다. 이 작업은 사용자의 기본 모델이나 네이티브 `deepseek-official` 프로바이더를 바꾸지 않습니다. 관리형 DSH 연동은 현재 루프백 전용이며 실제 자격 증명을 기록하지 않습니다.
+관리형 DSH 지원의 최저 호환 버전은 **DSH 0.1.0-rc.6**입니다. **DSH 0.1.7 이상**은 Desktop 프로필 패치인 `$DSH_HOME/profiles/desktop/cordis.patch.yml`에서 라우트를 읽고 파일 변경을 즉시 반영합니다. Desktop 프로필과 패치가 있으면 OpenCodex는 `[id=llm-pi-ai].config.providers.opencodex` 행만 기록합니다. `$DSH_HOME/profiles/desktop/package.json`은 있지만 `cordis.patch.yml`이 없으면 Apply를 거부합니다. `[]`(DSH가 새 프로필에 기록하는 빈 패치)가 들어 있는 `cordis.patch.yml`을 만든 뒤 연동을 다시 켜세요. Desktop 프로필이 없을 때만 `$DSH_HOME/settings.yaml`의 `llm-pi-ai.providers.opencodex`를 대신 사용합니다. Apply와 Refresh는 해당 부분을 교체하고, Disable은 그 부분만 제거하며, Restore는 기록된 스냅샷을 되돌립니다. 이 작업은 사용자의 기본 모델이나 네이티브 `deepseek-official` 프로바이더를 바꾸지 않습니다. 관리형 DSH 연동은 현재 루프백 전용이며 실제 자격 증명을 기록하지 않습니다.
 
 MiniMax Code는 `MINIMAX_DATA_DIR`, 다음으로 `MAVIS_DATA_DIR`를 확인한 뒤 기본값 `~/.minimax`를 사용합니다. 관리형 블록은 `custom_provider.opencodex`만 소유합니다. `defaultModel`, 선택된 MiniMax 자격 증명 출처, MiniMax 로그인은 바꾸지 않습니다. 연결 후 MCode에서 `custom_provider:opencodex/<provider/model>` 항목을 선택하세요. 연동을 새로 고치면 모델별로 신뢰할 수 있는 컨텍스트 창과 추론 강도 선택지도 갱신합니다. 알 수 없는 기능은 생략하고 MCode 세션이 소유한 현재 강도는 유지합니다.
 
@@ -51,7 +51,7 @@ Aside는 로컬 프로필을 포함해 등록된 프로필마다 별도 모델 �
 
 Aside만의 주의 사항이 있습니다. 실행 중인 앱이 `models.json`을 직접 다시 쓰므로 적용 후에는 Claude Desktop을 재시작할 때처럼 Aside를 완전히 종료하고 다시 여세요. Aside 블록은 루프백 전용이며 실제 자격 증명을 담지 않습니다.
 
-관리형 Raycast 연동은 **macOS와 Windows**를 지원합니다. Custom Providers는 **Raycast Pro** 기능입니다. 무료 플랜에서도 파일은 쓰지만 Raycast가 읽지 않으므로 `ocx integration client status --client raycast`와 Integrations 페이지에 경고가 표시됩니다. macOS나 Windows에서 Raycast → Settings → AI → **Reveal Providers Config**를 한 번 열어 `ai` 폴더를 만드세요. 지원 플랫폼에서 opencodex는 이 폴더로 설치 여부를 판단하며 폴더가 생기기 전에는 미설치로 보고합니다. 폴더가 있어도 Linux는 지원하지 않습니다.
+관리형 Raycast 연동은 **macOS와 Windows**를 지원합니다. Custom Providers는 **Raycast Pro** 기능입니다. 무료 플랜에서도 파일은 쓰지만 Raycast가 읽지 않으므로 `ocx integration client status --client raycast`와 **연결** 페이지에 경고가 표시됩니다. macOS나 Windows에서 Raycast → Settings → AI → **Reveal Providers Config**를 한 번 열어 `ai` 폴더를 만드세요. 지원 플랫폼에서 opencodex는 이 폴더로 설치 여부를 판단하며 폴더가 생기기 전에는 미설치로 보고합니다. 폴더가 있어도 Linux는 지원하지 않습니다.
 
 상태 필드 `aiDirPresent`는 Raycast 앱 설치 여부나 플랫폼 지원 여부와 관계없이 `~/.config/raycast/ai`의 존재만 알려줍니다. Raycast를 설치했거나 사용할 수 있다는 증거는 아닙니다. CLI는 `plan`을 별도 줄에 출력하고 `aiDirPresent`가 false이면 macOS/Windows 설정 안내를 추가합니다. `--json`은 중첩된 `raycast` 블록을 포함한 원시 상태를 유지합니다. Raycast는 macOS와 Windows 모두에서 `~/.config/raycast/ai/providers.yaml`을 읽고 `XDG_CONFIG_HOME`은 따르지 않으므로 이 경로를 옮길 수 없습니다.
 
@@ -103,7 +103,7 @@ Aside는 선택한 프로필 하나에 같은 미리 보기와 확인 흐름을 
 
 ## 실제로 예상해야 할 동작
 
-**형식은 대체로 보존되지 않습니다.** 적용 과정에서 설정을 파싱하고 다시 기록하므로 JSON, JSON5, TOML의 형식이 달라질 수 있고 JSON5나 TOML의 주석은 사라집니다. OMP, DSH, Hermes는 예외입니다. 이들의 YAML 기록기는 각각 `providers.opencodex`와 `llm-pi-ai.providers.opencodex`만 수정하며 다른 프로바이더의 주석과 형식을 바이트 단위로 보존합니다. 정확한 원본 범위를 안전하게 찾을 수 없으면 작업을 거부합니다. 다른 클라이언트에서 이전 파일 바이트가 필요하면 Restore를 사용하세요. 스냅샷은 원본 그대로의 사본입니다.
+**형식은 대체로 보존되지 않습니다.** 적용 과정에서 설정을 파싱하고 다시 기록하므로 JSON, JSON5, TOML의 형식이 달라질 수 있고 JSON5나 TOML의 주석은 사라집니다. OMP, DSH, Hermes는 예외입니다. YAML 기록기는 관리하는 부분만 수정합니다. OMP와 Hermes는 `providers.opencodex`를, DSH는 Desktop 패치의 `[id=llm-pi-ai].config.providers.opencodex`를 수정합니다. Desktop 프로필이 없을 때만 DSH는 `settings.yaml`의 `llm-pi-ai.providers.opencodex`를 사용합니다. 다른 프로바이더의 주석과 형식은 바이트 단위로 보존합니다. 정확한 원본 범위를 안전하게 찾을 수 없으면 작업을 거부합니다. 다른 클라이언트에서 이전 파일 바이트가 필요하면 Restore를 사용하세요. 스냅샷은 원본 그대로의 사본입니다.
 
 **값을 충실히 다시 쓸 수 없다면 스위치가 거부합니다.** 왕복 변환은 이 형식에서 실제로 쓰는 값 종류를 지원합니다. 예를 들어 사용 가능한 파서가 정확히 다시 읽을 수 없는 `inf` 또는 `nan`을 사용한 TOML 파일은 변경된 값을 성공으로 간주해 기록하지 않고 적용을 멈추며 이유를 알립니다. 파일 이름이 표시되고 디스크는 바뀌지 않습니다. 파일을 직접 편집하는 것은 계속 가능하며 자동 재작성만 거부합니다.
 
@@ -146,7 +146,7 @@ ocx mcode
 
 연결 후 `ocx sync`와 `POST /api/sync`는 소유한 MCode, Pi, Aside, Raycast, omo, OpenCode, Kilo 카탈로그를 현재 모델 선택, 컨텍스트 창, 추론 강도 단계로 갱신합니다. 프록시 시작 시 소유한 Raycast 카탈로그도 갱신합니다. 모델 표시 여부, 프로바이더 선택, 프리셋이 바뀌어도 연결된 Pi, Aside, Raycast, omo, OpenCode, Kilo 카탈로그를 갱신합니다. 누락되거나 외부에서 수정되었거나 안전하지 않은 블록, 그리고 이전에 소유했지만 사용자가 직접 삭제한 블록은 그대로 둡니다. 활성화된 Aside 프로필은 일반적인 소유 블록만 갱신하는 규칙의 예외입니다. 계정 디렉터리가 있고 소유 블록이 생긴 적이 없다면 해당 슬롯이 비어 있을 때 동기화로 첫 블록을 만들 수 있습니다. 이전 Aside 연결이 있으면 이 동작이 기본적으로 등록된 모든 프로필에 적용됩니다. 동기화는 없는 계정 디렉터리를 만들거나 수동 블록을 교체하지 않습니다. 거부되거나 겹친 갱신은 클라이언트마다 따로 보고합니다. 갱신 파일을 읽으려면 새 Pi, OpenCode, Kilo 세션을 시작하거나 Aside를 완전히 종료하고 다시 여세요. Aside 갱신에는 [호환되는 실행 중 프록시](#aside-프로필-제어)가 필요합니다.
 
-Models에 **“Model selection saved”**와 클라이언트 갱신 경고가 함께 표시되면 선택 자체는 저장되었지만 클라이언트 파일 하나 이상을 갱신하지 못한 상태입니다. 경고는 해당 클라이언트와, 필요하면 Aside 프로필을 알려주고 거부 이유를 설명합니다. 새 세션을 시작하기 전에 **Integrations**에서 해당 클라이언트나 프로필을 확인하세요. 문제를 해결한 뒤 `ocx sync`를 다시 실행합니다. 겹친 작업은 먼저 끝나야 합니다. 경고에 백업 경로가 있거나 복구가 완료되지 않았다고 나오면 재시도 전 복구 상태를 확인하세요. 선택 저장 성공만으로 클라이언트 파일 복구까지 확인된 것은 아닙니다.
+Models에 **“Model selection saved”**와 클라이언트 갱신 경고가 함께 표시되면 선택 자체는 저장되었지만 클라이언트 파일 하나 이상을 갱신하지 못한 상태입니다. 경고는 해당 클라이언트와, 필요하면 Aside 프로필을 알려주고 거부 이유를 설명합니다. 새 세션을 시작하기 전에 **연결**에서 해당 클라이언트나 프로필을 확인하세요. 문제를 해결한 뒤 `ocx sync`를 다시 실행합니다. 겹친 작업은 먼저 끝나야 합니다. 경고에 백업 경로가 있거나 복구가 완료되지 않았다고 나오면 재시도 전 복구 상태를 확인하세요. 선택 저장 성공만으로 클라이언트 파일 복구까지 확인된 것은 아닙니다.
 
 별도의 MiniMax 플랫폼 CLI(`mmx`)는 파일 스위치 연동이 아닙니다. 텍스트 명령은 MiniMax의 Anthropic 호환 엔드포인트를 사용하므로 opencodex가 자격 증명을 분리한 루프백 전용 런처를 제공합니다.
 
@@ -233,7 +233,7 @@ ocx export --client kilo --out ./kilo.jsonc
 
 ## GitHub Copilot 앱
 
-GitHub Copilot 데스크톱 앱에서 opencodex를 OpenAI 호환 모델 프로바이더로 사용할 수 있습니다. Integrations 탭의 스위치가 없는 수동 클라이언트 설정이며, opencodex의 백엔드로 Copilot 구독을 사용하는 upstream `github-copilot` 프로바이더와는 별개입니다.
+GitHub Copilot 데스크톱 앱에서 opencodex를 OpenAI 호환 모델 프로바이더로 사용할 수 있습니다. **연결** 페이지에 스위치가 없는 수동 클라이언트 설정이며, opencodex의 백엔드로 Copilot 구독을 사용하는 upstream `github-copilot` 프로바이더와는 별개입니다.
 
 1. opencodex를 시작하고 응답하는지 확인하세요.
 
@@ -258,7 +258,7 @@ GitHub Copilot 데스크톱 앱에서 opencodex를 OpenAI 호환 모델 프로�
 
 ## Factory Droid
 
-**연동 → Factory Droid** (`/#integrations/droid`)에서 연결된 모델별 추론 기본값을
+**연결 → Factory Droid** (`/#integrations/droid`)에서 연결된 모델별 추론 기본값을
 설정할 수 있습니다. 모델이 지원하는 effort를 선택하고 변경 내용을 검토한 뒤
 확인하세요. **기본값 없음**은 해당 모델의 편집 중인 값을 지웁니다. 실제로 적용하려면
 **변경 사항 저장 / 검토**에서 확인해야 합니다. 지원 effort

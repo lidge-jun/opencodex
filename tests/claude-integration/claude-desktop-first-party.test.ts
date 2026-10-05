@@ -114,6 +114,13 @@ test("CLI apply flags: default gateway, legacy shape flags imply gateway, confli
   expect("error" in parseDesktopApplyArgs(["--bogus"], config())).toBe(true);
 });
 
+test("CLI apply rejects unknown arguments without echoing option values or operands", () => {
+  const rejected = parseDesktopApplyArgs(["--token=synthetic-secret", "synthetic-operand", "-tsynthetic-short",
+    "--token", "--synthetic-dash-value", "--bogus\u001b[2Jsynthetic-escape"], config());
+  expect(rejected).toEqual({ error: "알 수 없는 인자 6개 (값은 표시하지 않습니다). 사용 가능한 옵션: --first-party --gateway --static --hybrid --discovery-only" });
+  expect(JSON.stringify(rejected)).not.toContain("synthetic");
+});
+
 test("first-party apply writes only the proxy env, creates the CA, and removes cleanly", () => {
   mkdirSync(claudeDir, { recursive: true });
   writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ theme: "dark", env: { FOO: "bar" } }));

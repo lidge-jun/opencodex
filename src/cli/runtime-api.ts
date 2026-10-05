@@ -11,6 +11,8 @@
  */
 import { findLiveProxy, probeHostname, type LivenessIo, type LiveProxy } from "../server/proxy-liveness";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
+import { redactSecretArgs } from "./secret-args";
+export { redactSecretArgs };
 
 export type CliStdin = NodeJS.ReadableStream & { isTTY?: boolean; readableEnded?: boolean };
 
@@ -226,79 +228,6 @@ export function takeIntegerOption(args: string[], flag: string, options: { min?:
 export function csv(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined;
   return [...new Set(value.split(",").map(item => item.trim()).filter(Boolean))];
-}
-
-/**
- * Options whose VALUE is a credential (or can carry one), listed here so a parse
- * error never prints one. `--headers` belongs on the list defensively: custom
- * headers are documented as non-secret metadata and the validator rejects the
- * standard credential names, but it cannot recognize an arbitrary one such as
- * `X-My-Token`, so a parse error must not echo the value back either way.
- *
- * `takeOption` only understands `--flag value`. `--flag=value` therefore falls
- * through to `rejectArgs`, which reports the offending argument verbatim — for
- * `--code=https://…?code=SECRET` that writes the authorization code to stderr,
- * which is the exact exposure the stdin path exists to avoid.
- */
-const SECRET_OPTIONS = [
-  "--code",
-  "--headers",
-  "--token",
-  "--admin-token",
-  "--pairing-code",
-  "--credential-env",
-  "--admin-token-env",
-  "--pairing-code-env",
-];
-
-/**
- * Replace credential values before they are reported back.
- *
- * Both spellings have to be covered, and the space-separated one spans two
- * tokens: mistyping `ocx account cancel <p> --code <secret>` on a command that
- * does not parse `--code` leaves the flag AND its value in the leftovers, and
- * reporting them verbatim writes the credential to stderr. Repeating the
- * option does the same with the second value, since the parser takes only the
- * first occurrence.
- *
- * The token after the option is redacted whatever it looks like. Skipping
- * `--`-prefixed tokens read as "that is a flag, not a value", but the shell
- * hands over whatever was typed: `--code --SUPERSECRET` and
- * `--code -- SUPERSECRET` both put the credential straight in the message. A
- * mistaken `--code --json` now reads `--code <redacted>`, which is worse
- * diagnostics for a case that already prints the usage text, and better than
- * printing a credential.
- *
- * `redactValues` extends that to bare leftovers, for commands whose positional
- * argument is itself a credential.
- */
-function redactSecretArgs(args: string[], redactValues = false): string[] {
-  const out: string[] = [];
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index] as string;
-    const inline = SECRET_OPTIONS.find(option => arg.startsWith(`${option}=`));
-    if (inline) {
-      out.push(`${inline}=<redacted>`);
-      continue;
-    }
-    if (SECRET_OPTIONS.includes(arg)) {
-      out.push(arg);
-      // Swallow the value that belongs to it. `--` is an end-of-options
-      // separator, so the value is the token after it.
-      let valueIndex = index + 1;
-      if (args[valueIndex] === "--") {
-        out.push("--");
-        valueIndex++;
-      }
-      if (args[valueIndex] !== undefined) {
-        out.push("<redacted>");
-        index = valueIndex;
-      }
-      continue;
-    }
-    out.push(redactValues && !arg.startsWith("-") ? "<redacted>" : arg);
-  }
-  return out;
 }
 
 export interface RejectArgsOptions {
