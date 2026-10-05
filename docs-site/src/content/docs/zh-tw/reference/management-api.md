@@ -303,7 +303,7 @@ OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中�
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | 列出／重新整理或刪除 Codex 帳號。POST 僅保留為已停用的相容 endpoint；成功的 DELETE 回應包含 `catalogRefreshPending`。 | POST 一律回傳 403 `manual_import_disabled`；DELETE 輸入無效時回傳 400 |
 | `PUT /api/codex-auth/accounts/alias` | 設定或清除帳號別名 | 400 無效帳號／別名 |
-| `PUT /api/codex-auth/accounts/pause` | 暫停或恢復一個帳號 | 400 無效帳號／狀態；404 缺失帳號 |
+| `PUT /api/codex-auth/accounts/pause` | 手動暫停或恢復帳號及身分相符的既有主帳號／帳號池項目；回傳 `affectedAccountIds` | 400 無效帳號／狀態；404 找不到帳號；503 主帳號身分資料使用中或無法讀取 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暫停配額耗盡的帳號 | 變更鎖失敗變為 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 清除一個或所有帳號的 runtime 冷卻 | 400 無效 id |
 | `GET, PUT /api/codex-auth/active` | 讀取或選擇現用帳號 | 400 無效或缺失帳號；409 暫停／舊列衝突 |

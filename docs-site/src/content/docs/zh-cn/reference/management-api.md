@@ -313,7 +313,7 @@ OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上�
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | 列出/刷新或删除 Codex 账户。POST 仅作为已禁用的兼容端点保留；成功的 DELETE 响应包含 `catalogRefreshPending`。 | POST 始终返回 403 `manual_import_disabled`；DELETE 输入无效时返回 400 |
 | `PUT /api/codex-auth/accounts/alias` | 设置或清除账户别名 | 400 账户/别名无效 |
-| `PUT /api/codex-auth/accounts/pause` | 暂停或恢复一个账户 | 400 账户/状态无效；404 缺少账户 |
+| `PUT /api/codex-auth/accounts/pause` | 手动暂停或恢复账户及同身份的已有主登录／池内入口；返回 `affectedAccountIds` | 400 账户/状态无效；404 缺少账户；503 主登录身份忙碌或无法读取 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暂停配额已耗尽的账户 | 变更锁失败会变成 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 清除一个账户或所有账户的运行时冷却 | 400 id 无效 |
 | `GET, PUT /api/codex-auth/active` | 读取或选择当前活跃账户 | 400 账户无效或缺失；409 暂停/旧行冲突 |

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { fetchLiveStartupHealth, selectStatusStartupHealth, statusServiceSummary } from "../../src/cli/status";
 import type { StartupHealth } from "../../src/codex/autostart-health";
+import { startupHealthProbeBudgetMs, startupHealthReadBudgetMs } from "../../src/codex/autostart-health";
 import { LOCAL_ATTESTATION_PROOF_HEADER, createLocalAttestationProof } from "../../src/lib/local-management-attestation";
+import type { fetchBoundLocalManagementRead } from "../../src/server/local-management-read-client";
 
 const LIVE = {
   pid: 4242,
@@ -62,6 +64,69 @@ function deps(body: unknown, proof: string | null = createLocalAttestationProof(
 }
 
 describe("ocx status live startup health", () => {
+  test("the reader covers the endpoint's bounded probe wait on every supported platform", () => {
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      expect(startupHealthReadBudgetMs(platform)).toBeGreaterThan(startupHealthProbeBudgetMs(platform) + 500);
+      expect(startupHealthReadBudgetMs(platform)).toBeLessThanOrEqual(16_500);
+    }
+  });
+
+  test("the direct transport receives the reader deadline instead of its own 10-second default", async () => {
+    const attested = deps(startupPayload());
+    let timeoutMs: number | undefined;
+    let directFetchCalls = 0;
+    const fixture: Parameters<typeof fetchBoundLocalManagementRead>[2] = {
+      ...attested,
+      directFetch: async (_url, _init, io) => {
+        timeoutMs = io?.timeoutMs;
+        directFetchCalls += 1;
+        return attested.fetchImpl();
+      },
+    };
+    delete fixture.fetchImpl;
+    expect((await fetchLiveStartupHealth(LIVE, fixture))?.serviceViable).toBe(true);
+    expect(timeoutMs).toBe(startupHealthReadBudgetMs());
+    expect(directFetchCalls).toBe(1);
+
+    fixture.fetchImpl = attested.fetchImpl;
+    expect((await fetchLiveStartupHealth(LIVE, fixture))?.serviceViable).toBe(true);
+    expect(directFetchCalls).toBe(1);
+  });
+
+  test("waits for a cold attested service probe beyond the old 1.5-second deadline", async () => {
+    const fixture = deps(startupPayload());
+    const observed = await fetchLiveStartupHealth(LIVE, {
+      ...fixture,
+      fetchImpl: async (_url, init) => {
+        await new Promise<void>((resolve, reject) => {
+          const signal = init!.signal!;
+          const onAbort = () => {
+            clearTimeout(timer);
+            reject(signal.reason);
+          };
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", onAbort);
+            resolve();
+          }, 1_650);
+          signal.addEventListener("abort", onAbort, { once: true });
+        });
+        return fixture.fetchImpl();
+      },
+    });
+    expect(observed?.serviceViable).toBe(true);
+  });
+
+  test("a probe exceeding the reader deadline still falls back", async () => {
+    const observed = await fetchLiveStartupHealth(LIVE, {
+      ...deps(startupPayload()),
+      timeoutMs: 10,
+      fetchImpl: async (_url, init) => new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+      }),
+    });
+    expect(observed).toBeNull();
+  });
+
   test("uses an attested live startup verdict when the shell-local service probe would disagree", async () => {
     const observed = await fetchLiveStartupHealth(LIVE, deps(startupPayload()));
     expect(observed?.status).toBe("protected");

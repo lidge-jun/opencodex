@@ -178,6 +178,9 @@ alone for the rotation gate and fails closed, so only positive evidence changes 
 stable `__main__` alias remains visible for maintenance and quota reads, but is excluded from new
 affinity, quota rotation, cooldown probes, transient failover, and manual activation. In-flight
 requests keep their captured credential. An all-paused pool fails closed.
+Manual pause/resume synchronizes existing entries with a confirmed matching account and workspace,
+including a duplicated main login. [Account operations](openai-accounts.md#manual-account-pause-and-resume)
+owns identity matching and publication; automatic quota policies retain their per-entry decisions.
 The dashboard's bulk pause action refreshes all account quotas and mutates only accounts whose
 plan-relevant window is freshly confirmed at exactly 100%; unknown and failed refreshes are skipped.
 

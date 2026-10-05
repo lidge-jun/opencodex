@@ -10,6 +10,16 @@ export type StartupProtection = "service" | "desktop" | "shim" | "none";
 export type StartupHealthStatus = "native" | "protected" | "at-risk";
 export type ShimCoverage = "full" | "cli-only" | "none";
 
+/** Bound the isolated service-manager probe and let its reader outlive that probe. */
+export function startupHealthProbeBudgetMs(platform: NodeJS.Platform = process.platform): number {
+  return platform === "win32" ? 15_000 : 5_000;
+}
+
+export function startupHealthReadBudgetMs(platform: NodeJS.Platform = process.platform): number {
+  // The endpoint waits an extra 500ms for child settlement; reserve another second for HTTP.
+  return startupHealthProbeBudgetMs(platform) + 1_500;
+}
+
 export interface StartupHealthInputs {
   desktop?: DesktopStartupDiagnostic;
   routingKind: CodexRoutingKind;

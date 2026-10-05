@@ -15,6 +15,7 @@ import type { OcxConfig } from "../../src/types";
 
 const runtimeUrl = pathToFileURL(join(import.meta.dir, "../../src/claude/intercept/runtime.ts")).href;
 const proxyUrl = pathToFileURL(join(import.meta.dir, "../../src/claude/intercept/connect-proxy.ts")).href;
+const storeUrl = pathToFileURL(join(import.meta.dir, "../helpers/picker-ca-store.ts")).href;
 const caUrl = pathToFileURL(join(import.meta.dir, "../../src/claude/intercept/picker-ca.ts")).href;
 
 // Logical configured ports are asserted separately from kernel-owned allocations.
@@ -23,8 +24,10 @@ const REQUESTED_PROXY_PORT = 10234;
 function replacement(root: string, port: number, fail: boolean, fingerprints: string[]) {
   const source = `
     import { readFileSync } from "node:fs";
+    import { join } from "node:path";
     import { startClaudeIntercept, getClaudePickerRuntime } from ${JSON.stringify(runtimeUrl)};
     import { startConnectProxy } from ${JSON.stringify(proxyUrl)};
+    import { filePickerCaStore } from ${JSON.stringify(storeUrl)};
     import { pickerCaFingerprints } from ${JSON.stringify(caUrl)};
     const root = ${JSON.stringify(root)};
     const trusted = new Set(${JSON.stringify(fingerprints)});
@@ -43,10 +46,11 @@ function replacement(root: string, port: number, fail: boolean, fingerprints: st
     const requestedPorts = [];
     let created = false;
     const handle = await startClaudeIntercept({
-      config: { port: 10100, providers: {}, defaultProvider: "openai", claudeCode: { intercept: { port: ${port} } } },
+      config: { port: 10100, providers: {}, defaultProvider: "openai", claudeCode: { desktopMode: "first-party", intercept: { port: ${port} } } },
       publicPort: 10100, configDir: root, dispatch: async () => new Response("unused"),
       loadPickerRoutes: async () => ({ nativeSlugs: [], routedModels: [] }),
       createPicker: () => { created = true; return { selectTunnel: () => ({ kind: "blind" }), start: async () => {}, stop: async () => {} }; },
+      pickerCaStore: filePickerCaStore(join(root, "test-only-store")),
       pickerSecurity: security, pickerPlatform: "darwin",
       // Bind real proxies on port 0; probing and releasing a port does not reserve its neighbour.
       startProxy: async (requestedPort, options) => {
@@ -87,7 +91,8 @@ test("a replacement process retries the recorded predecessor before rotating and
     const firstProcessSha1 = pickerCaFingerprints(readFileSync(pickerCaCertPath(root), "utf8")).sha1;
     expect(firstProcessSha1).not.toBe(foreignSha1);
     const second = replacement(root, port, false, [foreignSha1, firstProcessSha1]);
-    expect(second).toMatchObject({ created: true, active: true, attempts: [foreignSha1, firstProcessSha1] });
+    expect(second).toMatchObject({ created: true, active: true, attempts: [foreignSha1] });
+    expect(pickerCaFingerprints(readFileSync(pickerCaCertPath(root), "utf8")).sha1).toBe(firstProcessSha1);
     expect(second.requestedPorts).toEqual([port, port + 1]);
     const boundPorts = [second.listenerPort, second.proxyPort, second.pickerPort];
     expect(boundPorts.every(value => typeof value === "number" && Number.isInteger(value) && value > 0)).toBe(true);

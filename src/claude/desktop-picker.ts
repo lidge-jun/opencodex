@@ -10,6 +10,8 @@ import { getConfigDir } from "../config/paths";
 import { readFileSync, existsSync } from "node:fs";
 import { acceptsPickerAuthority, pickerCaCertPath, pickerCaFingerprints, ensurePickerCa, issuePickerLeaf, pickerLeafCertPath, publishedPickerCaSha256 } from "./intercept/picker-ca";
 import { inspectPickerTrust, trustPickerCa, untrustPickerCa } from "./intercept/picker-trust";
+import { preparePersistentPickerAuthority } from "./intercept/picker-ca-startup";
+import type { PickerCaStore } from "./intercept/picker-ca-store";
 import type { PickerRuntime } from "./intercept/picker-runtime";
 import type { PickerTrustState, SecurityRunner } from "./intercept/picker-trust";
 import {
@@ -52,6 +54,8 @@ export interface DesktopPickerEnableOptions {
   persist: boolean;
   context: "cli-trusted" | "server";
   callerAddedTrust?: boolean;
+  /** Normal restart only inspects trust; explicit enable keeps the consent flow. */
+  allowTrustPrompt?: boolean;
 }
 
 export interface DesktopPickerOps {
@@ -74,6 +78,7 @@ export interface DesktopPickerControllerDeps {
   /** Bound picker CONNECT proxy port (Desktop's egress), or null when it is not running. */
   proxyPort: () => number | null;
   configDir: string;
+  persistentAuthority?: { store?: PickerCaStore };
   security?: SecurityRunner;
   platform?: NodeJS.Platform;
   applyProfile?: typeof applyDesktopPickerProfile;
@@ -185,13 +190,8 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     // An already selected owned profile proves that another successful enable still relies on
     // this CA. Keep its trust even when the current request is refused.
     if (inspect().kind === "applied") return true;
-    try {
-      const ca = ensurePickerCa(deps.configDir);
-      const result = await untrustPickerCa(
-        pickerCaCertPath(deps.configDir), pickerCaFingerprints(ca.certPem).sha1, deps.security, platform,
-      );
-      return result.ok;
-    } catch { return false; }
+    // Compensation needs only the published public root, never a signing identity.
+    return untrustCurrentCa();
   }
 
   function withTrustFailure(status: DesktopPickerStatus, trustFailed: boolean): DesktopPickerStatus {
@@ -228,7 +228,9 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     let caPath: string;
     let caSha1: string;
     try {
-      const ca = ensurePickerCa(deps.configDir);
+      const ca = deps.persistentAuthority
+        ? await preparePersistentPickerAuthority({ configDir: deps.configDir, store: deps.persistentAuthority.store, security: deps.security, platform })
+        : ensurePickerCa(deps.configDir);
       // The CLI path gates trust on the same profile check; a published root whose bytes do not
       // match the profile this process mints must not reach the keychain through the server
       // path either, even when a live peer published it.
@@ -238,7 +240,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
       caSha1 = pickerCaFingerprints(ca.certPem).sha1;
       let trust = await inspectPickerTrust(pickerLeafCertPath(deps.configDir), caSha1, deps.security, platform);
       observedTrust = trust;
-      if (trust !== "trusted" && options.context === "server") {
+      if (trust !== "trusted" && options.context === "server" && options.allowTrustPrompt !== false) {
         const added = await trustPickerCa(caPath, deps.security, platform, { pem: ca.certPem });
         trustedByAttempt = added.ok;
         trust = await inspectPickerTrust(pickerLeafCertPath(deps.configDir), caSha1, deps.security, platform);

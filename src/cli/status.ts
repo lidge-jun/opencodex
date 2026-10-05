@@ -7,7 +7,7 @@ import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../cod
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { diagnoseService, serviceLogPath } from "../service";
-import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
+import { collectStartupHealth, startupHealthReadBudgetMs, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { missingOwnedCatalogPath } from "../codex/inject/config-toml";
 import { CODEX_CONFIG_PATH } from "../codex/paths";
@@ -251,7 +251,7 @@ export async function fetchLiveStartupHealth(
   deps: Parameters<typeof fetchBoundLocalManagementRead>[2] = {},
 ): Promise<StartupHealth | null> {
   const result = await fetchBoundLocalManagementRead(
-    live, LOCAL_MANAGEMENT_READ_PATHS.startupHealth, { timeoutMs: 1_500, ...deps, requireResponseProof: true },
+    live, LOCAL_MANAGEMENT_READ_PATHS.startupHealth, { timeoutMs: startupHealthReadBudgetMs(), ...deps, requireResponseProof: true },
   );
   if (result.kind !== "response" || !result.response.ok) return null;
   let payload: unknown;
