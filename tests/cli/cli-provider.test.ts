@@ -735,6 +735,7 @@ describe("local provider add validates the full config before saving", () => {
   test.each([
     { baseUrl: "http://127.0.0.1:9/v1", flags: [], reason: "loopback address", hint: true },
     { baseUrl: "http://169.254.169.254/v1", flags: ["--allow-private-network"], reason: "blocked metadata endpoint", hint: false },
+    { baseUrl: "https://fixture:synthetic-userinfo@provider.example.test/v1", flags: [], reason: "must not include embedded credentials", hint: false },
   ])("invalid destination $baseUrl leaves config bytes unchanged", ({ baseUrl, flags, reason, hint }) => {
     const { dir, configPath } = freshConfig();
     try {
@@ -745,6 +746,7 @@ describe("local provider add validates the full config before saving", () => {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(reason);
       if (hint) expect(result.stderr).toContain("add --allow-private-network");
+      expect(result.stderr).not.toContain("synthetic-userinfo");
       expect(readFileSync(configPath, "utf8")).toBe(before);
     } finally { removeTreeWithRetry(dir); }
   });

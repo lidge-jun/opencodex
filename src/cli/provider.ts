@@ -84,6 +84,8 @@ function validateAndSave(config: ReturnType<typeof loadConfig>): void {
     console.error(`Error: ${result.error}`);
     if (result.error.includes("set allowPrivateNetwork:true")) {
       console.error("For an intentionally local provider, add --allow-private-network.");
+    } else {
+      console.error("Nothing was saved. Fix the setting named above; if this command did not set it, run ocx config validate and repair it with ocx config set/unset.");
     }
     process.exit(1);
   }
