@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
+import { clearMainAccountInfoCache } from "../../src/codex/auth-api";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleResponses } from "../../src/server/responses/core";
@@ -98,7 +100,7 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
           expect(response.status).toBe(200);
           const wire = seen.at(-1)!;
           expect(wire.url).toBe("https://chatgpt.com/backend-api/codex/responses");
-          expect(wire.headers.get("session_id")).toBe(explicit ? explicit === "session_id" ? "caller-conversation" : null : expectedSession);
+          expect(wire.headers.get("session_id")).toBe(explicit ? "caller-conversation" : expectedSession);
           if (explicit) expect(wire.headers.get(explicit)).toBe("caller-conversation");
           expect(wire.headers.has("x-opencode-session")).toBe(false);
           expect(wire.body.prompt_cache_key).toBe(key);
@@ -156,5 +158,56 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
     expect(wires[0]?.get("session_id")).toBe(expectedSession);
     expect(wires.at(-1)?.has("session_id")).toBe(false);
     expect(requests.every(request => !request.headers.has("session_id"))).toBe(true);
+  });
+});
+
+
+describe("native alias identity survives 401 auth replay", () => {
+  test.each([
+    { session_id: "", "session-id": "caller-conversation" },
+    { "session-id": "", "thread-id": "caller-conversation" },
+    { "session-id": "caller-conversation", "thread-id": "weaker-conversation" },
+  ])("keeps the same wire identity before and after stored-main refresh: %j", async identity => {
+    const cfg = config();
+    cfg.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID;
+    cfg.autoSwitchThreshold = 0;
+    cfg.codexAccounts = [];
+    cfg.providers.openai!.codexAccountMode = "pool";
+    clearMainAccountInfoCache();
+    writeFileSync(join(isolated.path, "auth.json"), JSON.stringify({ tokens: {
+      access_token: token, refresh_token: "fixture-refresh-grant", account_id: "fixture-native-main",
+    } }));
+    const refreshed = fakeChatGptJwt({ exp: Math.floor(Date.now() / 1000) + 172800, chatgpt_account_id: "fixture-native-main" });
+    const wires: Headers[] = [];
+    let refreshes = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === "auth.openai.com") {
+        refreshes++;
+        return Response.json({ access_token: refreshed, refresh_token: "fixture-rotated-grant", expires_in: 3600 });
+      }
+      if (!url.pathname.endsWith("/responses")) return Response.json({ rate_limit: { primary_window: { used_percent: 10 } } });
+      wires.push(new Headers(init?.headers));
+      return wires.length === 1
+        ? Response.json({ error: { message: "expired bearer" } }, { status: 401 }) : completed();
+    }) as typeof fetch;
+    const req = new Request("http://localhost/v1/responses", { method: "POST",
+      headers: { "content-type": "application/json", originator: "example-agent", ...identity },
+      body: JSON.stringify({ model: "openai/gpt-5.6-luna", input: "ping", stream: false }),
+    });
+    const originalHeaders = [...req.headers];
+    const lease = tryAdmitTurn();
+    expect(lease).not.toBeNull();
+    try {
+      const response = await handleResponses(req, cfg, { model: "", provider: "" }, { turnAdmissionLease: lease! });
+      await response.text();
+      expect(response.status).toBe(200);
+      expect(refreshes).toBe(1);
+      expect(wires).toHaveLength(2);
+      expect(wires.map(headers => headers.get("session_id"))).toEqual(["caller-conversation", "caller-conversation"]);
+      expect(wires.map(headers => headers.get("originator"))).toEqual(["example-agent", "example-agent"]);
+      expect(wires.map(headers => headers.get("authorization"))).toEqual([`Bearer ${token}`, `Bearer ${refreshed}`]);
+      expect([...req.headers]).toEqual(originalHeaders);
+    } finally { lease?.release(); clearMainAccountInfoCache(); }
   });
 });

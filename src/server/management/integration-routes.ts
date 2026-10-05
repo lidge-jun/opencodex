@@ -46,7 +46,7 @@ import {
 } from "../../integrations/mutation-flight";
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
-import type { ManagementContext } from "./context";
+import { managementInferencePort, type ManagementContext } from "./context";
 import { exportSnapshotIdentity, loadExportModels, previewExportSnapshot } from "./model-rows";
 import {
   previewIntegration,
@@ -230,7 +230,7 @@ function asideOptions(ctx: ManagementContext): AsideProfileRouteOptions {
   return {
     input: () => input ??= {
       config: ctx.config,
-      port: Number(ctx.url.port) || ctx.config.port,
+      port: managementInferencePort(ctx),
       models: () => loadExportModels(ctx.config),
       store: integrationStore(),
       ...pathOverrides(),
@@ -252,7 +252,7 @@ async function buildIntegrationWriteInput(
     clientId,
     models: await loadExportModels(ctx.config),
     config: ctx.config,
-    port: Number(ctx.url.port) || ctx.config.port,
+    port: managementInferencePort(ctx),
     ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: { ...droidReasoningDefaults } }),
     store,
     io: integrationMutationTestHooks?.io,
@@ -284,7 +284,7 @@ async function buildIntegrationPreviewInput(
       clientId,
       models: snapshot.models,
       config: ctx.config,
-      port: Number(ctx.url.port) || ctx.config.port,
+      port: managementInferencePort(ctx),
       ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: { ...droidReasoningDefaults } }),
       store,
       io: integrationMutationTestHooks?.io,
@@ -619,7 +619,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
   if (url.pathname === "/api/client-integrations" && req.method === "GET") {
     try {
       const models = await loadExportModels(ctx.config);
-      const port = Number(url.port) || ctx.config.port;
+      const port = managementInferencePort(ctx);
       // One store for the whole collection read: without it this route retried
       // maintenance and counted snapshots in the default store even when the
       // caller had bound everything else to a temp root (A-gate round 13).

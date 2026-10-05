@@ -346,3 +346,11 @@ the ready/close DTO; readiness plus unverified close is partial/exit 1. A normal
 close after earlier failure is still failure. No raw frames/errors or credential
 carriers are exposed. Timeouts and cancellation close local resources without
 proving upstream lease release or absence of cost. Signals return 130/143.
+
+## Local config failures
+
+`config validate` exits 1 for an invalid config, including in JSON mode (`{ok:false,error}`). `config`, `config show`, and `config get` warn on stderr and exit nonzero when displaying fallback defaults. Use `config validate` to inspect the failure or `config show --source` for an explicit diagnostic read; that read may exit 0 while reporting `source: "fallback"` and a warning.
+
+Local `provider add` validates the complete candidate before saving. A refused destination leaves config bytes unchanged. Add `--allow-private-network` only for an intentionally local provider; blocked metadata endpoints remain forbidden. `health` accepts only one optional `--json`; other arguments exit 2 before discovery. Alias usage failures also exit 2.
+
+File `config export --json` emits only `{ok:true,path}`; the requested file contains raw credentials. Export to `-` always remains a raw config document and must stay out of agent transcripts.

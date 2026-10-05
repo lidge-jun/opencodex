@@ -3,7 +3,7 @@ title: Integrations
 description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
-The **Integrations** tab writes opencodex's provider block into a client's own config
+The **Connect** page writes opencodex's provider block into a client's own config
 file, and removes it again. Seventeen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
@@ -18,7 +18,7 @@ file, and removes it again. Seventeen clients work this way, each with a switch:
 | DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml` (default `~/.dsh/profiles/desktop/cordis.patch.yml`); `$DSH_HOME/settings.yaml` until DSH Desktop creates that profile | YAML | hot reload | non-secret loopback bearer placeholder |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | new sessions, or after opening the model picker | loopback placeholder |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | new sessions | loopback placeholder |
-| ZCode | `~/.zcode/v2/config.json` | JSON | on restart | loopback placeholder |
+| ZCode | `~/.zcode/v2/provider_config.json` (schemaVersion 1); legacy fallback: `~/.zcode/v2/config.json` | JSON | on restart | loopback placeholder |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | after fully quitting and reopening Aside | loopback placeholder |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
 | omo (Pi / senpi) | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
@@ -82,10 +82,16 @@ default — `none` included, offered only when the model's own declared ladder c
 the client selects, the proxy's pinned upstream reasoning policy still governs the request that
 leaves it.
 
-Managed DSH support has a compatibility floor of **DSH 0.1.0-rc.6**. OpenCodex owns only
-`llm-pi-ai.providers.opencodex`; Apply and Refresh replace that fragment, Disable removes only that
-fragment, and Restore puts back a recorded snapshot. DSH hot reloads provider changes. These
-operations do not change the user's default model or the native `deepseek-official` provider.
+Managed DSH support has a compatibility floor of **DSH 0.1.0-rc.6**. DSH 0.1.7+ reads provider
+routes from `[id=llm-pi-ai].config.providers.opencodex` in the Desktop profile patch,
+`$DSH_HOME/profiles/desktop/cordis.patch.yml`, which DSH hot reloads. OpenCodex writes that row when the Desktop profile and its patch exist. If
+`$DSH_HOME/profiles/desktop/package.json` exists but `cordis.patch.yml` is missing, Apply refuses:
+create `cordis.patch.yml` containing `[]` (the empty patch DSH writes for a new profile), then
+enable the integration again. Only when there is no Desktop profile does OpenCodex use
+`llm-pi-ai.providers.opencodex` in `$DSH_HOME/settings.yaml`. OpenCodex owns only that provider
+fragment: Apply and Refresh replace it, Disable removes it, and Restore puts back a recorded
+snapshot. These operations do not change the user's default model or the native
+`deepseek-official` provider.
 The managed DSH integration is currently loopback-only and never writes a real credential.
 
 MiniMax Code follows `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR`, before falling
@@ -114,7 +120,7 @@ restart. Aside's block is loopback-only and never carries a real credential.
 
 The managed Raycast integration supports **macOS and Windows**. Custom Providers
 is a **Raycast Pro** feature: on a free plan the file is still written, but
-`ocx integration client status --client raycast` and the Integrations page report
+`ocx integration client status --client raycast` and the **Connect** page report
 a warning, because Raycast will not read it. On macOS or Windows, open Raycast →
 Settings → AI → **Reveal Providers Config** once so the `ai` folder exists.
 On these supported platforms, opencodex uses that folder as its install signal
@@ -249,7 +255,7 @@ Older versions may ignore or discard the option; a valid configuration alone doe
 Hermes sends the header. Conversation isolation, compaction lineage and auxiliary/child requests
 follow Hermes' affinity semantics. This setting does not guarantee a particular cache-hit rate.
 
-For an existing managed integration, open **Integrations → Hermes**, review **Apply**, and confirm
+For an existing managed integration, open **Connect → Hermes**, review **Apply**, and confirm
 the update. Until then, it shows **Update needed** and implicit catalog refresh leaves it unchanged,
 including its model list. Reading the page does not upgrade the configuration. After Apply, normal
 catalog refresh resumes and retains the setting; **Replace** also includes it.
@@ -282,10 +288,11 @@ profiles** remains a separate bulk action and is not bound to one combined previ
 
 **Formatting is generally not preserved.** Applying parses a config and writes it back
 out, so JSON, JSON5 and TOML may be reformatted and comments in JSON5 or TOML are lost.
-OMP, DSH and Hermes are the exceptions: their YAML writers patch only `providers.opencodex` and
-`llm-pi-ai.providers.opencodex`, respectively, preserving
-unrelated provider comments and formatting byte-for-byte. If that exact source range
-cannot be identified safely, the operation refuses instead. For other clients, use
+OMP, DSH and Hermes are the exceptions: OMP and Hermes patch only `providers.opencodex`.
+DSH patches only `[id=llm-pi-ai].config.providers.opencodex` in the Desktop profile patch,
+or `llm-pi-ai.providers.opencodex` in `settings.yaml` when there is no Desktop profile.
+Their YAML writers preserve unrelated provider comments and formatting byte-for-byte. If that exact
+source range cannot be identified safely, the operation refuses instead. For other clients, use
 Restore when you need the previous file bytes: the snapshot is a verbatim copy.
 
 **If a value cannot be rewritten faithfully, the switch refuses instead.** The round
@@ -449,7 +456,7 @@ Aside refresh requires a [compatible running proxy](#aside-profile-controls).
 If Models reports **“Model selection saved”** together with a client-refresh warning, the
 selection is already saved; one or more client files could not be updated. The warning names
 the affected client and Aside profile, when applicable, and explains the refusal. Open
-**Integrations** to inspect that client or profile before starting a new session. Resolve the
+**Connect** to inspect that client or profile before starting a new session. Resolve the
 reported issue, then retry `ocx sync`; an overlapping operation must finish first. If the
 warning includes a backup path or says recovery did not finish, inspect that recovery state
 before retrying. A successful selection save alone does not confirm client-file recovery.
@@ -609,7 +616,7 @@ supported by this generated integration; it requires unauthenticated loopback ac
 ## GitHub Copilot App
 
 The GitHub Copilot desktop app can use opencodex as an OpenAI-compatible model provider. This is a
-manual client setup with no Integrations-tab switch, and it is separate from the upstream
+manual client setup with no switch on **Connect**, and it is separate from the upstream
 `github-copilot` provider, which uses a Copilot subscription as a backend for opencodex.
 
 1. Start opencodex and confirm it answers:
@@ -745,7 +752,7 @@ custom models remain yours.
 If Droid normalizes a `customModels` row by adding `id` or `index`, OpenCodex ignores those two
 client fields when checking ownership so saved reasoning defaults remain available.
 
-Open **Integrations → Factory Droid** (`/#integrations/droid`) to set a reasoning
+Open **Connect → Factory Droid** (`/#integrations/droid`) to set a reasoning
 default for each connected model. Choose from the model's supported efforts,
 review the changes, then confirm. **No default** clears that model's draft setting;
 use **Save / review changes** and confirm to apply the removal.

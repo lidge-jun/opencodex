@@ -25,3 +25,34 @@ describe("alias list JSON flags", () => {
     } finally { out.mockRestore(); }
   });
 });
+
+
+describe("alias failure boundaries", () => {
+  test.each([
+    { args: ["set"], message: "alias target is required" },
+    { args: ["list", "--wat"], message: "Unexpected argument(s): --wat" },
+    { args: ["wat"], message: "Unknown alias action: wat. See: ocx help alias" },
+    { args: ["wat", "local"], message: "Unknown alias action: wat. See: ocx help alias" },
+  ])("alias usage $args returns exit 2 before requests", async ({ args, message }) => {
+    const out = spyOn(console, "log").mockImplementation(() => {});
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    let requests = 0;
+    try {
+      expect(await handleAliasCommand(args, { baseUrl: "http://cli.test", fetchImpl: async () => {
+        requests++; throw new Error("unexpected request");
+      } })).toBe(2);
+      expect(requests).toBe(0);
+      expect(out.mock.calls).toEqual([]);
+      expect(err.mock.calls.map(call => call.join(" ")).join("\n")).toContain(message);
+    } finally { out.mockRestore(); err.mockRestore(); }
+  });
+  test.each([{ status: 404, code: 4 }, { status: 409, code: 5 }, { status: 500, code: 1 }])(
+    "alias API status $status returns exit $code", async ({ status, code }) => {
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(await handleAliasCommand(["list"], { baseUrl: "http://cli.test", fetchImpl: async () =>
+          Response.json({ error: "fixture failure" }, { status }) })).toBe(code);
+      } finally { err.mockRestore(); }
+    },
+  );
+});

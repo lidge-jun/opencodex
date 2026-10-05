@@ -290,6 +290,30 @@ describe("GET /api/native-integrations/cursor", () => {
     });
   });
 
+  test("gateway port prefers the live listener, then runtime, then config, never management ingress", async () => {
+    const config: OcxConfig = { ...statusConfig(), port: 10100, hostname: "127.0.0.1" };
+    const url = new URL("http://127.0.0.1:10101/api/native-integrations/cursor");
+    const runtime = { pid: process.pid, port: 34567 };
+    const cases = [
+      { livePort: 23456, runtime, expected: "http://127.0.0.1:23456/v1" },
+      { livePort: undefined, runtime, expected: "http://127.0.0.1:34567/v1" },
+      { livePort: undefined, runtime: null, expected: "http://127.0.0.1:10100/v1" },
+    ];
+    for (const { livePort, runtime, expected } of cases) {
+      const status = await buildCursorIntegrationStatus({
+        config,
+        url,
+        deps: {
+          liveListenPort: () => livePort,
+          readRuntimePort: () => runtime,
+          loadCursorEffortTable: () => null,
+        },
+      }, []);
+      expect(status.gateway.baseUrl).toBe(expected);
+      expect(status.gateway.baseUrl).not.toContain(":10101/");
+    }
+  });
+
   test("reports bundle effort-table provenance and unmatched model families through the server deps seam", async () => {
     saveConfig(statusConfig());
     const server = startServer(0, { managementApi: { loadCursorEffortTable: () => fixtureEffortTable() } });
@@ -325,9 +349,10 @@ describe("GET /api/native-integrations/cursor", () => {
     }) as typeof fetch;
     try {
       const status = await buildCursorIntegrationStatus(
-        { config: statusConfig(), deps: { readRuntimePort: () => undefined, loadCursorEffortTable: () => null }, url: new URL("http://127.0.0.1:10100/api/native-integrations/cursor") },
+        { config: statusConfig(), deps: { liveListenPort: () => 10100, readRuntimePort: () => undefined, loadCursorEffortTable: () => null }, url: new URL("http://127.0.0.1:10100/api/native-integrations/cursor") },
         [{ build: "regular", path: "/opt/cursor", version: null }],
       );
+      expect(status.gateway.baseUrl).toBe("http://127.0.0.1:10100/v1");
       expect(status.regularCursor.installed).toBe(true);
       expect(status.privateInference.installed).toBe(false);
       expect("localInstaller" in status).toBe(false);

@@ -115,7 +115,7 @@ Dashboard 的 **Sub-agent delegation** 选择器会保存 `injectionModel`，以
 
 ## Remote Hub 会话、密钥与用量
 
-控制台管理平面与 client→hub 的模型流量相互独立。**Integrations → API Keys** 显示待处理轮换，只显示一次替换密钥，并要求显式提交或中止。浏览器 logout 只使当前会话失效。连接时从 hub 按 `apiKeyId` 过滤用量；断开后使用本地记录，两者不会镜像。
+控制台管理平面与 client→hub 的模型流量相互独立。**连接 → API 密钥** 显示待处理轮换，只显示一次替换密钥，并要求显式提交或中止。浏览器 logout 只使当前会话失效。连接时从 hub 按 `apiKeyId` 过滤用量；断开后使用本地记录，两者不会镜像。
 
 选择器会列出已启用的原生与路由模型，以及全局 Codex reasoning 阶梯。API 会先验证所选强度是否
 属于全局阶梯；Codex 仍会根据目标目录条目再次校验该 spawn 强度。

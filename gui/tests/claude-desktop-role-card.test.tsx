@@ -29,20 +29,26 @@ const MODELS = [
   model("prov/only-sonnet", "Sonnet Model", "sonnet"),
 ];
 
+// A stored default whose long route went unavailable (R4 audit: it overflowed the Models card).
+const STALE_ROUTE = "openrouter/anthropic/claude-sonnet-4.5-thinking-extended-context-preview-20260930";
+let withStaleDefault = false;
+
 function payload() {
+  const models = withStaleDefault ? [...MODELS, model(STALE_ROUTE, STALE_ROUTE, "opus", false)] : MODELS;
   return {
     profile: {
       version: 1,
-      assignments: Object.fromEntries(MODELS.map(m => [m.route, m.assignment])),
-      defaults: { opus: "prov/opus-0", fable: null, sonnet: "prov/only-sonnet", haiku: null },
+      assignments: Object.fromEntries(models.map(m => [m.route, m.assignment])),
+      defaults: { opus: withStaleDefault ? STALE_ROUTE : "prov/opus-0", fable: null, sonnet: "prov/only-sonnet", haiku: null },
     },
-    models: MODELS,
+    models,
     rendered: [],
     port: 10100,
   };
 }
 
 beforeEach(() => {
+  withStaleDefault = false;
   clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/" });
@@ -145,4 +151,19 @@ test("choosing a Default model from another family moves it into Opus", async ()
   const sonnet = Array.from(container.querySelectorAll(".claude-desktop-advanced-chip"))
     .find(chip => chip.textContent?.startsWith("Sonnet"));
   expect(sonnet?.textContent).toContain("empty");
+});
+
+test("an unavailable stored default keeps its status whole while the route may truncate", async () => {
+  withStaleDefault = true;
+  await mount();
+  const trigger = combobox("Default model");
+  // The visible text and the tooltip both name the full route and its status.
+  expect(trigger.textContent).toBe(`${STALE_ROUTE} (unavailable)`);
+  expect(trigger.getAttribute("title")).toBe(`${STALE_ROUTE} (unavailable)`);
+  // Only the route sits in the truncating span; the translated status is a separate element
+  // that never shrinks, so a narrow trigger still says the choice is unavailable.
+  expect(trigger.querySelector(".claude-role-option__route")?.textContent).toBe(STALE_ROUTE);
+  expect(trigger.querySelector(".claude-role-option__status")?.textContent).toBe(" (unavailable)");
+  // An available choice keeps a plain label and its own tooltip.
+  expect(combobox("Quick task model").getAttribute("title")).toBeNull();
 });

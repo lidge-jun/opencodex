@@ -37,6 +37,7 @@ import {
   resolveEffectiveUserIdentity,
   samePathIdentity,
 } from "./user-identity";
+import { assertNotRealCodexHomeUnderTest } from "../lib/test-home-guard";
 
 /**
  * Authorization to perform the fixed sequence of catalog mutations inside ONE
@@ -177,6 +178,9 @@ export function withCatalogWriteSerialization<T>(
   write: (permit: CatalogWritePermit) => T,
   options: CatalogWriteOptions,
 ): CatalogSerializationOutcome<T> {
+  // First, ahead of the owner precheck and its diagnostics: a test process never gets a permit for
+  // the real Codex home, whatever its CODEX_HOME resolved to (#6529).
+  assertNotRealCodexHomeUnderTest(canonicalCodexHome);
   // Re-evaluate on every acquisition; unknown evidence cannot authorize a takeover.
   const refusedOwner = ownerRefusal(canonicalCodexHome);
   // A precheck refusal may still acquire K for append-only diagnostics; it never gets a permit.

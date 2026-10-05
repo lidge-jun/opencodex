@@ -191,9 +191,9 @@ describe("#2696 doctor names the credential collision", () => {
 });
 
 describe("#2698 management errors carry reason and hint", () => {
-  async function messageFor(body: unknown, status: number): Promise<string> {
+  async function messageFor(body: unknown, status: number, path = "/api/config"): Promise<string> {
     try {
-      await runtimeRequest("/api/config", {}, {
+      await runtimeRequest(path, {}, {
         baseUrl: "http://127.0.0.1:10100",
         fetchImpl: async () => Response.json(body, { status }),
       });
@@ -203,6 +203,38 @@ describe("#2698 management errors carry reason and hint", () => {
     }
     throw new Error("expected a RuntimeApiError");
   }
+
+  test.each(["write_failed", "unsafe", "conflict"])("integration %s refusals render fixed guidance and never echo writer prose", async reason => {
+    const writer = "PRIVATE_CANARY Content-Disposition: form-data; name=\"authorization\"\r\n\r\nopaque /Users/Jane Doe/config";
+    const message = await messageFor({ error: "integration mutation failed", message: writer,
+      reason, snapshotPath: "/fixture/backup.json", residual: true }, 500, "/api/client-integrations/hermes");
+    const detail = message.split("\n").find(line => line.startsWith("Details: "))!;
+    expect(detail).toContain("ocx integration client status");
+    for (const leaked of ["PRIVATE_CANARY", "opaque", "Jane", "Doe"]) expect(message).not.toContain(leaked);
+    expect(message).toContain("Backup: /fixture/backup.json"); expect(message).toContain("Automatic recovery did not finish");
+  });
+
+  test("an unknown integration reason adds no writer detail", async () => {
+    const message = await messageFor({ error: "integration mutation failed", message: "PRIVATE_CANARY", reason: "novel_reason" },
+      500, "/api/client-integrations/hermes");
+    expect(message).not.toContain("PRIVATE_CANARY"); expect(message).not.toContain("Details:");
+  });
+
+  test("integration structured recovery reasons use fixed guidance instead of arbitrary writer text", async () => {
+    const message = await messageFor({ error: "integration mutation failed", message: "PRIVATE_CANARY",
+      reason: "superseded_store" }, 500, "/api/client-integrations/hermes");
+    expect(message).toContain("ocx integration client status"); expect(message).toContain("disable and enable");
+    expect(message).not.toContain("PRIVATE_CANARY");
+  });
+
+  test.each(["/api/config", "/api/client-integrations-other/hermes", "/api/settings?next=/api/client-integrations/hermes", "/api/client-integrations/../settings", "/api/client-integrations/%2e%2e/settings"])("distinct writer messages stay excluded outside integration routes: %s", async path => {
+    expect(await messageFor({ error: "refused", message: "PRIVATE_CANARY" }, 500, path)).not.toContain("PRIVATE_CANARY");
+  });
+
+  test("identical integration writer and primary messages are not repeated", async () => {
+    const message = await messageFor({ error: "refused", message: "refused" }, 500, "/api/client-integrations/hermes");
+    expect(message).toBe("refused");
+  });
 
   test("a 503 renders the primary message, the reason and the hint", async () => {
     const message = await messageFor(

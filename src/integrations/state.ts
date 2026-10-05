@@ -42,7 +42,7 @@ import {
   unresolvedPathHintFor,
   type IntegrationClientId,
 } from "./registry";
-import { resolveIntegrationTarget, type IntegrationTarget } from "./target";
+import { resolveIntegrationTarget, type IneffectiveWriteReason, type IntegrationTarget } from "./target";
 import { inspectKiloCandidates } from "./kilo-candidates";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 
@@ -86,6 +86,13 @@ export interface IntegrationStatus {
    * `current` has to be able to report this beside it.
    */
   supersededBy?: string;
+  /** Why `supersededBy` is not written; present exactly when it is. */
+  supersededReason?: IneffectiveWriteReason;
+  /**
+   * `missing-store` only: the document that recreates the store. A surface that localizes the
+   * remedy needs the content to name, not the writer's English sentence.
+   */
+  missingStoreDocument?: string;
   /** Snapshot files retained for this client; -1 when they cannot be inspected. */
   snapshotCount: number;
   /** Pruning is behind, so older (possibly credential-bearing) snapshots remain. */
@@ -690,7 +697,11 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
      * about. A store we are writing needs no notice; the path already names it.
      */
     ...(effective.ineffective && effective.ineffective.store !== configPath
-      ? { supersededBy: effective.ineffective.store }
+      ? {
+          supersededBy: effective.ineffective.store,
+          supersededReason: effective.ineffective.why,
+          ...(effective.ineffective.emptyDocument === undefined ? {} : { missingStoreDocument: effective.ineffective.emptyDocument }),
+        }
       : {}),
     ...(record ? { appliedAt: record.appliedAt, lastOpId: record.opId } : {}),
     ...retention,

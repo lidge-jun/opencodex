@@ -203,3 +203,24 @@ describe("operation capability workflows use existing handlers", () => {
     expect(dispatch).toContain('case "install": {\n        const r = installCodexShim();');
   });
 });
+
+
+test.each(["running", "restarting", "succeeded", "failed"])("human update reports job ID, %s state and exact progress command", async status => {
+  const io = transport({ ok: true, job: { id: "123-fixture", status } });
+  expect(await handleSystemCommand(["update", "run", "--yes"], io.deps)).toBe(0);
+  expect(output.mock.calls.flat().join("\n")).toBe(`Update job 123-fixture: ${status} (latest).\nCheck progress: ocx system update status 123-fixture`);
+  expect(io.requests).toEqual([{ path: "/api/update/run", method: "POST", body: { tag: "latest", restart: true } }]);
+});
+
+test("JSON update keeps its original response shape", async () => {
+  const body = { ok: true, job: { id: "123-fixture", status: "running", extra: "retained" } };
+  expect(await handleSystemCommand(["update", "run", "--yes", "--json"], transport(body).deps)).toBe(0);
+  expect(JSON.parse(String(output.mock.calls[0]![0]))).toEqual(body);
+});
+
+test.each([{ ok: true, skipped: true }, { ok: true }, { ok: true, job: { id: "unsafe;command\u001b", status: "running" } }])("missing or unsafe update job handles never claim started or print server text", async body => {
+  expect(await handleSystemCommand(["update", "run", "--yes"], transport(body).deps)).toBe(0);
+  const text = output.mock.calls.flat().join("\n");
+  expect(text).not.toContain("Update started"); expect(text).not.toContain("unsafe;command");
+  expect(text).toContain("ocx system update check");
+});

@@ -391,8 +391,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "route",
-    usage: "ocx route combo <list|show|set|remove> ...",
-    summary: "Manage routing features; combo is currently the supported routing resource.",
+    usage: "ocx route <combo|policy> <subcommand>",
+    summary: "Manage combo routing and routing profiles.",
   },
   {
     name: "effort",
@@ -559,7 +559,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "and `providers.opencodex` blocks injected through OpenCode's inline runtime layer",
       "(`OPENCODE_CONFIG_CONTENT`). Any existing inline config in the environment is preserved",
       "and only `provider.opencodex` and `providers.opencodex` are overwritten for this launch.",
-      "Only the V2 block (`providers.opencodex`) carries the reasoning-effort variants.",
+      "V1 receives reasoning-effort variant maps; V2 receives native variant arrays for the same declared choices and defaults.",
       "Global/project opencode.json may be read to warn about an existing provider.opencodex or",
       "providers.opencodex override; on-disk files are never modified.",
       "Routed models appear in the model picker as opencodex/<provider>/<model>.",
@@ -592,8 +592,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Connect ZCode (Z.ai desktop client) to the proxy via its managed provider.",
     details: [
       "Alias of ocx integration client <sub> --client zcode.",
-      "enable writes the managed provider.opencodex block into ~/.zcode/v2/config.json; disable removes only that block.",
-      "ZCode 3.14 moved its providers to ~/.zcode/v2/provider_config.json; where that file exists, enable is refused because the write cannot reach the client.",
+      "enable manages ~/.zcode/v2/provider_config.json with schemaVersion 1; if the store is absent, it writes the legacy provider.opencodex block into ~/.zcode/v2/config.json.",
+      "A surviving owned legacy block prevents switching stores. Run `ocx zcode disable` before enabling the current store. Unknown store schemas are refused.",
       "ZCode reads its config at startup — restart ZCode after enable/disable.",
       "Select OpenCodex Proxy/<provider>/<model> from ZCode's model picker.",
     ],
@@ -601,7 +601,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "restart",
     usage: "ocx restart",
-    summary: "Stop the proxy and restart it (background). Equivalent to stop + ensure.",
+    summary: "Request a graceful restart of the verified running proxy, preserving routing.",
+    details: [
+      "If no proxy is running, use the normal `ocx ensure` start policy, including the Codex autostart setting.",
+      "Unverifiable running targets are refused without a stop/start fallback.",
+      "Restarting an older proxy from this newer CLI requires standalone macOS/Linux proxies; supervised, shared, foreground, or unverifiable targets are refused.",
+      "For a service-managed update, run `ocx service restart`; for a desktop-managed update, restart through the OpenCodex desktop app.",
+    ],
   },
   {
     name: "v2",

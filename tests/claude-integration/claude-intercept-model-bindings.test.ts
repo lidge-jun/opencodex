@@ -95,6 +95,16 @@ test("applying a patch checks routes against the available vocabulary", () => {
     .toEqual({ ok: true, bindings: { "claude-opus-4-6": "xai/grok-4.7" }, changed: false });
 });
 
+test("binding errors never echo a rejected picker id or a non-route operand", () => {
+  const badId = parseInterceptBindingPatch({ set: { "--token=synthetic-secret": "xai/grok-4.7" } });
+  expect(badId).toEqual({ error: "invalid picker id (expected a claude- model id)" });
+  const routes = new Set(["xai/grok-4.7"]);
+  for (const route of ["synthetic-secret-token", "nope/missing"]) {
+    expect(applyInterceptBindingPatch({}, { set: { "claude-sonnet-4-6": route } }, routes))
+      .toEqual({ ok: false, error: "route is not available (see ocx claude desktop show)" });
+  }
+});
+
 test("config validation rejects a malformed intercept.modelMap", () => {
   const base = { port: 10100, providers: { openai: { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "forward" } }, defaultProvider: "openai" };
   expect(validateConfigCandidate({ ...base, claudeCode: { intercept: { modelMap: { "claude-sonnet-4-6": "xai/grok-4.7" } } } }).ok).toBe(true);

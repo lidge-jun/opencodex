@@ -98,6 +98,14 @@ describe("preview wire and failure contracts", () => {
     const f = fixture({ error: "PRIVATE" }, status);
     expect(await command([...previewArgs, "--json"], f.deps)).toBe(status === 404 ? 4 : status === 409 ? 5 : 1);
     expect(out.mock.calls).toEqual([]); expect(JSON.stringify(err.mock.calls)).not.toContain("PRIVATE");
+    if (status === 503) expect(JSON.stringify(err.mock.calls)).toContain("Management API is unavailable");
+  });
+  test.each([{ args: previewArgs }, { args: ["restore", "--op", "op-one", "--preview"] }])("no running proxy names ocx start and sends nothing: $args", async ({ args }) => {
+    const f = fixture();
+    const deps: RuntimeApiDeps = { ...f.deps, findLiveProxy: async () => null };
+    expect(await command([...args, "--json"], deps)).toBe(1);
+    expect(out.mock.calls).toEqual([]); expect(f.calls).toEqual([]);
+    expect(JSON.stringify(err.mock.calls)).toContain("Proxy is not running. Start the intended proxy with: ocx start. No request was sent.");
   });
   test("recognized drift refusal gives a concrete recovery command without echoing prose", async () => {
     const f = fixture({ reason: "drift_requires_confirm", error: "PRIVATE", message: "PRIVATE" }, 409);
@@ -165,6 +173,37 @@ test.each(invalidPlans)("both decoders reject malformed plan %#", async value =>
   expect(() => decodeIntegrationPlan(value)).toThrow(); expect(() => guiDecode(value)).toThrow();
   const f = fixture(value); expect(await command([...previewArgs, "--json"], f.deps)).toBe(1);
   expect(out.mock.calls).toEqual([]); expect(JSON.stringify(err.mock.calls)).not.toContain("PRIVATE");
+});
+const missingStore = {
+  ...plan, clientId: "dsh", canApply: false, fingerprint: "p7:unbound",
+  refusalReason: "superseded_store", supersededReason: "missing-store", missingStoreDocument: "[]",
+};
+test("both decoders keep a DSH missing-store remedy and the CLI names it", async () => {
+  expect(decodeIntegrationPlan(missingStore)).toEqual(guiDecode(missingStore));
+  expect(decodeIntegrationPlan(missingStore)).toMatchObject({ supersededReason: "missing-store", missingStoreDocument: "[]" });
+  const { missingStoreDocument: _document, ...schemaOnly } = missingStore;
+  const unestablished = { ...schemaOnly, supersededReason: "unestablished-schema" };
+  expect(decodeIntegrationPlan(unestablished)).toEqual(guiDecode(unestablished));
+  const f = fixture(missingStore);
+  expect(await command(["preview", "--client", "dsh", "--operation", "apply"], f.deps)).toBe(0);
+  const printed = JSON.stringify(out.mock.calls);
+  expect(printed).toContain("refused (superseded_store)");
+  expect(printed).toContain("Create it containing `[]`");
+  expect(printed).toContain("ocx integration client status --client dsh");
+});
+test.each([
+  { ...missingStore, refusalReason: "conflict" },
+  { ...missingStore, supersededReason: "moved" },
+  { ...missingStore, supersededReason: ["missing-store"] },
+  { ...missingStore, supersededReason: "owned-config-file" },
+  { ...missingStore, missingStoreDocument: "" },
+  { ...missingStore, missingStoreDocument: "[]\n- id: PRIVATE" },
+  { ...missingStore, missingStoreDocument: "\u001b]0;PRIVATE\u0007" },
+  { ...missingStore, missingStoreDocument: "x".repeat(65) },
+  { ...missingStore, missingStoreDocument: ["[]"] },
+  { ...plan, supersededReason: "missing-store" },
+])("both decoders reject a misplaced or malformed superseded-store detail %#", value => {
+  expect(() => decodeIntegrationPlan(value)).toThrow(); expect(() => guiDecode(value)).toThrow();
 });
 test("CLI refuses coercible non-string enum fields at the JSON boundary", () => {
   expect(() => decodeIntegrationPlan({ ...plan, state: ["current"] })).toThrow();
