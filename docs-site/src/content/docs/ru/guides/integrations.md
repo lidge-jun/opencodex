@@ -19,7 +19,7 @@ description: Подключайте opencodex к OpenCode, Pi, OMP, Hermes, Open
 | DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml` (по умолчанию `~/.dsh/profiles/desktop/cordis.patch.yml`); `$DSH_HOME/settings.yaml`, пока DSH Desktop не создал этот профиль | YAML | горячая перезагрузка | несекретная bearer-заглушка для loopback |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | в новых сессиях или после открытия выбора модели | заглушка для loopback |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | в новых сессиях | заглушка для loopback |
-| ZCode | `~/.zcode/v2/config.json` | JSON | после перезапуска | заглушка для loopback |
+| ZCode | `~/.zcode/v2/provider_config.json` (schemaVersion 1); резервный путь старого формата: `~/.zcode/v2/config.json` | JSON | после перезапуска | заглушка для loopback |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | после полного закрытия и повторного открытия Aside | заглушка для loopback |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | сразу после сохранения — Raycast следит за файлом | нет — только loopback |
 | omo | `~/.omo/agent/models.json` | JSON | в новых сессиях | заглушка для loopback |

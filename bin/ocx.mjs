@@ -52,7 +52,7 @@ import {
 } from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 import { bootRestoreProbe, launcherUsableAfterNpmUpdate, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
-import { npmUpdateFailureGuidance } from "../src/update/update-failure-guidance.mjs";
+import { manualUpdateFailureGuidance, npmUpdateFailureGuidance } from "../src/update/update-failure-guidance.mjs";
 import {
   CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
   isCodexCliUpdateInspectionArgv,
@@ -816,14 +816,11 @@ function runPackageManagerSelfUpdate(manager) {
       // legacy in-place install (which deletes live first) is exactly the wrong rescue —
       // it recreates the #1849 destruction path. Report and stop; the boot probe and the
       // recovery marker cover the swap-window states.
-      const manual = manager === "pnpm"
-        ? `pnpm add -g --allow-build=bun ${PKG}@${tag}`
-        : `npm install -g --allow-scripts=bun ${PKG}@${tag}`;
       // An unexpected exception leaves the active package path unproven for either manager.
       // Do not run service/tray/proxy recovery through a possibly half-swapped tree.
       postUpdateLauncherUsable = false;
       console.error(`opencodex: ${manager} update failed unexpectedly (${error?.message ?? error}). ` +
-        `The live install was not knowingly modified; run 'ocx update' again or reinstall with ${manual}.`);
+        `Run 'ocx update' again or follow the manual recovery steps below.`);
       res = { status: 1 };
     }
     if (res.status !== 0) recoverStoppedRuntimeAfterFailure("update failed");
@@ -861,13 +858,17 @@ function runPackageManagerSelfUpdate(manager) {
     // Phase-specific next step (#5624): whether the previous version is still in place decides
     // between "retry" and "restore", and a bare reinstall must follow a stop (#5496).
     const guidance = npmUpdateFailureGuidance({ ...npmFailure, pkgName: PKG, version: latest || undefined, tag });
-    console.error(`\nUpdate failed (npm ${npmFailure.phase}). ${guidance.lines.join(" ")}`);
+    console.error(`\nUpdate failed (npm ${npmFailure.phase}). ${guidance.lines.join("\n")}`);
     process.exit(1);
   }
-  const manual = manager === "pnpm"
-    ? `pnpm add -g --allow-build=bun ${PKG}@${tag}`
-    : `npm install -g --allow-scripts=bun ${PKG}@${tag}`;
-  console.error(`\nUpdate failed (${manager} exit ${res.status ?? "?"}). Try manually:  ${manual}`);
+  const guidance = manualUpdateFailureGuidance({
+    bin: manager,
+    args: manager === "pnpm"
+      ? ["add", "-g", "--allow-build=bun", `${PKG}@${latest || tag}`]
+      : ["install", "-g", "--allow-scripts=bun", `${PKG}@${latest || tag}`],
+    owner,
+  });
+  console.error(`\nUpdate failed (${manager} exit ${res.status ?? "?"}). ${guidance.join("\n")}`);
   process.exit(1);
 }
 
