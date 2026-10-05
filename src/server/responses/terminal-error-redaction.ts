@@ -2,8 +2,9 @@ import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib
 import { foldForMatching, NAMED_ENTITY_PLACEHOLDER } from "../../lib/redact-folding";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 
-// An exact credential match cannot be proven while undecoded encoding syntax remains.
-const UNRESOLVED_ENCODING = /\\["\\/bfnrt]|&#|&[A-Za-z][A-Za-z0-9]{0,31}(?![A-Za-z0-9;=])/;
+// Any residual reference start or JSON short escape withholds the diagnostic.
+// Over-withholding is accepted: this path only projects terminal error diagnostics.
+const UNRESOLVED_ENCODING = /\\["\\/bfnrt]|&[A-Za-z#]/;
 
 function maskEncodedCredentials(text: string, secrets: string[]): string {
   let view = text;

@@ -221,6 +221,8 @@ describe("reset replacement error confidentiality", () => {
       ["uppercase hex numeric reference", credential, "invalid request: &#X66;ixture-active-credential-v1"],
       ["numeric reference without semicolon", credential, "invalid request: &#102ixture-active-credential-v1"],
       ["legacy named reference without semicolon", "fixture&credential-v1", "invalid request: fixture&ampcredential-v1"],
+      ["legacy reference before equals", "fixture&credential", "invalid request: fixture&ampcredential="],
+      ["legacy reference before long run", "fixture&" + "a".repeat(40), "invalid request: fixture&amp" + "a".repeat(40)],
     ])(`${adapter} withholds unresolved diagnostic encoding (%s)`, async (_name, apiKey, message) => {
       const result = await probe({ provider: { adapter, apiKey }, answer: ordinal => ordinal === 1
         ? reset() : Response.json({ error: { message } }, { status: 400 }) });
@@ -231,15 +233,51 @@ describe("reset replacement error confidentiality", () => {
       expect(JSON.parse(result.text)).toEqual({ error: { message: "[REDACTED]" } });
     });
 
-    test(`${adapter} preserves diagnostic URL query parameters with an unrelated credential`, async () => {
-      const message = "see https://x.test/a?b=1&c=2 for details";
+    test.each([
+      ["preserves a query without a reference start", "see https://x.test/a?b=1 for details", "see https://x.test/a?b=1 for details"],
+      ["withholds a query with a reference start", "see https://x.test/a?b=1&c=2", "[REDACTED]"],
+    ])(`${adapter} %s with an unrelated credential`, async (_name, message, expected) => {
       const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
         ? reset() : Response.json({ error: { message } }, { status: 400 }) });
       expect(result.status).toBe(400);
       expect(result.bodies).toHaveLength(2);
       expect(result.used).toBe(2);
       expect(result.grantSpent).toBe(true);
-      expect(JSON.parse(result.text)).toEqual({ error: { message } });
+      expect(JSON.parse(result.text)).toEqual({ error: { message: expected } });
+    });
+
+    test.each([
+      ["malformed structured JSON", `{"error":{"message":"invalid request: ${credential}"`, "application/json",
+        { error: { type: "upstream_error", message: "Provider error 400: diagnostic unavailable" } }],
+      ["JSON nested beyond the display limit", '{"detail":'.repeat(65) + JSON.stringify(credential) + "}".repeat(65), "application/json",
+        { error: { type: "upstream_error", message: "Provider error 400: diagnostic unavailable" } }],
+      ["array diagnostic", JSON.stringify([credential, { message: `invalid request: ${credential}` }, 17]), "application/json",
+        ["[REDACTED]", { message: "invalid request: [REDACTED]" }, 17]],
+      ["non-2xx SSE diagnostic", `event: response.failed\ndata: {"type":"response.failed","response":{"error":{"message":"invalid request: ${credential}"}}}\n\n`, "text/event-stream",
+        { error: { type: "upstream_error", message: 'event: response.failed\ndata: {"type":"response.failed","response":{"error":{"message":"invalid request: [REDACTED]"}}}\n\n' } }],
+    ] as const)(`${adapter} safely projects %s`, async (_name, text, contentType, expected) => {
+      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
+        ? reset() : new Response(text, { status: 400, headers: { "content-type": contentType } }) });
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(result.used).toBe(2);
+      expect(result.grantSpent).toBe(true);
+      expect(JSON.parse(result.text)).toEqual(expected);
+    });
+
+    test(`${adapter} drops upstream diagnostic headers and preserves retry refusal`, async () => {
+      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
+        ? reset() : Response.json({ error: { message: `invalid request: ${credential}` } }, { status: 400, headers: {
+          "x-debug-token": credential, "set-cookie": `diagnostic=${credential}`, "x-should-retry": "false",
+        } }) });
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(result.used).toBe(2);
+      expect(result.grantSpent).toBe(true);
+      expect(JSON.parse(result.text)).toEqual({ error: { message: "invalid request: [REDACTED]" } });
+      expect(result.headers.get("x-debug-token")).toBeNull();
+      expect(result.headers.get("set-cookie")).toBeNull();
+      expect(result.headers.get("x-should-retry")).toBe("false");
     });
 
     test.each([
