@@ -74,7 +74,7 @@ the web route. The native panel introduces no management endpoint or credential 
 
 ## Dashboard serving
 
-Management exports, integration write/preview/refresh inputs and Claude port projections use `managementInferencePort` in `src/server/management/context.ts`, never the request URL port. `src/server/index/serve-options.ts` supplies the public runtime-bound port through `liveListenPort`; direct route fixtures fall back to config. The existing inference resolver still selects an explicit companion port. Request identity, management authentication and ingress restrictions are unchanged.
+Management exports, integration write/preview/refresh inputs and Claude port projections use `managementInferencePort` in `src/server/management/context.ts` for the PUBLIC bound port, never the request URL port. `src/server/index/serve-options.ts` supplies `liveListenPort`; direct fixtures fall back to config. Cursor status in `src/server/management/cursor-integration-routes.ts` uses live -> PID-matched runtime -> config. Destination resolution and explicit loopback companion precedence stay in `standaloneCodexRoutingTarget` (`src/codex/inject/routing-target.ts`), `effectiveLoopbackListenerPort` (`src/codex/loopback-target.ts`) and `localInferenceDestination` (`src/lib/local-destinations.ts`).
 
 > Decision record: [ADR-6598](decisions/ADR-6598-management-inference-port.md)
 
