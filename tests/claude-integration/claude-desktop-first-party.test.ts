@@ -9,7 +9,8 @@ import {
   resolveClaudeDesktopApplyMode,
   resolveClaudeDesktopMode,
 } from "../../src/claude/desktop-first-party";
-import { applyDesktop, displayRouteOperand, parseDesktopApplyArgs } from "../../src/cli/claude-desktop";
+import { applyDesktop, parseDesktopApplyArgs } from "../../src/cli/claude-desktop";
+import { displayRouteOperand } from "../../src/claude/intercept/model-bindings";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } from "../../src/claude/desktop-3p";
 import { persistCommittedDesktopGateway } from "../../src/claude/desktop-gateway-state";
 import { armClaudeCodeBaseline, saveConfigPreservingClaudeCode } from "../../src/config";
@@ -124,8 +125,10 @@ test("CLI apply rejects unknown arguments without echoing option values or opera
 test("CLI route errors show only plain provider/model operands", () => {
   expect(displayRouteOperand("xai/grok-4.7")).toBe("xai/grok-4.7");
   expect(displayRouteOperand("missing/old-model")).toBe("missing/old-model");
-  for (const operand of ["--token=synthetic-secret", "synthetic-bare-token", "-tsynthetic", "a/b\nsynthetic", "x/\u001b[2J"]) {
-    expect(displayRouteOperand(operand)).toBe("(값은 표시하지 않습니다)");
+  expect(displayRouteOperand(`a/${"b".repeat(192)}`)).toBe(`a/${"b".repeat(192)}`);
+  for (const operand of ["--token=synthetic-secret", "synthetic-bare-token", "-tsynthetic", "a/b\nsynthetic",
+    "a/b\n", "x/\u001b[2J", `a/${"b".repeat(193)}`]) {
+    expect(displayRouteOperand(operand, "(hidden)")).toBe("(hidden)");
   }
 });
 

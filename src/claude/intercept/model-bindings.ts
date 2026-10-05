@@ -53,6 +53,15 @@ export function isInterceptBindingRoute(value: unknown): value is string {
 }
 
 /**
+ * A route operand as an error may show it: only a plain `provider/model` id. Anything else (an
+ * option-shaped or bare token in the route position) may be a credential typed in the wrong place,
+ * or carry terminal control characters.
+ */
+export function displayRouteOperand(route: string, hidden = "(hidden)"): string {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,191}$/.test(route) ? route : hidden;
+}
+
+/**
  * Router model id for a binding target written in the Desktop route vocabulary. `native/<slug>`
  * is the native OpenAI pool's pseudo-provider and resolves to the bare slug, exactly like a
  * Desktop 3P alias does (src/claude/inbound-model-options.ts); every other route is used as is.
@@ -113,7 +122,7 @@ export function parseInterceptBindingPatch(body: unknown): InterceptBindingPatch
     if (!set || typeof set !== "object" || Array.isArray(set)) return { error: "set must be an object of picker id to route" };
     const entries: Record<string, string> = {};
     for (const [id, route] of Object.entries(set as Record<string, unknown>)) {
-      if (!isInterceptBindingId(id)) return { error: `invalid picker id: ${id} (expected a claude- model id)` };
+      if (!isInterceptBindingId(id)) return { error: "invalid picker id (expected a claude- model id)" };
       if (!isInterceptBindingRoute(route)) return { error: `invalid route for ${id}` };
       entries[id] = route;
     }
@@ -137,7 +146,7 @@ export function applyInterceptBindingPatch(
 ): InterceptBindingPatchResult {
   const next: Record<string, string> = { ...current };
   for (const [id, route] of Object.entries(patch.set ?? {})) {
-    if (!availableRoutes.has(route)) return { ok: false, error: `route is not available: ${route}` };
+    if (!availableRoutes.has(route)) return { ok: false, error: `route is not available: ${displayRouteOperand(route)}` };
     next[id] = route;
   }
   for (const id of patch.remove ?? []) delete next[id];

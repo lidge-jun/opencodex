@@ -32,6 +32,7 @@ import {
 } from "../claude/desktop-first-party";
 import { FIRST_PARTY_ACCOUNT_RISK } from "../claude/desktop-risk";
 import { claudeInterceptEnabled } from "../claude/intercept/runtime";
+import { displayRouteOperand } from "../claude/intercept/model-bindings";
 import { acceptsPickerAuthority, ensurePickerCa, pickerCaCertPath, pickerCaFingerprints, pickerLeafCertPath } from "../claude/intercept/picker-ca";
 import { inspectPickerTrust, trustPickerCa, untrustPickerCa, type SecurityRunner } from "../claude/intercept/picker-trust";
 import { offlinePickerStatus, removeDesktopPickerArtifacts, type DesktopPickerStatus } from "../claude/desktop-picker";
@@ -332,12 +333,13 @@ function unknownApplyArgsError(count: number): string {
   return `알 수 없는 인자 ${count}개 (값은 표시하지 않습니다). 사용 가능한 옵션: ${DESKTOP_APPLY_FLAGS.join(" ")}`;
 }
 
-/**
- * A route operand as an error may show it: only a plain `provider/model` id. Anything else (an
- * option-shaped or bare token in the route position) may be a credential typed in the wrong place.
- */
-export function displayRouteOperand(route: string): string {
-  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,191}$/.test(route) ? route : "(값은 표시하지 않습니다)";
+const HIDDEN_OPERAND = "(값은 표시하지 않습니다)";
+
+/** Profile files are user-chosen paths; a failure reports the operation and error code only. */
+function profileFileError(operation: "export" | "import", error: unknown): Error {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  const reason = typeof code === "string" && /^E[A-Z]+$/.test(code) ? code : error instanceof SyntaxError ? "invalid JSON" : "failed";
+  return new Error(`Claude Desktop 프로필 ${operation === "export" ? "내보내기" : "가져오기"} 실패: ${reason}`);
 }
 
 export function parseDesktopApplyArgs(
@@ -831,7 +833,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
     if (command === "move") {
       const [, route, familyRaw, ...flags] = argv;
       if (!route || !isFamily(familyRaw) || flags.some(flag => flag !== "--default")) throw new CliUsageError("Usage: ocx claude desktop move <route> <family> [--default]");
-      if (!state.models.some(model => model.route === route && model.available)) throw new Error(`현재 사용할 수 없는 모델입니다: ${displayRouteOperand(route)}`);
+      if (!state.models.some(model => model.route === route && model.available)) throw new Error(`현재 사용할 수 없는 모델입니다: ${displayRouteOperand(route, HIDDEN_OPERAND)}`);
       const profile = moveDesktopRoute(state.profile, route, familyRaw, flags.includes("--default"));
       saveLocalDesktopProfile(profile, config.claudeCode?.desktopProfile, connection, deps);
       console.log(`${route} 모델을 ${familyRaw} 그룹으로 옮겼습니다.`);
@@ -841,7 +843,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
       const [, familyRaw, routeRaw] = argv;
       if (!isFamily(familyRaw) || !routeRaw || argv.length !== 3) throw new CliUsageError("Usage: ocx claude desktop default <family> <route|none>");
       const route = routeRaw === "none" ? null : routeRaw;
-      if (route && !state.models.some(model => model.route === route && model.available)) throw new Error(`현재 사용할 수 없는 모델입니다: ${displayRouteOperand(route)}`);
+      if (route && !state.models.some(model => model.route === route && model.available)) throw new Error(`현재 사용할 수 없는 모델입니다: ${displayRouteOperand(route, HIDDEN_OPERAND)}`);
       const profile = setDesktopFamilyDefault(state.profile, familyRaw, route);
       saveLocalDesktopProfile(profile, config.claudeCode?.desktopProfile, connection, deps);
       console.log(`${familyRaw} 기본 모델을 ${route ?? "없음"}으로 지정했습니다.`);
@@ -852,14 +854,20 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
       if (!target || argv.length !== 2) throw new CliUsageError("Usage: ocx claude desktop export <path|->");
       const json = JSON.stringify(state.profile, null, 2) + "\n";
       if (target === "-") process.stdout.write(json);
-      else writeFileSync(resolve(target), json, { encoding: "utf8", mode: 0o600 });
+      else {
+        try { writeFileSync(resolve(target), json, { encoding: "utf8", mode: 0o600 }); }
+        catch (error) { throw profileFileError("export", error); }
+      }
       return 0;
     }
     if (command === "import") {
       const source = argv[1];
       const flags = argv.slice(2);
       if (!source || flags.some(flag => flag !== "--apply")) throw new CliUsageError("Usage: ocx claude desktop import <path> [--apply]");
-      const profile = parseDesktopProfile(JSON.parse(readFileSync(resolve(source), "utf8")));
+      let raw: unknown;
+      try { raw = JSON.parse(readFileSync(resolve(source), "utf8")); }
+      catch (error) { throw profileFileError("import", error); }
+      const profile = parseDesktopProfile(raw);
       const reconciled = (await buildClaudeDesktopState(config, profile)).profile;
       if (flags.includes("--apply")) assertNoClientDisconnectPending();
       if (flags.includes("--apply") && readClientConnectionState().kind !== "disconnected") {
