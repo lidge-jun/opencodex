@@ -44,6 +44,7 @@
   "responses-combo-exhausted-error.test.ts": "responses",
   "cli-config-default-show.test.ts": "cli",
   "ollama-native-tool-continuations.test.ts": "providers/ollama",
+  "gui-pair-delivery.test.ts": "gui",
   "usage-antigravity-55.test.ts": "usage", "provider-antigravity-wire-snapshot.test.ts": "providers",
   "antigravity-discovered-families.test.ts": "adapters/google",
   "provider-antigravity-effort-families.test.ts": "providers",
