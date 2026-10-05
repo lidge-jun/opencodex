@@ -1,30 +1,28 @@
 import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib/redact";
-import { foldForMatching, NAMED_ENTITY_PLACEHOLDER } from "../../lib/redact-folding";
+import { foldForMatching } from "../../lib/redact-folding";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 
-// Any residual reference start or JSON short escape withholds the diagnostic.
-// Over-withholding is accepted: this path only projects terminal error diagnostics.
-const UNRESOLVED_ENCODING = /\\["\\/bfnrt]|&[A-Za-z#]/;
+// Encoded spellings are withheld rather than decoded: a bounded decoder cannot
+// be proven equivalent to every client decoder. Only terminal diagnostics take this path.
+const ENCODING_SYNTAX = /%[0-9A-Fa-f]{2}|\\(?:u[0-9A-Fa-f]{4}|["\\/bfnrt])|&[A-Za-z#]/;
 
 function maskEncodedCredentials(text: string, secrets: string[]): string {
+  if (ENCODING_SYNTAX.test(text)) return REDACTED_SECRET;
   let view = text;
   let offsets = Array.from({ length: text.length + 1 }, (_, index) => index);
   for (let depth = 0; depth < 4; depth++) {
-    const next = foldForMatching(view);
-    // An unresolved named reference has unknown decoded width, so an exact
-    // credential match cannot be proven; withhold the diagnostic.
-    if (next.folded.includes(NAMED_ENTITY_PLACEHOLDER)) return REDACTED_SECRET;
+    const next = foldForMatching(view, false);
     if (next.folded === view) break;
     offsets = next.map.map(index => offsets[index]!);
     view = next.folded;
   }
-  // Never expose a diagnostic whose encoding exceeds the bounded matching view.
-  if (foldForMatching(view).folded !== view) return REDACTED_SECRET;
-  if (UNRESOLVED_ENCODING.test(view)) return REDACTED_SECRET;
+  // Never expose a diagnostic whose folding exceeds the bounded matching view.
+  if (foldForMatching(view, false).folded !== view) return REDACTED_SECRET;
+  if (ENCODING_SYNTAX.test(view)) return REDACTED_SECRET;
   const ranges: Array<{ start: number; end: number }> = [];
   for (const secret of secrets) {
     let needle = secret;
-    for (let depth = 0; depth < 4; depth++) needle = foldForMatching(needle).folded;
+    for (let depth = 0; depth < 4; depth++) needle = foldForMatching(needle, false).folded;
     if (!needle) continue;
     for (let at = view.indexOf(needle); at !== -1; at = view.indexOf(needle, at + 1)) {
       ranges.push({ start: offsets[at]!, end: offsets[at + needle.length]! });

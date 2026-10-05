@@ -193,13 +193,13 @@ describe("reset replacement error confidentiality", () => {
       ["percent escape", "%66ixture-active-credential-v1"],
       ["nested percent escape", "%2566ixture-active-credential-v1"],
       ["numeric entity", "&#102;ixture-active-credential-v1"],
-    ])(`${adapter} masks encoded diagnostic credentials (%s)`, async (_name, encoded) => {
+    ])(`${adapter} withholds encoded diagnostic credentials (%s)`, async (_name, encoded) => {
       const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
         ? reset() : Response.json({ error: { message: `invalid request: ${encoded}; path C:\\safe\\u1234.txt` } }, { status: 400 }) });
       expect(result.status).toBe(400);
       expect(result.bodies).toHaveLength(2);
       const message = JSON.parse(result.text).error.message;
-      expect(message).toBe("invalid request: [REDACTED]; path C:\\safe\\u1234.txt");
+      expect(message).toBe("[REDACTED]");
     });
 
     test.each([
@@ -217,13 +217,15 @@ describe("reset replacement error confidentiality", () => {
     });
 
     test.each([
+      ["UTF-8 percent sequence", "éabcdeé-active-v1", "invalid request: %C3%A9%61%62%63%64%65%C3%A9-active-v1"],
+      ["fullwidth percent", credential, "invalid request: ％66ixture-active-credential-v1"],
       ["nested JSON short escape", "fixture/credential-v1", "invalid request: fixture\\/credential-v1"],
       ["uppercase hex numeric reference", credential, "invalid request: &#X66;ixture-active-credential-v1"],
       ["numeric reference without semicolon", credential, "invalid request: &#102ixture-active-credential-v1"],
       ["legacy named reference without semicolon", "fixture&credential-v1", "invalid request: fixture&ampcredential-v1"],
       ["legacy reference before equals", "fixture&credential", "invalid request: fixture&ampcredential="],
       ["legacy reference before long run", "fixture&" + "a".repeat(40), "invalid request: fixture&amp" + "a".repeat(40)],
-    ])(`${adapter} withholds unresolved diagnostic encoding (%s)`, async (_name, apiKey, message) => {
+    ])(`${adapter} withholds diagnostic encoding (%s)`, async (_name, apiKey, message) => {
       const result = await probe({ provider: { adapter, apiKey }, answer: ordinal => ordinal === 1
         ? reset() : Response.json({ error: { message } }, { status: 400 }) });
       expect(result.status).toBe(400);
@@ -231,6 +233,14 @@ describe("reset replacement error confidentiality", () => {
       expect(result.used).toBe(2);
       expect(result.grantSpent).toBe(true);
       expect(JSON.parse(result.text)).toEqual({ error: { message: "[REDACTED]" } });
+    });
+
+    test(`${adapter} masks lookalike diagnostic credentials without encoding`, async () => {
+      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
+        ? reset() : Response.json({ error: { message: "invalid request: ｆｉｘｔｕｒｅ-active-credential-v1" } }, { status: 400 }) });
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(JSON.parse(result.text).error.message).toBe("invalid request: [REDACTED]");
     });
 
     test.each([
