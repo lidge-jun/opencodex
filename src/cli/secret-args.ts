@@ -30,6 +30,18 @@ function isSecretOptionToken(token: string): boolean {
   return SECRET_OPTIONS.includes(token) || SECRET_OPTIONS.some(option => token.startsWith(`${option}=`));
 }
 
+let credentialArgvSeen = false;
+
+/**
+ * Record whether the process argv carried any credential option. Parsers that take
+ * positionals can consume the option token itself (`ocx account use openai --token X`
+ * makes `--token` the id), leaving only its operand as a "leftover"; once a credential
+ * option was present anywhere, every bare leftover is reported as `<redacted>`.
+ */
+export function noteCredentialArgv(argv: readonly string[]): void {
+  credentialArgvSeen = argv.some(isSecretOptionToken);
+}
+
 /**
  * Replace credential values before they are reported back.
  *
@@ -52,6 +64,7 @@ function isSecretOptionToken(token: string): boolean {
  * argument is itself a credential.
  */
 export function redactSecretArgs(args: string[], redactValues = false): string[] {
+  redactValues ||= credentialArgvSeen;
   const out: string[] = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] as string;

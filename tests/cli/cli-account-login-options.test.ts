@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { handleAccountAuthCommand } from "../../src/cli/account-auth";
 import { cmdAccount } from "../../src/cli/account";
+import { noteCredentialArgv } from "../../src/cli/secret-args";
 import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
@@ -81,6 +82,17 @@ describe("account argument redaction", () => {
       expect(await cmdAccount([...args, "--json"], { ...f.deps, baseUrl: "http://127.0.0.1:32100" })).toBe(1);
       expect(JSON.stringify(error.mock.calls)).not.toContain(SECRET);
       expect(f.calls).toEqual([]);
+    });
+  }
+  for (const args of [["use", "openai", "--token", SECRET], ["main", "register", "--token", SECRET], ["main", "switch", "--code", SECRET]]) {
+    test(`${args.join(" ")} redacts an operand whose option a positional consumed`, async () => {
+      const f = fixture();
+      error.mockClear();
+      noteCredentialArgv(["account", ...args]);
+      try {
+        await cmdAccount([...args, "--json"], { ...f.deps, baseUrl: "http://127.0.0.1:32100" });
+      } finally { noteCredentialArgv([]); }
+      expect(JSON.stringify(error.mock.calls)).not.toContain(SECRET);
     });
   }
 });

@@ -15,7 +15,7 @@ import { parseStopApproval } from "./stop-approval";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
-import { redactSecretArgs } from "./secret-args";
+import { noteCredentialArgv, redactSecretArgs } from "./secret-args";
 
 export interface CliHead {
   kind: "version" | "help" | "ready" | "resolve" | "command";
@@ -85,6 +85,7 @@ export function uninstallArgsError(command: string | undefined, args: string[]):
 }
 
 export async function runCli(argv: string[]): Promise<CliHead> {
+  noteCredentialArgv(argv);
   const head = parseCliHead(argv);
   switch (head.kind) {
     case "version":
