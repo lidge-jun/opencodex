@@ -50,3 +50,17 @@ eleven catalogs with matching placeholders, no removed key still referenced, no
 clipping in seven long locales at 1440/1024; DSH plan-path allowlist is exact
 (`integration-api.ts:262`, `:273`, `:285`); design-system notes match the code.
 No emoji used as UI on the audited surfaces. No console errors in roughly 250 renders.
+
+## #6597 audit (after it landed on dev as e0238355da)
+
+The missing-store remedy passes end to end in the sandbox: a Desktop profile manifest
+without `cordis.patch.yml` shows the remedy (full path, the exact `[]` document) in the
+status notice and the refused preview, the switch stays off, and creating the patch lets
+Apply, the Applied badge, rollback and Disable work. All eleven catalogs carry both new
+keys with matching placeholders; en/de/pt/ru/ja/ko × 1440/1024/768/390 × light/dark show no
+clipping, overflow or console errors. OpenCode, Hermes and Factory Droid pages are unchanged.
+
+| ID | Sev | Finding | Cause | Fix |
+|---|---|---|---|---|
+| F6 | P2 | The consequence dialog opens with focus on the invisible full-screen backdrop button; no focus ring, and Space dismisses it unseen. Predates #6597. | `gui/src/pages/integrations/ConsequenceDialog.tsx:82` `showModal()` focuses the first focusable descendant | #6623 focuses Close after `showModal()` |
+| F7 | P2 | A cold client status failure shows only "Could not load integration state." with no Retry. Predates #6597. | `gui/src/pages/integrations/FileIntegrationPage.tsx:292` | #6623 adds the existing Retry control |
