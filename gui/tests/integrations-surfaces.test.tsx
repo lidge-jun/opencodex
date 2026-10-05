@@ -976,6 +976,22 @@ test("a failed first read does not claim nothing is installed either", async () 
   expect(text).toContain("Hermes");
 });
 
+test("a failed first status read on a client page offers Retry, which reads again", async () => {
+  // The page used to show only the error notice, so recovering from a transient failure
+  // meant reloading the dashboard.
+  stateResponse = () => json({ error: "nope" }, 503);
+  await mountClient();
+  expect(container.textContent ?? "").toContain("Could not load integration state.");
+  const retry = buttonByText("Retry");
+  expect(retry).toBeDefined();
+
+  const before = requests.filter(request => request.method === "GET" && !request.url.includes("/journal")).length;
+  await act(async () => { retry!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  const after = requests.filter(request => request.method === "GET" && !request.url.includes("/journal")).length;
+  expect(after).toBeGreaterThan(before);
+});
+
 test("the aggregate Aside overview toggle stays unbound", async () => {
   let applied = true;
   stateResponse = () => json({ clients: [asideStatus({ state: applied ? "current" : "absent" })] });
