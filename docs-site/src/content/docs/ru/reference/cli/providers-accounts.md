@@ -16,7 +16,7 @@ pool'ами и контролируют каталог моделей, кото�
 | Подкоманда | Поддерживаемые флаги | Действие |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | Показать настроенных провайдеров и оставшиеся записи registry. `--jsonl` выводит по одному JSON-объекту настроенного провайдера на строку. |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Добавить registry/custom-провайдера. `--force` перезаписывает; `--sync` обновляет живой прокси в human-output mode. |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Сохраняет локально. `--force` разрешает перезапись; `--sync` пытается синхронизировать как при JSON, так и при текстовом выводе. |
 | `edit <name>` | provider field flags, `--headers <json>`, `--json` | Изменить валидированные live-поля провайдера, не заменяя key-pool'ы. `--headers` объединяет пользовательские request-header'ы; передайте `{}` или `-`, чтобы очистить их. |
 | `test <name>` | `--json` | Пробный запрос к реальному upstream model-endpoint'у. |
 | `show <name>` | `--json` | Показать конфиг с замаскированными API-key'ами. |
@@ -26,6 +26,8 @@ pool'ами и контролируют каталог моделей, кото�
 | `quota` | `--refresh`, `--json` | Прочитать отчёты по quota провайдеров. |
 | `presets` | `--json` | Показать provider preset'ы дашборда. |
 | `account-mode` | `pool`, `direct`, `--json` | Выбрать pooled или direct routing для аккаунтов Codex. |
+
+По умолчанию `add`, `remove` и `set-default` меняют локальную конфигурацию. Для работающего прокси добавьте `--live`, а для удаления — также `--yes`. `--sync --json` тоже пытается синхронизировать после сохранения; при сбое сохранение остаётся, код выхода ненулевой и `needsSync: true`. Флаги `--live` и `--sync` несовместимы. Pacing и snapshot/apply описаны в [английской инструкции](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline).
 
 ```bash
 ocx provider list --json
@@ -268,12 +270,7 @@ generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean,
 
 ### `ocx account login|reauth|code|cancel ...`
 
-Запускать browser-based или manual-code account-authentication из headless-shell. Для
-provider-specific формы команды используйте `ocx account --help`. Если login аккаунта Codex
-сохранён, но обновление каталога моделей ещё не завершилось, human-readable вывод по-прежнему
-завершается успешно и печатает в stderr фиксированную рекомендацию `ocx sync`. С `--json` stdout
-остаётся пригодным для парсинга, а завершённый login-state содержит
-`catalogRefreshPending: true` без human-readable предупреждения.
+Выполняет аутентификацию через браузер или ручной ввод кода из консоли без графического интерфейса. Синтаксис для конкретного провайдера указан в `ocx account --help`. Если вход Codex сохранён, но проверка или обновление каталога ещё не завершены, текстовый режим и `--json` возвращают код 1. Сохранённый вход остаётся видимым; не начинайте аутентификацию заново только из-за ожидающих операций. При ожидании каталога текстовый режим выводит рекомендацию `ocx sync` в stderr. Режим `--json` сохраняет машиночитаемый stdout и признаки ожидания без текстового предупреждения.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
@@ -377,18 +374,15 @@ ocx account main recover [--rollback --yes] [--json]
 `selected` управляет allowlist'ом провайдера; `context` — provider context cap'ами; `shadow`
 управляет intercept'ом background shadow-call'ов.
 
-Любая per-model операция, которую умеет дашборд, доступна и здесь, так что headless-установке не
-нужен GUI для управления каталогом. `add`, `remove` и `list-custom` работают напрямую с файлом
-конфига и применяются к работающему прокси через sync каталога; остальные обращаются к live
-management API и требуют, чтобы прокси уже работал (`ocx start` или установленная служба).
+`add` и `remove` по умолчанию сохраняют локально; `--live` меняет работающий прокси. Без прокси локальное сохранение с `--json` возвращает `sync.status: "not-attempted"`, `needsSync: true` и код 0. Неудачная попытка синхронизации сохраняет запись и возвращает ненулевой код. `list-custom` читает локальный список. `display-name` использует исходный upstream ID, а `order` — публичные ID picker. Полная перестановка, префикс featured и сброс native-порядка описаны в [английской инструкции](/reference/cli/providers-accounts/#display-names-and-picker-identities).
 
 | Подкоманда | Поддерживаемые флаги | Действие |
 | --- | --- | --- |
 | `list` (default) | `--provider <name>`, `--json` | Показать модели, засеянные в настроенных провайдерах. |
 | `live` | `--provider <name>`, `--json` | Прочитать работающий каталог, включая модели, обнаруженные во время выполнения. Строки помечаются как `native`/`routed`, `custom` и `enabled`/`disabled`. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Зарегистрировать модель, которую каталог провайдера сам не рекламирует. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Регистрирует custom-модель локально или на работающем прокси с `--live`. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Изменить custom-модель. `-` очищает поле; `0` очищает context window. |
-| `remove <custom-id\|provider/modelId>` | `--yes` | Удалить custom-модель. В неинтерактивном stdin требует `--yes`. |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | Удаляет custom-модель; с `--live` или `--json` требуется `--yes`. |
 | `list-custom` | `--json` | Показать все custom-модели вместе с `custom-id`, который используют остальные подкоманды. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Сделать одну модель видимой для Codex. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Скрыть одну модель от Codex. |

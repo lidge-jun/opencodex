@@ -262,7 +262,7 @@ remain untouched, and the existing snapshot and Restore workflow applies to the 
 
 ## Preview and confirm changes
 
-Apply, Replace, Disable, and Restore now begin with a preview. The dialog shows exactly which
+In the dashboard, Apply, Replace, Disable, and Restore begin with a preview. The dialog shows exactly which
 managed settings will change, including the bounded change paths and whether each change adds,
 updates, or removes a value. Review that plan before confirming.
 
@@ -335,6 +335,84 @@ ocx integration client disable --client hermes
 ocx integration client history --client hermes
 ocx integration client restore --op <opId> [--confirm-drift]
 ```
+
+### Preview and bind a terminal write
+
+The existing direct commands remain supported. To bind a write to a reviewed
+observation, inspect status and save a preview first:
+
+```bash
+ocx integration client preview --help
+ocx integration client status --client hermes --json
+ocx integration client preview --client hermes --operation apply --json > hermes-preview.json
+```
+
+Review `state`, `foreignEdit`, structural `changes`, `canApply` and `willChange`.
+Valid refused and no-op plans exit 0 because inspection succeeded; nothing was
+applied. The plan contains no secret values or full file diff. It uses existing
+passive catalog evidence and never secretly refreshes providers. If unavailable,
+resolve catalog availability separately before requesting a new preview.
+
+Only after reviewing an applicable plan and choosing the write:
+
+```bash
+PLAN_FINGERPRINT="$(jq -er 'select(.canApply == true) | .fingerprint' hermes-preview.json)"
+ocx integration client enable --client hermes --plan-fingerprint "$PLAN_FINGERPRINT" --json
+ocx integration client status --client hermes --json
+```
+
+Fingerprint is concurrency evidence, not authorization. Commit accepts `pN:`
+followed by 32 lowercase hex digits; a refused `pN:unbound` cannot commit. Repeat
+exact client/action/profile/options. Preview `overwrite` maps to enable with
+`--overwrite-conflict`; preview `disable` maps to disable. Stale commit exits 5,
+prints re-preview guidance on stderr and leaves stdout empty. It never adopts a
+replacement fingerprint or retries. Other failures use usage 2, not-found 4,
+runtime/malformed 1, with safe stderr rather than a JSON error envelope.
+
+### Inspect restoration drift before replacing it
+
+Use a real history opId; `op-example` below is fictional:
+
+```bash
+ocx integration client history --client aside --profile 1 --json
+ocx integration client restore --op op-example --client aside --profile 1 --preview --json
+```
+
+If drift is refused, inspect the edits. When replacing them is explicitly intended,
+preview with `--confirm-drift`, review, then bind that same intent:
+
+```bash
+ocx integration client restore --op op-example --client aside --profile 1 --preview --confirm-drift --json > restore-preview.json
+```
+
+After review:
+
+```bash
+RESTORE_FINGERPRINT="$(jq -er 'select(.canApply == true) | .fingerprint' restore-preview.json)"
+ocx integration client restore --op op-example --client aside --profile 1 --confirm-drift --plan-fingerprint "$RESTORE_FINGERPRINT" --json
+ocx integration client status --client aside --profile 1 --json
+```
+
+Aside preview/bound writes require one profile, not an aggregate target. Generic
+restore omits client/profile; the server derives the non-Aside client from opId.
+The returned plan does not contain opId or all original command inputs, so retain
+that context. `--preview` cannot combine with `--plan-fingerprint`.
+
+### Retire an old recovery record
+
+This permanently retires the record and backup; it does not restore or disable
+the integration. After inspecting history and choosing to lose that recovery point:
+
+```bash
+ocx integration client history remove --op op-example --client aside --profile 1 --yes --json
+ocx integration client history --client aside --profile 1 --json
+```
+
+Use the actual selected opId. No selector addresses the global journal; `--client aside`
+addresses aggregate Aside history and optional `--profile` narrows it. Other client
+selectors are refused for deletion. The newest row is protected. A receipt with
+`snapshotRemoved:false` is committed retirement with incomplete cleanup and exit 1;
+it is not rollback and must not trigger repeated deletion. `journal remove` is an alias.
 
 `--overwrite-conflict` is the terminal form of **Replace**:
 
@@ -431,6 +509,20 @@ successful bulk operation and HTTP 207 with `ok: false` if any profile refuses. 
 entry in `results`: successful profiles are not rolled back when another fails. Desired
 settings remain saved, so retry after addressing the affected profile rather than assuming
 the entire change failed. If saving those settings fails, no profile files are changed.
+
+For a targeted refresh of eligible Aside profiles, rather than broad catalog sync:
+
+```bash
+ocx integration client sync --client aside --json
+ocx integration client status --client aside --json
+```
+
+This uses the existing attested Aside owner and has no profile selector or local
+fallback. `{results:[]}` exits 0 and means no eligible profiles, not applied writes.
+Any failed row returns exit 1 while successful profiles remain updated. Preserve
+per-profile refusal, residual and separately labeled redacted backup information;
+inspect the affected profile before retrying. This refresh is separate from each
+profile's preview/bound mutation workflow.
 
 Each profile has separate ownership and history. Existing user edits, unsafe paths and linked
 catalogs are refused; the existing explicit overwrite and drift-confirmation controls remain
@@ -658,6 +750,43 @@ default for each connected model. Choose from the model's supported efforts,
 review the changes, then confirm. **No default** clears that model's draft setting;
 use **Save / review changes** and confirm to apply the removal.
 Models without a declared effort list show that no default is available.
+
+The CLI supports the same defaults in Droid apply/overwrite. For example, replace
+the fictional model below with an exact connected ID and supported effort:
+
+```bash
+ocx integration client preview --client droid --operation apply --reasoning-default example/model-a=high --json > droid-preview.json
+```
+
+After reviewing the applicable plan and choosing the write:
+
+```bash
+DROID_FINGERPRINT="$(jq -er 'select(.canApply == true) | .fingerprint' droid-preview.json)"
+ocx integration client enable --client droid --reasoning-default example/model-a=high --plan-fingerprint "$DROID_FINGERPRINT" --json
+ocx integration client status --client droid --json
+```
+
+Repeat `--reasoning-default MODEL=EFFORT` to submit the complete replacement map.
+The last equals sign separates model and effort; case and exact IDs are preserved.
+Duplicate model keys refuse. Omitted flags preserve defaults;
+`--clear-reasoning-defaults` explicitly sends an empty map. To clear, preview with
+that flag and repeat it in the matching enable command. Clear and entries cannot
+combine. These flags are Droid-only and do not apply to disable/restore. Repeat
+the same map in preview and commit; the server validates model-specific efforts
+and refuses stale binding rather than silently accepting a changed map.
+
+For an intended complete clear, preview that separate action:
+
+```bash
+ocx integration client preview --client droid --operation apply --clear-reasoning-defaults --json > droid-clear-preview.json
+```
+
+After reviewing and choosing it:
+
+```bash
+DROID_CLEAR_FINGERPRINT="$(jq -er 'select(.canApply == true) | .fingerprint' droid-clear-preview.json)"
+ocx integration client enable --client droid --clear-reasoning-defaults --plan-fingerprint "$DROID_CLEAR_FINGERPRINT" --json
+```
 
 The default applies only when Droid omits an effort from its request. An explicit
 request effort takes precedence over this default; existing OpenCodex pins and

@@ -24,6 +24,9 @@ import { MAX_COST4_RATE } from "../usage/expected-prices";
 import { isValidCost4Rate } from "../usage/user-cost-overlays";
 
 const USAGE = `Usage:
+  ocx models display-name <provider/raw-model> (--set <text> | --clear) [--json]
+  ocx models order status|reset [--json]
+  ocx models order set (--models <csv> | --mode <default|alphabetical|provider|most-used>) [--json]
   ocx models live [--provider <name>] [--free-only] [--json]
   ocx models price <provider/model> [--json]
   ocx models set-price <provider/model> --input N --output N [--cache-read N] [--cache-write N] [--json]
@@ -564,6 +567,10 @@ async function shadow(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 }
 
 export async function handleModelsRuntimeCommand(sub: string, argv: string[], deps: RuntimeApiDeps = {}): Promise<number | null> {
+  if (sub === "order" || sub === "display-name") {
+    const { handleModelsOrderCommand, handleModelsDisplayNameCommand } = await import("./models-order");
+    return sub === "order" ? handleModelsOrderCommand(argv, deps) : handleModelsDisplayNameCommand(argv, deps);
+  }
   // The dispatch below and MODELS_RUNTIME_SUBCOMMANDS must name the same set;
   // tests/cli/cli-models-runtime-dispatch.test.ts fails if they drift (#3094).
   if (!isModelsRuntimeSubcommand(sub)) return null;
