@@ -188,7 +188,7 @@ const chatSuccess = (): Response => Response.json({ id: "chat-test", choices: [{
 describe("reset replacement error confidentiality", () => {
   const credential = "fixture-active-credential-v1";
   const genericBody = { error: { type: "upstream_error",
-    message: "Provider error 400: upstream diagnostic withheld after a connection-reset replacement",
+    message: "Provider error 400: upstream diagnostic withheld for a non-replayable failure",
   } };
   const diagnostics = [
     ...([
@@ -262,6 +262,30 @@ describe("reset replacement error confidentiality", () => {
       expect(result.used).toBe(2);
       expect(result.grantSpent).toBe(true);
       expect(JSON.parse(result.text)).toEqual({ error: { type: "invalid_request_error", message: genericBody.error.message } });
+      expect(result.text).not.toContain(credential);
+    });
+
+    test(`${adapter} preserves an allowlisted upstream error code without its diagnostic`, async () => {
+      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
+        ? reset() : Response.json({ error: { type: "invalid_request_error", code: "context_length_exceeded", message: credential } }, { status: 400 }) });
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(result.used).toBe(2);
+      expect(result.grantSpent).toBe(true);
+      expect(JSON.parse(result.text)).toEqual({ error: { type: "invalid_request_error",
+        code: "context_length_exceeded", message: genericBody.error.message } });
+      expect(result.text).not.toContain(credential);
+    });
+
+    test.each(["unrecognized_error_code", credential])(`${adapter} drops an unapproved upstream error code (%s)`, async code => {
+      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
+        ? reset() : Response.json({ error: { type: "invalid_request_error", code, message: credential } }, { status: 400 }) });
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(result.used).toBe(2);
+      expect(result.grantSpent).toBe(true);
+      expect(JSON.parse(result.text)).toEqual({ error: { type: "invalid_request_error", message: genericBody.error.message } });
+      expect(result.text).not.toContain(code);
       expect(result.text).not.toContain(credential);
     });
 
@@ -414,7 +438,7 @@ describe("translated reset replay boundaries and accounting", () => {
         : Response.json({ error: { message: "recoverable-looking failure" } }, { status }) });
     expect(result.status, result.text).toBe(status === 400 ? 400 : 429);
     if (status === 400) expect(JSON.parse(result.text)).toEqual({ error: { type: "invalid_request_error",
-      message: "Provider error 400: upstream diagnostic withheld after a connection-reset replacement",
+      message: "Provider error 400: upstream diagnostic withheld for a non-replayable failure",
     } });
     else expect(result.text).toContain("upstream_reset_replay_refused");
     expect(result.bodies).toHaveLength(2);
