@@ -83,7 +83,7 @@ import {
   resolvePassthroughBodyGuard,
   sanitizePassthroughToolCallIds,
   tapAnthropicSseForLog,
-} from "./claude-messages";
+} from "./messages-shared";
 import { beginInferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog, type FinalRequestLogMeta } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";

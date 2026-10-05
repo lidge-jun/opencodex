@@ -591,7 +591,7 @@ export function maybePrimeSubagentQuota(
       if (subagentQuotaPrimeForTests) {
         await subagentQuotaPrimeForTests(config, "subagent-spawn");
       } else {
-        const { primeCodexPoolQuotas } = await import("./auth-api");
+        const { primeCodexPoolQuotas } = await import("./auth-api/pool-mode-gate");
         await primeCodexPoolQuotas(config, "subagent-spawn");
       }
       quotaPrimedAt.set("global", Date.now());

@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ELEVATION_REQUEST_TIMEOUT_MS, OCX_ELEVATED_PROTOCOL_FAILED, raceWithTimeout, resolveTrustedWindowsSchtasksExe, startElevatedSchtasksCreateAndRun, runWindowsElevated, toWindowsSchtasksError, WindowsElevationError, type ElevatedSchedulerOutcome, type ElevatedSchtasksCreateAndRunExecution, type ElevatedSchtasksCreateAndRunResult } from "../lib/windows-elevation";
 import { statusWinswRaw } from "../lib/winsw";
@@ -10,8 +9,9 @@ import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { TASK, windowsServiceScriptPath, windowsLauncherVbsPath, windowsTaskXmlPath, writeServiceInstallState } from "./state";
 import { buildWindowsSchtasksCreateArgs, windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy } from "./windows-taskxml";
 import type { ExpectedWindowsTaskUserId } from "./windows-taskxml";
-import { win32 } from "node:path";
 import { WINSW_SERVICE_ID } from "../lib/winsw";
+
+export { windowsWscript } from "./windows-wscript";
 
 /**
  * Decode schtasks stdout. `/query /xml` emits UTF-16LE (often with BOM) because the
@@ -67,11 +67,6 @@ function runFile(file: string, args: string[]): string {
 
 function windowsSchtasks(): string {
   return resolveTrustedWindowsSchtasksExe();
-}
-
-export function windowsWscript(): string {
-  const candidate = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "wscript.exe");
-  return existsSync(candidate) ? candidate : "wscript.exe";
 }
 
 let querySchtasksForTests: ((args: string[]) => string) | null = null;

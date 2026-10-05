@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
@@ -141,4 +141,89 @@ export function readRootTomlString(content: string, key: string): string | null 
 
 export function resolveCodexConfigPath(path: string): string {
   return isAbsolute(path) ? path : join(CODEX_HOME, path);
+}
+
+// ---------------------------------------------------------------------------
+// Active Codex home resolution.
+//
+// These resolve `CODEX_HOME` at call time rather than at import time, which is
+// what lets a test or a sibling-home probe point fixture state somewhere else
+// after this module has already loaded. They live here, next to the constants
+// they fall back to, so a caller that only needs a path never has to reach the
+// catalog parser.
+// ---------------------------------------------------------------------------
+
+export function samePath(a: string, b: string): boolean {
+  const left = resolve(a);
+  const right = resolve(b);
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+export function activeCodexHome(): string | null {
+  const raw = process.env.CODEX_HOME?.trim();
+  if (!raw) return null;
+  const path = resolve(expandUserPath(raw));
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+}
+
+export function activeCodexConfigPath(): string {
+  const home = activeCodexHome();
+  return home ? join(home, "config.toml") : CODEX_CONFIG_PATH;
+}
+
+export function activeDefaultCatalogPath(): string {
+  const home = activeCodexHome();
+  return home ? join(home, "opencodex-catalog.json") : DEFAULT_CATALOG_PATH;
+}
+
+export function activeCodexModelsCachePath(): string {
+  const home = activeCodexHome();
+  return home ? join(home, "models_cache.json") : CODEX_MODELS_CACHE_PATH;
+}
+
+export function resolveActiveCodexConfigPath(path: string): string {
+  const home = activeCodexHome();
+  return home ? resolve(home, path) : resolveCodexConfigPath(path);
+}
+
+export function isDefaultCatalogPath(path: string): boolean {
+  return samePath(path, activeDefaultCatalogPath());
+}
+
+export function readCodexCatalogPath(): string {
+  const home = activeCodexHome();
+  if (home) return readCodexCatalogPathForHome(home);
+  try {
+    const configPath = activeCodexConfigPath();
+    if (existsSync(configPath)) {
+      const toml = readFileSync(configPath, "utf-8");
+      const path = readRootTomlString(toml, "model_catalog_json");
+      if (path) return resolveActiveCodexConfigPath(path);
+    }
+  } catch { /* ignore */ }
+  return activeDefaultCatalogPath();
+}
+
+/**
+ * Resolve the configured catalog without consulting ambient CODEX_HOME again.
+ *
+ * `configText` is for a caller that has already read that same `config.toml` under
+ * its own constraints - the prompt-text probe reads it bounded, on the request
+ * thread - so resolving the catalog does not cost a second, unbounded read of the
+ * file the caller is holding. Omitting it keeps the original behaviour.
+ */
+export function readCodexCatalogPathForHome(codexHome: string, configText?: string): string {
+  try {
+    const configPath = join(codexHome, "config.toml");
+    if (configText !== undefined || existsSync(configPath)) {
+      const toml = configText ?? readFileSync(configPath, "utf-8");
+      const path = readRootTomlString(toml, "model_catalog_json");
+      if (path) return resolve(codexHome, path);
+    }
+  } catch { /* ignore */ }
+  return join(codexHome, "opencodex-catalog.json");
 }

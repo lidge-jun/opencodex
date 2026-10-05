@@ -15,7 +15,7 @@
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { modelInList } from "../types";
 import { codexEffortRank, configuredReasoningEfforts, isCodexReasoningEffort, isDeclaredReasoningEffort, modelRecordValue } from "../reasoning-effort";
-import { catalogModelEfforts } from "../codex/catalog";
+import { catalogModelEfforts } from "../codex/catalog/effort";
 
 /**
  * True when the request carries codex-rs's spawned-child markers, matched EXACTLY.

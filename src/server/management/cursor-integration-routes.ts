@@ -16,7 +16,7 @@ import { buildCursorLocalInstallerHint, type CursorLocalInstallerHint } from "..
 import { loadCursorEffortTable } from "../../integrations/cursor-effort-table";
 import { configuredApiAuthToken, isApiAuthRequired, jsonResponse } from "../auth-cors";
 import { localInferenceDestination } from "../../lib/local-destinations";
-import { fetchAllModels } from "../management-api";
+import { fetchAllModels } from "./shared";
 import { predictCursorEffort } from "../models-capabilities";
 import { expandCursorEffortRow, knownEffortRowIds } from "../effort-row";
 import type { ManagementContext } from "./context";

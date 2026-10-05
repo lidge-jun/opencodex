@@ -11,7 +11,9 @@ import { clearAccountNeedsReauth } from "./account-runtime-state";
 import { getMainChatgptAccountId, readCodexTokensResult } from "./auth-collision";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
 import { clearAccountQuota } from "./quota";
-import { clearCodexUpstreamHealthForAccount, clearThreadAccountMapForAccount } from "./routing";
+import { forgetManualPreference } from "./routing/active-account";
+import { deleteAllHealthForAccount } from "./routing/health-store";
+import { clearThreadAccountMapForAccount } from "./routing/thread-affinity";
 
 import { clearCodexPoolRefreshFailure } from "./pool-refresh-backoff";
 import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
@@ -45,7 +47,11 @@ export function purgeCodexAccountRuntimeState(accountId: string): void {
   clearAccountNeedsReauth(accountId);
   clearAccountQuota(accountId);
   clearThreadAccountMapForAccount(accountId);
-  clearCodexUpstreamHealthForAccount(accountId);
+  // Deliberately not via `./routing`: the account-delete path only needs the health rows and
+  // the manual preference gone, and importing the router here closed a cycle through
+  // routing/health-store and routing/active-account.
+  deleteAllHealthForAccount(accountId);
+  forgetManualPreference(accountId);
   clearCodexPoolRefreshFailure(accountId);
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
     clearMainAccountInfoCache();

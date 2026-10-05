@@ -11,7 +11,7 @@ import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type D
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./guards";
-import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, installedServiceListenPort, resolvedProxyEnv } from "./health";
+import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv } from "./definition";
 import { SERVICE_MANAGED_ENV, LABEL, cliEntry, filterTransientServicePath, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 import { readTextOrNull } from "./windows-taskxml";
@@ -359,8 +359,11 @@ export function probeLaunchdLoadState(deps: {
   for (const domain of [`gui/${uid}`, `user/${uid}`]) {
     const printed = run(["print", `${domain}/${LABEL}`]);
     if (printed.status === 0) {
+      // `installedServiceListenPort()` minus the three readers that cannot answer on
+      // macOS: this probe only runs on the darwin path, and on darwin the systemd and
+      // Windows artifacts are absent, so their readers were always null here.
       const expected = (deps.expectedCommand
-        ?? (() => expectedLaunchdCommand(installedServiceListenPort())))();
+        ?? (() => expectedLaunchdCommand(launchdListenPort() ?? resolveServiceListenPort())))();
       const printedText = `${printed.stdout}\n${printed.stderr}`;
       return {
         state: printedText.includes(expected) ? "loaded-current" : "loaded-stale",
@@ -779,7 +782,7 @@ export function startLaunchd(deps: {
   // `install` can assume a stale job (it just rewrote the plist); `start` cannot, and
   // throwing here would break `ocx service start` on every healthy service.
   const live = (deps.matches ?? launchdJobMatchesPlist)(
-    expectedLaunchdCommand(installedServiceListenPort()),
+    expectedLaunchdCommand(launchdListenPort() ?? resolveServiceListenPort()),
   );
   if (live.loaded && live.matchesPlist) {
     console.log("ℹ️  service was already loaded from the current plist; nothing to do.");
