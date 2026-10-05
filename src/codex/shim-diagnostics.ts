@@ -67,7 +67,9 @@ export function diagnoseCodexShim(): CodexShimDiagnostic {
     const backup = existsSync(file.backupPath) ? "present" : "missing";
     return `Codex autostart shim: wrapper ${wrapper} at ${file.wrapperPath}; original backup ${backup} at ${file.backupPath}.`;
   }).join("\n");
-  return { installed: true, healthy, summary };
+  // Presence alone is not health: a damaged wrapper still reads "shim present", so state the verdict.
+  return { installed: true, healthy, summary: healthy ? summary
+    : `${summary}\nCodex autostart shim is unhealthy. Run ocx codex-shim install to repair it.` };
 }
 
 export function codexShimStatus(): string {
