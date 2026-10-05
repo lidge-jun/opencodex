@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codexShimReadinessWarnings } from "../../src/cli/codex-shim-readiness";
+import { diagnoseCodexShim } from "../../src/codex/shim-diagnostics";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
@@ -288,4 +289,31 @@ describe("Codex shim install readiness", () => {
       removeTreeWithRetry(root);
     }
   }, SHIM_INSTALL_CASE_MS * 3);
+});
+
+describe("in-place Windows shim status verdict", () => {
+  test("a damaged in-place wrapper says unhealthy instead of only 'shim present'", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-shim-inplace-verdict-"));
+    const previous = process.env.OPENCODEX_HOME;
+    try {
+      const home = join(root, "ocx"); const bin = join(root, "bin"); mkdirSync(home); mkdirSync(bin);
+      const wrapperPath = join(bin, "codex.cmd"); const backupPath = join(bin, "codex.opencodex-real.cmd");
+      writeFileSync(backupPath, "@echo off\r\n");
+      // Legacy in-place record, as Windows installs write it; readable on every host.
+      writeFileSync(join(home, "codex-shim.json"), JSON.stringify({ platform: "win32", wrapperPath, originalPath: wrapperPath, backupPath }));
+      process.env.OPENCODEX_HOME = home;
+      const body = `@echo off\r\nrem opencodex codex autostart shim${"\r\nrem padding".repeat(20)}\r\n`;
+      writeFileSync(wrapperPath, `${body}ocx codex-shim ensure\r\n`);
+      expect(diagnoseCodexShim()).toMatchObject({ installed: true, healthy: true });
+      expect(diagnoseCodexShim().summary).not.toContain("unhealthy");
+      writeFileSync(wrapperPath, `${body}ocx codex-shim broken\r\n`);
+      const damaged = diagnoseCodexShim();
+      expect(damaged).toMatchObject({ installed: true, healthy: false });
+      expect(damaged.summary).toContain("wrapper shim present");
+      expect(damaged.summary).toContain("Codex autostart shim is unhealthy. Run ocx codex-shim install to repair it.");
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+      removeTreeWithRetry(root);
+    }
+  });
 });

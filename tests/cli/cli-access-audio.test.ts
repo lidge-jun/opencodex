@@ -249,9 +249,15 @@ describe("bounded regular audio files", () => {
     expect(value.size).toBe(25_000_000); expect(value.name).toBe("audio.wav");
   });
   test("directory and device are refused", async () => {
-    for (const path of [root, "/dev/null"]) {
-      expect(await handleAccessAudioCommand(args(path), deps())).toBe(2);
-    }
+    expect(await handleAccessAudioCommand(args(root), deps())).toBe(2);
+    // POSIX stats /dev/null as a character device (usage refusal). Windows has no /dev; its NUL
+    // device may not stat at all, which is a read failure. Either way nothing is read or sent.
+    let requests = 0;
+    const device = process.platform === "win32" ? "NUL" : "/dev/null";
+    const code = await handleAccessAudioCommand(args(device), deps({ fetchImpl: fetcher(() => { requests++; return Response.json({ text: "" }); }) }));
+    if (process.platform === "win32") expect([1, 2]).toContain(code);
+    else expect(code).toBe(2);
+    expect(requests).toBe(0);
   });
   test("growing file is bounded by actual reads, not the stale stat", async () => {
     expect(await handleAccessAudioCommand(args(), deps({ audioOpen: async (path, flags) => {

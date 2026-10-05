@@ -1,19 +1,19 @@
 import { expect, test } from "bun:test";
 
-test("ClaudeCode renders the denser workspace rail layout", async () => {
+test("ClaudeCode renders every section on one page without an inner rail", async () => {
   const page = await Bun.file(new URL("../src/pages/ClaudeCode.tsx", import.meta.url)).text();
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
   // The Claude nav entry mounts a Code/Desktop tab wrapper; ClaudeCode itself is
-  // the Code tab body with a section rail to cut scroll.
+  // the Code tab body, laid out as one vertical page.
   const claude = await Bun.file(new URL("../src/pages/Claude.tsx", import.meta.url)).text();
 
-  expect(page).toContain("claudecode-workspace");
-  expect(page).toContain("ccw-body");
-  expect(page).toContain("ccw-main-head");
-  expect(page).toContain("selectedSection");
-  expect(page).toContain("claude.workspace.settings");
-  // Save stays in the pane head (visibility-toggled) so the Code/Desktop chrome does not jump.
-  expect(page).toContain('data-visible={sectionEditable ? "true" : "false"}');
+  expect(page).toContain("claudecode-workspace-shell claudecode-doc");
+  // The inner section rail made a second sidebar beside the app's own; it must not return.
+  expect(page).not.toContain("claudecode-workspace-rail");
+  expect(page).not.toContain("selectedSection");
+  // One Save bar for the page, with its own polite status line.
+  expect(page).toContain('className="ccw-savebar" role="region"');
+  expect(page).toContain('aria-live="polite" aria-atomic="true"');
 
   // Claude lives as a tab inside Connect (Integrations), not as its own App slot.
   expect(app).not.toContain("<Claude ");
@@ -30,19 +30,23 @@ test("ClaudeCode renders the denser workspace rail layout", async () => {
   expect(integrations).toContain("<ClaudeDesktop key={apiBase} apiBase={apiBase} active={active} />");
 });
 
-test("ClaudeCode workspace sections remain available in source order", async () => {
+test("ClaudeCode sections follow the page order, master switch and Save bar last", async () => {
   const src = await Bun.file(new URL("../src/pages/ClaudeCode.tsx", import.meta.url)).text();
+  const render = src.slice(src.indexOf('<div className="claudecode-workspace-shell claudecode-doc">'));
 
   const order = [
-    "<ClaudeCodeSettingsCard",
+    "claude.firstParty.label",
     "<ClaudeCodeQuickstartSection",
+    "<ClaudeCodeSettingsCard",
     "<SmallFastModelSetting",
     "<ClaudeCodeModelMapSection",
     "<ClaudeCodeAliasesSection",
+    "{connectionRow}",
+    'className="ccw-savebar"',
   ];
   let cursor = -1;
   for (const marker of order) {
-    const at = src.indexOf(marker);
+    const at = render.indexOf(marker);
     expect(at).toBeGreaterThan(cursor);
     cursor = at;
   }

@@ -177,7 +177,7 @@ Claude Code needs a token in `ANTHROPIC_AUTH_TOKEN` to talk to a gateway, but se
 variable also disables your claude.ai login and its connectors. Which of the two you want
 depends on something opencodex can look up, so by default it does.
 
-Leave **Auth mode** on **Auto** (the default) in **Claude → Claude Code** and opencodex
+Leave **Auth mode** on **Auto** (the default) in **Connect → Claude** and opencodex
 decides at each launch:
 
 | What it finds | What it does |
@@ -202,7 +202,7 @@ the proxy starts or you save settings, while `ocx claude` always resolves live.
 ## Claude Desktop modes: gateway (default) and first-party
 
 Claude Desktop can use OpenCodex in one of two mutually exclusive modes. Pick it in
-**Claude → Desktop → Connection mode** in the dashboard or with `ocx claude desktop apply
+**Connect → Claude Desktop → Connection mode** in the dashboard or with `ocx claude desktop apply
 --first-party|--gateway`.
 
 ### Gateway (default)
@@ -298,7 +298,7 @@ While picker mode is on, Claude Desktop reaches the network through OpenCodex. I
 Desktop is offline until you fully restart it or turn picker mode off. Check the state with
 `ocx claude desktop picker status`; use `ocx claude desktop picker trust` to repeat the trust step,
 or turn it off with `ocx claude desktop picker off`. The dashboard has the same picker toggle under
-**Claude → Desktop**. After the picker profile is selected, fully quit and reopen Claude Desktop.
+**Connect → Claude Desktop**. After the picker profile is selected, fully quit and reopen Claude Desktop.
 
 Picker mode is part of first-party mode, so the [first-party account risk](#first-party-opt-in)
 applies to it as well. Desktop and CLI catalog rewrites share bounded row and metadata limits:
@@ -318,7 +318,7 @@ ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 
-or use **Claude → Desktop → Code tab model bindings** in the dashboard. Picking **Sonnet 4.6** in
+or use **Connect → Claude Desktop → Code tab model bindings** in the dashboard. Picking **Sonnet 4.6** in
 the Code tab is then served by `xai/grok-4.7`. The picker keeps Anthropic's label, and the model is
 still introduced to itself as that Claude model by Claude Code's system prompt, so prefer rows you
 do not otherwise use (the **More models** entries are good candidates). Bindings take effect on the
@@ -336,7 +336,7 @@ next request; Desktop does not need a restart.
 
 ### Claude Code CLI first-party
 
-Turn on the CLI switch in Claude → Code, or run `ocx claude config set --first-party on`; use `off` to disable it. The switch is immediate and refuses `{enabled:false, cliFirstParty:true}` before any field is saved; it may also refuse to turn on if the local intercept is unavailable, the CA cannot be prepared, settings cannot be read, or a foreign proxy setting owns the keys. Off persists even when the intercept is unavailable; disabling Claude routing alone leaves an owned settings env untouched. For fully native terminal traffic with only Desktop first-party on, set `NO_PROXY='*'` in the shell. This still carries the first-party account risk stated above.
+Turn on the CLI switch in Connect → Claude, or run `ocx claude config set --first-party on`; use `off` to disable it. The switch is immediate and refuses `{enabled:false, cliFirstParty:true}` before any field is saved; it may also refuse to turn on if the local intercept is unavailable, the CA cannot be prepared, settings cannot be read, or a foreign proxy setting owns the keys. Off persists even when the intercept is unavailable; disabling Claude routing alone leaves an owned settings env untouched. For fully native terminal traffic with only Desktop first-party on, set `NO_PROXY='*'` in the shell. This still carries the first-party account risk stated above.
 Disabling Claude routing leaves the owned settings env untouched. While the bound listener still runs, every Messages request relays unchanged; after it stops, plain `claude` cannot connect until OpenCodex runs or Desktop/CLI first-party is turned off. Native `ocx claude` sets `NO_PROXY=*` only for an owned env without a foreign inherited `HTTPS_PROXY`/`https_proxy`. With a foreign proxy it preserves that value and warns that the settings-owned intercept still applies; turn Desktop/CLI first-party off or unset the setting.
 The UI distinguishes uncertainty about whether settings still point at its proxy (unknown), a token-bearing opencodex proxy with a foreign CA (foreign: fix HTTPS_PROXY / NODE_EXTRA_CA_CERTS manually), and a tokenless loopback proxy beside a foreign CA (local: ownership is unconfirmed; remove HTTPS_PROXY if unused). With matching applied settings and a bound listener but Claude routing off, disabled means requests relay unchanged while it is bound; turn first-party off to remove settings. An owned URL with no listener is stopped; a bound listener with an owned CA but mismatched port or token is broken even when routing is off. With an intent on, stopped or broken plus ineligible interception displays routingOff: Claude routing or the intercept is off, or this machine is a client of another opencodex hub; enable interception on this machine or turn first-party off to remove the settings. When interception is stopped, use **Start interception** or `ocx claude intercept start` to retry within the running OpenCodex service. Saving first-party settings also starts it automatically. A refusal reports disabled routing, client role, an ephemeral public port, an occupied port, or a startup failure. For an occupied port, free it or set `claudeCode.intercept.port`. If a pair is already bound on a different port, the response names both ports; use the bound port or restore the configured value. CLI intent with no proxy is not applied; one intent with a live proxy gets the shared-relay notice; any remaining proxy with neither intent is residual, unless unknown, foreign, or local takes precedence.
 
@@ -373,8 +373,12 @@ routes that session to the model, just like a binding.
 
 ## Claude Desktop profile (gateway mode)
 
-The profile below is written only in gateway mode. Claude Desktop uses a separate profile from Claude Code. Open **Claude → Desktop** in the
-dashboard to place each available route in one of four families: Opus, Fable, Sonnet, or Haiku.
+The profile below is written only in gateway mode. Claude Desktop uses a separate profile from Claude Code. Open **Connect → Claude Desktop** in the
+dashboard. The **Models** card has the two choices most people need: **Default model** is listed
+first in Claude Desktop and sent as the Opus tier, and **Quick task model** answers Desktop's
+Haiku-tier requests. Picking a model there moves it into that family and makes it the family
+default. To place every route yourself, open **Advanced: Claude tier assignment**, where each
+available route sits in one of four families: Opus, Fable, Sonnet, or Haiku.
 All routes start in Opus on a new profile. The first Opus route becomes the initial overall
 default, and every non-empty family always has one family default.
 
@@ -905,10 +909,12 @@ Claude debug immediately clears the ring.
 
 ## GUI (Claude page)
 
-The dashboard sidebar has a dedicated **Claude** page (under Connect) and a **Claude ON** toggle
-(label intentionally identical in every language). The page shows:
+Claude has two tabs under **Connect** in the dashboard: **Claude** for Claude Code and **Claude Desktop**,
+and the Claude card on the Connect overview carries the same connection switch. Claude Code settings are one page with a
+single Save bar at the bottom (unsaved state, **Revert**, **Save**); the Claude connection switch
+is the last control and commits immediately, so **Save** never changes it. The page shows:
 
-- Desktop tab: **Connection mode** selector — gateway (default) or first-party — with the
+- Claude Desktop tab: **Connection mode** selector — gateway (default) or first-party — with the
   running proxy port in first-party mode. Only **Save & apply** switches modes; **Save** alone
   stores the gateway profile lanes for a later gateway apply and leaves the current mode as is
 - Inbound kill switch (enabled toggle)
