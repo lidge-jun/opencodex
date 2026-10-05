@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Logs from "../src/pages/Logs";
+import { decodeRateLabelKeys } from "../src/pages/logs-decode-rate";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -153,23 +154,29 @@ test("mixed Logs rows visibly identify their basis, with distinct details and at
     const generation = rowFor(container, "generation-row").querySelector(".log-col-rate")!;
     expect(legacy.textContent).toContain("6.2");
     expect(legacy.textContent).toContain("~134");
-    expect(legacy.textContent).toContain("Legacy");
+    expect(legacy.textContent).toContain("After visible output");
     expect(generation.textContent).toContain("6.2");
     expect(generation.textContent).toContain("~21.8");
-    expect(generation.textContent).toContain("Generation");
-    expect(legacy.querySelector("[title]")?.getAttribute("title")).toBe("Legacy post-visible-output rate (est.)");
+    expect(generation.textContent).toContain("Generation window");
+    expect(legacy.querySelector("[title]")?.getAttribute("title")).toBe("Output rate after first visible output (est.)");
     await openDetails(rowFor(container, "generation-row"));
     const performance = document.querySelector('[aria-labelledby="log-detail-performance"]')!;
     expect(performance.textContent).toContain("End-to-end output tok/s");
-    expect(performance.textContent).toContain("Generation-window rate (est.)");
+    expect(performance.textContent).toContain("Output rate during generation (est.)");
+    const hint = performance.querySelector(".logs-decode-basis-hint")!;
+    expect(hint.textContent).toBe("Estimated using the time from the first output observed by the proxy, including reasoning, to the last output delta.");
+    expect(hint.classList.contains("muted")).toBe(true);
+    expect(hint.classList.contains("text-caption")).toBe(true);
+    expect(hint.parentElement?.classList.contains("log-detail-performance-grid")).toBe(true);
     const attempts = document.querySelector(".log-detail-attempts")!;
-    const legacyAttempt = attempts.querySelector('[title="Legacy post-visible-output rate (est.)"].logs-decode-rate');
+    const legacyAttempt = attempts.querySelector('[title="Output rate after first visible output (est.)"].logs-decode-rate');
     expect(legacyAttempt?.textContent).toContain("~30.0");
-    expect(legacyAttempt?.textContent).toContain("Legacy");
-    const unknownAttempt = attempts.querySelector('[title="Decode rate (est.; timing basis unknown)"].logs-decode-rate');
+    expect(legacyAttempt?.textContent).toContain("After visible output");
+    const unknownAttempt = attempts.querySelector('[title="Output rate (est.; timing method unknown)"].logs-decode-rate');
     expect(unknownAttempt?.textContent).toContain("~21.8");
-    expect(unknownAttempt?.textContent).toContain("Unknown basis");
+    expect(unknownAttempt?.textContent).toContain("Timing unknown");
     expect(attempts.querySelectorAll(".logs-decode-rate")).toHaveLength(2);
+    expect(attempts.querySelector(".logs-decode-basis-hint")).toBeNull();
     expect(attempts).not.toBeNull();
   } finally { await act(async () => { root.unmount(); }); }
 });
@@ -185,29 +192,73 @@ test("older and unknown DTOs never invent a timing basis; absent and unavailable
     for (const id of ["cached-old", "future"]) {
       const cell = rowFor(container, id).querySelector(".log-col-rate")!;
       expect(cell.textContent).toContain("~21.8");
-      expect(cell.textContent).toContain("Unknown basis");
-      expect(cell.textContent).not.toContain("Generation");
+      expect(cell.textContent).toContain("Timing unknown");
+      expect(cell.textContent).not.toContain("Generation window");
     }
     for (const id of ["absent", "short"]) {
       expect(rowFor(container, id).querySelector(".logs-decode-rate")).toBeNull();
       expect(rowFor(container, id).querySelector(".log-col-rate")?.textContent?.trim()).toBe("6.2");
     }
-    await openDetails(rowFor(container, "cached-old"));
-    expect(document.querySelector('[aria-labelledby="log-detail-performance"]')?.textContent)
-      .toContain("Decode rate (est.; timing basis unknown)");
+    for (const id of ["cached-old", "future"]) {
+      await openDetails(rowFor(container, id));
+      const performance = document.querySelector('[aria-labelledby="log-detail-performance"]')!;
+      expect(performance.textContent).toContain("Output rate (est.; timing method unknown)");
+      expect(performance.querySelector(".logs-decode-basis-hint")?.textContent)
+        .toBe("The server did not report which timing method was used for this estimate.");
+      await act(async () => { document.querySelector<HTMLButtonElement>(".modal-head button")!.click(); });
+    }
   } finally { await act(async () => { root.unmount(); }); }
 });
 
 test("all locales translate both explicit bases and the unknown fallback", async () => {
   const { DICTS } = await import("../src/i18n/shared");
-  const { decodeRateLabelKeys } = await import("../src/pages/logs-decode-rate");
   for (const dict of Object.values(DICTS)) {
     for (const timingBasis of ["generation-window", "legacy-post-visible-output", undefined, "unknown-new-value"]) {
       const keys = decodeRateLabelKeys({ timingBasis });
       expect(dict[keys.short]?.length).toBeGreaterThan(0);
       expect(dict[keys.detail]?.length).toBeGreaterThan(0);
+      expect(dict[keys.hint]?.length).toBeGreaterThan(0);
     }
     expect(dict["logs.decodeBasis.generation"]).not.toBe(dict["logs.decodeBasis.legacy"]);
     expect(dict["logs.decodeBasis.unknown"]).not.toBe(dict["logs.decodeBasis.legacy"]);
   }
+});
+
+
+test("decode label keys include the matching hint for every timing method", () => {
+  for (const [timingBasis, suffix, detail] of [
+    ["generation-window", "generation", "decodeGeneration"],
+    ["legacy-post-visible-output", "legacy", "decodeLegacy"],
+    [undefined, "unknown", "decodeUnknown"],
+    ["future-basis", "unknown", "decodeUnknown"],
+  ] as const) {
+    expect(decodeRateLabelKeys({ timingBasis })).toEqual({
+      short: `logs.decodeBasis.${suffix}`,
+      detail: `logs.detail.${detail}`,
+      hint: `logs.detail.decodeBasisHint.${suffix}`,
+    });
+  }
+});
+
+test.each([
+  ["legacy", value("legacy-post-visible-output")],
+  ["absent", undefined],
+  ["short", { kind: "unavailable", reason: "decode_window_too_short" }],
+  ["missing-ttft", { kind: "unavailable", reason: "ttft_missing" }],
+] as const)("request detail hint visibility follows the decode value: %s", async (id, decode) => {
+  mockLogs([fixture(id, decode)]);
+  const { root, container } = await mountLogs();
+  try {
+    await openDetails(rowFor(container, id));
+    const performance = document.querySelector('[aria-labelledby="log-detail-performance"]')!;
+    const hint = performance.querySelector(".logs-decode-basis-hint");
+    if (id === "legacy") {
+      expect(performance.textContent).toContain("Output rate after first visible output (est.)");
+      expect(hint?.textContent).toBe("Estimated using the time from the first visible output to the end of the request, while counting all reported output tokens, including reasoning.");
+    } else {
+      expect(hint).toBeNull();
+      expect(performance.textContent).not.toContain("Estimated using the time");
+      expect(performance.textContent).not.toContain("The server did not report");
+    }
+  } finally { await act(async () => { root.unmount(); }); }
 });

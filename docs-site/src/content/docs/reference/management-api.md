@@ -296,6 +296,10 @@ and `estimated: true`; attempt values identify their own window. Unavailable res
 existing `reason` and no timing basis. The field is derived only at read time: stored JSONL,
 end-to-end `tokPerSecond`, request-history DTOs and aggregate throughput are unchanged.
 Older DTOs can omit the field; clients must treat the timing basis as unknown in that case.
+The dashboard names these methods **Generation window** and **After visible output**, with
+**Timing unknown** for a missing or unfamiliar basis. Request details show **Output rate during
+generation (est.)**, **Output rate after first visible output (est.)**, or **Output rate (est.;
+timing method unknown)** and a visible explanation of the timing method when a rate is available.
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
