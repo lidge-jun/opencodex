@@ -18,10 +18,15 @@ const PRIVATE_DACL_FLAGS = 0x1004; // DiscretionaryAclPresent | DiscretionaryAcl
 const FULL_CONTROL = 2032127;
 
 // This script is constant. Literal paths are environment data, never PowerShell source.
-// Enumerate the raw descriptor: GetAccessRules projects away unsupported ACE details.
+// Enumerate the descriptor Get-Acl reports. GetAccessRules projects away unsupported ACE details, so the
+// ACEs are read from the serialized descriptor instead. .NET canonicalizes it first: entries for the same
+// principal merge and entries that grant nothing drop, but another principal's entry is never folded into
+// the user's, and the owner is untouched. The policy is therefore the effective DACL, not the on-disk bytes.
 const ACL_SCRIPT = String.raw`
 $ErrorActionPreference='Stop'
 try {
+  # ASCII has no preamble, so a UTF-8 console code page cannot prefix the protocol with a BOM.
+  try { [Console]::OutputEncoding=[System.Text.Encoding]::ASCII } catch { $encodingUnchanged=$true }
   $countText=[Environment]::GetEnvironmentVariable('OCX_ACL_COUNT')
   if ($countText -notmatch '^[1-9][0-9]*$') { throw 'count' }
   $count=[int]$countText
@@ -69,12 +74,14 @@ function defaultWindowsOwnerAclRunner(entries: readonly WindowsPrivateEntry[], t
   return { success: result.success, timedOut: result.exitedDueToTimeout ?? false, stdout: result.stdout ?? new Uint8Array() };
 }
 let ownerAclRunner: WindowsOwnerAclRunner = defaultWindowsOwnerAclRunner;
+/** Test-only access to the real subprocess runner, for native diagnostics. */
+export const windowsOwnerAclDefaultRunnerForTests: WindowsOwnerAclRunner = defaultWindowsOwnerAclRunner;
 
 export function setWindowsOwnerAclRunnerForTests(runner: WindowsOwnerAclRunner | null): void {
   ownerAclRunner = runner ?? defaultWindowsOwnerAclRunner;
 }
 
-/** Pure, strict line-protocol parser and owner/raw-DACL policy. No account names or SDDL. */
+/** Pure, strict line-protocol parser and owner/effective-DACL policy. No account names or SDDL. */
 export function windowsPrivateEntriesAclMatches(stdout: string | Uint8Array, entries: readonly WindowsPrivateEntry[]): boolean {
   if (entries.length === 0) return false;
   // The script emits ASCII only. Reject BOMs, NULs, non-ASCII bytes and replacement decoding.

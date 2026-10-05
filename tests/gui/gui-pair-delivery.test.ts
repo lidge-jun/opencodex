@@ -11,7 +11,7 @@ import { consumeGuiPairIntent, createGuiPairIntent, GUI_PAIR_INTENT_HEADER } fro
 import { deliverGuiPairingGrant, GuiPairingIntentRequiredError } from "../../src/server/gui-pair-delivery";
 import { GuiPairingGrantRateLimitError } from "../../src/server/gui-session";
 import { resetHardenedStateForTests, setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests, setPlatformForTests } from "../../src/lib/windows-secret-acl";
-import { setWindowsOwnerAclRunnerForTests, windowsPrivateEntriesAclMatches, type WindowsPrivateEntry } from "../../src/lib/windows-owner-acl";
+import { setWindowsOwnerAclRunnerForTests, windowsOwnerAclDefaultRunnerForTests, windowsPrivateEntriesAclMatches, type WindowsPrivateEntry } from "../../src/lib/windows-owner-acl";
 import { resetWindowsPrincipalForTests, setWindowsPrincipalRunnerForTests, setAsyncWindowsPrincipalRunnerForTests, setWindowsPrincipalLocaleForTests } from "../../src/lib/windows-user-principal";
 import { resolveTrustedWindowsIcaclsExe } from "../../src/lib/windows-elevation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -375,7 +375,7 @@ describe("one-use local CLI pairing intent", () => {
   });
 });
 
-describe("Windows redemption owner and raw-DACL policy", () => {
+describe("Windows redemption owner and effective-DACL policy", () => {
   beforeEach(() => { setPlatformForTests("win32"); resetHardenedStateForTests(); });
 
   const refusals: [string, string][] = [
@@ -535,18 +535,30 @@ describe("Windows redemption owner and raw-DACL policy", () => {
   test.skipIf(process.platform !== "win32")("native private ACLs grant, an additional ACE refuses, and recovery grants", () => {
     setIcaclsRunnerForTests(null); setAsyncIcaclsRunnerForTests(null); setWindowsOwnerAclRunnerForTests(null);
     const clean = createGuiPairIntent(CAP), cleanState = state();
+    // Diagnose the real subprocess before relying on it: the policy fixtures above cannot see what
+    // Windows PowerShell actually prints. The protocol carries only SIDs and numbers, never paths.
+    const cleanEntries = [{ path: join(root, "gui-pair-intents"), directory: true }, { path: recordPath(), directory: false }];
+    const probe = windowsOwnerAclDefaultRunnerForTests(cleanEntries, 30_000);
+    if (!probe.success || !windowsPrivateEntriesAclMatches(probe.stdout, cleanEntries)) {
+      const shown = typeof probe.stdout === "string" ? probe.stdout : Buffer.from(probe.stdout).toString("latin1");
+      throw new Error(`native verifier refused a clean intent: success=${probe.success} timedOut=${probe.timedOut} stdout=${JSON.stringify(shown)}`);
+    }
     expect(deliverGuiPairingGrant(request(clean.proof), config(), cleanState)).toHaveProperty("grant");
     const capability = "C".repeat(43), intent = createGuiPairIntent(capability), path = recordPath();
     const dir = join(root, "gui-pair-intents"), s = state();
     const icacls = (...args: string[]) => Bun.spawnSync([resolveTrustedWindowsIcaclsExe(), dir, ...args], {
       stdin: "ignore", stdout: "pipe", stderr: "ignore", windowsHide: true, timeout: 5_000,
     });
-    try {
-      expect(icacls("/grant", "*S-1-5-4:(OI)(CI)(RX)").success).toBe(true);
-      expect(() => deliverGuiPairingGrant(request(intent.proof, ORIGIN, capability), config(), s)).toThrow(GuiPairingIntentRequiredError);
-      expect(existsSync(path)).toBe(true); expect(existsSync(`${path}.consuming`)).toBe(false);
-      expect(s.pairingGrants.size).toBe(0);
-    } finally { expect(icacls("/remove:g", "*S-1-5-4").success).toBe(true); }
+    // A directly applicable entry and an inherit-only entry for another principal both survive
+    // Get-Acl canonicalization, so each must refuse on its own.
+    for (const ace of ["*S-1-5-4:(OI)(CI)(RX)", "*S-1-5-4:(OI)(CI)(IO)(RX)"]) {
+      try {
+        expect(icacls("/grant", ace).success).toBe(true);
+        expect(() => deliverGuiPairingGrant(request(intent.proof, ORIGIN, capability), config(), s)).toThrow(GuiPairingIntentRequiredError);
+        expect(existsSync(path)).toBe(true); expect(existsSync(`${path}.consuming`)).toBe(false);
+        expect(s.pairingGrants.size).toBe(0);
+      } finally { expect(icacls("/remove:g", "*S-1-5-4").success).toBe(true); }
+    }
     expect(deliverGuiPairingGrant(request(intent.proof, ORIGIN, capability), config(), s)).toHaveProperty("grant");
     expect(s.pairingGrants.size).toBe(1); expect(existsSync(path)).toBe(false);
   }, 45_000);
