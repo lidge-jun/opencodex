@@ -58,9 +58,10 @@ test("CODEX_BUSY guides a status read and fresh stopped confirmation, without re
     await f.session.toggle(); f.session.select(action); f.session.setStopped(true);
     f.failure("CODEX_BUSY"); await f.session.confirm();
     const alert = f.render().querySelector('[role="alert"]')!;
+    expect(alert.classList.contains("native-main-notice")).toBe(true);
     expect(alert.textContent).toContain("Close it for the displayed CODEX_HOME");
-    expect(alert.textContent).toContain("Refresh status and review the active profile");
-    expect(alert.textContent).toContain("give a new stopped confirmation");
+    expect(alert.textContent).toContain("Refresh the status and review the active profile");
+    expect(alert.textContent).toContain("select the action again and confirm that Codex is closed");
     expect(alert.textContent).not.toContain("private-server-detail");
     expect(f.session.state.snapshot?.doctor.activeProfileId).toBe(a.id);
     expect(f.session.state.confirmedStopped).toBe(false);
@@ -78,7 +79,7 @@ test("CODEX_BUSY guides a status read and fresh stopped confirmation, without re
   } finally { await f.close(); }
 });
 
-test("confirmation presents close, acknowledge and result steps in English and German", async () => {
+test("confirmation presents close, checkbox and result steps in English and German", async () => {
   const f = fixture();
   try {
     await f.session.toggle(); f.session.select(action);
@@ -88,8 +89,13 @@ test("confirmation presents close, acknowledge and result steps in English and G
       expect([...panel.querySelectorAll("ol li")].map(item => item.textContent)).toEqual([
         t("nativeMain.stepClose"), t("nativeMain.stepConfirm"), t("nativeMain.stepResult"),
       ]);
-      expect(panel.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
-      expect(panel.querySelector<HTMLButtonElement>('.btn-primary')!.disabled).toBe(true);
+      const steps = panel.querySelector("ol")!;
+      const checkbox = panel.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+      const confirm = panel.querySelector<HTMLButtonElement>('.btn-primary')!;
+      expect(steps.compareDocumentPosition(checkbox) & 4).toBe(4);
+      expect(checkbox.compareDocumentPosition(confirm) & 4).toBe(4);
+      expect(checkbox.checked).toBe(false);
+      expect(confirm.disabled).toBe(true);
     }
   } finally { await f.close(); }
 });
@@ -166,7 +172,7 @@ test("a retained restart result is labelled as last confirmed after an uncertain
   } finally { await f.close(); }
 });
 
-test("process uncertainty, running requests and confirmed rollback have distinct guidance", async () => {
+test("process uncertainty, running operations, storage and rollback have distinct retry guidance", async () => {
   const f = fixture();
   try {
     await f.session.toggle();
@@ -174,10 +180,16 @@ test("process uncertainty, running requests and confirmed rollback have distinct
       ["CODEX_PROCESS_CHECK_UNAVAILABLE", "could not verify whether native Codex is running"],
       ["MAIN_REQUESTS_ACTIVE", "Wait for them to finish"],
       ["SWITCH_ROLLED_BACK", "original login was restored"],
-      ["NETWORK_ERROR", "a lost response does not prove rollback"],
+      ["NETWORK_ERROR", "A missing response does not mean the original login was restored"],
+      ["NATIVE_PROFILE_BUSY", "Another native-login operation is running"],
+      ["PROFILE_STORAGE_UNSAFE", "The server cannot safely access the login folder or profile storage"],
     ] as const) {
       f.failure(code); f.session.select(action); f.session.setStopped(true); await f.session.confirm();
-      expect(f.render().querySelector('[role="alert"]')!.textContent).toContain(phrase);
+      const alert = f.render().querySelector('[role="alert"]')!;
+      expect(alert.textContent).toContain(phrase);
+      expect(alert.textContent).toContain("To retry a login change, select the action again and confirm that Codex is closed.");
+      expect(alert.textContent).toContain("Nothing is retried automatically.");
+      expect(alert.classList.contains("native-main-notice")).toBe(true);
       expect(f.render().textContent).not.toContain(nativeMainTranslator("en")("nativeMain.reopenHint"));
     }
   } finally { await f.close(); }

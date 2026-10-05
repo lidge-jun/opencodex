@@ -43,3 +43,25 @@ test("native confirmation overrides the shared horizontal notice and permits wra
     await window.happyDOM.close();
   }
 });
+
+test("native error and result notices use block layout and respect hidden", async () => {
+  const window = new Window();
+  try {
+    window.document.head.innerHTML = `<style>${css}</style>`;
+    for (const error of ["NATIVE_PROFILE_BUSY", "PROFILE_STORAGE_UNSAFE", null] as const) {
+      window.document.body.innerHTML = renderToStaticMarkup(<NativeMainProfilesView {...props}
+        action={null} error={error} result={error ? null : "done"} />);
+      const notice = window.document.querySelector<HTMLElement>(error ? '[role="alert"]' : '[role="status"]')!;
+      expect(notice.classList.contains("native-main-notice")).toBe(true);
+      expect(notice.hasAttribute("style")).toBe(false);
+      expect(window.getComputedStyle(notice).display).toBe("block");
+      // The warning variant appears later in the stylesheet, but this class must win.
+      notice.classList.add("notice-warn");
+      expect(window.getComputedStyle(notice).display).toBe("block");
+      notice.hidden = true;
+      expect(window.getComputedStyle(notice).display).toBe("none");
+    }
+  } finally {
+    await window.happyDOM.close();
+  }
+});

@@ -67,12 +67,12 @@ export function NativeMainProfilesView({
       <p className="card-sub">{t("nativeMain.physicalHint")}</p>
       {blocked && <p role="status" className="notice notice-warn">{t("nativeMain.busyOther")}</p>}
       {busy && <p role="status">{t("nativeMain.working")}</p>}
-      {error && <div role="alert" className="notice notice-err" style={{ display: "block" }}>
+      {error && <div role="alert" className="notice notice-err native-main-notice">
         <p>{t(NATIVE_MAIN_ERROR_COPY[error])}</p>
         <p>{t("nativeMain.retryHint")}</p>
         <p><code>{error}</code> <DoctorHint t={t} /></p>
       </div>}
-      {result && !busy && !error && !action && <div role="status" className="notice" style={{ display: "block" }}>
+      {result && !busy && !error && !action && <div role="status" className="notice native-main-notice">
         <strong>{t("nativeMain.lastResult")}</strong>
         <p>{t(result === "saved" ? "nativeMain.saved" : result === "restart" ? "nativeMain.restart" : "nativeMain.done")}</p>
         {result !== "saved" && s && !refreshFailed && <p>{t("nativeMain.reopenHint")}</p>}
