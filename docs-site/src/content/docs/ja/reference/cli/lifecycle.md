@@ -230,14 +230,7 @@ Windows では、`ocx service status` は、ID 検証済みの OpenCodex プロ�
 
 Windows では、タスク スケジューラ エントリを作成するには昇格が必要です。認識されたローカライズされたアクセス拒否テキストは、既存のガイダンス パスを維持します。そのテキストが判読できない場合、フォールバックには、所有されているコマンド形状 `/create /tn opencodex-proxy /xml <non-empty-path> /f`、ステータス 1、および確認済みの非昇格トークンが必要です。ダッシュボードのスタートアップ セーフティ アクションは、UAC を自動的に要求できるようになります。そのフォールバックがトークンの状態を判断できない場合、元のスケジューラ エラーが保持されます。外部タスクおよび操作は、自動昇格マーカーを発行することはできません。ダッシュボードの UAC プロンプトを承認するか、管理者特権の PowerShell ウィンドウで `ocx service install` を再実行します。
 
-If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
-`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
-proxy is not running. The message includes the lock path, recorded PID, current liveness,
-executable name when available, and lease age. The process identity is unverified: the PID
-may have been reused, so liveness and executable name describe whichever process occupies
-that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
-process based only on this PID. A later mutation attempt can reclaim a stale lease once its
-age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+起動時に `another process owns the runtime mutation lease` と表示された場合、または `ocx service status` に `Runtime mutation lease busy` と表示された場合は、プロキシが動いていなくても、このリースが起動やサービスの変更を妨げています。メッセージにはロックのパス、記録された PID、その PID が現在生きているか、取得できた場合は実行ファイル名、リースの経過時間が含まれます。プロセスの同一性は検証されていません。PID は再利用されている可能性があるため、生存状態と実行ファイル名は、いまその PID を使っているプロセスについての情報です。処理が終わるのを待ってから再試行してください。この PID だけを根拠にロックを削除したり、プロセスを停止したりしないでください。リースの経過時間が 30 秒を超え、記録された PID が生きていなければ、後続の変更処理が古いリースを回収できます。`ocx service status` はリースを確認するだけです。
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 

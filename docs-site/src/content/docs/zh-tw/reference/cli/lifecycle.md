@@ -224,14 +224,7 @@ ocx service uninstall
 
 在 Windows 上，建立 Task Scheduler 項目需要提高權限。可識別的本地化存取拒絕文字保持既有的指引路徑。若該文字不可讀，後備方案需要擁有的指令形式 `/create /tn opencodex-proxy /xml <non-empty-path> /f`、狀態 1，以及確認的非提高 token；儀表板的 Startup Safety 動作隨後可自動請求 UAC。若該後備無法判斷 token 狀態，則保留原始排程器錯誤。外部工作與操作永不發出自動提高標記。請核准儀表板 UAC 提示，或在提高的 PowerShell 視窗中重新執行 `ocx service install`。
 
-If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
-`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
-proxy is not running. The message includes the lock path, recorded PID, current liveness,
-executable name when available, and lease age. The process identity is unverified: the PID
-may have been reused, so liveness and executable name describe whichever process occupies
-that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
-process based only on this PID. A later mutation attempt can reclaim a stale lease once its
-age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+如果啟動時回報 `another process owns the runtime mutation lease`，或 `ocx service status` 顯示 `Runtime mutation lease busy`，表示即使代理沒有在執行，這個租約也正在阻擋啟動或服務變更。訊息中包含鎖定路徑、記錄的 PID、該 PID 目前是否存活、可取得時的執行檔名稱，以及租約已持有的時間。程序身分未經驗證：PID 可能已被重複使用，因此存活狀態與執行檔名稱描述的是目前占用該 PID 的程序。請等待作業結束後再試；不要只憑這個 PID 刪除鎖定或停止程序。當租約時間超過 30 秒且記錄的 PID 已不再存活時，之後的變更作業可以回收這個過期租約；`ocx service status` 只會檢查它，不會回收。
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
