@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { parseCliHead } from "../../src/cli/root";
+import { describe, expect, spyOn, test } from "bun:test";
+import { parseCliHead, runCli } from "../../src/cli/root";
+import * as autorestore from "../../src/cli/codex-shim-autorestore";
 import { DEFAULT_READY_WAIT_TIMEOUT_SECONDS } from "../../src/cli/ready";
 
 describe("parseCliHead (pure CLI head, Phase 1)", () => {
@@ -170,5 +171,43 @@ describe("parseCliHead (pure CLI head, Phase 1)", () => {
       args: ["provider", "list"],
     });
     expect(parseCliHead([""])).toEqual({ kind: "command", command: "", args: [""] });
+  });
+});
+
+describe("uninstall argument validation", () => {
+  test("uninstall and remove reject trailing arguments before shim preflight", async () => {
+    const preflight = spyOn(autorestore, "maybeAutoRestoreCodexShim").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const exit = spyOn(process, "exit").mockImplementation((() => { throw new Error("usage-exit"); }) as never);
+    try {
+      for (const command of ["uninstall", "remove"]) {
+        for (const trailing of [["--dry-run"], ["--yes"], ["extra"], ["--", "--help"]]) {
+          await expect(runCli([command, ...trailing])).rejects.toThrow("usage-exit");
+          expect(exit).toHaveBeenLastCalledWith(2);
+          expect(error.mock.calls.at(-1)?.[0]).toContain("No changes were made.");
+          expect(error.mock.calls.at(-1)?.[0]).toContain(`ocx help ${command}`);
+        }
+      }
+      expect(preflight).not.toHaveBeenCalled();
+    } finally { preflight.mockRestore(); error.mockRestore(); exit.mockRestore(); }
+  });
+
+  test("uninstall help bypasses preflight and bare commands retain it", async () => {
+    const preflight = spyOn(autorestore, "maybeAutoRestoreCodexShim").mockImplementation(() => {});
+    const output = spyOn(console, "log").mockImplementation(() => {});
+    const exit = spyOn(process, "exit").mockImplementation((() => { throw new Error("help-exit"); }) as never);
+    try {
+      for (const command of ["uninstall", "remove"]) {
+        for (const args of [[command, "--help"], [command, "-h"], [command, "help"], ["help", command]]) {
+          await expect(runCli(args)).rejects.toThrow("help-exit");
+          expect(exit).toHaveBeenLastCalledWith(0);
+        }
+      }
+      expect(preflight).not.toHaveBeenCalled();
+      for (const command of ["uninstall", "remove"]) {
+        expect(await runCli([command])).toMatchObject({ kind: "command", command });
+      }
+      expect(preflight).toHaveBeenCalledTimes(2);
+    } finally { preflight.mockRestore(); output.mockRestore(); exit.mockRestore(); }
   });
 });

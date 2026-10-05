@@ -112,7 +112,7 @@ Démarrez OAuth avec `POST /api/oauth/login`; si le rappel ne rejoint pas le hub
 
 La rotation garde les deux clés valides sous le même `apiKeyId` pendant dix minutes au plus. L’ancienne clé est sauvegardée dans `service-api-token.prev`, la nouvelle est installée atomiquement et vérifiée avec `/v1/catalog`, puis validée. Si le résultat est incertain, relancez `ocx connect rotate` avec une autorité transitoire; ne supprimez aucun candidat.
 
-`ocx disconnect` restaure l’état local même hors ligne et ne révoque pas la clé du hub. Après déconnexion, la seule voie de révocation est **Integrations → API Keys** sur le hub. `ocx connect revoke --admin-token-stdin` fonctionne uniquement tant que le client est connecté.
+`ocx disconnect` restaure l’état local même hors ligne et ne révoque pas la clé du hub. Après déconnexion, la seule voie de révocation est **Connexion → Clés API** sur le hub. `ocx connect revoke --admin-token-stdin` fonctionne uniquement tant que le client est connecté.
 
 ## Docker, retour arrière et dépannage
 

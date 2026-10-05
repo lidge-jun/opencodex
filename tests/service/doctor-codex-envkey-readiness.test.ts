@@ -1,7 +1,8 @@
-import { isolateCodexShimEnvironment } from "../helpers/codex-shim-install-fixture";
+import { isolateCodexShimEnvironment, withInstalledShim } from "../helpers/codex-shim-install-fixture";
 import { describe, expect, test } from "bun:test";
-import { collectCodexEnvKeyReadiness } from "../../src/cli/doctor";
-import type { CodexShimDiagnostic } from "../../src/codex/shim";
+import { collectCodexEnvKeyReadiness, formatCodexShimDoctorLines } from "../../src/cli/doctor";
+import { diagnoseCodexShim, type CodexShimDiagnostic } from "../../src/codex/shim";
+import { join } from "node:path";
 
 isolateCodexShimEnvironment();
 
@@ -79,5 +80,46 @@ describe("doctor Codex env_key launch readiness", () => {
     const token = "super-secret-fixture-token";
     const row = collectCodexEnvKeyReadiness(config, {}, missingShim, Boolean(token));
     expect(JSON.stringify(row)).not.toContain(token);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("doctor general Codex shim guidance", () => {
+  test.each([
+    { name: "no Codex config", text: null, env: {}, token: true },
+    { name: "native provider", text: 'model_provider = "openai"', env: {}, token: true },
+    { name: "exported env_key", text: config, env: { OPENCODEX_API_AUTH_TOKEN: "set" }, token: true },
+    { name: "no service token", text: config, env: {}, token: false },
+  ])("inactive overlay prints shell activation with $name", scenario => withInstalledShim(f => {
+    const shim = diagnoseCodexShim();
+    expect(shim).toMatchObject({ runnable: true, active: false });
+    expect(collectCodexEnvKeyReadiness(scenario.text, scenario.env, shim, scenario.token)).toBeNull();
+    const lines = formatCodexShimDoctorLines(shim).join("\n");
+    expect(lines).toContain(`run . '${join(f.home, "codex-shell-env.sh")}'`);
+    expect(lines).toContain("after other PATH setup in your shell startup file");
+  }));
+
+  test("token warning refers to restart guidance without duplicating the source command", () => withInstalledShim(() => {
+    const shim = diagnoseCodexShim();
+    const lines = formatCodexShimDoctorLines(shim);
+    const row = collectCodexEnvKeyReadiness(config, {}, shim, true, lines.length > 0);
+    expect(row?.shimState).toBe("inactive");
+    expect(row?.detail).toContain("variable is unset");
+    expect(row?.action).toContain("Codex restart safety");
+    expect(row?.action).toContain("or export OPENCODEX_API_AUTH_TOKEN");
+    expect(`${lines.join("\n")}\n${row?.action}`.split("codex-shell-env.sh")).toHaveLength(2);
+  }));
+
+  test("healthy legacy guidance remains visible without an env_key warning", () => {
+    const shim = { ...healthyShim, summary: "Legacy Unix shim installed in place; run ocx codex-shim install." };
+    expect(collectCodexEnvKeyReadiness(config, {}, shim, true)).toBeNull();
+    expect(formatCodexShimDoctorLines(shim)).toEqual([`       ${shim.summary}`]);
+  });
+
+  test("Windows, missing, damaged, and active shims receive no Unix activation hint", () => {
+    const inactive = { installed: true, healthy: false, runnable: true, active: false, summary: "inactive" };
+    expect(formatCodexShimDoctorLines(inactive, "win32")).toEqual([]);
+    expect(formatCodexShimDoctorLines(missingShim)).toEqual([]);
+    expect(formatCodexShimDoctorLines({ ...inactive, runnable: false })).toEqual([]);
+    expect(formatCodexShimDoctorLines({ ...inactive, active: true, healthy: true })).toEqual([]);
   });
 });

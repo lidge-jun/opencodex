@@ -466,7 +466,7 @@ npm에 게시하면 사용할 수 있게 됩니다.
 
 ## Remote Hub 클라이언트 라이프사이클
 
-`ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, `ocx connect rotate --pairing-code-stdin`을 사용합니다. `ocx disconnect`는 오프라인에서도 로컬 상태를 복원하지만 허브 키는 폐기하지 않습니다. 연결 중에는 `ocx connect revoke --admin-token-stdin`으로 저장된 `apiKeyId`를 폐기할 수 있고, 연결을 끊은 뒤에는 허브의 **Integrations → API Keys**를 사용해야 합니다. 비밀값은 stdin으로만 전달하고 argv에 넣지 마세요.
+`ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, `ocx connect rotate --pairing-code-stdin`을 사용합니다. `ocx disconnect`는 오프라인에서도 로컬 상태를 복원하지만 허브 키는 폐기하지 않습니다. 연결 중에는 `ocx connect revoke --admin-token-stdin`으로 저장된 `apiKeyId`를 폐기할 수 있고, 연결을 끊은 뒤에는 허브의 **연결 → API 키**를 사용해야 합니다. 비밀값은 stdin으로만 전달하고 argv에 넣지 마세요.
 
 ## Setup port validation
 

@@ -1,5 +1,6 @@
 import {
   CliUsageError,
+  RuntimeApiError,
   printData,
   rejectArgs,
   runCliAction,
@@ -218,7 +219,8 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     else {
       try {
         result = await runtimeRequest<UsageSummary & { filter?: UsageFilterEcho }>(`/api/usage${suffix}`, { redirect: "error", credentials: "omit" }, deps);
-      } catch {
+      } catch (error) {
+        if (error instanceof RuntimeApiError && error.code === "proxy_not_running") throw error;
         throw new Error("Key-scoped usage could not be read. Check runtime access and retry.");
       }
       if (result?.filter?.apiKeyId !== apiKeyId) {

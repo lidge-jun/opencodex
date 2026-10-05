@@ -60,6 +60,30 @@ function readConfig(dir: string) {
 }
 
 describe("ocx provider", () => {
+  for (const option of ["--api-key", "--key", "--secret", "--password", "--admin-token"]) {
+    for (const syntax of ["inline", "separated"]) {
+      test(`add redacts leftover ${option} ${syntax} values without saving`, () => {
+        const { dir, configPath } = freshConfig();
+        const before = readFileSync(configPath, "utf8");
+        const secret = "synthetic-private-value";
+        const credential = syntax === "inline" ? [`${option}=${secret}`] : [option, secret];
+        try {
+          const result = runCli([
+            "provider", "add", "fixture", "--adapter", "openai-chat", "--base-url", "https://provider.example.test/v1",
+            // The first supported key is consumed; a repeated key remains an argument error.
+            ...(option === "--api-key" && credential.length === 2 ? ["--api-key", "fixture-value"] : []),
+            ...credential, "--json",
+          ], { OPENCODEX_HOME: dir });
+          expect(result.status).toBe(1);
+          expect(result.stderr).toContain(option);
+          expect(result.stderr).toContain("<redacted>");
+          expect(result.stdout + result.stderr).not.toContain(secret);
+          expect(readFileSync(configPath, "utf8")).toBe(before);
+        } finally { removeTreeWithRetry(dir); }
+      });
+    }
+  }
+
   test("new provider registration initializes model selection but force overwrite preserves it", () => {
     const { dir } = freshConfig();
     try {
@@ -327,6 +351,7 @@ describe("ocx provider", () => {
         "provider", "add", "my-llm",
         "--adapter", "openai-chat",
         "--base-url", "http://localhost:8080/v1",
+        "--allow-private-network",
         "--api-key", "test-key",
         "--default-model", "my-model",
       ], { OPENCODEX_HOME: dir });
@@ -336,6 +361,7 @@ describe("ocx provider", () => {
       expect(config.providers["my-llm"]).toBeDefined();
       expect(config.providers["my-llm"].adapter).toBe("openai-chat");
       expect(config.providers["my-llm"].baseUrl).toBe("http://localhost:8080/v1");
+      expect(config.providers["my-llm"].allowPrivateNetwork).toBe(true);
       expect(config.providers["my-llm"].apiKey).toBe("test-key");
       expect(config.providers["my-llm"].defaultModel).toBe("my-model");
     } finally {
@@ -726,4 +752,39 @@ test("provider add --text-only preserves other capability axes during force over
       ModelA: { inputModalities: ["text"], contextTier: "long_context", video: { processing: "agentic" } }, modela: { inputModalities: ["text", "image"] },
     });
   } finally { removeTreeWithRetry(dir); }
+});
+
+
+describe("local provider add validates the full config before saving", () => {
+  test.each([
+    { baseUrl: "http://127.0.0.1:9/v1", flags: [], reason: "loopback address", hint: true },
+    { baseUrl: "http://169.254.169.254/v1", flags: ["--allow-private-network"], reason: "blocked metadata endpoint", hint: false },
+    { baseUrl: "https://fixture:synthetic-userinfo@provider.example.test/v1", flags: [], reason: "must not include embedded credentials", hint: false },
+  ])("invalid destination $baseUrl leaves config bytes unchanged", ({ baseUrl, flags, reason, hint }) => {
+    const { dir, configPath } = freshConfig();
+    try {
+      const before = readFileSync(configPath, "utf8");
+      const result = runCli(["provider", "add", "local-fixture", "--adapter", "openai-chat",
+        "--base-url", baseUrl, ...flags, "--json"], { OPENCODEX_HOME: dir }, true);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(reason);
+      if (hint) expect(result.stderr).toContain("add --allow-private-network");
+      expect(result.stderr).not.toContain("synthetic-userinfo");
+      expect(readFileSync(configPath, "utf8")).toBe(before);
+    } finally { removeTreeWithRetry(dir); }
+  });
+  test("intentional local destination remains saveable with --allow-private-network", () => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(["provider", "add", "local-fixture", "--adapter", "openai-chat",
+        "--base-url", "http://127.0.0.1:9/v1", "--allow-private-network", "--json"], { OPENCODEX_HOME: dir }, true);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).action).toBe("added");
+      expect(readConfig(dir).providers["local-fixture"].allowPrivateNetwork).toBe(true);
+      const diagnosis = runCli(["config", "show", "--source", "--json"], { OPENCODEX_HOME: dir }, true);
+      expect(diagnosis.status).toBe(0);
+      expect(JSON.parse(diagnosis.stdout)).toMatchObject({ source: "file", error: null });
+    } finally { removeTreeWithRetry(dir); }
+  });
 });

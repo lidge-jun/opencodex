@@ -321,6 +321,27 @@ export function defaultDesktopApplyMode(
   return connection.kind === "connected" ? "gateway" : "first-party";
 }
 
+const DESKTOP_APPLY_FLAGS = ["--first-party", "--gateway", "--static", "--hybrid", "--discovery-only"] as const;
+
+/**
+ * A rejected argument is never echoed: an option-shaped token can carry a value (`-tVALUE`,
+ * `--opt=VALUE`, a dash-prefixed operand) and any token can carry terminal control characters, so
+ * the error counts them and lists the options that do exist instead.
+ */
+function unknownApplyArgsError(count: number): string {
+  return `알 수 없는 인자 ${count}개 (값은 표시하지 않습니다). 사용 가능한 옵션: ${DESKTOP_APPLY_FLAGS.join(" ")}`;
+}
+
+/** A rejected route is not echoed: whatever sits in that position may be a misplaced credential. */
+const UNAVAILABLE_ROUTE = "현재 사용할 수 없는 모델입니다. 사용 가능한 모델은 ocx claude desktop show로 확인하세요.";
+
+/** Profile files are user-chosen paths; a failure reports the operation and error code only. */
+function profileFileError(operation: "export" | "import", error: unknown): Error {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  const reason = typeof code === "string" && /^E[A-Z]+$/.test(code) ? code : error instanceof SyntaxError ? "invalid JSON" : "failed";
+  return new Error(`Claude Desktop 프로필 ${operation === "export" ? "내보내기" : "가져오기"} 실패: ${reason}`);
+}
+
 export function parseDesktopApplyArgs(
   flags: string[],
   config: Pick<OcxConfig, "claudeCode" | "port" | "runtimeRole">,
@@ -330,8 +351,8 @@ export function parseDesktopApplyArgs(
   const wantsFirstParty = flags.includes("--first-party");
   const wantsGateway = flags.includes("--gateway") || shapeFlags.length > 0;
   if (wantsFirstParty && wantsGateway) return { error: "--first-party cannot be combined with --gateway or gateway shape flags." };
-  const unknown = flags.filter(arg => !["--first-party", "--gateway", "--static", "--hybrid", "--discovery-only"].includes(arg));
-  if (unknown.length > 0) return { error: `알 수 없는 인자: ${unknown.join(" ")}` };
+  const unknown = flags.filter(arg => !(DESKTOP_APPLY_FLAGS as readonly string[]).includes(arg));
+  if (unknown.length > 0) return { error: unknownApplyArgsError(unknown.length) };
   const kind: ClaudeDesktopMode = wantsFirstParty
     ? "first-party"
     : wantsGateway ? "gateway" : defaultDesktopApplyMode(config, readClientConnectionState(), observed ?? observeClaudeDesktopMode(config));
@@ -812,7 +833,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
     if (command === "move") {
       const [, route, familyRaw, ...flags] = argv;
       if (!route || !isFamily(familyRaw) || flags.some(flag => flag !== "--default")) throw new CliUsageError("Usage: ocx claude desktop move <route> <family> [--default]");
-      if (!state.models.some(model => model.route === route && model.available)) throw new Error(`현재 사용할 수 없는 모델입니다: ${route}`);
+      if (!state.models.some(model => model.route === route && model.available)) throw new Error(UNAVAILABLE_ROUTE);
       const profile = moveDesktopRoute(state.profile, route, familyRaw, flags.includes("--default"));
       saveLocalDesktopProfile(profile, config.claudeCode?.desktopProfile, connection, deps);
       console.log(`${route} 모델을 ${familyRaw} 그룹으로 옮겼습니다.`);
@@ -822,7 +843,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
       const [, familyRaw, routeRaw] = argv;
       if (!isFamily(familyRaw) || !routeRaw || argv.length !== 3) throw new CliUsageError("Usage: ocx claude desktop default <family> <route|none>");
       const route = routeRaw === "none" ? null : routeRaw;
-      if (route && !state.models.some(model => model.route === route && model.available)) throw new Error(`현재 사용할 수 없는 모델입니다: ${route}`);
+      if (route && !state.models.some(model => model.route === route && model.available)) throw new Error(UNAVAILABLE_ROUTE);
       const profile = setDesktopFamilyDefault(state.profile, familyRaw, route);
       saveLocalDesktopProfile(profile, config.claudeCode?.desktopProfile, connection, deps);
       console.log(`${familyRaw} 기본 모델을 ${route ?? "없음"}으로 지정했습니다.`);
@@ -833,14 +854,20 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
       if (!target || argv.length !== 2) throw new CliUsageError("Usage: ocx claude desktop export <path|->");
       const json = JSON.stringify(state.profile, null, 2) + "\n";
       if (target === "-") process.stdout.write(json);
-      else writeFileSync(resolve(target), json, { encoding: "utf8", mode: 0o600 });
+      else {
+        try { writeFileSync(resolve(target), json, { encoding: "utf8", mode: 0o600 }); }
+        catch (error) { throw profileFileError("export", error); }
+      }
       return 0;
     }
     if (command === "import") {
       const source = argv[1];
       const flags = argv.slice(2);
       if (!source || flags.some(flag => flag !== "--apply")) throw new CliUsageError("Usage: ocx claude desktop import <path> [--apply]");
-      const profile = parseDesktopProfile(JSON.parse(readFileSync(resolve(source), "utf8")));
+      let raw: unknown;
+      try { raw = JSON.parse(readFileSync(resolve(source), "utf8")); }
+      catch (error) { throw profileFileError("import", error); }
+      const profile = parseDesktopProfile(raw);
       const reconciled = (await buildClaudeDesktopState(config, profile)).profile;
       if (flags.includes("--apply")) assertNoClientDisconnectPending();
       if (flags.includes("--apply") && readClientConnectionState().kind !== "disconnected") {

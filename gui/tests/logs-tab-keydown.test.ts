@@ -53,6 +53,12 @@ test("readTabFromHash maps logs and logs/debug hashes", () => {
   testWindow.location.hash = "#/logs/debug";
   expect(readTabFromHash()).toBe("debug");
 
+  testWindow.location.hash = "#debug";
+  expect(readTabFromHash()).toBe("debug");
+
+  testWindow.location.hash = "#debug/legacy";
+  expect(readTabFromHash()).toBe("debug");
+
   testWindow.location.hash = "#logs/other";
   expect(readTabFromHash()).toBe("logs");
 });

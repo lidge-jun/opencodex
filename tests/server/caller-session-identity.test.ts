@@ -8,6 +8,7 @@ import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversat
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } from "../../src/server/responses/combo-session-recall";
 import { withGrokSessionIdentity } from "../../src/grok/session-identity";
+import { withClaudeNativeSession } from "../../src/server/responses/core-auth";
 import { handleResponses } from "../../src/server/responses/core";
 import { tryAdmitTurn } from "../../src/server/lifecycle";
 import type { OcxConfig } from "../../src/types";
@@ -129,7 +130,7 @@ describe("Non-Codex callers reach the ChatGPT Codex backend with session_id", ()
     removeTreeWithRetry(home);
   });
 
-  test("the upstream request carries the promoted session_id", async () => {
+  for (const identityHeader of ["x-session-id", "session-id", "thread-id"]) test(`the upstream request carries ${identityHeader} as session_id`, async () => {
     const cfg = { openaiProviderTierVersion: 2, providers: {
       openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex", models: ["gpt-5.6-luna"] },
     } } as OcxConfig;
@@ -147,7 +148,7 @@ describe("Non-Codex callers reach the ChatGPT Codex backend with session_id", ()
     expect(lease).not.toBeNull();
     try {
       const req = withCallerSessionIdentity(new Request("http://localhost/v1/responses", {
-        method: "POST", headers: callerHeaders({ authorization: `Bearer ${token}` }),
+        method: "POST", headers: callerHeaders({ authorization: `Bearer ${token}`, [identityHeader]: SESSION, originator: "example-agent" }),
         body: JSON.stringify({ model: "openai/gpt-5.6-luna", stream: false, store: false, input: "ping" }),
       }), LOOPBACK);
       const logCtx = { model: "", provider: "" } as Parameters<typeof handleResponses>[2];
@@ -157,6 +158,7 @@ describe("Non-Codex callers reach the ChatGPT Codex backend with session_id", ()
       const wire = seen.at(-1)!;
       expect(wire.url).toBe("https://chatgpt.com/backend-api/codex/responses");
       expect(wire.headers.get("session_id")).toBe(SESSION);
+      expect(wire.headers.get("originator")).toBe("example-agent");
       expect(logCtx.conversationId).toBeTruthy();
     } finally { lease?.release(); }
   });
@@ -237,5 +239,59 @@ describe("trusted caller namespaces", () => {
       expect(recallComboForLane(config, lane("recall-fixture-b"), "visible-model")).toBe("beta");
       expect(recallComboForLane(config, lane("recall-fixture-rotated"), "visible-model")).toBeUndefined();
     } finally { clearComboRecallForTests(); }
+  });
+});
+
+const canonical = { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" } as const;
+
+describe("native cache session aliases", () => {
+  test("session-id wins over thread-id and metadata while preserving caller headers", () => {
+    const headers = new Headers({ "session-id": "first-session", "thread-id": "second-session" });
+    const forwarded = withClaudeNativeSession(headers, canonical, "third-session");
+    expect(forwarded.get("session_id")).toBe("first-session");
+    expect(forwarded.get("session-id")).toBe("first-session");
+    expect(forwarded.get("thread-id")).toBe("second-session");
+    expect(headers.has("session_id")).toBe(false);
+  });
+
+  test("upstream normalization preserves explicit aliases without inventing an identity", () => {
+    for (const alias of ["session-id", "thread-id"]) {
+      const headers = new Headers({ [alias]: SESSION, originator: "example-agent" });
+      const forwarded = withClaudeNativeSession(headers, canonical);
+      expect(forwarded.get("session_id")).toBe(SESSION);
+      expect(forwarded.get(alias)).toBe(SESSION);
+      expect(forwarded.get("originator")).toBe("example-agent");
+      expect(headers.has("session_id")).toBe(false);
+    }
+  });
+
+  test("a non-empty explicit header wins and unsafe aliases stay unpromoted", () => {
+    const explicit = new Headers({ session_id: "native-session", "session-id": SESSION });
+    expect(withClaudeNativeSession(explicit, canonical, "metadata-session")).toBe(explicit);
+    for (const value of ["invalid session", "a".repeat(129)]) {
+      const headers = new Headers({ "session-id": value, "thread-id": SESSION });
+      expect(withClaudeNativeSession(headers, canonical, "metadata-session")).toBe(headers);
+    }
+  });
+
+  test("empty values count as absent, as in upstream auth header selection", () => {
+    for (const headers of [
+      new Headers({ session_id: "", "session-id": SESSION }),
+      new Headers({ "session-id": "", "thread-id": SESSION }),
+    ]) {
+      expect(withClaudeNativeSession(headers, canonical, "metadata-session").get("session_id")).toBe(SESSION);
+    }
+    const emptyOnly = new Headers({ "session-id": "" });
+    expect(withClaudeNativeSession(emptyOnly, canonical, "metadata-session").get("session_id")).toBe("metadata-session");
+  });
+
+  test("keyed/custom destinations and identity-free requests remain unchanged", () => {
+    const headers = new Headers({ "session-id": SESSION });
+    for (const provider of [{ ...canonical, baseUrl: "https://example.test/v1" }, { ...canonical, authMode: "key" as const }]) {
+      expect(withClaudeNativeSession(headers, provider)).toBe(headers);
+    }
+    const anonymous = new Headers();
+    expect(withClaudeNativeSession(anonymous, canonical)).toBe(anonymous);
+    expect(anonymous.has("originator")).toBe(false);
   });
 });

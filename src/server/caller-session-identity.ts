@@ -4,11 +4,14 @@ import { contextPrincipalIdOf, type DataPlaneAdmission } from "./auth-cors";
 const SESSION_HEADERS = ["session_id", "session-id", "thread-id"] as const;
 const SAFE_CALLER_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
+export function safeCallerSessionId(raw: string | null): string | undefined {
+  const value = raw?.trim();
+  return value && SAFE_CALLER_SESSION_ID.test(value) ? value : undefined;
+}
+
 export function callerSessionId(headers: Headers): string | undefined {
   if (SESSION_HEADERS.some(name => headers.has(name))) return undefined;
-  const value = headers.get("x-session-id")?.trim();
-  if (!value || !SAFE_CALLER_SESSION_ID.test(value)) return undefined;
-  return value;
+  return safeCallerSessionId(headers.get("x-session-id"));
 }
 
 /** Authenticated callers share continuity only within their trusted credential principal. */
