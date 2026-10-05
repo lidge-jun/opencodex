@@ -1,5 +1,6 @@
 /** `ocx account` — list and switch provider credentials (issue #180). */
 import { apiKeyQuotaText } from "./account-key-quota";
+import { emptyAccountNextAction, recoveryAccountLabel } from "./account-next-actions";
 import { loadConfig } from "../config";
 import { explainCodexUseOutcome, reportCodexAccountTargetError, resolveCodexUseTarget } from "./account-target";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -122,6 +123,8 @@ function statusText(row: AccountRow): string {
   if (row.provider === "kiro" && row.autoSelectable === false && !(row.paused && row.skipReason === "paused"))
     parts.push(row.skipReason ? `not-auto-selected(${row.skipReason})` : "not-auto-selected");
   if (row.validationPending) parts.push("validation-pending");
+  if (row.health && row.health !== "Healthy" && !row.needsReauth && !row.validationPending) parts.push(row.health.toLowerCase());
+  if (row.creditsAfterLimit === true) parts.push("paid-credits: on");
   if (row.selectionExcludedReason === "plan_excluded") {
     parts.push(`not-auto-selected(plan=${row.selectionExcludedPlan ?? row.plan ?? "unknown"})`);
   }
@@ -173,7 +176,8 @@ export function formatAccountTable(rows: AccountRow[], withQuota = false): strin
   });
   const widths = header.map((h, i) => Math.max(h.length, ...data.map(d => d[i]!.length)));
   const line = (cols: string[]) => cols.map((c, i) => c.padEnd(widths[i]!)).join("  ").trimEnd();
-  return [line(header), ...data.map(line)].join("\n");
+  const actions = rows.flatMap(row => row.healthAction ? [`${row.provider} ${recoveryAccountLabel(row.id, displayId(row.id))}: ${row.health?.toLowerCase() ?? "needs attention"}. Next: ${row.healthAction}`] : []);
+  return [line(header), ...data.map(line), ...actions].join("\n");
 }
 
 async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
@@ -243,7 +247,7 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
       return apiError(r.errorJson, `failed to list ${t.name}`, r.status);
     }
     if (r.rows.length === 0) {
-      if (showAll) notes.push(`${t.name}: no stored accounts or keys`);
+      if (showAll || name) notes.push(`${t.name}: no stored accounts or keys`, emptyAccountNextAction(t.name, t.type));
       continue;
     }
     rows.push(...r.rows);
@@ -258,6 +262,7 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
     }
   }
 
+  if (rows.length === 0 && !name) notes.push("No stored accounts or keys.", emptyAccountNextAction());
   if (wantsJson) {
     console.log(JSON.stringify({ accounts: rows, notes }, null, 2));
     return 0;

@@ -297,6 +297,41 @@ test("the DSH surface uses localized ownership semantics and its own API route",
   expect(requests.some(request => request.url.endsWith("/api/client-integrations/dsh"))).toBe(true);
 });
 
+test("a DSH profile without its patch tells the operator which file to create and with what", async () => {
+  const patch = "/tmp/home/.dsh/profiles/desktop/cordis.patch.yml";
+  stateResponse = () => json(status({
+    clientId: "dsh",
+    state: "absent",
+    configPath: "/tmp/home/.dsh/settings.yaml",
+    supersededBy: patch,
+    supersededReason: "missing-store",
+    missingStoreDocument: "[]",
+  }));
+  await mountClient(true, "dsh");
+
+  const text = container.textContent ?? "";
+  expect(text).toContain(`This client keeps its providers in ${patch}, which is missing.`);
+  expect(text).toContain(`Create ${patch} containing [], then press Apply again.`);
+  expect(text).not.toContain("which opencodex does not write");
+
+  // The apply preview refuses; its dialog covers that notice, so it names the path itself.
+  previewResponse = () => json(previewPlan("apply", {
+    clientId: "dsh",
+    changes: [],
+    fingerprint: "p7:unbound",
+    canApply: false,
+    willChange: false,
+    refusalReason: "superseded_store",
+    supersededReason: "missing-store",
+    missingStoreDocument: "[]",
+  }));
+  await act(async () => { toggleSwitch().click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+  const dialog = container.querySelector("dialog")?.textContent ?? "";
+  expect(dialog).toContain(`Create ${patch} containing [], then press Apply again.`);
+  expect(requests.some(request => request.method === "PUT")).toBe(false);
+});
+
 test("Droid reasoning defaults use one frozen snapshot for review and commit", async () => {
   let savedDefaults: Record<string, string> = {};
   stateResponse = () => json(status({

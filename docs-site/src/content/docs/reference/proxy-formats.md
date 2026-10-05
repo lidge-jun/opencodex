@@ -188,6 +188,26 @@ Use distinct markers for distinct conversations. This preserves conversation con
 for downstream consumers, but does not guarantee an upstream cache hit or measured savings.
 Chat Completions, WebSocket frames, compact, and count_tokens do not use this promotion.
 
+On canonical ChatGPT-backed Responses dispatch, a non-empty explicit `session_id` wins.
+Otherwise, the first non-empty alias among `session-id`, then `thread-id`, supplies
+`session_id` if its value is safe; an invalid winning alias suppresses weaker identity.
+Empty header values are dropped before this step on every path (Responses auth header
+selection and the Claude Messages and Chat Completions bridges), so an empty header counts as
+absent: an empty `session-id` lets a valid `thread-id` win. The Claude metadata-derived
+session applies only when no non-empty canonical header or alias remains.
+Aliases keep their original names on the wire; their validated raw caller values are forwarded
+like an explicit `session_id`, without the principal scoping used for promoted `x-session-id`.
+This egress conversion does not change ingress affinity. Custom and API-key destinations are
+unchanged, and no identity is invented for requests without a conversation marker.
+
+For third-party clients, keep one caller-owned marker per conversation, including repeated
+`curl` requests. A shared `prompt_cache_key` or identical system/tools prefix is a cache cohort,
+not proof that two requests belong to one conversation. Requests without a conversation marker
+receive no invented stable session. OpenCodex also does not impersonate Codex by synthesizing
+an `originator`; a caller-supplied originator retains its normal forwarding rules. Header
+continuity does not establish a cache hit: compare the upstream's reported cached input tokens
+for your own repeated-prefix requests. An omitted cache-write count is not evidence of no write.
+
 ### Accepted request fields
 
 | Area | Accepted shape |

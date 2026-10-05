@@ -570,6 +570,20 @@ returns:
 { accounts: AccountRow[], notes: string[] }
 ```
 
+An empty provider listing names the next command in human output and JSON `notes`:
+`ocx account login <provider>` for OAuth/Codex, or `ocx account add-key <provider>`
+with a human-controlled piped stdin source for API keys. An empty global listing
+points to `ocx account login <provider>` and `ocx help account login`.
+
+Account rows include a validated `health` label and, when recovery is available,
+`healthAction`. Human output prints the recovery below the table. Reauthentication
+targets the stored account with `ocx account reauth <provider> --id <id>`;
+native main uses `ocx account main reauth --device`. Provider verification,
+credential conflicts, and pending validation retain distinct guidance.
+Codex rows preserve the server's boolean `creditsAfterLimit` in list/current JSON;
+human rows show `paid-credits: on` only when permission is enabled. These reads do
+not change paid-credit permission.
+
 `--quota` adds a `QUOTA` column with each account's own usage, for providers that support a
 per-account probe (Anthropic, Kiro, Google Antigravity, and Devin today). It is opt-in because the proxy probes the upstream
 once per stored credential; the default listing stays a local read. `--refresh` bypasses the
@@ -932,6 +946,9 @@ ocx account main reauth cancel --flow <id> [--json]
 ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
+
+An empty native-profile list suggests `ocx account main add <label>` in human
+output and JSON `notes`; it does not assume an existing native login is available.
 
 `ocx account main reauth --device --no-wait --json` writes one JSON object to stdout on success, without the human-readable `follow up:` line. Use its `flowId` with `ocx account main reauth status --flow <id> --json` to check progress.
 

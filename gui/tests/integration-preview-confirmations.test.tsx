@@ -78,6 +78,38 @@ test("plan details render a semantic safe-path list without surrounding private 
   expect(container.textContent).not.toContain(privateCanary);
 });
 
+test("a missing provider store names the document to create instead of the generic refusal", async () => {
+  const refused: IntegrationMutationPlan = {
+    ...plan("p1:33333333333333333333333333333333"),
+    clientId: "dsh",
+    changes: [],
+    canApply: false,
+    willChange: false,
+    refusalReason: "superseded_store",
+    supersededReason: "missing-store",
+    missingStoreDocument: "[]",
+  };
+  await act(async () => {
+    root?.render(<LanguageProvider><IntegrationPlanDetails plan={refused} /></LanguageProvider>);
+  });
+  expect(container.textContent).toContain("Create the file containing [], then press Apply again.");
+  expect(container.textContent).not.toContain("a file opencodex does not write");
+
+  // The open dialog covers the page's status notice, so a caller that knows the path passes it.
+  const patch = "/tmp/home/.dsh/profiles/desktop/cordis.patch.yml";
+  await act(async () => {
+    root?.render(<LanguageProvider><IntegrationPlanDetails plan={refused} missingStorePath={patch} /></LanguageProvider>);
+  });
+  expect(container.textContent).toContain(`Create ${patch} containing [], then press Apply again.`);
+
+  // Any other superseded store keeps the generic refusal: there is nothing to create.
+  const { missingStoreDocument: _document, ...schemaOnly } = refused;
+  await act(async () => {
+    root?.render(<LanguageProvider><IntegrationPlanDetails plan={{ ...schemaOnly, supersededReason: "unestablished-schema" }} /></LanguageProvider>);
+  });
+  expect(container.textContent).toContain("a file opencodex does not write");
+});
+
 test("a profile no-op explains document scope and still confirms its fingerprint", async () => {
   const noOpPlan: IntegrationMutationPlan = {
     ...plan("p1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),

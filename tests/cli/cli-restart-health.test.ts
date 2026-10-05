@@ -276,7 +276,7 @@ describe("ocx restart", () => {
     try {
       const result = await runCli(["help", "restart"], { OPENCODEX_HOME: dir });
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("Stop the proxy and restart");
+      expect(result.stdout).toContain("Request a graceful restart of the verified running proxy");
     } catch (error) {
       failed = true;
       throw error;

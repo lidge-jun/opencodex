@@ -198,12 +198,22 @@ The User-Agent is a routing hint, not a trust boundary: a client that fakes it r
 any local process already reaches (the `api.anthropic.com` intercept is on the Claude Code proxy
 too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
 because each terminator presents a certificate only its intended client trusts. `claude.ai:443` is
-terminated by a `node:https` HTTP/1.1 relay (`picker-listener.ts`) with a bounded 64 KiB
-incoming-request and ordinary upstream-response header allowance for browser session cookies,
-only while the runtime's cached
+intercepted only while the runtime's cached
 decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
-trusted in the login keychain (`picker-trust.ts`). The picker CA (`picker-ca.ts`) carries critical
+trusted in the login keychain (`picker-trust.ts`). A loopback TCP front in `picker-listener.ts`
+reads ClientHello ALPN through `src/claude/intercept/client-hello.ts`, reassembling across TCP
+splits and up to 16 TLS records within 64 KiB of wire bytes and a 10-second deadline. It splices
+the untouched connection to an HTTP/2 server when the client offers `h2`, or to the native
+`node:https` HTTP/1.1 relay otherwise. WebSocket connections use the latter: extended CONNECT
+is not enabled, so Chromium opens them over HTTP/1.1. HTTP/2 multiplexing avoids the connection
+starvation reported in #6511, where SSE subscriptions held Chromium's six per-origin HTTP/1.1
+connections and later requests queued before reaching the listener. Upstream remains one
+HTTP/1.1 request per client request. Incoming requests and ordinary upstream responses retain
+a 64 KiB header allowance for browser session cookies; Bun enforces the HTTP/2 inbound bound
+natively, counting name + value + 32 bytes per field and rejecting an oversized stream with
+`RST_STREAM ENHANCE_YOUR_CALM` before the request handler runs.
+The picker CA (`picker-ca.ts`) carries critical
 name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its signing
 key exists only in the server process; only public certificates are written under
 `<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). On restart the lifecycle keeps the applied
