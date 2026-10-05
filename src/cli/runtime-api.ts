@@ -104,6 +104,27 @@ function integrationRecoveryMessage(reason: string | undefined): string | undefi
 }
 
 /**
+ * Integration writer detail is the only server prose this client appends beside the primary
+ * error. Scope it to the normalized request pathname (dot segments resolved, no query) and to
+ * an unredirected response so no other route's body can ride along.
+ */
+function isIntegrationRoute(path: string, response: Response): boolean {
+  if (response.redirected) return false;
+  let pathname: string;
+  try { pathname = new URL(path.startsWith("/") ? path : "/" + path, "http://cli.invalid").pathname; }
+  catch { return false; }
+  return /^\/api\/client-integrations(?:\/|$)/.test(pathname);
+}
+
+/** One bounded line: controls stripped, secret-shaped values redacted, home/sensitive path tokens masked. */
+function integrationWriterDetail(message: string): string | undefined {
+  const cleaned = sanitizeLogMetadataString(message.replace(/[\r\n\u2028\u2029]+/g, " "), 2000);
+  if (!cleaned) return undefined;
+  const masked = cleaned.split(/(\s+)/).map(token => /[\\/]/.test(token) ? redactUserPath(token) : token).join("");
+  return masked.slice(0, 300).trim() || undefined;
+}
+
+/**
  * Compose the operator-facing message from a management error body.
  *
  * The server states WHY a request was refused under `reason` and WHAT TO DO under
@@ -120,7 +141,7 @@ function integrationRecoveryMessage(reason: string | undefined): string | undefi
  * (#4662). Name the route instead, so any listener that does not serve a path stays legible
  * even if another one starts answering this way.
  */
-function responseMessage(body: unknown, status: number, path: string): string {
+function responseMessage(body: unknown, status: number, integrationRoute = false): string {
   if (typeof body === "string" && body.trim()) return body.trim().slice(0, 400);
   if (!body || typeof body !== "object") return `Management request failed (${status})`;
   const record = body as Record<string, unknown>;
@@ -139,11 +160,11 @@ function responseMessage(body: unknown, status: number, path: string): string {
   const parts = [primary ?? `Management request failed (${status})`];
   // Only integration mutation routes carry a writer explanation beside a generic error.
   // Keep other management bodies on their existing presentation contract.
-  if (/^\/?api\/client-integrations(?:\/|$)/.test(path.split("?")[0] ?? "")) {
+  if (integrationRoute) {
     const writerMessage = stringField(record, "message");
     if (writerMessage && writerMessage !== primary) {
       const fixed = integrationRecoveryMessage(stringField(record, "reason"));
-      const explanation = fixed ?? sanitizeLogMetadataString(redactUserPath(writerMessage), 300);
+      const explanation = fixed ?? integrationWriterDetail(writerMessage);
       if (explanation) parts.push(`Details: ${explanation}`);
     }
   }
@@ -186,7 +207,9 @@ export async function runtimeRequest<T = unknown>(
     try { body = JSON.parse(text); }
     catch { body = text; }
   }
-  if (!response.ok) throw new RuntimeApiError(responseMessage(body, response.status, path), response.status, body);
+  if (!response.ok) {
+    throw new RuntimeApiError(responseMessage(body, response.status, isIntegrationRoute(path, response)), response.status, body);
+  }
   return body as T;
 }
 

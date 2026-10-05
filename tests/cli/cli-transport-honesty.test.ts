@@ -223,7 +223,7 @@ describe("#2698 management errors carry reason and hint", () => {
     expect(message).not.toContain("PRIVATE_CANARY");
   });
 
-  test.each(["/api/config", "/api/client-integrations-other/hermes", "/api/settings?next=/api/client-integrations/hermes"])("distinct writer messages stay excluded outside integration routes: %s", async path => {
+  test.each(["/api/config", "/api/client-integrations-other/hermes", "/api/settings?next=/api/client-integrations/hermes", "/api/client-integrations/../settings", "/api/client-integrations/%2e%2e/settings"])("distinct writer messages stay excluded outside integration routes: %s", async path => {
     expect(await messageFor({ error: "refused", message: "PRIVATE_CANARY" }, 500, path)).not.toContain("PRIVATE_CANARY");
   });
 

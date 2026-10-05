@@ -210,7 +210,7 @@ describe("CLI restart recovery guidance", () => {
       const lines = [errors.mock.calls.flat().join(" "), describeUpdateRestartFailure("update_restart_runtime_incomplete"),
         describeUpdateRestartFailure("update_restart_runtime_failed")];
       for (const text of lines) {
-        expect(text).toContain("installer already exited or failed"); expect(text).toContain("reinstall with your package manager");
+        expect(text).toContain("installer already exited or failed"); expect(text).toContain("stop any running proxy through its owner"); expect(text).toContain("reinstall with the same package manager");
         expect(text).toContain("https://opencodex.me/troubleshooting/update-failed");
       }
     } finally { errors.mockRestore(); }

@@ -149,7 +149,8 @@ owning service/desktop app on Windows. Unknown ancestry or a changed target call
 `ocx status` before any restart.
 
 If package files or the Bun runtime remain incomplete after the installer exited or failed,
-reinstall with the owning package manager before restarting. See
+run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or
+desktop app), then reinstall with the same package manager and start it again. See
 [Update failed](/troubleshooting/update-failed).
 
 When a proxy is running, ask that exact attested PID and port to restart in place, wait for its

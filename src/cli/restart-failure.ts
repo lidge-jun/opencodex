@@ -1,6 +1,6 @@
 import type { ProxyRestartResult } from "./tray-proxy";
 
-export const INCOMPLETE_INSTALL_RECOVERY = "If the installer already exited or failed, reinstall with your package manager (see https://opencodex.me/troubleshooting/update-failed/) before restarting.";
+export const INCOMPLETE_INSTALL_RECOVERY = "If the installer already exited or failed, run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or desktop app), then reinstall with the same package manager and start it again (see https://opencodex.me/troubleshooting/update-failed/).";
 
 export function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>): void {
   if (result.phase === "identity") {
