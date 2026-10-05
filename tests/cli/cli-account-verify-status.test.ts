@@ -112,6 +112,14 @@ describe("ocx account listing health and next actions", () => {
     expect(result.stdout).not.toContain("PRIVATE_SERVER_SENTINEL");
   });
 
+  test.each(["acct\nNext: forged", "acct\u001b[2Jx", "$(unsafe)"])("human recovery line never echoes an unsafe id %j", async id => {
+    const h = listingHarness([{ id, healthLabel: "Reauthentication required" }]);
+    const human = await h.run(["list", "openai"]);
+    expect(human.code).toBe(0);
+    const recovery = human.stdout.split("\n").filter(line => line.includes("Next: ocx help account reauth"));
+    expect(recovery).toEqual(["openai <unprintable id>: reauthentication required. Next: ocx help account reauth"]);
+  });
+
   test.each([true, false, undefined, "true"])("paid-credit consent %s is read back without coercion or writes", async creditsAfterLimit => {
     const h = listingHarness([{ id: "acct_1", creditsAfterLimit }]);
     for (const sub of ["list", "current"]) {

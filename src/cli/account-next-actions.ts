@@ -12,6 +12,11 @@ function commandSelector(value: string): string | undefined {
   return /^[A-Za-z0-9_][A-Za-z0-9_.:@/-]{0,199}$/.test(value) ? value : undefined;
 }
 
+/** Account label for recovery lines; ids that fail the selector allowlist are never echoed. */
+export function recoveryAccountLabel(id: string, display: string): string {
+  return commandSelector(id) ? display : "<unprintable id>";
+}
+
 export function emptyAccountNextAction(provider?: string, type?: AccountType): string {
   const name = provider && commandSelector(provider);
   if (!name) return "Next: ocx account login <provider> (see ocx help account login)";

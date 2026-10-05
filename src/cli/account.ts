@@ -1,6 +1,6 @@
 /** `ocx account` — list and switch provider credentials (issue #180). */
 import { apiKeyQuotaText } from "./account-key-quota";
-import { emptyAccountNextAction } from "./account-next-actions";
+import { emptyAccountNextAction, recoveryAccountLabel } from "./account-next-actions";
 import { loadConfig } from "../config";
 import { explainCodexUseOutcome, reportCodexAccountTargetError, resolveCodexUseTarget } from "./account-target";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -176,7 +176,7 @@ export function formatAccountTable(rows: AccountRow[], withQuota = false): strin
   });
   const widths = header.map((h, i) => Math.max(h.length, ...data.map(d => d[i]!.length)));
   const line = (cols: string[]) => cols.map((c, i) => c.padEnd(widths[i]!)).join("  ").trimEnd();
-  const actions = rows.flatMap(row => row.healthAction ? [`${row.provider} ${displayId(row.id)}: ${row.health?.toLowerCase() ?? "needs attention"}. Next: ${row.healthAction}`] : []);
+  const actions = rows.flatMap(row => row.healthAction ? [`${row.provider} ${recoveryAccountLabel(row.id, displayId(row.id))}: ${row.health?.toLowerCase() ?? "needs attention"}. Next: ${row.healthAction}`] : []);
   return [line(header), ...data.map(line), ...actions].join("\n");
 }
 
