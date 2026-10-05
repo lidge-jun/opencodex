@@ -4,6 +4,7 @@ import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
 import { transientSendCapFor } from "./request-send-budget";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
@@ -704,8 +705,10 @@ export async function prepareAdapterExchange(
       // Preserve the terminal verdict through adapter and combo error formatting.
       // This also covers a reset reached by a 401/429/413 recovery refetch.
       if (isNonReplayableResponse(upstreamResponse)) {
-        cleanupUpstreamAbort();
-        return upstreamResponse;
+        try {
+          return await sanitizeNonReplayableUpstreamError(upstreamResponse,
+            transportState.sameTargetRequest?.headers ?? builtInitialRequest.headers, upstream.signal);
+        } finally { cleanupUpstreamAbort(); }
       }
      if (
        upstreamResponse.status === 401

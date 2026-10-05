@@ -13,6 +13,8 @@ import { handleResponses } from "../../src/server/responses";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable, replayRefusalResponse } from "../../src/lib/upstream-retry";
+import { sanitizeNonReplayableUpstreamError } from "../../src/server/responses/non-replayable-error";
 
 async function probe(options: {
   provider?: Partial<OcxProviderConfig>;
@@ -28,7 +30,7 @@ async function probe(options: {
   previous?: boolean;
   prepaid?: boolean;
   config?: Partial<OcxConfig>;
-  answer?: (ordinal: number) => Response;
+  answer?: (ordinal: number, authorization: string | null) => Response;
   executor?: typeof fetch;
   oauth?: boolean;
 }) {
@@ -78,7 +80,7 @@ async function probe(options: {
       authorizations.push(new Headers(init?.headers).get("authorization"));
       if (options.executor) return options.executor(_input, init);
       if (options.abort) abort.abort();
-      if (options.answer) return options.answer(bodies.length);
+      if (options.answer) return options.answer(bodies.length, authorizations.at(-1) ?? null);
       if (options.downgrade && bodies.length === 1) {
         if (options.spendOnDowngrade) budget.claimAmbiguousResend(1);
         return Response.json({ error: { type: "invalid_request_error", param: "reasoning_effort",
@@ -107,7 +109,8 @@ async function probe(options: {
       expect(workflowSends).toBe(bodies.length);
     }
     expect(attemptSends).toBe(bodies.length);
-    return { status: response.status, text, bodies, used: budget.used, workflowSends, attemptSends,
+    return { status: response.status, text, headers: response.headers,
+      bodies, used: budget.used, workflowSends, attemptSends,
       grantSpent: budget.ambiguousResendSpent, reserveSpent: budget.reserveSpent, authorizations };
 
   } finally {
@@ -181,6 +184,140 @@ const effortRefusal = (): Response => Response.json({ error: { type: "invalid_re
   param: "reasoning_effort", message: "reasoning_effort max is not supported for this model" } }, { status: 400 });
 const chatSuccess = (): Response => Response.json({ id: "chat-test", choices: [{ index: 0,
   message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] });
+
+describe("reset replacement error confidentiality", () => {
+  const credential = "fixture-active-credential-v1";
+  for (const adapter of ["openai-chat", "openai-responses"] as const) {
+    test.each([
+      ["nested JSON escape", "\\u0066ixture-active-credential-v1"],
+      ["percent escape", "%66ixture-active-credential-v1"],
+      ["nested percent escape", "%2566ixture-active-credential-v1"],
+      ["numeric entity", "&#102;ixture-active-credential-v1"],
+    ])(`${adapter} masks encoded diagnostic credentials (%s)`, async (_name, encoded) => {
+      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
+        ? reset() : Response.json({ error: { message: `invalid request: ${encoded}; path C:\\safe\\u1234.txt` } }, { status: 400 }) });
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      const message = JSON.parse(result.text).error.message;
+      expect(message).toBe("invalid request: [REDACTED]; path C:\\safe\\u1234.txt");
+    });
+
+    test(`${adapter} masks the actual wire credential after header OWS normalization`, async () => {
+      const result = await probe({ provider: { adapter, apiKey: `${credential} ` }, answer: (ordinal, authorization) => ordinal === 1
+        ? reset() : Response.json({ error: { message: `invalid request: ${authorization!.replace(/^Bearer /, "")}` } }, { status: 400 }) });
+      expect(result.authorizations).toEqual([`Bearer ${credential}`, `Bearer ${credential}`]);
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(JSON.parse(result.text).error.message).toBe("invalid request: [REDACTED]");
+    });
+
+    test.each(["plain", "escaped-json"])(`${adapter} redacts replacement diagnostics (%s)`, async shape => {
+      const diagnostic = `invalid request: ${credential}`;
+      const text = shape === "plain" ? diagnostic : JSON.stringify({ error: {
+        message: diagnostic, type: credential, code: credential,
+      }, [credential]: credential }).replaceAll(credential, credential.replaceAll("f", "\\u0066"));
+      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
+        ? reset() : new Response(text, { status: 400, headers: {
+          "content-type": "application/json", "x-upstream-debug": credential,
+          "set-cookie": `diagnostic=${credential}`, "retry-after": "0",
+        } }) });
+      expect(result.status).toBe(400);
+      expect(result.text).toContain("invalid request");
+      expect(result.text).not.toContain(credential);
+      expect(result.text).not.toContain("\\u0066ixture-active");
+      expect(result.text).toContain("[REDACTED]");
+      expect(result.headers.get("x-upstream-debug")).toBeNull();
+      expect(result.headers.get("set-cookie")).toBeNull();
+      expect(result.headers.get("retry-after")).toBeNull();
+      expect(result.text).not.toContain("upstream_reset_replay_refused");
+      expect(result.bodies).toHaveLength(2);
+    });
+  }
+
+  test("redacts the serving credential after an OAuth account replacement", async () => {
+    const result = await probe({ oauth: true, providerName: "xai", provider: { adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1", authMode: "oauth", models: ["test"] },
+      body: { model: "xai/test" }, answer: (ordinal, authorization) => ordinal === 1
+        ? Response.json({ error: { message: "quota exhausted" } }, { status: 429 })
+        : ordinal === 2 ? reset() : Response.json({ error: { message: `invalid request: ${authorization}` } }, { status: 400 }) });
+    expect(result.status).toBe(400);
+    expect(result.authorizations[0]).not.toBe(result.authorizations[2]);
+    expect(result.text).not.toContain(result.authorizations[2]!.replace(/^Bearer /, ""));
+    expect(result.text).toContain("[REDACTED]");
+    expect(result.bodies).toHaveLength(3);
+  });
+
+  test("over-nested diagnostic encoding fails closed within the matching limit", async () => {
+    const upstream = Response.json({ error: { message: "%2525252566ixture-active-credential-v1" } }, { status: 400 });
+    markResponseNonReplayable(upstream);
+    const safe = await sanitizeNonReplayableUpstreamError(upstream, { authorization: `Bearer ${credential}` }, new AbortController().signal);
+    expect(safe.status).toBe(400);
+    expect((await safe.json() as { error: { message: string } }).error.message).toBe("[REDACTED]");
+  });
+
+  test.each(["openai-chat", "openai-responses"] as const)("%s keeps a replacement terminal through combo consumption", async adapter => {
+    const result = await probe({ provider: { adapter, apiKey: credential, models: ["test", "other"] },
+      config: { combos: { pair: { strategy: "failover", targets: [
+        { provider: "mock", model: "test" }, { provider: "mock", model: "other" },
+      ] } } }, body: { model: "combo/pair" }, answer: ordinal => ordinal === 1 ? reset()
+        : ordinal === 2 ? Response.json({ error: { code: "context_length_exceeded", message: `context length exceeded: ${credential}` } }, { status: 400 })
+          : chatSuccess() });
+    expect(result.status).toBe(400);
+    expect(result.text).not.toContain(credential);
+    expect(result.text).toContain("[REDACTED]");
+    expect(result.bodies).toHaveLength(2);
+  });
+
+  test("the client projection preserves marker provenance before lifetime wrapping", async () => {
+    const upstream = Response.json({ error: { message: `invalid request: ${credential}` } }, { status: 400 });
+    markResponseNonReplayable(upstream);
+    const safe = await sanitizeNonReplayableUpstreamError(upstream, { authorization: `Bearer ${credential}` }, new AbortController().signal);
+    expect(safe.status).toBe(400);
+    expect(isNonReplayableResponse(safe)).toBe(true);
+    expect(isReplayRefusalResponse(safe)).toBe(false);
+    expect(await safe.text()).not.toContain(credential);
+    const refusal = replayRefusalResponse();
+    expect(await sanitizeNonReplayableUpstreamError(refusal, {}, new AbortController().signal)).toBe(refusal);
+    expect(isReplayRefusalResponse(refusal)).toBe(true);
+    await refusal.text();
+  });
+
+  test("an ordinary error keeps its existing delivery owner", async () => {
+    const upstream = Response.json({ error: { message: "ordinary error" } }, { status: 400 });
+    expect(await sanitizeNonReplayableUpstreamError(upstream, {}, new AbortController().signal)).toBe(upstream);
+    await upstream.text();
+  });
+
+  test("bodyless terminal responses retain their real status", async () => {
+    const upstream = new Response(null, { status: 304, headers: { "x-upstream-debug": credential } });
+    markResponseNonReplayable(upstream);
+    const safe = await sanitizeNonReplayableUpstreamError(upstream, { "x-api-key": credential }, new AbortController().signal);
+    expect(safe.status).toBe(304);
+    expect(safe.body).toBeNull();
+    expect(safe.headers.get("x-upstream-debug")).toBeNull();
+    expect(isNonReplayableResponse(safe)).toBe(true);
+  });
+
+  test("oversized or cancelled diagnostics release their reader without leaking a prefix", async () => {
+    for (const abortRead of [false, true]) {
+      const abort = new AbortController();
+      let cancelled = false;
+      const upstream = new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(credential + (abortRead ? "" : "x".repeat(65_536))));
+          if (abortRead) queueMicrotask(() => abort.abort());
+        },
+        cancel() { cancelled = true; },
+      }), { status: 400 });
+      markResponseNonReplayable(upstream);
+      const safe = await sanitizeNonReplayableUpstreamError(upstream, { "x-api-key": credential }, abort.signal);
+      expect(safe.status).toBe(abortRead ? 499 : 400);
+      expect(await safe.text()).not.toContain(credential);
+      expect(cancelled).toBe(true);
+      expect(isNonReplayableResponse(safe)).toBe(true);
+    }
+  });
+});
 
 describe("translated reset replay boundaries and accounting", () => {
   test("a valid stored predecessor refuses replay even after local expansion", async () => {
