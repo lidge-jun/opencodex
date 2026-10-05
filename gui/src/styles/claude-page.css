@@ -84,6 +84,57 @@
 .claude-desktop-roles .setting-controls > .custom-select {
   text-align: right;
 }
+/* Role selects: the label keeps a readable share of the row and a long route truncates inside
+   the trigger, so the chevron and an unavailable status never leave the card (390-768px audit). */
+.claude-desktop-roles .setting-label {
+  flex: 1 1 12rem;
+}
+.claude-desktop-roles .setting-controls {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(60%, 28rem);
+}
+.claude-desktop-roles .setting-controls > .custom-select,
+.claude-desktop-roles .select-trigger {
+  max-width: 100%;
+}
+.claude-desktop-roles .select-trigger > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.claude-desktop-roles .select-trigger > svg {
+  flex: none;
+}
+.claude-role-option {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: bottom;
+}
+.claude-role-option__route {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.claude-role-option__status {
+  flex: none;
+  white-space: pre;
+  color: var(--muted);
+}
+@media (max-width: 760px) {
+  .claude-desktop-roles .setting-controls {
+    max-width: 100%;
+  }
+  .claude-desktop-roles .setting-controls > .custom-select,
+  .claude-desktop-roles .select-trigger {
+    width: 100%;
+  }
+  .claude-desktop-roles .select-trigger {
+    justify-content: space-between;
+  }
+}
 .claude-desktop-list {
   display: flex;
   flex-direction: column;
