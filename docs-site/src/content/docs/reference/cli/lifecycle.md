@@ -230,6 +230,10 @@ opencodex local config only if all restore steps succeeded. `remove` is an alias
 Config cleanup requires ownership metadata created by a fresh install; legacy or shared directories
 are left in place.
 
+Both commands accept no arguments. Unsupported flags (including `--dry-run` and `--yes`)
+exit with usage status 2 before preflight or teardown; no changes are made.
+For help, run `ocx help uninstall` or `ocx help remove`.
+
 ## Status and health
 
 ### `ocx status [--json]`

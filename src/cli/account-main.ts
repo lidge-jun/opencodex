@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import { redactSecretArgs } from "./secret-args";
 import { codexExecInvocation } from "../codex/exec-invocation";
 import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
 import type { ResolveDeps, SpawnInvocation } from "../lib/win-exec";
@@ -53,7 +54,7 @@ function flag(args: string[], name: string): boolean {
 }
 
 function reject(args: string[]): number {
-  if (args.length > 0) console.error(`Unexpected argument(s): ${args.join(", ")}`);
+  if (args.length > 0) console.error(`Unexpected argument(s): ${redactSecretArgs(args).join(", ")}`);
   console.error(USAGE);
   return 1;
 }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Readable } from "node:stream";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { handleAccountAuthCommand } from "../../src/cli/account-auth";
+import { cmdAccount } from "../../src/cli/account";
 import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
@@ -48,6 +49,27 @@ function fixture(replies: unknown[] = [{ url: "https://example.test/auth", flowI
   return { deps, calls, probes: () => probes, reads: () => reads };
 }
 const output = () => JSON.parse(log.mock.calls[0]![0] as string);
+
+describe("account argument redaction", () => {
+  for (const target of [["list", "openai"], ["current", "openai"], ["main", "list"]]) {
+    for (const option of ["--code", "--token", "--api-key", "--key", "--secret", "--password", "--admin-token"]) {
+      test(`${target.join(" ")} redacts leftover ${option} values`, async () => {
+        const f = fixture();
+        for (const args of [[`${option}=${SECRET}`], [option, SECRET], [option, `--${SECRET}`], [option, "--", SECRET]]) {
+          error.mockClear();
+          expect(await cmdAccount([...target, ...args, "--json"], { ...f.deps, baseUrl: "http://127.0.0.1:32100" })).toBe(1);
+          const printed = JSON.stringify(error.mock.calls);
+          expect(printed).toContain(option);
+          expect(printed).toContain("<redacted>");
+          expect(printed).not.toContain(SECRET);
+        }
+        expect(f.calls).toEqual([]);
+        expect(f.probes()).toBe(0);
+        expect(f.reads()).toBe(0);
+      });
+    }
+  }
+});
 
 describe("login flow-specific options", () => {
   for (const provider of ["anthropic", "kiro", "kimi", "nous", "github-copilot"]) {

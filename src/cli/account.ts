@@ -1,5 +1,6 @@
 /** `ocx account` — list and switch provider credentials (issue #180). */
 import { apiKeyQuotaText } from "./account-key-quota";
+import { redactSecretArgs } from "./secret-args";
 import { loadConfig } from "../config";
 import { explainCodexUseOutcome, reportCodexAccountTargetError, resolveCodexUseTarget } from "./account-target";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -92,10 +93,11 @@ function consumeFlag(args: string[], flag: string): boolean {
 /** Returns an error message for leftover args, or null when clean. */
 function leftoverArgsError(args: string[]): string | null {
   if (args.length === 0) return null;
-  const unknown = args.filter(a => a.startsWith("-"));
+  const shown = redactSecretArgs(args);
+  const unknown = shown.filter(a => a.startsWith("-"));
   return unknown.length > 0
-    ? `Unknown flag(s): ${unknown.join(", ")}`
-    : `Unexpected argument(s): ${args.join(", ")}`;
+    ? `Unknown flag(s): ${shown.join(", ")}`
+    : `Unexpected argument(s): ${shown.join(", ")}`;
 }
 
 function candidateNames(config: OcxConfig): string {
