@@ -1171,7 +1171,7 @@ describe("login routes the Codex account names instead of printing the provider 
     for (const name of ["codex", "chatgpt", "openai", "CODEX", " codex "]) {
       const result = await runLogin([name]);
       expect(result.code, `${name} must route to the account login`).toBe(1);
-      expect(result.err).toContain("Management API is unavailable");
+      expect(result.err).toContain("Proxy is not running. Start the intended proxy with: ocx start. No request was sent.");
       expect(result.err).not.toContain("Usage: ocx login <provider>");
     }
   });
