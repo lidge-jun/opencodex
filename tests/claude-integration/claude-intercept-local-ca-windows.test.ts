@@ -90,7 +90,9 @@ for (const name of ["claude-intercept", "ca.key", "ca.pem", "ca-publication.sqli
       f.writes.length = 0;
       f.reads.length = 0;
       f.secretWrites.length = 0;
+      f.hardened.clear();
       const dir = claudeInterceptStateDir(f.root);
+      const target = name === "claude-intercept" ? dir : join(dir, name);
       const keyBefore = readFileSync(join(dir, "ca.key"));
       const certBefore = readFileSync(join(dir, "ca.pem"));
       setLocalCaWindowsAclRunnerForTests(path => {
@@ -104,6 +106,8 @@ for (const name of ["claude-intercept", "ca.key", "ca.pem", "ca-publication.sqli
       expect(f.writes).toEqual([]);
       expect(f.secretWrites).toEqual([]);
       expect(f.reads).toEqual([]);
+      // Only a trusted-grant DACL may be narrowed; foreign owners, grants and failed probes are never mutated.
+      if (failure !== "unprotected after hardening") expect(f.hardened.has(target)).toBe(false);
       expect(readFileSync(join(dir, "ca.key"))).toEqual(keyBefore);
       expect(readFileSync(join(dir, "ca.pem"))).toEqual(certBefore);
       expect(certBefore.toString()).toBe(first.certPem);
@@ -257,7 +261,7 @@ test("Windows memo follows staged identities across rename without another ACL i
   expect(inspections.filter(path => ["ca.key", "ca.pem"].includes(basename(path)))).toEqual([]);
 });
 
-test("Windows inherited SQLite sidecar is verified once without requiring protection or hardening", () => {
+test("Windows inherited SQLite sidecar is re-inspected on every guard without requiring protection or hardening", () => {
   const f = setup();
   ensureLocalInterceptCa(f.root);
   const dir = claudeInterceptStateDir(f.root);
@@ -270,7 +274,8 @@ test("Windows inherited SQLite sidecar is verified once without requiring protec
     return acl(CURRENT, undefined, false);
   });
   withLocalCaPublication(dir, "ca-publication.sqlite", files => { files.readPair(); files.readPair(); });
-  expect(inspections).toBe(1);
+  // SQLite owns sidecar lifetimes, so an inherited-level result is never memoized.
+  expect(inspections).toBeGreaterThanOrEqual(3);
   expect(f.hardened.has(sidecar)).toBe(false);
 });
 

@@ -12,7 +12,7 @@ const KEY = "ca.key";
 const CERT = "ca.pem";
 type FileMode = 0o600 | 0o644;
 type AclLevel = "owner" | "inherited" | "private";
-type AclCheck = (path: string, stat: BigIntStats, level?: AclLevel) => void;
+type AclCheck = ((path: string, stat: BigIntStats, level?: AclLevel) => void) & { forget(stat: BigIntStats): void };
 type FileHooks = { beforeRead?: (path: string) => void; beforeWrite?: (path: string) => void; beforePublish?: (path: string) => void };
 let hooks: FileHooks = {};
 /** Boundary fault injection for substitution and zero-secret-write assertions. */
@@ -116,7 +116,7 @@ function stage(path: string, contents: string, mode: FileMode, assertDirectory: 
   const dispose = (): void => {
     if (!closed) { closed = true; closeSync(fd); }
     if (removed) return;
-    try { same(temp, created, false, mode); unlinkSync(temp); removed = true; }
+    try { same(temp, created, false, mode); unlinkSync(temp); removed = true; checkAcl.forget(created); }
     catch (error) { if (missing(error)) removed = true; else throw error; }
     if (removed) forgetEphemeralSecretPath(temp);
   };
@@ -138,6 +138,7 @@ function stage(path: string, contents: string, mode: FileMode, assertDirectory: 
         const current = inspect(path, mode, checkAcl);
         if (previous ? !current || previous.dev !== current.dev || previous.ino !== current.ino : current !== null) throw unsafe();
         renameSync(temp, path);
+        if (current) checkAcl.forget(current);
         removed = true;
         forgetEphemeralSecretPath(temp);
         same(path, created, false, mode);
@@ -160,9 +161,11 @@ export function withLocalCaPublication<T>(dir: string, lockName: string, work: (
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   // Publication-local only: a private DACL can be changed only by the owner,
   // SYSTEM or Administrators. Every memo hit still checks lstat dev/ino via same().
+  // Inherited-level results (SQLite sidecars, pre-migration probes) are never kept:
+  // SQLite creates and deletes sidecars itself, so their identities are not pinned.
   const verified = new Map<bigint, Map<bigint, AclLevel>>();
   const strength = { owner: 0, inherited: 1, private: 2 };
-  const checkAcl: AclCheck = (path, stat, level = "private") => {
+  const checkAcl: AclCheck = Object.assign((path: string, stat: BigIntStats, level: AclLevel = "private") => {
     if (!windowsSecretAclApplies()) return;
     const identity = same(path, stat, stat.isDirectory());
     const identities = verified.get(identity.dev);
@@ -170,10 +173,14 @@ export function withLocalCaPublication<T>(dir: string, lockName: string, work: (
     if (prior !== undefined && strength[prior] >= strength[level]) return;
     assertLocalCaWindowsAcl(path, level);
     same(path, stat, stat.isDirectory());
+    if (level === "inherited") return;
     const entries = identities ?? new Map<bigint, AclLevel>();
     entries.set(identity.ino, level);
     verified.set(identity.dev, entries);
-  };
+  }, {
+    // An identity this publication unlinked or replaced is retired; a recycled id must be re-inspected.
+    forget(stat: BigIntStats): void { verified.get(stat.dev)?.delete(stat.ino); },
+  });
   const directory = lstatSync(dir, { bigint: true });
   owned(directory, true);
   const dirFd = windowsSecretAclApplies() ? null : openSync(dir, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | NOFOLLOW);
