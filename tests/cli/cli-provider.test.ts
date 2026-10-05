@@ -60,6 +60,30 @@ function readConfig(dir: string) {
 }
 
 describe("ocx provider", () => {
+  for (const option of ["--api-key", "--key", "--secret", "--password", "--admin-token"]) {
+    for (const syntax of ["inline", "separated"]) {
+      test(`add redacts leftover ${option} ${syntax} values without saving`, () => {
+        const { dir, configPath } = freshConfig();
+        const before = readFileSync(configPath, "utf8");
+        const secret = "synthetic-private-value";
+        const credential = syntax === "inline" ? [`${option}=${secret}`] : [option, secret];
+        try {
+          const result = runCli([
+            "provider", "add", "fixture", "--adapter", "openai-chat", "--base-url", "https://provider.example.test/v1",
+            // The first supported key is consumed; a repeated key remains an argument error.
+            ...(option === "--api-key" && credential.length === 2 ? ["--api-key", "fixture-value"] : []),
+            ...credential, "--json",
+          ], { OPENCODEX_HOME: dir });
+          expect(result.status).toBe(1);
+          expect(result.stderr).toContain(option);
+          expect(result.stderr).toContain("<redacted>");
+          expect(result.stdout + result.stderr).not.toContain(secret);
+          expect(readFileSync(configPath, "utf8")).toBe(before);
+        } finally { removeTreeWithRetry(dir); }
+      });
+    }
+  }
+
   test("new provider registration initializes model selection but force overwrite preserves it", () => {
     const { dir } = freshConfig();
     try {

@@ -163,8 +163,12 @@ function reportError(error: unknown): number {
     const body = record(error.body) ? error.body : {};
     const stale = body.code === "integration_preview_stale";
     const unavailable = body.code === "integration_preview_unavailable";
+    // Local discovery found no proxy: nothing was sent, so name the start command instead of
+    // the generic management-host guidance. Server 503s always carry a body; this one has none.
+    const stopped = error.status === 503 && error.body === null && error.message.startsWith("Proxy is not running");
     console.error(stale ? "Error: Integration preview is stale. Run the explicit preview again and review its changes before retrying."
       : unavailable ? "Error: Integration preview is unavailable. Load the model catalog, then run the preview again."
+      : stopped ? "Error: Proxy is not running. Start the intended proxy with: ocx start. No request was sent."
       : error.status === 404 ? "Error: Integration operation or profile was not found. Inspect integration history and the selected profile."
       : error.status === 409 ? "Error: Integration change was refused. Inspect integration status and preview before retrying."
       : error.status === 503 ? "Error: Management API is unavailable. Check the proxy and run this command on its management host."

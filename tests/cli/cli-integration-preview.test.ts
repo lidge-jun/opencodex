@@ -98,6 +98,14 @@ describe("preview wire and failure contracts", () => {
     const f = fixture({ error: "PRIVATE" }, status);
     expect(await command([...previewArgs, "--json"], f.deps)).toBe(status === 404 ? 4 : status === 409 ? 5 : 1);
     expect(out.mock.calls).toEqual([]); expect(JSON.stringify(err.mock.calls)).not.toContain("PRIVATE");
+    if (status === 503) expect(JSON.stringify(err.mock.calls)).toContain("Management API is unavailable");
+  });
+  test.each([{ args: previewArgs }, { args: ["restore", "--op", "op-one", "--preview"] }])("no running proxy names ocx start and sends nothing: $args", async ({ args }) => {
+    const f = fixture();
+    const deps: RuntimeApiDeps = { ...f.deps, findLiveProxy: async () => null };
+    expect(await command([...args, "--json"], deps)).toBe(1);
+    expect(out.mock.calls).toEqual([]); expect(f.calls).toEqual([]);
+    expect(JSON.stringify(err.mock.calls)).toContain("Proxy is not running. Start the intended proxy with: ocx start. No request was sent.");
   });
   test("recognized drift refusal gives a concrete recovery command without echoing prose", async () => {
     const f = fixture({ reason: "drift_requires_confirm", error: "PRIVATE", message: "PRIVATE" }, 409);

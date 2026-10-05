@@ -3,7 +3,7 @@ title: Entegrasyonlar
 description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo ve Factory Droid'u opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
 ---
 
-**Entegrasyonlar** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
+**Bağlantı** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
 yapılandırma dosyasına yazar ve tekrar kaldırır. On yedi istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
@@ -29,8 +29,13 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. On yedi istemci bu şekild
 
 Desteklenen akıl yürütme düzeylerine sahip GJC modelleri, GJC'nin düzey seçimi sunabilmesi için `reasoning: true`, `thinking.levels` ve `compat.supportsReasoningEffort` alanlarını dışa aktarır. Yerel Codex modelleri, katalogda belirtilmese bile standart düzeylerini alır. Bilinen düzeyi olmayan modellerde bu alanlar bulunmaz. `none` düzey göndermez ve `ultra` gönderimde `max` düzeyine dönüşür; bu yüzden seçeneklerde yer almazlar. Model seçeneklerini güncellemek için entegrasyonu yenileyin.
 
-Yönetilen DSH desteğinin en düşük uyumlu sürümü **DSH 0.1.0-rc.6**'dır. OpenCodex yalnızca
-`llm-pi-ai.providers.opencodex` bölümünü yönetir: Uygula ve Yenile bu bölümü değiştirir, Devre Dışı
+Yönetilen DSH desteğinin en düşük uyumlu sürümü **DSH 0.1.0-rc.6**'dır. DSH 0.1.7 ve üzeri, sağlayıcı rotalarını
+`$DSH_HOME/profiles/desktop/cordis.patch.yml` dosyasındaki `[id=llm-pi-ai].config.providers.opencodex` satırından okur.
+Desktop profili ve yaması varsa OpenCodex yalnızca bu satırı yazar.
+`$DSH_HOME/profiles/desktop/package.json` varsa ancak `cordis.patch.yml` yoksa Uygula işlemi reddedilir:
+`[]` içeren bir `cordis.patch.yml` oluşturun (DSH’nin yeni bir profil için yazdığı boş yama), ardından
+entegrasyonu yeniden etkinleştirin. Yalnızca Desktop profili yoksa
+`$DSH_HOME/settings.yaml` içindeki `llm-pi-ai.providers.opencodex` bölümünü kullanır. Uygula ve Yenile seçilen yönetilen bölümü değiştirir, Devre Dışı
 Bırak yalnızca bu bölümü kaldırır, Geri Yükle ise kaydedilmiş bir anlık görüntüyü geri koyar. DSH
 sağlayıcı değişikliklerini çalışırken yeniden yükler. Bu işlemler kullanıcının varsayılan modelini
 veya yerel `deepseek-official` sağlayıcısını değiştirmez. Yönetilen DSH entegrasyonu şu anda yalnızca
@@ -47,7 +52,7 @@ yönettiği geçerli çaba seçimi korunur.
 
 Raycast'in iki ön koşulu vardır. Özel sağlayıcılar (Custom Providers) bir **Raycast Pro**
 özelliğidir: ücretsiz planda dosya yine yazılır, ancak Raycast onu okumayacağı için
-`ocx integration client status --client raycast` ve Entegrasyonlar sayfası bir uyarı
+`ocx integration client status --client raycast` ve **Bağlantı** sayfası bir uyarı
 bildirir. Ayrıca Raycast `ai` klasörünü yalnızca Raycast → Settings → AI →
 **Reveal Providers Config** seçeneğini bir kez açtığınızda oluşturur; opencodex bu
 klasörü kurulum sinyali olarak kullanır ve klasör var olana kadar istemciyi kurulu değil
@@ -184,8 +189,10 @@ eşitle** ayrı bir toplu işlem olarak kalır ve tek bir birleşik önizlemeye 
 **Biçimlendirme genellikle korunmaz.** Uygulama işlemi bir yapılandırmayı
 ayrıştırır ve geri yazar, bu nedenle JSON, JSON5 ve TOML yeniden
 biçimlendirilebilir ve JSON5 veya TOML içindeki yorumlar kaybolur. OMP ve DSH
-istisnadır: YAML yazıcıları sırasıyla yalnızca `providers.opencodex` ve
-`llm-pi-ai.providers.opencodex` kısımlarını yamalar,
+istisnadır: OMP YAML yazıcısı yalnızca `providers.opencodex` bölümünü yamalar.
+DSH yazıcısı, Desktop profili varsa `$DSH_HOME/profiles/desktop/cordis.patch.yml` içindeki
+`[id=llm-pi-ai].config.providers.opencodex` satırını, profil yoksa
+`$DSH_HOME/settings.yaml` içindeki `llm-pi-ai.providers.opencodex` bölümünü yamalar;
 ilgisiz sağlayıcı yorumlarını ve biçimlendirmesini bayt bayt korur. Bu tam
 kaynak aralığı güvenli bir şekilde tanımlanamazsa işlem bunun yerine reddeder.
 Diğer istemciler için önceki dosya baytlarına ihtiyacınız olduğunda Geri

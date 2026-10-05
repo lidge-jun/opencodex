@@ -789,17 +789,18 @@ hemen temizler.
 
 ## GUI (Claude sayfası)
 
-Kontrol panelinde **Bağlantı** altında iki sekme bulunur: Claude Code için **Claude** ve **Claude Desktop**.
-Bağlantı genel görünümündeki Claude kartında da aynı bağlantı anahtarı bulunur.
-Sayfa şunları gösterir:
+Kontrol panelinde **Bağlantı → Claude**, Claude Code ayarlarını tek sayfada gösterir. **Claude Desktop**, **Bağlantı** altında ayrı bir sekmedir. Bağlantı genel görünümündeki Claude kartında da aynı bağlantı anahtarı bulunur.
+Sayfadaki denetimler yukarıdan aşağıya şu sıradadır:
 
-- Gelen acil durdurma anahtarı (etkinleştirme geçişi)
-- Hızlı başlangıç (`ocx claude`) ve manuel ortam bloğu
-- Hızlı Mod seçici (Otomatik / AÇIK / KAPALI)
-- Otomatik bağlam geçişi ve sıkıştırma eşiği açılır menüsü
-- Alt ajan otomatik kayıt geçişi
-- Model müdahale (modelMap) düzenleyicisi
-- Seçici takma adlarının canlı önizlemesi
+- **Claude Code CLI first-party** anahtarı.
+- **Başlarken**: `ocx claude` ve manuel ortam bloğu.
+- **Genel**: Hızlı Mod, otomatik bağlam, sıkıştırma eşiği ve alt ajan otomatik kayıt ayarları.
+- **Arka plan yardımcı modeli**: sohbet özetleri ve konu tespiti gibi arka plan işleri için model seçimi.
+- **Model yakalama**: belirli model isteklerini başka modellere yönlendiren `modelMap` düzenleyicisi.
+- **Kullanılabilir modeller**: `/model` menüsündeki takma adların canlı önizlemesi.
+- **Claude bağlantısı** anahtarı.
+
+Sayfanın altında kaydırırken görünür kalan kaydetme çubuğu, **Değişiklik yok** veya **Kaydedilmemiş değişiklikler** durumunu gösterir. **Geri al**, kaydedilmemiş ayar değişikliklerini geri alır; **Kaydet**, düzenlenen ayarları kaydeder. **Claude bağlantısı** ve **Claude Code CLI first-party** anahtarları hemen uygulanır; **Kaydet** bu iki anahtarın durumunu hiçbir zaman değiştirmez.
 
 `GET /api/claude-code`, geçerli varsayılanları, yapılandırmayı, bağlam penceresi
 kayıt defterini, geçerli ortamı, kullanılabilir rota kimliklerini, takma adları

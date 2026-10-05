@@ -22,6 +22,7 @@ import { modelSelectionGuidance, modelSelectionNextSteps } from "./model-selecti
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import type { RuntimeApiDeps } from "./runtime-api";
+import { redactSecretArgs } from "./secret-args";
 import { projectLocalSyncResult, type LocalSyncResult } from "./local-sync-result";
 import { providerManagementConfigError } from "../server/auth-cors";
 
@@ -51,11 +52,13 @@ function consumeFlagValue(args: string[], flag: string): string | undefined {
 /** Reject any leftover args (unknown flags or trailing values). */
 function rejectUnknownArgs(args: string[], usage: string): void {
   if (args.length === 0) return;
-  const unknown = args.filter(a => a.startsWith("-"));
+  const shown = redactSecretArgs(args);
+  // Flags plus redaction markers only: a stray positional may be a credential operand.
+  const unknown = shown.filter(a => a.startsWith("-") || a === "<redacted>");
   if (unknown.length > 0) {
     console.error(`Unknown flag(s): ${unknown.join(", ")}`);
   } else {
-    console.error(`Unexpected argument(s): ${args.join(", ")}`);
+    console.error(`Unexpected argument(s): ${shown.join(", ")}`);
   }
   console.error(usage);
   process.exit(1);
@@ -571,7 +574,7 @@ export async function handleProviderCommand(args: string[], deps: ProviderComman
         process.exitCode = code;
         break;
       }
-      console.error(`Unknown provider subcommand: ${sub}`);
+      console.error(`Unknown provider subcommand: ${redactSecretArgs([sub ?? ""])[0]}`);
       printSubcommandUsage("provider", undefined, { write: console.error });
       process.exit(1);
     }
