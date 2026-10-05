@@ -3,7 +3,7 @@ import { Readable } from "node:stream";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { handleAccountAuthCommand } from "../../src/cli/account-auth";
 import { cmdAccount } from "../../src/cli/account";
-import { noteCredentialArgv } from "../../src/cli/secret-args";
+import { noteCredentialArgv, scrubCredentialOperands } from "../../src/cli/secret-args";
 import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
@@ -250,4 +250,14 @@ describe("typed public login completion", () => {
     expect(await handleAccountAuthCommand("login", ["openai", "--no-wait", "--json"], f.deps)).toBe(1);
     expect(log).not.toHaveBeenCalled();
   });
+});
+
+test("console diagnostics scrub argv credential operands case-insensitively", () => {
+  noteCredentialArgv(["models", "preset", "--token=Synthetic-Value-1", "--code", "--api-key", "Synthetic-Value-2", "--secret", "abc"]);
+  try {
+    expect(scrubCredentialOperands("x '--token=synthetic-value-1' y Synthetic-Value-2")).toBe("x '--token=<redacted>' y <redacted>");
+    // An option name that followed another credential option is not an operand.
+    expect(scrubCredentialOperands("[--api-key <key>] abc")).toBe("[--api-key <key>] abc");
+  } finally { noteCredentialArgv([]); }
+  expect(scrubCredentialOperands("Synthetic-Value-2")).toBe("Synthetic-Value-2");
 });

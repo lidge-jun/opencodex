@@ -31,6 +31,49 @@ function isSecretOptionToken(token: string): boolean {
 }
 
 let credentialArgvSeen = false;
+let credentialValues: string[] = [];
+let consoleScrubInstalled = false;
+
+/** Operands of credential options in argv, longest first; very short values are not scrubbed. */
+function credentialOperands(argv: readonly string[]): string[] {
+  const values = new Set<string>();
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index] as string;
+    const inline = SECRET_OPTIONS.find(option => token.startsWith(`${option}=`));
+    let value: string | undefined;
+    if (inline) value = token.slice(inline.length + 1);
+    else if (SECRET_OPTIONS.includes(token)) value = argv[argv[index + 1] === "--" ? index + 2 : index + 1];
+    // A following credential option is not this option's operand; its own operand is collected next.
+    if (value !== undefined && value.length >= 4 && !isSecretOptionToken(value)) values.add(value);
+  }
+  return [...values].sort((a, b) => b.length - a.length);
+}
+
+/** Replace every argv credential operand in text printed by this process. */
+export function scrubCredentialOperands(text: string): string {
+  let out = text;
+  // Case-insensitive: some parsers lowercase an action before echoing it.
+  for (const value of credentialValues) out = out.replace(new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "<redacted>");
+  return out;
+}
+
+/**
+ * Last-line guard for every console diagnostic: parsers that echo a selector, an unknown
+ * subcommand or a leftover before any redaction would otherwise print an operand typed after
+ * a credential option. Installed once; it reads the operands recorded for the current argv.
+ */
+function installConsoleScrub(): void {
+  if (consoleScrubInstalled) return;
+  consoleScrubInstalled = true;
+  for (const method of ["log", "info", "warn", "error"] as const) {
+    const original = console[method].bind(console);
+    console[method] = (...args: unknown[]) => {
+      if (credentialValues.length === 0) return original(...args);
+      return original(...args.map(arg => typeof arg === "string" ? scrubCredentialOperands(arg)
+        : arg instanceof Error ? scrubCredentialOperands(arg.stack ?? arg.message) : arg));
+    };
+  }
+}
 
 /**
  * Record whether the process argv carried any credential option. Parsers that take
@@ -40,6 +83,8 @@ let credentialArgvSeen = false;
  */
 export function noteCredentialArgv(argv: readonly string[]): void {
   credentialArgvSeen = argv.some(isSecretOptionToken);
+  credentialValues = credentialOperands(argv);
+  if (credentialValues.length > 0) installConsoleScrub();
 }
 
 /**
