@@ -1,9 +1,16 @@
+import { handleCompanionTimelineCommand } from "./companion-timeline";
+import { handleCompanionUsageCommand } from "./companion-usage";
+import type { ObserveStreamDeps } from "./observe-stream";
 import { CliUsageError, printData, rejectArgs, runCliAction, runtimeRequest, takeFlag, type RuntimeApiDeps } from "./runtime-api";
 
 const USAGE = `Usage:
   ocx companion [show] [--json]
   ocx companion set <key>=<value> [...] [--json]
-  ocx companion reset [--json]`;
+  ocx companion reset [--json]
+  ocx companion usage [--json]
+  ocx companion timeline [--hours <6|24|72|168>] [--bucket-minutes <1..1440>]
+      [--metric <total|input|output|cached>] [--aggregation <sum|average|max>]
+      [--grouping <model|modelAccount>] [--model <provider/model>]... [--hide-provider <name>]... [--json]`;
 
 function parseValue(raw: string): unknown {
   if (raw === "null") return null;
@@ -43,9 +50,11 @@ async function reset(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }, deps), wantsJson, ["Companion settings reset."]);
 }
 
-export async function handleCompanionCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+export async function handleCompanionCommand(argv: string[], deps: ObserveStreamDeps = {}): Promise<number> {
+  const [sub = "show", ...rest] = argv;
+  if (sub === "timeline") return handleCompanionTimelineCommand(rest, deps);
+  if (sub === "usage") return handleCompanionUsageCommand(rest, deps);
   return runCliAction(async () => {
-    const [sub = "show", ...rest] = argv;
     if (sub === "show") await show(rest, deps);
     else if (sub === "set") await set(rest, deps);
     else if (sub === "reset") await reset(rest, deps);

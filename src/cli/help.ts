@@ -96,7 +96,7 @@ Usage:
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
   ocx config [sub]            Validated configuration show/get/set/import/export
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
-  ocx lab <sub>               Read-only Compatibility Lab projection inspection
+  ocx lab <sub>               Inspect Lab evidence and control local automation
   ocx chatgpt <sub>          Experimental app-server shim: launch|restore|status (macOS)
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
@@ -154,7 +154,8 @@ export function printSubcommandUsage(
     write(`Usage:\n${MODELS_CONTEXT_USAGE}\n\n${MODELS_CONTEXT_DETAILS.join("\n")}`);
   } else if (result.kind === "capability") {
     const { capability } = result;
-    write(`Command: ocx ${result.path.join(" ")}\n\n${capability.summary}`);
+    const heading = capability.usage !== undefined ? `Usage: ${capability.usage}` : `Command: ocx ${result.path.join(" ")}`;
+    write(`${heading}\n\n${capability.summary}`);
     if (capability.flags.length) {
       write("\nDeclared flags:");
       for (const flag of capability.flags) {
@@ -162,7 +163,13 @@ export function printSubcommandUsage(
       }
     }
     if (capability.details?.length) write(`\n${capability.details.join("\n")}`);
-    write("\nCapability metadata is incomplete; this is not the full operand grammar.");
+    if (result.children.length) {
+      write("\nDeclared commands (incomplete):");
+      for (const child of result.children) write(`  ocx help ${child.command.join(" ")}  ${child.summary}`);
+    }
+    if (capability.usage === undefined) {
+      write("\nCapability metadata is incomplete; this is not the full operand grammar.");
+    }
   } else {
     write(`Command group: ocx ${result.path.join(" ")}\n\nDeclared commands (incomplete):`);
     for (const child of result.children) write(`  ocx ${child.command.join(" ")}  ${child.summary}`);

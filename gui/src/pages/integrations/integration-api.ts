@@ -269,6 +269,8 @@ const PLAN_SCHEMA_PATHS = new Set([
   // file's templates, and a path missing here is rejected as an invalid preview.
   "config.providerConfigRules.providerRules.[providerId=opencodex]",
   "config.modelConfigRules.providerModelRules.*",
+  // DSH 0.1.7+ reads routes from the `llm-pi-ai` row of its Desktop profile patch.
+  "[id=llm-pi-ai].config.providers.opencodex",
 ]);
 const PLAN_CHANGE_LIMIT = 256;
 

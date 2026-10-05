@@ -313,6 +313,12 @@ export function classifyIntegration(input: {
    * the wrong way.
    */
   format?: ConfigFormat;
+  /**
+   * Whether the file being classified is patched in place, which makes a
+   * sibling edit harmless. Like `format`, it belongs to the target; omitted, the
+   * client's config-file declaration answers.
+   */
+  sourcePreservingYaml?: boolean;
 }): { state: IntegrationState; reason?: StateReason } {
   if (input.fileText !== null && !input.fileIsRegular) {
     return { state: "unsafe", reason: "not-regular-file" };
@@ -414,7 +420,7 @@ export function classifyIntegration(input: {
     && !isHermesAffinityUpgrade(input.parsed, input.record, input.contribution)) {
     return { state: "conflict", reason: "foreign-edit" };
   }
-  if (!INTEGRATION_CLIENTS[clientId].sourcePreservingYaml
+  if (!(input.sourcePreservingYaml ?? INTEGRATION_CLIENTS[clientId].sourcePreservingYaml !== undefined)
     && fingerprint(input.fileText ?? "") !== input.record.fileFingerprint
     && !droidNormalizedFileMatchesRecord(input.parsed, input.record)) {
     /*
@@ -662,6 +668,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     configPath,
     clientId: input.clientId,
     format: effective.format,
+    sourcePreservingYaml: effective.sourcePreservingYaml !== null,
   });
   if (input.clientId === "droid" && record && (state === "current" || state === "stale")) {
     try { assertDroidRecordedSettingsUnambiguous(spec.detectDir(input.env, input.home), parsed, record); }

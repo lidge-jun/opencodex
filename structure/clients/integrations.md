@@ -147,9 +147,9 @@ added only to a writer would let a mutation bypass the state users saw.
 
 ## Read-only mutation plans
 
-An operator confirming apply, overwrite, disable or undo is agreeing to consequences they were
-never shown. A plan is what shows them, and it is only trustworthy if it describes the operation
-that will actually run.
+The CLI owner `src/cli/integration-preview.ts` exposes the same preview and optional flat operation/planFingerprint binding. `src/cli/integration-plan-dto.ts` validates structural plans at the wire boundary; `src/cli/integration-input.ts` preserves exact profile/default-map intent. Droid map omission inherits, explicit entries replace, and clear sends an empty map. `src/cli/integration-journal.ts` retires confirmed history entries through existing owners and reports snapshot cleanup separately; `src/cli/integration-aside-sync.ts` uses the established attested sync helper unchanged. Neither command creates new management authority.
+
+An operator confirming apply, overwrite, disable or undo is agreeing to consequences they were never shown. A plan is what shows them, and it is only trustworthy if it describes the operation that will actually run.
 
 One observation serves both. `mutation-plan.ts` owns the read, parse, contribution build, record
 selection and classification that the writer used to perform itself, so a preview and the mutation
@@ -383,7 +383,7 @@ observed. Naming the store without the last three would be naming a file we cann
 file this operation reads, writes, journals and records, and whether a write there reaches the
 client. It decides from three facts, in order:
 
-1. No declared store, or no store on disk — the config file, unchanged. A client that has never run
+1. No declared store, or no store on disk — the config file, unchanged, unless the declaration's `missingStore` says the client still reads the absent store; that is an ineffective write carrying its remedy. A client that has never run
    still imports what we write there, which is why the rule keys on the store's presence rather
    than on a client version.
 2. This project's own block already in one of the two files — that file. Disable removes what we
@@ -427,6 +427,16 @@ notice appears only when the client reads some other file than the one the state
 
 Deleting the client's store to re-trigger its own import is not implemented and must not be. It
 discards every provider the client keeps there.
+
+DSH is the second instance: from 0.1.7 it imports `$DSH_HOME/settings.yaml` once into the first
+booted profile and hot reloads routes from the `llm-pi-ai` row of the store, the Desktop profile's
+`profiles/desktop/cordis.patch.yml` (a home patch row would replace that row's whole `config`). The
+file is a top-level list of loader rows, so the managed path starts with `[id=llm-pi-ai]`: `merge.ts`
+keeps a sequence root, the source patcher rewrites that entry with its `- ` and indent restored byte
+for byte, `[]` is the only flow form adopted or written back, and a created row pruned to its selector
+is removed. `IntegrationTarget` carries its own `sourcePreservingYaml`. Writes hold `settings.yaml.lock`,
+then the profile's `package.json.lock`, re-probing the profile after each revalidation await; refresh
+keeps the selected row in place, and restore refuses to recreate a missing profile directory unlocked. A profile with `package.json` but no patch is refused: DSH renames `settings.yaml` to `settings.yaml.imported` on startup, which would orphan the ownership record.
 
 ## Verification
 

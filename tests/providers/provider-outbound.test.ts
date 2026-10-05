@@ -493,7 +493,11 @@ describe("provider outbound GET transport", () => {
     expect(override).toHaveBeenCalledTimes(1);
   });
 
+  // A cold Bun start plus the fixture's imports can exceed 12s on slow Windows runners. The child
+  // stays bounded and SIGKILLed below the case deadline, so a real hang still fails with its timing.
+  const PROXY_E2E_CHILD_MS = process.platform === "win32" ? 45_000 : 12_000;
   test("proxy mode reaches one real proxy across outbound, connection-test, and model-discovery paths", async () => {
+    const startedAt = performance.now();
     const childHome = mkdtempSync(join(tmpdir(), "ocx-provider-proxy-e2e-"));
     const child = Bun.spawn([
       process.execPath,
@@ -506,8 +510,8 @@ describe("provider outbound GET transport", () => {
       },
       stdout: "pipe",
       stderr: "pipe",
-      // Terminate and reap the fixture before the existing 15s test deadline.
-      timeout: 12_000,
+      // Terminate and reap the fixture before the case deadline.
+      timeout: PROXY_E2E_CHILD_MS,
       killSignal: "SIGKILL",
     });
 
@@ -518,7 +522,8 @@ describe("provider outbound GET transport", () => {
         child.exited,
       ]);
       if (exitCode !== 0) {
-        throw new Error(`provider outbound fixture exited ${exitCode}: ${stderr.trim()}`);
+        const bound = child.signalCode ? ` (${child.signalCode} after ${Math.round(performance.now() - startedAt)} ms; bound ${PROXY_E2E_CHILD_MS} ms)` : "";
+        throw new Error(`provider outbound fixture exited ${exitCode}${bound}: ${stderr.trim()}`);
       }
       const result = JSON.parse(stdout.trim()) as {
         dnsLookups: string[];
@@ -569,7 +574,7 @@ describe("provider outbound GET transport", () => {
       await child.exited;
       removeTreeWithRetry(childHome);
     }
-  }, 15_000);
+  }, PROXY_E2E_CHILD_MS + 3_000);
 });
 
 describe("provider outbound POST transport", () => {

@@ -83,6 +83,7 @@ export async function runCapabilities(argv: string[]): Promise<number> {
         flags: cap.flags,
         mutates: cap.mutates,
         json: cap.json,
+        ...(cap.usage !== undefined ? { usage: cap.usage } : {}),
         ...(cap.details ? { details: cap.details } : {}),
       })),
       ...(route === undefined && !mutatingOnly ? { headCapabilities: HEAD_CAPABILITIES } : {}),

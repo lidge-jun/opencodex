@@ -16,7 +16,7 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. On yedi istemci bu şekild
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | hemen, çalışan bir ağ geçidinde | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | yeniden başlatmada veya `/reload` ile | geri döngü (loopback) yer tutucusu |
 | gjc | `~/.gjc/agent/models.yml` | YAML | yeni oturumlarda veya `/model` açtığınızda | non-secret loopback placeholder |
-| DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (varsayılan `~/.dsh/settings.yaml`) | YAML | çalışırken yeniden yükleme | gizli olmayan geri döngü bearer yer tutucusu |
+| DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml` (varsayılan `~/.dsh/profiles/desktop/cordis.patch.yml`); DSH Desktop bu profili oluşturana kadar `$DSH_HOME/settings.yaml` | YAML | çalışırken yeniden yükleme | gizli olmayan geri döngü bearer yer tutucusu |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | yeni oturumlarda veya model seçici açıldıktan sonra | geri döngü (loopback) yer tutucusu |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
 | ZCode | `~/.zcode/v2/config.json` | JSON | yeniden başlatmada | geri döngü yer tutucusu |

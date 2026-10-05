@@ -418,6 +418,17 @@
       ]
     },
     {
+      "path": "cli-management.md",
+      "tier": 5,
+      "title": "CLI management and discovery",
+      "scope": "Terminal help and capability metadata, management-client output and the generated operating reference.",
+      "documents": [
+        "src/cli/",
+        "scripts/generate-ocx-skill-surface.ts",
+        "skills/ocx/"
+      ]
+    },
+    {
       "path": "gui-and-management-api.md",
       "tier": 5,
       "title": "GUI And Management API",

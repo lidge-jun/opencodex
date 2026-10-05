@@ -406,30 +406,30 @@ describe("ocx logs --follow output contract", () => {
     const errors: string[] = [];
     const originalLog = console.log;
     const originalError = console.error;
-    const sleep = spyOn(Bun, "sleep").mockImplementation(async () => {
-      throw new Error("stop after first follow poll");
-    });
-    console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+    const controller = new AbortController();
+    let fetches = 0;
+    console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); controller.abort(); };
     console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
     try {
       const code = await handleObserveCommand(
         ["logs", "--follow"],
         {
           baseUrl: "http://cli.test",
-          fetchImpl: async () => new Response(JSON.stringify(rows), {
+          signal: controller.signal,
+          fetchImpl: async () => { fetches++; return new Response(JSON.stringify(rows), {
             status: 200,
             headers: { "content-type": "application/json" },
-          }),
+          }); },
         },
       );
-      expect(code).toBe(1);
+      expect(code).toBe(130);
       expect(lines).toEqual(["t0  200  xai/grok-4.6  12ms  conv=conv-7"]);
       expect(lines[0]?.startsWith("{")).toBe(false);
-      expect(errors.join("\n")).toContain("stop after first follow poll");
+      expect(errors).toEqual([]);
+      expect(fetches).toBe(1);
     } finally {
       console.log = originalLog;
       console.error = originalError;
-      sleep.mockRestore();
     }
   });
 });

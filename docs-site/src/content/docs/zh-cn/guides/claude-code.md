@@ -102,7 +102,7 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 
 ## Claude Desktop 模式：网关（默认）与第一方
 
-在控制台的 **Claude → Desktop → 连接模式** 中，或使用
+在控制台的 **连接 → Claude Desktop → 连接模式** 中，或使用
 `ocx claude desktop apply --first-party|--gateway` 选择互斥的模式。
 
 ### 网关（默认）
@@ -131,7 +131,7 @@ OpenCodex 拥有的已选网关条目、保存的网关指纹、`settings.json` 
 
 ### Claude Code CLI 第一方模式
 
-在 Claude → Code 中开启 CLI 开关，或运行 `ocx claude config set --first-party on`；关闭时用 `off`。若本地代理不可用、CA 无法准备、设置无法读取，或代理键由其他程序所有，开启请求会被拒绝。关闭操作始终可以保存。仅开启 Desktop 第一方模式时，要让终端完全原生直连，请在 shell 中设置 `NO_PROXY='*'`。上述账户风险也适用于 CLI。
+在 连接 → Claude 中开启 CLI 开关，或运行 `ocx claude config set --first-party on`；关闭时用 `off`。若本地代理不可用、CA 无法准备、设置无法读取，或代理键由其他程序所有，开启请求会被拒绝。关闭操作始终可以保存。仅开启 Desktop 第一方模式时，要让终端完全原生直连，请在 shell 中设置 `NO_PROXY='*'`。上述账户风险也适用于 CLI。
 关闭 Claude 路由会保留由 OpenCodex 管理的代理设置。监听器仍运行时，所有 Messages 请求原样转发；停止后，运行 OpenCodex 或关闭 Desktop/CLI 第一方模式之前，直接运行 `claude` 无法连接。`ocx claude` 原生启动仅在有自有设置且未继承外部 HTTPS 代理时设置 `NO_PROXY=*`。否则保留外部代理，并警告设置中的拦截仍生效；请关闭第一方模式或取消该设置。
 界面区分设置不可读（unknown）、带 opencodex 令牌的代理 URL 却搭配外部 CA（foreign：手动修正 HTTPS_PROXY / NODE_EXTRA_CA_CERTS），以及 Claude 路由已关闭但仍有监听器原样转发请求（disabled：重启前关闭第一方模式以清除设置）。没有监听器时为 stopped；使用受管理的 CA 但端口或令牌不匹配时为 broken。第一方模式开启但无法提供拦截服务时，stopped 和 broken 都显示 routingOff：Claude 路由或拦截功能已关闭，或此设备是另一台 opencodex 中枢的客户端；请在此设备上重新启用拦截服务，或关闭第一方模式以移除设置。仅在拦截服务可用时，stopped 才提示启动 opencodex，broken 才提示运行 `ocx ensure` 或重启。CLI 已开启但没有代理设置为未应用；仅开启一个客户端且代理正常时提示共享转发；两个客户端都关闭但代理设置仍在时提示残留。
 unknown 表示 opencodex 无法确定设置是否仍指向自己的代理。外部 CA 搭配 127.0.0.1 上无令牌的代理时显示 local：归属无法确认；如果不再使用，请从 ~/.claude/settings.json 中删除 HTTPS_PROXY。disabled 仅在设置与运行中的监听器匹配时出现；端口或令牌不匹配时，即使路由关闭也显示 broken。
@@ -148,7 +148,7 @@ OpenCodex 都会发布新的颁发机构，macOS 也会再次请求信任——�
 Picker 模式开启期间，Claude Desktop 通过 OpenCodex 访问网络。如果 OpenCodex 停止，Desktop 会处于离线状态，
 直到你完全重启 Desktop 或关闭 Picker 模式。使用 `ocx claude desktop picker status` 查看状态，使用
 `ocx claude desktop picker trust` 重复信任步骤，或使用 `ocx claude desktop picker off` 关闭。
-控制台 **Claude → Desktop** 中也有同样的开关。选择 Picker 配置档案后，请完全退出并重新打开 Claude Desktop。
+控制台 **连接 → Claude Desktop** 中也有同样的开关。选择 Picker 配置档案后，请完全退出并重新打开 Claude Desktop。
 
 Picker 模式属于第一方模式，因此[第一方账户风险](#第一方主动选择)同样适用。
 
@@ -184,7 +184,7 @@ ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 
-也可以在仪表板中通过 **Claude → Desktop → Code 标签页模型绑定** 完成同样操作。绑定之后，在
+也可以在仪表板中通过 **连接 → Claude Desktop → Code 标签页模型绑定** 完成同样操作。绑定之后，在
 Code 标签页选择 **Sonnet 4.6** 时会由 `xai/grok-4.7` 响应。选择器仍显示 Anthropic 名称，且
 Claude Code 的系统提示仍会把模型介绍为那个 Claude 模型，所以建议选择平时不用的条目
 （**More models** 中的条目是不错的候选）。绑定在下一个请求即生效，无需重启 Desktop。
@@ -516,8 +516,8 @@ HMAC 等值标签。**不会存储提示文本、原始对象或跨运行稳定�
 
 ## GUI（Claude 页面）
 
-仪表板侧边栏有一个专用的 **Claude** 页面（位于连接下方）和 **Claude ON** 开关
-（标签特意在所有语言中保持一致）。该页面显示：
+仪表板的 **连接** 下有两个标签页：用于 Claude Code 的 **Claude** 和 **Claude Desktop**。
+连接概览中的 Claude 卡片也提供同一个连接开关。该页面显示：
 
 - 入站总开关（启用开关）
 - 快速开始（`ocx claude`）和手动环境变量块
