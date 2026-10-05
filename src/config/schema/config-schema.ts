@@ -87,6 +87,7 @@ export const protocolConfigSchema = z.object({
 }).strict();
 
 export const configSchema = z.object({
+  // A malformed desktop leaf disables its optional integrations on read; writes validate strictly.
   chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   codexNativeSteering: z.boolean().optional().catch(false),
   codexNativeInjection: z.boolean().optional().catch(false),
