@@ -202,6 +202,36 @@ describe("reset replacement error confidentiality", () => {
       expect(message).toBe("invalid request: [REDACTED]; path C:\\safe\\u1234.txt");
     });
 
+    test.each([
+      ["named entity", "fixture+credential-v1", "invalid request: fixture&plus;credential-v1"],
+      ["percent-encoded named entity", "fixture+credential-v1", "invalid request: fixture%26plus%3Bcredential-v1"],
+      ["multi-code-point named entity", "fj-credential-v1", "bad key &fjlig;-credential-v1"],
+    ])(`${adapter} withholds unresolved named diagnostic references (%s)`, async (_name, apiKey, message) => {
+      const result = await probe({ provider: { adapter, apiKey }, answer: ordinal => ordinal === 1
+        ? reset() : Response.json({ error: { message } }, { status: 400 }) });
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(result.used).toBe(2);
+      expect(result.grantSpent).toBe(true);
+      expect(JSON.parse(result.text)).toEqual({ error: { message: "[REDACTED]" } });
+    });
+
+    test.each([
+      ["number", "867530912345", { message: "invalid request", code: 867530912345, count: 17, flag: false },
+        { message: "invalid request", code: "[REDACTED]", count: 17, flag: false }],
+      ["boolean", "true", { message: "x", code: true }, { message: "x", code: "[REDACTED]" }],
+      ["null", "null", { message: "x", code: null }, { message: "x", code: "[REDACTED]" }],
+    ] as const)(`${adapter} masks scalar diagnostic credentials (%s)`, async (_name, apiKey, error, expected) => {
+      const result = await probe({ provider: { adapter, apiKey }, answer: ordinal => ordinal === 1
+        ? reset() : Response.json({ error }, { status: 400 }) });
+      expect(result.authorizations).toEqual([`Bearer ${apiKey}`, `Bearer ${apiKey}`]);
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(result.used).toBe(2);
+      expect(result.grantSpent).toBe(true);
+      expect(JSON.parse(result.text)).toEqual({ error: expected });
+    });
+
     test(`${adapter} masks the actual wire credential after header OWS normalization`, async () => {
       const result = await probe({ provider: { adapter, apiKey: `${credential} ` }, answer: (ordinal, authorization) => ordinal === 1
         ? reset() : Response.json({ error: { message: `invalid request: ${authorization!.replace(/^Bearer /, "")}` } }, { status: 400 }) });

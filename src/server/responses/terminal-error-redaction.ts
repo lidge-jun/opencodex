@@ -1,5 +1,5 @@
 import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib/redact";
-import { foldForMatching } from "../../lib/redact-folding";
+import { foldForMatching, NAMED_ENTITY_PLACEHOLDER } from "../../lib/redact-folding";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 
 function maskEncodedCredentials(text: string, secrets: string[]): string {
@@ -7,6 +7,9 @@ function maskEncodedCredentials(text: string, secrets: string[]): string {
   let offsets = Array.from({ length: text.length + 1 }, (_, index) => index);
   for (let depth = 0; depth < 4; depth++) {
     const next = foldForMatching(view);
+    // An unresolved named reference has unknown decoded width, so an exact
+    // credential match cannot be proven; withhold the diagnostic.
+    if (next.folded.includes(NAMED_ENTITY_PLACEHOLDER)) return REDACTED_SECRET;
     if (next.folded === view) break;
     offsets = next.map.map(index => offsets[index]!);
     view = next.folded;

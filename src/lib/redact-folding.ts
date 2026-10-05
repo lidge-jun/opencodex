@@ -32,7 +32,7 @@ const INVISIBLE_FORMAT = /[\p{Default_Ignorable_Code_Point}\p{Cf}\p{Mn}\p{Me}]/u
  * letter may appear. Every named entity is covered, present and future,
  * without claiming to know what any of them mean.
  */
-const NAMED_ENTITY_PLACEHOLDER = "\u0001";
+export const NAMED_ENTITY_PLACEHOLDER = "\u0001";
 
 /**
  * The handful of named references that spell a SEPARATOR rather than a letter.

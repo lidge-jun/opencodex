@@ -1,4 +1,4 @@
-import { redactSecrets, redactSecretString } from "../../lib/redact";
+import { REDACTED_SECRET, redactSecrets, redactSecretString } from "../../lib/redact";
 import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
 import { createOutboundCredentialMask } from "./terminal-error-redaction";
@@ -6,6 +6,10 @@ import { createOutboundCredentialMask } from "./terminal-error-redaction";
 function maskJson(value: unknown, mask: (text: string) => string, depth = 0): unknown {
   if (depth > 64) throw new Error("Upstream diagnostic nesting exceeds the display limit");
   if (typeof value === "string") return mask(value);
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    const text = String(value);
+    return mask(text) === text ? value : REDACTED_SECRET;
+  }
   if (Array.isArray(value)) return value.map(item => maskJson(item, mask, depth + 1));
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [
