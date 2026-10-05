@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,9 @@ import {
 import type { PickerRuntime, PickerRuntimeStatus } from "../../src/claude/intercept/picker-runtime";
 import type { SecurityResult, SecurityRunner } from "../../src/claude/intercept/picker-trust";
 import { pickerCaCertPath, pickerCaFingerprints } from "../../src/claude/intercept/picker-ca";
+import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
+import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "../../src/claude/intercept/picker-ca";
+import { memoryPickerCaStore } from "../helpers/picker-ca-store";
 import type { OcxConfig } from "../../src/types";
 
 let root = "";
@@ -109,6 +112,7 @@ function controllerFor(options: {
   security?: SecurityRunner;
   profile?: ReturnType<typeof profileFake>;
   proxy?: number | null;
+  persistentAuthority?: { store: ReturnType<typeof memoryPickerCaStore>["store"] };
 } = {}) {
   const current = options.config ?? config();
   const runtime = options.runtime ?? fakeRuntime(options.events).runtime;
@@ -123,6 +127,7 @@ function controllerFor(options: {
     },
     proxyPort: () => options.proxy === undefined ? 10201 : options.proxy,
     configDir: root,
+    persistentAuthority: options.persistentAuthority,
     platform: "darwin",
     security: options.security,
     applyProfile: profile.apply as never,
@@ -260,6 +265,8 @@ test("one lock serializes a pending enable and a queued disable", async () => {
 });
 
 test("caller-added trust is compensated on an early refusal", async () => {
+  const legacy = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+  mkdirSync(join(root, "claude-picker")); writeFileSync(pickerCaCertPath(root), legacy.certPem);
   const trust = pickerSecurity({ trusted: true, removeTrust: true });
   const current = config({ clientIntegrations: { "claude-desktop": false } });
   const controller = controllerFor({ config: current, security: trust.run });
@@ -294,4 +301,66 @@ test("a restart is asked for only after this process changed the profile, never 
   expect((await changed.enable({ persist: false, context: "server" })).reason).toBe("restart_required");
   second.state.lastBootstrapAt = Date.now() + 1;
   expect((await changed.status()).reason).toBe("active");
+});
+
+test("startup enable never adds or removes trust when trust is lost", async () => {
+  const trust = pickerSecurity({ trusted: false, addTrust: true });
+  const events: string[] = [];
+  const controller = controllerFor({ security: trust.run, events });
+  const result = await controller.enable({ persist: false, context: "server", allowTrustPrompt: false });
+  expect(result).toMatchObject({ reason: "trust_pending", effective: false, hint: "ocx claude desktop picker trust" });
+  expect(trust.calls.some(call => ["add-trusted-cert", "remove-trusted-cert", "delete-certificate"].includes(call[0]!))).toBe(false);
+  expect(events).toEqual([]);
+});
+
+test("startup enable reuses actually listed trusted CA without trust mutations", async () => {
+  const trust = pickerSecurity({ trusted: true });
+  const controller = controllerFor({ security: trust.run });
+  expect((await controller.enable({ persist: false, context: "server", allowTrustPrompt: false })).effective).toBe(true);
+  expect(trust.calls.map(call => call[0])).toEqual(["find-certificate", "verify-cert", "trust-settings-export"]);
+});
+
+test("dormant persistent refusal compensates without credential access or authority creation", async () => {
+  const fake = memoryPickerCaStore();
+  let reads = 0;
+  const trust = pickerSecurity({ trusted: true });
+  const controller = controllerFor({ config: config({ claudeCode: { desktopMode: "gateway" } }), security: trust.run,
+    persistentAuthority: { store: (service, account) => { reads++; return fake.store(service, account); } } });
+  const result = await controller.enable({ persist: false, context: "cli-trusted", callerAddedTrust: true });
+  expect(result.reason).toBe("mode_not_committed");
+  expect(reads).toBe(0);
+  expect(fake.writes).toBe(0);
+  expect(existsSync(join(root, "claude-picker", "authority.json"))).toBe(false);
+  expect(existsSync(pickerCaCertPath(root))).toBe(false);
+  expect(trust.calls).toEqual([]);
+});
+
+test("persistent refusal removes the published legacy root without minting a replacement", async () => {
+  const legacy = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+  mkdirSync(join(root, "claude-picker")); writeFileSync(pickerCaCertPath(root), legacy.certPem);
+  const fake = memoryPickerCaStore();
+  const trust = pickerSecurity({ trusted: true });
+  const controller = controllerFor({ config: config({ claudeCode: { desktopMode: "gateway" } }), security: trust.run,
+    persistentAuthority: { store: fake.store } });
+  const result = await controller.enable({ persist: false, context: "cli-trusted", callerAddedTrust: true });
+  expect(result.reason).toBe("mode_not_committed");
+  expect(result.residual).toBeUndefined();
+  expect(trust.calls.map(call => call[0])).toEqual(["find-certificate", "remove-trusted-cert", "delete-certificate", "find-certificate"]);
+  expect(trust.calls.find(call => call[0] === "delete-certificate")?.[2]).toBe(pickerCaFingerprints(legacy.certPem).sha1);
+  expect(readFileSync(pickerCaCertPath(root), "utf8")).toBe(legacy.certPem);
+  expect(fake.writes).toBe(0);
+  expect(existsSync(join(root, "claude-picker", "authority.json"))).toBe(false);
+});
+
+test("persistent refusal preserves the published root trusted by an applied profile", async () => {
+  const legacy = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+  mkdirSync(join(root, "claude-picker")); writeFileSync(pickerCaCertPath(root), legacy.certPem);
+  const fake = memoryPickerCaStore(), trust = pickerSecurity({ trusted: true });
+  const profile = profileFake(); profile.apply({ proxyPort: 10201 });
+  const controller = controllerFor({ config: config({ claudeCode: { desktopMode: "gateway" } }), security: trust.run,
+    persistentAuthority: { store: fake.store }, profile });
+  expect((await controller.enable({ persist: false, context: "cli-trusted", callerAddedTrust: true })).reason).toBe("mode_not_committed");
+  expect(trust.calls).toEqual([]);
+  expect(fake.writes).toBe(0);
+  expect(readFileSync(pickerCaCertPath(root), "utf8")).toBe(legacy.certPem);
 });

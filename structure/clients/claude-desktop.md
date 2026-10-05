@@ -181,7 +181,7 @@ before tunnel selection or dialing. Authentication and loopback refusal remain i
 Existing Claude consumers omit this option and retain blind forwarding; it enables no new integration or certificate trust.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
 
-When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
+On macOS, when the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
 port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
 also hands that proxy to the Claude Code processes it spawns, and the two trust different CAs, so
@@ -214,16 +214,30 @@ a 64 KiB header allowance for browser session cookies; Bun enforces the HTTP/2 i
 natively, counting name + value + 32 bytes per field and rejecting an oversized stream with
 `RST_STREAM ENHANCE_YOUR_CALM` before the request handler runs.
 The picker CA (`picker-ca.ts`) carries critical
-name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its signing
-key exists only in the server process; only public certificates are written under
-`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). On restart the lifecycle keeps the applied
-profile row in place, and removes the prior public root only when the published certificate differs
-from this process's authority — a reused authority stays trusted, and a predecessor that cannot be
-untrusted leaves the picker disabled rather than trusted beside its replacement —
-then re-runs the controller's enable flow when that profile had been applied so the replacement
-authority is trusted (with the user's keychain consent) and the selection restored. Trust is added without a policy string: Chromium
+name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its exportable
+signing identity is protected by the OS credential store and scoped to the canonical config directory;
+normal restarts reuse the same validated certificate and key. No plaintext picker signing key is
+stored in that directory; public certificates and non-secret identity metadata remain under
+`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Windows and Linux skip picker CA, credential-store and proxy construction entirely; the main intercept pair remains available.
+On restart the lifecycle keeps the applied profile and restores through the controller with
+`allowTrustPrompt: false`. An unchanged approved identity with an available credential store needs
+no Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the
+picker pending; restore never installs trust. Explicit `on` or `trust` completes the trust step.
+Legacy predecessor cleanup may still require consent during migration. Native keychain unlock and
+application-access dialogs are controlled by macOS; restart or upgrade does not guarantee their absence.
+`picker-ca-store.ts` owns the versioned OS credential service, canonical-config identity namespace,
+bounded exact-shape payload, full constrained CA profile, validity and P-256 private-key match validation.
+`picker-ca-persistence.ts` validates public `authority.json` and `authority-init.json` records under
+the canonical CA lock. Initialization journals the config identity, new fingerprint and public
+predecessor before writing the credential, verifies readback, then commits metadata and publication;
+it removes the journal last. Recovery requires matching journal/store identity; missing initialized
+credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
+Gateway/off startup does not read or initialize an OS picker credential unless an applied picker
+profile needs recovery. Its dormant macOS runtime/controller remains available for later explicit
+activation, which uses the same persistent authority path.
+Trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
-trust settings carry `kSecTrustSettingsPolicyString` as untrusted and the trust step replaces it; an
+trust settings carry `kSecTrustSettingsPolicyString` as untrusted and an explicit trust step replaces it; an
 export it cannot read makes trust `unknown`, which never arms. A rotated-out picker certificate is
 removed from the login keychain as its replacement is published, and a failed removal stops the
 picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
@@ -233,11 +247,11 @@ certificate is rewritten under the lock so a second process cannot rotate out a 
 authority. The owner record carries the OS process start identity where the platform exposes one,
 so a reused PID does not count as the live owner; an older record without one still counts as live
 unless, on macOS, the PID's process started after the record was written.
-Before a startup rotation replaces `ca.pem`, the outgoing certificate's **public** PEM and its
+During legacy migration, before a replacement changes `ca.pem`, the outgoing certificate's **public** PEM and its
 SHA-1/SHA-256 go to `pending-untrust.json` (mode 0600, no key material); only one such record may
 exist, and a default `ensurePickerCa` call (the controller's enable/trust path) refuses while it
-does. Startup (`runtime.ts` via `picker-ca-cleanup.ts`) drains that record before and after
-rotation: it defers without calling `security` while the recorded certificate is still published by
+does. Activation (`runtime.ts` and the controller via `picker-ca-startup.ts` and `picker-ca-cleanup.ts`) drains that record before and after
+migration: it defers without calling `security` while the recorded certificate is still published by
 a live owner, untrusts a private temporary copy of the public PEM otherwise, and acknowledges the
 exact record only after a confirmed removal, so a failure survives process replacement and is
 retried by the next start. While the drain is incomplete and a Desktop picker profile is applied, the
