@@ -54,6 +54,7 @@ export default function ConsequenceDialog({
   const t = useT();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [staleOverride, setStaleOverride] = useState<{
@@ -80,6 +81,9 @@ export default function ConsequenceDialog({
     const active = document.activeElement;
     triggerRef.current = active?.tagName === "BUTTON" ? active as HTMLElement : null;
     if (dialog && !dialog.open) dialog.showModal();
+    // showModal() focuses the first focusable descendant, which is the invisible full-screen
+    // backdrop button; Space or Enter there would dismiss the dialog unseen. Start on Close.
+    closeRef.current?.focus();
     return () => {
       if (dialog?.open) dialog.close();
       if (triggerRef.current?.isConnected) triggerRef.current.focus?.();
@@ -138,7 +142,7 @@ export default function ConsequenceDialog({
       <div className="modal-card integration-consequence-dialog" role="document">
         <div className="modal-head">
           <h3 id={titleId}>{t(copy.titleKey, copy.vars)}</h3>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={dismiss} disabled={pending}>
+          <button ref={closeRef} type="button" className="btn btn-ghost btn-sm" onClick={dismiss} disabled={pending}>
             {t("common.close")}
           </button>
         </div>

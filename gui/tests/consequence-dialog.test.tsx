@@ -98,3 +98,13 @@ test("clicking the action invokes onConfirm", async () => {
   await act(async () => { container.querySelector<HTMLButtonElement>(".modal-actions .btn-primary")!.click(); });
   expect(confirms).toBe(1);
 });
+
+test("the dialog opens on the visible Close button, never on the invisible backdrop", async () => {
+  // showModal() focuses the first focusable descendant, the full-screen backdrop button;
+  // Space there dismissed the dialog with no visible focus anywhere.
+  await mount();
+  const close = container.querySelector<HTMLButtonElement>(".modal-head button")!;
+  expect(close.textContent?.trim()).toBe("닫기");
+  expect(testWindow.document.activeElement as unknown).toBe(close);
+  expect((testWindow.document.activeElement as unknown as HTMLElement).classList.contains("modal-backdrop-dismiss")).toBe(false);
+});
