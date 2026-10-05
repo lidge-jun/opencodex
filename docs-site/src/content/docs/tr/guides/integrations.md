@@ -31,7 +31,10 @@ Desteklenen akıl yürütme düzeylerine sahip GJC modelleri, GJC'nin düzey se�
 
 Yönetilen DSH desteğinin en düşük uyumlu sürümü **DSH 0.1.0-rc.6**'dır. DSH 0.1.7 ve üzeri, sağlayıcı rotalarını
 `$DSH_HOME/profiles/desktop/cordis.patch.yml` dosyasındaki `[id=llm-pi-ai].config.providers.opencodex` satırından okur.
-Desktop profili varsa OpenCodex yalnızca bu satırı yönetir; profil yoksa
+Desktop profili ve yaması varsa OpenCodex yalnızca bu satırı yazar.
+`$DSH_HOME/profiles/desktop/package.json` varsa ancak `cordis.patch.yml` yoksa Uygula işlemi reddedilir:
+`[]` içeren bir `cordis.patch.yml` oluşturun (DSH’nin yeni bir profil için yazdığı boş yama), ardından
+entegrasyonu yeniden etkinleştirin. Yalnızca Desktop profili yoksa
 `$DSH_HOME/settings.yaml` içindeki `llm-pi-ai.providers.opencodex` bölümünü kullanır. Uygula ve Yenile seçilen yönetilen bölümü değiştirir, Devre Dışı
 Bırak yalnızca bu bölümü kaldırır, Geri Yükle ise kaydedilmiş bir anlık görüntüyü geri koyar. DSH
 sağlayıcı değişikliklerini çalışırken yeniden yükler. Bu işlemler kullanıcının varsayılan modelini

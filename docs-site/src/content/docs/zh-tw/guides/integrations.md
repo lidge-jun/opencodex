@@ -29,7 +29,7 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 
 受管理 DSH 支援的相容性下限是 **DSH 0.1.0-rc.6**。DSH 0.1.7 及以上版本從
 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 列讀取 provider 路由。
-Desktop profile 存在時，OpenCodex 只管理該列；僅在沒有 Desktop profile 時，才使用
+Desktop profile 與補丁都存在時，OpenCodex 只寫入該列。若 `$DSH_HOME/profiles/desktop/package.json` 存在但缺少 `cordis.patch.yml`，Apply 會拒絕執行：請建立內容為 `[]` 的 `cordis.patch.yml`（DSH 為新 profile 寫入的空補丁），然後重新啟用整合；僅在沒有 Desktop profile 時，才使用
 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`：Apply 與 Refresh 會取代該片段，Disable 只移除該片段，
 Restore 則放回已記錄的快照。DSH 會熱重載 provider 變更。這些操作不會改動使用者的
 預設模型，也不會改動原生 `deepseek-official` provider。受管理 DSH 整合目前僅支援

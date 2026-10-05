@@ -88,7 +88,7 @@ authority; recovery probes both files before committing or restoring. Never dele
 recovery reports that both candidates were rejected.
 
 `ocx disconnect` is local and works while the hub is offline. It restores local client state and
-does not revoke the hub key. After disconnect, revoke that key from **Integrations → API Keys** on
+does not revoke the hub key. After disconnect, revoke that key from **Connect → API Keys** on
 the hub. `ocx connect revoke --admin-token-stdin` is available only while still connected and uses
 the persisted `apiKeyId`; it accepts no id override. Browser session logout/expiry is separate from
 data-key rotation, revocation, and disconnect.
@@ -784,7 +784,7 @@ For a service rollback, stop the branch service and repair the prior release aga
   bound to loopback behind a TLS frontend. See [Giving the data listener TLS](#giving-the-data-listener-tls).
 - **Remote session ended:** sign in or pair again. Logout and expiry invalidate only the browser
   session, not a client data key.
-- **Outstanding revocation after disconnect:** use the hub dashboard's **Integrations → API Keys**
+- **Outstanding revocation after disconnect:** use the hub dashboard's **Connect → API Keys**
   page. It is the sole post-disconnect revocation path.
 ### Usage from a connected client
 

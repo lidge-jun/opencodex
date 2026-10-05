@@ -84,8 +84,10 @@ leaves it.
 
 Managed DSH support has a compatibility floor of **DSH 0.1.0-rc.6**. DSH 0.1.7+ reads provider
 routes from `[id=llm-pi-ai].config.providers.opencodex` in the Desktop profile patch,
-`$DSH_HOME/profiles/desktop/cordis.patch.yml`, which DSH hot reloads. OpenCodex writes there when
-that profile exists; only when there is no Desktop profile does it use
+`$DSH_HOME/profiles/desktop/cordis.patch.yml`, which DSH hot reloads. OpenCodex writes that row when the Desktop profile and its patch exist. If
+`$DSH_HOME/profiles/desktop/package.json` exists but `cordis.patch.yml` is missing, Apply refuses:
+create `cordis.patch.yml` containing `[]` (the empty patch DSH writes for a new profile), then
+enable the integration again. Only when there is no Desktop profile does OpenCodex use
 `llm-pi-ai.providers.opencodex` in `$DSH_HOME/settings.yaml`. OpenCodex owns only that provider
 fragment: Apply and Refresh replace it, Disable removes it, and Restore puts back a recorded
 snapshot. These operations do not change the user's default model or the native
