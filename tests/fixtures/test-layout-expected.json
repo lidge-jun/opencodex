@@ -1,4 +1,5 @@
 {
+  "messages-native-scope.test.ts": "claude-integration",
   "cli-log-view-filter.test.ts": "cli",
   "cli-usage-model-search.test.ts": "cli",
   "cli-companion-usage.test.ts": "cli",
