@@ -954,6 +954,7 @@ export function createPassthroughWebSearchBridgeExecutor(
           settings,
           querySignal,
           sidecar.recordOutcome,
+          sidecar.beforeDispatch,
         );
       }
       case "anthropic": {

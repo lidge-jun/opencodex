@@ -298,6 +298,7 @@ export interface WebSearchLoopDeps {
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
   recordSidecarOutcome?: SidecarOutcomeRecorder;
+  beforeSidecarDispatch?: () => void;
   /** Cumulative per-iteration deadline for DNS/TCP/TLS and final response headers only. */
   connectTimeoutMs?: number;
   /** Continuous routed-model response-body raw-byte inactivity deadline. Default 200000ms. */
@@ -761,7 +762,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               ? await runExaWebSearch(query, deps.exaApiKey, settings, signal)
               : { text: "", sources: [], error: "exa backend selected without an exaApiKey" };
           } else {
-            outcome = await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome);
+            outcome = await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome, deps.beforeSidecarDispatch);
           }
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
         } catch (e) {

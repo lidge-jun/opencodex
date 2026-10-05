@@ -1,4 +1,5 @@
 import { resolveProviderApiKey } from "./key-store";
+import { createOpenAiSidecarCreditGuard } from "./openai-sidecar-credit";
 import {
   CodexPoolAuthenticationError,
   headersForCodexAuthContext,
@@ -31,6 +32,7 @@ export interface OpenAiForwardSidecarCandidate {
 export interface ResolvedOpenAiForwardSidecar extends OpenAiForwardSidecarCandidate {
   authContext: CodexAuthContext;
   headers: Headers;
+  beforeDispatch?: () => void;
   recordOutcome?: (outcome: CodexUpstreamOutcome) => void;
   /** Hand back an acquired recovery probe when no sidecar request reached upstream. */
   releaseProbeLease?: () => void;
@@ -176,6 +178,7 @@ export async function resolveFirstUsableOpenAiSidecar(
         ...candidate,
         authContext,
         headers: selectedHeaders,
+        beforeDispatch: createOpenAiSidecarCreditGuard(authContext, policy),
         recordOutcome: (outcome: CodexUpstreamOutcome) => recordCodexUpstreamOutcome(
           config,
           authContext.accountId,
@@ -226,6 +229,7 @@ export async function resolveFirstUsableOpenAiSidecar(
       ...candidate,
       authContext,
       headers: selectedHeaders,
+      beforeDispatch: createOpenAiSidecarCreditGuard(authContext, policy),
       ...(authContext.kind === "pool" || authContext.kind === "main-pool"
         ? {
           recordOutcome: (outcome: CodexUpstreamOutcome) => recordCodexUpstreamOutcome(

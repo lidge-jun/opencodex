@@ -510,6 +510,7 @@ export async function executeResponsesSidecars(
         transportState.bindKeyUsageFromBridge(usage);
       },
       recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
+      beforeSidecarDispatch: wsPlan.forwardSidecar?.beforeDispatch,
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec,
