@@ -18,7 +18,8 @@ import {
   relayWithAbort,
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { isReplayRefusalResponse } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, isReplayRefusalResponse } from "../../lib/upstream-retry";
+import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { teeWithBoundedInspection } from "../inspection-tee";
 import {
   codexForwardTerminalOutcomeRecorder,
@@ -543,6 +544,9 @@ export async function deliverPassthroughResponse(
     // through sanitizePassthroughHeaders) so a redirect to a dead host can never
     // masquerade as a pre-connection failure after the credential was seen.
     // The numeric outcome above already classified it neutral — no streak.
+    if (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse)) {
+      return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
+    }
     if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
       return new Response(upstreamResponse.body, {
         status: upstreamResponse.status,

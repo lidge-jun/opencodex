@@ -5290,8 +5290,8 @@ describe("GitHub Actions hardening", () => {
     expect(rootPkg).toContain('"doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts"');
     expect(rootPkg).toContain('"lint:gui": "cd gui && bun run lint"');
     expect(rootPkg).toContain('"lint:gui:if-changed": "bun scripts/lint-gui-if-changed.ts"');
-    // Gating steps include lint and React Doctor only on gui/ pushes.
-    expect(rootPkg).toContain("bun run typecheck && bun run lint:gui:if-changed && bun run test");
+    // Gating steps include the gui typecheck, lint, and React Doctor only on gui/ pushes.
+    expect(rootPkg).toContain("bun run typecheck && bun run typecheck:gui:if-changed && bun run lint:gui:if-changed && bun run test");
     expect(rootPkg).toContain("bun run privacy:scan && bun run doctor:gui:if-changed");
   });
 });
