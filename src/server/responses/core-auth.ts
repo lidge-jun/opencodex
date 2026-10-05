@@ -201,6 +201,7 @@ export async function resolveResponsesCodexAuth(
   credentialDomainWasRewritten = false,
   retainAccountForUploadedFiles = false,
 ): Promise<ResponsesAuthResolution> {
+  let authCtx: CodexAuthContext | undefined;
   try {
     let authInputHeaders = codexRouteCredentialDomainHeaders(
       req,
@@ -261,7 +262,6 @@ export async function resolveResponsesCodexAuth(
     if (route.codexAccountMode === "direct" && !substituteMainCredential) {
       validateForwardAdmissionCredential(authInputHeaders, config);
     }
-    let authCtx: CodexAuthContext;
     if (route.codexAccountMode) {
       authCtx = await resolveCodexAuthContext(authInputHeaders, config, route.codexAccountMode, {
         admission: options.admission,
@@ -343,6 +343,7 @@ export async function resolveResponsesCodexAuth(
       substituteMainCredential,
     };
   } catch (err) {
+    releaseCodexAuthContextProbeLease(authCtx);
     if (options.abortSignal?.aborted || req.signal.aborted) {
       return { ok: false, response: clientCancelledResponse() };
     }

@@ -1,17 +1,34 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { clearAccountNeedsReauth, clearAccountQuota, isAccountNeedsReauth, updateAccountQuota } from "../../src/codex/auth-api";
 import { codexPoolAffinityKey } from "../../src/codex/auth-context";
+import * as authContextModule from "../../src/codex/auth-context";
+import * as coreAuthModule from "../../src/server/responses/core-auth";
+import { prepareResponsesRequest } from "../../src/server/responses/request-prepare";
+import { handleComboResponses } from "../../src/server/responses/core";
+import type { ResponsesAdmissionState } from "../../src/server/responses/core-options";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import {
+  canAcquireTransientProbe,
+  clearPoolRecoveryState,
+  transientProbeDiagnostics,
+  TRANSIENT_PROBE_INTERVAL_MS,
+} from "../../src/routing/probe-lease";
 import { setAccountQuotaFromParsed } from "../../src/codex/quota";
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  CODEX_QUOTA_PROBE_INTERVAL_MS,
   peekConversationStateIssuer,
+  recordCodexUpstreamOutcome,
+  releaseCodexQuotaScopeProbeLease,
   resolveCodexAccountForThreadDetailed,
+  tryAcquireCodexQuotaScopeProbeLease,
 } from "../../src/codex/routing";
+import { scopedHealthFor } from "../../src/codex/routing/health-store";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import { clearCompactHandoffRoutesForTests } from "../../src/server/responses/compact";
 import {
@@ -343,6 +360,203 @@ afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   removeTreeWithRetry(home);
+});
+
+describe("stored-account credit refusal before Responses dispatch (#6606)", () => {
+  let now: number;
+  let clock: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    now = Date.now();
+    clock = spyOn(Date, "now").mockReturnValue(now);
+    clearPoolRecoveryState();
+  });
+  afterEach(() => {
+    clock.mockRestore();
+    clearPoolRecoveryState();
+  });
+
+  function probeFixture(kind: "quota" | "transient") {
+    const cfg = config();
+    cfg.creditCodexAccountIds = [];
+    cfg.upstreamHostCircuitThreshold = 0;
+    cfg.upstreamFailoverThreshold = 3;
+    updateAccountQuota(ACCOUNT_ID, 99, now + 3_600_000);
+    const req = request("/v1/responses", { affined: true });
+    if (kind === "quota") {
+      recordCodexUpstreamOutcome(cfg, ACCOUNT_ID, 429, {
+        now: now - CODEX_QUOTA_PROBE_INTERVAL_MS - 1_000,
+        resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+        modelId: "gpt-5.5",
+        fixedAccount: true,
+      });
+    } else {
+      const key = codexPoolAffinityKey(req.headers)!;
+      expect(resolveCodexAccountForThreadDetailed(key, cfg, now, "shared"))
+        .toMatchObject({ status: "selected", accountId: ACCOUNT_ID });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        recordCodexUpstreamOutcome(cfg, ACCOUNT_ID, 503, { now, modelId: "gpt-5.5" });
+      }
+    }
+    return { cfg, req };
+  }
+
+  function expectProbeHeld(ctx: authContextModule.CodexAuthContext, kind: "quota" | "transient") {
+    expect(ctx.kind).toBe("pool");
+    if (ctx.kind !== "pool") throw new Error("expected a stored pool probe");
+    if (kind === "quota") {
+      expect(ctx.probeLeaseId).toBeDefined();
+      expect(ctx.probeQuotaScope).toBe("shared");
+      expect(scopedHealthFor(ACCOUNT_ID, "shared")?.probeLeaseId).toBe(ctx.probeLeaseId);
+    } else {
+      expect(ctx.transientProbe).toBeDefined();
+      expect(transientProbeDiagnostics(ACCOUNT_ID, now)).toMatchObject({
+        held: true, leaseId: ctx.transientProbe!.lease.leaseId,
+      });
+      expect(canAcquireTransientProbe(ACCOUNT_ID, now + TRANSIENT_PROBE_INTERVAL_MS)).toBe(false);
+    }
+  }
+
+  function expectProbeReleased(kind: "quota" | "transient") {
+    if (kind === "quota") {
+      expect(scopedHealthFor(ACCOUNT_ID, "shared")?.probeLeaseId).toBeUndefined();
+      const lease = tryAcquireCodexQuotaScopeProbeLease(ACCOUNT_ID, "shared", now + CODEX_QUOTA_PROBE_INTERVAL_MS);
+      expect(lease).toBeTruthy();
+      if (lease) releaseCodexQuotaScopeProbeLease(ACCOUNT_ID, "shared", lease, now);
+    } else {
+      expect(transientProbeDiagnostics(ACCOUNT_ID, now).held).toBe(false);
+      expect(canAcquireTransientProbe(ACCOUNT_ID, now + TRANSIENT_PROBE_INTERVAL_MS)).toBe(true);
+    }
+  }
+
+  async function prepareProbe(req: Request, cfg: OcxConfig, state: ResponsesAdmissionState, abortSignal?: AbortSignal) {
+    const translatorBudget = createTranslatorBudget();
+    try {
+      return await prepareResponsesRequest({
+        req, config: cfg, logCtx: { model: "", provider: "" } as RequestLogContext,
+        options: { translatorBudget, abortSignal },
+      }, state, { handleResponses, handleComboResponses });
+    } finally {
+      translatorBudget.dispose();
+    }
+  }
+
+  // D1: change policy only after real materialization has acquired and used the quota probe.
+  for (const cancelled of [false, true]) {
+    test(`late materialization credit hold releases its quota probe (${cancelled ? "499" : "429"})`, async () => {
+      const { cfg, req } = probeFixture("quota");
+      const harness = installHarness();
+      const abort = new AbortController();
+      const materialize = authContextModule.materializeCodexUpstreamAuthAsync;
+      const materializeSpy = spyOn(authContextModule, "materializeCodexUpstreamAuthAsync")
+        .mockImplementation(async (...args) => {
+          const headers = await materialize(...args);
+          expectProbeHeld(args[1], "quota");
+          updateAccountQuota(ACCOUNT_ID, 100, now + 3_600_000);
+          if (cancelled) abort.abort();
+          return headers;
+        });
+      try {
+        const response = await handleResponses(req, cfg, { model: "", provider: "" } as RequestLogContext,
+          { abortSignal: abort.signal });
+        expect(materializeSpy).toHaveBeenCalledTimes(1);
+        expect(response.status).toBe(cancelled ? 499 : 429);
+        if (cancelled) expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
+        else {
+          expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(0);
+          expect(await response.text()).toContain("spending credits");
+        }
+        expect(harness.sends).toEqual([]);
+        expect(harness.refreshes).toEqual([]);
+        expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+        expect(readStoredGeneration()).toBe(3);
+        expectProbeReleased("quota");
+      } finally { materializeSpy.mockRestore(); }
+    });
+  }
+
+  // D2: auth resolution admits either kind of probe; a quota probe and transient trial never coexist.
+  for (const cancelled of [false, true]) {
+    test.each(["quota", "transient"] as const)(
+      `provider credit hold returns ${cancelled ? "499" : "429"} and releases the %s probe with host circuit disabled`,
+      async kind => {
+        const { cfg, req } = probeFixture(kind);
+        const harness = installHarness();
+        const abort = new AbortController();
+        const state: ResponsesAdmissionState = { pendingHostAdmissionLease: null, authCtx: { kind: "main", accountId: null } };
+        const resolveAuth = coreAuthModule.resolveResponsesCodexAuth;
+        const authSpy = spyOn(coreAuthModule, "resolveResponsesCodexAuth").mockImplementation(async (...args) => {
+          const result = await resolveAuth(...args);
+          expect(result.ok).toBe(true);
+          if (result.ok) {
+            expectProbeHeld(result.authCtx, kind);
+            updateAccountQuota(ACCOUNT_ID, 100, now + 3_600_000);
+            if (cancelled) abort.abort();
+          }
+          return result;
+        });
+        try {
+          const result = await prepareProbe(req, cfg, state, abort.signal);
+          expect(authSpy).toHaveBeenCalledTimes(1);
+          expect(result).toBeInstanceOf(Response);
+          if (!(result instanceof Response)) throw new Error("expected a pre-dispatch refusal");
+          expect(result.status).toBe(cancelled ? 499 : 429);
+          if (cancelled) expect(await result.json()).toMatchObject({ error: { code: "client_cancelled" } });
+          else {
+            expect(Number(result.headers.get("Retry-After"))).toBeGreaterThan(0);
+            expect(await result.text()).toContain("spending credits");
+          }
+          expect(state.pendingHostAdmissionLease).toBeNull();
+          expect(harness.sends).toEqual([]);
+          expect(harness.refreshes).toEqual([]);
+          expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+          expectProbeReleased(kind);
+        } finally {
+          authSpy.mockRestore();
+          authContextModule.releaseCodexAuthContextProbeLease(state.authCtx);
+        }
+      },
+    );
+  }
+
+  test.each(["quota", "transient"] as const)("unknown provider materialization error propagates after releasing the %s probe", async kind => {
+    const { cfg, req } = probeFixture(kind);
+    const harness = installHarness();
+    const state: ResponsesAdmissionState = { pendingHostAdmissionLease: null, authCtx: { kind: "main", accountId: null } };
+    const error = new Error("fixture provider materialization failure");
+    const applySpy = spyOn(authContextModule, "applyCodexAuthContextToProvider").mockImplementation((_provider, ctx) => {
+      expectProbeHeld(ctx, kind);
+      throw error;
+    });
+    try {
+      await expect(prepareProbe(req, cfg, state)).rejects.toBe(error);
+      expect(applySpy).toHaveBeenCalledTimes(1);
+      expect(state.pendingHostAdmissionLease).toBeNull();
+      expect(harness.sends).toEqual([]);
+      expect(harness.refreshes).toEqual([]);
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+      expectProbeReleased(kind);
+    } finally {
+      applySpy.mockRestore();
+      authContextModule.releaseCodexAuthContextProbeLease(state.authCtx);
+    }
+  });
+
+  test.each(["quota", "transient"] as const)("successful preparation retains the %s probe for downstream dispatch", async kind => {
+    const { cfg, req } = probeFixture(kind);
+    const harness = installHarness();
+    const state: ResponsesAdmissionState = { pendingHostAdmissionLease: null, authCtx: { kind: "main", accountId: null } };
+    try {
+      const result = await prepareProbe(req, cfg, state);
+      expect(result).not.toBeInstanceOf(Response);
+      if (result instanceof Response) throw new Error("expected successful preparation");
+      expect(result.selectedForwardHeaders.get("authorization")).toBe("Bearer rejected-access");
+      expectProbeHeld(state.authCtx, kind);
+      expect(state.pendingHostAdmissionLease).toBeNull();
+      expect(harness.sends).toEqual([]);
+      expect(harness.refreshes).toEqual([]);
+    } finally { authContextModule.releaseCodexAuthContextProbeLease(state.authCtx); }
+  });
 });
 
 describe("ordinary pool 401 refresh and replay (#2887)", () => {
