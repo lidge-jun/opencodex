@@ -8,13 +8,14 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 let home: string;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), "ocx-agy-restart-")); });
 afterEach(() => removeTreeWithRetry(home));
+const base = 'future-flash';
 const prefix = `
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels, resolveAntigravityEffortWireModel } from './src/providers/antigravity-models';
 import { captureModelCacheGeneration, clearModelCache, getStaleCached } from './src/codex/model-cache';
 import { gatherRoutedModels } from './src/codex/catalog';
 const provider = 'google-antigravity';
 const baseUrl = 'https://snapshot.example.test/TenantA';
-const base = 'claude-opus-5-5';
+const base = '${base}';
 const ids = ['low','medium','high'].map(tier => base+'-'+tier);
 const payload = {models: Object.fromEntries(ids.map(id => [id, {maxTokens:350000}])), agentModelSorts:[{groups:[{modelIds:ids}]}]};
 const config = {port:0, defaultProvider:provider, providers:{[provider]:{adapter:'google',authMode:'key',apiKey:'fixture-token',baseUrl,googleMode:'cloud-code-assist',project:'fixture-project',liveModels:true,models:['safe-previous'],fetch:(...args)=>globalThis.fetch(...args)}}};
@@ -28,7 +29,7 @@ function run(code: string) {
 }
 function discover() {
   expect(run(`globalThis.fetch=async()=>Response.json(payload); console.log(JSON.stringify((await gatherRoutedModels(config)).map(m=>m.id)));`))
-    .toEqual(["claude-opus-5-5"]);
+    .toEqual([base]);
 }
 function snapshotFile() { return join(home, readdirSync(home).find(file => file.startsWith("antigravity-wire-"))!); }
 
@@ -57,8 +58,8 @@ test("discovery survives restart and failed discovery with actual adapter wire e
     console.log(JSON.stringify(wires));
   `);
   expect(result).toEqual([
-    {model:"claude-opus-5-5-low"},{model:"claude-opus-5-5-medium"},{model:"claude-opus-5-5-high"},{model:"claude-opus-5-5-medium"},
-    {wireModelId:"claude-opus-5-5"},{wireModelId:"claude-opus-5-5"},
+    {model:`${base}-low`},{model:`${base}-medium`},{model:`${base}-high`},{model:`${base}-medium`},
+    {wireModelId:base},{wireModelId:base},
   ]);
 });
 
@@ -67,26 +68,26 @@ test("accepted partial and empty discoveries replace old durable families", () =
     discover();
     run(`registerAntigravityDiscoveredWireModels(baseUrl,${models},{provider,cacheGeneration:captureModelCacheGeneration(provider)});console.log('true');`);
     expect(run(`console.log(JSON.stringify(resolveAntigravityEffortWireModel(base,'high',baseUrl)));`))
-      .toEqual({wireModelId:"claude-opus-5-5"});
+      .toEqual({wireModelId:base});
   }
 });
 
 test("stale discovery never overwrites durable evidence and path case remains isolated", () => {
   discover();
   expect(run(`const generation=captureModelCacheGeneration(provider);clearModelCache(provider);registerAntigravityDiscoveredWireModels(baseUrl,[],{provider,cacheGeneration:generation});console.log(JSON.stringify(resolveAntigravityEffortWireModel(base,'high',baseUrl)));`))
-    .toEqual({wireModelId:"claude-opus-5-5-high"});
+    .toEqual({wireModelId:`${base}-high`});
   expect(run(`console.log(JSON.stringify(resolveAntigravityEffortWireModel(base,'high',baseUrl.toLowerCase())));`))
-    .toEqual({wireModelId:"claude-opus-5-5"});
+    .toEqual({wireModelId:base});
 });
 
 test("malformed and oversized snapshots fail closed", () => {
   discover();
   const path = snapshotFile();
   for (const content of ["{", JSON.stringify({version:2,provider:"google-antigravity",families:{}}),
-    JSON.stringify({version:1,provider:"google-antigravity",families:{"claude-opus-5-5":{low:"different",medium:"claude-opus-5-5-medium",high:"claude-opus-5-5-high"}}}), " ".repeat(4*1024*1024+1)]) {
+    JSON.stringify({version:1,provider:"google-antigravity",families:{[base]:{low:"different",medium:`${base}-medium`,high:`${base}-high`}}}), " ".repeat(4*1024*1024+1)]) {
     writeFileSync(path,content);
     expect(run(`console.log(JSON.stringify(resolveAntigravityEffortWireModel(base,'high',baseUrl)));`))
-      .toEqual({wireModelId:"claude-opus-5-5"});
+      .toEqual({wireModelId:base});
   }
 });
 
@@ -107,6 +108,6 @@ test("generationless registrations stay memory-only and homes do not share mappi
     const other=resolveAntigravityEffortWireModel(base,'high',baseUrl);
     process.env.OPENCODEX_HOME=originalHome;
     console.log(JSON.stringify([original,other,resolveAntigravityEffortWireModel(base,'low',baseUrl)]));
-  `)).toEqual([{wireModelId:"claude-opus-5-5-high"},{wireModelId:"claude-opus-5-5"},{wireModelId:"claude-opus-5-5-low"}]);
+  `)).toEqual([{wireModelId:`${base}-high`},{wireModelId:base},{wireModelId:`${base}-low`}]);
   expect(readdirSync(home).filter(file=>file.startsWith("antigravity-wire-"))).toEqual([]);
 });

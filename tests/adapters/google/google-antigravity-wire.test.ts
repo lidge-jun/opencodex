@@ -84,11 +84,21 @@ describe("antigravity CCA envelope", () => {
       "gemini-3.7-flash",
       "gemini-3.1-pro",
       "gemini-3.1-flash-image",
-      "claude-sonnet-4-6",
-      "claude-opus-4-6-thinking",
+      "claude-sonnet-5-5",
+      "claude-opus-5-5",
       "gpt-oss-120b-medium",
     ]);
     for (const hidden of [
+      "claude-sonnet-4-6",
+      "claude-sonnet-4-6-thinking",
+      "claude-opus-4-6",
+      "claude-opus-4-6-thinking",
+      "claude-sonnet-5-5-low",
+      "claude-sonnet-5-5-medium",
+      "claude-sonnet-5-5-high",
+      "claude-opus-5-5-low",
+      "claude-opus-5-5-medium",
+      "claude-opus-5-5-high",
       "gemini-3.6-flash",
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-medium",
@@ -254,7 +264,9 @@ describe("antigravity CCA envelope", () => {
         "gemini-3.7-flash-high": { displayName: "Gemini 3.7 Flash (High)", maxTokens: 1_048_576 },
         "gemini-pro-agent": { displayName: "Gemini 3.1 Pro (High)", maxTokens: 1_048_576 },
         "gemini-3.1-pro-low": { displayName: "Gemini 3.1 Pro (Low)", maxTokens: 1_048_576 },
-        "claude-sonnet-4-6": { displayName: "Claude Sonnet 4.6 (Thinking)", maxTokens: 250_000 },
+        "claude-sonnet-5-5-low": { displayName: "Claude Sonnet 5.5 (Low)", maxTokens: 1_000_000 },
+        "claude-sonnet-5-5-medium": { displayName: "Claude Sonnet 5.5 (Medium)", maxTokens: 1_000_000 },
+        "claude-sonnet-5-5-high": { displayName: "Claude Sonnet 5.5 (High)", maxTokens: 1_000_000 },
         // Renamed on the wire, stable in public. Only THIS case may use the label.
         "internal-codename-x7": { displayName: "Gemini Nebula", maxTokens: 1_048_576 },
       },
@@ -264,7 +276,9 @@ describe("antigravity CCA envelope", () => {
         "gemini-3.7-flash-high",
         "gemini-pro-agent",
         "gemini-3.1-pro-low",
-        "claude-sonnet-4-6",
+        "claude-sonnet-5-5-low",
+        "claude-sonnet-5-5-medium",
+        "claude-sonnet-5-5-high",
         "internal-codename-x7",
       ] }] }],
     };
@@ -274,7 +288,7 @@ describe("antigravity CCA envelope", () => {
     expect(rows.map(model => model.id)).toEqual([
       "gemini-3.7-flash",
       "gemini-3.1-pro",
-      "claude-sonnet-4-6",
+      "claude-sonnet-5-5",
       "gemini-nebula",
     ]);
     // The display label still resolves an id Google renamed on the wire.
@@ -299,8 +313,12 @@ describe("antigravity CCA envelope", () => {
       .toEqual({ wireModelId: "gemini-3.7-flash-high" });
     expect(resolveAntigravityEffortWireModel("gemini-nebula", undefined, baseUrl))
       .toEqual({ wireModelId: "internal-codename-x7" });
+    expect(resolveAntigravityEffortWireModel("claude-sonnet-5-5", "high", baseUrl))
+      .toEqual({ wireModelId: "claude-sonnet-5-5-high" });
     expect(resolveAntigravityEffortWireModel("claude-sonnet-4-6", "high", baseUrl))
-      .toEqual({ wireModelId: "claude-sonnet-4-6", thinkingLevel: "high" });
+      .toEqual({ wireModelId: "claude-sonnet-5-5-high" });
+    expect(resolveAntigravityEffortWireModel("claude-sonnet-4-6", undefined, baseUrl))
+      .toEqual({ wireModelId: "claude-sonnet-5-5-medium" });
 
     const req = await createGoogleAdapter({ ...effortProvider, baseUrl }).buildRequest(
       parsedWithEffort("gemini-nebula"),
@@ -698,55 +716,58 @@ describe("antigravity CCA envelope", () => {
 
   // ── Claude Opus effort via thinkingConfig (no suffix variants) ──
 
-  test("claude-opus-4-6-thinking with effort=high sends thinkingConfig", async () => {
-    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking", "high"));
-    const env = JSON.parse(req.body);
-    expect(env.model).toBe("claude-opus-4-6-thinking");
-    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  test("claude-opus-5-5 routes to suffixed wire IDs and sends no thinkingConfig", async () => {
+    const highReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-5-5", "high"));
+    expect(JSON.parse(highReq.body).model).toBe("claude-opus-5-5-high");
+    expect(JSON.parse(highReq.body).request.generationConfig?.thinkingConfig).toBeUndefined();
+
+    const maxReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-5-5", "max"));
+    expect(JSON.parse(maxReq.body).model).toBe("claude-opus-5-5-high");
+
+    const lowReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-5-5", "low"));
+    expect(JSON.parse(lowReq.body).model).toBe("claude-opus-5-5-low");
+
+    const defaultReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-5-5"));
+    expect(JSON.parse(defaultReq.body).model).toBe("claude-opus-5-5-medium");
   });
 
-  test("claude-opus-4-6-thinking with effort=max clamps CCA thinkingLevel to high", async () => {
-    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking", "max"));
-    const env = JSON.parse(req.body);
-    expect(env.model).toBe("claude-opus-4-6-thinking");
-    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  test("claude-sonnet-5-5 routes to suffixed wire IDs and sends no thinkingConfig", async () => {
+    const highReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-5-5", "high"));
+    expect(JSON.parse(highReq.body).model).toBe("claude-sonnet-5-5-high");
+    expect(JSON.parse(highReq.body).request.generationConfig?.thinkingConfig).toBeUndefined();
+
+    const maxReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-5-5", "max"));
+    expect(JSON.parse(maxReq.body).model).toBe("claude-sonnet-5-5-high");
+
+    const lowReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-5-5", "low"));
+    expect(JSON.parse(lowReq.body).model).toBe("claude-sonnet-5-5-low");
+
+    const defaultReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-5-5"));
+    expect(JSON.parse(defaultReq.body).model).toBe("claude-sonnet-5-5-medium");
   });
 
-  test("claude-opus-4-6-thinking with effort=ultra clamps CCA thinkingLevel to high", async () => {
-    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking", "ultra"));
-    const env = JSON.parse(req.body);
-    expect(env.model).toBe("claude-opus-4-6-thinking");
-    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  test("retired claude-opus-4-6-thinking redirects to 5.5 wire IDs preserving effort", async () => {
+    const highReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking", "high"));
+    expect(JSON.parse(highReq.body).model).toBe("claude-opus-5-5-high");
+    expect(JSON.parse(highReq.body).request.generationConfig?.thinkingConfig).toBeUndefined();
+
+    const lowReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking", "low"));
+    expect(JSON.parse(lowReq.body).model).toBe("claude-opus-5-5-low");
+
+    const defaultReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking"));
+    expect(JSON.parse(defaultReq.body).model).toBe("claude-opus-5-5-medium");
   });
 
-  test("claude-opus-4-6-thinking with no effort sends no thinkingConfig", async () => {
-    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-opus-4-6-thinking"));
-    const env = JSON.parse(req.body);
-    expect(env.model).toBe("claude-opus-4-6-thinking");
-    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
-  });
+  test("retired claude-sonnet-4-6 redirects to 5.5 wire IDs preserving effort", async () => {
+    const highReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-4-6", "high"));
+    expect(JSON.parse(highReq.body).model).toBe("claude-sonnet-5-5-high");
+    expect(JSON.parse(highReq.body).request.generationConfig?.thinkingConfig).toBeUndefined();
 
-  // ── Non-effort models: no thinkingConfig regardless of effort ──
+    const lowReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-4-6", "low"));
+    expect(JSON.parse(lowReq.body).model).toBe("claude-sonnet-5-5-low");
 
-  test("claude-sonnet-4-6 with effort=high sends thinkingConfig", async () => {
-    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-4-6", "high"));
-    const env = JSON.parse(req.body);
-    expect(env.model).toBe("claude-sonnet-4-6");
-    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
-  });
-
-  test("claude-sonnet-4-6 with effort=max clamps CCA thinkingLevel to high", async () => {
-    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-4-6", "max"));
-    const env = JSON.parse(req.body);
-    expect(env.model).toBe("claude-sonnet-4-6");
-    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
-  });
-
-  test("claude-sonnet-4-6 with no effort sends no thinkingConfig", async () => {
-    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-4-6"));
-    const env = JSON.parse(req.body);
-    expect(env.model).toBe("claude-sonnet-4-6");
-    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
+    const defaultReq = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("claude-sonnet-4-6"));
+    expect(JSON.parse(defaultReq.body).model).toBe("claude-sonnet-5-5-medium");
   });
 
   test("gpt-oss-120b-medium with any effort sends no thinkingConfig", async () => {

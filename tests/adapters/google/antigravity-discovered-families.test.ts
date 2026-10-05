@@ -62,7 +62,7 @@ test("family metadata uses the lower common capability instead of first-tier met
 });
 
 test("discovery mapping remains URL scoped and retires with cache generation", () => {
-  const base = "claude-opus-5-5";
+  const base = "future-flash";
   registerAntigravityDiscoveredWireModels(baseUrl, parseAntigravityAvailableModels(payload(base))!, {
     provider: "family-test", cacheGeneration: captureModelCacheGeneration("family-test"),
   });

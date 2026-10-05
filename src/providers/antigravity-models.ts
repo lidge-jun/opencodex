@@ -66,20 +66,30 @@ const RETIRED_FLASH_TIERS: Record<string, string> = {
 
 const ANTIGRAVITY_WIRE_MODELS = [
   "gemini-3.7-flash-tiered",
-  "gemini-3.1-pro-low",
-  "gemini-pro-agent",
-  "gemini-3.1-flash-image",
-  "claude-sonnet-4-6",
-  "claude-opus-4-6-thinking",
-  "gpt-oss-120b-medium",
+ "gemini-3.1-pro-low",
+ "gemini-pro-agent",
+ "gemini-3.1-flash-image",
+  "claude-sonnet-5-5-low",
+  "claude-sonnet-5-5-medium",
+  "claude-sonnet-5-5-high",
+  "claude-opus-5-5-low",
+  "claude-opus-5-5-medium",
+  "claude-opus-5-5-high",
+ "gpt-oss-120b-medium",
 ];
 
 const ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID: Record<string, string> = {
   "gemini-3.8-flash-low": "gemini-3.8-flash",
   "gemini-3.8-flash-medium": "gemini-3.8-flash",
-  "gemini-3.8-flash-high": "gemini-3.8-flash",
-  "gemini-3.1-pro-low": "gemini-3.1-pro",
-  "gemini-pro-agent": "gemini-3.1-pro",
+ "gemini-3.8-flash-high": "gemini-3.8-flash",
+ "gemini-3.1-pro-low": "gemini-3.1-pro",
+ "gemini-pro-agent": "gemini-3.1-pro",
+  "claude-sonnet-5-5-low": "claude-sonnet-5-5",
+  "claude-sonnet-5-5-medium": "claude-sonnet-5-5",
+  "claude-sonnet-5-5-high": "claude-sonnet-5-5",
+  "claude-opus-5-5-low": "claude-opus-5-5",
+  "claude-opus-5-5-medium": "claude-opus-5-5",
+  "claude-opus-5-5-high": "claude-opus-5-5",
 };
 
 const ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL: Record<string, string[]> = Object.entries(
@@ -165,11 +175,11 @@ function collapsesIntoKnownPickerModel(candidateId: string): boolean {
 export const ANTIGRAVITY_MODEL_EFFORTS: Record<string, string[]> = {
   // No `minimal`: Google documents it as an error for this generation, and CCA exposes only
   // the three tiers.
-  "gemini-3.8-flash": ["low", "medium", "high"],
-  "gemini-3.7-flash": ["low", "medium", "high"],
-  "gemini-3.1-pro": ["low", "high"],
-  "claude-sonnet-4-6": ["low", "medium", "high", "max"],
-  "claude-opus-4-6-thinking": ["low", "medium", "high", "max"],
+ "gemini-3.8-flash": ["low", "medium", "high"],
+ "gemini-3.7-flash": ["low", "medium", "high"],
+ "gemini-3.1-pro": ["low", "high"],
+  "claude-sonnet-5-5": ["low", "medium", "high"],
+  "claude-opus-5-5": ["low", "medium", "high"],
 };
 
 // ── Effort → wire model map for Gemini base models ──
@@ -181,9 +191,19 @@ const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
     medium: "gemini-3.8-flash-medium",
     high: "gemini-3.8-flash-high",
   },
-  "gemini-3.1-pro": {
-    low: "gemini-3.1-pro-low",
-    high: "gemini-pro-agent",
+ "gemini-3.1-pro": {
+   low: "gemini-3.1-pro-low",
+   high: "gemini-pro-agent",
+ },
+  "claude-sonnet-5-5": {
+    low: "claude-sonnet-5-5-low",
+    medium: "claude-sonnet-5-5-medium",
+    high: "claude-sonnet-5-5-high",
+  },
+  "claude-opus-5-5": {
+    low: "claude-opus-5-5-low",
+    medium: "claude-opus-5-5-medium",
+    high: "claude-opus-5-5-high",
   },
 };
 
@@ -198,7 +218,7 @@ const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
  * `gemini-3.1-pro` is deliberately absent: its `high` rung is `gemini-pro-agent`, which carries
  * no tier suffix, so there the level is the only thing naming the effort.
  */
-const ANTIGRAVITY_SUFFIX_TIER_MODELS = new Set(["gemini-3.8-flash"]);
+const ANTIGRAVITY_SUFFIX_TIER_MODELS = new Set(["gemini-3.8-flash", "claude-sonnet-5-5", "claude-opus-5-5"]);
 
 function completeDiscoveredEffortWireModelIds(
   pickerId: string,
@@ -223,8 +243,10 @@ function completeDiscoveredEffortWireModelIds(
 // ── Default effort per Gemini base model ──
 const ANTIGRAVITY_DEFAULT_EFFORT: Record<string, string> = {
   // Google's documented thinking_level default, and the tier CCA marks `recommended`.
-  "gemini-3.8-flash": "medium",
-  "gemini-3.1-pro": "high",
+ "gemini-3.8-flash": "medium",
+ "gemini-3.1-pro": "high",
+  "claude-sonnet-5-5": "medium",
+  "claude-opus-5-5": "medium",
 };
 
 /**
@@ -266,6 +288,22 @@ const ANTIGRAVITY_VISIBLE_MODEL_ALIASES: Record<string, string> = {
 // ── Hidden compatibility aliases for saved selections ──
 // Wire suffix IDs are identity aliases — they resolve to themselves so saved configs
 // with explicit suffixes (e.g. gemini-3.6-flash-low) continue to work.
+/**
+ * Retired Claude 4.6 generation → base model for fallback routing.
+ *
+ * Google took the 4.6 Claude models offline when 5.5 shipped. Unlike retired Flash
+ * (where the suffix named a tier on a single -tiered wire id), Claude 5.5 wire ids
+ * encode the tier directly (claude-sonnet-5-5-low/medium/high).
+ * Carrying the base model and consulting the caller's requested effort preserves
+ * the user's saved or specified reasoning level.
+ */
+const RETIRED_CLAUDE_BASE: Record<string, "claude-sonnet-5-5" | "claude-opus-5-5"> = {
+  "claude-sonnet-4-6": "claude-sonnet-5-5",
+  "claude-sonnet-4-6-thinking": "claude-sonnet-5-5",
+  "claude-opus-4-6": "claude-opus-5-5",
+  "claude-opus-4-6-thinking": "claude-opus-5-5",
+};
+
 const ANTIGRAVITY_COMPATIBILITY_MODEL_ALIASES: Record<string, string> = {
   "gemini-3.1-pro-low": "gemini-3.1-pro-low",
   "gemini-pro-agent": "gemini-pro-agent",
@@ -277,6 +315,10 @@ const ANTIGRAVITY_COMPATIBILITY_MODEL_ALIASES: Record<string, string> = {
   // payload from republishing a dead wire id as a picker row.
   ...Object.fromEntries(
     Object.keys(RETIRED_FLASH_TIERS).map(retired => [retired, GEMINI_RETIRED_FLASH_TARGET_WIRE_ID]),
+  ),
+  // ── Retired Claude generations ──
+  ...Object.fromEntries(
+    Object.keys(RETIRED_CLAUDE_BASE).map(retired => [retired, "claude-sonnet-5-5-medium"]),
   ),
 };
 
@@ -291,8 +333,8 @@ export const ANTIGRAVITY_MODELS = [
   GEMINI_FLASH_PREVIOUS,
   "gemini-3.1-pro",
   "gemini-3.1-flash-image",
-  "claude-sonnet-4-6",
-  "claude-opus-4-6-thinking",
+  "claude-sonnet-5-5",
+  "claude-opus-5-5",
   "gpt-oss-120b-medium",
 ];
 
@@ -309,6 +351,12 @@ const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-3.1-pro-low": 1_048_576,
   "gemini-pro-agent": 1_048_576,
   "gemini-3.1-flash-image": 1_048_576,
+  "claude-sonnet-5-5-low": 1_000_000,
+  "claude-sonnet-5-5-medium": 1_000_000,
+  "claude-sonnet-5-5-high": 1_000_000,
+  "claude-opus-5-5-low": 1_000_000,
+  "claude-opus-5-5-medium": 1_000_000,
+  "claude-opus-5-5-high": 1_000_000,
   "claude-sonnet-4-6": 250_000,
   "claude-opus-4-6-thinking": 250_000,
   "gpt-oss-120b-medium": 131_072,
@@ -319,6 +367,8 @@ export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-3.8-flash": 1_048_576,
   "gemini-3.7-flash": 1_048_576,
   "gemini-3.1-pro": 1_048_576,
+  "claude-sonnet-5-5": 1_000_000,
+  "claude-opus-5-5": 1_000_000,
   // Wire IDs and aliases via derivation.
   ...ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS,
   ...Object.fromEntries(
@@ -338,8 +388,8 @@ export const ANTIGRAVITY_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
   "gemini-3.7-flash": ["text", "image"],
   "gemini-3.1-pro": ["text", "image"],
   "gemini-3.1-flash-image": ["text", "image"],
-  "claude-sonnet-4-6": ["text", "image"],
-  "claude-opus-4-6-thinking": ["text", "image"],
+  "claude-sonnet-5-5": ["text", "image"],
+  "claude-opus-5-5": ["text", "image"],
   "gpt-oss-120b-medium": ["text"],
 };
 
@@ -702,6 +752,21 @@ export function resolveAntigravityEffortWireModel(
     };
   }
 
+ // Rule 0b: retired Claude generation — Google took the 4.6 models offline when 5.5 shipped.
+ // Route to the corresponding 5.5 wire id while preserving the caller's requested effort
+ // (low/medium/high, with max/xhigh/ultra clamped to high). If no effort is specified,
+ // default to medium.
+  const retiredClaudeBase = Object.hasOwn(RETIRED_CLAUDE_BASE, modelId)
+    ? RETIRED_CLAUDE_BASE[modelId] : undefined;
+  if (retiredClaudeBase) {
+    const targetEffort = effort
+      ? resolveAntigravityThinkingLevel(effort) ?? "medium"
+      : "medium";
+    const wireModelId = ANTIGRAVITY_EFFORT_WIRE_MAP[retiredClaudeBase]?.[targetEffort]
+      ?? `${retiredClaudeBase}-${targetEffort}`;
+    return { wireModelId };
+  }
+
   // Rule 1: suffix/compat alias — suffix IS the effort.
   if (isAntigravitySuffixModelId(modelId)) {
     return { wireModelId: resolveAntigravityWireModelId(modelId, baseUrl) };
@@ -770,6 +835,7 @@ const ANTIGRAVITY_USAGE_BASE_BY_ID: Record<string, string> = (() => {
   // onto a model that did not exist then, and away from the 3.6 price row that still
   // prices it correctly. Retirement changes what we CALL, not what we RECORD.
   for (const retired of Object.keys(RETIRED_FLASH_TIERS)) rev[retired] = retired;
+  for (const retired of Object.keys(RETIRED_CLAUDE_BASE)) rev[retired] = retired;
   // Usage identity is stable even before discovery; routing keeps its own live evidence.
   for (const base of ["claude-sonnet-5-5", "claude-opus-5-5"]) {
     rev[base] = base;
