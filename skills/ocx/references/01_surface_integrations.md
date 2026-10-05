@@ -855,7 +855,9 @@ Drives no management route.
 JSON mode: `none`.
 
 - Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.
-- Installation diagnoses wrapper health and reports readiness warnings.
+- On macOS/Linux, installs the private PATH overlay and explicitly migrates legacy in-place shims; automatic repair does not migrate them.
+- On macOS/Linux with sh/bash/zsh, source the printed codex-shell-env.sh path, then add that line after PATH setup in your shell startup file.
+- Installation diagnoses wrapper health and reports readiness warnings; Windows keeps in-place wrappers.
 
 ### `ocx codex-shim status`
 
@@ -870,7 +872,8 @@ Drives no management route.
 JSON mode: `none`.
 
 - Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.
-- Inspects local launcher wrapper state.
+- Reports wrapper health, Unix overlay PATH activation, and explicit legacy migration guidance.
+- For JSON, run ocx status --json and inspect codexShim; this command rejects --json and unexpected arguments.
 
 ### `ocx codex-shim uninstall`
 

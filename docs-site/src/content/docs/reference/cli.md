@@ -107,6 +107,17 @@ explicitly reviewed build and pins its digest in local Executor state.
 `ocx remote-workspace status [--json]` reports the Hub, device, roots, and advertised capabilities
 without printing its bearer or private key. See [Remote Workspace](/guides/remote-workspace/).
 
+Additional command families:
+
+| Family | Syntax and reference |
+| --- | --- |
+| `ocx chatgpt` | `ocx chatgpt <launch\|restore\|status>` — experimental macOS app-server shim, default off. See [ChatGPT Desktop](/guides/chatgpt-desktop/). |
+| `ocx hub` | `ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]` — mint a secret single-use pairing code on a running hub. See [Remote Hub](/guides/remote-hub/); invite requires explicit authorization and its code must not enter an agent transcript. |
+| `ocx inspect` | `ocx inspect <subcommand>` — read effective config, catalog, routing analytics, pacing, key-provider inventory, Codex prompt, client config, star status or Windows tray state. Run `ocx help inspect` for topic links. |
+| `ocx mcode` | `ocx mcode [mcode args...]` — launch MiniMax Code after its managed file integration is enabled. See [MiniMax clients](/guides/minimax/). |
+| `ocx mmx` | `ocx mmx text <chat\|repl> [mmx args...]` — launch MiniMax CLI text through the proxy; use plain `mmx` for other surfaces. See [MiniMax clients](/guides/minimax/). |
+| `ocx zcode` | `ocx zcode [status\|enable\|disable\|history\|restore] [--json]` — managed ZCode integration commands. See [ZCode stores](/guides/integrations/#zcode-314-and-later). |
+
 - [Lifecycle](/reference/cli/lifecycle/) — setup, proxy and service lifecycle, health, diagnostics,
   catalog sync, the dashboard, and updates.
 - [Providers, accounts, and models](/reference/cli/providers-accounts/) — provider configuration,
@@ -235,8 +246,9 @@ latter need a live target. Before live operations, run `ocx ready --json` and
 version mismatch. `unknown` does not confirm matching builds. Offline help,
 local configuration and local Lab inspection do not require startup.
 
-Output flags are per command. `doctor` rejects `--json` with exit 2; `v2` has no
-JSON output contract. Even for JSON-capable management commands, API failures
+Output flags are per command. `doctor` rejects `--json` with exit 2;
+[`v2` (family reference)](/reference/cli/agents/)
+supports `--json` for local and `--live` targets. Even for JSON-capable management commands, API failures
 normally use stderr prose with optional `reason:` and `hint:` lines, not a JSON
 error envelope. Keep stdout, stderr and exit status separate.
 

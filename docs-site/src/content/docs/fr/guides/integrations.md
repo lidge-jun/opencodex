@@ -18,7 +18,7 @@ puis peut le retirer. Dix-sept clients fonctionnent ainsi, chacun avec son propr
 | DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml` (`~/.dsh/profiles/desktop/cordis.patch.yml` par défaut) ; `$DSH_HOME/settings.yaml` tant que DSH Desktop n’a pas créé ce profil | YAML | rechargement à chaud | jeton porteur fictif et non secret pour le bouclage |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | dans les nouvelles sessions ou après l’ouverture du sélecteur de modèles | valeur fictive de bouclage |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | dans les nouvelles sessions | valeur fictive de bouclage |
-| ZCode | `~/.zcode/v2/config.json` | JSON | au redémarrage | valeur fictive de bouclage |
+| ZCode | `~/.zcode/v2/provider_config.json` (schemaVersion 1) ; repli historique : `~/.zcode/v2/config.json` | JSON | au redémarrage | valeur fictive de bouclage |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | après avoir quitté complètement puis rouvert Aside | valeur fictive de bouclage |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immédiatement à l'enregistrement — Raycast surveille le fichier | aucun — bouclage uniquement |
 | omo | `~/.omo/agent/models.json` | JSON | nouvelles sessions | espace réservé de bouclage |

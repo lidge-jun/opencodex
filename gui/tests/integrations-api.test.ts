@@ -144,6 +144,44 @@ test("preview and mutation adapters send exact bound methods and bodies", async 
   });
 });
 
+const missingStorePlan = {
+  ...plan,
+  clientId: "dsh" as const,
+  changes: [],
+  canApply: false,
+  willChange: false,
+  refusalReason: "superseded_store" as const,
+  supersededReason: "missing-store" as const,
+  missingStoreDocument: "[]",
+};
+
+test("a superseded-store refusal keeps its structured reason and the document to create", () => {
+  expect(parseIntegrationMutationPlan(missingStorePlan)).toMatchObject({
+    refusalReason: "superseded_store",
+    supersededReason: "missing-store",
+    missingStoreDocument: "[]",
+  });
+  const { missingStoreDocument: _document, ...schemaOnly } = missingStorePlan;
+  expect(parseIntegrationMutationPlan({ ...schemaOnly, supersededReason: "unestablished-schema" }))
+    .toMatchObject({ supersededReason: "unestablished-schema" });
+});
+
+test.each([
+  // A superseded reason belongs to a superseded-store refusal only.
+  { ...missingStorePlan, refusalReason: "conflict" },
+  { ...missingStorePlan, supersededReason: "moved" },
+  // The document belongs to a missing store only, and is one short line.
+  { ...missingStorePlan, supersededReason: "owned-config-file" },
+  { ...missingStorePlan, missingStoreDocument: "" },
+  { ...missingStorePlan, missingStoreDocument: "[]\n- id: injected" },
+  { ...missingStorePlan, missingStoreDocument: "x".repeat(65) },
+  { ...missingStorePlan, missingStoreDocument: 0 },
+  { ...missingStorePlan, missingStoreDocument: "\u001b[31m[]" },
+  { ...missingStorePlan, supersededReason: ["missing-store"] },
+])("superseded-store details are rejected outside their refusal", body => {
+  expect(() => parseIntegrationMutationPlan(body)).toThrow(IntegrationApiError);
+});
+
 test.each([
   { ...plan, extra: "raw-value" },
   { ...plan, operation: "refresh" },

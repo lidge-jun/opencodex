@@ -19,7 +19,7 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. On yedi istemci bu şekild
 | DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml` (varsayılan `~/.dsh/profiles/desktop/cordis.patch.yml`); DSH Desktop bu profili oluşturana kadar `$DSH_HOME/settings.yaml` | YAML | çalışırken yeniden yükleme | gizli olmayan geri döngü bearer yer tutucusu |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | yeni oturumlarda veya model seçici açıldıktan sonra | geri döngü (loopback) yer tutucusu |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
-| ZCode | `~/.zcode/v2/config.json` | JSON | yeniden başlatmada | geri döngü yer tutucusu |
+| ZCode | `~/.zcode/v2/provider_config.json` (schemaVersion 1); eski biçim için yedek yol: `~/.zcode/v2/config.json` | JSON | yeniden başlatmada | geri döngü yer tutucusu |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | Aside tamamen kapatılıp yeniden açıldıktan sonra | geri döngü yer tutucusu |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | kaydedildiği anda — Raycast dosyayı izler | yok — yalnızca geri döngü |
 | omo | `~/.omo/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |

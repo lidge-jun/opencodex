@@ -243,7 +243,18 @@ describe("DSH Desktop profile patch", () => {
     mkdirSync(dirname(storePath()), { recursive: true });
     writeFileSync(join(dirname(storePath()), "package.json"), "{}\n");
 
-    expect(readIntegrationState(input()).supersededBy).toBe(storePath());
+    const status = readIntegrationState(input());
+    expect(status.supersededBy).toBe(storePath());
+    expect(status.supersededReason).toBe("missing-store");
+    expect(status.missingStoreDocument).toBe("[]");
+    // The preview carries the same structured remedy, so the dashboard can name what to create
+    // in its own language instead of only the generic superseded-store refusal.
+    expect(previewIntegration(input(), { operation: "apply" })).toMatchObject({
+      canApply: false,
+      refusalReason: "superseded_store",
+      supersededReason: "missing-store",
+      missingStoreDocument: "[]",
+    });
     const applied = applyIntegration(input());
     expect(applied.ok).toBe(false);
     if (!applied.ok) {
@@ -259,6 +270,12 @@ describe("DSH Desktop profile patch", () => {
     installDesktop("[]\n");
     expect(applyIntegration(input()).ok).toBe(true);
     expect(readPath(parsedStore(), [...DSH_PROFILE_PROVIDER_PATH, "api"])).toBe("openai-responses");
+  });
+
+  test("the declared empty patch is the document the remedy text names", () => {
+    const missing = spec().currentStore?.missingStore;
+    expect(missing?.emptyDocument).toBe("[]");
+    expect(missing?.remedy).toContain(`\`${missing?.emptyDocument}\``);
   });
 
   test("without a Desktop profile the legacy settings file is still the target", () => {

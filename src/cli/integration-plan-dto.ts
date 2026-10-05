@@ -5,6 +5,7 @@ import type {
 } from "../integrations/mutation-plan";
 import type { IntegrationClientId as FileIntegrationClientId } from "../integrations/registry";
 import type { IntegrationState } from "../integrations/state";
+import type { IneffectiveWriteReason } from "../integrations/target";
 
 export const FILE_INTEGRATION_CLIENTS = [
   "opencode",
@@ -46,7 +47,10 @@ export const INTEGRATION_STATES: ReadonlySet<string> = new Set<IntegrationState>
 const PLAN_OPERATIONS: readonly IntegrationPlanOperation[] = ["apply", "overwrite", "disable", "restore"];
 const PLAN_CHANGE_KINDS: readonly IntegrationPlanChangeKind[] = ["add", "replace", "remove", "snapshot", "ownership", "journal"];
 const PLAN_FOREIGN_EDITS: readonly IntegrationPlanForeignEdit[] = ["none", "unowned", "foreign-edit", "drift"];
-const PLAN_KEYS = new Set(["version", "clientId", "operation", "state", "foreignEdit", "changes", "fingerprint", "canApply", "willChange", "refusalReason", "profileId"]);
+const PLAN_KEYS = new Set(["version", "clientId", "operation", "state", "foreignEdit", "changes", "fingerprint", "canApply", "willChange", "refusalReason", "supersededReason", "missingStoreDocument", "profileId"]);
+const SUPERSEDED_REASONS: ReadonlySet<string> = new Set<IneffectiveWriteReason>(["owned-config-file", "unestablished-schema", "missing-store"]);
+/** What to create a missing store with: echoed to a terminal, so one short printable-ASCII line. */
+const MISSING_STORE_DOCUMENT = /^[\x20-\x7e]{1,64}$/;
 const PLAN_CHANGE_KEYS = new Set(["kind", "path"]);
 const PLAN_PSEUDO_PATHS = new Set(["$snapshot", "$ownership", "$journal"]);
 const PLAN_SCHEMA_PATHS = new Set([
@@ -103,7 +107,12 @@ export function decodeIntegrationPlan(value: unknown): IntegrationMutationPlan {
     || !Array.isArray(value.changes) || value.changes.length > PLAN_CHANGE_LIMIT
     || (value.profileId !== undefined && (typeof value.profileId !== "number" || !Number.isSafeInteger(value.profileId) || value.profileId < 0))
     || (value.profileId !== undefined && value.clientId !== "aside")
-    || (value.refusalReason !== undefined && (typeof value.refusalReason !== "string" || !INTEGRATION_REFUSAL_REASONS.has(value.refusalReason)))) {
+    || (value.refusalReason !== undefined && (typeof value.refusalReason !== "string" || !INTEGRATION_REFUSAL_REASONS.has(value.refusalReason)))
+    // Descriptive fields of a superseded-store refusal; anywhere else they are a malformed plan.
+    || (value.supersededReason !== undefined && (value.refusalReason !== "superseded_store"
+      || typeof value.supersededReason !== "string" || !SUPERSEDED_REASONS.has(value.supersededReason)))
+    || (value.missingStoreDocument !== undefined && (value.supersededReason !== "missing-store"
+      || typeof value.missingStoreDocument !== "string" || !MISSING_STORE_DOCUMENT.test(value.missingStoreDocument)))) {
     throw invalidPreviewResponse();
   }
   const changes: IntegrationPlanChange[] = [];
@@ -140,6 +149,8 @@ export function decodeIntegrationPlan(value: unknown): IntegrationMutationPlan {
     canApply: value.canApply,
     willChange: value.willChange,
     ...(value.refusalReason === undefined ? {} : { refusalReason: value.refusalReason as IntegrationRefusalReason }),
+    ...(value.supersededReason === undefined ? {} : { supersededReason: value.supersededReason as IneffectiveWriteReason }),
+    ...(value.missingStoreDocument === undefined ? {} : { missingStoreDocument: value.missingStoreDocument as string }),
     ...(value.profileId === undefined ? {} : { profileId: Number(value.profileId) }),
   };
 }
