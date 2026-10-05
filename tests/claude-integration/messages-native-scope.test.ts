@@ -112,6 +112,11 @@ describe("managed native Messages billed tool scope", () => {
       expect(response.status, text).toBe(403);
       expect(sent).toHaveLength(0);
     });
+    test(`a temporary inline advisor declaration is still scoped (OAuth=${oauth})`, async () => {
+      const { response, text } = await send({ tools: [custom], messages: [user, { ...addition(advisor()), clear_at: "after_turn" }] }, { oauth });
+      expect(response.status, text).toBe(403);
+      expect(sent).toHaveLength(0);
+    });
   }
 
   test("clear_at never retains a legitimate removal", async () => {
@@ -151,6 +156,9 @@ describe("managed native Messages billed tool scope", () => {
     ["deferred declaration", { tools: [{ ...advisor(), defer_loading: true }] }],
     ["missing model", { tools: [{ type: "advisor_20260301", name: "advisor" }] }],
     ["nonstring model", { tools: [advisor(7)] }],
+    ["temporary removal", { tools: [advisor()], messages: [user, { ...reference("tool_removal"), clear_at: "after_turn" }] }],
+    ["temporary re-offer", { tools: [advisor()], messages: [user, reference("tool_removal"), { ...reference("tool_addition"), clear_at: "after_turn" }] }],
+    ["temporary allowed replacement", { tools: [advisor()], messages: [user, { ...addition(advisor(EXECUTOR)), clear_at: "after_turn" }] }],
     ["paused advisor resume", { tools: [advisor()], messages: [user, { role: "assistant", content: [
       { type: "server_tool_use", id: "srvtoolu_fixture", name: "advisor", input: {} },
     ] }] }],

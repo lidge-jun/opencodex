@@ -26,17 +26,20 @@ export function nativeMessagesToolScopeDenial(
   }
   if (Array.isArray(body.messages)) for (const message of body.messages) {
     if (!isRec(message) || message.role !== "system" || !Array.isArray(message.content)) continue;
-    if (message.clear_at !== undefined && message.clear_at !== "never") continue;
+    // A temporary lifetime still covers the current turn, so an addition always counts. Only a
+    // permanent removal withdraws a declaration; a temporary one keeps it scoped (fail closed).
+    const permanent = message.clear_at === undefined || message.clear_at === "never";
     for (const block of message.content) {
       if (!isRec(block) || !isRec(block.tool)) continue;
       const tool = block.tool;
       if (block.type === "tool_addition" && tool.type === "tool_definition" && isRec(tool.definition)) {
         const definition = tool.definition;
         if (typeof definition.name !== "string") { anonymous.push(definition); continue; }
-        definitions.set(definition.name, [definition]);
+        // A temporary replacement keeps the declaration it shadows in scope as well.
+        definitions.set(definition.name, permanent ? [definition] : [...definitions.get(definition.name) ?? [], definition]);
         withdrawn.delete(definition.name);
       } else if (tool.type === "tool_reference" && typeof tool.name === "string") {
-        if (block.type === "tool_removal") withdrawn.add(tool.name);
+        if (block.type === "tool_removal" && permanent) withdrawn.add(tool.name);
         if (block.type === "tool_addition") withdrawn.delete(tool.name);
       }
     }

@@ -291,7 +291,9 @@ Configured admission-key model scope also applies to separately billed Advisor m
 managed native key or OAuth dispatch. `src/server/messages-native-scope.ts` resolves active
 top-level and system-message tool declarations, including replacement, removal and re-offer;
 deferred definitions remain scoped because tool search can load them. Missing Advisor model
-identity cannot satisfy a model list. Ordinary custom schemas, arguments and historical tool
+identity cannot satisfy a model list. A system message with a temporary `clear_at` still covers
+the current turn: its additions are always checked, and only a permanent removal withdraws a
+declaration. Ordinary custom schemas, arguments and historical tool
 results remain opaque. Provider-only and unrestricted admissions retain their existing scope.
 `tests/claude-integration/messages-native-scope.test.ts` covers refusal with zero upstream sends
 and byte-preserving allowed tool definitions through both credential lanes.
