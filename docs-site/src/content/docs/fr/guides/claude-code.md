@@ -689,16 +689,17 @@ du débogage Claude efface immédiatement l'anneau.
 
 ## Interface graphique (page Claude)
 
-Le tableau de bord propose deux onglets sous **Connexion** : **Claude** pour Claude Code et **Claude Desktop**.
-La carte Claude de la vue d’ensemble de Connexion comporte le même interrupteur de connexion. La page affiche :
+Le tableau de bord propose **Connexion → Claude** pour Claude Code. Tous les réglages sont réunis sur une seule page ; **Claude Desktop** est un onglet distinct de **Connexion**. La page présente les éléments dans cet ordre :
 
-- Interrupteur général des requêtes entrantes
-- Démarrage rapide (`ocx claude`) et bloc d'environnement manuel
-- Sélecteur de mode rapide (Auto / ON / OFF)
-- Basculement automatique du contexte et liste déroulante du seuil de compactage
-- Bascule d'enregistrement automatique des sous-agents
-- Éditeur d'interception des modèles (modelMap)
-- Aperçu en direct des alias du sélecteur
+1. **First-party de la CLI Claude Code**, l’interrupteur du mode first-party de la CLI.
+2. **Commencer**, avec `ocx claude` et le bloc d’environnement manuel.
+3. **Général**, avec le mode rapide, le contexte automatique, le seuil de compactage et l’enregistrement automatique des sous-agents.
+4. **Modèle auxiliaire en arrière-plan**, pour choisir le modèle des tâches en arrière-plan.
+5. **Interception de modèles**, l’éditeur des règles `modelMap`.
+6. **Modèles disponibles**, l’aperçu des alias du sélecteur `/model`.
+7. **Connexion Claude**, l’interrupteur général du routage, également présent sur la carte Claude de la vue d’ensemble de **Connexion**.
+
+La barre d’enregistrement reste visible en bas pendant le défilement. Elle indique **Aucune modification** ou **Modifications non enregistrées**. **Annuler les modifications** abandonne les réglages non enregistrés ; **Enregistrer** les applique. Les interrupteurs **Connexion Claude** et **First-party de la CLI Claude Code** s’appliquent immédiatement : **Enregistrer** ne les modifie jamais.
 
 `GET /api/claude-code` renvoie les valeurs par défaut effectives, la configuration, le registre des fenêtres de contexte, l'environnement effectif,
 les identifiants de route, les alias et le port disponibles. `PUT /api/claude-code` applique une mise à jour partielle et conserve les

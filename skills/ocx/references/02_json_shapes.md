@@ -93,6 +93,16 @@ appears only under `--quota`.
 
 `paused` and `selected` are independent — a paused-but-selected account still receives requests.
 
+List/current account rows add a validated `health` label and optional `healthAction`
+with locally generated recovery guidance. Raw server summaries/actions are not echoed.
+Codex rows also preserve boolean `creditsAfterLimit` when supplied; absence means
+the server did not report this permission. Human rows show `paid-credits: on` only
+for `true`. Reading these fields does not grant paid-credit consent.
+
+Empty list results include onboarding commands in `notes`: OAuth/Codex login,
+API-key `account add-key` with human-controlled piped stdin, or global login help.
+Empty `account main list --json` adds `notes` pointing to `account main add <label>`.
+
 ## Pool settings
 
 `ocx account strategy|sticky <provider> --json` returns pool-neutral keys:

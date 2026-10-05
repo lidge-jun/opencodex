@@ -1,4 +1,5 @@
 import { resolveHelpPath } from "./help-catalog";
+import type { Capability } from "./capabilities";
 import { MODELS_CONTEXT_DETAILS, MODELS_CONTEXT_USAGE } from "./help-models-context";
 import { renderRootHelp } from "./help-navigation";
 import { formatHelpRecovery } from "./help-recovery";
@@ -40,7 +41,7 @@ Usage:
   ocx recover-history --ocx-compaction <thread-id> --yes
                                Back up and make one ocx1-compacted thread replayable by native Codex
   ocx uninstall               Remove service/shim/config and restore native Codex (alias: remove)
-  ocx service [sub]           Run as a background service (default: install/update/start)
+  ocx service [sub]           Run as a background service (default: install if absent, otherwise repair)
   ocx codex-shim <sub>        Auto-start proxy when \`codex\` launches (install|status|uninstall|remove)
   ocx tray <sub>              Windows status tray (install|start|stop|status|uninstall)
   ocx ensure                  Ensure the proxy is running and Codex config/cache are current
@@ -122,6 +123,17 @@ export function hasHelpFlag(values: string[]): boolean {
   return values.some(value => value === "--help" || value === "-h" || value === "help");
 }
 
+function printCapabilityDetails(capability: Capability, write: (text: string) => void, shown: readonly string[] = []): void {
+  if (capability.flags.length) {
+    write("\nDeclared flags:");
+    for (const flag of capability.flags) {
+      write(`  ${flag.name}${flag.value && flag.value !== "boolean" ? ` <${flag.value}>` : ""}${flag.required ? " (required)" : ""}  ${flag.summary}`);
+    }
+  }
+  const details = capability.details?.filter(detail => !shown.includes(detail));
+  if (details?.length) write(`\n${details.join("\n")}`);
+}
+
 export function printSubcommandUsage(
   name: string | undefined,
   path?: readonly string[],
@@ -142,6 +154,7 @@ export function printSubcommandUsage(
   if (result.kind === "entry") {
     write(`Usage: ${result.entry.usage}\n\n${result.entry.summary}`);
     if (result.entry.details?.length) write(`\n${result.entry.details.join("\n")}`);
+    if (result.capability) printCapabilityDetails(result.capability, write, result.entry.details);
     if (result.children.length) {
       write("\nDeclared commands (incomplete):");
       for (const child of result.children) write(`  ocx help ${child.command.join(" ")}  ${child.summary}`);
@@ -156,13 +169,7 @@ export function printSubcommandUsage(
     const { capability } = result;
     const heading = capability.usage !== undefined ? `Usage: ${capability.usage}` : `Command: ocx ${result.path.join(" ")}`;
     write(`${heading}\n\n${capability.summary}`);
-    if (capability.flags.length) {
-      write("\nDeclared flags:");
-      for (const flag of capability.flags) {
-        write(`  ${flag.name}${flag.value && flag.value !== "boolean" ? ` <${flag.value}>` : ""}${flag.required ? " (required)" : ""}  ${flag.summary}`);
-      }
-    }
-    if (capability.details?.length) write(`\n${capability.details.join("\n")}`);
+    printCapabilityDetails(capability, write);
     if (result.children.length) {
       write("\nDeclared commands (incomplete):");
       for (const child of result.children) write(`  ocx help ${child.command.join(" ")}  ${child.summary}`);

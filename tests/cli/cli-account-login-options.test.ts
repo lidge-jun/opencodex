@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Readable } from "node:stream";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { handleAccountAuthCommand } from "../../src/cli/account-auth";
+import { cmdAccount } from "../../src/cli/account";
+import { noteCredentialArgv, scrubCredentialOperands } from "../../src/cli/secret-args";
 import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
@@ -48,6 +50,52 @@ function fixture(replies: unknown[] = [{ url: "https://example.test/auth", flowI
   return { deps, calls, probes: () => probes, reads: () => reads };
 }
 const output = () => JSON.parse(log.mock.calls[0]![0] as string);
+
+describe("account argument redaction", () => {
+  for (const target of [["list", "openai"], ["current", "openai"], ["main", "list"]]) {
+    for (const option of ["--code", "--token", "--api-key", "--key", "--secret", "--password", "--admin-token"]) {
+      test(`${target.join(" ")} redacts leftover ${option} values`, async () => {
+        const f = fixture();
+        for (const args of [[`${option}=${SECRET}`], [option, SECRET], [option, `--${SECRET}`], [option, "--", SECRET]]) {
+          error.mockClear();
+          expect(await cmdAccount([...target, ...args, "--json"], { ...f.deps, baseUrl: "http://127.0.0.1:32100" })).toBe(1);
+          const printed = JSON.stringify(error.mock.calls);
+          expect(printed).toContain(option);
+          expect(printed).toContain("<redacted>");
+          expect(printed).not.toContain(SECRET);
+        }
+        expect(f.calls).toEqual([]);
+        expect(f.probes()).toBe(0);
+        expect(f.reads()).toBe(0);
+      });
+    }
+  }
+  for (const args of [
+    ["list", "openai", "--code", "--token", SECRET],
+    ["list", "--token", SECRET, "--bogus"],
+    ["current", "--token", SECRET],
+    ["list", "openai", "--code", "--api-key=" + SECRET],
+  ]) {
+    test(`${args.join(" ")} never prints a credential operand`, async () => {
+      const f = fixture();
+      error.mockClear();
+      expect(await cmdAccount([...args, "--json"], { ...f.deps, baseUrl: "http://127.0.0.1:32100" })).toBe(1);
+      expect(JSON.stringify(error.mock.calls)).not.toContain(SECRET);
+      expect(f.calls).toEqual([]);
+    });
+  }
+  for (const args of [["use", "openai", "--token", SECRET], ["main", "register", "--token", SECRET], ["main", "switch", "--code", SECRET]]) {
+    test(`${args.join(" ")} redacts an operand whose option a positional consumed`, async () => {
+      const f = fixture();
+      error.mockClear();
+      noteCredentialArgv(["account", ...args]);
+      try {
+        await cmdAccount([...args, "--json"], { ...f.deps, baseUrl: "http://127.0.0.1:32100" });
+      } finally { noteCredentialArgv([]); }
+      expect(JSON.stringify(error.mock.calls)).not.toContain(SECRET);
+    });
+  }
+});
 
 describe("login flow-specific options", () => {
   for (const provider of ["anthropic", "kiro", "kimi", "nous", "github-copilot"]) {
@@ -202,4 +250,15 @@ describe("typed public login completion", () => {
     expect(await handleAccountAuthCommand("login", ["openai", "--no-wait", "--json"], f.deps)).toBe(1);
     expect(log).not.toHaveBeenCalled();
   });
+});
+
+test("console diagnostics scrub argv credential operands case-insensitively", () => {
+  noteCredentialArgv(["models", "preset", "--token=Synthetic-Value-1", "--code", "--api-key", "Synthetic-Value-2", "--secret", "abc", "--key=--api-key=Synthetic-Value-3"]);
+  try {
+    expect(scrubCredentialOperands("x '--token=synthetic-value-1' y Synthetic-Value-2")).toBe("x '--token=<redacted>' y <redacted>");
+    // An option name that followed another credential option is not an operand.
+    expect(scrubCredentialOperands("[--api-key <key>] abc")).toBe("[--api-key <key>] abc");
+    expect(scrubCredentialOperands("Unknown provider subcommand: --key=--api-key=synthetic-value-3")).toBe("Unknown provider subcommand: --key=<redacted>");
+  } finally { noteCredentialArgv([]); }
+  expect(scrubCredentialOperands("Synthetic-Value-2")).toBe("Synthetic-Value-2");
 });

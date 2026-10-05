@@ -3,7 +3,7 @@ title: 整合
 description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo 與 Factory Droid——每個客戶端一個開關，每次寫入前都會先備份。
 ---
 
-**整合（Integrations）** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十七個客戶端以這種方式運作，每個都有一個開關：
+**連線** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十七個客戶端以這種方式運作，每個都有一個開關：
 
 | 客戶端 | 設定檔 | 格式 | 變更生效時機 | 憑證 |
 |---|---|---|---|---|
@@ -17,7 +17,7 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 | DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml`（預設 `~/.dsh/profiles/desktop/cordis.patch.yml`）；DSH Desktop 建立該 profile 之前為 `$DSH_HOME/settings.yaml` | YAML | 熱重載 | 非秘密的 loopback bearer 佔位符 |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | 新 sessions，或開啟模型選擇器後 | loopback 佔位符 |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | 新 sessions | loopback 佔位符 |
-| ZCode | `~/.zcode/v2/config.json` | JSON | 重新啟動時 | loopback 佔位符 |
+| ZCode | `~/.zcode/v2/provider_config.json` (schemaVersion 1)；舊版備援路徑：`~/.zcode/v2/config.json` | JSON | 重新啟動時 | loopback 佔位符 |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | 完全結束並重新開啟 Aside 後 | loopback 佔位符 |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | 儲存後立即生效——Raycast 會監看該檔案 | 無——僅限 loopback |
 | omo | `~/.omo/agent/models.json` | JSON | 新工作階段 | loopback 佔位符 |
@@ -27,8 +27,10 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 
 具有受支援推理強度階梯的 GJC 模型會匯出 `reasoning: true`、`thinking.levels` 與 `compat.supportsReasoningEffort`，讓 GJC 提供強度選擇。原生 Codex 模型即使未在目錄中列出階梯，也會取得標準階梯。沒有已知階梯的模型會省略這些欄位；`none` 不傳送強度，`ultra` 在傳輸時會折疊成 `max`，因此不會列為選項。重新整理整合即可更新模型選項。
 
-受管理 DSH 支援的相容性下限是 **DSH 0.1.0-rc.6**。OpenCodex 只擁有
-`llm-pi-ai.providers.opencodex`：Apply 與 Refresh 會取代該片段，Disable 只移除該片段，
+受管理 DSH 支援的相容性下限是 **DSH 0.1.0-rc.6**。DSH 0.1.7 及以上版本從
+`$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 列讀取 provider 路由。
+Desktop profile 與補丁都存在時，OpenCodex 只寫入該列。若 `$DSH_HOME/profiles/desktop/package.json` 存在但缺少 `cordis.patch.yml`，Apply 會拒絕執行：請建立內容為 `[]` 的 `cordis.patch.yml`（DSH 為新 profile 寫入的空補丁），然後重新啟用整合；僅在沒有 Desktop profile 時，才使用
+`$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`：Apply 與 Refresh 會取代該片段，Disable 只移除該片段，
 Restore 則放回已記錄的快照。DSH 會熱重載 provider 變更。這些操作不會改動使用者的
 預設模型，也不會改動原生 `deepseek-official` provider。受管理 DSH 整合目前僅支援
 loopback，而且絕不會寫入真實憑證。
@@ -41,7 +43,7 @@ MiniMax Code 依序遵循 `MINIMAX_DATA_DIR`、`MAVIS_DATA_DIR`，最後才回�
 目前選取的 effort 不會被覆寫。
 
 Raycast 有兩個前提。Custom Providers 是 **Raycast Pro** 功能：免費方案下檔案仍會被寫入，但
-`ocx integration client status --client raycast` 與整合頁面會回報警告，因為 Raycast 不會讀取它。
+`ocx integration client status --client raycast` 與 **連線** 頁面會回報警告，因為 Raycast 不會讀取它。
 另外，Raycast 只有在你開啟一次 Raycast → Settings → AI → **Reveal Providers Config** 後才會建立
 `ai` 資料夾；opencodex 以該資料夾作為安裝訊號，在它存在之前都會回報客戶端尚未安裝。Raycast 在
 macOS 與 Windows 上同樣讀取 `~/.config/raycast/ai/providers.yaml`，且不遵循 `XDG_CONFIG_HOME`，
@@ -86,7 +88,7 @@ opencodex 從自己的環境讀取這些變數。如果你的 gateway 以 profil
 - **Restore this point…** 會出現在較舊的操作上，或當檔案在那次操作之後有變更時。跨過這樣的變更做回復會再詢問一次，才覆蓋你的較新編輯——並且也會備份它們，所以那次的回復本身也可以復原。
 - 每個客戶端保留十份備份。超過之後，最舊的快照檔案會被移除，其歷史列顯示為 **Backup expired**。
 
-停用只移除 opencodex 記錄為自己寫入的條目。如果你的檔案在我們寫入之後有變更，後續行為取決於我們自己的條目是否完好，以及檔案的格式。對於嚴格 JSON 設定檔（OpenCode、Pi），在我們的區塊**旁邊**進行的編輯——例如新增 MCP 伺服器或你自己的 provider——會顯示為**需要更新**：重新整理會在保留你的條目的前提下合併寫入，但格式可能會被正規化。例外情況是 JSON 無法精確重寫的內容——例如 `1e999` 這類非有限數字、重寫會被四捨五入的數字（極大的整數，或小到會塌縮成零的數字）、`-0`、同一個物件裡重複出現的鍵，或巢狀層數超過 1000 層——此時開關會鎖定，確保沒有任何值被悄悄改動或刪除。**OMP、DSH 與 Hermes** 同樣不受旁邊編輯影響，但原因不同：它們的 writer 只逐位元組修補自己的 `providers.opencodex` 範圍，檔案其餘部分從不會被重寫。至於其餘可以包含註解的格式（OpenClaw、Kimi Code、gjc、MiniMax Code、Raycast——以整份文件寫出的 YAML、JSON5 與 TOML），或當我們自己的條目被編輯過時，開關會鎖定，停用會拒絕執行，而不是猜測哪些編輯是你的。
+停用只移除 opencodex 記錄為自己寫入的條目。如果你的檔案在我們寫入之後有變更，後續行為取決於我們自己的條目是否完好，以及檔案的格式。對於嚴格 JSON 設定檔（OpenCode、Pi），在我們的區塊**旁邊**進行的編輯——例如新增 MCP 伺服器或你自己的 provider——會顯示為**需要更新**：重新整理會在保留你的條目的前提下合併寫入，但格式可能會被正規化。例外情況是 JSON 無法精確重寫的內容——例如 `1e999` 這類非有限數字、重寫會被四捨五入的數字（極大的整數，或小到會塌縮成零的數字）、`-0`、同一個物件裡重複出現的鍵，或巢狀層數超過 1000 層——此時開關會鎖定，確保沒有任何值被悄悄改動或刪除。**OMP、DSH 與 Hermes** 同樣不受旁邊編輯影響，但原因不同：它們的 writer 只逐位元組修補自己管理的 provider 片段，檔案其餘部分從不會被重寫。至於其餘可以包含註解的格式（OpenClaw、Kimi Code、gjc、MiniMax Code、Raycast——以整份文件寫出的 YAML、JSON5 與 TOML），或當我們自己的條目被編輯過時，開關會鎖定，停用會拒絕執行，而不是猜測哪些編輯是你的。
 
 Hermes 的會話標識升級是上述衝突規則的特例：既有受管設定僅新增 `session_affinity_header: session-id` 時，可透過 **Apply** 接納；其他受管欄位的修改仍會衝突。升級前，背景重新整理也會暫停此整合的模型清單更新。此設定適用於該 provider 的所有模型，需要支援此能力的 Hermes 版本，且不保證快取命中率。詳見[英文升級說明](/guides/integrations/#hermes-session-affinity)。
 
@@ -107,7 +109,7 @@ Aside 會對一次選取的單一設定檔使用相同的預覽與確認流程�
 
 ## 誠實的預期
 
-**格式通常不會被保留。** 套用會解析設定並重新寫出，所以 JSON、JSON5 與 TOML 可能被重新格式化，JSON5 或 TOML 中的註解會遺失。OMP 與 DSH 是例外：它們的 YAML writer 分別只修補 `providers.opencodex` 與 `llm-pi-ai.providers.opencodex`，逐位元組保留無關的 provider 註解與格式。如果無法安全地識別那個確切的來源範圍，操作會拒絕執行。對其他客戶端，當你需要先前的檔案位元組時請使用 Restore：快照是逐字的副本。
+**格式通常不會被保留。** 套用會解析設定並重新寫出，所以 JSON、JSON5 與 TOML 可能被重新格式化，JSON5 或 TOML 中的註解會遺失。OMP 與 DSH 是例外：OMP 的 YAML writer 只修補 `providers.opencodex`。DSH 在 Desktop profile 存在時修補 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 列；僅在沒有該 profile 時，才修補 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`。這些 writer 逐位元組保留無關的 provider 註解與格式。如果無法安全地識別那個確切的來源範圍，操作會拒絕執行。對其他客戶端，當你需要先前的檔案位元組時請使用 Restore：快照是逐字的副本。
 
 **如果某個值無法忠實重寫，開關會拒絕執行。** 往返覆蓋這些格式在實務上會用到的值種類；當它做不到時——例如使用 `inf` 或 `nan` 的 TOML 檔案，我們可用的 parser 無法準確讀回——套用會停止並說明，而不是寫入被改動的值然後宣稱成功。你會看到檔案被指名，磁碟上沒有任何東西被移動。手動編輯那個檔案仍然有效；只有我們的自動重寫會拒絕。
 

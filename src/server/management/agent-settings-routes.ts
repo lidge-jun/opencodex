@@ -205,7 +205,7 @@ export function setGrokApplyFlightTestHooks(
   grokApplyFlight = null;
   grokApplyHighWaterBytes = 0;
 }
-import type { ManagementContext } from "./context";
+import { managementInferencePort, type ManagementContext } from "./context";
 
 async function injectionModelOptions(config: OcxConfig, models: readonly CatalogModel[]) {
   const disabled = new Set(config.disabledModels ?? []);
@@ -262,7 +262,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const writtenProfile = current.claudeCode.desktopProfile;
         const markerBaseline = captureDesktopAppliedMarker(writtenProfile);
         const result = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(
-          current.port ?? 10100,
+          // Live bound port, not config: a CLI override or ephemeral bind must not strand Desktop (#6598).
+          managementInferencePort({ config: current, deps }) ?? 10100,
           [...desktopVisibleNativeSlugs(current)],
           routed,
           current.apiKeys?.[0]?.key,
@@ -898,7 +899,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   if (url.pathname === "/api/claude-desktop" && req.method === "GET") {
     try {
       const state = await buildClaudeDesktopState(config);
-      const runtimePort = Number(url.port) || config.port;
+      const runtimePort = managementInferencePort(ctx);
       return jsonResponse({ ...state, port: runtimePort });
     } catch (error) {
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -966,7 +967,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         };
       }
       const saved = await buildClaudeDesktopState(config);
-      const runtimePort = Number(url.port) || config.port;
+      const runtimePort = managementInferencePort(ctx);
       return jsonResponse({ ok: true, ...saved, port: runtimePort });
     } catch (error) {
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -1131,7 +1132,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         // Picker mode belongs to first-party: stop terminating claude.ai before the gateway lands.
         const pickerOff = await ops.disableLocked({ persist: false });
         const result = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(
-          Number(url.port) || latest.port,
+          managementInferencePort({ config: latest, deps }),
           [...desktopVisibleNativeSlugs(latest)],
           routed,
           latest.apiKeys?.[0]?.key,

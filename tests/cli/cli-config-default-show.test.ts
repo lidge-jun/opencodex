@@ -191,3 +191,76 @@ test.each([["config", "--help"], ["help", "config"]])(
     });
   }, SPAWN_BUDGET_MS,
 );
+
+
+test.each([[], ["show"], ["--json"], ["show", "--json"], ["get", "port"], ["get", "port", "--json"]])(
+  "config fallback %j warns and returns exit 1 with parseable stdout", async (...args) => {
+    await withConfig(async ({ configPath, invoke }) => {
+      writeFileSync(configPath, '{"port":"invalid"}');
+      const result = await invoke(args);
+      expect(result.code).toBe(1);
+      expect(() => JSON.parse(result.stdout)).not.toThrow();
+      expect(result.stderr).toContain(configPath);
+      expect(result.stderr).toContain("defaults are being shown");
+      expect(result.stderr).toContain("ocx config validate");
+      expect(result.stderr).toContain("ocx config show --source");
+      expect(readFileSync(configPath, "utf8")).toBe('{"port":"invalid"}');
+    });
+  },
+);
+
+test("config show --source explicitly reports fallback with a warning and exit 0", async () => {
+  await withConfig(async ({ configPath, invoke }) => {
+    writeFileSync(configPath, "{");
+    const result = await invoke(["show", "--source", "--json"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ source: "fallback", error: "invalid_json" });
+    expect(result.stderr).toContain(configPath);
+    expect(result.stderr).toContain("defaults are being shown");
+  });
+});
+
+test.each([false, true])("config validate JSON=%s returns exit 1 for an invalid saved file", async json => {
+  await withConfig(async ({ configPath, invoke }) => {
+    writeFileSync(configPath, '{"port":"invalid"}');
+    const result = await invoke(["validate", ...(json ? ["--json"] : [])]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toBe("");
+    if (json) expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    else expect(result.stdout).toContain("Config is invalid:");
+  });
+});
+
+test("config validate explicit file returns exit 1 with one JSON failure", async () => {
+  await withConfig(async ({ root, invoke }) => {
+    const input = join(root, "invalid.json");
+    writeFileSync(input, '{"port":"invalid"}');
+    const result = await invoke(["validate", input, "--json"]);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(result.stderr).toBe("");
+  });
+});
+
+test.each([false, true])("config export JSON=%s preserves content and emits the selected receipt", async json => {
+  await withConfig(async ({ root, invoke }) => {
+    const path = join(root, "export.json");
+    const result = await invoke(["export", path, ...(json ? ["--json"] : [])]);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    if (json) expect(JSON.parse(result.stdout)).toEqual({ ok: true, path });
+    else expect(result.stdout).toBe(`Exported config to ${path}.`);
+    expect(JSON.parse(readFileSync(path, "utf8")).providers.local.apiKey).toBe("fixture-only");
+    expect(result.stdout).not.toContain("fixture-only");
+  });
+});
+
+test("config unset without a path requests only the path", async () => {
+  await withConfig(async ({ invoke }) => {
+    const result = await invoke(["unset"]);
+    expect(result.code).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Error: config path is required");
+    expect(result.stderr).not.toContain("path and value");
+  });
+});

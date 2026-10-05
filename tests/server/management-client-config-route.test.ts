@@ -114,8 +114,8 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   } as OcxConfig;
 }
 
-async function clientConfigApi(config: OcxConfig, query: string): Promise<Response> {
-  const url = new URL(`http://127.0.0.1:10100/api/client-config${query}`);
+async function clientConfigApi(config: OcxConfig, query: string, port = 10100): Promise<Response> {
+  const url = new URL(`http://127.0.0.1:${port}/api/client-config${query}`);
   const response = await handleManagementAPI(
     new Request(url, { headers: { Host: url.host } }),
     url,
@@ -136,6 +136,20 @@ async function modelRows(config: OcxConfig): Promise<ModelRow[]> {
   );
   return await response!.json() as ModelRow[];
 }
+
+test.each(["opencode", "pi"])("management ingress must not become %s inference destination (#6598)", async client => {
+  const config = baseConfig({
+    runtimeRole: "hub",
+    hostname: "100.64.0.2",
+    unauthenticatedLoopbackListener: { enabled: true },
+    hub: { managementIngress: { enabled: true, port: 10101 } },
+  } as Partial<OcxConfig>);
+  const response = await clientConfigApi(config, `?client=${client}`, 10101);
+  expect(response.status).toBe(200);
+  const body = await response.json() as ClientConfigEnvelope;
+  expect(body.text).toContain("http://127.0.0.1:10100/v1");
+  expect(body.text).not.toContain("http://127.0.0.1:10101/v1");
+});
 
 describe("native Anthropic image input reaches client documents", () => {
   test.each(["anthropic", "anthropic-apikey"])("all capability-aware exports advertise image input for %s", async (provider) => {
