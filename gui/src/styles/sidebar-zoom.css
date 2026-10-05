@@ -54,11 +54,19 @@
 }
 
 @media (min-width: 761px) and (max-height: 480px) {
-  .sidebar { overflow-y: auto; scroll-padding-top: calc(var(--titlebar-h, 40px) + 4px); }
-  /* The rail contains fixed descendants via its backdrop-filter. Anchor the non-portaled
-     menu below the strip so scrolling the footer cannot clip it above the window. */
+  /* The rail drops its glass here: a backdrop-filter would make it the containing block of the
+     language menu below, and that menu would then scroll and clip with the rail in every engine
+     that treats a scroll container's fixed descendants like absolute ones. Opaque, the rail
+     leaves the menu anchored to the window. */
+  .sidebar {
+    overflow-y: auto; scroll-padding-top: calc(var(--titlebar-h, 40px) + 4px);
+    background: var(--rail); backdrop-filter: none; -webkit-backdrop-filter: none;
+  }
+  /* Anchor the non-portaled menu below the title strip so scrolling the footer cannot push it
+     off screen. Opaque like the rail, as in the no-backdrop-filter fallback in styles.css. */
   .sidebar .lang-toggle .select-dropdown-beside {
     position: fixed; top: calc(var(--titlebar-h, 40px) + 4px); bottom: auto; left: 14px; right: auto;
     max-height: min(60vh, calc(100dvh - var(--titlebar-h, 40px) - 12px), 20rem);
+    background: var(--rail); backdrop-filter: none; -webkit-backdrop-filter: none;
   }
 }
