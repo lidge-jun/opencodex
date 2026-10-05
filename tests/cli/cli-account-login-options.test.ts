@@ -253,11 +253,12 @@ describe("typed public login completion", () => {
 });
 
 test("console diagnostics scrub argv credential operands case-insensitively", () => {
-  noteCredentialArgv(["models", "preset", "--token=Synthetic-Value-1", "--code", "--api-key", "Synthetic-Value-2", "--secret", "abc"]);
+  noteCredentialArgv(["models", "preset", "--token=Synthetic-Value-1", "--code", "--api-key", "Synthetic-Value-2", "--secret", "abc", "--key=--api-key=Synthetic-Value-3"]);
   try {
     expect(scrubCredentialOperands("x '--token=synthetic-value-1' y Synthetic-Value-2")).toBe("x '--token=<redacted>' y <redacted>");
     // An option name that followed another credential option is not an operand.
     expect(scrubCredentialOperands("[--api-key <key>] abc")).toBe("[--api-key <key>] abc");
+    expect(scrubCredentialOperands("Unknown provider subcommand: --key=--api-key=synthetic-value-3")).toBe("Unknown provider subcommand: --key=<redacted>");
   } finally { noteCredentialArgv([]); }
   expect(scrubCredentialOperands("Synthetic-Value-2")).toBe("Synthetic-Value-2");
 });

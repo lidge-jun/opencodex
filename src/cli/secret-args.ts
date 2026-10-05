@@ -42,9 +42,13 @@ function credentialOperands(argv: readonly string[]): string[] {
     const inline = SECRET_OPTIONS.find(option => token.startsWith(`${option}=`));
     let value: string | undefined;
     if (inline) value = token.slice(inline.length + 1);
-    else if (SECRET_OPTIONS.includes(token)) value = argv[argv[index + 1] === "--" ? index + 2 : index + 1];
-    // A following credential option is not this option's operand; its own operand is collected next.
-    if (value !== undefined && value.length >= 4 && !isSecretOptionToken(value)) values.add(value);
+    else if (SECRET_OPTIONS.includes(token)) {
+      value = argv[argv[index + 1] === "--" ? index + 2 : index + 1];
+      // A following bare credential option is not this option's operand; its own operand is
+      // collected on its turn. An inline value is always an operand, whatever it looks like.
+      if (value !== undefined && SECRET_OPTIONS.includes(value)) value = undefined;
+    }
+    if (value !== undefined && value.length >= 4) values.add(value);
   }
   return [...values].sort((a, b) => b.length - a.length);
 }
@@ -58,14 +62,15 @@ export function scrubCredentialOperands(text: string): string {
 }
 
 /**
- * Last-line guard for every console diagnostic: parsers that echo a selector, an unknown
+ * Last-line guard for console diagnostics (stderr): parsers that echo a selector, an unknown
  * subcommand or a leftover before any redaction would otherwise print an operand typed after
  * a credential option. Installed once; it reads the operands recorded for the current argv.
  */
 function installConsoleScrub(): void {
   if (consoleScrubInstalled) return;
   consoleScrubInstalled = true;
-  for (const method of ["log", "info", "warn", "error"] as const) {
+  // Diagnostics only: stdout carries JSON documents whose primitives must not be rewritten.
+  for (const method of ["warn", "error"] as const) {
     const original = console[method].bind(console);
     console[method] = (...args: unknown[]) => {
       if (credentialValues.length === 0) return original(...args);
