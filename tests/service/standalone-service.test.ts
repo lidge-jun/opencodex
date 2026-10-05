@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildServiceShellCommand } from "../../src/service/health";
+import { buildServiceShellCommand } from "../../src/service/definition";
 import { buildWinswXml } from "../../src/lib/winsw";
 import { cliEntry } from "../../src/service/state";
 import { buildWindowsServiceScript } from "../../src/service/windows-taskxml";

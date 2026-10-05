@@ -31,6 +31,8 @@ import {
 import { getConfigPath, loadConfig, saveConfig } from "../../src/config";
 import * as configModule from "../../src/config";
 import { setCodexAccountAutoSwitchThresholdOverride } from "../../src/codex/account-auto-switch";
+import { clearAllManualPreferences, manualPreferenceBlocks, resetCodexRoutingForManualSelection } from "../../src/codex/routing/active-account";
+import { POOL_KEY_CODEX } from "../../src/oauth/pool-kernel";
 import { prepareConfigObjectChildDeletionRebase } from "../../src/config/rebase-provenance";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -413,5 +415,18 @@ describe("Codex account delete persistence ordering", () => {
     expect(deleteCodexAccount(config, ACCOUNT_ID)).toBe(false);
     expect(getCodexAccountCredential(ACCOUNT_ID)).toBeNull();
     expect(loadConfig().codexAccountNamespaces).toEqual({ stable: ACCOUNT_ID });
+  });
+
+  test("deleting the account drops its manual routing preference", () => {
+    const config = seededConfig();
+    resetCodexRoutingForManualSelection(ACCOUNT_ID);
+    expect(manualPreferenceBlocks(POOL_KEY_CODEX, "other-account")).toBe(true);
+    try {
+      expect(deleteCodexAccount(config, ACCOUNT_ID)).toBe(true);
+      // Checked before the cleanup below, which would clear the preference on its own.
+      expect(manualPreferenceBlocks(POOL_KEY_CODEX, "other-account")).toBe(false);
+    } finally {
+      clearAllManualPreferences();
+    }
   });
 });

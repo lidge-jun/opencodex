@@ -1,5 +1,5 @@
 import { isCodexAccountGenerationLive, readCodexAccountRecord } from "../account-store";
-import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
+import { MAIN_CODEX_ACCOUNT_ID } from "../account-id";
 import { retainedUtf8Bytes } from "../../lib/admission";
 import { clearAllCodexPoolRefreshFailures } from "../pool-refresh-backoff";
 import type { CodexThreadLineage } from "../lineage";

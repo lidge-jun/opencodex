@@ -226,7 +226,6 @@ export async function syncEnabledClientIntegrations(
     try {
       const { writeDesktop3pConfig } = await import("../../claude/desktop-3p");
       const { desktopVisibleNativeSlugs, filterCatalogVisibleModels } = await import("../../codex/catalog");
-      const { fetchAllModels } = await import("../management-api");
       const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
       // Serialized with Desktop mode transitions (picker lock): a first-party switch cannot interleave.
       const { runPickerTransition } = await import("./claude-desktop-picker-routes");

@@ -20,7 +20,8 @@ import {
 import { setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
-import { clearAccountNeedsReauth, clearAccountQuota, handleCodexAuthAPI, updateAccountQuota } from "../../src/codex/auth-api";
+import { clearAccountNeedsReauth, clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import type { OcxConfig } from "../../src/types";

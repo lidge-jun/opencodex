@@ -5,7 +5,7 @@ import { managementFetch as fetch } from "../helpers/management-auth";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleCodexAuthAPI } from "../../src/codex/auth-api";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";

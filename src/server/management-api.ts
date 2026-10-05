@@ -511,7 +511,7 @@ export async function handleManagementAPI(
       const { handleMainDeviceReauthAPI } = await import("../codex/main-device-reauth-api");
       return handleMainDeviceReauthAPI(req, url, config);
     }
-    const { handleCodexAuthAPI } = await import("../codex/auth-api");
+    const { handleCodexAuthAPI } = await import("../codex/auth-api/routes");
     const { ConfigMutationLockError } = await import("../config");
     const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");
     try {

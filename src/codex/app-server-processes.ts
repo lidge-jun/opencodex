@@ -14,7 +14,7 @@ import {
   resolveTrustedWindowsPowerShellExe,
   resolveTrustedWindowsTaskkillExe,
 } from "../lib/windows-elevation";
-import { readCodexCatalogPath } from "./catalog/parsing";
+import { readCodexCatalogPath } from "./paths";
 
 export const STALE_CODEX_APP_SERVER_HINT =
   "If Codex still shows an older model list, run `ocx sync --restart-codex`: it restarts the long-lived app-server "

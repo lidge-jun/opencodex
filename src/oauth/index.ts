@@ -1775,7 +1775,7 @@ export async function runLogin(
   if (provider !== "chatgpt") {
     try {
       const { clearModelCache } = await import("../codex/model-cache");
-      const { clearGatherRoutedModelsInflight } = await import("../codex/catalog");
+      const { clearGatherRoutedModelsInflight } = await import("../codex/catalog/routed-gather");
       clearModelCache(provider);
       clearGatherRoutedModelsInflight();
       const { clearAccountQuotaCache, clearProviderQuotaCache } = await import("../providers/quota");

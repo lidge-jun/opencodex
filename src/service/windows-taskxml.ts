@@ -1,14 +1,14 @@
 import { WINDOWS_WRAPPER_PROTOCOL_ENV, WINDOWS_WRAPPER_STAY_OUT_EXIT_CODE } from "./windows-wrapper-exit";
 import { readFileSync } from "node:fs";
 import { TASK, windowsServiceScriptPath, windowsLauncherVbsPath, windowsTaskXmlPath } from "./state";
-import { windowsWscript } from "./windows-scheduler";
+import { windowsWscript } from "./windows-wscript";
 import { join } from "node:path";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV } from "../lib/bun-runtime";
 import { REAL_BUN_MIN_BYTES } from "../lib/bun-binary-validator.mjs";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "../lib/win-paths";
 import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../lib/windows-user-principal";
-import { resolveServiceListenPort, resolvedProxyEnv } from "./health";
+import { resolveServiceListenPort, resolvedProxyEnv } from "./definition";
 import { cliEntry, filterTransientServicePath, serviceLogPath, currentCodexSqliteHomeAbsolute } from "./state";
 
 function windowsBatchValue(value: string): string {
