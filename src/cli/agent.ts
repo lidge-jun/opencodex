@@ -24,7 +24,7 @@ interface WebSearchModelOption {
 const USAGE = `Usage:
   ocx agent [status] [--json]
   ocx agent injection <status|set> [--model <id|->] [--effort <level|->]
-      [--prompt <text|->] [--guidance <on|off>] [--json]
+      [--prompt <text|->] [--guidance <on|off>] [--sync-codex-defaults <on|off>] [--json]
   ocx agent injection suggest <work description> [--model <id>] [--apply] [--json]
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
@@ -33,7 +33,10 @@ const USAGE = `Usage:
   ocx agent roles [status|set <role> <model>|suggest [--model <id>] [--apply]] [--json]
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->]
       [--backend web:<openai|anthropic|xai|gemini|exa|-> vision:<openai|anthropic|routed|->]
-      [--reasoning <level>] [--max-descriptions <n>] [--enabled <on|off>] [--json]
+      [--reasoning <level>] [--max-descriptions <n> (vision)] [--enabled <on|off>]
+      [--stream-routed-output <on|off> (web)] [--timeout-ms <1-2147483647> (vision)] [--json]
+  ocx agent memory-models <show|set|clear> [options] [--json]
+  ocx agent compaction-routing <show|set|clear> [options] [--json]
   ocx agent request-user-input [on|off] [--json]`;
 
 function clearable(value: string | undefined): string | null | undefined {
@@ -257,6 +260,7 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const backend = takeOption(args, "--backend");
   const reasoning = takeOption(args, "--reasoning");
   const maxDescriptionsPerTurn = takeIntegerOption(args, "--max-descriptions", { min: 1 });
+  if (section === "web" && maxDescriptionsPerTurn !== undefined) throw new CliUsageError("--max-descriptions applies only to the vision sidecar", USAGE);
   const enabled = takeBooleanOption(args, "--enabled");
   rejectArgs(args, USAGE);
   const settings: Record<string, unknown> = {};
@@ -418,6 +422,19 @@ async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 }
 
 export async function handleAgentCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  const has = (flag: string) => argv.some(arg => arg === flag || arg.startsWith(`${flag}=`));
+  if ((argv[0] === "injection" || argv[0] === "guidance") && has("--sync-codex-defaults")) {
+    const { handleInjectionDefaults } = await import("./agent-runtime-settings");
+    return handleInjectionDefaults(argv.slice(1), deps);
+  }
+  if (argv[0] === "sidecar" && (has("--stream-routed-output") || has("--timeout-ms"))) {
+    const { handleSidecarRuntimeSettings } = await import("./agent-runtime-settings");
+    return handleSidecarRuntimeSettings(argv.slice(1), deps);
+  }
+  if (argv[0] === "memory-models" || argv[0] === "compaction-routing") {
+    const { handleAgentSettingsCommand } = await import("./agent-settings");
+    return handleAgentSettingsCommand(argv[0], argv.slice(1), deps);
+  }
   return runCliAction(async () => {
     const [sub = "status", ...rest] = argv;
     if (sub === "status") await status(rest, deps);

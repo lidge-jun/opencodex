@@ -286,7 +286,10 @@ test("the DSH surface uses localized ownership semantics and its own API route",
   // form; the full product name still lives on the API Keys page (api.clientConfig.clientDsh).
   expect(text).toContain("DSH");
   expect(text).not.toContain("DeepSeek Harness (DSH)");
-  expect(text).toContain("llm-pi-ai.providers.opencodex");
+  // DSH 0.1.7+ reads the llm-pi-ai row of the Desktop profile patch; settings.yaml is the fallback.
+  expect(text).toContain("llm-pi-ai row");
+  expect(text).toContain("$DSH_HOME/profiles/desktop/cordis.patch.yml");
+  expect(text).toContain("$DSH_HOME/settings.yaml");
   expect(text).toContain("hot reload");
   expect(text).toContain("default model");
   expect(text).toContain("deepseek-official");

@@ -40,10 +40,10 @@ export function ClaudeCodeSettingsCard({
   return (
     <div className="card" style={{ overflow: "hidden" }}>
       {/*
-        The connection toggle lives in the Claude Code header, where it commits
-        immediately. Keeping a copy here as a Save-gated draft row meant one
-        setting with two controls and two different commit semantics — a user
-        who flipped this one and navigated away had changed nothing.
+        The connection toggle is not in this card: it commits immediately, so ClaudeCode
+        keeps it in its own card at the bottom of the page. A Save-gated draft copy once
+        lived here too: one setting with two controls and two commit semantics, so a user
+        who flipped it and navigated away had changed nothing. Keep exactly one control.
       */}
       <div className="setting-row">
         <div className="setting-label">
@@ -215,7 +215,7 @@ export function ClaudeCodeSettingsCard({
 
 export function ClaudeCodeQuickstartSection({ manualEnv }: { manualEnv: string }) {
   const t = useT();
-  // Title lives in ClaudeCode's shared ccw-main-head so every rail pane shares one top inset.
+  // The section title lives in ClaudeCode's CcwSection heading.
   return (
     <>
       <p className="muted text-label" style={{ margin: "0 0 8px" }}><Trans k="claude.quickstartHint" cmd="ocx claude" /></p>
@@ -236,11 +236,11 @@ export function ClaudeCodeModelMapSection({
   onRowsChange: (rows: MapRow[]) => void;
 }) {
   const t = useT();
-  // Title + count live in ClaudeCode's shared ccw-main-head (stable across rail panes).
+  // Title + count live in ClaudeCode's CcwSection heading.
   return (
     <>
       <p className="muted text-label" style={{ margin: "0 0 8px" }}>{t("claude.modelMapHint")}</p>
-      <div className="stack" style={{ gap: 8 }}>
+      {rows.length > 0 && <div className="stack" style={{ gap: 8 }}>
         {rows.map((row, i) => (
           <div key={row.id} className="row" style={{ gap: 8 }}>
             <input
@@ -266,8 +266,8 @@ export function ClaudeCodeModelMapSection({
             </button>
           </div>
         ))}
-      </div>
-      <div style={{ marginTop: 8 }}>
+      </div>}
+      <div style={{ marginTop: rows.length > 0 ? 8 : 0 }}>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => onRowsChange([...rows, { id: newClientId(), from: "", to: "" }])}>
           <IconPlus /> {t("claude.addMapping")}
         </button>
@@ -295,7 +295,7 @@ function groupAliasesByProvider(aliases: AliasRow[]): Array<[string, AliasRow[]]
 
 export function ClaudeCodeAliasesSection({ aliases }: { aliases: AliasRow[] }) {
   const t = useT();
-  // Title + count live in ClaudeCode's shared ccw-main-head (stable across rail panes).
+  // Title + count live in ClaudeCode's CcwSection heading.
   return (
     <div className="claude-aliases">
       <p className="muted text-label claude-aliases-hint">{t("claude.aliasesHint")}</p>

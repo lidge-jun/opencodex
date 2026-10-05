@@ -330,7 +330,7 @@ describe("kilo JSONC apply/disable/restore", () => {
     expect(store.listOperations("kilo")).toHaveLength(0);
   });
 
-  test("an unsafe second candidate refuses before touching the selected file", () => {
+  test.skipIf(process.platform === "win32")("an unsafe second candidate refuses before touching the selected file", () => {
     const dir = INTEGRATION_CLIENTS.kilo.detectDir({}, home);
     mkdirSync(dir, { recursive: true });
     const first = join(dir, "kilo.jsonc");

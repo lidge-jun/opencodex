@@ -4,6 +4,7 @@ import {
   type CodexRoutingKind,
 } from "../codex/inject";
 import { diagnoseCodexShim, type CodexShimDiagnostic } from "../codex/shim";
+import { overlayActivationHint } from "../codex/shim-overlay";
 import { findFirstCodexOnPath, type CodexPathCandidate } from "../codex/shim-path-resolution";
 import { loadConfig, resolveEnvValue } from "../config";
 
@@ -32,7 +33,7 @@ export interface CodexConnectShimReadiness {
 }
 
 export interface CodexConnectShimInspectionDeps {
-  diagnose?: () => Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary">;
+  diagnose?: () => Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary" | "runnable" | "active">;
   findOnPath?: () => CodexPathCandidate | null;
 }
 
@@ -42,10 +43,29 @@ const CODEX_TOKEN_NOTE = "The connected Codex config uses OPENCODEX_API_AUTH_TOK
 const CODEX_TOKEN_ACTION = `${CODEX_TOKEN_NOTE} Run 'ocx codex-shim install' to repair it.`;
 
 export function codexConnectShimReadiness(inputs: {
-  diagnosis: Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary">;
+  diagnosis: Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary" | "runnable" | "active">;
   commandPath: string | null;
   commandIsShim?: boolean;
 }): CodexConnectShimReadiness {
+  if (inputs.diagnosis.runnable && inputs.diagnosis.active !== undefined) {
+    if (inputs.diagnosis.active === null) {
+      return {
+        status: "unverified",
+        message: `PATH activation could not be verified. Shim state: ${inputs.diagnosis.summary}. `
+          + `Check PATH and retry 'ocx connect'. ${CODEX_TOKEN_NOTE}`,
+      };
+    }
+    if (!inputs.diagnosis.active) {
+      return {
+        status: "missing",
+        message: `installed but not active; ${inputs.commandPath
+          ? `PATH resolves 'codex' to ${inputs.commandPath}`
+          : "no 'codex' executable was found on PATH"}. `
+          + `Shim state: ${inputs.diagnosis.summary}. ${overlayActivationHint()} ${CODEX_TOKEN_NOTE}`,
+      };
+    }
+    return { status: "ready", message: "installed and healthy" };
+  }
   if (inputs.diagnosis.installed && !inputs.diagnosis.healthy) {
     return {
       status: "unhealthy",
@@ -87,7 +107,7 @@ export function codexConnectShimReadiness(inputs: {
 export function inspectCodexShimForConnect(
   deps: CodexConnectShimInspectionDeps = {},
 ): CodexConnectShimReadiness {
-  let diagnosis: Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary">;
+  let diagnosis: Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary" | "runnable" | "active">;
   try {
     diagnosis = (deps.diagnose ?? diagnoseCodexShim)();
   } catch {

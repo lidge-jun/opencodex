@@ -484,8 +484,8 @@ that shows the same client resending.
 
 The existing provider HTTP-status policy and the shared physical-send budget remain
 independent: zero refuses dispatch, invalid counts fail, and a stopped send is counted once.
-A denied first combo target returns a local typed 429 `request_send_budget_exhausted` without
-dispatch; a denied later hop returns the last real upstream failure without contacting that target.
+A denied first combo target returns a local typed 429 `request_send_budget_exhausted` without dispatch; a denied later hop, like a ladder with no target left, returns the last real upstream failure without contacting that target.
+Exception at both exits (`exhaustedFailure` in `core-combo.ts`): when that last failure is a 400/401/403 (a fallback refusing its own credential or plan), the first 429/402 of the ladder is returned instead, and the logical log adopts that quota failure's child diagnostics while retaining every physical attempt and its spend history. When no target answered with quota evidence, a 503 `combo_unavailable` is considered only from target/expiry pairs snapshotted before dispatch for unexpired 429/402 cooldowns passing the picker's provider availability and cached quota checks, without evaluating request eligibility. Only this exhaustion branch evaluates snapshot targets' request eligibility, treating throws as ineligible, and its `Retry-After` uses the earliest still-active eligible snapshot expiry; non-quota cooldowns, disabled/ineligible targets and cooldowns created during this request cannot replace the fallback refusal or shorten the delay. Coverage: `tests/responses/responses-combo-exhausted-error.test.ts`.
 `src/bridge/errors.ts` retains only the allowlisted non-replayable transport codes,
 reapplies the in-process marker, attaches no `Retry-After`, and restates 429 for the refusal
 code alone so a combo or adapter formatter holding an upstream-shaped 502 cannot hand the

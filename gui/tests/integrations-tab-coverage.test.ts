@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { FILE_CLIENTS, TABS } from "../src/pages/integrations/integration-tabs";
 import { FILE_INTEGRATION_CLIENTS } from "../src/pages/integrations/integration-api";
-import { INTEGRATION_TAB_HASHES } from "../src/app-routing";
+import { resolveAppHashChange } from "../src/app-routing";
 
 /*
  * The gap this closes.
@@ -27,9 +27,9 @@ test("every file client has a tab definition and is registered as a file client"
 
 test("every tab hash is routable, so a tab can actually be reached", () => {
   // App normalization strips an unregistered hash, which would render the
-  // overview instead of the tab and look like a missing client.
-  const routable = new Set<string>(INTEGRATION_TAB_HASHES);
-  const unroutable = TABS.filter(tab => tab.hash !== "integrations" && !routable.has(tab.hash));
+  // overview instead of the tab and look like a missing client. Asked of the resolver
+  // itself, so Claude's own #claude hash counts as reachable.
+  const unroutable = TABS.filter(tab => resolveAppHashChange(tab.hash).replaceTo !== null);
   expect(unroutable.map(tab => tab.hash)).toEqual([]);
 });
 

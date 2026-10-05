@@ -28,6 +28,7 @@ import { CODEX_HOME_JOURNAL_FILE } from "../../src/codex/codex-home-owner";
 import { initializeConfigOwnership, CONFIG_UNINSTALL_MANIFEST } from "../../src/lib/config-ownership";
 import type { CatalogWriteAuditEvent } from "../../src/codex/catalog/write-audit-contract";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { redactUserPath } from "../../src/lib/redact";
 
 let root = "";
 let codexHome = "";
@@ -108,7 +109,9 @@ describe("catalog write audit (#6529)", () => {
     expect(first).toMatchObject({ target: "catalog", writer: "other", routedBefore: 2, routedAfter: 3, pid: process.pid });
     expect(typeof first!.at).toBe("string");
     expect(typeof first!.command).toBe("string");
-    expect(first!.opencodexHome).toBe(realpathSync.native(opencodexHome));
+    // The record masks the account name under a Windows or POSIX home (long or 8.3 profile name
+    // alike) and keeps other paths verbatim, so compare against the same projection.
+    expect(first!.opencodexHome).toBe(redactUserPath(realpathSync.native(opencodexHome)));
   });
 
   test("keeps the newest records once the file passes its budget", () => {
@@ -556,19 +559,23 @@ describe("Windows audit privacy (r4176128642)", () => {
 
   for (const code of ["EICACLS", "ETIMEDOUT", "returned-failure"]) {
     test(`${code} leaves a blank file and preserves catalog publication`, () => {
+      // Only the audit file's ACL fails. On real Windows the catalog writer also hardens its own
+      // backup, which this case must not turn into a publication failure.
       harden.mockImplementation(path => {
+        if (path !== auditPath()) return { ok: true };
         expect(readFileSync(path)).toHaveLength(0);
         if (code === "returned-failure") return { ok: false };
         throw Object.assign(new Error("ACL failure"), { code });
       });
+      const auditHardens = () => harden.mock.calls.filter(([path]) => path === auditPath()).length;
       expect(appendUnderK()).toBe("skipped");
-      expect(harden).toHaveBeenCalledTimes(1);
+      expect(auditHardens()).toBe(1);
       expect(readFileSync(auditPath())).toHaveLength(0);
       // A skipped diagnostic must not alter the real operation's outcome.
       expect(replaceAs("restore", catalogBytes(native))).toEqual({ kind: "written" });
       expect(readFileSync(catalogPath(), "utf8")).toBe(catalogBytes(native));
       expect(readFileSync(auditPath())).toHaveLength(0);
-      expect(harden).toHaveBeenCalledTimes(1);
+      expect(auditHardens()).toBe(1);
     });
   }
 

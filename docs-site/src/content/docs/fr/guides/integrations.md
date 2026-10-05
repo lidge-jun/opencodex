@@ -15,7 +15,7 @@ puis peut le retirer. Dix-sept clients fonctionnent ainsi, chacun avec son propr
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immédiatement, sur une passerelle en cours d'exécution | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | au redémarrage ou avec `/reload` | valeur fictive de bouclage |
 | gjc | `~/.gjc/agent/models.yml` | YAML | dans les nouvelles sessions ou à l'ouverture de `/model` |non-secret loopback placeholder |
-| DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (`~/.dsh/settings.yaml` par défaut) | YAML | rechargement à chaud | jeton porteur fictif et non secret pour le bouclage |
+| DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml` (`~/.dsh/profiles/desktop/cordis.patch.yml` par défaut) ; `$DSH_HOME/settings.yaml` tant que DSH Desktop n’a pas créé ce profil | YAML | rechargement à chaud | jeton porteur fictif et non secret pour le bouclage |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | dans les nouvelles sessions ou après l’ouverture du sélecteur de modèles | valeur fictive de bouclage |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | dans les nouvelles sessions | valeur fictive de bouclage |
 | ZCode | `~/.zcode/v2/config.json` | JSON | au redémarrage | valeur fictive de bouclage |

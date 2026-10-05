@@ -42,6 +42,7 @@ held while a usage window reads 100%: the long window (weekly, or monthly on 30-
 while its reset is still ahead, the burst window through `isTerminalShortWindow`. A held account
 receives no traffic and therefore no new observation, so the reading has to end on its own; a long
 window without a reset is not trusted.
+Fresh spendable-credit evidence follows the [WHAM credit contract](providers/openai-tiers.md#spendable-codex-credits); included-plan refusal is not a credit-spending veto.
 
 The hold is checked wherever plan exclusion is checked in `src/codex/routing/selection.ts`: the
 eligible list (its pool filter and its main branch), `isCodexAccountSelectable`, and
@@ -60,8 +61,8 @@ login for reauthentication, including when the window fills during the awaited t
 
 `PUT /api/codex-auth/accounts/credits` writes one account (`{ id, creditsAfterLimit }`, pool
 accounts and `__main__`) or the whole list (`{ all }`: on lists `__main__` and every selectable
-pool account, off clears it). It has no CLI verb yet (`deferred-verb`, owner "#6334 follow-up");
-`ocx config set creditCodexAccountIds` covers scripted use. The dashboard control is
+pool account, off clears it). `ocx account credits openai` exposes explicit one/all on/off scope through
+`src/cli/account-policy.ts`, with validated target identities and the same narrow API body. The dashboard control is
 `gui/src/components/CodexCreditSpend.tsx`: one global switch in the Codex Auth header beside the
 "Codex credits" display switch, derived from the rows (off when none may spend, mixed when some
 may, on when all may, matching the quota auto-refresh control), and one switch per account inside

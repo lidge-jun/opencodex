@@ -17,7 +17,7 @@ bir ad hem `--adapter` hem de `--base-url` gerektirir.
 | Alt komut | Desteklenen bayraklar | Eylem |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | Yapılandırılmış sağlayıcıları ve kalan kayıt defteri girdilerini listeleyin. `--jsonl`, yapılandırılmış her sağlayıcı için satır başına bir JSON nesnesi üretir. |
-| `add <ad>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Bir kayıt defteri/özel sağlayıcı ekleyin. `--force` üzerine yazar; `--sync`, insan çıktısı modunda çalışan bir proxy'yi yeniler. |
+| `add <ad>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Yerel olarak kaydeder. `--force` üzerine yazmaya izin verir; `--sync` hem JSON hem metin çıktısında eşitlemeyi dener. |
 | `edit <ad>` | sağlayıcı alan bayrakları, `--headers <json>`, `--json` | Anahtar havuzlarını değiştirmeden doğrulanmış canlı sağlayıcı alanlarını düzenleyin. `--headers` özel istek başlıklarını birleştirir; temizlemek için `{}` veya `-` iletin. |
 | `test <ad>` | `--json` | Gerçek yukarı akış model uç noktasını araştırın. |
 | `show <ad>` | `--json` | Maskelenmiş API anahtarlarıyla yapılandırmayı gösterin. |
@@ -27,6 +27,8 @@ bir ad hem `--adapter` hem de `--base-url` gerektirir.
 | `quota` | `--refresh`, `--json` | Sağlayıcı kota raporlarını okuyun. |
 | `presets` | `--json` | Kontrol paneli sağlayıcı önayarlarını listeleyin. |
 | `account-mode` | `pool`, `direct`, `--json` | Havuzlanmış veya doğrudan Codex hesap yönlendirmesini seçin. |
+
+Varsayılan `add`, `remove` ve `set-default` yerel yapılandırmayı değiştirir. Çalışan proxy için `--live`, canlı silme için ayrıca `--yes` kullanın. `--sync --json` da kayıttan sonra eşitlemeyi dener; başarısızlıkta kayıt korunur, sıfır olmayan çıkış kodu ve `needsSync: true` döner. `--live` ile `--sync` birlikte kullanılamaz. Pacing ve snapshot/apply için [İngilizce kılavuza](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline) bakın.
 
 ```bash
 ocx provider list --json
@@ -329,13 +331,7 @@ değer 1 ile çıkar. `--json` şunu döndürür:
 
 ### `ocx account login|reauth|code|cancel ...`
 
-Başsız bir kabuktan tarayıcı tabanlı veya manuel kodlu hesap kimlik
-doğrulamasını çalıştırın. Sağlayıcıya özgü komut şekli için `ocx account --help`
-kullanın. Bir Codex hesap girişi kaydedilirse ancak model kataloğu yenilemesi
-beklemede kalırsa insan çıktısı yine de başarıyla çıkar ve stderr'e sabit `ocx
-sync` kurtarma rehberliği yazdırır. `--json`, stdout'u ayrıştırılabilir tutar ve
-insan uyarısı olmadan tamamlanan giriş durumunda `catalogRefreshPending: true`
-taşır.
+Grafik arayüzü olmayan bir kabuktan tarayıcı veya elle girilen kod ile hesap doğrulaması yapar. Sağlayıcıya özgü sözdizimi için `ocx account --help` kullanın. Codex girişi kaydedilmiş olsa bile doğrulama ya da model kataloğu yenilemesi bekliyorsa hem metin modu hem de `--json` çıkış kodu 1 döndürür. Kaydedilen giriş korunur; yalnızca bekleyen işlem nedeniyle kimlik doğrulamayı yeniden başlatmayın. Katalog yenilemesi beklerken metin modu stderr üzerinde `ocx sync` yönlendirmesi gösterir. `--json`, metin uyarısı eklemeden durumu ve bekleme işaretlerini ayrıştırılabilir stdout çıktısında tutar.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
@@ -483,20 +479,15 @@ görünürlüğü kontrol eder; `selected` bir sağlayıcı izin listesini kontr
 `context` sağlayıcı bağlam sınırlarını kontrol eder; ve `shadow` arka plan gölge
 çağrı müdahalesini yönetir.
 
-Kontrol panelinin sunduğu model başına her işlem burada mevcuttur, bu nedenle
-başsız bir kurulum bir kataloğu yönetmek için asla GUI'ye ihtiyaç duymaz. `add`,
-`remove` ve `list-custom` yapılandırma dosyasına karşı çalışır ve bir katalog
-senkronizasyonu aracılığıyla çalışan bir proxy'ye uygulanır; geri kalanı canlı
-yönetim API'si ile konuşur ve proxy'nin çalışmasını gerektirir (`ocx start` veya
-kurulu bir servis).
+`add` ve `remove` varsayılan olarak yerel kaydeder; `--live` çalışan proxy’yi değiştirir. Proxy yoksa yerel `--json` kaydı `sync.status: "not-attempted"`, `needsSync: true` ve çıkış kodu 0 döndürür. Denenen eşitleme başarısız olduğunda kayıt korunur ve çıkış kodu sıfırdan farklıdır. `list-custom` yerel listedir. `display-name` ham upstream ID, `order` ise picker’ın public ID değerlerini kullanır. Tam permütasyon, featured öneki ve native sıra sıfırlama kısıtları için [İngilizce adımlara](/reference/cli/providers-accounts/#display-names-and-picker-identities) bakın.
 
 | Alt komut | Desteklenen bayraklar | Eylem |
 | --- | --- | --- |
 | `list` (varsayılan) | `--provider <ad>`, `--json` | Yapılandırılmış sağlayıcılarda beslenen modelleri listeleyin. |
 | `live` | `--provider <ad>`, `--json` | Çalışma zamanında keşfedilen modeller de dahil olmak üzere çalışan kataloğu okuyun. Satırlar `native`/`routed`, `custom` ve `enabled`/`disabled` olarak bayraklanır. |
-| `add <saglayici> <modelId>` | `--display-name <ad>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Sağlayıcı kataloğunun bildirmediği bir modeli kaydedin. |
+| `add <saglayici> <modelId>` | `--display-name <ad>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Özel modeli yerel olarak veya `--live` ile çalışan proxy’ye kaydeder. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <ad\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Özel bir modeli düzenleyin. `-` bir alanı temizler; `0` bağlam penceresini temizler. |
-| `remove <custom-id\|provider/modelId>` | `--yes` | Özel bir modeli silin. Stdin etkileşimli bir terminal olmadığında `--yes` gerektirir. |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | Özel modeli siler; `--live` ya da `--json` için `--yes` gerekir. |
 | `list-custom` | `--json` | Diğer alt komutların aldığı `custom-id` ile tüm özel modelleri gösterin. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Bir modeli Codex için görünür yapın. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Bir modeli Codex'ten gizleyin. |

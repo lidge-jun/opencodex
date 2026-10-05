@@ -67,7 +67,7 @@ Claude Code가 게이트웨이와 통신하려면 `ANTHROPIC_AUTH_TOKEN`에 토�
 설정하면 claude.ai 로그인과 커넥터가 꺼져요. 둘 중 무엇이 필요한지는 지금 이 컴퓨터에 Claude
 로그인이 있느냐에 달려 있고, 그건 opencodex가 직접 확인할 수 있어요.
 
-**Claude → Claude Code**의 **인증 모드**를 기본값인 **자동**으로 두면 실행할 때마다 이렇게 판단해요.
+**연결 → Claude**의 **인증 모드**를 기본값인 **자동**으로 두면 실행할 때마다 이렇게 판단해요.
 
 | 발견한 것 | 동작 |
 | --- | --- |
@@ -131,7 +131,7 @@ hook을 제거해요. Claude Desktop은 별도 profile을 사용하며 shell hoo
 
 ## Claude Desktop 모드: 게이트웨이(기본값)와 1P
 
-대시보드의 **Claude → Desktop → 연결 모드** 또는
+대시보드의 **연결 → Claude Desktop → 연결 모드** 또는
 `ocx claude desktop apply --first-party|--gateway`로 서로 배타적인 두 모드 중 하나를 선택해요.
 
 ### 게이트웨이(기본값)
@@ -161,7 +161,7 @@ OpenCodex 소유의 선택된 게이트웨이 항목, 저장된 게이트웨이 
 
 ### Claude Code CLI 1P
 
-Claude → Code에서 CLI 1P를 켜거나 `ocx claude config set --first-party on`을 실행하세요. 끌 때는 `off`를 사용해요. 프록시가 꺼져 있거나 실행 중이지 않거나, CA·설정 파일을 준비할 수 없거나, 다른 프로그램이 프록시 설정을 소유하면 켜기 요청은 거절돼요. 끄기는 프록시 상태와 관계없이 저장돼요. Desktop 1P만 켜진 상태에서 터미널을 완전히 직접 연결하려면 셸에 `NO_PROXY='*'`를 설정하세요. 위의 계정 위험은 CLI 1P에도 적용돼요.
+연결 → Claude에서 CLI 1P를 켜거나 `ocx claude config set --first-party on`을 실행하세요. 끌 때는 `off`를 사용해요. 프록시가 꺼져 있거나 실행 중이지 않거나, CA·설정 파일을 준비할 수 없거나, 다른 프로그램이 프록시 설정을 소유하면 켜기 요청은 거절돼요. 끄기는 프록시 상태와 관계없이 저장돼요. Desktop 1P만 켜진 상태에서 터미널을 완전히 직접 연결하려면 셸에 `NO_PROXY='*'`를 설정하세요. 위의 계정 위험은 CLI 1P에도 적용돼요.
 Claude 라우팅을 꺼도 소유한 설정 환경 변수는 남아요. 리스너가 실행 중이면 모든 Messages 요청을 그대로 전달하지만, 프록시가 멈추면 OpenCodex를 실행하거나 Desktop/CLI 1P를 끄기 전까지 일반 `claude`는 연결할 수 없어요. `ocx claude`는 소유한 설정 환경 변수가 있고 상속된 외부 HTTPS 프록시가 없을 때만 `NO_PROXY=*`를 설정해요. 외부 프록시가 있으면 보존하고, 설정의 인터셉트가 계속 적용되므로 1P를 끄거나 설정을 해제하라는 경고를 표시해요.
 화면은 설정을 읽지 못한 상태(unknown), opencodex 토큰이 있는 프록시에 관리 대상이 아닌 CA가 붙은 상태(foreign), Claude 라우팅이 꺼졌지만 리스너는 살아 있어 요청을 그대로 전달하는 상태(disabled)를 구분해요. foreign이면 HTTPS_PROXY / NODE_EXTRA_CA_CERTS를 직접 고치고, disabled이면 재시작 전에 1P를 꺼서 설정을 지우세요. 리스너가 없으면 stopped, 관리 대상 CA를 쓰지만 포트·토큰이 다르면 broken이에요. 1P가 켜진 상태에서 인터셉트를 제공할 수 없으면 stopped와 broken 모두 routingOff 경고를 보여 줘요. Claude 라우팅이나 인터셉트가 꺼졌거나 이 기기가 다른 opencodex 허브의 클라이언트일 수 있으므로, 이 기기에서 다시 켜거나 1P를 꺼서 설정을 지우라고 안내해요. 인터셉트가 가능한 설정일 때만 stopped는 opencodex 실행, broken은 `ocx ensure` 또는 재시작을 안내해요. CLI 1P만 켰는데 프록시 설정이 없으면 미적용, 한쪽만 켜고 프록시가 정상이면 공유 전달, 둘 다 껐는데 설정이 남으면 잔여 설정으로 표시해요.
 unknown은 설정이 아직 opencodex 프록시를 가리키는지 판단할 수 없다는 뜻이에요. 외부 CA와 토큰 없는 127.0.0.1 프록시가 함께 있으면 local로 표시해요. opencodex 소유인지 확인할 수 없으므로 더 이상 사용하지 않는다면 ~/.claude/settings.json에서 HTTPS_PROXY를 지우세요. disabled는 현재 리스너와 설정이 정확히 맞을 때만 나타나고, 포트나 토큰이 어긋나면 라우팅이 꺼져 있어도 broken이에요.
@@ -179,7 +179,7 @@ Picker 모드는 1P 모드의 일부예요. macOS에서 1P를 선택하면 기�
 Picker 모드가 켜져 있는 동안 Claude Desktop의 네트워크는 OpenCodex를 거쳐요. OpenCodex가 중단되면
 Picker 모드를 끄거나 Desktop을 완전히 다시 시작할 때까지 Desktop은 오프라인이에요.
 `ocx claude desktop picker status`로 상태를 보고, `ocx claude desktop picker trust`로 신뢰 절차를
-다시 실행할 수 있어요. `ocx claude desktop picker off` 또는 대시보드 **Claude → Desktop**의 토글로
+다시 실행할 수 있어요. `ocx claude desktop picker off` 또는 대시보드 **연결 → Claude Desktop**의 토글로
 끌 수 있어요. Picker 프로필을 선택한 뒤에는 Claude Desktop을 완전히 종료하고 다시 열어야 해요.
 
 Picker 모드는 1P의 일부이므로 [1P 계정 위험](#1p직접-선택)도 그대로 적용돼요.
@@ -197,7 +197,7 @@ ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 
-대시보드의 **Claude → Desktop → Code 탭 모델 바인딩**에서도 같은 작업을 할 수 있어요. 이렇게 묶으면
+대시보드의 **연결 → Claude Desktop → Code 탭 모델 바인딩**에서도 같은 작업을 할 수 있어요. 이렇게 묶으면
 Code 탭에서 **Sonnet 4.6**을 고를 때 `xai/grok-4.7`이 응답해요. 선택기에는 Anthropic 이름이
 그대로 보이고, Claude Code 시스템 프롬프트도 모델에게 그 Claude 모델이라고 알려 주므로 평소에
 쓰지 않는 행(**More models** 쪽)을 고르는 편이 좋아요. 바인딩은 다음 요청부터 적용되고 Desktop을
@@ -355,7 +355,7 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
 - **`false`:** 사용 안 함. 표식도 붙지 않고 압축 창도 주입하지 않아요
 - **기존 `maxContextTokens` 설정:** 자동 컨텍스트를 자동으로 꺼요
 
-Claude 페이지에서 압축 값을 조절할 수 있어요. **경고:** 모델의 실제 컨텍스트 창보다 크게 올리면
+**연결 → Claude**에서 압축 값을 조절할 수 있어요. **경고:** 모델의 실제 컨텍스트 창보다 크게 올리면
 요약을 시작하기 전에 채팅 오류가 발생해요.
 
 1M 미만인 네이티브 Anthropic 모델에는 자동으로 표식을 붙이지 않아요. 직접 내보낸 값이 항상
@@ -610,8 +610,8 @@ role, `tool_use_id` 없는 `tool_result`, id/name 없는 `tool_use`, name 없는
 
 ## GUI(Claude 페이지)
 
-대시보드 사이드바에는 API 아래에 전용 **Claude** 페이지와 **Claude ON** 토글이 있어요. 토글
-레이블은 모든 언어에서 의도적으로 같아요. 페이지에는 다음 항목이 표시돼요.
+대시보드의 **연결** 아래에는 Claude Code용 **Claude**와 **Claude Desktop** 두 탭이 있어요.
+연결 개요의 Claude 카드에도 같은 연결 스위치가 있어요. 페이지에는 다음 항목이 표시돼요.
 
 - 입력 차단 스위치(사용 토글)
 - 빠른 시작(`ocx claude`)과 수동 환경 블록

@@ -14,6 +14,7 @@
  * preview route.
  */
 import { createHash } from "node:crypto";
+import { dirname } from "node:path";
 import { canonicalContribution, fingerprint, type OwnershipRecord } from "./ownership";
 import { ClientPathError, EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import { OPENCODE_PROVIDER_ID } from "../clients/config-export/constants";
@@ -129,7 +130,7 @@ const CLIENT_MANAGED_PATHS = {
   openclaw: [["models", "providers", OPENCODE_PROVIDER_ID]],
   kimi: [["providers", OPENCODE_PROVIDER_ID], ["models", DYNAMIC_SEGMENT]],
   gajae: [["providers", OPENCODE_PROVIDER_ID]],
-  dsh: [["llm-pi-ai", "providers", OPENCODE_PROVIDER_ID]],
+  dsh: [["llm-pi-ai", "providers", OPENCODE_PROVIDER_ID], ["[id=llm-pi-ai]", "config", "providers", OPENCODE_PROVIDER_ID]],
   mcode: [["custom_provider", OPENCODE_PROVIDER_ID]],
   zcode: [
     ["provider", OPENCODE_PROVIDER_ID],
@@ -531,6 +532,25 @@ function unboundPlan(
   });
 }
 
+/** A restore must not recreate a declared store without its client's lock. */
+export function restoreStoreDirectoryRefusal(
+  input: IntegrationWriteInput,
+  configPath: string,
+  io: IntegrationIO,
+): string | null {
+  const declared = INTEGRATION_CLIENTS[input.clientId].currentStore;
+  if (!declared?.lockFile) return null;
+  let storePath: string;
+  try {
+    storePath = declared.path(input.env, input.home);
+  } catch (error) {
+    if (error instanceof ClientPathError) return null;
+    throw error;
+  }
+  return configPath === storePath && io.statKind(dirname(storePath)) !== "dir"
+    ? "the client store directory is missing; restore will not create it" : null;
+}
+
 /**
  * Restore reads a different specification, so it gets its own observation.
  *
@@ -591,6 +611,10 @@ export function observeRestore(
     return {
       failed: observationFailure("conflict", "conflict", "that operation was recorded for a different location"),
     } as const;
+  }
+  const directoryRefusal = restoreStoreDirectoryRefusal(input, configPath, io);
+  if (directoryRefusal !== null) {
+    return { failed: observationFailure("unsafe", "unsafe", directoryRefusal) } as const;
   }
   /*
    * A legal historical path is not enough. Another candidate can already own
@@ -954,7 +978,7 @@ export function observeIntegration(
   // ownership here and disable would delete fragments it never wrote.
   const classified = classifyIntegration({
     fileText: before, fileIsRegular: true, parsed, record, contribution, configPath, clientId,
-    format: effective.format,
+    format: effective.format, sourcePreservingYaml: effective.sourcePreservingYaml !== null,
   });
   if (clientId === "droid" && record && (classified.state === "current" || classified.state === "stale")) {
     try { assertDroidRecordedSettingsUnambiguous(detectDir, parsed, record); }
