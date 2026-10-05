@@ -574,7 +574,7 @@ export async function handleProviderCommand(args: string[], deps: ProviderComman
         process.exitCode = code;
         break;
       }
-      console.error(`Unknown provider subcommand: ${sub}`);
+      console.error(`Unknown provider subcommand: ${redactSecretArgs([sub ?? ""])[0]}`);
       printSubcommandUsage("provider", undefined, { write: console.error });
       process.exit(1);
     }
