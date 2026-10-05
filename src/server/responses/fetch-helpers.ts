@@ -151,7 +151,7 @@ export type ProviderFetch = typeof globalThis.fetch & PaceAwareFetch;
  * Idempotent on purpose: an override that hands the send back to the supplied executor passes
  * through here twice, and both passes derive the same headers from the same wire URL.
  */
-export function sendWithConnectionPolicy(
+export async function sendWithConnectionPolicy(
   physicalFetch: typeof globalThis.fetch,
   rawInput: Parameters<typeof globalThis.fetch>[0],
   init?: RequestInit,
@@ -200,16 +200,48 @@ export function sendWithConnectionPolicy(
   const largeCodexBody = typeof body === "string"
     && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
-  return physicalFetch(input, {
-    ...init,
-    ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
-    headers,
-    redirect: "manual",
-    ...(fresh ? { keepalive: false } : {}),
-    ...egressInit,
-    ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
-    ...{ [UPSTREAM_REWRITTEN]: true },
-  });
+
+  let currentInput = input;
+  let redirectCount = 0;
+  const maxRedirects = 5;
+
+  while (true) {
+    const response = await physicalFetch(currentInput, {
+      ...init,
+      ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
+      headers,
+      redirect: "manual",
+      ...(fresh ? { keepalive: false } : {}),
+      ...egressInit,
+      ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
+      ...{ [UPSTREAM_REWRITTEN]: true },
+    });
+
+    if ((response.status === 307 || response.status === 308) && redirectCount < maxRedirects) {
+      const location = response.headers.get("location");
+      if (location) {
+        try {
+          const currentUrlStr = currentInput instanceof Request ? currentInput.url : String(currentInput);
+          const currentUrl = new URL(currentUrlStr);
+          const targetUrl = new URL(location, currentUrl);
+          // Only follow redirects to the exact same origin (same scheme + host + port).
+          // Cross-origin redirects are never followed to prevent credential leaks and SSRF.
+          if (targetUrl.origin === currentUrl.origin) {
+            try { await response.body?.cancel(); } catch { /* ignore cancellation failure */ }
+            currentInput = currentInput instanceof Request
+              ? new Request(targetUrl.href, currentInput)
+              : targetUrl.href;
+            redirectCount++;
+            continue;
+          }
+        } catch {
+          // If URL parsing fails, fall through to return original response
+        }
+      }
+    }
+
+    return response;
+  }
 }
 
 export interface ProviderFetchOptions {

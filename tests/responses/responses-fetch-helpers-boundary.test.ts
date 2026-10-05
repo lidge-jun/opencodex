@@ -309,3 +309,105 @@ describe("storedPoolReplayDispatchNotifier", () => {
     expect(storedPoolReplayDispatchNotifier(executor.wrapped, undefined)).toBe(executor.wrapped);
   });
 });
+
+describe("same-origin 307 and 308 redirect following", () => {
+  const origin = "https://api.example.com";
+  const startUrl = `${origin}/v1/chat/completions`;
+  const redirectTarget = `${origin}/r/v1/chat/completions?token=test-123`;
+
+  test("follows 307 redirect when target is same origin, preserving POST method and body", async () => {
+    const body = JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "hello" }] });
+    const calls: { input: Parameters<typeof fetch>[0]; init?: RequestInit }[] = [];
+    const fakeFetch = (async (input, init) => {
+      calls.push({ input, init });
+      if (calls.length === 1) {
+        return new Response("redirecting", {
+          status: 307,
+          headers: { location: redirectTarget },
+        });
+      }
+      return new Response("success", { status: 200 });
+    }) as typeof fetch;
+
+    const response = await sendWithConnectionPolicy(fakeFetch, startUrl, {
+      method: "POST",
+      headers: { "authorization": "Bearer key-123", "content-type": "application/json" },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("success");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.input).toBe(startUrl);
+    expect(calls[1]!.input).toBe(redirectTarget);
+    expect(calls[1]!.init?.method).toBe("POST");
+    expect(calls[1]!.init?.body).toBe(body);
+    expect(new Headers(calls[1]!.init?.headers).get("authorization")).toBe("Bearer key-123");
+  });
+
+  test("follows 308 permanent redirect when target is same origin", async () => {
+    const calls: { input: Parameters<typeof fetch>[0]; init?: RequestInit }[] = [];
+    const fakeFetch = (async (input, init) => {
+      calls.push({ input, init });
+      if (calls.length === 1) {
+        return new Response("permanent redirect", {
+          status: 308,
+          headers: { location: redirectTarget },
+        });
+      }
+      return new Response("success-308", { status: 200 });
+    }) as typeof fetch;
+
+    const response = await sendWithConnectionPolicy(fakeFetch, startUrl, {
+      method: "POST",
+      body: "{}",
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("success-308");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.input).toBe(redirectTarget);
+  });
+
+  test("refuses to follow cross-origin redirect to preserve credentials and prevent SSRF", async () => {
+    const crossOriginTarget = "https://evil.attacker.com/steal";
+    const calls: { input: Parameters<typeof fetch>[0]; init?: RequestInit }[] = [];
+    const fakeFetch = (async (input, init) => {
+      calls.push({ input, init });
+      return new Response("cross-origin redirect", {
+        status: 307,
+        headers: { location: crossOriginTarget },
+      });
+    }) as typeof fetch;
+
+    const response = await sendWithConnectionPolicy(fakeFetch, startUrl, {
+      method: "POST",
+      headers: { "authorization": "Bearer secret-key" },
+      body: "{}",
+    });
+
+    expect(response.status).toBe(307);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.input).toBe(startUrl);
+  });
+
+  test("caps redirect chain at maxRedirects to prevent infinite loops", async () => {
+    let callCount = 0;
+    const fakeFetch = (async () => {
+      callCount += 1;
+      return new Response("looping", {
+        status: 307,
+        headers: { location: `${origin}/loop?step=${callCount}` },
+      });
+    }) as typeof fetch;
+
+    const response = await sendWithConnectionPolicy(fakeFetch, startUrl, {
+      method: "POST",
+      body: "{}",
+    });
+
+    expect(callCount).toBe(6);
+    expect(response.status).toBe(307);
+  });
+});
+
