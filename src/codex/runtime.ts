@@ -5,6 +5,7 @@ import { delimiter, join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "./exec-invocation";
 import { resolveCodexHomeDir } from "./home";
+import { decodeOverlayState } from "./shim-state-file";
 import { redactSecretString, redactUserPath } from "../lib/redact";
 
 export type CodexRuntimeSource =
@@ -516,13 +517,18 @@ function shimCandidates(deps: ResolveCodexRuntimeDeps): string[] {
   const platform = deps.platform ?? process.platform;
   try {
     const state = JSON.parse(read(join(configDir, "codex-shim.json"), "utf8")) as {
+      schema?: unknown;
+      mode?: unknown;
       wrapperPath?: unknown;
       originalPath?: unknown;
       backupPath?: unknown;
       wrappers?: Array<{ wrapperPath?: unknown; originalPath?: unknown; backupPath?: unknown }>;
     };
+    const overlay = decodeOverlayState(state, configDir);
+    if ((state.schema !== undefined || state.mode !== undefined) && !overlay) return [];
     const files = Array.isArray(state.wrappers) && state.wrappers.length > 0 ? state.wrappers : [state];
-    const out: string[] = [];
+    const out: string[] = overlay && isSpawnableCodexCandidate(overlay.launcherPath, platform)
+      ? [overlay.launcherPath] : [];
     for (const file of files) {
       for (const value of [file.backupPath, file.originalPath, file.wrapperPath]) {
         if (typeof value !== "string" || value.length === 0) continue;

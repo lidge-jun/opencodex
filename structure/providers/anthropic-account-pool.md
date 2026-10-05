@@ -61,6 +61,11 @@ serialized persistence. Superseding writes win. An unresolved full rotation leav
 pending intent intact, without replaying a possibly consumed refresh or setting reauthentication
 solely from the identity failure. A proven different account may use its own stored refresh only
 when no pending intent blocks it. Intent cleanup follows successful durable adoption.
+An unsent token request proven by structured `getaddrinfo` `ENOTFOUND` for the token host,
+with no outbound proxy configured in either the startup or current environment and a single
+HTTP/1.1 attempt without keep-alive reuse or redirect following, releases its intent as
+`pre-dispatch`; redirects and every other transport failure keep the intent.
+`tests/oauth/oauth-refresh.test.ts` covers this boundary.
 An already-expired identityless row whose old bearer no longer authenticates cannot establish
 continuity to a fully rotated pair automatically; explicit import can create a separate slot.
 

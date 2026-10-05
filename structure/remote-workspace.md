@@ -27,6 +27,8 @@ RPC v1 peers fail closed and must upgrade together rather than fall back to imme
 
 `src/remote-control/workspace-runtime.ts` is the lazy composition owner for Hub services. Codex, Claude and Pi adapters keep model processes on the Hub and expose selected remote tools. Their source configuration is not evidence of live CLI confinement. `src/cli/remote-workspace.ts` contains registered executor pair/agent/status handling; the machine-readable entries live in `src/cli/capabilities.ts`.
 
+The explicit hub status/runtimes/sessions branch selects `src/cli/remote-workspace-hub.ts` before executor storage. It performs fixed management reads and projects public devices/root labels, named runtime availability and session events; it exposes no pairing or session mutation. The outer management dispatcher returns available:false with HTTP200 when activation is off; CLI reports that observation with exit1 and fixed recovery guidance, distinct from an available Hub with empty lists. Client-role refusal, transport errors and malformed observations remain nonzero.
+
 The optional terminal prototype in `src/remote-control/host.ts` invokes only a caller-supplied factory after authenticated traffic. `src/remote-control/relay.ts` routes opaque prototype envelopes after caller authorization. Neither is a production terminal service.
 
 Regression coverage lives in `tests/clients/remote-workspace-session-binding.test.ts`, `tests/clients/remote-workspace-secret-store.test.ts` and the adjacent protocol, agent-wire, device, hub, sessions and command-runner tests. Real CLI and native confinement tests require their explicit environments; generic suite success does not certify those paths. Windows command support remains unavailable pending a verified lifecycle owner.

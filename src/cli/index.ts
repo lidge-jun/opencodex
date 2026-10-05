@@ -8,6 +8,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { currentServingCommand, deferServiceChildToNewerRuntime, markDelegatedServiceReady, recordServingRuntime } from "../config/serving-runtimes";
 import { packageVersion } from "../lib/package-version";
+import { admitUpdateRestartChild } from "./update-restart-child";
+import { UpdateRestartRequired } from "./update-restart-candidate";
+import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 
@@ -201,6 +204,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
@@ -372,6 +376,7 @@ async function findProxyOwnerBeforeJournalRecovery(
 }
 
 async function handleStart(options: { block?: boolean } = {}) {
+  updateRestartChild?.check();
   // A supervised service child defers to a foreign recorded owner before doing
   // anything else. 'ocx service start' refuses this activation path already, but
   // the process managers below it — the Windows boot wrapper's restart loop and
@@ -467,6 +472,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     },
   });
 
+  updateRestartChild?.check();
   const clientState = readClientConnectionState();
   if (clientState.kind === "invalid" || clientState.kind === "mismatched") {
     throw new Error(`client startup refused: ${clientState.reason}`);
@@ -551,7 +557,17 @@ async function handleStart(options: { block?: boolean } = {}) {
         let server: ReturnType<typeof serverModule.startServer>;
         for (let attempt = 0; ; attempt++) {
           try {
+            if (updateRestartChild && siblingStart) throw new Error("update_restart_sibling_refused");
+            updateRestartChild?.check(port, loadConfig().hostname ?? "");
             server = serverModule.startServer(port, { localAttestationSecret, readinessGate });
+            if (updateRestartChild) {
+              try { updateRestartChild.check(port, server.hostname); }
+              catch (error) {
+                try { await server.stop(true); }
+                catch (rollback) { throw new StartOwnershipRollbackUncertainError([error, rollback]); }
+                throw error;
+              }
+            }
             break;
           } catch (err) {
             try { await serverModule.waitForFailedStartRollback(err); }
@@ -579,14 +595,14 @@ async function handleStart(options: { block?: boolean } = {}) {
         }
         return { server, serverModule, port, readinessGate, localAttestationSecret, config };
       },
-      writePid: () => writePid(process.pid),
-      writeRuntime: bound => writeRuntimePort({
+      writePid: () => { updateRestartChild?.check(); writePid(process.pid); },
+      writeRuntime: bound => { updateRestartChild?.check(bound.port, bound.config.hostname ?? ""); writeRuntimePort({
         pid: process.pid,
         port: bound.port,
         hostname: bound.config.hostname,
         attestationSecret: bound.localAttestationSecret,
         ...siblingRuntimeField(),
-      }),
+      }); updateRestartChild?.complete(); },
       stopBound: bound => bound.server.stop(true),
       removeRuntime: () => removeRuntimePortIfPidIs(process.pid),
       removePid: () => removePidIfValueIs(process.pid),
@@ -947,6 +963,15 @@ async function handleProxyRestart(
       findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }), expired: () => Date.now() >= end,
     })),
   });
+  if (!result.ok && result.phase === "request" && result.error instanceof UpdateRestartRequired) {
+    const candidate = result.error.candidate();
+    console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
+    const update = await restartFromCurrentInstallation(candidate, deadlineAt, detachedStartEnvironment());
+    if (update.ok) console.log(`✅ Proxy updated to ${update.live.version} (PID ${update.live.pid}).`);
+    else console.error(`❌ ${describeUpdateRestartFailure(update.code)} (${update.code})`);
+    process.exitCode = update.ok ? 0 : 1;
+    return update.ok;
+  }
   if (!result.ok) reportRestartFailure(result);
   process.exitCode = result.ok ? 0 : 1;
   return result.ok;

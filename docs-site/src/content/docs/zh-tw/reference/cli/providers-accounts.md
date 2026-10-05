@@ -14,7 +14,7 @@ description: 供應商設定、憑證、配額與模型目錄指令。
 | 子指令 | 支援的旗標 | 動作 |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | 列出已設定的供應商與剩餘的 registry 項目。 `--jsonl` 為每個已設定的供應商輸出一行 JSON 物件。 |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 新增 registry／自訂供應商。`--force` 覆寫；`--sync` 在人類輸出模式下重新整理執行中的代理。 |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 儲存至本機。`--force` 允許覆寫；`--sync` 在 JSON 與一般輸出模式下都會嘗試同步。 |
 | `edit <name>` | 供應商欄位旗標, `--json` | 編輯已驗證的即時供應商欄位而不替換金鑰池。 |
 | `test <name>` | `--json` | 探測真實上游模型端點。 |
 | `show <name>` | `--json` | 顯示設定，API 金鑰已遮罩。 |
@@ -24,6 +24,8 @@ description: 供應商設定、憑證、配額與模型目錄指令。
 | `quota` | `--refresh`, `--json` | 讀取供應商配額報告。 |
 | `presets` | `--json` | 列出儀表板供應商預設。 |
 | `account-mode` | `pool`, `direct`, `--json` | 選擇池化或直接的 Codex 帳號路由。 |
+
+預設的 `add`、`remove` 與 `set-default` 修改本機設定。修改執行中的代理需加 `--live`，線上刪除還需 `--yes`。`--sync --json` 同樣會在儲存後嘗試同步；失敗時保留儲存結果，以非零狀態結束，並回傳 `needsSync: true`。`--live` 不能與 `--sync` 同用。pacing 與 snapshot/apply 操作請見[英文指南](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)。
 
 ```bash
 ocx provider list --json
@@ -325,15 +327,15 @@ Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不�
 
 `ocx model` 是 `ocx models` 的別名。無子指令時，列出已設定供應商中靜態播種的模型。`--provider` 過濾一個已設定的供應商，而 `--json` 回傳模型中繼資料。`live` 讀取執行中的目錄；`add`、`edit`、`remove` 與 `list-custom` 管理手動目錄項目；`enable`、`disable` 與 `provider` 控制可見性；`selected` 控制供應商允許清單；`context` 控制供應商 context 上限；而 `shadow` 管理背景 shadow-call 攔截。
 
-儀表板提供的每個 per-model 操作在此皆可用，因此無頭安裝永不需要 GUI 來管理目錄。`add`、`remove` 與 `list-custom` 針對設定檔運作並透過目錄同步套用於執行中的代理；其餘與即時管理 API 通訊並需要代理正在執行（`ocx start` 或已安裝的服務）。
+`add` 與 `remove` 預設儲存至本機；`--live` 修改執行中的代理。本機 `--json` 儲存時若無代理，回傳 `sync.status: "not-attempted"`、`needsSync: true`，結束碼為 0。實際嘗試的同步失敗時保留儲存結果，以非零碼結束。`list-custom` 是本機清單。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、featured 前綴與 native 順序重設限制請見[英文步驟](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
 
 | 子指令 | 支援的旗標 | 動作 |
 | --- | --- | --- |
 | `list`（預設） | `--provider <name>`, `--json` | 列出已設定供應商中播種的模型。 |
 | `live` | `--provider <name>`, `--json` | 讀取執行中的目錄，包含 runtime 探索的模型。列標記為 `native`/`routed`、`custom` 與 `enabled`/`disabled`。 |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 註冊供應商目錄未廣告的模型。 |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 在本機註冊自訂模型，或使用 `--live` 在執行中的代理上註冊。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 編輯自訂模型。`-` 清除欄位；`0` 清除 context window。 |
-| `remove <custom-id\|provider/modelId>` | `--yes` | 刪除自訂模型。stdin 非互動終端時需要 `--yes`。 |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | 刪除自訂模型；使用 `--live` 或 `--json` 時必須加 `--yes`。 |
 | `list-custom` | `--json` | 顯示所有自訂模型及其 `custom-id`（其他子指令所採用）。 |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | 使一個模型對 Codex 可見。 |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | 對 Codex 隱藏一個模型。 |

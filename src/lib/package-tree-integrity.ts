@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRealBunBinary } from "./bun-binary-validator.mjs";
 import { isStandaloneBinary } from "./standalone";
 
 export interface PackageTreeObservation {
@@ -56,6 +57,14 @@ export interface PackageTreeIntegrityOptions {
   schedule?: (callback: () => void, delayMs: number) => (() => void) | void;
   /** Test seam for `installedVersion()`; production reads the package manifest. */
   readInstalledVersion?: () => string | undefined;
+  /**
+   * Whether the runtime a restart would spawn is complete. An in-place npm install writes
+   * package.json and extracts the `bun` package's small placeholder before its postinstall
+   * swaps the real binary in, and the replacement spawns `process.execPath`, that same path.
+   * While this answers false the replacement is treated like an unreadable tree: no restart,
+   * then a fresh full debounce once the runtime is ready.
+   */
+  runtimeReady?: () => boolean;
 }
 
 export type ObservePackageTree = () => PackageTreeObservation | null;
@@ -142,6 +151,12 @@ export function sameObservation(left: PackageTreeObservation, right: PackageTree
  */
 const PACKAGE_TREE_RECHECK_MS = 1_000;
 
+/**
+ * Fences a live process whose package manifest was replaced, and once the replacement is readable,
+ * stable for the debounce interval and any configured `runtimeReady` check passes, hands it to
+ * `onReplaced`. If the callback throws, the guard rechecks the tree and may call it again after
+ * another debounce interval while the replacement persists.
+ */
 export function createPackageTreeIntegrityGuard(
   observe: ObservePackageTree = observePackageManifest,
   now: () => number = Date.now,
@@ -154,6 +169,8 @@ export function createPackageTreeIntegrityGuard(
   let timerScheduled = false;
   let cancelScheduled: (() => void) | null = null;
   let waitingForReadableTree = false;
+  /** Logged once per wait, so a postinstall that never runs is visible rather than silent. */
+  let waitingForRuntime = false;
   let replacementCandidate: PackageTreeObservation | null = null;
   /** The replacement identity that survived a full stability interval (see installedVersion). */
   let settledReplacement: PackageTreeObservation | null = null;
@@ -192,9 +209,24 @@ export function createPackageTreeIntegrityGuard(
       if (sameObservation(boot, current)) {
         resetRestartTimer();
         waitingForReadableTree = false;
+        waitingForRuntime = false;
         replacementCandidate = null;
         return;
       }
+      if (options.runtimeReady && !options.runtimeReady()) {
+        if (!waitingForRuntime) {
+          waitingForRuntime = true;
+          console.warn("Package tree replaced; waiting for its Bun runtime to finish installing before restarting");
+        }
+        // A replacement settled before a failed admission is no longer restart-ready: withdraw
+        // it so installedVersion() stays silent until the fresh debounce settles it again.
+        settledReplacement = null;
+        resetRestartTimer();
+        waitingForReadableTree = true;
+        armRestartTimer(PACKAGE_TREE_RECHECK_MS);
+        return;
+      }
+      waitingForRuntime = false;
       if (waitingForReadableTree) {
         waitingForReadableTree = false;
         replacementCandidate = current;
@@ -239,6 +271,7 @@ export function createPackageTreeIntegrityGuard(
   return {
     installedVersion: () => {
       if (settledReplacement === null) return undefined;
+      if (options.runtimeReady && !options.runtimeReady()) return undefined;
       const current = observe();
       if (current === null || !sameObservation(settledReplacement, current)) return undefined;
       return readInstalledVersion();
@@ -271,6 +304,7 @@ export function createPackageTreeIntegrityGuard(
       lastOkAt = at;
       resetRestartTimer();
       waitingForReadableTree = false;
+      waitingForRuntime = false;
       replacementCandidate = null;
       return { ok: true };
     },
@@ -292,5 +326,12 @@ export function createRuntimePackageTreeIntegrityGuard(
     if (installer === "source" || isStandaloneBinary()) {
       return { status: () => ({ ok: true }), dispose: () => {} };
     }
-    return createPackageTreeIntegrityGuard(observe, now, options);
+    // The restart replacement spawns process.execPath, the bundled Bun in an npm install. Read it
+    // now: Linux Bun resolves it lazily, and after npm swaps the package directory a first read
+    // reports the retired binary as "(deleted)"; reading it once pins the boot path.
+    const runtimePath = process.execPath;
+    return createPackageTreeIntegrityGuard(observe, now, {
+      ...options,
+      runtimeReady: options.runtimeReady ?? (() => isRealBunBinary(runtimePath)),
+    });
   }

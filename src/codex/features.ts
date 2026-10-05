@@ -38,6 +38,7 @@ import { AtomicWriteResidualTempError, AtomicWriteSecretResidualError, atomicWri
 import { forgetEphemeralSecretPath } from "../lib/windows-secret-acl";
 import { CODEX_CONFIG_PATH } from "./paths";
 import { resolveAndPersistCodexRuntime } from "./runtime";
+import { decodeOverlayState } from "./shim-state-file";
 import { canonicalizeOpenCodexModeHint } from "./multi-agent-mode-policy";
 
 /** Upstream codex-rs feature key: allow `request_user_input` in Default mode. */
@@ -1232,13 +1233,19 @@ function codexNativeBinaryCandidates(command: string): string[] {
 /** Backing paths tied to this exact OCX shim entry in codex-shim.json. */
 function selectedShimBackingPaths(commandPath: string): string[] {
   try {
-    const state = JSON.parse(readFileSync(join(getConfigDir(), "codex-shim.json"), "utf8")) as {
+    const configDir = getConfigDir();
+    const state = JSON.parse(readFileSync(join(configDir, "codex-shim.json"), "utf8")) as {
+      schema?: unknown;
+      mode?: unknown;
       wrapperPath?: unknown;
       originalPath?: unknown;
       backupPath?: unknown;
       realPath?: unknown;
       wrappers?: Array<Record<string, unknown>>;
     };
+    const overlay = decodeOverlayState(state, configDir);
+    if (overlay) return resolve(overlay.wrapperPath) === resolve(commandPath) ? [overlay.launcherPath] : [];
+    if (state.schema !== undefined || state.mode !== undefined) return [];
     const entries = Array.isArray(state.wrappers) && state.wrappers.length > 0 ? state.wrappers : [state];
     const selected = resolve(commandPath);
     for (const entry of entries) {

@@ -88,7 +88,7 @@ ocx claude
 Claude Code 需要在 `ANTHROPIC_AUTH_TOKEN` 中有 token 才能與閘道器通訊，但設定該變數也會停用
 你的 claude.ai 登入及其聯結器。你要哪一種，取決於 opencodex 可以查到的狀態，因此預設會自動判斷。
 
-在 **Claude → Claude Code** 中把 **認證模式** 保持為 **自動**（預設值），opencodex 會在每次
+在 **連線 → Claude** 中把 **認證模式** 保持為 **自動**（預設值），opencodex 會在每次
 啟動時決定：
 
 | 偵測結果 | 行為 |
@@ -108,7 +108,7 @@ Claude Code 需要在 `ANTHROPIC_AUTH_TOKEN` 中有 token 才能與閘道器通�
 
 ## Claude Desktop 模式：閘道（預設）與第一方
 
-在儀表板的 **Claude → Desktop → 連線模式**，或透過
+在儀表板的 **連線 → Claude Desktop → 連線模式**，或透過
 `ocx claude desktop apply --first-party|--gateway` 選擇互斥的模式。
 
 ### 閘道（預設）
@@ -137,7 +137,7 @@ Desktop 第一方模式透過 OpenCodex 處理 Code 分頁及其子代理。獨�
 
 ### Claude Code CLI 第一方模式
 
-在 Claude → Code 開啟 CLI 開關，或執行 `ocx claude config set --first-party on`；關閉時使用 `off`。若本機代理無法使用、CA 無法準備、設定無法讀取，或代理鍵由其他程式擁有，開啟要求會被拒絕。關閉仍可儲存。只有 Desktop 第一方模式開啟時，若要讓終端機完全原生直連，請在 shell 設定 `NO_PROXY='*'`。上述帳號風險也適用於 CLI。
+在 連線 → Claude 開啟 CLI 開關，或執行 `ocx claude config set --first-party on`；關閉時使用 `off`。若本機代理無法使用、CA 無法準備、設定無法讀取，或代理鍵由其他程式擁有，開啟要求會被拒絕。關閉仍可儲存。只有 Desktop 第一方模式開啟時，若要讓終端機完全原生直連，請在 shell 設定 `NO_PROXY='*'`。上述帳號風險也適用於 CLI。
 關閉 Claude 路由會保留由 OpenCodex 管理的代理設定。監聽器仍執行時，所有 Messages 請求原樣轉送；停止後，執行 OpenCodex 或關閉 Desktop/CLI 第一方模式前，直接執行 `claude` 無法連線。`ocx claude` 原生啟動只在有自有設定且未繼承外部 HTTPS 代理時設定 `NO_PROXY=*`。否則保留外部代理，並警告設定中的攔截仍生效；請關閉第一方模式或取消該設定。
 介面會區分設定無法讀取（unknown）、帶有 opencodex 權杖的代理 URL 卻搭配外部 CA（foreign：手動修正 HTTPS_PROXY / NODE_EXTRA_CA_CERTS），以及 Claude 路由已關閉但監聽器仍原樣轉送要求（disabled：重新啟動前關閉第一方模式以移除設定）。沒有監聽器時為 stopped；使用受管理的 CA 但連接埠或權杖不符時為 broken。第一方模式開啟但無法提供攔截服務時，stopped 和 broken 都顯示 routingOff：Claude 路由或攔截功能已關閉，或這台裝置是另一個 opencodex 中樞的用戶端；請在這台裝置上重新啟用攔截服務，或關閉第一方模式以移除設定。只有攔截服務可用時，stopped 才提示啟動 opencodex，broken 才提示執行 `ocx ensure` 或重新啟動。CLI 已開啟但沒有代理設定時為未套用；只開啟一個用戶端且代理正常時提示共享轉送；兩者皆關閉但代理設定仍在時提示殘留。
 unknown 表示 opencodex 無法確定設定是否仍指向自己的代理。外部 CA 搭配 127.0.0.1 上沒有權杖的代理時顯示 local：無法確認歸屬；若不再使用，請從 ~/.claude/settings.json 移除 HTTPS_PROXY。disabled 僅在設定與執行中的監聽器相符時出現；連接埠或權杖不相符時，即使路由關閉也顯示 broken。
@@ -155,7 +155,7 @@ OpenCodex 都會發佈新的授權單位，macOS 也會再次請求信任——�
 Picker 模式開啟期間，Claude Desktop 會透過 OpenCodex 存取網路。如果 OpenCodex 停止，Desktop 會離線，
 直到你完全重新啟動 Desktop 或關閉 Picker 模式。使用 `ocx claude desktop picker status` 查看狀態，
 使用 `ocx claude desktop picker trust` 重複信任步驟，或使用 `ocx claude desktop picker off` 關閉。
-儀表板的 **Claude → Desktop** 也有相同的切換開關。選取 Picker 設定檔後，請完全結束並重新開啟 Claude Desktop。
+儀表板的 **連線 → Claude Desktop** 也有相同的切換開關。選取 Picker 設定檔後，請完全結束並重新開啟 Claude Desktop。
 
 Picker 模式屬於第一方模式，因此[第一方帳號風險](#第一方自行選擇)同樣適用。
 
@@ -163,7 +163,7 @@ Picker 模式屬於第一方模式，因此[第一方帳號風險](#第一方自
 
 只有閘道模式會將以下設定檔寫入 Desktop。
 
-Claude Desktop 使用與 Claude Code 分開的設定檔。在儀表板開啟 **Claude → Desktop**，可把每條
+Claude Desktop 使用與 Claude Code 分開的設定檔。在儀表板開啟 **連線 → Claude Desktop**，可把每條
 可用路由放到四個系列之一：Opus、Fable、Sonnet 或 Haiku。新設定檔中所有路由一開始都在 Opus。
 第一個 Opus 路由會成為整體初始預設，且每個非空系列都一定會有一個系列預設。
 
@@ -269,7 +269,7 @@ ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 
-也可以在儀表板中透過 **Claude → Desktop → Code 分頁模型綁定** 完成同樣操作。綁定之後，在
+也可以在儀表板中透過 **連線 → Claude Desktop → Code 分頁模型綁定** 完成同樣操作。綁定之後，在
 Code 分頁選擇 **Sonnet 4.6** 時會由 `xai/grok-4.7` 回應。選擇器仍顯示 Anthropic 名稱，且
 Claude Code 的系統提示仍會把模型介紹為那個 Claude 模型，所以建議選擇平時不用的項目
 （**More models** 中的項目是不錯的候選）。綁定於下一個請求即生效，無需重新啟動 Desktop。
@@ -592,8 +592,8 @@ HMAC 等值標籤。**不會儲存提示文字、原始物件或跨執行穩定�
 
 ## GUI（Claude 頁面）
 
-儀表板側邊欄有一個專用的 **Claude** 頁面（位於 API 下方）和 **Claude ON** 開關
-（標籤特意在所有語言中保持一致）。該頁面顯示：
+儀表板的 **連線** 下有兩個分頁：用於 Claude Code 的 **Claude** 和 **Claude Desktop**。
+連線概覽中的 Claude 卡片也提供同一個連線開關。該頁面顯示：
 
 - 入站總開關（啟用開關）
 - 快速入門（`ocx claude`）和手動環境變數塊

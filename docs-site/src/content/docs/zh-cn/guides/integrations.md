@@ -14,7 +14,7 @@ description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | 运行中的网关立即生效 | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | 重启或执行 `/reload` 后 | 回环占位符 |
 | gjc | `~/.gjc/agent/models.yml` | YAML | 新会话，或打开 `/model` 时 | 非敏感回环占位符 |
-| DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml`（默认 `~/.dsh/settings.yaml`） | YAML | 热重载 | 非敏感回环 bearer 占位符 |
+| DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml`（默认 `~/.dsh/profiles/desktop/cordis.patch.yml`）；DSH Desktop 创建该 profile 之前为 `$DSH_HOME/settings.yaml` | YAML | 热重载 | 非敏感回环 bearer 占位符 |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | 新会话，或打开模型选择器后 | 回环占位符 |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | 新会话 | 回环占位符 |
 | ZCode | `~/.zcode/v2/config.json` | JSON | 重启后 | 回环占位符 |

@@ -78,6 +78,7 @@ The dashboard, the management API, and third-party client config ownership.
 
 | Doc | Scope |
 | --- | --- |
+| [`cli-management.md`](cli-management.md) | Terminal help and capability metadata, management-client output and the generated operating reference. |
 | [`gui-and-management-api.md`](gui-and-management-api.md) | Dashboard serving, authentication boundaries, /api/* ownership, and startup safety. |
 | [`dashboard-and-usage.md`](dashboard-and-usage.md) | Dashboard page contracts, usage accounting and request metrics, and per-surface management settings. |
 | [`clients/integrations.md`](clients/integrations.md) | Third-party client config ownership, snapshots, refresh, disable, and restore. |
@@ -114,6 +115,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `docs-site/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `gui/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`design-methodology.md`](design-methodology.md)<br>[`companion.md`](companion.md) |
 | `scripts/` | [`overview.md`](overview.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
+| `skills/ocx/` | [`cli-management.md`](cli-management.md) |
 | `src/adapters/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/cursor.md`](providers/cursor.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md)<br>[`adapters/registry.md`](adapters/registry.md) |
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
 | `src/bridge/` | [`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md) |
@@ -121,7 +124,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/chatgpt/` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
 | `src/claude/` | [`runtime.md`](runtime.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
 | `src/cli.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
-| `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`cli-management.md`](cli-management.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
 | `src/clients/` | [`clients/integrations.md`](clients/integrations.md) |
 | `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |

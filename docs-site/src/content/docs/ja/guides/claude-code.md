@@ -108,7 +108,7 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 
 ## Claude Desktop のモード: ゲートウェイ（デフォルト）と 1P
 
-ダッシュボードの **Claude → Desktop → 接続モード**、または
+ダッシュボードの **接続 → Claude Desktop → 接続モード**、または
 `ocx claude desktop apply --first-party|--gateway` で排他的なモードを選びます。
 
 ### ゲートウェイ（デフォルト）
@@ -138,7 +138,7 @@ OpenCodex 所有の選択済みゲートウェイ行、保存済みのゲート�
 
 ### Claude Code CLI の 1P
 
-Claude → Code で CLI の 1P をオンにするか、`ocx claude config set --first-party on` を実行します。オフには `off` を使います。プロキシの停止、CA の準備失敗、設定の読み取り失敗、他プログラムが所有するキーがある場合、オンへの切り替えは拒否されます。オフはプロキシが使えなくても保存できます。Desktop の 1P だけがオンのとき、ターミナルから完全に直接接続するにはシェルで `NO_PROXY='*'` を設定してください。上記のアカウントリスクは CLI にも適用されます。
+接続 → Claude で CLI の 1P をオンにするか、`ocx claude config set --first-party on` を実行します。オフには `off` を使います。プロキシの停止、CA の準備失敗、設定の読み取り失敗、他プログラムが所有するキーがある場合、オンへの切り替えは拒否されます。オフはプロキシが使えなくても保存できます。Desktop の 1P だけがオンのとき、ターミナルから完全に直接接続するにはシェルで `NO_PROXY='*'` を設定してください。上記のアカウントリスクは CLI にも適用されます。
 Claude のルーティングを無効にしても管理対象の設定環境変数は残ります。リスナーが動いている間はすべての Messages 要求を変更せず中継しますが、停止後は OpenCodex を起動するか Desktop/CLI の 1P をオフにするまで通常の `claude` は接続できません。`ocx claude` は管理対象の設定があり、外部の HTTPS プロキシを継承していない場合だけ `NO_PROXY=*` を設定します。外部プロキシは保持し、設定側の傍受が続くため 1P をオフにするか設定を解除するよう警告します。
 画面では設定を読めない unknown、opencodex のトークン付き URL と管理外 CA が組み合わさった foreign、Claude ルーティングがオフでも動作中のリスナーが要求をそのまま中継する disabled を区別します。foreign は HTTPS_PROXY / NODE_EXTRA_CA_CERTS を手動で直し、disabled は再起動前に 1P をオフにして設定を消してください。リスナーがなければ stopped、管理対象 CA でもポートやトークンが違えば broken です。1P がオンでもインターセプトを提供できなければ、stopped と broken は routingOff を表示します。Claude ルーティングまたはインターセプトがオフか、この端末が別の opencodex ハブのクライアントであるため、この端末で再度有効にするか 1P をオフにして設定を削除するよう案内します。インターセプトを提供できる設定の場合だけ、stopped は opencodex の起動、broken は `ocx ensure` または再起動を案内します。CLI だけオンでプロキシ設定がなければ未適用、片方だけオンで正常なら共有中継、両方オフでも設定が残れば残留設定を表示します。
 unknown は設定がまだ opencodex のプロキシを指すか判断できない状態です。外部 CA とトークンなしの 127.0.0.1 プロキシがある場合は local と表示します。所有者を確認できないため、使っていなければ ~/.claude/settings.json から HTTPS_PROXY を削除してください。disabled は設定と動作中のリスナーが一致する場合だけで、ポートやトークンが違えばルーティングがオフでも broken です。
@@ -156,7 +156,7 @@ macOS がログインキーチェーン内のローカル証明書認証局を�
 Picker モードが有効な間、Claude Desktop のネットワークは OpenCodex を経由します。OpenCodex が停止
 すると、Picker モードをオフにするか Desktop を完全に再起動するまで Desktop はオフラインになります。
 状態は `ocx claude desktop picker status`、信頼操作は `ocx claude desktop picker trust` で確認・実行できます。
-`ocx claude desktop picker off` またはダッシュボードの **Claude → Desktop** の切り替えでオフにできます。
+`ocx claude desktop picker off` またはダッシュボードの **接続 → Claude Desktop** の切り替えでオフにできます。
 Picker プロファイルを選択した後は、Claude Desktop を完全に終了して開き直してください。
 
 Picker モードは 1P の一部なので、[1P のアカウントリスク](#1pオプトイン)も同じように適用されます。
@@ -174,7 +174,7 @@ ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 
-ダッシュボードの **Claude → Desktop → Code タブのモデルバインディング** からも同じ操作ができます。
+ダッシュボードの **接続 → Claude Desktop → Code タブのモデルバインディング** からも同じ操作ができます。
 こうすると Code タブで **Sonnet 4.6** を選んだとき `xai/grok-4.7` が応答します。ピッカーには
 Anthropic の名前がそのまま表示され、Claude Code のシステムプロンプトもモデルにその Claude モデルだと
 伝えるため、普段使わない行（**More models** の項目が候補）を選ぶのがおすすめです。バインディングは
@@ -322,7 +322,7 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 - **`false`:** 使用不可。標識も付かず圧縮ウィンドウも注入しません
 - **従来の `maxContextTokens` 設定:** 自動コンテキストを自動でオフにします
 
-Claude ページで圧縮値を調整できます。**警告:** モデルの実際のコンテキストウィンドウより大きく上げると
+**接続 → Claude** で圧縮値を調整できます。**警告:** モデルの実際のコンテキストウィンドウより大きく上げると
 要約を開始する前にチャットエラーが発生します。
 
 1M 未満のネイティブ Anthropic モデルには自動で標識を付けません。直接 export した値が常に優先し、プロキシは**ユーザーが指定した**値を基準にどのモデルに安全に標識を付けるか決定します。
@@ -547,8 +547,8 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 
 ## GUI(Claude ページ)
 
-ダッシュボードサイドバーには API の下に専用 **Claude** ページと **Claude ON** トグルがあります。トグル
-ラベルはすべての言語で意図的に同じです。ページには次の項目が表示されます。
+ダッシュボードの **接続** には、Claude Code 用の **Claude** と **Claude Desktop** の2つのタブがあります。
+接続の概要にある Claude カードにも同じ接続スイッチがあります。ページには次の項目が表示されます。
 
 - 入力遮断スイッチ(使用トグル)
 - クイックスタート(`ocx claude`)と手動環境ブロック

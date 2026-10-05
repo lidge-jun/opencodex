@@ -230,28 +230,47 @@ Windows では、`ocx service status` は、ID 検証済みの OpenCodex プロ�
 
 Windows では、タスク スケジューラ エントリを作成するには昇格が必要です。認識されたローカライズされたアクセス拒否テキストは、既存のガイダンス パスを維持します。そのテキストが判読できない場合、フォールバックには、所有されているコマンド形状 `/create /tn opencodex-proxy /xml <non-empty-path> /f`、ステータス 1、および確認済みの非昇格トークンが必要です。ダッシュボードのスタートアップ セーフティ アクションは、UAC を自動的に要求できるようになります。そのフォールバックがトークンの状態を判断できない場合、元のスケジューラ エラーが保持されます。外部タスクおよび操作は、自動昇格マーカーを発行することはできません。ダッシュボードの UAC プロンプトを承認するか、管理者特権の PowerShell ウィンドウで `ocx service install` を再実行します。
 
+If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
+`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
+proxy is not running. The message includes the lock path, recorded PID, current liveness,
+executable name when available, and lease age. The process identity is unverified: the PID
+may have been reused, so liveness and executable name describe whichever process occupies
+that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
+process based only on this PID. A later mutation attempt can reclaim a stale lease once its
+age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-軽量の自動起動スクリプトを使用して、スクリプトベースの `codex` ランチャーを PATH 上にラップします。実際の `codex.exe` ターゲットは、正確な実行可能呼び出しの破損を避けるため、変更されないまま残されます。
+macOS と Linux では、`ocx codex-shim install` は解決済みの OpenCodex ホームに専用 wrapper `<OPENCODEX_HOME>/bin/codex` と、読み込むための `<OPENCODEX_HOME>/codex-shell-env.sh` を作成します。ネイティブランチャーは brew、npm、fnm が配置した場所に残るため、パッケージマネージャーによる更新やバージョンの巻き戻しでも再ラップは不要です。Windows では従来どおりスクリプトランチャーをその場でラップし、実際の `codex.exe` は変更しません。`codex.exe` しかない Windows 環境では `ocx service install` を使用してください。
+
+brew/fnm の PATH 設定後に、インストール時に表示された有効化コマンドを実行します。既定のホームの場合：
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+ホームを変更している場合は、表示された引用符付きのパスを使用してください。何度読み込んでも専用 bin の重複を除去して PATH の先頭に配置します。今後のシェルでも使うには、起動ファイルの PATH 設定後にこの行を自分で追加します。OpenCodex はシェル起動ファイルを編集せず、インストールは親シェルの PATH を変更しません。wrapper が実行可能なら、現在のシェルで未有効でもインストールは成功です。拒否された場合や実行できない場合は失敗します。`ocx status`、`ocx codex-shim status`、`ocx doctor`、`ocx connect` は未選択の wrapper を **not active** として有効化コマンドとともに報告します。connect の警告は終了コードを変更しません。エイリアス、関数、デスクトップやサービスからの起動には個別の設定が必要です。
 
 インストールまたは修復を確定する前に、OpenCodex はサービス起動をバイパスした状態で、保存済みランチャーを `--version` 付きで実行します。ランチャーが `codex` を再び shim に解決する、0 以外で終了する、5 秒を超える、子プロセスを残す、または安全に検証・クリーンアップできない場合、変更を拒否してロールバックします。したがって `codex-shim install` は無条件のインストールではありません。拒否された場合は、PATH エントリが具体的な実行ファイルまたはランチャーを指すよう Codex を再インストールしてから再試行してください。動的コマンドマネージャーのランチャーがこれらの検証を満たせない場合は、代わりに `ocx service install` を使用してください。
 
-アップグレード時には、現在の検証ガードを持たない既存の Unix shim を再生成して検証します。保存済みランチャーが安全でない場合、OpenCodex は危険な wrapper を残さず、古い shim を削除して元のランチャーを復元します。
+古い Unix のその場でラップする shim は、明示的な `ocx codex-shim install` でのみ移行します。記録済みのネイティブランチャーを復元しますが、すでにある新しいランチャーは置き換えません。その後、専用 wrapper をインストールします。復元後に専用 wrapper のインストールが失敗してもネイティブランチャーは復元されたままで、再試行できます。記録済みランチャーが存在しないか使用できない場合は、パッケージマネージャーで修復してください。別のインストールを推測したり、管理対象パスを再ラップしたりしません。
 
-完了した外部 Codex アップデートがインストールされている shim を上書きした場合、次の通常の `ocx` コマンドは安定した新しいランチャーをバックアップし、ディスパッチ前に shim を復元します。副作用のない検査コマンド `ocx system codex-cli-update check` と、予約された `ocx system codex-cli-update` 名前空間の不正な呼び出しは、この修復を行いません。まだ変更中のランチャーは変更されず、後で再試行されます。修復の失敗は、要求されたコマンドを失敗させることなく警告します。手動フォールバック: `ocx codex-shim install`。 `codexShimAutoRestore` を `false` に設定するか、プロセス レベルのオプトアウトの場合は `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` を設定します。
+Unix の自動修復は専用 wrapper の更新だけを行い、パッケージマネージャーのランチャーを書き換えたり古いその場の shim を移行したりしません。Windows では、完了した外部更新で shim が上書きされると、次の通常の `ocx` コマンドが安定した新しいランチャーを保存して shim を復元します。変更中のランチャーはそのままにして後で再試行します。`ocx status`、`ocx doctor`、`ocx codex-shim status`、`ocx system codex-cli-update check` とその予約名前空間の不正な呼び出しは、この自動修復を実行しません。失敗しても要求されたコマンドは失敗せず、警告を表示します。手動の対処は `ocx codex-shim install` です。`codexShimAutoRestore` を `false` にするか、プロセス単位で `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` を設定すると無効になります。
 
 |サブコマンド |アクション |
 | --- | --- |
 | `install` |シムを取り付けます（または古い場合は修理します）。 |
-| `uninstall` |シムを削除し、元の Codex バイナリを復元します。 |
+| `uninstall` | Unix の専用ファイルを削除し、ネイティブ Codex は保持します。Windows では元のランチャーを復元します。 |
 | `remove` | `uninstall`の別名。 |
-| `status` |シムの状態 (インストール済み、古い、または欠落) を報告します。 |
+| `status` | shim の状態と、専用 wrapper が PATH で有効かどうかを報告します。 |
 
 ```bash
 ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+Unix でアンインストールした後は、起動ファイルから読み込み行を削除し、シェルを再起動するか専用 bin を PATH から取り除いてください。所有する wrapper、環境ファイル、状態だけを削除し、パッケージマネージャーのランチャーは変更しません。古いその場の Unix shim は記録済みの復元情報を使って解除します。
 
 :::note[Windows のトークン環境]
 新しく生成される Windows CMD と PowerShell のシムは、実行後に呼び出し元の `OPENCODEX_API_AUTH_TOKEN` を元の状態に戻します。Codex とその子プロセスには、引き続きトークンが継承される可能性があります。
@@ -273,7 +292,7 @@ OpenCodex の更新後、既存の Windows シムにこの動作を適用する�
 
 `opencodex-proxy.service` の `EnvironmentFile=` または `OCX_API_TOKEN_FILE` は、プロキシプロセスだけを設定するものであり、独立して起動された `codex exec` に渡されることはありません。
 
-ランチャーを置き換える Codex のアップグレードによって、シムは削除されます。次に通常の `ocx` コマンドを実行すると復元されますが（上記参照）、その前に実行された `codex exec` は失敗します。`ocx doctor` は、この状態（env_key が設定済み、変数が未設定、シムが存在しないか正常でない、トークンファイルは存在する）を修復コマンドとともに "Codex env_key launch readiness" の項目で報告し、トークンを表示することはありません。トークンファイルの読み取りは、注入された `env_key` の契約には含まれません。起動元のプロセスがその変数を渡す必要があります。
+Unix のパッケージマネージャーによる更新では専用 wrapper は残ります。未有効なら表示されたファイルを読み込んでください。Windows または古いその場の shim では、ランチャーを置き換える更新によって shim が削除されます。Windows では、次に通常の `ocx` コマンドを実行すると復元されますが（上記参照）、その前に実行された `codex exec` は失敗します。`ocx doctor` は、この状態や未有効の wrapper（env_key が設定済み、変数が未設定、シムが存在しないか正常でない、トークンファイルは存在する）を修復または有効化の案内とともに "Codex env_key launch readiness" の項目で報告し、トークンを表示することはありません。トークンファイルの読み取りは、注入された `env_key` の契約には含まれません。起動元のプロセスがその変数を渡す必要があります。
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 

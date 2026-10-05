@@ -3,6 +3,7 @@ import { OAuthCallbackFlow } from "./callback-server";
 import { bindAnthropicIdentity, resolveAnthropicAccountIdentity } from "./anthropic-identity";
 import { generatePKCE } from "./pkce";
 import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
+import { outboundProxyConfigured, startupOutboundProxyConfigured } from "../lib/proxy-env";
 
 const CLIENT_ID = atob("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
@@ -40,6 +41,7 @@ export class AnthropicTokenError extends Error {
     message: string,
     readonly httpStatus: number | undefined,
     readonly oauthError: string | undefined,
+    readonly requestNotSent = false,
   ) {
     super(message);
     this.name = "AnthropicTokenError";
@@ -47,12 +49,35 @@ export class AnthropicTokenError extends Error {
 }
 
 async function postJson(url: string, body: Record<string, string | number>): Promise<string> {
-  const response = await fetch(url, {
+  const direct = !startupOutboundProxyConfigured && !outboundProxyConfigured();
+  const init: RequestInit & { protocol: "http1.1" } = {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),
-  });
+    // Pinned Bun 1.4.0: one HTTP/1.1 attempt, no keep-alive reuse or redirect following.
+    // Only without an outbound proxy can token-host DNS failure prove no request was sent.
+    redirect: "manual",
+    keepalive: false,
+    protocol: "http1.1",
+  };
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    if (direct && typeof error === "object" && error !== null
+      && "code" in error && error.code === "ENOTFOUND"
+      && "syscall" in error && error.syscall === "getaddrinfo"
+      && "hostname" in error && error.hostname === new URL(url).hostname) {
+      throw new AnthropicTokenError("Anthropic OAuth DNS lookup failed before connection", undefined, undefined, true);
+    }
+    throw error;
+  }
+  if (response.status >= 300 && response.status < 400) {
+    // A redirect can follow a completed POST and token rotation; it is not a rejection.
+    await response.body?.cancel().catch(() => {});
+    throw new AnthropicTokenError(`Anthropic OAuth redirect HTTP ${response.status}: outcome unknown`, undefined, undefined);
+  }
   const responseBody = await response.text();
   if (!response.ok) {
     let oauthError: string | undefined;

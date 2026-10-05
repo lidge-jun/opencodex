@@ -4,24 +4,28 @@ What each exit code means, which failures are worth retrying, and which mean sto
 
 ## Exit codes
 
-Set in one place (`runCliAction`), so every verb agrees:
+`runCliAction` maps many management failures; the whole CLI does not share one
+exit contract. Its common mappings and the main exceptions are:
 
 | Code | Cause | Retry? |
 |---|---|---|
 | 0 | success | — |
-| 2 | usage error: bad, missing, or unknown arguments | no; nothing was sent |
+| 2 | locally rejected usage in management handlers; also unsupported `doctor --json` | fix arguments |
+| 64 | usage validation in `capabilities`, `ready`, `resolve` | fix arguments; no discovery/request for invalid input |
 | 4 | HTTP 404 — the named account, provider, key, or route does not exist | no |
-| 5 | HTTP 409 — conflict; a lock is held or state moved under you | usually yes |
+| 5 | HTTP 409 — conflict; a lock is held or state moved under you | inspect first; stale baselines require review |
 | 1 | everything else: transport failure, 5xx, unexpected errors | depends on `reason` |
 
 Two consequences worth internalizing:
 
 **Exit 0 means no error was reported, not that a mutation happened.** Preview verbs
 (`storage cleanup` without `--yes`) exit 0 after a read-only preview. Parse `--json` (or the
-human summary) to see whether anything was written. A command that failed will not exit 0.
+human summary) to see whether anything was written. Read saved/applied/skipped
+fields and warnings as well; a successful save can leave live convergence pending.
 
-**Exit 2 means nothing was sent.** A usage error is rejected locally, before any request. Retrying
-the same arguments produces the same result; fix the arguments.
+**A local usage refusal is not a transport failure.** Fix the arguments rather than
+retrying unchanged. Unknown root commands and unavailable explicit help topics use
+exit 1; a capability route miss uses 4 even when an undeclared handler exists.
 
 ## Distinguishing "not running" from "failing"
 
@@ -29,9 +33,11 @@ the same arguments produces the same result; fix the arguments.
 ocx ready --json
 ```
 
-`ready` is the discriminator. If it fails or reports `ready: false`, nothing else will work and the
-answer is to start or wait for the proxy. If `ready` is true and one specific verb fails, the
-problem is that route or its arguments — not the proxy.
+Use readiness before live management. `pending` permits a bounded wait; `failed`
+and `unreachable` need diagnosis. Offline help, local config and local Lab reads
+still work without a proxy: do not start one just to perform those tasks. A ready
+proxy can still refuse a route, serve an older version, or be the wrong role.
+Check `status --json` and its `versionSkew` and target information.
 
 A transport failure exits 1 and names the underlying cause (connection refused, DNS, TLS). Those
 used to be indistinguishable; they are now reported separately, so read the message.
@@ -56,11 +62,14 @@ and repeating the call produces the same error indefinitely.
 
 ## A retry policy that does not spin
 
-1. Exit 2 → fix arguments. Never retry unchanged.
-2. Exit 4 → the target does not exist. List first (`account list`, `provider list`, `access key
-   list`) rather than retrying.
-3. Exit 5 or a 503 with `Retry-After` → wait the stated interval, retry **once**. If it fails the
-   same way twice, report it instead of looping.
+1. Exit 2 or 64 → fix arguments. Never retry unchanged.
+2. Exit 4 → distinguish a missing resource from a missing declaration. For a
+   resource, list first (`account list`, `provider list`, `access key list`); for
+   a declaration, consult family help. Do not retry the same lookup.
+3. For a read or a confirmed pre-write contention refusal, wait the stated
+   `Retry-After` interval and retry **once**. An exit 5 from provider apply or profile update requires
+   fresh review, not a timed retry. Never repeat an uncertain or persisted write
+   merely because its exit code is nonzero.
 4. Exit 1 with a credential-conflict reason → run `ocx doctor` and report. Do not retry.
 5. Exit 1 otherwise → read the message. A transport failure may be worth one retry; an unexpected
    5xx is worth reporting.
@@ -136,3 +145,204 @@ Starring the repository has no CLI verb and no failure code, because it has no C
 spends the user's GitHub identity and the server requires a dashboard session for exactly that
 reason. `ocx inspect star` reads status; if starring is wanted, ask the user.
 
+
+## Provider save and convergence failures
+
+Live provider lifecycle, pacing and batch operations can return `success: true`
+with a nonzero exit: the configuration was saved but `catalogRefresh` failed or
+was skipped as busy, stale, refused or unavailable. Preserve both facts. Read back
+with `ocx provider snapshot --json` (and pacing read for pacing changes), then
+inspect the reported convergence issue. Do not resend an add/remove/apply to
+repair catalog refresh. Null, absent or `not-requested` refresh does not mean
+client synchronization occurred, even when the command exits 0.
+
+Local add with `--sync --json` also really attempts synchronization after saving.
+No running proxy returns `sync.status: "not-running"`, `sync.ok: false`,
+`needsSync: true`, and exit 1. Refused or failed sync is nonzero too; no rollback
+is implied. Applied sync clears `needsSync`; policy-skipped and catalog-only
+outcomes leave it true. JSON is an output choice, not a dry-run flag.
+
+A stale batch baseline returns HTTP 409 / exit 5. Obtain a fresh snapshot from the
+same intended host/context, compare concurrent changes, and rebuild the next
+document for review. Do not silently replace the baseline, auto-rebase, or retry.
+Pacing scalar PATCH has no baseline check and can overwrite a concurrent edit;
+use snapshot/apply for compare-and-swap. Batch removal requires `--yes` and does
+not include single-provider DELETE's OAuth account cleanup.
+
+Invalid/oversized input, interactive stdin, missing removal confirmation and
+conflicting flags return exit 2 before mutation. Files must be regular UTF-8 JSON;
+each read has a 4 MiB cap and 30-second deadline, and the combined batch request
+also has a 4 MiB cap. Fix the input rather than retrying unchanged. Provider errors
+use fixed safe messages and never expose arbitrary nested server bodies. An
+unusable receipt or transport failure can mean the write outcome is unknown:
+inspect the target rather than claiming rollback or trying a local fallback.
+
+## Model and routing recovery
+
+Local custom-model saves have opportunistic sync: no proxy yields
+`sync.status: "not-attempted"`, `needsSync: true` and exit 0. Do not confuse this
+with an explicitly requested provider `--sync` failing because no proxy exists.
+Attempted failed/refused/incomplete custom-model sync returns nonzero after saving;
+policy-skipped success can still exit 0 while needing sync. Local JSON removal
+requires `--yes`; live removal always requires it and never falls back locally.
+
+New live custom, picker, display-name and profile writes, plus combo set, return
+1 with the saved receipt when catalog refresh is skipped, failed or degraded.
+Display-name can recognize HTTP 503 with `saved: true` and failed refresh as this
+partial result. Inspect current state; a nonzero exit does not mean rollback.
+Other errors print fixed stderr messages, not JSON error envelopes. Unknown write
+outcomes must not trigger automatic repetition.
+
+For manual picker order, supply each routed public ID exactly once with the
+required featured prefix. Native-inclusive saved order requires an explicit
+reset/default decision before replacement; do not reset merely to suppress a
+refusal. A changed observation before PUT returns 409/exit 5. Re-read status and
+identities, review the list and resubmit only the intended edit. This recheck is
+not CAS. Most-used refuses incomplete usage rather than ranking missing data as zero.
+
+Profile update requires the original explicit revision and an editable-only
+file. A 409/exit 5 means read show again and review concurrent changes; never
+silently substitute a fresh revision, retry, or fall back to create. Create/update
+may activate Lab and enabled automation, including upstream probes, so retrying
+is not an observational operation. Deletion has no revision protection.
+
+Combo target files cannot be combined with `--targets`. An incompatible retained
+native alias can make `--native-alias off` refuse; clear that alias too only if
+that is the intended change. `set` is an upsert without CAS. Statistics with
+incomplete history can exit 0: preserve coverage limits and nullable measurements;
+never convert the report into unsupported cost or savings claims.
+
+## Account, settings and v2 boundaries
+
+Unsupported pool fields or conflicting account selectors refuse before writing.
+Null stored policy, effective state and inert pooling are different; do not turn
+null into false or retry an unsupported setting. OpenAI per-account auto-switch
+requires `--account`; omission retains pool scope. Unavailable quota activation
+may return 409: inspect window availability, never enable paid credits or consume
+a reset grant as recovery. Anthropic grant GET may read upstream but never spends.
+
+Login options depend on the actual flow. Device-only browser flags, add-account
+on reauth/Codex, or either new flag on native Kiro `--method` refuse before login.
+Preserve flow identity on cancellation/expiry; do not restart or verify automatically.
+Live OAuth logout failure never authorizes local credential deletion.
+
+Memory/compaction set replaces a full block, not just supplied phase/scope fields.
+Memory `{}` or clear/null restores existing routing without disabling the pipeline;
+compaction clear restores ordinary compaction. Read back before fixing an unintended
+scope. A settings write can be accepted yet return pending/unverified and exit 1.
+Missing Ultra Fast read-back must remain unverified. Sidecar saved state and native
+apply are separate; inspect ownership rather than replaying a refused apply.
+
+v2 parse failures preserve local exit 1 and live exit 2. Advisory acknowledgment
+is accepted only for explicit live mode; never auto-ack to bypass refusal. A 502
+from live v2 may mean partial native application, not rollback. Local sync can
+actually run without a discovered proxy port; void/malformed evidence exits 1 as
+unverified. Inspect `v2 status` on the same local/live target before recovery.
+Unknown state, saved state and client convergence must remain separate.
+
+## Integration and maintenance recovery
+
+Preview is an observation: valid refused/no-op plans exit 0. Read `canApply`,
+`willChange` and refusal reason before choosing a write. Never auto-confirm drift,
+overwrite a conflict, or treat a fingerprint as permission. An unbound refusal
+fingerprint cannot commit. A stale bound write exits 5, leaves stdout empty and
+prints a fixed re-preview instruction on stderr; preserve the exact original
+client/action/profile/opId/default-map/drift intent when preparing a new preview.
+Do not adopt a replacement fingerprint automatically. Syntax errors exit 2,
+not-found 4, malformed/runtime failures 1. Preview needs passive catalog evidence;
+unavailability does not trigger a provider refresh inside the command.
+
+History deletion is irreversible. The latest recovery row is protected. If a
+receipt says `snapshotRemoved:false`, the row is already retired and exit is 1;
+inspect before further cleanup, never claim rollback or repeat deletion. Aside
+sync empty results mean no eligible profiles; partial results leave successful
+writes intact and exit 1. There is no profile selector, local-write fallback or
+broad-sync fallback for that command. Preserve residual and redacted backup facts.
+
+Runtime Desktop import saves only and retains server conflict/availability/applied
+marker checks. On refusal, do not import locally or apply native state as a fallback.
+Cursor installer unavailable is a valid read even with null reason; no download,
+installation or trust change follows automatically.
+
+Hub activation off can return outer HTTP 200 with `available:false`: the CLI emits
+that narrow observation and exits 1. It is not an available empty Hub. Inner 409
+is exit 5; client-role, transport and malformed replies remain failures. Inspect
+the intended Hub and its activation setting without automatically changing them.
+
+Storage target forms conflict; omitted enable remains unchanged and set does not
+run cleanup. Forced link revoke requires `--force --yes`. Success reports remote
+cleanup skipped, and idempotent not-found reports it unverified; neither confirms
+an attempted remote disconnect. Review the remote-client disconnect recovery
+separately. Do not interpret exit 0 as proof that all remote state was removed.
+
+## Filtered observation recovery
+
+`logs filter` rejects follow/events, conflicting outputs, unknown/repeated flags
+and invalid bounds before discovery. Empty matches are a successful observation
+of the scanned window. Malformed or oversized replies and transport failures are
+nonzero, never an empty success. Reduce `--scan-limit` for an oversized snapshot;
+reducing `--limit` alone cannot reduce the fetched window. No automatic history
+scan or retry occurs.
+
+`usage --search` is local model-row selection after the scoped read. A search
+miss leaves report totals intact; `filter.matched:false` and incomplete-history
+markers remain independent. Invalid model data must not be read as no matches.
+Omit search to recover the existing report layout, not to change authorization.
+
+`companion usage` retains available ranges when another range fails, prints a
+fixed partial-failure diagnostic and exits 1. Do not sum unavailable data as zero.
+Valid server defaults from a corrupt settings file remain usable but visibly
+flagged; malformed settings stop before usage reads. Each settings/range GET has
+its own 10-second fetch/body deadline after discovery and 32 MiB body bound;
+these are not a 10-second whole-command promise. Signals exit 130/143 without
+late output. A retry is a new observation, not an atomic continuation.
+
+API-key `account list --quota` distinguishes unsupported, passive, unmeasured and
+unavailable readings. Missing quota-mode evidence on a returned key row is
+unverified/nonzero; invalid consumed fields fail instead of becoming zero.
+`--refresh` bypasses the existing quota cache only when quota was requested.
+Do not loop on failed probes: explicit quota reads may contact providers.
+
+## Observation and selected-key recovery
+
+Follow usage errors exit 2. Request/injection follow failures stop with fixed stderr
+and exit 1; they do not silently truncate, retry or reconnect. A 32 MiB window
+refusal suggests reducing `--limit`. Detected runtime drift requires an explicit
+restart of follow. Ctrl-C/SIGINT exits 130, SIGTERM 143, without subsequent polls
+or output. Retained rows are observations, not proof of a complete history. Use
+log events for resets/removals; legacy row JSONL cannot reconstruct them. Injection
+has no epoch/gap indicator and cannot promise lossless restart recovery.
+
+Timeline exclusions use `--hide-provider`; `--provider` is unsupported. Stale or
+future bucket windows fail instead of appearing as current usage; only the
+request-time end or its immediate successor after a rollover is accepted. Read the
+applied filter acknowledgment and incomplete evidence rather than retrying a zero
+plot as a fault. Management health can report status ok with degraded spendLedger;
+liveness and subsystem readiness are different. Key-scoped usage refuses an
+unacknowledged filter; connected clients reject the flag before enrolled-key access
+or network. Unknown acknowledged IDs can legitimately match nothing.
+
+Rename accepts only a unique key identity/name and a valid new label. Usage or
+ambiguous/missing selector exits 2; an unconfirmed write exits 1 with fixed stderr.
+Re-list masked state before retrying. It never rotates keys or broadens scopes.
+
+Selected-key model/audio input is explicit bounded stdin in the operator's private
+terminal. Invalid grammar/input exits 2 before a data request; input timeout or
+operation/target/HTTP/response-size/schema failure exits 1. Never repair failure by using an
+admin/enrolled credential, another protocol, another origin, automatic key capture
+or a repeated paid request/upload. Model tests only advance after exact native
+credential-required 401; authless/unrecognized control means verification unavailable,
+not a broken key. Chosen-key JSON operational failure preserves the versioned
+observations with fixed stderr. Unkeyed legacy JSON remains the original payload.
+
+A usable limited model reply is visibly limited, not unsupported. Refusal, content
+filter, tool-only or malformed replies cannot establish success. Even a success
+report cannot certify atomic key admission, scope or billing identity. Only exact
+key occurrences in permitted text are redacted, not every possible encoding.
+
+Transcription failure prints no stdout, only fixed stderr/nonzero; successful JSON
+is `{text}`. Do not re-upload automatically. Live-check operational failures retain
+the ready/close DTO; readiness plus unverified close is partial/exit 1. A normal
+close after earlier failure is still failure. No raw frames/errors or credential
+carriers are exposed. Timeouts and cancellation close local resources without
+proving upstream lease release or absence of cost. Signals return 130/143.

@@ -35,9 +35,9 @@ function distance(left: string, right: string, limit: number): number {
 export function suggestHelpPaths(path: readonly string[]): string[][] {
   if (!path.length || path.length > MAX_PATH_DEPTH || !path.every(safeToken)) return [];
   const result = resolveHelpPath(path);
-  if (result.kind !== "unavailable") return [];
+  if (result.kind !== "unavailable" || result.path.length > MAX_PATH_DEPTH) return [];
   const parent = result.parent ?? [];
-  const token = path[parent.length].toLowerCase();
+  const token = result.path[parent.length].toLowerCase();
   const limit = token.length < 6 ? 1 : 2;
   return helpRecoveryCandidates(parent).map(candidate => ({
     path: candidate.path,

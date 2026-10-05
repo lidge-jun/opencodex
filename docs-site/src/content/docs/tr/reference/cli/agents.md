@@ -144,13 +144,15 @@ varsayılan olarak `OCX_DEBUG=1`'den gelir (eski `OCX_DEBUG_FRAMES=1` de
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-OpenCodex kabul API anahtarlarını yönetin ve harici uç noktaları ile modelleri
-inceleyin. `ocx api-key <list|create|remove> ...`, `ocx access key`'in bir takma
-adıdır.
+OpenCodex erişim API anahtarlarının listesini, harici uç noktaları ve modelleri inceleyin. `ocx api-key`, `ocx access key` komut ailesinin takma adıdır.
+
+Anahtar oluşturma ve anahtar yenilemeyi başlatma işlemleri, hem metin hem de JSON çıktısında yalnızca bir kez gösterilen açık metin kimlik bilgisi döndürür. Ajanlar bu adımları, ajan oturumu dışında bir insanın doğrudan kullandığı terminale bırakmalıdır. Anahtarın kendisini sohbette istemeyin; yalnızca yapılandırmanın ve bağlantı testinin tamamlandığına dair onayı ve gizli olmayan anahtar ile yenileme kimliklerini alın.
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+Yeni anahtarın yapılandırılıp doğrulanması, eski anahtarı iptal etme izni değildir. Yenilemeyi kesinleştirmek veya eski anahtarı silmek için o anahtarın iptaline yönelik ayrıca açık izin gerekir. İzin verilen işlemden sonra listeyi yeniden kontrol edin. Doğrudan API çağrılarıyla bu süreci aşmaya çalışmayın.
 
 ## İstemci entegrasyonları
 
@@ -278,8 +280,7 @@ diğer sağlayıcıları, ajanları ve MCP girdilerini yok eder.
 :::
 
 Hiçbir anahtar asla serileştirilmez. Yapılandırmalar belgelenmiş bir ortam
-referansı veya gizli olmayan bir geri döngü yer tutucusu taşır. Bir geri döngü
-proxy'si (`127.0.0.1`, varsayılan) hiçbir kabul anahtarı gerektirmez. Referans
+referansı veya gizli olmayan bir geri döngü yer tutucusu taşır. Geri döngü adresi (`127.0.0.1`) tek başına anahtarsız erişimi kanıtlamaz; hedefin politikasını ve uç noktasını kontrol edin. Seçili anahtarla model/ses CLI komutları geri döngüde de açık anahtar girişi gerektirir. Referans
 verilen bir değişkeni yalnızca istemci şeması desteklediğinde ve proxy geri
 döngünün ötesine bağlandığında ayarlayın; kabul anahtarlarının nasıl verildiğini
 görmek için [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim)
@@ -330,7 +331,9 @@ Sınırlı okuma boyunca yerel tanıtıcılar üst dizinleri ve dosyaları açı
 
 Kimlik veya özet yalnızca gözlem anındaki dosyaları tanımlar; kalıcı güncelleme izni değildir. Seçilen çalışma zamanını, geçmiş yükleyiciyi, etkin npm yapılandırmasını veya araçların gerçekliğini kanıtlamaz. Verilen Node yalnızca gözlemlenir; başlatıcının onu seçeceği kanıtlanmaz. Hiçbir hedef çalıştırılmaz; kayıt deposu isteği, kurulum, yapılandırma yazımı veya süreç denetimi yapılmaz. Mevcut Windows `check`, aday veya yapılandırma dosya sistemi G/Ç işlemlerini hâlâ yapmaz.
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]`, çalışan bir proxy olmadan yerel yapılandırmayı gösterir. `show` atlandığında bayraklardan biri veya ikisi herhangi bir sırayla kullanılabilir. `--source`, tanılama kaynağını, hataları ve uyarıları içerir ve yalnızca görüntüleme için kabul edilir. `--json`, açıkça belirtilen bir eylemden önce gelebilir; çalıştırılan eylemi değiştirmez. Yinelenen `--json` veya `--source` bayrakları ve bilinmeyen bağımsız değişkenler reddedilir.
 
 Doğrulanmış OpenCodex yapılandırmasını inceleyin ve güvenle değiştirin. `show`
 ve `get` sırları maskeler. İçe aktarma yazmadan önce doğrular ve `--yes`

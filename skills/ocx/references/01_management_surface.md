@@ -3,16 +3,13 @@
 
 # The `ocx` management surface
 
-Every capability the CLI declares, with the management routes it drives and whether it
-mutates state. This file is generated from the same table `ocx capabilities --json`
-serves, so it cannot describe a command that does not exist.
-
-Ask the running binary instead of trusting this file when the two disagree:
+Declared capabilities, grouped by operating task. This index is not every CLI verb.
+Read the chapter for routes, flags and mutation notes; use the running binary when versions differ.
 
 ```bash
-ocx capabilities --json                 # the whole table
-ocx capabilities --mutating-only --json  # only state-changing verbs
-ocx capabilities --route /api/logs      # which verbs drive one route
+ocx capabilities --json                 # the declared table
+ocx capabilities --mutating-only --json  # declared state-changing verbs
+ocx capabilities --route /api/logs       # declarations for one route
 ```
 
 ## Resolved before dispatch
@@ -24,1314 +21,1346 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | `--version` `-v` `version` | Print the CLI version and exit. |
 | `help` `--help` `-h` | Print the command list, or one command's usage with `ocx help <command>`. |
 
+## Task chapters
+
+| Chapter | Declared capabilities |
+|---|---|
+| [lifecycle](01_surface_lifecycle.md) | 12 |
+| [providers-models](01_surface_providers-models.md) | 47 |
+| [accounts](01_surface_accounts.md) | 40 |
+| [agents-routing](01_surface_agents-routing.md) | 48 |
+| [integrations](01_surface_integrations.md) | 40 |
+| [observe-system](01_surface_observe-system.md) | 92 |
+| [access-remote](01_surface_access-remote.md) | 28 |
+| [lab](01_surface_lab.md) | 21 |
+
 ## Read-only capabilities
 
-Safe to run at any time; none of these change state.
-
-### `ocx link port`
-
-Allocate a free loopback port for a remote home link.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the selected port as JSON. |
-
-JSON mode: `payload`.
-
-### `ocx link status`
-
-Read link listener and tunnel status.
-
-| Method | Route |
-|---|---|
-| GET | `/api/link/status` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the K16 status payload as JSON. |
-
-JSON mode: `payload`.
-
-### `ocx remote-workspace status`
-
-Read local executor enrollment and available capabilities without printing credentials.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the public local executor status. |
-
-JSON mode: `payload`.
-
-- Executor-local operation; Hub consent and session control stay in the dashboard.
-
-### `ocx models price`
-
-Read the saved manual price for an exact provider/model selector.
-
-| Method | Route |
-|---|---|
-| GET | `/api/providers/{provider}/model-costs` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit provider, modelId, and cost (null for automatic pricing). |
-
-JSON mode: `envelope`.
-
-- The provider must be configured; everything after the first slash is the exact upstream model ID.
-
-### `ocx status`
-
-Proxy status, injection state, and version skew between this CLI and the running proxy.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the status envelope as JSON. |
-
-JSON mode: `envelope`.
-
-- Reads /healthz plus local config; drives no management API route.
-
-### `ocx resolve`
-
-One JSON document naming the config home, the effective port, and the identity-checked proxy liveness verdict.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the resolve document as JSON (the shell contract). |
-
-JSON mode: `envelope`.
-
-- Exit 0 carries a trustworthy verdict (live or proven absent); exit 1 means the CLI could not resolve and a caller must refuse to guess — unknown liveness never reads as absent.
-- Built for embedding shells (desktop app): the liveness budgets stay owned by src/server/proxy-liveness.ts.
-
-### `ocx capabilities`
-
-List the declared CLI capabilities and the management routes they drive.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the full capability table as JSON. |
-| `--mutating-only` | boolean | Restrict output to capabilities that mutate state. |
-| `--route` | string | Show which capabilities drive a management route. |
-
-JSON mode: `envelope`.
-
-- Start here when driving ocx programmatically: it is the declared surface index, not a complete verb list.
-
-### `ocx provider list`
-
-Configured providers with connectivity and selected models.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the provider list as JSON. |
-| `--jsonl` | boolean | Emit one configured provider per JSON line. |
-
-JSON mode: `envelope`.
-
-- Reads local config; drives no management API route.
-
-### `ocx provider resets`
-
-Recently detected quota resets and whether reset notifications are enabled.
-
-| Method | Route |
-|---|---|
-| GET | `/api/quota-resets` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit reset events as JSON. |
-| `--limit` | number | Limit returned events; defaults to 20, capped at 100. |
-
-JSON mode: `payload`.
-
-### `ocx account history`
-
-Cached quota observations for one stored Codex pool account.
-
-| Method | Route |
-|---|---|
-| GET | `/api/codex-auth/quota/history` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the bounded observation history. |
-| `--limit` | number | Return the newest 1 to 200 observations. |
-
-JSON mode: `payload`.
-
-- Use account history openai <pool-account-id>. Reads cached observations only; no refresh or warmup. Native main is not included.
-
-### `ocx account list`
-
-Codex OAuth accounts with pool priority and pause state.
-
-| Method | Route |
-|---|---|
-| GET | `/api/codex-auth/accounts` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the account list as JSON. |
-
-JSON mode: `payload`.
-
-- STATUS names `paused` alongside `selected`: a paused-but-selected account still receives requests.
-- `--quota` shows cached Codex windows (including 5h); `--refresh` bypasses the server TTL.
-
-### `ocx usage`
-
-Token and estimated-cost report over a time range.
-
-| Method | Route |
-|---|---|
-| GET | `/api/usage` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--range` | string | today | 1d | 7d | 30d | all |
-| `--since` | string | Inclusive start: epoch milliseconds or full ISO datetime with timezone; requires --until and overrides --range. |
-| `--until` | string | Inclusive end: epoch milliseconds or full ISO datetime with timezone; requires --since. |
-| `--provider` | string | Restrict to one provider. |
-| `--model` | string | Restrict to one model id. |
-| `--json` | boolean | Emit the usage report as JSON. |
-
-JSON mode: `payload`.
-
-- Per-account totals are withheld under `--provider` or `--model`: account rows cannot be honestly re-partitioned by provider, so the report says so rather than printing an empty table.
-- An `(ambiguous)` account row aggregates several accounts; do not read it as one identity.
-
-### `ocx logs`
-
-Recent request log rows, filterable by provider, model, conversation, account, and status.
-
-| Method | Route |
-|---|---|
-| GET | `/api/logs` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--provider` | string | Restrict to one provider, matching failover attempts too. |
-| `--model` | string | Restrict to one model id, matching failover attempts too. |
-| `--conversation` | string | Restrict to one conversation id (`--conversationId` is accepted too). |
-| `--account` | string | Restrict to one account log label (`main`, `p<hex6>`, `o<hex6>`), matching failover attempts too. |
-| `--status` | string | An exact code (429) or a class (5xx). |
-| `--limit` | number | Row cap; defaults to 200. |
-| `--follow` | boolean | Poll for new rows; add --jsonl to emit JSONL. |
-| `--json` | boolean | Emit the server payload as JSON. |
-| `--jsonl` | boolean | Emit one row per line. |
-
-JSON mode: `payload`.
-
-- `--provider` and `--model` both match a failover attempt, so a request is findable by what actually served it, not only by what was asked for.
-- Rows print `conv=<id>` when the entry carries one, so a conversation filter can be told apart from an empty result.
-- Rows print `acct=<label>` when the account is known, so an `--account` filter can be told apart from an empty result.
-- `--follow` deduplicates by row id and cannot be combined with `--json`.
-
-### `ocx storage report`
-
-Disk usage under CODEX_HOME, with the log-guard protection report.
-
-| Method | Route |
-|---|---|
-| GET | `/api/storage` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the storage report as JSON. |
-
-JSON mode: `payload`.
-
-### `ocx inspect config`
-
-The effective merged configuration the proxy is running.
-
-| Method | Route |
-|---|---|
-| GET | `/api/config` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the config as JSON. |
-
-JSON mode: `payload`.
-
-### `ocx inspect catalog`
-
-The generated model catalog served to clients.
-
-| Method | Route |
-|---|---|
-| GET | `/api/catalog` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the catalog as JSON. |
-
-JSON mode: `payload`.
-
-### `ocx inspect routing-analytics`
-
-Aggregate routing outcomes per provider and model.
-
-| Method | Route |
-|---|---|
-| GET | `/api/routing-analytics` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the analytics payload as JSON. |
-
-JSON mode: `payload`.
-
-### `ocx inspect pacing`
-
-Request-pacing state for one provider or all of them.
-
-| Method | Route |
-|---|---|
-| GET | `/api/provider-request-pacing` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--name` | string | Restrict to one provider; omitted means every provider. |
-| `--json` | boolean | Emit the pacing state as JSON. |
-
-JSON mode: `payload`.
-
-- An unknown provider name is a 404 rather than an empty result.
-
-### `ocx inspect key-providers`
-
-Providers that authenticate with an API key rather than OAuth.
-
-| Method | Route |
-|---|---|
-| GET | `/api/key-providers` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the provider list as JSON. |
-
-JSON mode: `payload`.
-
-### `ocx inspect codex-prompt`
-
-The Codex system prompt state, or the prompt text itself.
-
-| Method | Route |
-|---|---|
-| GET | `/api/codex-prompt` |
-| GET | `/api/codex-prompt/text` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--text` | boolean | Print the prompt body verbatim instead of its metadata. |
-| `--json` | boolean | Emit the prompt metadata as JSON. |
-
-JSON mode: `payload`.
-
-- Read-only by design: the six mutating prompt routes require a dashboard session.
-
-### `ocx inspect client-config`
-
-The generated configuration snippet for a supported client.
-
-| Method | Route |
-|---|---|
-| GET | `/api/client-config` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--client` | string | Required client id; the route names every accepted value on error. |
-| `--json` | boolean | Emit the snippet payload as JSON. |
-
-JSON mode: `payload`.
-
-### `ocx inspect star`
-
-Whether this repository is starred by the signed-in GitHub account.
-
-| Method | Route |
-|---|---|
-| GET | `/api/github/star` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the star status as JSON. |
-
-JSON mode: `payload`.
-
-- Starring is never available from the CLI; the verb says so rather than offering a flag that cannot work.
-
-### `ocx inspect windows-tray`
-
-Windows tray helper state.
-
-| Method | Route |
-|---|---|
-| GET | `/api/windows-tray` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the tray state as JSON. |
-
-JSON mode: `payload`.
-
-### `ocx system codex-app-server`
-
-Codex app-server reachability and process state, as the dashboard sees it.
-
-| Method | Route |
-|---|---|
-| GET | `/api/system/codex-app-server` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the app-server state as JSON. |
-
-JSON mode: `payload`.
-
-- The GUI reads this state directly; without a verb an agent could not tell whether the Codex app-server was reachable at all.
-
-### `ocx system codex-cli-update check`
-
-Inspect a configured Codex CLI candidate and its ownership provenance.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the redacted provenance report as JSON. |
-
-JSON mode: `envelope`.
-
-- Proof-bound published-launcher context authenticates the configured candidate snapshot, not successful Codex execution; this check does not attest or admit a selected runtime.
-- On Windows this first slice performs no candidate or configuration filesystem I/O: only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels; every other Windows candidate fails closed.
-- Makes no package-registry request.
-- Does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.
-
-### `ocx system codex-cli-update attest`
-
-Observe the selected or explicitly named Windows npm Codex installation files without enabling updates.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--candidate` | string | Absolute npm codex.cmd or package bin/codex.js path; all four paths are all-or-none. |
-| `--npm-prefix` | string | Absolute prefix containing node_modules/@openai/codex. |
-| `--npm-cli` | string | Absolute node_modules/npm/bin/npm-cli.js path. |
-| `--node` | string | Absolute node.exe path; observed, never executed. |
-| `--json` | boolean | Emit the path-free installation identity observation. |
-
-JSON mode: `envelope`.
-
-- Opt-in Windows x64 local-volume inspection using held native file handles; refuses reparse points, active writers and unsupported layouts.
-- Without explicit paths, the proof-bound launcher snapshot identifies the selected candidate: the configured CODEX_CLI_PATH or the first codex on the captured PATH, with an OpenCodex wrapper resolving to its codex.opencodex-real backing. Discovery only proposes paths; the held-handle observation remains the authority.
-- Success binds observed file identities and bytes, not selected-runtime admission or installer ownership.
-- selectionAttested, managed and applyAllowed remain false. The digest is an observation, not a durable update permit.
-- Does not run the named Codex/npm/Node files, query a registry, install software, control processes or persist state.
-
-### `ocx claude desktop status`
-
-Applied-vs-desired Claude Desktop state, including staleness, drift, and health.
-
-| Method | Route |
-|---|---|
-| GET | `/api/claude-desktop/status` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the live status as JSON. |
-
-JSON mode: `payload`.
-
-- Distinct from `claude desktop show`, which reports what this machine WOULD write; this reports what is actually in effect, which only the running proxy knows.
-
-### `ocx claude desktop picker status`
-
-First-party picker mode: whether Claude Desktop's Code tab lists opencodex models, and what is missing if not.
-
-| Method | Route |
-|---|---|
-| GET | `/api/claude-desktop/picker` |
-
-JSON mode: `none`.
-
-- Reports desired, effective, keychain trust, the Desktop egress profile, the model count and a reason with the next command to run.
-
-### `ocx api protocols`
-
-Read the protocol contract version, API surfaces, protocol settings and feature vocabulary.
-
-| Method | Route |
-|---|---|
-| GET | `/api/protocols` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--provider` | string | Add one configured provider's upstream wire and who decided it. |
-| `--json` | boolean | Emit the GET /api/protocols body. |
-
-JSON mode: `payload`.
-
-### `ocx combo discover`
-
-List configured System One decision rows and catalog models that look like decision services.
-
-| Method | Route |
-|---|---|
-| GET | `/api/combos/decision-discovery` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--query` | string | Match catalog rows by this text instead of the built-in decision-model hint. |
-| `--json` | boolean | Emit the discovery payload. |
-
-JSON mode: `payload`.
-
-- Read-only: nothing is probed and no provider row is created.
-
-### `ocx api explain`
-
-Preview the request path a model would take from one inbound API, computed from config.
-
-| Method | Route |
-|---|---|
-| POST | `/api/protocols/plan` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--model` | string | Model selector as a client would send it. |
-| `--inbound` | string | Inbound API: responses, chat or messages. |
-| `--feature` | string | Request feature key to judge; repeatable or comma-separated. |
-| `--json` | boolean | Emit the ProtocolPlanV1 preview. |
-
-JSON mode: `payload`.
-
-- A read-only POST: nothing is sent upstream, no combo state advances and the input is not logged.
+Read-oriented tasks are marked non-mutating in the registry. Probes may contact providers,
+consume quota or refresh caches; this label does not promise cost-free or effect-free execution.
 
 ## State-changing capabilities
 
-Each of these writes. Check the flags column before running one unattended.
+Check the chapter's flags, the requested authority and the operating skill's consent and secret rules.
+
+## Canonical invocation index
+
+Original invocation order. These headings preserve links to the previous single-file reference.
 
 ### `ocx chatgpt`
 
-Experimental ChatGPT app-server shim: launch, restore or status (macOS only).
+[State-changing task](01_surface_lifecycle.md#ocx-chatgpt)
 
-Drives no management route.
+### `ocx link port`
 
-JSON mode: `none`.
+[Read-oriented task](01_surface_access-remote.md#ocx-link-port)
 
-- Default off; launch requires chatgptDesktop.appServerShim: true. Restore removes the generated launcher.
+### ocx link issue
 
-### `ocx link issue`
+[State-changing task](01_surface_access-remote.md#ocx-link-issue)
 
-Issue one link credential and record its tunnel metadata.
+### `ocx link status`
 
-| Method | Route |
-|---|---|
-| POST | `/api/link/issue` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--alias` | string | SSH host alias for the linked machine. |
-| `--tunnel-port` | number | Remote loopback port for the reverse tunnel. |
-| `--json` | boolean | Emit the issue result as JSON. |
-
-JSON mode: `payload`.
-
-- Requires the running proxy's admin token on loopback; the one-time data key is printed only on stdout.
+[Read-oriented task](01_surface_access-remote.md#ocx-link-status)
 
 ### `ocx link revoke`
 
-Revoke a link credential and remove its link record.
-
-| Method | Route |
-|---|---|
-| DELETE | `/api/link/{id}` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--link-id` | string | Link id to revoke. |
-| `--json` | boolean | Emit the revoked link id as JSON. |
-
-JSON mode: `payload`.
-
-- Requires the running proxy's admin token on loopback.
+[State-changing task](01_surface_access-remote.md#ocx-link-revoke)
 
 ### `ocx remote-workspace pair`
 
-Enroll this executor with one Hub using a one-time code from stdin and locally approved roots.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the public local executor status. |
-| `--pairing-code-stdin` | boolean | Read the one-time pairing code from stdin. |
-| `--root` | string | Approve an absolute workspace directory; repeatable. |
-| `--toolchain-root` | string | Approve a read-only toolchain directory; repeatable. |
-| `--executor-helper` | string | Select a reviewed native helper file. |
-| `--name` | string | Name this executor. |
-
-JSON mode: `payload`.
-
-- Executor-local operation; Hub consent and session control stay in the dashboard.
+[State-changing task](01_surface_access-remote.md#ocx-remote-workspace-pair)
 
 ### `ocx remote-workspace agent`
 
-Keep the paired executor connected to its Hub.
+[State-changing task](01_surface_access-remote.md#ocx-remote-workspace-agent)
 
-Drives no management route.
+### `ocx remote-workspace status`
 
-JSON mode: `none`.
+[Read-oriented task](01_surface_access-remote.md#ocx-remote-workspace-status)
 
-- Executor-local operation; Hub consent and session control stay in the dashboard.
+### `ocx models price`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-price)
 
 ### `ocx models set-price`
 
-Save four manual USD-per-1M-token rates, or restore automatic pricing for one model.
-
-| Method | Route |
-|---|---|
-| PUT | `/api/providers/{provider}/model-costs` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--input` | number | Input rate; required unless --auto is used. |
-| `--output` | number | Output rate; required unless --auto is used. |
-| `--cache-read` | number | Cache read rate; defaults to 0. |
-| `--cache-write` | number | Cache write rate; defaults to 0. |
-| `--auto` | boolean | Remove this model's override; cannot be combined with rates. |
-| `--json` | boolean | Emit the saved price or reset result as JSON. |
-
-JSON mode: `payload`.
-
-- Uses the exact upstream model ID after the first slash. Omitted cache rates default to zero; sibling model prices are preserved.
+[State-changing task](01_surface_providers-models.md#ocx-models-set-price)
 
 ### `ocx models set`
 
-Save per-model overrides for a routed model, or clear them back to the computed values.
+[State-changing task](01_surface_providers-models.md#ocx-models-set)
 
-| Method | Route |
-|---|---|
-| PUT | `/api/model-settings` |
+### `ocx status`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--context-window` | string | Context window in tokens; 0 or - clears the override. |
-| `--modalities` | string | Comma-separated text,image,audio; - clears the override. |
-| `--reasoning-efforts` | string | Comma-separated ladder; "" for no reasoning, - to inherit. |
-| `--default-reasoning-effort` | string | Ladder member a request inherits when it omits one; - to inherit. |
-| `--reset` | boolean | Clear every override on this model; cannot be combined with the options above. |
-| `--json` | boolean | Emit the saved state as JSON. |
+[Read-oriented task](01_surface_lifecycle.md#ocx-status)
 
-JSON mode: `envelope`.
+### `ocx resolve`
 
-- Addresses a routed model as provider/model. The native openai lane and combos have no per-model overrides.
-- Unlike ocx models edit, which changes a custom model's own definition, this edits a row that already exists.
+[Read-oriented task](01_surface_lifecycle.md#ocx-resolve)
 
-### `ocx hub invite`
+### ocx hub invite
 
-Mint a single-use pairing code on a hub and print the exact `ocx connect` line for one more machine.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit code, expiresAt, dataUrl, managementUrl, and command. |
-| `--data-url` | string | Advertise this data origin instead of hub.dataPublicOrigin or the bind address. |
-| `--management-url` | string | Confirm the management origin; it must equal hub.managementPublicOrigin. |
-| `--clients` | string | Pre-select codex and/or claude in the printed connect command. |
-
-JSON mode: `envelope`.
-
-- Hub only: refuses when runtimeRole is not hub, and requires a running attested proxy.
-- The code is secret, single-use and short-lived; it is bound to hub.managementPublicOrigin and to the connecting machine's loopback browser origin.
-- The bound browser origin is always printed; when it is not http://localhost:10100 the warning names the port the connecting machine must use.
-- Refuses when the advertised data origin would be loopback (a loopback or wildcard bind with no hub.dataPublicOrigin and no --data-url) rather than printing a line that dials the other machine itself.
-- Prints no data-plane token. Remote machines receive their own revocable per-client key from the exchange.
-- Mints through the attested local pairing-grant route, the same one ocx gui pair uses; no admin token is read.
+[State-changing task](01_surface_access-remote.md#ocx-hub-invite)
 
 ### `ocx connect rotate`
 
-Rotate the connected client's data key against the hub, with commit and abort.
+[State-changing task](01_surface_access-remote.md#ocx-connect-rotate)
 
-| Method | Route |
-|---|---|
-| POST | `/api/keys/rotate` |
-| POST | `/api/keys/rotate/commit` |
-| DELETE | `/api/keys/rotate` |
+### `ocx capabilities`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--pairing-code-stdin` | boolean | Read a one-time pairing code from stdin as the rotation authority. |
-| `--admin-token-stdin` | boolean | Read the hub admin token from stdin as the rotation authority. |
-| `--json` | boolean | Emit the rotation result as JSON. |
+[Read-oriented task](01_surface_lifecycle.md#ocx-capabilities)
 
-JSON mode: `payload`.
+### `ocx provider list`
 
-- Requires transient authority on stdin; the credential is never persisted or echoed.
-- A rotation left pending by a crash is resumed here — startup and status stop rather than guess which key generation is live.
+[Read-oriented task](01_surface_providers-models.md#ocx-provider-list)
+
+### `ocx provider resets`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-provider-resets)
 
 ### `ocx provider keychain`
 
-Move a provider's API key into the OS keychain, restore it, or report where it lives.
-
-| Method | Route |
-|---|---|
-| GET | `/api/providers/keychain` |
-| POST | `/api/providers/keychain` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the keychain status or result as JSON. |
-
-JSON mode: `payload`.
-
-- `store` verifies every keychain write by read-back before config.json is rewritten with keychain: references; an unavailable keychain refuses with 503 and leaves the file untouched.
-- Headless services usually have no unlocked keychain session; prefer ${ENV_VAR} references there.
+[State-changing task](01_surface_providers-models.md#ocx-provider-keychain)
 
 ### `ocx companion`
 
-Inspect and configure menu-bar and widget companion usage settings.
-
-| Method | Route |
-|---|---|
-| GET | `/api/companion/settings` |
-| GET | `/api/usage/timeline` |
-| PUT | `/api/companion/settings` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit companion settings as JSON. |
-
-JSON mode: `payload`.
-
-- `show` (the default) reads settings; `set key=value ...` updates selected settings; `reset` restores defaults.
-- Values accepted by `set` are parsed as JSON when valid, so booleans, numbers, arrays, objects, and null can be passed directly.
+[State-changing task](01_surface_observe-system.md#ocx-companion)
 
 ### `ocx account login`
 
-Log in to an OAuth provider; Kiro can add a native device account.
+[State-changing task](01_surface_accounts.md#ocx-account-login)
 
-| Method | Route |
-|---|---|
-| POST | `/api/oauth/login` |
-| GET | `/api/oauth/status` |
+### `ocx account history`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--method` | string | For Kiro: builder-id, google, or github device login (add only). |
-| `--reauth` | boolean | Reauthenticate a selected existing account. |
-| `--id` | string | Account id for reauthentication. |
-| `--no-wait` | boolean | Return after the login flow starts. |
-| `--json` | boolean | Emit flow state as JSON. |
-
-JSON mode: `payload`.
+[Read-oriented task](01_surface_accounts.md#ocx-account-history)
 
 ### `ocx account main reauth`
 
-Reauthenticate the native main Codex login with a device code (#3898); headless hubs need no Codex App or keyring.
+[State-changing task](01_surface_accounts.md#ocx-account-main-reauth)
 
-| Method | Route |
-|---|---|
-| POST | `/api/codex-auth/main/reauth-device` |
-| GET | `/api/codex-auth/main/reauth-device` |
-| DELETE | `/api/codex-auth/main/reauth-device` |
+### `ocx account list`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--device` | boolean | Run the device-code flow (the only reauth mode). |
-| `--no-wait` | boolean | Print the flow handle and code without waiting for completion. |
-| `--flow` | string | Flow id for status and cancel. |
-| `--json` | boolean | Emit the flow status as JSON. |
-
-JSON mode: `payload`.
-
-- Same-identity reauth only: the device login must complete for the ChatGPT account that already holds the native main slot, and the commit is fenced by the exclusive claim plus a path/hash/inode snapshot.
-- /api/codex-auth/login stays pool-only and keeps rejecting __main__; this namespace is the only device-reauth surface for the native main slot.
-- Payloads carry only flowId, status, the verification URL, the device code, and a closed set of failure codes -- never tokens, emails, or raw account ids.
+[Read-oriented task](01_surface_accounts.md#ocx-account-list)
 
 ### `ocx account import-orca`
 
-Preview or register read-only links to Orca-managed Codex accounts without another login.
-
-Drives no management route.
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--source` | string | Orca data directory containing codex-accounts. |
-| `--registry` | string | The chosen Orca profile's orca-data.json account registry. |
-| `--apply` | boolean | Register new accounts; requires a stopped proxy. Default is preview. |
-| `--json` | boolean | Emit counts and fixed invalid-reason codes without credentials or source paths. |
-
-JSON mode: `envelope`.
-
-- Local files only; never copies refresh tokens or changes Orca authentication files.
-- Skips existing ChatGPT identities. New accounts remain pending until dashboard validation.
-- Orca must keep the source login available and refreshed; a missing or expired source fails closed.
-- Mixed eligible and invalid entries exit successfully; an all-invalid result exits nonzero.
+[State-changing task](01_surface_accounts.md#ocx-account-import-orca)
 
 ### `ocx account refresh`
 
-Refresh account quotas without model validation; pending Codex accounts require dashboard consent.
-
-| Method | Route |
-|---|---|
-| POST | `/api/codex-auth/accounts/refresh` |
-| GET | `/api/provider-quotas` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the refresh result as JSON. |
-
-JSON mode: `payload`.
-
-- CLI/admin-token refreshes only observe usage. After quota recovery, a human must click Refresh quotas in the dashboard to authorize model validation. Do not mint a GUI session to work around this consent boundary.
+[State-changing task](01_surface_accounts.md#ocx-account-refresh)
 
 ### `ocx account grok-reset-coupons`
 
-Inspect or redeem Grok billing reset coupons; redemption is journaled and idempotent.
+[State-changing task](01_surface_accounts.md#ocx-account-grok-reset-coupons)
 
-| Method | Route |
-|---|---|
-| GET | `/api/grok/reset-coupons` |
-| POST | `/api/grok/reset-coupons/consume` |
+### `ocx usage`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--consume` | boolean | Redeem one reset coupon; requires --yes. |
-| `--yes` | boolean | Explicit confirmation required by --consume. |
-| `--token-id` | string | Redeem a specific reset token instead of the default selection. |
-| `--operation-id` | string | UUIDv4 making a redemption idempotent: retries replay the journaled outcome. |
-| `--json` | boolean | Emit the coupon list or redemption result as JSON. |
-
-JSON mode: `payload`.
-
-- Without --consume this is a read: remaining coupons and their validity windows.
-- The operation is journaled before the upstream call, so retrying the same --operation-id replays the recorded outcome instead of spending a second coupon.
+[Read-oriented task](01_surface_observe-system.md#ocx-usage)
 
 ### `ocx account pause`
 
-Exclude one account in a Codex, Anthropic or supported generic OAuth pool from automatic selection.
-
-| Method | Route |
-|---|---|
-| PUT | `/api/codex-auth/accounts/pause` |
-| GET | `/api/oauth/accounts` |
-| PUT | `/api/oauth/accounts/pause` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the pause result as JSON. |
-
-JSON mode: `envelope`.
-
-- Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Anthropic and generic OAuth pause exclude the account from new requests, failover and refresh, and an all-paused pool answers 403. Credentials and health are preserved; already-sent turns are not cancelled.
+[State-changing task](01_surface_accounts.md#ocx-account-pause)
 
 ### `ocx account resume`
 
-Return a paused account to a Codex, Anthropic or supported generic OAuth pool.
-
-| Method | Route |
-|---|---|
-| PUT | `/api/codex-auth/accounts/pause` |
-| GET | `/api/oauth/accounts` |
-| PUT | `/api/oauth/accounts/pause` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the resume result as JSON. |
-
-JSON mode: `envelope`.
+[State-changing task](01_surface_accounts.md#ocx-account-resume)
 
 ### `ocx account pause-exhausted`
 
-Pause every Codex account whose quota is spent.
-
-| Method | Route |
-|---|---|
-| PUT | `/api/codex-auth/accounts/pause-exhausted` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit paused ids and the checked/failed counts as JSON. |
-
-JSON mode: `envelope`.
-
-- The route refreshes quota per account and can partially fail; a non-zero failed count exits 1 and sets ok:false, because silence would read as `none were exhausted`.
+[State-changing task](01_surface_accounts.md#ocx-account-pause-exhausted)
 
 ### `ocx account strategy`
 
-Show or set how an account pool picks the next account.
-
-| Method | Route |
-|---|---|
-| GET | `/api/pool/settings` |
-| PUT | `/api/pool/settings` |
-| PATCH | `/api/pool/settings` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the applied strategy and sticky limit as JSON. |
-
-JSON mode: `envelope`.
-
-- A bare invocation reads and never writes.
-- The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.
-- Values are not re-validated in the CLI: the server owns the strategy names and the 1-100 sticky bound.
-- One route answers for every pool kind and declares which fields that kind honours in `supported`, so an unsupported field is a stated null rather than an absence. `anthropic` alone carries `quotaWindow`. Generic-provider settings steer selection only while `pool.kernel` is on. The legacy per-pool paths still work and are unchanged.
+[State-changing task](01_surface_accounts.md#ocx-account-strategy)
 
 ### `ocx account sticky`
 
-Show or set how many consecutive requests stay on one account.
-
-| Method | Route |
-|---|---|
-| GET | `/api/pool/settings` |
-| PUT | `/api/pool/settings` |
-| PATCH | `/api/pool/settings` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the applied strategy and sticky limit as JSON. |
-
-JSON mode: `envelope`.
-
-- Only meaningful under the sticky-capable strategies; the pool strategy is the other half of this setting.
+[State-changing task](01_surface_accounts.md#ocx-account-sticky)
 
 ### `ocx account routes`
 
-Read, replace, or clear Anthropic OAuth model account routes.
-
-| Method | Route |
-|---|---|
-| GET | `/api/pool/settings` |
-| PUT | `/api/pool/settings` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--file` | string | Read a bounded JSON route array from a local file. |
-| `--clear` | boolean | Remove the stored routes. |
-| `--json` | boolean | Emit the unified settings response as JSON. |
-
-JSON mode: `envelope`.
-
-- Only anthropic is supported. The server validates route names, patterns, and account IDs.
+[State-changing task](01_surface_accounts.md#ocx-account-routes)
 
 ### `ocx account auto-switch`
 
-Show or set the usage percentage at which a pool moves to another account.
+[State-changing task](01_surface_accounts.md#ocx-account-auto-switch)
 
-| Method | Route |
-|---|---|
-| GET | `/api/codex-auth/active` |
-| PUT | `/api/codex-auth/auto-switch` |
-| GET | `/api/oauth/accounts/pool` |
-| PUT | `/api/oauth/accounts/pool` |
-| GET | `/api/oauth/accounts` |
-| PUT | `/api/oauth/accounts/auto-switch` |
+### `ocx logs`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the stored threshold and whether it is applied. |
-| `--account` | string | Anthropic account ID; inherit restores the pool default, off stores zero. |
+[Read-oriented task](01_surface_observe-system.md#ocx-logs)
 
-JSON mode: `envelope`.
+### `ocx storage report`
 
-- A bare invocation reads and never writes.
-- `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0-100.
-- Anthropic requires --account <id>; inherit sends null to restore its pool default. Manual/affinity precedence and pool-off recovery are unchanged.
-- For a generic OAuth pool, `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability.
+[Read-oriented task](01_surface_observe-system.md#ocx-storage-report)
 
 ### `ocx storage cleanup`
 
-Preview or delete the oldest archived sessions by percentage.
-
-| Method | Route |
-|---|---|
-| POST | `/api/storage/cleanup/preview` |
-| POST | `/api/storage/cleanup` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--percent` | number | Portion of the oldest archived sessions to target (0-100). |
-| `--mode` | string | quarantine (recoverable from trash) or permanent. |
-| `--yes` | boolean | Required to actually delete; without it this is a preview. |
-| `--json` | boolean | Emit the preview or result as JSON. |
-
-JSON mode: `payload`.
-
-- Without `--yes` it prints what WOULD be freed and exits 0 having changed nothing.
-- There is no interactive confirmation: a prompt an agent can answer is not a safety boundary.
-- `--mode quarantine` moves files to trash, so `storage trash restore` can undo it; `permanent` cannot be undone.
+[State-changing task](01_surface_observe-system.md#ocx-storage-cleanup)
 
 ### `ocx storage trash`
 
-List quarantined cleanup batches, or restore one.
-
-| Method | Route |
-|---|---|
-| GET | `/api/storage/trash` |
-| POST | `/api/storage/trash/restore` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--yes` | boolean | Required for restore, which moves files and reconciles database rows. |
-| `--json` | boolean | Emit the trash list or restore result as JSON. |
-
-JSON mode: `payload`.
-
-- Restore fails with a named 409 when the destination already exists, rather than overwriting it.
+[State-changing task](01_surface_observe-system.md#ocx-storage-trash)
 
 ### `ocx storage policy`
 
-Show, change, or run the automatic archived-session cleanup policy.
+[State-changing task](01_surface_observe-system.md#ocx-storage-policy)
 
-| Method | Route |
-|---|---|
-| GET | `/api/storage/cleanup-policy` |
-| PUT | `/api/storage/cleanup-policy` |
-| POST | `/api/storage/cleanup-policy/run` |
+### `ocx inspect config`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--enabled` | string | true or false. |
-| `--percent` | number | Portion of oldest archived sessions each run targets. |
-| `--mode` | string | quarantine or permanent. |
-| `--schedule` | string | startup, daily, weekly, or manual. |
-| `--yes` | boolean | Required for `policy run`, which deletes immediately. |
-| `--json` | boolean | Emit the policy or run state as JSON. |
+[Read-oriented task](01_surface_observe-system.md#ocx-inspect-config)
 
-JSON mode: `payload`.
+### `ocx inspect catalog`
 
-- `policy set` never enables implicitly: omitting `--enabled` keeps the stored value.
-- `policy run` forces a run regardless of schedule, so it needs `--yes`.
+[Read-oriented task](01_surface_observe-system.md#ocx-inspect-catalog)
+
+### `ocx inspect routing-analytics`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-inspect-routing-analytics)
+
+### `ocx inspect pacing`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-inspect-pacing)
+
+### `ocx inspect key-providers`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-inspect-key-providers)
+
+### `ocx inspect codex-prompt`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-inspect-codex-prompt)
+
+### `ocx inspect client-config`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-inspect-client-config)
+
+### `ocx inspect star`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-inspect-star)
+
+### `ocx inspect windows-tray`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-inspect-windows-tray)
+
+### `ocx system codex-app-server`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-codex-app-server)
+
+### `ocx system codex-cli-update check`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-codex-cli-update-check)
+
+### `ocx system codex-cli-update attest`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-codex-cli-update-attest)
 
 ### `ocx system codex-restart`
 
-Restart the Codex desktop app and app-servers.
-
-| Method | Route |
-|---|---|
-| POST | `/api/system/codex-restart` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--yes` | boolean | Required: fully quits and relaunches the operator's Codex desktop app, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts; also restarts its app-servers. |
-| `--json` | boolean | Emit the restart result as JSON. |
-
-JSON mode: `payload`.
-
-- `sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.
-- Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.
-- --yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand.
+[State-changing task](01_surface_observe-system.md#ocx-system-codex-restart)
 
 ### `ocx claude config`
 
-Read or update Claude Code settings, including independent CLI first-party routing.
-
-| Method | Route |
-|---|---|
-| GET | `/api/claude-code` |
-| PUT | `/api/claude-code` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--first-party` | string | For `set`, on or off; route standalone Claude CLI subscription requests through the intercept. |
-| `--json` | boolean | Emit the management response as JSON. |
-
-JSON mode: `payload`.
-
-- `status` reads the route; `set` writes only submitted fields. Enabling first-party requires a running Claude intercept.
+[State-changing task](01_surface_integrations.md#ocx-claude-config)
 
 ### `ocx claude intercept start`
 
-Start the local Claude interception pair on demand.
+[State-changing task](01_surface_integrations.md#ocx-claude-intercept-start)
 
-| Method | Route |
-|---|---|
-| POST | `/api/claude-intercept/start` |
+### `ocx claude desktop status`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the management response as JSON. |
-
-JSON mode: `payload`.
+[Read-oriented task](01_surface_integrations.md#ocx-claude-desktop-status)
 
 ### `ocx claude desktop bind`
 
-First-party: serve a Claude Desktop Code tab picker model with an opencodex route.
-
-| Method | Route |
-|---|---|
-| PUT | `/api/claude-desktop/first-party-bindings` |
-
-JSON mode: `none`.
-
-- Takes a picker model id (claude-sonnet-4-6) and a route in the Desktop route vocabulary (provider/model or native/<slug>); the route must be one the Desktop profile can offer.
-- Only Claude Code traffic that reaches the proxy through the first-party intercept (Desktop's Code tab, the claude CLI) honours it; ocx claude and the public Messages endpoint are unaffected.
-- The Desktop picker keeps Anthropic's label; the binding changes which model answers, starting with the next request.
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-bind)
 
 ### `ocx claude desktop unbind`
 
-Remove a first-party Claude Desktop Code tab picker binding.
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-unbind)
 
-| Method | Route |
-|---|---|
-| PUT | `/api/claude-desktop/first-party-bindings` |
+### `ocx claude desktop picker status`
 
-JSON mode: `none`.
-
-- Removing an id that is not bound is a no-op; the remaining bindings are printed.
+[Read-oriented task](01_surface_integrations.md#ocx-claude-desktop-picker-status)
 
 ### `ocx claude desktop picker on`
 
-Turn first-party picker mode on and remember the choice.
-
-| Method | Route |
-|---|---|
-| PUT | `/api/claude-desktop/picker` |
-
-JSON mode: `none`.
-
-- Needs a running proxy, first-party mode and macOS. The first time, macOS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.
-- Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards.
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-picker-on)
 
 ### `ocx claude desktop picker off`
 
-Turn first-party picker mode off, remove its Desktop egress profile and certificate trust, and remember the choice.
-
-| Method | Route |
-|---|---|
-| PUT | `/api/claude-desktop/picker` |
-
-JSON mode: `none`.
-
-- Works without a running proxy: the preference is saved and the picker profile and trust are removed locally.
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-picker-off)
 
 ### `ocx claude desktop picker trust`
 
-Run the macOS keychain step for picker mode in this terminal, then ask the server to finish enabling it.
-
-| Method | Route |
-|---|---|
-| PUT | `/api/claude-desktop/picker` |
-
-JSON mode: `none`.
-
-- The server removes trust this command added if the enable is refused; if the request is lost, trust is left alone and picker status tells what happened.
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-picker-trust)
 
 ### `ocx integration native`
 
-Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor status (which builds are installed, gateway values, last request seen) and, on request, the Private Inference installer Cursor's update channel advertises.
-
-| Method | Route |
-|---|---|
-| GET | `/api/native-integrations` |
-| PUT | `/api/native-integrations/claude` |
-| PUT | `/api/native-integrations/claude-desktop` |
-| PUT | `/api/native-integrations/codex` |
-| PUT | `/api/native-integrations/grok` |
-| GET | `/api/native-integrations/cursor` |
-| GET | `/api/native-integrations/cursor/local-installer` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the client rows or toggle result as JSON. |
-
-JSON mode: `payload`.
-
-- The list renders per-client state, installed, and desired columns; a blocked disable is named rather than left silent.
-- Each client has its own route because a toggle rewrites that client's own config file.
+[State-changing task](01_surface_integrations.md#ocx-integration-native)
 
 ### `ocx integration client`
 
-Inspect and toggle Aside profile catalogs, read their history, and restore a selected profile operation.
-
-| Method | Route |
-|---|---|
-| GET | `/api/client-integrations/aside/profiles` |
-| PUT | `/api/client-integrations/aside/profiles` |
-| GET | `/api/client-integrations/aside/profiles/{profileId}` |
-| PUT | `/api/client-integrations/aside/profiles/{profileId}` |
-| GET | `/api/client-integrations/aside/profiles/journal` |
-| GET | `/api/client-integrations/aside/profiles/{profileId}/journal` |
-| POST | `/api/client-integrations/aside/profiles/{profileId}/restore` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--client` | string | Select the file integration; use aside for profile controls. |
-| `--profile` | number | Select one registered Aside account; omitted toggles affect all profiles. |
-| `--op` | string | Operation ID for restore. |
-| `--confirm-drift` | boolean | Explicitly allow restore to replace subsequent edits. |
-| `--overwrite-conflict` | boolean | Explicitly allow enable to replace a conflicting provider block. |
-| `--json` | boolean | Emit the profile state, history, or mutation result as JSON. |
-
-JSON mode: `payload`.
-
-- Use status/show/list, history/journal, enable/disable, or restore after integration client.
-- These declarations cover the dedicated Aside profile paths; existing generic client routes retain their separate parity inventory.
+[State-changing task](01_surface_integrations.md#ocx-integration-client)
 
 ### `ocx sync`
 
-Synchronize client catalogs, including Aside profiles through the running server's mutation owner.
-
-| Method | Route |
-|---|---|
-| POST | `/api/client-integrations/aside/sync` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--restart-codex` | boolean | Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog or cache write, on macOS, Linux and Windows. |
-| `--restart-app-server-only` | boolean | Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given. |
-| `--restart-desktop-app` | boolean | Deprecated alias of --restart-codex. |
-
-JSON mode: `none`.
-
-- The Aside refresh uses the live server; other catalog synchronization also performs local work.
+[State-changing task](01_surface_lifecycle.md#ocx-sync)
 
 ### `ocx agent subagents force`
 
-Force Claude Code subagents onto one exposed model at the next routed launch; - clears.
-
-| Method | Route |
-|---|---|
-| GET | `/api/subagent-models` |
-| PUT | `/api/subagent-models` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the saved force setting. |
-
-JSON mode: `payload`.
-
-- Requires Claude Code 2.1.257+. Plain claude, forks, inherit skills, the main model and small-fast sidecars are unaffected.
+[State-changing task](01_surface_agents-routing.md#ocx-agent-subagents-force)
 
 ### `ocx agent request-user-input`
 
-Show or set whether default mode may ask the operator a question mid-task.
-
-| Method | Route |
-|---|---|
-| GET | `/api/codex-auth/features/default-mode-request-user-input` |
-| PUT | `/api/codex-auth/features/default-mode-request-user-input` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the feature state as JSON. |
-
-JSON mode: `payload`.
-
-- A bare invocation reads and never writes.
+[State-changing task](01_surface_agents-routing.md#ocx-agent-request-user-input)
 
 ### `ocx agent roles`
 
-omo (Codex / LazyCodex): show each Codex agent role's model pin, set one role's model in its TOML and in omo.jsonc, or suggest a model for every role.
-
-| Method | Route |
-|---|---|
-| GET | `/api/codex-agent-roles` |
-| PUT | `/api/codex-agent-roles/{role}` |
-| POST | `/api/codex-agent-roles/auto-assign` |
-
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the role list, the write result or the proposals as JSON. |
-| `--model` | string | suggest: size the roles with this model instead of the Codex default model. |
-| `--apply` | boolean | suggest: write every proposal through the role model write. |
-
-JSON mode: `payload`.
-
-- A bare invocation reads and never writes.
-- Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles, and set and suggest are refused.
-- set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml; omo.jsonc is skipped when absent or when it contains comments.
-- suggest sizes every role with one model call and prints proposals without writing; --apply writes each proposed model, and its effort when the role file already sets model_reasoning_effort.
+[State-changing task](01_surface_agents-routing.md#ocx-agent-roles)
 
 ### `ocx agent injection`
 
-Show or set the delegation model and effort, or suggest both for a described piece of delegated work.
+[State-changing task](01_surface_agents-routing.md#ocx-agent-injection)
 
-| Method | Route |
-|---|---|
-| GET | `/api/injection-model` |
-| PUT | `/api/injection-model` |
-| POST | `/api/injection-model/suggest` |
+### `ocx api protocols`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--json` | boolean | Emit the delegation settings, the write result or the proposal as JSON. |
-| `--model` | string | set: the delegation model, - clears it. suggest: size the work with this model instead of the Codex default model. |
-| `--effort` | string | set: the delegation reasoning effort, - clears it. |
-| `--prompt` | string | set: a custom guidance prompt, - clears it. |
-| `--guidance` | string | set: on or off for OpenCodex delegation guidance. |
-| `--apply` | boolean | suggest: write the proposed model and effort through the delegation settings write. |
-
-JSON mode: `payload`.
-
-- A bare invocation reads and never writes.
-- suggest sizes the described work with one model call, picks the cheapest sufficient model the delegation picker offers, and writes nothing unless --apply is given.
+[Read-oriented task](01_surface_access-remote.md#ocx-api-protocols)
 
 ### `ocx combo test`
 
-Run one JEV decision probe through a decision method: TypeSafe, a System One row, or an opencodex model.
+[State-changing task](01_surface_agents-routing.md#ocx-combo-test)
 
-| Method | Route |
-|---|---|
-| POST | `/api/combos/decision-test` |
+### `ocx combo discover`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--combo` | string | Combo id whose saved decision method is probed and whose recursion rules apply. |
-| `--decision-provider` | string | Probe a jev-decision provider row (or jev for TypeSafe) instead of the saved method. |
-| `--decision-model` | string | Probe an opencodex-routed model instead of the saved method. |
-| `--decision-timeout` | number | Decision deadline in milliseconds (1000-120000). |
-| `--json` | boolean | Emit the probe result. |
+[Read-oriented task](01_surface_agents-routing.md#ocx-combo-discover)
 
-JSON mode: `payload`.
+### `ocx api explain`
 
-- Sends one synthetic two-option decision; it may spend a decision call on the chosen backend.
+[Read-oriented task](01_surface_access-remote.md#ocx-api-explain)
 
 ### `ocx api policy`
 
-Read the protocol policy, or change the Messages surface, unrepresentable policy and rollout switches.
+[State-changing task](01_surface_access-remote.md#ocx-api-policy)
 
-| Method | Route |
-|---|---|
-| GET | `/api/protocols` |
-| PATCH | `/api/protocols/settings` |
+### `ocx provider add`
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `--messages` | string | Open or close the Messages API: on or off. Off also turns the Claude integration off. |
-| `--unrepresentable` | string | legacy keeps today's behavior; reject refuses a request its path cannot carry. |
-| `--rollout` | string | One switch as name=on or name=off; repeatable. Every switch defaults off. |
-| `--json` | boolean | Emit the resulting GET /api/protocols body. |
+[State-changing task](01_surface_providers-models.md#ocx-provider-add)
 
-JSON mode: `payload`.
+### `ocx provider show`
 
-- A bare invocation reads and never writes.
-- A setting flag changes the operator's config; run it only when the operator asks for that change.
+[Read-oriented task](01_surface_providers-models.md#ocx-provider-show)
+
+### `ocx provider remove`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-remove)
+
+### `ocx provider set-default`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-set-default)
+
+### `ocx provider edit`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-edit)
+
+### `ocx provider test`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-test)
+
+### `ocx provider quota`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-provider-quota)
+
+### `ocx provider presets`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-provider-presets)
+
+### `ocx provider account-mode`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-account-mode)
+
+### `ocx provider selected`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-selected)
+
+### `ocx models list`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-list)
+
+### `ocx models add`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-add)
+
+### `ocx models remove`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-remove)
+
+### `ocx models list-custom`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-list-custom)
+
+### `ocx models live`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-live)
+
+### `ocx models edit`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-edit)
+
+### `ocx models enable`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-enable)
+
+### `ocx models disable`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-disable)
+
+### `ocx models provider`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-provider)
+
+### `ocx models selected`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-selected)
+
+### `ocx models preset show`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-preset-show)
+
+### `ocx models preset apply`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-preset-apply)
+
+### `ocx models new-policy`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-new-policy)
+
+### `ocx models new-arrivals`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-new-arrivals)
+
+### `ocx models context status`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-context-status)
+
+### `ocx models context value`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-context-value)
+
+### `ocx models context provider`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-context-provider)
+
+### `ocx models context all`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-context-all)
+
+### `ocx models shadow status`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-shadow-status)
+
+### `ocx models shadow set`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-shadow-set)
+
+### `ocx alias list`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-alias-list)
+
+### `ocx alias set`
+
+[State-changing task](01_surface_providers-models.md#ocx-alias-set)
+
+### `ocx alias rm`
+
+[State-changing task](01_surface_providers-models.md#ocx-alias-rm)
+
+### `ocx alias defaults`
+
+[State-changing task](01_surface_providers-models.md#ocx-alias-defaults)
+
+### `ocx provider pacing`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-pacing)
+
+### `ocx provider snapshot`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-provider-snapshot)
+
+### `ocx provider apply`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-apply)
+
+### `ocx models display-name`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-display-name)
+
+### `ocx models order status`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-order-status)
+
+### `ocx models order set`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-order-set)
+
+### `ocx models order reset`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-order-reset)
+
+### `ocx logout`
+
+[State-changing task](01_surface_accounts.md#ocx-logout)
+
+### `ocx account current`
+
+[Read-oriented task](01_surface_accounts.md#ocx-account-current)
+
+### `ocx account use`
+
+[State-changing task](01_surface_accounts.md#ocx-account-use)
+
+### `ocx account clear`
+
+[State-changing task](01_surface_accounts.md#ocx-account-clear)
+
+### `ocx account alias`
+
+[State-changing task](01_surface_accounts.md#ocx-account-alias)
+
+### `ocx account priority`
+
+[State-changing task](01_surface_accounts.md#ocx-account-priority)
+
+### `ocx account clear-cooldown`
+
+[State-changing task](01_surface_accounts.md#ocx-account-clear-cooldown)
+
+### `ocx account remove`
+
+[State-changing task](01_surface_accounts.md#ocx-account-remove)
+
+### `ocx account add-key`
+
+[State-changing task](01_surface_accounts.md#ocx-account-add-key)
+
+### `ocx account import`
+
+[State-changing task](01_surface_accounts.md#ocx-account-import)
+
+### `ocx account reauth`
+
+[State-changing task](01_surface_accounts.md#ocx-account-reauth)
+
+### `ocx account code`
+
+[State-changing task](01_surface_accounts.md#ocx-account-code)
+
+### `ocx account cancel`
+
+[State-changing task](01_surface_accounts.md#ocx-account-cancel)
+
+### `ocx account reset-credits`
+
+[State-changing task](01_surface_accounts.md#ocx-account-reset-credits)
+
+### `ocx account main doctor`
+
+[Read-oriented task](01_surface_accounts.md#ocx-account-main-doctor)
+
+### `ocx account main list`
+
+[Read-oriented task](01_surface_accounts.md#ocx-account-main-list)
+
+### `ocx account main register`
+
+[State-changing task](01_surface_accounts.md#ocx-account-main-register)
+
+### `ocx account main add`
+
+[State-changing task](01_surface_accounts.md#ocx-account-main-add)
+
+### `ocx account main reauth status`
+
+[Read-oriented task](01_surface_accounts.md#ocx-account-main-reauth-status)
+
+### `ocx account main reauth cancel`
+
+[State-changing task](01_surface_accounts.md#ocx-account-main-reauth-cancel)
+
+### `ocx account main switch`
+
+[State-changing task](01_surface_accounts.md#ocx-account-main-switch)
+
+### `ocx account main recover`
+
+[State-changing task](01_surface_accounts.md#ocx-account-main-recover)
+
+### `ocx account pool`
+
+[State-changing task](01_surface_accounts.md#ocx-account-pool)
+
+### `ocx account credits`
+
+[State-changing task](01_surface_accounts.md#ocx-account-credits)
+
+### `ocx account quota-activation`
+
+[State-changing task](01_surface_accounts.md#ocx-account-quota-activation)
+
+### `ocx account anthropic-reset-grants`
+
+[Read-oriented task](01_surface_accounts.md#ocx-account-anthropic-reset-grants)
+
+### `ocx agent status`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-agent-status)
+
+### `ocx agent effort`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-agent-effort)
+
+### `ocx agent effort set`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-effort-set)
+
+### `ocx agent subagents`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-agent-subagents)
+
+### `ocx agent subagents set`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-subagents-set)
+
+### `ocx agent subagents clear`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-subagents-clear)
+
+### `ocx agent fallback`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-agent-fallback)
+
+### `ocx agent fallback set`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-fallback-set)
+
+### `ocx agent fallback clear`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-fallback-clear)
+
+### `ocx agent sidecar`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-agent-sidecar)
+
+### `ocx agent sidecar web`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-sidecar-web)
+
+### `ocx agent sidecar vision`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-sidecar-vision)
+
+### `ocx effort`
+
+[State-changing task](01_surface_agents-routing.md#ocx-effort)
+
+### `ocx effort set`
+
+[State-changing task](01_surface_agents-routing.md#ocx-effort-set)
+
+### `ocx effort clear`
+
+[State-changing task](01_surface_agents-routing.md#ocx-effort-clear)
+
+### `ocx effort model`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-effort-model)
+
+### `ocx v2 status`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-v2-status)
+
+### `ocx v2 on`
+
+[State-changing task](01_surface_agents-routing.md#ocx-v2-on)
+
+### `ocx v2 off`
+
+[State-changing task](01_surface_agents-routing.md#ocx-v2-off)
+
+### `ocx v2 mode`
+
+[State-changing task](01_surface_agents-routing.md#ocx-v2-mode)
+
+### `ocx v2 keep-native-v1`
+
+[State-changing task](01_surface_agents-routing.md#ocx-v2-keep-native-v1)
+
+### `ocx v2 threads`
+
+[State-changing task](01_surface_agents-routing.md#ocx-v2-threads)
+
+### `ocx v2 mode-hint`
+
+[State-changing task](01_surface_agents-routing.md#ocx-v2-mode-hint)
+
+### `ocx combo list`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-combo-list)
+
+### `ocx combo show`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-combo-show)
+
+### `ocx combo set`
+
+[State-changing task](01_surface_agents-routing.md#ocx-combo-set)
+
+### `ocx combo remove`
+
+[State-changing task](01_surface_agents-routing.md#ocx-combo-remove)
+
+### `ocx route policy list`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-route-policy-list)
+
+### `ocx route policy show`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-route-policy-show)
+
+### `ocx route policy dry-run`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-policy-dry-run)
+
+### `ocx route policy evaluate`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-policy-evaluate)
+
+### `ocx route policy create`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-policy-create)
+
+### `ocx route policy update`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-policy-update)
+
+### `ocx route policy remove`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-policy-remove)
+
+### `ocx combo stats`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-combo-stats)
+
+### `ocx agent memory-models show`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-agent-memory-models-show)
+
+### `ocx agent memory-models set`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-memory-models-set)
+
+### `ocx agent memory-models clear`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-memory-models-clear)
+
+### `ocx agent compaction-routing show`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-agent-compaction-routing-show)
+
+### `ocx agent compaction-routing set`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-compaction-routing-set)
+
+### `ocx agent compaction-routing clear`
+
+[State-changing task](01_surface_agents-routing.md#ocx-agent-compaction-routing-clear)
+
+### `ocx grok status`
+
+[Read-oriented task](01_surface_integrations.md#ocx-grok-status)
+
+### `ocx grok set`
+
+[State-changing task](01_surface_integrations.md#ocx-grok-set)
+
+### `ocx grok exclude`
+
+[State-changing task](01_surface_integrations.md#ocx-grok-exclude)
+
+### `ocx grok include`
+
+[State-changing task](01_surface_integrations.md#ocx-grok-include)
+
+### `ocx grok clear`
+
+[State-changing task](01_surface_integrations.md#ocx-grok-clear)
+
+### `ocx grok apply`
+
+[State-changing task](01_surface_integrations.md#ocx-grok-apply)
+
+### `ocx integration client status`
+
+[Read-oriented task](01_surface_integrations.md#ocx-integration-client-status)
+
+### `ocx integration client history`
+
+[Read-oriented task](01_surface_integrations.md#ocx-integration-client-history)
+
+### `ocx integration client enable`
+
+[State-changing task](01_surface_integrations.md#ocx-integration-client-enable)
+
+### `ocx integration client disable`
+
+[State-changing task](01_surface_integrations.md#ocx-integration-client-disable)
+
+### `ocx integration client restore`
+
+[State-changing task](01_surface_integrations.md#ocx-integration-client-restore)
+
+### `ocx claude config status`
+
+[Read-oriented task](01_surface_integrations.md#ocx-claude-config-status)
+
+### `ocx claude config set`
+
+[State-changing task](01_surface_integrations.md#ocx-claude-config-set)
+
+### `ocx claude desktop show`
+
+[Read-oriented task](01_surface_integrations.md#ocx-claude-desktop-show)
+
+### `ocx claude desktop move`
+
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-move)
+
+### `ocx claude desktop default`
+
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-default)
+
+### `ocx claude desktop export`
+
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-export)
+
+### `ocx claude desktop import`
+
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-import)
+
+### `ocx claude desktop apply`
+
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-apply)
+
+### `ocx integration client preview`
+
+[Read-oriented task](01_surface_integrations.md#ocx-integration-client-preview)
+
+### `ocx integration client history remove`
+
+[State-changing task](01_surface_integrations.md#ocx-integration-client-history-remove)
+
+### `ocx integration client sync`
+
+[State-changing task](01_surface_integrations.md#ocx-integration-client-sync)
+
+### `ocx claude desktop profile show`
+
+[Read-oriented task](01_surface_integrations.md#ocx-claude-desktop-profile-show)
+
+### `ocx claude desktop profile import`
+
+[State-changing task](01_surface_integrations.md#ocx-claude-desktop-profile-import)
+
+### `ocx integration native cursor status`
+
+[Read-oriented task](01_surface_integrations.md#ocx-integration-native-cursor-status)
+
+### `ocx integration native cursor local-installer`
+
+[Read-oriented task](01_surface_integrations.md#ocx-integration-native-cursor-local-installer)
+
+### `ocx logs filter`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-logs-filter)
+
+### `ocx observe logs filter`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-observe-logs-filter)
+
+### `ocx companion usage`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-companion-usage)
+
+### `ocx observe logs`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-observe-logs)
+
+### `ocx logs explain`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-logs-explain)
+
+### `ocx logs rebuild-index`
+
+[State-changing task](01_surface_observe-system.md#ocx-logs-rebuild-index)
+
+### `ocx logs index-status`
+
+[State-changing task](01_surface_observe-system.md#ocx-logs-index-status)
+
+### `ocx observe usage`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-observe-usage)
+
+### `ocx observe storage`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-observe-storage)
+
+### `ocx observe memory`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-observe-memory)
+
+### `ocx observe debug`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-observe-debug)
+
+### `ocx observe claude-inbound`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-observe-claude-inbound)
+
+### `ocx observe injection`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-observe-injection)
+
+### `ocx memory`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-memory)
+
+### `ocx storage codex-logs status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-storage-codex-logs-status)
+
+### `ocx storage codex-logs protect`
+
+[State-changing task](01_surface_observe-system.md#ocx-storage-codex-logs-protect)
+
+### `ocx storage codex-logs unprotect`
+
+[State-changing task](01_surface_observe-system.md#ocx-storage-codex-logs-unprotect)
+
+### `ocx storage codex-logs repair`
+
+[State-changing task](01_surface_observe-system.md#ocx-storage-codex-logs-repair)
+
+### `ocx storage codex-logs compact`
+
+[State-changing task](01_surface_observe-system.md#ocx-storage-codex-logs-compact)
+
+### `ocx storage trash list`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-storage-trash-list)
+
+### `ocx storage policy show`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-storage-policy-show)
+
+### `ocx storage trash restore`
+
+[State-changing task](01_surface_observe-system.md#ocx-storage-trash-restore)
+
+### `ocx storage policy set`
+
+[State-changing task](01_surface_observe-system.md#ocx-storage-policy-set)
+
+### `ocx storage policy run`
+
+[State-changing task](01_surface_observe-system.md#ocx-storage-policy-run)
+
+### `ocx debug provider`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-provider)
+
+### `ocx debug provider status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-debug-provider-status)
+
+### `ocx debug provider on`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-provider-on)
+
+### `ocx debug provider off`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-provider-off)
+
+### `ocx debug provider reset`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-provider-reset)
+
+### `ocx debug provider logs`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-debug-provider-logs)
+
+### `ocx debug usage`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-usage)
+
+### `ocx debug usage status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-debug-usage-status)
+
+### `ocx debug usage on`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-usage-on)
+
+### `ocx debug usage off`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-usage-off)
+
+### `ocx debug usage reset`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-usage-reset)
+
+### `ocx debug usage logs`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-debug-usage-logs)
+
+### `ocx debug injection`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-injection)
+
+### `ocx debug injection status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-debug-injection-status)
+
+### `ocx debug injection on`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-injection-on)
+
+### `ocx debug injection off`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-injection-off)
+
+### `ocx debug injection reset`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-injection-reset)
+
+### `ocx debug claude`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-claude)
+
+### `ocx debug claude status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-debug-claude-status)
+
+### `ocx debug claude on`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-claude-on)
+
+### `ocx debug claude off`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-claude-off)
+
+### `ocx debug claude reset`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-claude-reset)
+
+### `ocx system status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-status)
+
+### `ocx system settings`
+
+[State-changing task](01_surface_observe-system.md#ocx-system-settings)
+
+### `ocx system startup health`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-startup-health)
+
+### `ocx system startup install-service`
+
+[State-changing task](01_surface_observe-system.md#ocx-system-startup-install-service)
+
+### `ocx system startup install-shim`
+
+[State-changing task](01_surface_observe-system.md#ocx-system-startup-install-shim)
+
+### `ocx system diagnostics`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-diagnostics)
+
+### `ocx system sync`
+
+[State-changing task](01_surface_observe-system.md#ocx-system-sync)
+
+### `ocx system update check`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-update-check)
+
+### `ocx system update run`
+
+[State-changing task](01_surface_observe-system.md#ocx-system-update-run)
+
+### `ocx system update status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-update-status)
+
+### `ocx config show`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-config-show)
+
+### `ocx config get`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-config-get)
+
+### `ocx config set`
+
+[State-changing task](01_surface_observe-system.md#ocx-config-set)
+
+### `ocx config unset`
+
+[State-changing task](01_surface_observe-system.md#ocx-config-unset)
+
+### `ocx config validate`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-config-validate)
+
+### ocx config export
+
+[State-changing task](01_surface_observe-system.md#ocx-config-export)
+
+### `ocx config import`
+
+[State-changing task](01_surface_observe-system.md#ocx-config-import)
+
+### `ocx companion show`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-companion-show)
+
+### `ocx companion set`
+
+[State-changing task](01_surface_observe-system.md#ocx-companion-set)
+
+### `ocx companion reset`
+
+[State-changing task](01_surface_observe-system.md#ocx-companion-reset)
+
+### `ocx service install`
+
+[State-changing task](01_surface_lifecycle.md#ocx-service-install)
+
+### `ocx service repair`
+
+[State-changing task](01_surface_lifecycle.md#ocx-service-repair)
+
+### `ocx service restart`
+
+[State-changing task](01_surface_lifecycle.md#ocx-service-restart)
+
+### `ocx service start`
+
+[State-changing task](01_surface_lifecycle.md#ocx-service-start)
+
+### `ocx service stop`
+
+[State-changing task](01_surface_lifecycle.md#ocx-service-stop)
+
+### `ocx service status`
+
+[Read-oriented task](01_surface_lifecycle.md#ocx-service-status)
+
+### `ocx service uninstall`
+
+[State-changing task](01_surface_lifecycle.md#ocx-service-uninstall)
+
+### `ocx codex-shim install`
+
+[State-changing task](01_surface_integrations.md#ocx-codex-shim-install)
+
+### `ocx codex-shim status`
+
+[Read-oriented task](01_surface_integrations.md#ocx-codex-shim-status)
+
+### `ocx codex-shim uninstall`
+
+[State-changing task](01_surface_integrations.md#ocx-codex-shim-uninstall)
+
+### `ocx tray install`
+
+[State-changing task](01_surface_observe-system.md#ocx-tray-install)
+
+### `ocx tray start`
+
+[State-changing task](01_surface_observe-system.md#ocx-tray-start)
+
+### `ocx tray stop`
+
+[State-changing task](01_surface_observe-system.md#ocx-tray-stop)
+
+### `ocx tray status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-tray-status)
+
+### `ocx tray uninstall`
+
+[State-changing task](01_surface_observe-system.md#ocx-tray-uninstall)
+
+### `ocx system health`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-health)
+
+### `ocx companion timeline`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-companion-timeline)
+
+### `ocx access key`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-key)
+
+### `ocx access key list`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-access-key-list)
+
+### `ocx access key get`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-access-key-get)
+
+### `ocx access key set`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-key-set)
+
+### `ocx access key rotate commit`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-key-rotate-commit)
+
+### `ocx access key rotate abort`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-key-rotate-abort)
+
+### `ocx access key remove`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-key-remove)
+
+### `ocx access endpoints`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-access-endpoints)
+
+### `ocx access models`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-access-models)
+
+### `ocx access test`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-test)
+
+### `ocx remote-workspace hub status`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-remote-workspace-hub-status)
+
+### `ocx remote-workspace hub runtimes`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-remote-workspace-hub-runtimes)
+
+### `ocx remote-workspace hub sessions`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-remote-workspace-hub-sessions)
+
+### `ocx access key rename`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-key-rename)
+
+### `ocx access audio transcribe`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-audio-transcribe)
+
+### `ocx access audio live-check`
+
+[State-changing task](01_surface_access-remote.md#ocx-access-audio-live-check)
+
+### `ocx lab status`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-status)
+
+### `ocx lab verdicts`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-verdicts)
+
+### `ocx lab subjects`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-subjects)
+
+### `ocx lab observations`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-observations)
+
+### `ocx lab events`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-events)
+
+### `ocx lab artifacts`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-artifacts)
+
+### `ocx lab catalog`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-catalog)
+
+### `ocx lab subject`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-subject)
+
+### `ocx lab event`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-event)
+
+### `ocx lab artifact`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-artifact)
+
+### `ocx lab production-signals`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-production-signals)
+
+### `ocx lab public preview`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-public-preview)
+
+### `ocx lab public export`
+
+[State-changing task](01_surface_lab.md#ocx-lab-public-export)
+
+### `ocx lab public verify`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-public-verify)
+
+### `ocx lab public import`
+
+[State-changing task](01_surface_lab.md#ocx-lab-public-import)
+
+### `ocx lab public community`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-public-community)
+
+### `ocx lab automation status`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-automation-status)
+
+### `ocx lab automation enable`
+
+[State-changing task](01_surface_lab.md#ocx-lab-automation-enable)
+
+### `ocx lab automation disable`
+
+[State-changing task](01_surface_lab.md#ocx-lab-automation-disable)
+
+### `ocx lab automation runs`
+
+[Read-oriented task](01_surface_lab.md#ocx-lab-automation-runs)
+
+### `ocx lab run`
+
+[State-changing task](01_surface_lab.md#ocx-lab-run)
 
 ## Counts
 
-- declared capabilities: 74
-- of those, state-changing: 43
+- declared capabilities: 328
+- of those, state-changing: 198
 - head-resolved invocations: 2
