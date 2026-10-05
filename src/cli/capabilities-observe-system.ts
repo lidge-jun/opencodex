@@ -481,11 +481,11 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
     details: ["Local config/file operation; no management API request or automatic live convergence."],
   },
   {
-    command: ["config", "export"], summary: "Human-only raw configuration export handoff.",
+    command: ["config", "export"], summary: "Raw configuration export with an optional JSON file receipt.",
     routes: [],
-    flags: [{"name": "--json", "value": "boolean", "summary": "Emit the result as JSON."}],
+    flags: [{"name": "--json", "value": "boolean", "summary": "Emit a JSON receipt for a file destination; stdout export stays raw."}],
     mutates: true, json: "payload",
-    details: ["Local config/file operation; no management API request or automatic live convergence.", "Human-only secret-bearing export: raw credentials are included. Keep the file and stdout out of agent transcripts. --json is accepted but does not alter this raw export."],
+    details: ["Local config/file operation; no management API request or automatic live convergence.", "Human-only secret-bearing export: raw credentials are included. Keep the file and stdout out of agent transcripts. --json emits {ok:true,path} for a file destination; export to - always emits the raw config."],
   },
   {
     command: ["config", "import"], summary: "Local configuration import.",
@@ -581,7 +581,7 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
     routes: [],
     flags: [],
     mutates: true, json: "none",
-    details: ["Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.", "Installation diagnoses wrapper health and reports readiness warnings."],
+    details: ["Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.", "On macOS/Linux, installs the private PATH overlay and explicitly migrates legacy in-place shims; automatic repair does not migrate them.", "On macOS/Linux with sh/bash/zsh, source the printed codex-shell-env.sh path, then add that line after PATH setup in your shell startup file.", "Installation diagnoses wrapper health and reports readiness warnings; Windows keeps in-place wrappers."],
   },
   {
     command: ["codex-shim", "status"], summary: "Local Codex launcher shim status.",
@@ -589,7 +589,7 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
     routes: [],
     flags: [],
     mutates: false, json: "none",
-    details: ["Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.", "Inspects local launcher wrapper state."],
+    details: ["Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.", "Reports wrapper health, Unix overlay PATH activation, and explicit legacy migration guidance.", "For JSON, run ocx status --json and inspect codexShim; this command rejects --json and unexpected arguments."],
   },
   {
     command: ["codex-shim", "uninstall"], summary: "Local Codex launcher shim uninstall.",

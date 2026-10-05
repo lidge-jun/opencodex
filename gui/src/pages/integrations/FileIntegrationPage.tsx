@@ -289,7 +289,11 @@ function FileIntegrationControls({
     return (
       <section className="integration-client-page">
         {stateResource.state.showError
-          ? <Notice tone="err">{t("integrations.error.load")}</Notice>
+          ? (
+            <Notice tone="err">{t("integrations.error.load")}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={refresh} disabled={stateResource.state.refreshing}>{t("common.retry")}</button>
+            </Notice>
+          )
           : <p className="page-sub">{t("common.loading")}</p>}
       </section>
     );
@@ -386,7 +390,11 @@ function FileIntegrationControls({
         place that can say the client has stopped reading it.
       */}
       {status.supersededBy && (
-        <Notice tone="err">{t("integrations.status.supersededStore", { path: status.supersededBy })}</Notice>
+        <Notice tone="err">
+          {status.supersededReason === "missing-store" && status.missingStoreDocument !== undefined
+            ? t("integrations.status.missingStore", { path: status.supersededBy, document: status.missingStoreDocument })
+            : t("integrations.status.supersededStore", { path: status.supersededBy })}
+        </Notice>
       )}
 
       {status.appliedAt && (
@@ -470,6 +478,7 @@ function FileIntegrationControls({
           plan={plannedMutation.plan}
           planLoading={plannedMutation.loading}
           planFailure={plannedMutation.failure}
+          missingStorePath={status.supersededReason === "missing-store" ? status.supersededBy : undefined}
           onClose={closePlannedMutation}
           onConfirm={async plan => { if (plan) await mutate(plan); }}
         />

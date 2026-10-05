@@ -115,7 +115,7 @@ Env values are resolved through `src/config/proxy-env.ts`, so a config value nam
 
 Malformed optional data-loopback and nested hub-management listener blocks are disabled in memory and reported by load-time warnings and read-only config diagnostics. Ingress warnings validate the raw ingress independently, so an invalid hub sibling does not falsely blame a valid ingress. The warning names only the field; unrelated providers and keys survive. Explicit writes remain strictly validated.
 
-The `ocx config [show]` reader in `src/cli/config-command.ts` uses those diagnostics directly. `--json` and `--source` are consumed before selecting the action, so flags alone default to `show`; repeated `--json` or `--source` flags are rejected before positional operands, and `--source` is rejected for every other action.
+The `ocx config [show]` reader in `src/cli/config-command.ts` uses those diagnostics directly. `--json` and `--source` are consumed before selecting the action, so flags alone default to `show`; repeated `--json` or `--source` flags are rejected before positional operands, and `--source` is rejected for every other action. When diagnostics report a fallback or error, `show`/`get` warn on stderr and exit nonzero (explicit `--source` still exits 0); `validate` returns exit 1 for an invalid candidate, file `export --json` emits only `{ok:true,path}`, and local `ocx provider add` saves only a candidate that passes `validateConfigCandidate`.
 Its client annotation compares only the bounded service-token fingerprint with the validated client record; it does not call `loadConfig`, mutate permissions, or import the write-capable connect flow.
 All config publication continues through the existing required ACL-hardened writers above.
 

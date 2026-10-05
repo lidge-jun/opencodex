@@ -27,6 +27,7 @@ const LIST_CUSTOM_USAGE = "Usage: ocx models list-custom [--json]";
 const ALLOWED_MODALITIES = new Set(["text", "image", "audio"]);
 
 import { parseReasoningArgs } from "./models-custom-input";
+import { redactSecretArgs } from "./secret-args";
 export { parseReasoningArgs } from "./models-custom-input";
 
 interface ModelEntry {
@@ -123,11 +124,12 @@ function fail(message: string, usage?: string): never {
 
 function rejectUnexpectedArgs(args: string[], usage: string): void {
   if (args.length === 0) return;
-  const unknown = args.filter(arg => arg.startsWith("-"));
+  const shown = redactSecretArgs(args);
+  const unknown = shown.filter(arg => arg.startsWith("-"));
   fail(
     unknown.length > 0
       ? `Unknown flag(s): ${unknown.join(", ")}`
-      : `Unexpected argument(s): ${args.join(", ")}`,
+      : `Unexpected argument(s): ${shown.join(", ")}`,
     usage,
   );
 }
@@ -354,11 +356,12 @@ function handleConfiguredModels(args: string[]): void {
   const providerFilter = consumeFlagValue(restArgs, "--provider");
 
   if (restArgs.length > 0) {
-    const unknown = restArgs.filter(a => a.startsWith("-"));
+    const shown = redactSecretArgs(restArgs);
+    const unknown = shown.filter(a => a.startsWith("-"));
     if (unknown.length > 0) {
       console.error(`Unknown flag(s): ${unknown.join(", ")}`);
     } else {
-      console.error(`Unexpected argument(s): ${restArgs.join(", ")}`);
+      console.error(`Unexpected argument(s): ${shown.join(", ")}`);
     }
     console.error("Usage: ocx models [--provider <name>] [--json]");
     process.exit(1);

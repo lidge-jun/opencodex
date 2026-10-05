@@ -472,4 +472,4 @@ ocx update --tag preview
 
 ## Жизненный цикл клиента Remote Hub
 
-Используйте `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync` и `ocx connect rotate --pairing-code-stdin`. `ocx disconnect` офлайн восстанавливает локальное состояние, но не отзывает ключ hub. Пока подключение активно, `ocx connect revoke --admin-token-stdin` отзывает сохранённый `apiKeyId`; после отключения используйте **Integrations → API Keys** на hub. Секреты передаются только через stdin, не argv.
+Используйте `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync` и `ocx connect rotate --pairing-code-stdin`. `ocx disconnect` офлайн восстанавливает локальное состояние, но не отзывает ключ hub. Пока подключение активно, `ocx connect revoke --admin-token-stdin` отзывает сохранённый `apiKeyId`; после отключения используйте **Подключение → API-ключи** на hub. Секреты передаются только через stdin, не argv.

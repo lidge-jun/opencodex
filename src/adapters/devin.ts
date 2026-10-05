@@ -523,9 +523,30 @@ export function mapOcxMessagesToDevin(
     .join("\n\n");
   if (system) items.push({ role: "system", content: system });
 
+  let previousToolResult: ChatHistoryItem | undefined;
   for (const message of parsed.context.messages) {
+    // Original-message adjacency matters even when an intervening message maps to nothing.
+    if (message.role !== "toolResult") previousToolResult = undefined;
     const mapped = mapOneMessage(message, parsed.modelId, options);
-    if (mapped) items.push(mapped);
+    if (!mapped) continue;
+    if (mapped.role === "tool") {
+      if (previousToolResult && previousToolResult.tool_call_id === mapped.tool_call_id) {
+        const previous = previousToolResult;
+        previous.content = typeof previous.content === "string" && typeof mapped.content === "string"
+          ? `${previous.content}\n\n${mapped.content}`
+          : [
+              ...(typeof previous.content === "string"
+                ? [{ type: "text" as const, text: previous.content }] : previous.content),
+              { type: "text", text: "\n\n" },
+              ...(typeof mapped.content === "string"
+                ? [{ type: "text" as const, text: mapped.content }] : mapped.content),
+            ];
+        if (mapped.is_error) previous.is_error = true;
+        continue;
+      }
+      previousToolResult = mapped;
+    }
+    items.push(mapped);
   }
   return items;
 }

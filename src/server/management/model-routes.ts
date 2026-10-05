@@ -167,7 +167,7 @@ import type {
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
-import type { ManagementContext } from "./context";
+import { managementInferencePort, type ManagementContext } from "./context";
 import { effectiveModelReasoningEfforts, inheritedModelReasoningEfforts, listManagementModelRows, loadExportModels } from "./model-rows";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
@@ -204,7 +204,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       ?? (await import("../../integrations/catalog-refresh")).refreshOwnedCatalogIntegrations;
     const clientIntegrations = await refresh({
       config,
-      port: Number(url.port) || config.port,
+      port: managementInferencePort(ctx),
       models: () => loadExportModels(config),
     });
     return { catalogRefresh, clientIntegrations };
@@ -562,7 +562,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
         reason: "non_loopback",
       }, 400, req, config);
     }
-    const baseUrl = opencodeProxyBaseUrl(Number(url.port) || config.port, config.hostname, config);
+    const baseUrl = opencodeProxyBaseUrl(managementInferencePort(ctx), config.hostname, config);
     let models: ExportModel[];
     try {
       // The ONE loader every export surface uses. It carries the visibility

@@ -155,7 +155,7 @@ OpenCodex demandent à Codex de transmettre les remplacements à `spawn_agent` ;
 
 ## Sessions, clés et usage Remote Hub
 
-Le plan de gestion du tableau de bord est séparé du trafic modèle direct client→hub. **Integrations → API Keys** affiche les rotations en attente, montre le secret de remplacement une seule fois et exige une validation ou une annulation explicite. La déconnexion du navigateur n'invalide que la session courante. L'usage connecté vient du hub filtré par `apiKeyId`; l'usage déconnecté est local, sans réplication.
+Le plan de gestion du tableau de bord est séparé du trafic modèle direct client→hub. **Connexion → Clés API** affiche les rotations en attente, montre le secret de remplacement une seule fois et exige une validation ou une annulation explicite. La déconnexion du navigateur n'invalide que la session courante. L'usage connecté vient du hub filtré par `apiKeyId`; l'usage déconnecté est local, sans réplication.
 
 La garantie de remplacement lors d'une création de sous-agent s'applique au texte de consignes v2 **intégré**.
 Un `injectionPrompt` personnalisé remplace entièrement ce texte et doit contenir les espaces réservés

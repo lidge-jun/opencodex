@@ -70,11 +70,15 @@ export interface IneffectiveWrite {
    * `missing-store` — the store does not exist, but the client already manages it
    * (DSH: a Desktop profile manifest is present). DSH renames `settings.yaml` to
    * `settings.yaml.imported` and imports it on startup, so a config-file write would
-   * orphan our ownership record. `remedy` says how to bring the store back.
+   * orphan our ownership record. `remedy` says how to bring the store back, and
+   * `emptyDocument` is what to create it with.
    */
-  readonly why: "owned-config-file" | "unestablished-schema" | "missing-store";
+  readonly why: IneffectiveWriteReason;
   readonly remedy?: string;
+  readonly emptyDocument?: string;
 }
+
+export type IneffectiveWriteReason = "owned-config-file" | "unestablished-schema" | "missing-store";
 
 function configFileTarget(
   clientId: IntegrationClientId,
@@ -158,7 +162,7 @@ export function resolveIntegrationTarget(args: {
   if (kind === "missing") {
     const missing = declared.missingStore;
     return missing?.readsStore(storePath, path => io.statKind(path)) === true
-      ? configFileTarget(clientId, configPath, { store: storePath, why: "missing-store", remedy: missing.remedy })
+      ? configFileTarget(clientId, configPath, { store: storePath, why: "missing-store", remedy: missing.remedy, emptyDocument: missing.emptyDocument })
       : configFileTarget(clientId, configPath, null);
   }
   // Only proven absence permits a legacy write. Unreadable or non-file stores

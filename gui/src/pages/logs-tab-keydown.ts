@@ -1,9 +1,10 @@
 import type { KeyboardEvent } from "react";
+import { canonicalHashPath } from "../app-routing";
 
 export type LogsTab = "logs" | "debug";
 
 export function readTabFromHash(): LogsTab {
-  return window.location.hash.replace(/^#\/?/, "") === "logs/debug" ? "debug" : "logs";
+  return canonicalHashPath(window.location.hash) === "logs/debug" ? "debug" : "logs";
 }
 
 export function selectLogsTab(next: LogsTab) {

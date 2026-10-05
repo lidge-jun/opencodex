@@ -41,13 +41,19 @@ import { markLocalRequestLogRefusal } from "../request-log";
 import { CODEX_POOL_REFRESH_INCOMPLETE_LOG_REASON } from "../../codex/pool-refresh-backoff";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import { forceRefreshMainAccountToken } from "../../codex/main-account";
+import { safeCallerSessionId } from "../caller-session-identity";
 
-/** Keep synthesized Claude identity out of request headers reused by policy/combo fallback. */
+/** Normalize caller aliases only on native egress; preserve ingress and fallback identity. */
 export function withClaudeNativeSession(headers: Headers, provider: OcxProviderConfig, sessionId?: string): Headers {
-  if (!sessionId || !isCanonicalOpenAiForwardProvider(provider)
-    || headers.has("session_id") || headers.has("session-id") || headers.has("thread-id")) return headers;
+  // Empty values count as absent, matching materializeCodexUpstreamAuth, so first attempts and
+  // retries rebuilt from caller headers pick the same identity.
+  if (!isCanonicalOpenAiForwardProvider(provider) || headers.get("session_id")) return headers;
+  const alias = ["session-id", "thread-id"].find(name => headers.get(name));
+  const nativeSession = alias ? safeCallerSessionId(headers.get(alias)) : sessionId;
+  // A non-empty invalid alias suppresses weaker metadata identity.
+  if (!nativeSession) return headers;
   const forwarded = new Headers(headers);
-  forwarded.set("session_id", sessionId);
+  forwarded.set("session_id", nativeSession);
   return forwarded;
 }
 

@@ -1160,6 +1160,7 @@
     "management-anthropic-reset-grants.test.ts": "server",
     "management-api-logs-metrics.test.ts": "server",
     "management-client-config-route.test.ts": "server",
+    "management-inference-port.test.ts": "server",
     "management-google-tool-schema-policy.test.ts": "server",
     "management-integration-journal-delete.test.ts": "server",
     "management-integration-routes.test.ts": "server",

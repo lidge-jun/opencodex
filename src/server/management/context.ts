@@ -160,7 +160,7 @@ export interface ManagementApiDeps {
   issueApiKey?: (config: OcxConfig, name: string) => IssuedApiKey;
   revokeApiKey?: (config: OcxConfig, id: string) => boolean;
   loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
-  /** The port this runtime listens on; a join is refused unless it is the configured port. */
+  /** Bound public inference port, not the ingress receiving this management request. */
   liveListenPort?: () => number | undefined;
   now?: () => number;
 }
@@ -190,4 +190,11 @@ export interface ManagementContext {
   guiSessionIssuance: import("../gui-session").GuiSessionIssuance | null;
   convergeCodexCatalog: () => Promise<CatalogDisposition>;
   syncClaudeAgentDefsBestEffort: () => Promise<void>;
+}
+
+/** A management-only ingress cannot supply the port used by generated inference clients. */
+export function managementInferencePort(ctx: Pick<ManagementContext, "config" | "deps">): number {
+  // Lifecycle owns the actual port (including CLI overrides/ephemeral binds); direct route
+  // fixtures fall back to config without consulting another runtime's state file.
+  return ctx.deps.liveListenPort?.() ?? ctx.config.port;
 }
