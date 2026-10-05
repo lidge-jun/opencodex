@@ -706,8 +706,7 @@ export async function prepareAdapterExchange(
       // This also covers a reset reached by a 401/429/413 recovery refetch.
       if (isNonReplayableResponse(upstreamResponse)) {
         try {
-          return await sanitizeNonReplayableUpstreamError(upstreamResponse,
-            transportState.sameTargetRequest?.headers ?? builtInitialRequest.headers, upstream.signal);
+          return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
         } finally { cleanupUpstreamAbort(); }
       }
      if (

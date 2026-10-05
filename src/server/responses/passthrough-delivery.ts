@@ -545,7 +545,7 @@ export async function deliverPassthroughResponse(
     // masquerade as a pre-connection failure after the credential was seen.
     // The numeric outcome above already classified it neutral — no streak.
     if (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse)) {
-      return await sanitizeNonReplayableUpstreamError(upstreamResponse, nativeExchange.request.headers, upstream.signal);
+      return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
     }
     if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
       return new Response(upstreamResponse.body, {

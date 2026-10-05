@@ -187,40 +187,23 @@ const chatSuccess = (): Response => Response.json({ id: "chat-test", choices: [{
 
 describe("reset replacement error confidentiality", () => {
   const credential = "fixture-active-credential-v1";
-  for (const adapter of ["openai-chat", "openai-responses"] as const) {
-    test.each([
-      ["nested JSON escape", "\\u0066ixture-active-credential-v1"],
-      ["percent escape", "%66ixture-active-credential-v1"],
-      ["nested percent escape", "%2566ixture-active-credential-v1"],
-      ["numeric entity", "&#102;ixture-active-credential-v1"],
-    ])(`${adapter} withholds encoded diagnostic credentials (%s)`, async (_name, encoded) => {
-      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
-        ? reset() : Response.json({ error: { message: `invalid request: ${encoded}; path C:\\safe\\u1234.txt` } }, { status: 400 }) });
-      expect(result.status).toBe(400);
-      expect(result.bodies).toHaveLength(2);
-      const message = JSON.parse(result.text).error.message;
-      expect(message).toBe("[REDACTED]");
-    });
-
-    test.each([
-      ["named entity", "fixture+credential-v1", "invalid request: fixture&plus;credential-v1"],
-      ["percent-encoded named entity", "fixture+credential-v1", "invalid request: fixture%26plus%3Bcredential-v1"],
-      ["multi-code-point named entity", "fj-credential-v1", "bad key &fjlig;-credential-v1"],
-    ])(`${adapter} withholds unresolved named diagnostic references (%s)`, async (_name, apiKey, message) => {
-      const result = await probe({ provider: { adapter, apiKey }, answer: ordinal => ordinal === 1
-        ? reset() : Response.json({ error: { message } }, { status: 400 }) });
-      expect(result.status).toBe(400);
-      expect(result.bodies).toHaveLength(2);
-      expect(result.used).toBe(2);
-      expect(result.grantSpent).toBe(true);
-      expect(JSON.parse(result.text)).toEqual({ error: { message: "[REDACTED]" } });
-    });
-
-    test.each([
+  const genericBody = { error: { type: "upstream_error",
+    message: "Provider error 400: upstream diagnostic withheld after a connection-reset replacement",
+  } };
+  const diagnostics = [
+    ...([
+      ["nested JSON escape", credential, "invalid request: \\u0066ixture-active-credential-v1; path C:\\safe\\u1234.txt"],
+      ["percent escape", credential, "invalid request: %66ixture-active-credential-v1"],
+      ["nested percent escape", credential, "invalid request: %2566ixture-active-credential-v1"],
+      ["numeric reference", credential, "invalid request: &#102;ixture-active-credential-v1"],
+      ["named reference", "fixture+credential-v1", "invalid request: fixture&plus;credential-v1"],
+      ["percent-encoded named reference", "fixture+credential-v1", "invalid request: fixture%26plus%3Bcredential-v1"],
+      ["multi-code-point named reference", "fj-credential-v1", "bad key &fjlig;-credential-v1"],
       ["UTF-8 percent sequence", "éabcdeé-active-v1", "invalid request: %C3%A9%61%62%63%64%65%C3%A9-active-v1"],
       ["fullwidth percent", credential, "invalid request: ％66ixture-active-credential-v1"],
       ["uppercase Greek lookalike", "fixture-Active-credential-v1", "invalid request: fixture-\u0391ctive-credential-v1"],
       ["ligature lookalike", credential, "invalid request: \uFB01xture-active-credential-v1"],
+      ["fullwidth lookalike", credential, "invalid request: ｆｉｘｔｕｒｅ-active-credential-v1"],
       ["zero-width split", credential, "invalid request: fixture-active-\u200Bcredential-v1"],
       ["nested JSON short escape", "fixture/credential-v1", "invalid request: fixture\\/credential-v1"],
       ["uppercase hex numeric reference", credential, "invalid request: &#X66;ixture-active-credential-v1"],
@@ -228,130 +211,102 @@ describe("reset replacement error confidentiality", () => {
       ["legacy named reference without semicolon", "fixture&credential-v1", "invalid request: fixture&ampcredential-v1"],
       ["legacy reference before equals", "fixture&credential", "invalid request: fixture&ampcredential="],
       ["legacy reference before long run", "fixture&" + "a".repeat(40), "invalid request: fixture&amp" + "a".repeat(40)],
-    ])(`${adapter} withholds unprovable diagnostic text (%s)`, async (_name, apiKey, message) => {
-      const result = await probe({ provider: { adapter, apiKey }, answer: ordinal => ordinal === 1
-        ? reset() : Response.json({ error: { message } }, { status: 400 }) });
-      expect(result.status).toBe(400);
-      expect(result.bodies).toHaveLength(2);
-      expect(result.used).toBe(2);
-      expect(result.grantSpent).toBe(true);
-      expect(JSON.parse(result.text)).toEqual({ error: { message: "[REDACTED]" } });
-    });
+      ["over-nested percent encoding", credential, "invalid request: %2525252566ixture-active-credential-v1"],
+      ["HTML split", credential, "invalid request: fixture-active-<b>credential-v1</b>"],
+      ["query without reference start", credential, "see https://x.test/a?b=1 for details"],
+      ["query with reference start", credential, "see https://x.test/a?b=1&c=2"],
+      ["redaction marker overlap", "REDACTED", "api_key=REDACTED"],
+    ] as const).map(([name, apiKey, message]) => ({ name, apiKey,
+      text: JSON.stringify({ error: { message } }), contentType: "application/json", type: "upstream_error" })),
+    ...([
+      ["plain echo", credential, `invalid request: ${credential}`, "text/plain"],
+      ["JSON unicode escape", credential, JSON.stringify({ error: { message: credential } }).replaceAll("f", "\\u0066"), "application/json"],
+      ["JSON short escape", "fixture/credential-v1", '{"error":{"message":"fixture\\/credential-v1"}}', "application/json"],
+      ["numeric credential normalized to exponent", "1000000000000000000000", '{"error":{"code":1e21}}', "application/json"],
+      ["numeric scalar credential", "867530912345", '{"error":{"message":"invalid request","code":867530912345,"count":17,"flag":false}}', "application/json"],
+      ["boolean scalar credential", "true", '{"error":{"message":"x","code":true}}', "application/json"],
+      ["null scalar credential", "null", '{"error":{"message":"x","code":null}}', "application/json"],
+      ["credential as JSON key", credential, JSON.stringify({ error: { [credential]: 1 } }), "application/json"],
+      ["non-ASCII JSON key", "fixture-Active", JSON.stringify({ error: { message: "x", ["fixture-\u0391ctive"]: 1 } }), "application/json"],
+      ["array body", credential, JSON.stringify([credential, { message: `invalid request: ${credential}` }, 17]), "application/json"],
+      ["non-2xx SSE body", credential, `event: response.failed\ndata: {"type":"response.failed","response":{"error":{"message":"invalid request: ${credential}"}}}\n\n`, "text/event-stream"],
+      ["malformed JSON", credential, `{"error":{"message":"invalid request: ${credential}"`, "application/json"],
+      ["over-nested JSON", credential, '{"detail":'.repeat(65) + JSON.stringify(credential) + "}".repeat(65), "application/json"],
+      ["escaped credential in every JSON field", credential, JSON.stringify({ error: { message: credential, type: credential, code: credential },
+        [credential]: credential }).replaceAll(credential, credential.replaceAll("f", "\\u0066")), "application/json"],
+    ] as const).map(([name, apiKey, text, contentType]) => ({ name, apiKey, text, contentType, type: "upstream_error" })),
+    { name: "allowlisted type with hostile message", apiKey: credential,
+      text: JSON.stringify({ error: { type: "invalid_request_error", message: credential } }),
+      contentType: "application/json", type: "invalid_request_error" },
+  ];
+  test.each((["openai-chat", "openai-responses"] as const).flatMap(adapter =>
+    diagnostics.map(diagnostic => [adapter, diagnostic.name, diagnostic] as const),
+  ))("%s withholds upstream diagnostics (%s)", async (adapter, _name, diagnostic) => {
+    const result = await probe({ provider: { adapter, apiKey: diagnostic.apiKey }, answer: ordinal => ordinal === 1
+      ? reset() : new Response(diagnostic.text, { status: 400, headers: { "content-type": diagnostic.contentType } }) });
+    expect(result.authorizations).toEqual([`Bearer ${diagnostic.apiKey}`, `Bearer ${diagnostic.apiKey}`]);
+    expect(result.status).toBe(400);
+    expect(result.bodies).toHaveLength(2);
+    expect(result.used).toBe(2);
+    expect(result.grantSpent).toBe(true);
+    expect(JSON.parse(result.text)).toEqual({ error: { type: diagnostic.type, message: genericBody.error.message } });
+    expect(result.text).not.toContain(diagnostic.apiKey);
+  });
 
-    test(`${adapter} withholds lookalike diagnostic text`, async () => {
+  for (const adapter of ["openai-chat", "openai-responses"] as const) {
+    test(`${adapter} preserves an allowlisted upstream error type`, async () => {
       const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
-        ? reset() : Response.json({ error: { message: "invalid request: ｆｉｘｔｕｒｅ-active-credential-v1" } }, { status: 400 }) });
-      expect(result.status).toBe(400);
-      expect(result.bodies).toHaveLength(2);
-      expect(JSON.parse(result.text).error.message).toBe("[REDACTED]");
-    });
-
-    test(`${adapter} withholds a non-ASCII diagnostic key`, async () => {
-      const result = await probe({ provider: { adapter, apiKey: "fixture-Active" }, answer: ordinal => ordinal === 1
-        ? reset() : Response.json({ error: { message: "x", ["fixture-\u0391ctive"]: 1 } }, { status: 400 }) });
+        ? reset() : Response.json({ error: { type: "invalid_request_error", message: credential } }, { status: 400 }) });
       expect(result.status).toBe(400);
       expect(result.bodies).toHaveLength(2);
       expect(result.used).toBe(2);
       expect(result.grantSpent).toBe(true);
-      expect(JSON.parse(result.text)).toEqual({ error: { message: "x", "[REDACTED]": 1 } });
+      expect(JSON.parse(result.text)).toEqual({ error: { type: "invalid_request_error", message: genericBody.error.message } });
+      expect(result.text).not.toContain(credential);
     });
 
-    test.each([
-      ["preserves a query without a reference start", "see https://x.test/a?b=1 for details", "see https://x.test/a?b=1 for details"],
-      ["withholds a query with a reference start", "see https://x.test/a?b=1&c=2", "[REDACTED]"],
-    ])(`${adapter} %s with an unrelated credential`, async (_name, message, expected) => {
+    test(`${adapter} rejects a credential-valued upstream error type`, async () => {
       const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
-        ? reset() : Response.json({ error: { message } }, { status: 400 }) });
+        ? reset() : Response.json({ error: { type: credential } }, { status: 400 }) });
       expect(result.status).toBe(400);
       expect(result.bodies).toHaveLength(2);
       expect(result.used).toBe(2);
       expect(result.grantSpent).toBe(true);
-      expect(JSON.parse(result.text)).toEqual({ error: { message: expected } });
-    });
-
-    test.each([
-      ["malformed structured JSON", `{"error":{"message":"invalid request: ${credential}"`, "application/json",
-        { error: { type: "upstream_error", message: "Provider error 400: diagnostic unavailable" } }],
-      ["JSON nested beyond the display limit", '{"detail":'.repeat(65) + JSON.stringify(credential) + "}".repeat(65), "application/json",
-        { error: { type: "upstream_error", message: "Provider error 400: diagnostic unavailable" } }],
-      ["array diagnostic", JSON.stringify([credential, { message: `invalid request: ${credential}` }, 17]), "application/json",
-        ["[REDACTED]", { message: "invalid request: [REDACTED]" }, 17]],
-      ["non-2xx SSE diagnostic", `event: response.failed\ndata: {"type":"response.failed","response":{"error":{"message":"invalid request: ${credential}"}}}\n\n`, "text/event-stream",
-        { error: { type: "upstream_error", message: 'event: response.failed\ndata: {"type":"response.failed","response":{"error":{"message":"invalid request: [REDACTED]"}}}\n\n' } }],
-    ] as const)(`${adapter} safely projects %s`, async (_name, text, contentType, expected) => {
-      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
-        ? reset() : new Response(text, { status: 400, headers: { "content-type": contentType } }) });
-      expect(result.status).toBe(400);
-      expect(result.bodies).toHaveLength(2);
-      expect(result.used).toBe(2);
-      expect(result.grantSpent).toBe(true);
-      expect(JSON.parse(result.text)).toEqual(expected);
+      expect(JSON.parse(result.text)).toEqual(genericBody);
+      expect(result.text).not.toContain(credential);
     });
 
     test(`${adapter} drops upstream diagnostic headers and preserves retry refusal`, async () => {
       const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
         ? reset() : Response.json({ error: { message: `invalid request: ${credential}` } }, { status: 400, headers: {
-          "x-debug-token": credential, "set-cookie": `diagnostic=${credential}`, "x-should-retry": "false",
+          "x-debug-token": credential, "x-upstream-debug": credential, "set-cookie": `diagnostic=${credential}`,
+          "retry-after": "0", "x-should-retry": "false",
         } }) });
       expect(result.status).toBe(400);
       expect(result.bodies).toHaveLength(2);
       expect(result.used).toBe(2);
       expect(result.grantSpent).toBe(true);
-      expect(JSON.parse(result.text)).toEqual({ error: { message: "invalid request: [REDACTED]" } });
+      expect(JSON.parse(result.text)).toEqual(genericBody);
+      expect(result.text).not.toContain(credential);
+      expect([...result.headers.entries()]).toEqual([["content-type", "application/json"], ["x-should-retry", "false"]]);
       expect(result.headers.get("x-debug-token")).toBeNull();
+      expect(result.headers.get("x-upstream-debug")).toBeNull();
       expect(result.headers.get("set-cookie")).toBeNull();
+      expect(result.headers.get("retry-after")).toBeNull();
       expect(result.headers.get("x-should-retry")).toBe("false");
     });
 
-    test.each([
-      ["number", "867530912345", { message: "invalid request", code: 867530912345, count: 17, flag: false },
-        { message: "invalid request", code: "[REDACTED]", count: 17, flag: false }],
-      ["boolean", "true", { message: "x", code: true }, { message: "x", code: "[REDACTED]" }],
-      ["null", "null", { message: "x", code: null }, { message: "x", code: "[REDACTED]" }],
-    ] as const)(`${adapter} masks scalar diagnostic credentials (%s)`, async (_name, apiKey, error, expected) => {
-      const result = await probe({ provider: { adapter, apiKey }, answer: ordinal => ordinal === 1
-        ? reset() : Response.json({ error }, { status: 400 }) });
-      expect(result.authorizations).toEqual([`Bearer ${apiKey}`, `Bearer ${apiKey}`]);
-      expect(result.status).toBe(400);
-      expect(result.bodies).toHaveLength(2);
-      expect(result.used).toBe(2);
-      expect(result.grantSpent).toBe(true);
-      expect(JSON.parse(result.text)).toEqual({ error: expected });
-    });
-
-    test(`${adapter} masks the actual wire credential after header OWS normalization`, async () => {
+    test(`${adapter} withholds diagnostics after header OWS normalization`, async () => {
       const result = await probe({ provider: { adapter, apiKey: `${credential} ` }, answer: (ordinal, authorization) => ordinal === 1
         ? reset() : Response.json({ error: { message: `invalid request: ${authorization!.replace(/^Bearer /, "")}` } }, { status: 400 }) });
       expect(result.authorizations).toEqual([`Bearer ${credential}`, `Bearer ${credential}`]);
       expect(result.status).toBe(400);
       expect(result.bodies).toHaveLength(2);
-      expect(JSON.parse(result.text).error.message).toBe("invalid request: [REDACTED]");
-    });
-
-    test.each(["plain", "escaped-json"])(`${adapter} redacts replacement diagnostics (%s)`, async shape => {
-      const diagnostic = `invalid request: ${credential}`;
-      const text = shape === "plain" ? diagnostic : JSON.stringify({ error: {
-        message: diagnostic, type: credential, code: credential,
-      }, [credential]: credential }).replaceAll(credential, credential.replaceAll("f", "\\u0066"));
-      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
-        ? reset() : new Response(text, { status: 400, headers: {
-          "content-type": "application/json", "x-upstream-debug": credential,
-          "set-cookie": `diagnostic=${credential}`, "retry-after": "0",
-        } }) });
-      expect(result.status).toBe(400);
-      expect(result.text).toContain("invalid request");
-      expect(result.text).not.toContain(credential);
-      expect(result.text).not.toContain("\\u0066ixture-active");
-      expect(result.text).toContain("[REDACTED]");
-      expect(result.headers.get("x-upstream-debug")).toBeNull();
-      expect(result.headers.get("set-cookie")).toBeNull();
-      expect(result.headers.get("retry-after")).toBeNull();
-      expect(result.text).not.toContain("upstream_reset_replay_refused");
-      expect(result.bodies).toHaveLength(2);
+      expect(JSON.parse(result.text)).toEqual(genericBody);
     });
   }
 
-  test("redacts the serving credential after an OAuth account replacement", async () => {
+  test("withholds diagnostics after an OAuth account replacement", async () => {
     const result = await probe({ oauth: true, providerName: "xai", provider: { adapter: "openai-chat",
       baseUrl: "https://api.x.ai/v1", authMode: "oauth", models: ["test"] },
       body: { model: "xai/test" }, answer: (ordinal, authorization) => ordinal === 1
@@ -360,16 +315,8 @@ describe("reset replacement error confidentiality", () => {
     expect(result.status).toBe(400);
     expect(result.authorizations[0]).not.toBe(result.authorizations[2]);
     expect(result.text).not.toContain(result.authorizations[2]!.replace(/^Bearer /, ""));
-    expect(result.text).toContain("[REDACTED]");
+    expect(JSON.parse(result.text)).toEqual(genericBody);
     expect(result.bodies).toHaveLength(3);
-  });
-
-  test("over-nested diagnostic encoding fails closed within the matching limit", async () => {
-    const upstream = Response.json({ error: { message: "%2525252566ixture-active-credential-v1" } }, { status: 400 });
-    markResponseNonReplayable(upstream);
-    const safe = await sanitizeNonReplayableUpstreamError(upstream, { authorization: `Bearer ${credential}` }, new AbortController().signal);
-    expect(safe.status).toBe(400);
-    expect((await safe.json() as { error: { message: string } }).error.message).toBe("[REDACTED]");
   });
 
   test.each(["openai-chat", "openai-responses"] as const)("%s keeps a replacement terminal through combo consumption", async adapter => {
@@ -381,34 +328,34 @@ describe("reset replacement error confidentiality", () => {
           : chatSuccess() });
     expect(result.status).toBe(400);
     expect(result.text).not.toContain(credential);
-    expect(result.text).toContain("[REDACTED]");
+    expect(JSON.parse(result.text)).toEqual(genericBody);
     expect(result.bodies).toHaveLength(2);
   });
 
   test("the client projection preserves marker provenance before lifetime wrapping", async () => {
     const upstream = Response.json({ error: { message: `invalid request: ${credential}` } }, { status: 400 });
     markResponseNonReplayable(upstream);
-    const safe = await sanitizeNonReplayableUpstreamError(upstream, { authorization: `Bearer ${credential}` }, new AbortController().signal);
+    const safe = await sanitizeNonReplayableUpstreamError(upstream, new AbortController().signal);
     expect(safe.status).toBe(400);
     expect(isNonReplayableResponse(safe)).toBe(true);
     expect(isReplayRefusalResponse(safe)).toBe(false);
     expect(await safe.text()).not.toContain(credential);
     const refusal = replayRefusalResponse();
-    expect(await sanitizeNonReplayableUpstreamError(refusal, {}, new AbortController().signal)).toBe(refusal);
+    expect(await sanitizeNonReplayableUpstreamError(refusal, new AbortController().signal)).toBe(refusal);
     expect(isReplayRefusalResponse(refusal)).toBe(true);
     await refusal.text();
   });
 
   test("an ordinary error keeps its existing delivery owner", async () => {
     const upstream = Response.json({ error: { message: "ordinary error" } }, { status: 400 });
-    expect(await sanitizeNonReplayableUpstreamError(upstream, {}, new AbortController().signal)).toBe(upstream);
+    expect(await sanitizeNonReplayableUpstreamError(upstream, new AbortController().signal)).toBe(upstream);
     await upstream.text();
   });
 
   test("bodyless terminal responses retain their real status", async () => {
     const upstream = new Response(null, { status: 304, headers: { "x-upstream-debug": credential } });
     markResponseNonReplayable(upstream);
-    const safe = await sanitizeNonReplayableUpstreamError(upstream, { "x-api-key": credential }, new AbortController().signal);
+    const safe = await sanitizeNonReplayableUpstreamError(upstream, new AbortController().signal);
     expect(safe.status).toBe(304);
     expect(safe.body).toBeNull();
     expect(safe.headers.get("x-upstream-debug")).toBeNull();
@@ -427,7 +374,7 @@ describe("reset replacement error confidentiality", () => {
         cancel() { cancelled = true; },
       }), { status: 400 });
       markResponseNonReplayable(upstream);
-      const safe = await sanitizeNonReplayableUpstreamError(upstream, { "x-api-key": credential }, abort.signal);
+      const safe = await sanitizeNonReplayableUpstreamError(upstream, abort.signal);
       expect(safe.status).toBe(abortRead ? 499 : 400);
       expect(await safe.text()).not.toContain(credential);
       expect(cancelled).toBe(true);
@@ -464,7 +411,10 @@ describe("translated reset replay boundaries and accounting", () => {
       answer: ordinal => ordinal === 1 ? reset() : status === 400 ? effortRefusal()
         : Response.json({ error: { message: "recoverable-looking failure" } }, { status }) });
     expect(result.status, result.text).toBe(status === 400 ? 400 : 429);
-    expect(result.text).toContain(status === 400 ? "reasoning_effort max is not supported" : "upstream_reset_replay_refused");
+    if (status === 400) expect(JSON.parse(result.text)).toEqual({ error: { type: "invalid_request_error",
+      message: "Provider error 400: upstream diagnostic withheld after a connection-reset replacement",
+    } });
+    else expect(result.text).toContain("upstream_reset_replay_refused");
     expect(result.bodies).toHaveLength(2);
     expect(result.bodies[0]).toBe(result.bodies[1]);
     expect(result.grantSpent).toBe(true);
