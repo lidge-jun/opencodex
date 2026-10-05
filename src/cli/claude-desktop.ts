@@ -321,6 +321,14 @@ export function defaultDesktopApplyMode(
   return connection.kind === "connected" ? "gateway" : "first-party";
 }
 
+/**
+ * A rejected argument as the error may show it: an option by name only, and anything else as a
+ * placeholder. An inline `--option=value` and a bare operand can each be a credential.
+ */
+function describeRejectedArg(arg: string): string {
+  return arg.startsWith("-") ? arg.split("=", 1)[0]! : "<redacted>";
+}
+
 export function parseDesktopApplyArgs(
   flags: string[],
   config: Pick<OcxConfig, "claudeCode" | "port" | "runtimeRole">,
@@ -331,7 +339,7 @@ export function parseDesktopApplyArgs(
   const wantsGateway = flags.includes("--gateway") || shapeFlags.length > 0;
   if (wantsFirstParty && wantsGateway) return { error: "--first-party cannot be combined with --gateway or gateway shape flags." };
   const unknown = flags.filter(arg => !["--first-party", "--gateway", "--static", "--hybrid", "--discovery-only"].includes(arg));
-  if (unknown.length > 0) return { error: `알 수 없는 인자: ${unknown.join(" ")}` };
+  if (unknown.length > 0) return { error: `알 수 없는 인자: ${unknown.map(describeRejectedArg).join(" ")}` };
   const kind: ClaudeDesktopMode = wantsFirstParty
     ? "first-party"
     : wantsGateway ? "gateway" : defaultDesktopApplyMode(config, readClientConnectionState(), observed ?? observeClaudeDesktopMode(config));

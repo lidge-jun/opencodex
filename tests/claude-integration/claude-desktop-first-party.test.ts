@@ -114,6 +114,11 @@ test("CLI apply flags: default gateway, legacy shape flags imply gateway, confli
   expect("error" in parseDesktopApplyArgs(["--bogus"], config())).toBe(true);
 });
 
+test("CLI apply rejects unknown arguments without echoing option values or operands", () => {
+  expect(parseDesktopApplyArgs(["--token=synthetic-secret", "synthetic-operand", "--bogus"], config()))
+    .toEqual({ error: "알 수 없는 인자: --token <redacted> --bogus" });
+});
+
 test("first-party apply writes only the proxy env, creates the CA, and removes cleanly", () => {
   mkdirSync(claudeDir, { recursive: true });
   writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ theme: "dark", env: { FOO: "bar" } }));
