@@ -909,21 +909,26 @@ Claude debug immediately clears the ring.
 
 ## GUI (Claude page)
 
-Claude has two tabs under **Connect** in the dashboard: **Claude** for Claude Code and **Claude Desktop**,
-and the Claude card on the Connect overview carries the same connection switch. Claude Code settings are one page with a
-single Save bar at the bottom (unsaved state, **Revert**, **Save**); the Claude connection switch
-is the last control and commits immediately, so **Save** never changes it. The page shows:
+Open **Connect → Claude** for the one-page Claude Code settings. The page shows these controls
+and sections in order:
 
-- Claude Desktop tab: **Connection mode** selector — gateway (default) or first-party — with the
-  running proxy port in first-party mode. Only **Save & apply** switches modes; **Save** alone
-  stores the gateway profile lanes for a later gateway apply and leaves the current mode as is
-- Inbound kill switch (enabled toggle)
-- Quickstart (`ocx claude`) and manual env block
-- Fast Mode selector (Auto / ON / OFF)
-- Auto-context toggle and compaction threshold dropdown
-- Subagent auto-registration toggle
-- Model interception (modelMap) editor
-- Live preview of picker aliases
+1. **Claude Code CLI first-party** switch
+2. **Get started** with `ocx claude` and the manual environment block
+3. **General** with compatibility, agent instructions, Fast Mode, and context controls
+4. **Background helper model** selector
+5. **Model interception** editor
+6. **Available models**, the live preview of Claude Code's `/model` picker aliases
+7. **Claude connection** switch, also available on the Claude card in the Connect overview
+
+The sticky Save bar shows **No changes** when the saved settings match the page, or
+**Unsaved changes** after you edit them. **Revert** discards unsaved edits; **Save** commits the
+editable settings. The **Claude connection** and **Claude Code CLI first-party** switches apply
+immediately. **Save** never changes either switch.
+
+**Claude Desktop** is a separate tab under **Connect**. Its **Connection mode** selector offers
+gateway (default) or first-party, with the running proxy port in first-party mode. Only
+**Save & apply** switches modes; **Save** alone stores the gateway profile lanes for a later
+gateway apply and leaves the current mode as is.
 
 `GET /api/claude-code` returns effective defaults, config, context-window registry, effective env,
 available route ids, aliases, and port. `PUT /api/claude-code` is partial and preserves omitted
