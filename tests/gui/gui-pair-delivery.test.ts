@@ -43,6 +43,12 @@ function compliantAcl(entries: readonly WindowsPrivateEntry[] = ACL_ENTRIES): st
     ]), "END",
   ].join("\n");
 }
+// The shape a hardened intent directory has on a GitHub-hosted Windows runner: explicit, protected
+// Full Control for SYSTEM, Administrators and the serving account.
+function runnerShapeAcl(): string {
+  return compliantAcl().replace(`E|0|${USER_SID}|4100|1\nA|0|0|3|2032127|${USER_SID}|False`,
+    `E|0|${USER_SID}|37892|3\nA|0|0|3|2032127|S-1-5-18|False\nA|0|0|3|2032127|S-1-5-32-544|False\nA|0|0|3|2032127|${USER_SID}|False`);
+}
 const aclResult = (stdout = compliantAcl()) => ({ success: true, timedOut: false, stdout });
 function changeAclLine(index: number, line: string): string {
   const lines = compliantAcl().split("\n"); lines[index] = line; return lines.join("\n");
@@ -421,6 +427,15 @@ describe("Windows redemption owner and effective-DACL policy", () => {
     ["two trailing newlines", `${compliantAcl()}\n\n`],
     ["unknown output", changeAclLine(2, "garbled")],
     ["BOM", `\ufeff${compliantAcl()}`],
+    ["SYSTEM entry with inheritance flag", runnerShapeAcl().replace("A|0|0|3|2032127|S-1-5-18|", "A|0|0|19|2032127|S-1-5-18|")],
+    ["duplicate SYSTEM entry", runnerShapeAcl().replace("A|0|0|3|2032127|S-1-5-32-544|False", "A|0|0|3|2032127|S-1-5-18|False")],
+    ["four directory entries", runnerShapeAcl().replace("|3\nA|0|0|3|2032127|S-1-5-18|False", `|4\nA|0|0|3|2032127|S-1-5-18|False\nA|0|0|3|1179817|${FOREIGN_SID}|False`)],
+    ["foreign entry beside SYSTEM", runnerShapeAcl().replace("A|0|0|3|2032127|S-1-5-32-544|", `A|0|0|3|1179817|${FOREIGN_SID}|`)],
+    ["SYSTEM deny entry", runnerShapeAcl().replace("A|0|0|3|2032127|S-1-5-18|", "A|0|1|3|2032127|S-1-5-18|")],
+    // AccessAllowedCallback is AceType 9; a privileged grantee does not make it acceptable.
+    ["SYSTEM callback entry", runnerShapeAcl().replace("A|0|0|3|2032127|S-1-5-18|False", "A|0|9|3|2032127|S-1-5-18|True")],
+    ["privileged entries without the user", runnerShapeAcl().replace(`|3\nA|0|0|3|2032127|S-1-5-18|False\nA|0|0|3|2032127|S-1-5-32-544|False\nA|0|0|3|2032127|${USER_SID}|False`, "|2\nA|0|0|3|2032127|S-1-5-18|False\nA|0|0|3|2032127|S-1-5-32-544|False")],
+    ["user entry below Full Control beside SYSTEM", runnerShapeAcl().replace(`A|0|0|3|2032127|${USER_SID}|`, `A|0|0|3|1179817|${USER_SID}|`)],
     ["bare CR", compliantAcl().replace("\n", "\r")],
   ];
   test.each(refusals)("refuses %s, retains the record and releases its lock", (_name, stdout) => {
@@ -474,6 +489,8 @@ describe("Windows redemption owner and effective-DACL policy", () => {
       expect(windowsPrivateEntriesAclMatches(Buffer.from(stdout, "ascii"), ACL_ENTRIES)).toBe(true);
     }
     expect(windowsPrivateEntriesAclMatches(compliantAcl().replaceAll("|4100|", "|36868|"), ACL_ENTRIES)).toBe(true);
+    expect(windowsPrivateEntriesAclMatches(runnerShapeAcl(), ACL_ENTRIES)).toBe(true);
+    expect(windowsPrivateEntriesAclMatches(runnerShapeAcl().replace("A|0|0|3|2032127|S-1-5-32-544|", "A|0|0|3|1179817|S-1-5-32-544|"), ACL_ENTRIES)).toBe(true);
     expect(windowsPrivateEntriesAclMatches(Buffer.from(`\ufeff${compliantAcl()}`), ACL_ENTRIES)).toBe(false);
     expect(windowsPrivateEntriesAclMatches(Buffer.from(compliantAcl(), "utf16le"), ACL_ENTRIES)).toBe(false);
   });

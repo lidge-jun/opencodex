@@ -14,13 +14,14 @@ export type WindowsOwnerAclRunner = (entries: readonly WindowsPrivateEntry[], ti
 export const WINDOWS_OWNER_ACL_TIMEOUT_MS = 5_000;
 const SID = /^S-1-\d+(?:-\d+)+$/i;
 const ADMINISTRATORS = "S-1-5-32-544";
+const PRIVILEGED_GRANTEES = new Set(["S-1-5-18", ADMINISTRATORS]); // LocalSystem, BUILTIN\Administrators
 const PRIVATE_DACL_FLAGS = 0x1004; // DiscretionaryAclPresent | DiscretionaryAclProtected
 const FULL_CONTROL = 2032127;
 
 // This script is constant. Literal paths are environment data, never PowerShell source.
 // Enumerate the descriptor Get-Acl reports. GetAccessRules projects away unsupported ACE details, so the
-// ACEs are read from the serialized descriptor instead. .NET canonicalizes it first: entries for the same
-// principal merge and entries that grant nothing drop, but another principal's entry is never folded into
+// ACEs are read from the serialized descriptor instead. .NET canonicalizes it first: compatible entries for the
+// same principal merge and entries that grant nothing drop, but another principal's entry is never folded into
 // the user's, and the owner is untouched. The policy is therefore the effective DACL, not the on-disk bytes.
 const ACL_SCRIPT = String.raw`
 $ErrorActionPreference='Stop'
@@ -91,26 +92,38 @@ export function windowsPrivateEntriesAclMatches(stdout: string | Uint8Array, ent
   const normalized = text.replace(/\r\n/g, "\n");
   if (normalized.includes("\r")) return false;
   const lines = (normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized).split("\n");
-  if (lines.length !== 2 + entries.length * 2 || lines.at(-1) !== "END") return false;
+  if (lines.at(-1) !== "END") return false;
   const token = lines[0]!.split("|");
   if (token.length !== 4 || token[0] !== "U" || !SID.test(token[1]!) || !SID.test(token[2]!)
     || (token[3] !== "True" && token[3] !== "False")) return false;
   const user = token[1]!.toUpperCase();
   const acceptsAdministrators = token[2]!.toUpperCase() === ADMINISTRATORS && token[3] === "True";
+  let at = 1;
   for (let i = 0; i < entries.length; i++) {
-    const entry = lines[1 + i * 2]!.split("|");
+    const entry = (lines[at++] ?? "").split("|");
     if (entry.length !== 5 || entry[0] !== "E" || entry[1] !== String(i) || !SID.test(entry[2]!)
-      || !/^(0|[1-9]\d{0,4})$/.test(entry[3]!) || entry[4] !== "1") return false;
+      || !/^(0|[1-9]\d{0,4})$/.test(entry[3]!) || !/^[1-3]$/.test(entry[4]!)) return false;
     const flags = Number(entry[3]);
     if (flags > 0xffff || (flags & PRIVATE_DACL_FLAGS) !== PRIVATE_DACL_FLAGS) return false;
     const owner = entry[2]!.toUpperCase();
     if (owner !== user && !(owner === ADMINISTRATORS && acceptsAdministrators)) return false;
-    const ace = lines[2 + i * 2]!.split("|");
-    if (ace.length !== 7 || ace[0] !== "A" || ace[1] !== String(i) || ace[2] !== "0"
-      || ace[3] !== (entries[i]!.directory ? "3" : "0") || ace[4] !== String(FULL_CONTROL)
-      || !SID.test(ace[5]!) || ace[5]!.toUpperCase() !== user || ace[6] !== "False") return false;
+    // The serving account needs its own Full Control entry. SYSTEM and Administrators may also hold plain
+    // allow entries: LocalSystem and an elevated administrator can already take ownership of any object, and a
+    // filtered administrator token holds Administrators only as deny-only, so the allow entry grants it nothing.
+    const grantees = new Set<string>();
+    for (let k = Number(entry[4]); k > 0; k--) {
+      const ace = (lines[at++] ?? "").split("|");
+      if (ace.length !== 7 || ace[0] !== "A" || ace[1] !== String(i) || ace[2] !== "0"
+        || ace[3] !== (entries[i]!.directory ? "3" : "0") || !/^[1-9]\d{0,9}$/.test(ace[4]!)
+        || !SID.test(ace[5]!) || ace[6] !== "False") return false;
+      const grantee = ace[5]!.toUpperCase();
+      if (grantees.has(grantee)) return false;
+      grantees.add(grantee);
+      if (grantee === user ? ace[4] !== String(FULL_CONTROL) : !PRIVILEGED_GRANTEES.has(grantee)) return false;
+    }
+    if (!grantees.has(user)) return false;
   }
-  return true;
+  return at === lines.length - 1;
 }
 
 /** Fresh, read-only verification; runner failures never disclose paths, SIDs or ACL output. */
