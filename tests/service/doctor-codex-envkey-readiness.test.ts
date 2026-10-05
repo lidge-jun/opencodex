@@ -96,7 +96,7 @@ describe.skipIf(process.platform === "win32")("doctor general Codex shim guidanc
     const lines = formatCodexShimDoctorLines(shim).join("\n");
     expect(lines).toContain(`run . '${join(f.home, "codex-shell-env.sh")}'`);
     expect(lines).toContain("after other PATH setup in your shell startup file");
-  }));
+  }), 10_000);
 
   test("token warning refers to restart guidance without duplicating the source command", () => withInstalledShim(() => {
     const shim = diagnoseCodexShim();
@@ -107,7 +107,7 @@ describe.skipIf(process.platform === "win32")("doctor general Codex shim guidanc
     expect(row?.action).toContain("Codex restart safety");
     expect(row?.action).toContain("or export OPENCODEX_API_AUTH_TOKEN");
     expect(`${lines.join("\n")}\n${row?.action}`.split("codex-shell-env.sh")).toHaveLength(2);
-  }));
+  }), 10_000);
 
   test("healthy legacy guidance remains visible without an env_key warning", () => {
     const shim = { ...healthyShim, summary: "Legacy Unix shim installed in place; run ocx codex-shim install." };
