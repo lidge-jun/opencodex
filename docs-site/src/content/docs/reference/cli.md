@@ -194,7 +194,7 @@ CPU-heavy proxy can itself delay NORMAL-priority applications. The change is bes
 
 Successful commands exit 0. Invalid usage, unknown commands or resources, failed API operations,
 and unavailable required services exit nonzero. `ocx health` specifically exits 0 only when the
-proxy is healthy and 1 otherwise, so it can be used as a service probe. Scripts should test the exit
+proxy is healthy and 1 when no healthy proxy is found; invalid arguments exit 2, so it can be used as a service probe. Scripts should test the exit
 code instead of scraping human-readable output.
 
 Many management commands share these mappings; other CLI families retain their own exit contracts:
@@ -302,3 +302,15 @@ Integer options such as `--limit` require decimal whole numbers within JavaScrip
 ## Default alias listing
 
 `ocx alias --json` is equivalent to `ocx alias list --json`. The output flag can precede or follow an explicit alias action.
+
+## Local config output and validation
+
+`ocx config validate [path|-] [--json]` exits 1 when validation fails. JSON mode emits one `{ok:false,error}` payload; human mode names the validation failure.
+
+When saved config is invalid or unreadable, `ocx config`, `ocx config show`, and `ocx config get` warn on stderr that defaults are being shown for invalid settings and exit nonzero. Stdout retains its existing format. Run `ocx config validate` to inspect the error, or `ocx config show --source` for the config and source diagnostics. The explicit `--source` inspection exits 0 when it successfully reports a fallback and still emits the warning.
+
+`ocx config export <file> --json` writes the raw config to the file and emits only `{ok:true,path}` on stdout. Export to `-` always emits the raw config document, including credentials; keep it out of agent transcripts.
+
+Local `ocx provider add` validates the full candidate config before saving. A validation failure leaves the saved file unchanged. Intentionally local providers require `--allow-private-network` unless their registry entry already permits private destinations. The flag does not permit blocked metadata endpoints.
+
+`ocx health` accepts only one optional `--json` flag. Unknown arguments or repeated flags return exit 2 before probing. Alias usage errors also return exit 2 with a readable error; unknown actions name `ocx help alias`.

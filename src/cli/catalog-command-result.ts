@@ -1,5 +1,5 @@
 import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
-import { CliUsageError, RuntimeApiError, printData, terminalSafeText } from "./runtime-api";
+import { CliUsageError, RuntimeApiError, PROXY_NOT_RUNNING_MESSAGE, printData, terminalSafeText } from "./runtime-api";
 
 function own(value: unknown, key: string): unknown {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -21,6 +21,11 @@ export async function runCatalogAction(
       return 2;
     }
     if (error instanceof RuntimeApiError) {
+      if (error.code) {
+        console.error(`Error: ${error.code === "proxy_not_running" ? PROXY_NOT_RUNNING_MESSAGE
+          : "This listener has no management API. Run management commands on the connected Hub. No request was sent."}`);
+        return 1;
+      }
       const code = own(error.body, "code") ?? own(own(error.body, "error"), "code");
       const known = typeof code === "string" && Object.hasOwn(knownErrors, code) ? knownErrors[code] : undefined;
       const message = error.status === 404 ? "The requested record or operation was not found on the selected target."

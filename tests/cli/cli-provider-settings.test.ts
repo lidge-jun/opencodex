@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import { handleProviderPacingCommand, takeProviderEditSettings } from "../../src/cli/provider-settings";
+import { handleProviderRuntimeCommand } from "../../src/cli/provider-runtime";
 import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 
@@ -58,6 +59,23 @@ function inputFile(value: unknown): string {
 }
 
 describe("provider edit settings", () => {
+  test("edit redacts unsupported credential options before target discovery", async () => {
+    const secret = "synthetic-private-value";
+    const f = fixture();
+    for (const option of ["--api-key", "--key", "--secret", "--password", "--admin-token"]) {
+      for (const args of [[`${option}=${secret}`], [option, secret], [option, `--${secret}`], [option, "--", secret]]) {
+        errors.mockClear();
+        expect(await handleProviderRuntimeCommand("edit", ["fixture", ...args, "--json"], f.deps)).toBe(2);
+        const printed = JSON.stringify(errors.mock.calls);
+        expect(printed).toContain(option);
+        expect(printed).toContain("<redacted>");
+        expect(printed).not.toContain(secret);
+      }
+    }
+    expect(f.calls).toEqual([]);
+    expect(f.resolutions()).toBe(0);
+  });
+
   test("preserves unrelated options and exact null/false fields", () => {
     const args = ["--note", "kept", "--upstream-http-version", "-", "--fast", "off", "--context-window=-", "--json"];
     expect(takeProviderEditSettings(args)).toEqual({ upstreamHttpVersion: null, fastEnabled: false, contextWindow: null });

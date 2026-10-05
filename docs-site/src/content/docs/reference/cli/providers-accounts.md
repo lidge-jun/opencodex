@@ -5,6 +5,13 @@ description: Provider configuration, credentials, quota, and model catalog comma
 
 These commands configure upstream providers, authenticate accounts, manage credential pools, and control the model catalog exposed to Codex.
 
+Leftover-argument errors from `account list`, `account current`, native main profiles,
+and provider commands redact values of credential options, including `--code`, `--token`,
+`--api-key`, `--key`, `--secret`, `--password`, and `--admin-token`, in both
+`--option value` and `--option=value` forms. Local provider registration uses
+`ocx provider add <name> --api-key <key>`; an inline `--api-key=<key>` is rejected
+with its value redacted. `ocx provider edit` does not accept `--api-key`.
+
 ## Providers
 
 ### `ocx provider <subcommand>`

@@ -10,7 +10,7 @@ import type { ProxyRestartStartOutcome } from "./tray-proxy";
  * never needs to import the entry module back (no cycle).
  */
 import { CLI_COMMANDS } from "./registry";
-import type { CliHead } from "./root";
+import { uninstallArgsError, type CliHead } from "./root";
 import type { ReadyArgs } from "./ready";
 import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
@@ -299,6 +299,11 @@ const commandRunners: Record<string, CommandRunner> = {
     return Number(process.exitCode ?? 0);
   },
   uninstall: async deps => {
+    const error = uninstallArgsError("uninstall", deps.args);
+    if (error) {
+      console.error(error);
+      return 2;
+    }
     await deps.handleUninstall();
     return Number(process.exitCode ?? 0);
   },
@@ -695,7 +700,7 @@ const commandRunners: Record<string, CommandRunner> = {
     }
     const { runUpdate } = await import("../update");
     await runUpdate();
-    return 0;
+    return Number(process.exitCode ?? 0);
   },
   "__refresh-version": async deps => {
     // Hidden, detached helper spawned by the update prompt to refresh the
@@ -750,6 +755,10 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   health: async deps => {
     const healthArgs = deps.args.slice(1);
+    if (healthArgs.length > 1 || (healthArgs.length === 1 && healthArgs[0] !== "--json")) {
+      console.error("Usage: ocx health [--json]\nSee: ocx help health");
+      return 2;
+    }
     const wantsHealthJson = healthArgs.includes("--json");
     // A proxy that has only just bound can miss a single probe while its event loop
     // is still settling startup work — the same just-started race the stop paths
@@ -897,7 +906,7 @@ const commandRunners: Record<string, CommandRunner> = {
       const { handleClientIntegrationCommand } = await import("./integrations");
       return await handleClientIntegrationCommand(deps.args.slice(2), { findLiveProxy: deps.findLiveProxy });
     } else {
-      console.error("Usage: ocx integration <claude|grok|client> <subcommand>");
+      console.error("Usage: ocx integration <claude|grok|client|native> <subcommand>\nSee: ocx help integration");
       return 2;
     }
   },
