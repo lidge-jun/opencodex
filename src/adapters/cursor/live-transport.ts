@@ -706,7 +706,7 @@ class LiveCursorTransport implements CursorTransport {
     const syntheticStructuredEditToolNames = new Set(
       (cursorVisibleTools ?? [])
         .filter(isCursorSyntheticStructuredEditTool)
-        .map(cursorToolWireName),
+        .map(tool => cursorToolWireName(tool, cursorVisibleTools)),
     );
     const freeformToolNames = new Set(
       (cursorVisibleTools ?? [])
@@ -723,7 +723,7 @@ class LiveCursorTransport implements CursorTransport {
     const toolSchemas = new Map<string, unknown>();
     const cursorToolNameMap = new Map<string, string>();
     for (const tool of cursorVisibleTools ?? []) {
-      const cursorWireName = cursorToolWireName(tool);
+      const cursorWireName = cursorToolWireName(tool, cursorVisibleTools);
       // Normalize against Responses/Codex field names, not the Cursor advertisement schema.
       // Advertising `cmd` while also storing that schema here left `cmd` unmapped and Codex
       // rejected shell_command with "missing field `command`" (#399).

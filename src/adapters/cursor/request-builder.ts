@@ -171,8 +171,8 @@ export function applyCursorToolBudget(
 
 function catalogLimitNote(kept: readonly OcxTool[], omitted: readonly OcxTool[]): string | undefined {
   if (omitted.length === 0) return undefined;
-  const recoverable = kept.some(tool => tool.toolSearch || cursorToolWireName(tool) === "tool_search");
-  const names = omitted.slice(0, 12).map(cursorToolWireName);
+  const recoverable = kept.some(tool => tool.toolSearch || cursorToolWireName(tool, kept) === "tool_search");
+  const names = omitted.slice(0, 12).map(tool => cursorToolWireName(tool, kept));
   const remainder = omitted.length - names.length;
   const omittedSummary = `${names.join(", ")}${remainder > 0 ? `, and ${remainder} more` : ""}`;
   return recoverable
