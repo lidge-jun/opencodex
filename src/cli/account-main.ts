@@ -64,8 +64,10 @@ function effectiveCodexHome(result: Record<string, unknown>): string {
     : "the effective CODEX_HOME";
 }
 
+const EMPTY_PROFILES_NOTES = ["No native main login profiles registered.", "Next: ocx account main add <label>"];
+
 function printProfiles(profiles: PublicProfile[]): void {
-  if (profiles.length === 0) { console.log("No native main login profiles registered."); return; }
+  if (profiles.length === 0) { for (const note of EMPTY_PROFILES_NOTES) console.log(note); return; }
   const rows = profiles.map(profile => [profile.state === "active" ? "*" : " ", profile.label, profile.id, profile.identityHint]);
   const header = ["", "LABEL", "PROFILE ID", "IDENTITY"];
   const widths = header.map((value, index) => Math.max(value.length, ...rows.map(row => row[index]!.length)));
@@ -272,8 +274,12 @@ export async function cmdNativeMainAccount(args: string[], deps: AccountDeps): P
     const result = await apiJson(deps, baseUrl, "GET", path);
     if (result.status === 0) return proxyUnreachable(result.transportError);
     if (result.status !== 200) return apiError(result.json, `failed to ${sub} native profiles`, result.status);
-    if (wantsJson || sub === "doctor") console.log(JSON.stringify(result.json, null, 2));
-    else printProfiles(Array.isArray(result.json.profiles) ? result.json.profiles as PublicProfile[] : []);
+    const profiles = Array.isArray(result.json.profiles) ? result.json.profiles as PublicProfile[] : [];
+    if (wantsJson || sub === "doctor") console.log(JSON.stringify({
+      ...result.json,
+      ...(sub === "list" && profiles.length === 0 ? { notes: [...(Array.isArray(result.json.notes) ? result.json.notes : []), ...EMPTY_PROFILES_NOTES] } : {}),
+    }, null, 2));
+    else printProfiles(profiles);
     return 0;
   }
 

@@ -35,6 +35,7 @@ export default function ConsequenceDialog({
   planStale = false,
   planLoading = false,
   planFailure = null,
+  missingStorePath,
   onConfirm,
   onClose,
 }: {
@@ -45,6 +46,8 @@ export default function ConsequenceDialog({
   planStale?: boolean;
   planLoading?: boolean;
   planFailure?: string | null;
+  /** Passed through to the plan details; see IntegrationPlanDetails. */
+  missingStorePath?: string;
   onConfirm: (plan?: IntegrationMutationPlan) => Promise<void> | void;
   onClose: () => void;
 }) {
@@ -146,7 +149,7 @@ export default function ConsequenceDialog({
           {(stale || planStale) && <Notice tone="err">{t("integrations.preview.stale")}</Notice>}
           {planFailure && <Notice tone="err">{planFailure}</Notice>}
         </div>
-        <IntegrationPlanDetails plan={activePlan} plans={plans} />
+        <IntegrationPlanDetails plan={activePlan} plans={plans} missingStorePath={missingStorePath} />
         {failure && <Notice tone="err">{failure}</Notice>}
         <div className="modal-actions">
           <button type="button" className="btn btn-primary" onClick={() => void applyConsequence()} disabled={pending || planLoading || Boolean(planFailure) || (planRequired && !activePlan && plans === undefined) || noActionableBulkTarget || activePlan?.canApply === false}>

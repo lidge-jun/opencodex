@@ -38,8 +38,10 @@ paths. Running `ocx update` in a terminal shows the step that failed and the nex
    `ocx` or `bunx`, and the OpenCodex tray. A running `bun.exe` or `bunx.exe` keeps its files
    locked on Windows.
 2. Run `ocx update` again from a terminal.
-3. If it fails the same way, stop the proxy first and install by hand. Stopping first matters:
-   installing over a running proxy makes it refuse requests until it restarts.
+3. If it fails the same way, run `ocx status` and let any in-progress recovery finish. If the
+   updater restarted the proxy, stop it through its owner (`ocx stop`, its service, or the desktop
+   app) and confirm it has stopped. Reinstall with the same package manager that owns the install;
+   for an npm install managed by the OpenCodex service:
 
    ```bash
    ocx stop
@@ -47,8 +49,8 @@ paths. Running `ocx update` in a terminal shows the step that failed and the nex
    ocx service restart
    ```
 
-   Use `ocx start` in place of `ocx service restart` when no background service is installed.
-   Replace `latest` with `preview` if you follow the preview channel.
+   Restart through the owning service or desktop app after installation completes; use `ocx start`
+   when unmanaged. Replace `latest` with `preview` if you follow the preview channel.
 
 ## Leftover folders
 
@@ -73,11 +75,19 @@ releases the lock.
 ## If the proxy answers 503 after a manual install
 
 Installing over a running proxy makes it answer `503` with `package_tree_changed` until it
-restarts. Releases after 2.64.0 restart themselves after a few seconds, and `ocx restart` or
-`ocx service restart` can find and restart a proxy in that state. With 2.64.0 and earlier, the
+restarts. Releases after 2.64.0 can restart themselves after a few seconds once the package tree
+and its Bun runtime are complete. An incomplete or failed Bun postinstall prevents that recovery.
+`ocx restart` or `ocx service restart` can find a proxy in that state, but restarting still requires
+a complete runtime and package tree. With 2.64.0 and earlier, the
 proxy stays in that state, and `ocx restart` may report that no proxy is running while the old one
 still holds the port; use `ocx service restart`, or end the process whose `pid` the `/healthz`
 response shows and then run `ocx start`.
+
+If the installer has exited or failed, inspect its error and run `ocx status`. Let any in-progress
+recovery finish, stop any running proxy through its owner (`ocx stop`, its service, or the desktop
+app), and confirm it has stopped. Reinstall with the same package manager, allowing Bun's
+postinstall to complete, then start again through the owning service or desktop app (`ocx start`
+when unmanaged).
 
 ## If the update stops at the npm cache check
 

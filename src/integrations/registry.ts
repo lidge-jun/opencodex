@@ -115,6 +115,12 @@ export interface IntegrationClientSpec {
      */
     missingStore?: {
       readsStore: (storePath: string, statKind: (path: string) => string) => boolean;
+      /**
+       * The document the client writes into a new store. Creating the store with exactly this is
+       * the remedy, and it is published on its own so a surface that localizes the remedy text
+       * can still name what to write.
+       */
+      emptyDocument: string;
       remedy: string;
     };
   };
@@ -336,6 +342,7 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
       // record pointing at a file that no longer exists. Refuse it and name the remedy instead.
       missingStore: {
         readsStore: (store, statKind) => statKind(join(dirname(store), "package.json")) === "file",
+        emptyDocument: "[]",
         remedy: "Create it containing `[]` (the empty patch DSH writes for a new profile), then enable the integration again.",
       },
     },
