@@ -1272,3 +1272,31 @@ describe("login routes the Codex account names instead of printing the provider 
     expect(details).toContain("openai-apikey");
   });
 });
+
+
+describe("CLI usage recovery contracts", () => {
+  test.each([["--wat"], ["--wat", "--json"], ["--json", "--json"], ["extra"]].map(args => [args]))(
+    "health rejects %j before liveness discovery", async healthArgs => {
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      const out = spyOn(console, "log").mockImplementation(() => {});
+      let probes = 0;
+      const args = ["health", ...healthArgs];
+      const deps = { ...fakeDeps, args, findLiveProxy: async () => { probes++; return null; } } as CliDispatchDeps;
+      try {
+        expect(await dispatchCommand({ kind: "command", command: "health", args }, deps)).toBe(2);
+        expect(probes).toBe(0);
+        expect(out.mock.calls).toEqual([]);
+        expect(err.mock.calls.flat().join(" ")).toBe("Usage: ocx health [--json]\nSee: ocx help health");
+      } finally { err.mockRestore(); out.mockRestore(); }
+    },
+  );
+  test.each([["integration"], ["integration", "unknown"]].map(args => [args]))(
+    "integration %j names all families and the help command", async args => {
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(await dispatchCommand({ kind: "command", command: "integration", args }, { ...fakeDeps, args })).toBe(2);
+        expect(err.mock.calls.flat().join(" ")).toBe("Usage: ocx integration <claude|grok|client|native> <subcommand>\nSee: ocx help integration");
+      } finally { err.mockRestore(); }
+    },
+  );
+});

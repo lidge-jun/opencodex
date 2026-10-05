@@ -57,7 +57,7 @@ Bu durumda sınırları `OCX_PROBE_TIMEOUT_MS` ile yükseltin, örneğin `OCX_PR
 Başarılı komutlar 0 ile çıkar. Geçersiz kullanım, bilinmeyen komutlar veya
 kaynaklar, başarısız API işlemleri ve kullanılamayan gerekli servisler sıfır
 olmayan bir çıkış yapar. `ocx health` özellikle yalnızca proxy sağlıklı
-olduğunda 0 ve aksi takdirde 1 ile çıkar, bu nedenle bir servis probu olarak
+olduğunda 0, sağlıklı proxy bulunamadığında 1 ve geçersiz argümanlarda 2 ile çıkar, bu nedenle bir servis probu olarak
 kullanılabilir. Betikler insan tarafından okunabilir çıktıyı kazımak yerine
 çıkış kodunu test etmelidir.
 

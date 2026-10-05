@@ -481,11 +481,11 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
     details: ["Local config/file operation; no management API request or automatic live convergence."],
   },
   {
-    command: ["config", "export"], summary: "Human-only raw configuration export handoff.",
+    command: ["config", "export"], summary: "Raw configuration export with an optional JSON file receipt.",
     routes: [],
-    flags: [{"name": "--json", "value": "boolean", "summary": "Emit the result as JSON."}],
+    flags: [{"name": "--json", "value": "boolean", "summary": "Emit a JSON receipt for a file destination; stdout export stays raw."}],
     mutates: true, json: "payload",
-    details: ["Local config/file operation; no management API request or automatic live convergence.", "Human-only secret-bearing export: raw credentials are included. Keep the file and stdout out of agent transcripts. --json is accepted but does not alter this raw export."],
+    details: ["Local config/file operation; no management API request or automatic live convergence.", "Human-only secret-bearing export: raw credentials are included. Keep the file and stdout out of agent transcripts. --json emits {ok:true,path} for a file destination; export to - always emits the raw config."],
   },
   {
     command: ["config", "import"], summary: "Local configuration import.",

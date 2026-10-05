@@ -8,7 +8,7 @@
  *   show <name>   Show provider config details (secrets masked)
  *   set-default <name>  Change the default provider
  */
-import { hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig } from "../config";
+import { hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
 import { apiKeyTransportConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../config/provider-validation";
 import { hasHelpFlag, printSubcommandUsage } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
@@ -77,6 +77,14 @@ function validateAndSave(config: ReturnType<typeof loadConfig>): void {
   }
   if (!hasOwnProvider(config.providers, config.defaultProvider)) {
     console.error(`Error: defaultProvider "${config.defaultProvider}" does not exist in providers. Aborting.`);
+    process.exit(1);
+  }
+  const result = validateConfigCandidate(config);
+  if (!result.ok) {
+    console.error(`Error: ${result.error}`);
+    if (result.error.includes("set allowPrivateNetwork:true")) {
+      console.error("For an intentionally local provider, add --allow-private-network.");
+    }
     process.exit(1);
   }
   saveConfig(config);
@@ -293,8 +301,8 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
   }
   if (allowPrivateNetwork) provConfig.allowPrivateNetwork = true;
   // New auth/path overrides use the management owner's completed-row contract.
-  // Validate before registration state changes; legacy local adds without these
-  // options keep their existing config semantics.
+  // Validate overrides before registration state changes; the full candidate is
+  // validated again by validateAndSave for every local save.
   if ((authMode !== undefined || responsesPath !== undefined)
     && providerManagementConfigError(name, provConfig)) {
     console.error("Error: Invalid provider configuration. Authentication, destination and provider options must satisfy the provider's management rules.");
