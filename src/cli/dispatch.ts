@@ -662,9 +662,18 @@ const commandRunners: Record<string, CommandRunner> = {
         if (!success) console.error(`${r.refused ? "Codex shim installation was refused" : "Codex shim installation is unhealthy"}: ${summary}`);
         return success ? 0 : 1;
       }
-      case "status":
+      case "status": {
+        const extra = deps.args.slice(2);
+        if (extra.length > 0) {
+          console.error(extra.some(isJsonOption)
+            ? "ocx codex-shim status does not support --json; use ocx status --json (codexShim)."
+            : "ocx codex-shim status does not accept arguments or options.");
+          console.error("Usage: ocx codex-shim status");
+          return 2;
+        }
         console.log(codexShimStatus());
         break;
+      }
       case "uninstall":
       case "remove": {
         const r = uninstallCodexShim();

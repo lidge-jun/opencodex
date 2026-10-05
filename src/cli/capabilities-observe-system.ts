@@ -581,7 +581,7 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
     routes: [],
     flags: [],
     mutates: true, json: "none",
-    details: ["Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.", "Installation diagnoses wrapper health and reports readiness warnings."],
+    details: ["Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.", "On macOS/Linux, installs the private PATH overlay and explicitly migrates legacy in-place shims; automatic repair does not migrate them.", "On macOS/Linux with sh/bash/zsh, source the printed codex-shell-env.sh path, then add that line after PATH setup in your shell startup file.", "Installation diagnoses wrapper health and reports readiness warnings; Windows keeps in-place wrappers."],
   },
   {
     command: ["codex-shim", "status"], summary: "Local Codex launcher shim status.",
@@ -589,7 +589,7 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
     routes: [],
     flags: [],
     mutates: false, json: "none",
-    details: ["Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.", "Inspects local launcher wrapper state."],
+    details: ["Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.", "Reports wrapper health, Unix overlay PATH activation, and explicit legacy migration guidance.", "For JSON, run ocx status --json and inspect codexShim; this command rejects --json and unexpected arguments."],
   },
   {
     command: ["codex-shim", "uninstall"], summary: "Local Codex launcher shim uninstall.",

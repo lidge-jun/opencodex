@@ -68,7 +68,10 @@ export function diagnoseCodexShim(): CodexShimDiagnostic {
     return `Codex autostart shim: wrapper ${wrapper} at ${file.wrapperPath}; original backup ${backup} at ${file.backupPath}.`;
   }).join("\n");
   // Presence alone is not health: a damaged wrapper still reads "shim present", so state the verdict.
-  return { installed: true, healthy, summary: healthy ? summary
+  const migration = healthy && state.platform !== "win32"
+    ? " Legacy Unix shim installed in place; automatic repair does not migrate it. Run ocx codex-shim install, then source the printed codex-shell-env.sh path and add that line after PATH setup in your shell startup file."
+    : "";
+  return { installed: true, healthy, summary: healthy ? `${summary}${migration}`
     : `${summary}\nCodex autostart shim is unhealthy. Run ocx codex-shim install to repair it.` };
 }
 
