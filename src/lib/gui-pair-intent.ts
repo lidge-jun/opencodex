@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, unlinkSync, writeFileSync, type BigIntStats } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, rmdirSync, unlinkSync, writeFileSync, type BigIntStats } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
@@ -108,11 +108,18 @@ export function createGuiPairIntent(capability: string, configDir = getConfigDir
 export function consumeGuiPairIntent(capability: string | null, proof: string | null, configDir = getConfigDir()): boolean {
   if (!capability || !proof || !TOKEN.test(capability) || !TOKEN.test(proof)) return false;
   let fd: number | undefined;
+  let consumeLock: string | undefined;
+  let consumeLockIdentity: BigIntStats | undefined;
   try {
     assertNotRealHomeUnderTest(configDir);
     directory(configDir);
     const { dir, path } = location(capability, configDir);
     const parent = directory(dir);
+    consumeLock = `${path}.consuming`;
+    mkdirSync(consumeLock, { mode: 0o700 });
+    consumeLockIdentity = directory(consumeLock);
+    const lockedParent = directory(dir);
+    if (parent.dev !== lockedParent.dev || parent.ino !== lockedParent.ino) return false;
     const before = lstatSync(path, { bigint: true });
     if (!before.isFile() || before.isSymbolicLink() || !owned(before) || before.nlink !== 1n || before.size !== 65n) return false;
     // Do not block on a substituted FIFO. Windows retains descriptor/path identity checks.
@@ -127,11 +134,20 @@ export function consumeGuiPairIntent(capability: string | null, proof: string | 
     if (!same(opened, after) || !same(after, lstatSync(path, { bigint: true }))
       || parent.dev !== directory(dir).dev || parent.ino !== directory(dir).ino) return false;
     closeSync(fd); fd = undefined;
-    // Synchronous consume before granting: a second process loses the unlink race and refuses.
     if (!same(after, lstatSync(path, { bigint: true }))) return false;
     unlinkSync(path);
     forgetEphemeralSecretPath(path);
     return true;
   } catch { return false; }
-  finally { if (fd !== undefined) closeSync(fd); }
+  finally {
+    try {
+      if (fd !== undefined) closeSync(fd);
+    } finally {
+      if (consumeLock && consumeLockIdentity) {
+        try {
+          if (same(consumeLockIdentity, lstatSync(consumeLock, { bigint: true }))) rmdirSync(consumeLock);
+        } catch {}
+      }
+    }
+  }
 }

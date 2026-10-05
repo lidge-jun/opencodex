@@ -179,18 +179,67 @@ describe("one-use local CLI pairing intent", () => {
     expect(consumeGuiPairIntent(CAP, intent.proof)).toBe(false);
   });
   test("separate processes can consume a commitment only once", async () => {
+    if (process.platform === "win32") {
+      setIcaclsRunnerForTests(null);
+      setAsyncIcaclsRunnerForTests(null);
+    }
     const intent = createGuiPairIntent(CAP), path = recordPath();
+    const code = `import { consumeGuiPairIntent } from ${JSON.stringify(repoPath("src/lib/gui-pair-intent.ts"))};
+      await Bun.write(Bun.stdout, "ready\\n");
+      await new Response(Bun.stdin.stream()).text();
+      process.exit(consumeGuiPairIntent(${JSON.stringify(CAP)}, ${JSON.stringify(intent.proof)}, ${JSON.stringify(root)}) ? 0 : 1);`;
+    const startConsumer = () => Bun.spawn([process.execPath, "-e", code], {
+      env: process.env, stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 15_000,
+    });
+    const consumers: ReturnType<typeof startConsumer>[] = [];
     try {
-      const code = `import { consumeGuiPairIntent } from ${JSON.stringify(repoPath("src/lib/gui-pair-intent.ts"))};
-        process.exit(consumeGuiPairIntent(${JSON.stringify(CAP)}, ${JSON.stringify(intent.proof)}, ${JSON.stringify(root)}) ? 0 : 1);`;
-      const consumers = Array.from({ length: 8 }, () => Bun.spawn([process.execPath, "-e", code], {
-        env: process.env, stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      for (let index = 0; index < 8; index++) consumers.push(startConsumer());
+      await Promise.all(consumers.map(async child => {
+        const reader = child.stdout.getReader();
+        try {
+          let readiness = "";
+          while (!readiness.includes("\n")) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            readiness += new TextDecoder().decode(chunk.value);
+          }
+          expect(readiness).toBe("ready\n");
+        } finally { reader.releaseLock(); }
       }));
+      for (const child of consumers) child.stdin.end();
       const exits = await Promise.all(consumers.map(child => child.exited));
       expect(exits.filter(exit => exit === 0)).toHaveLength(1);
       expect(exits.filter(exit => exit === 1)).toHaveLength(7);
       expect(existsSync(path)).toBe(false);
+      expect(existsSync(`${path}.consuming`)).toBe(false);
+    } finally {
+      for (const child of consumers) { try { child.stdin.end(); } catch {} }
+      await Promise.all(consumers.map(child => child.exited));
+      intent.dispose();
+    }
+  });
+  test("proof refusal releases only its own consume lock", () => {
+    const intent = createGuiPairIntent(CAP), path = recordPath();
+    try {
+      expect(consumeGuiPairIntent(CAP, "B".repeat(43))).toBe(false);
+      expect(existsSync(`${path}.consuming`)).toBe(false);
+      expect(consumeGuiPairIntent(CAP, intent.proof)).toBe(true);
+      expect(existsSync(`${path}.consuming`)).toBe(false);
     } finally { intent.dispose(); }
+  });
+  test.each(["directory", "nonempty-directory", "file"] as const)("preserves an existing %s consume lock", lockKind => {
+    const intent = createGuiPairIntent(CAP), path = recordPath(), lock = `${path}.consuming`;
+    const record = readFileSync(path, "utf8");
+    if (lockKind === "file") writeFileSync(lock, "foreign");
+    else { mkdirSync(lock); if (lockKind === "nonempty-directory") writeFileSync(join(lock, "sentinel"), "foreign"); }
+    const identity = fs.lstatSync(lock, { bigint: true });
+    expect(consumeGuiPairIntent(CAP, intent.proof)).toBe(false);
+    intent.dispose();
+    expect(readFileSync(path, "utf8")).toBe(record);
+    const after = fs.lstatSync(lock, { bigint: true });
+    expect([after.dev, after.ino, after.ctimeNs]).toEqual([identity.dev, identity.ino, identity.ctimeNs]);
+    if (lockKind === "file") expect(readFileSync(lock, "utf8")).toBe("foreign");
+    if (lockKind === "nonempty-directory") expect(readFileSync(join(lock, "sentinel"), "utf8")).toBe("foreign");
   });
   test("grant capacity refusal burns intent and a fresh command can recover", () => {
     const intent = createGuiPairIntent(CAP), s = state(), path = recordPath();
