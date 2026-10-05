@@ -32,6 +32,8 @@ export interface PickerListenerOptions {
   upstream?: { host: string; port: number; servername: string; ca?: string };
   /** Test seam: encoded bootstrap cap; production uses BOOTSTRAP_MAX_ENCODED_BYTES. */
   maxEncodedBytes?: number;
+  /** Test seam: concurrent upstream requests; production uses PICKER_MAX_ACTIVE_UPSTREAMS. */
+  maxActiveUpstreams?: number;
   log?: (line: string) => void;
 }
 export interface PickerListenerHandle { port: number; close(): Promise<void> }
@@ -39,6 +41,14 @@ export interface PickerListenerHandle { port: number; close(): Promise<void> }
 // Browser session cookies can exceed the HTTP compatibility layer's 16 KiB default.
 // Keep both sides bounded, while allowing ordinary desktop session headers through.
 export const PICKER_MAX_HEADER_BYTES = 64 * 1024;
+/**
+ * Upstream requests in flight across the listener. HTTP/2 lets one connection open many streams,
+ * and each relays as its own upstream connection, so the budget caps that fan-out well above what
+ * Desktop uses (a handful of SSE subscriptions plus bursts of ordinary calls).
+ */
+export const PICKER_MAX_ACTIVE_UPSTREAMS = 256;
+/** Advertised per HTTP/2 connection; Chromium queues further requests rather than failing them. */
+export const PICKER_MAX_CONCURRENT_STREAMS = 100;
 /** A connection that has not sent a complete ClientHello by then is dropped. */
 const CLIENT_HELLO_TIMEOUT_MS = 10_000;
 
@@ -49,6 +59,17 @@ const HOP_HEADERS = new Set([
 
 type RelayRequest = IncomingMessage | Http2ServerRequest;
 type RelayResponse = ServerResponse | Http2ServerResponse;
+
+const METHOD_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const ORIGIN_FORM_TARGET = /^\/[\x21-\x7e]*$/;
+
+/**
+ * HTTP/2 carries method and path as header values, which Bun accepts more loosely than an
+ * HTTP/1.1 request line can express. Only a method token and an origin-form target relay.
+ */
+export function isRelayableH2Target(method: string | undefined, path: string | undefined): boolean {
+  return method !== undefined && path !== undefined && METHOD_TOKEN.test(method) && ORIGIN_FORM_TARGET.test(path);
+}
 
 function filteredHeaders(raw: readonly string[], omit: ReadonlySet<string> = new Set()): string[] {
   const named = new Set<string>();
@@ -130,6 +151,8 @@ function closeServer(server: TcpServer): Promise<void> {
 export async function startPickerListener(options: PickerListenerOptions): Promise<PickerListenerHandle> {
   const upstream = options.upstream ?? { host: "claude.ai", port: 443, servername: "claude.ai" };
   const cap = options.maxEncodedBytes ?? BOOTSTRAP_MAX_ENCODED_BYTES;
+  const maxActiveUpstreams = options.maxActiveUpstreams ?? PICKER_MAX_ACTIVE_UPSTREAMS;
+  let activeUpstreams = 0;
   const upgrades = new Set<Duplex>();
   const spliced = new Set<Socket>();
   const h2Sockets = new Set<Duplex>();
@@ -140,7 +163,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
   // (Bun counts name + value + 32 bytes per field) before the request handler runs.
   const h2Server = createSecureServer({
     cert: options.leaf.certPem, key: options.leaf.keyPem,
-    settings: { maxHeaderListSize: PICKER_MAX_HEADER_BYTES },
+    settings: { maxHeaderListSize: PICKER_MAX_HEADER_BYTES, maxConcurrentStreams: PICKER_MAX_CONCURRENT_STREAMS },
   });
   // Track sockets from accept (a handshake that never completes too) and after TLS, so a forced
   // shutdown reaches every one of them.
@@ -161,6 +184,14 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     // reason phrase differs, and sendHead branches on it.
     const res = relayRes as ServerResponse;
     const h2 = req.httpVersionMajor === 2;
+    // Refusals answer with an empty response and a fixed log line that carries no request data.
+    const refuse = (status: 400 | 503) => {
+      res.writeHead(status, { "Content-Length": "0" });
+      res.end();
+      options.log?.(`picker request refused ${status}`);
+    };
+    if (h2 && !isRelayableH2Target(req.method, req.url)) { refuse(400); return; }
+    if (activeUpstreams >= maxActiveUpstreams) { refuse(503); return; }
     const method = req.method ?? "GET";
     const pathname = new URL(req.url ?? "/", "https://claude.ai").pathname;
     const bootstrap = isPickerBootstrapRequest(method, pathname);
@@ -177,56 +208,70 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     const omit = bootstrap ? new Set(["accept-encoding"]) : new Set<string>();
     const headers = upstreamRequestHeaders(req, omit);
     if (bootstrap) headers.push("Accept-Encoding", narrowBootstrapAcceptEncoding());
-    const upReq = httpsRequest({
-      host: upstream.host, port: upstream.port, servername: upstream.servername,
-      ca: upstream.ca, rejectUnauthorized: true, agent: false,
-      method, path: req.url, headers, maxHeaderSize: PICKER_MAX_HEADER_BYTES,
-    }, upRes => {
-      const status = upRes.statusCode ?? 502;
-      const originalHeaders = filteredHeaders(upRes.rawHeaders);
-      const sendHead = (raw: string[]) => {
-        if (res.headersSent) return;
-        // HTTP/2 has no reason phrase; its compat writeHead takes the same flat raw header array.
-        if (h2) (relayRes as Http2ServerResponse).writeHead(status, raw as unknown as Record<string, string>);
-        else res.writeHead(status, upRes.statusMessage, raw);
-        log(status);
-      };
-      upRes.on("error", fail);
-      if (!bootstrap || status !== 200 || !hasJsonContentType(upRes.rawHeaders)) {
-        sendHead(originalHeaders);
-        upRes.pipe(res);
-        return;
-      }
-      const held: Buffer[] = [];
-      let size = 0;
-      let handedOff = false;
-      const onData = (chunk: Buffer) => {
-        if (size + chunk.length > cap) {
-          upRes.pause();
-          upRes.off("data", onData);
-          handedOff = true;
+    let upReq: ReturnType<typeof httpsRequest>;
+    try {
+      // The HTTP/1.1 client validates the method, path and header values synchronously.
+      upReq = httpsRequest({
+        host: upstream.host, port: upstream.port, servername: upstream.servername,
+        ca: upstream.ca, rejectUnauthorized: true, agent: false,
+        method, path: req.url, headers, maxHeaderSize: PICKER_MAX_HEADER_BYTES,
+        }, upRes => {
+        const status = upRes.statusCode ?? 502;
+        const originalHeaders = filteredHeaders(upRes.rawHeaders);
+        const sendHead = (raw: string[]) => {
+          if (res.headersSent) return;
+          // HTTP/2 has no reason phrase; its compat writeHead takes the same flat raw header array.
+          if (h2) (relayRes as Http2ServerResponse).writeHead(status, raw as unknown as Record<string, string>);
+          else res.writeHead(status, upRes.statusMessage, raw);
+          log(status);
+        };
+        upRes.on("error", fail);
+        if (!bootstrap || status !== 200 || !hasJsonContentType(upRes.rawHeaders)) {
           sendHead(originalHeaders);
-          for (const part of held) res.write(part);
-          res.write(chunk);
           upRes.pipe(res);
           return;
         }
-        held.push(chunk);
-        size += chunk.length;
-      };
-      upRes.on("data", onData);
-      upRes.once("end", () => {
-        if (handedOff) return;
-        const original = Buffer.concat(held, size);
-        let outcome = "unchanged";
-        const rewritten = rewriteBootstrapBody(original, contentEncoding(upRes.rawHeaders), options.models(), result => {
-          outcome = result.kind === "rewritten" ? `rewritten(+${result.added})` : `unchanged:${result.reason}`;
+        const held: Buffer[] = [];
+        let size = 0;
+        let handedOff = false;
+        const onData = (chunk: Buffer) => {
+          if (size + chunk.length > cap) {
+            upRes.pause();
+            upRes.off("data", onData);
+            handedOff = true;
+            sendHead(originalHeaders);
+            for (const part of held) res.write(part);
+            res.write(chunk);
+            upRes.pipe(res);
+            return;
+          }
+          held.push(chunk);
+          size += chunk.length;
+        };
+        upRes.on("data", onData);
+        upRes.once("end", () => {
+          if (handedOff) return;
+          const original = Buffer.concat(held, size);
+          let outcome = "unchanged";
+          const rewritten = rewriteBootstrapBody(original, contentEncoding(upRes.rawHeaders), options.models(), result => {
+            outcome = result.kind === "rewritten" ? `rewritten(+${result.added})` : `unchanged:${result.reason}`;
+          });
+          sendHead(rewritten === null ? originalHeaders : rewrittenHeaders(originalHeaders, rewritten.length));
+          options.log?.(`picker ${method} bootstrap ${outcome}`);
+          res.end(rewritten ?? original);
         });
-        sendHead(rewritten === null ? originalHeaders : rewrittenHeaders(originalHeaders, rewritten.length));
-        options.log?.(`picker ${method} bootstrap ${outcome}`);
-        res.end(rewritten ?? original);
       });
-    });
+    } catch {
+      refuse(400);
+      return;
+    }
+    // One budget slot per upstream request, released once by whichever end finishes first.
+    activeUpstreams++;
+    let released = false;
+    const release = () => { if (!released) { released = true; activeUpstreams--; } };
+    upReq.once("close", release);
+    res.once("close", release);
+    if (h2) (req as Http2ServerRequest).stream.once("close", release);
     upReq.on("error", error => {
       if ((error as NodeJS.ErrnoException).code === "HPE_HEADER_OVERFLOW") {
         options.log?.(`picker ${method} ${category} upstream:headers-too-large`);

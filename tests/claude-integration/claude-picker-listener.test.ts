@@ -3,7 +3,7 @@ import { createServer, request } from "node:https";
 import { connect as tlsConnect } from "node:tls";
 import { gzipSync } from "node:zlib";
 import { createLocalInterceptCa, issueLocalInterceptLeaf } from "../../src/claude/intercept/local-ca";
-import { PICKER_MAX_HEADER_BYTES, startPickerListener } from "../../src/claude/intercept/picker-listener";
+import { PICKER_MAX_HEADER_BYTES, isRelayableH2Target, startPickerListener } from "../../src/claude/intercept/picker-listener";
 import type { PickerListenerHandle } from "../../src/claude/intercept/picker-listener";
 import type { TLSSocket } from "node:tls";
 import type { Duplex } from "node:stream";
@@ -21,7 +21,7 @@ type ResponseData = { status: number; headers: IncomingMessage["headers"]; rawHe
 
 async function fixture(
   handler: Parameters<typeof createServer>[1],
-  options: { maxEncodedBytes?: number; untrusted?: boolean } = {},
+  options: { maxEncodedBytes?: number; maxActiveUpstreams?: number; untrusted?: boolean } = {},
 ) {
   const ca = createLocalInterceptCa();
   const upstreamCa = options.untrusted ? createLocalInterceptCa() : ca;
@@ -41,6 +41,7 @@ async function fixture(
     leaf, models: () => models,
     upstream: { host: "127.0.0.1", port: address.port, servername: "claude.ai", ca: ca.certPem },
     maxEncodedBytes: options.maxEncodedBytes,
+    maxActiveUpstreams: options.maxActiveUpstreams,
     log: line => logs.push(line),
   });
   const close = async () => {
@@ -823,4 +824,47 @@ boundedPickerTest("ending a raw connection halfway through ClientHello closes th
     expect(requests).toBe(0);
     expect(f.logs).toEqual([]);
   } finally { raw?.destroy(); await wait(f.close()); }
+});
+test("h2 request targets relay only as a method token and origin-form path", () => {
+  expect(isRelayableH2Target("GET", "/api/organizations?x=1")).toBe(true);
+  expect(isRelayableH2Target("PROPFIND", "/")).toBe(true);
+  for (const [method, target] of [
+    ["BAD METHOD", "/"], ["GET", "/bad path"], ["GET", "*"], ["GET", "https://claude.ai/"],
+    ["GET", "/tab\there"], ["GET", "/del\x7f"], ["", "/"], [undefined, "/"], ["GET", undefined],
+  ] as const) {
+    expect(isRelayableH2Target(method, target)).toBe(false);
+  }
+});
+
+boundedPickerTest("the upstream budget refuses excess h2 streams without dialing and recovers", async wait => {
+  const held: ServerResponse[] = [];
+  let requests = 0;
+  const f = await fixture((req, res) => {
+    requests++;
+    if (req.url?.startsWith("/stream/")) {
+      held.push(res);
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write("data: held\n\n");
+    } else res.end("ordinary");
+  }, { maxActiveUpstreams: 2 });
+  const session = openH2(f);
+  try {
+    const streams = [h2Exchange(session, "/stream/0"), h2Exchange(session, "/stream/1")];
+    await wait(Promise.all(streams.map(stream => stream.first)));
+    const refused = await wait(h2Exchange(session, "/ordinary").complete);
+    expect(refused.status).toBe(503);
+    expect(refused.body.length).toBe(0);
+    expect(requests).toBe(2);
+    expect(f.logs).toContain("picker request refused 503");
+    held[0]!.end();
+    await wait(streams[0]!.complete);
+    // The slot frees when the relayed exchange closes, which can trail the client's end of stream.
+    let received = await wait(h2Exchange(session, "/ordinary").complete);
+    for (let attempt = 0; received.status === 503 && attempt < 50; attempt++) {
+      received = await wait(h2Exchange(session, "/ordinary").complete);
+    }
+    expect(received.status).toBe(200);
+    expect(received.body.toString()).toBe("ordinary");
+    expect(requests).toBe(3);
+  } finally { session.destroy(); await wait(f.close()); }
 });
