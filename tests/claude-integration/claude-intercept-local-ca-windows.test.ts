@@ -91,6 +91,7 @@ for (const name of ["claude-intercept", "ca.key", "ca.pem", "ca-publication.sqli
       f.reads.length = 0;
       f.secretWrites.length = 0;
       f.hardened.clear();
+      resetHardenedStateForTests();
       const dir = claudeInterceptStateDir(f.root);
       const target = name === "claude-intercept" ? dir : join(dir, name);
       const keyBefore = readFileSync(join(dir, "ca.key"));

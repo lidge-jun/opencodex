@@ -116,9 +116,9 @@ function stage(path: string, contents: string, mode: FileMode, assertDirectory: 
   const dispose = (): void => {
     if (!closed) { closed = true; closeSync(fd); }
     if (removed) return;
-    try { same(temp, created, false, mode); unlinkSync(temp); removed = true; checkAcl.forget(created); }
+    try { same(temp, created, false, mode); unlinkSync(temp); removed = true; }
     catch (error) { if (missing(error)) removed = true; else throw error; }
-    if (removed) forgetEphemeralSecretPath(temp);
+    if (removed) { checkAcl.forget(created); forgetEphemeralSecretPath(temp); }
   };
   try {
     protectNew(temp, fd, mode, checkAcl);
