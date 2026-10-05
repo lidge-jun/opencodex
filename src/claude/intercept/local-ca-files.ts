@@ -62,9 +62,9 @@ function protectNew(path: string, fd: number, mode: FileMode, checkAcl: AclCheck
   const created = fstatSync(fd, { bigint: true });
   owned(created, false, mode);
   if (windowsSecretAclApplies()) {
-    // Owner inspection precedes ACL mutation; inherited grants on a new EMPTY file
-    // are removed by the existing hardener before the strict inspection and write.
-    checkAcl(path, created, "owner");
+    // Only O_CREAT|O_EXCL entries reach here. Narrow the empty file we created,
+    // then strictly verify before writing; an Administrators default owner still fails closed.
+    same(path, created, false, mode);
     hardenSecretPath(path, { required: true });
     checkAcl(path, created);
   } else fchmodSync(fd, mode);
@@ -160,26 +160,23 @@ export function withLocalCaPublication<T>(dir: string, lockName: string, work: (
   try { mkdirSync(dir, { mode: 0o700 }); created = true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   // Publication-local only: a private DACL can be changed only by the owner,
-  // SYSTEM or Administrators. Every memo hit still checks lstat dev/ino via same().
-  // Inherited-level results (SQLite sidecars, pre-migration probes) are never kept:
-  // SQLite creates and deletes sidecars itself, so their identities are not pinned.
-  const verified = new Map<bigint, Map<bigint, AclLevel>>();
+  // SYSTEM or Administrators. Every memo hit still checks lstat identity via same().
+  // Include bigint birthtimeNs to distinguish recycled SQLite sidecar file IDs;
+  // NTFS creation time survives same-volume rename, so staged entries keep their memo.
+  const verified = new Map<string, AclLevel>();
   const strength = { owner: 0, inherited: 1, private: 2 };
   const checkAcl: AclCheck = Object.assign((path: string, stat: BigIntStats, level: AclLevel = "private") => {
     if (!windowsSecretAclApplies()) return;
     const identity = same(path, stat, stat.isDirectory());
-    const identities = verified.get(identity.dev);
-    const prior = identities?.get(identity.ino);
+    const key = `${identity.dev}:${identity.ino}:${identity.birthtimeNs}`;
+    const prior = verified.get(key);
     if (prior !== undefined && strength[prior] >= strength[level]) return;
     assertLocalCaWindowsAcl(path, level);
     same(path, stat, stat.isDirectory());
-    if (level === "inherited") return;
-    const entries = identities ?? new Map<bigint, AclLevel>();
-    entries.set(identity.ino, level);
-    verified.set(identity.dev, entries);
+    verified.set(key, level);
   }, {
     // An identity this publication unlinked or replaced is retired; a recycled id must be re-inspected.
-    forget(stat: BigIntStats): void { verified.get(stat.dev)?.delete(stat.ino); },
+    forget(stat: BigIntStats): void { verified.delete(`${stat.dev}:${stat.ino}:${stat.birthtimeNs}`); },
   });
   const directory = lstatSync(dir, { bigint: true });
   owned(directory, true);
@@ -192,8 +189,9 @@ export function withLocalCaPublication<T>(dir: string, lockName: string, work: (
       owned(opened, true);
     } else {
       let needsHardening = created;
-      if (created) checkAcl(dir, directory, "owner");
-      else {
+      // A successful mkdir created this directory; strict verification after narrowing
+      // still refuses an Administrators default owner before any CA access.
+      if (!created) {
         try { checkAcl(dir, directory); }
         catch { checkAcl(dir, directory, "inherited"); needsHardening = true; }
       }

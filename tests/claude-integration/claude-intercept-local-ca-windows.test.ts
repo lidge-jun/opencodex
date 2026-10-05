@@ -116,7 +116,7 @@ for (const name of ["claude-intercept", "ca.key", "ca.pem", "ca-publication.sqli
   }
 }
 
-for (const failure of ["foreign owner", "foreign grant", "hardener failure", "probe failure", "timeout", "malformed", "empty DACL"] as const) {
+for (const failure of ["foreign owner", "Administrators default owner", "foreign grant", "hardener failure", "probe failure", "timeout", "malformed", "empty DACL"] as const) {
   test(`Windows ${failure} while protecting a new temp causes zero secret writes`, () => {
     const f = setup();
     let tempSeen = false;
@@ -125,6 +125,10 @@ for (const failure of ["foreign owner", "foreign grant", "hardener failure", "pr
       tempSeen = true;
       expect(statSync(path).size).toBe(0);
       if (failure === "foreign owner") return acl(FOREIGN);
+      if (failure === "Administrators default owner") {
+        expect(f.hardened.has(path)).toBe(true);
+        return acl("S-1-5-32-544");
+      }
       if (failure === "foreign grant") return acl(CURRENT, [{ sid: FOREIGN, type: 0, rights: 2 }]);
       if (failure === "probe failure") return { success: false, exitCode: 1, timedOut: false, stdout: "native failure" };
       if (failure === "timeout") return { success: false, exitCode: null, timedOut: true, stdout: "" };
@@ -176,8 +180,21 @@ test("Windows inspection failure on corrupt PEM never enters corruption regenera
 test("Windows effective SID lookup failure occurs before any secret write", () => {
   const f = setup();
   setWindowsPrincipalRunnerForTests(() => ({ success: false, exitCode: 1, timedOut: false, stdout: "" }));
-  expect(() => { ensureLocalInterceptCa(f.root); }).toThrow("Windows owner/ACL");
+  expect(() => { ensureLocalInterceptCa(f.root); }).toThrow("ACL hardening failed (EACLIDENTITY)");
   expect(f.writes).toEqual([]);
+  expect(f.secretWrites).toEqual([]);
+});
+
+test("Windows refuses a newly created directory with an Administrators default owner after hardening", () => {
+  const f = setup();
+  const dir = claudeInterceptStateDir(f.root);
+  setLocalCaWindowsAclRunnerForTests(path => {
+    expect(path).toBe(dir);
+    expect(f.hardened.has(dir)).toBe(true);
+    return acl("S-1-5-32-544");
+  });
+  expect(() => { ensureLocalInterceptCa(f.root); }).toThrow("Windows owner/ACL");
+  expect(readdirSync(dir)).toEqual([]);
   expect(f.secretWrites).toEqual([]);
 });
 
@@ -247,10 +264,14 @@ test("Windows memo verifies unchanged identities once per publication, including
     expect(files.readPair()).toEqual({ certPem: first.certPem, keyPem: first.keyPem });
     expect(files.readPair()).toEqual({ certPem: first.certPem, keyPem: first.keyPem });
   });
-  expect(inspections.map(path => basename(path)).sort()).toEqual(["ca-publication.sqlite", "ca.key", "ca.pem", "claude-intercept"]);
+  // Native SQLite may retain a journal during the lease; POSIX seams may not.
+  expect(inspections.filter(path => !/sqlite-(journal|wal|shm)$/.test(path)).map(path => basename(path)).sort())
+    .toEqual(["ca-publication.sqlite", "ca.key", "ca.pem", "claude-intercept"]);
+  expect(new Set(inspections).size).toBe(inspections.length); // each unchanged sidecar is inspected at most once too
   inspections.length = 0;
   expect(ensureLocalInterceptCa(f.root).keyPem).toBe(first.keyPem);
-  expect(inspections).toHaveLength(4); // no memo survives a publication
+  expect(inspections.filter(path => !/sqlite-(journal|wal|shm)$/.test(path))).toHaveLength(4); // no memo survives a publication
+  expect(new Set(inspections).size).toBe(inspections.length);
 });
 
 test("Windows memo follows staged identities across rename without another ACL inspection", () => {
@@ -258,11 +279,13 @@ test("Windows memo follows staged identities across rename without another ACL i
   const inspections: string[] = [];
   setLocalCaWindowsAclRunnerForTests(path => { inspections.push(path); return acl(); });
   ensureLocalInterceptCa(f.root);
-  expect(inspections.filter(path => path.endsWith(".tmp"))).toHaveLength(4); // owner + private for each temp
+  expect(inspections.filter(path => basename(path) === "claude-intercept")).toHaveLength(1);
+  expect(inspections.filter(path => basename(path) === "ca-publication.sqlite")).toHaveLength(1);
+  expect(inspections.filter(path => path.endsWith(".tmp"))).toHaveLength(2); // strict after hardening for each temp
   expect(inspections.filter(path => ["ca.key", "ca.pem"].includes(basename(path)))).toEqual([]);
 });
 
-test("Windows inherited SQLite sidecar is re-inspected on every guard without requiring protection or hardening", () => {
+test("Windows inherited SQLite sidecar is inspected once per identity without requiring protection or hardening", () => {
   const f = setup();
   ensureLocalInterceptCa(f.root);
   const dir = claudeInterceptStateDir(f.root);
@@ -275,8 +298,7 @@ test("Windows inherited SQLite sidecar is re-inspected on every guard without re
     return acl(CURRENT, undefined, false);
   });
   withLocalCaPublication(dir, "ca-publication.sqlite", files => { files.readPair(); files.readPair(); });
-  // SQLite owns sidecar lifetimes, so an inherited-level result is never memoized.
-  expect(inspections).toBeGreaterThanOrEqual(3);
+  expect(inspections).toBe(1);
   expect(f.hardened.has(sidecar)).toBe(false);
 });
 
