@@ -1,41 +1,13 @@
 import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib/redact";
-import { foldForMatching } from "../../lib/redact-folding";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 
-// Encoded spellings are withheld rather than decoded: a bounded decoder cannot
-// be proven equivalent to every client decoder. Only terminal diagnostics take this path.
+// Terminal diagnostics are withheld whenever they carry encoding syntax or non-ASCII text:
+// no bounded decoder or Unicode fold can be proven equivalent to what a client or reader recovers.
 const ENCODING_SYNTAX = /%[0-9A-Fa-f]{2}|\\(?:u[0-9A-Fa-f]{4}|["\\/bfnrt])|&[A-Za-z#]/;
+const NON_PRINTABLE_ASCII = /[^\t\n\r\x20-\x7E]/;
 
-function maskEncodedCredentials(text: string, secrets: string[]): string {
-  if (ENCODING_SYNTAX.test(text)) return REDACTED_SECRET;
-  let view = text;
-  let offsets = Array.from({ length: text.length + 1 }, (_, index) => index);
-  for (let depth = 0; depth < 4; depth++) {
-    const next = foldForMatching(view, false);
-    if (next.folded === view) break;
-    offsets = next.map.map(index => offsets[index]!);
-    view = next.folded;
-  }
-  // Never expose a diagnostic whose folding exceeds the bounded matching view.
-  if (foldForMatching(view, false).folded !== view) return REDACTED_SECRET;
-  if (ENCODING_SYNTAX.test(view)) return REDACTED_SECRET;
-  const ranges: Array<{ start: number; end: number }> = [];
-  for (const secret of secrets) {
-    let needle = secret;
-    for (let depth = 0; depth < 4; depth++) needle = foldForMatching(needle, false).folded;
-    if (!needle) continue;
-    for (let at = view.indexOf(needle); at !== -1; at = view.indexOf(needle, at + 1)) {
-      ranges.push({ start: offsets[at]!, end: offsets[at + needle.length]! });
-    }
-  }
-  const merged: typeof ranges = [];
-  for (const range of ranges.sort((a, b) => a.start - b.start)) {
-    const previous = merged.at(-1);
-    if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, range.end);
-    else merged.push(range);
-  }
-  for (const { start, end } of merged.reverse()) text = text.slice(0, start) + REDACTED_SECRET + text.slice(end);
-  return text;
+function withholdUnprovableDiagnostic(text: string): string {
+  return ENCODING_SYNTAX.test(text) || NON_PRINTABLE_ASCII.test(text) ? REDACTED_SECRET : text;
 }
 
 /** Mask the selected outbound credential even when upstream echoes only its raw value. */
@@ -55,7 +27,7 @@ export function createOutboundCredentialMask(
     .sort((a, b) => b.length - a.length);
   return (text) => {
     const safe = knownSecrets.reduce((value, secret) => value.replaceAll(secret, REDACTED_SECRET), text);
-    return encodedDiagnostics ? maskEncodedCredentials(safe, knownSecrets) : safe;
+    return encodedDiagnostics ? withholdUnprovableDiagnostic(safe) : safe;
   };
 }
 

@@ -219,13 +219,16 @@ describe("reset replacement error confidentiality", () => {
     test.each([
       ["UTF-8 percent sequence", "éabcdeé-active-v1", "invalid request: %C3%A9%61%62%63%64%65%C3%A9-active-v1"],
       ["fullwidth percent", credential, "invalid request: ％66ixture-active-credential-v1"],
+      ["uppercase Greek lookalike", "fixture-Active-credential-v1", "invalid request: fixture-\u0391ctive-credential-v1"],
+      ["ligature lookalike", credential, "invalid request: \uFB01xture-active-credential-v1"],
+      ["zero-width split", credential, "invalid request: fixture-active-\u200Bcredential-v1"],
       ["nested JSON short escape", "fixture/credential-v1", "invalid request: fixture\\/credential-v1"],
       ["uppercase hex numeric reference", credential, "invalid request: &#X66;ixture-active-credential-v1"],
       ["numeric reference without semicolon", credential, "invalid request: &#102ixture-active-credential-v1"],
       ["legacy named reference without semicolon", "fixture&credential-v1", "invalid request: fixture&ampcredential-v1"],
       ["legacy reference before equals", "fixture&credential", "invalid request: fixture&ampcredential="],
       ["legacy reference before long run", "fixture&" + "a".repeat(40), "invalid request: fixture&amp" + "a".repeat(40)],
-    ])(`${adapter} withholds diagnostic encoding (%s)`, async (_name, apiKey, message) => {
+    ])(`${adapter} withholds unprovable diagnostic text (%s)`, async (_name, apiKey, message) => {
       const result = await probe({ provider: { adapter, apiKey }, answer: ordinal => ordinal === 1
         ? reset() : Response.json({ error: { message } }, { status: 400 }) });
       expect(result.status).toBe(400);
@@ -235,12 +238,22 @@ describe("reset replacement error confidentiality", () => {
       expect(JSON.parse(result.text)).toEqual({ error: { message: "[REDACTED]" } });
     });
 
-    test(`${adapter} masks lookalike diagnostic credentials without encoding`, async () => {
+    test(`${adapter} withholds lookalike diagnostic text`, async () => {
       const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
         ? reset() : Response.json({ error: { message: "invalid request: ｆｉｘｔｕｒｅ-active-credential-v1" } }, { status: 400 }) });
       expect(result.status).toBe(400);
       expect(result.bodies).toHaveLength(2);
-      expect(JSON.parse(result.text).error.message).toBe("invalid request: [REDACTED]");
+      expect(JSON.parse(result.text).error.message).toBe("[REDACTED]");
+    });
+
+    test(`${adapter} withholds a non-ASCII diagnostic key`, async () => {
+      const result = await probe({ provider: { adapter, apiKey: "fixture-Active" }, answer: ordinal => ordinal === 1
+        ? reset() : Response.json({ error: { message: "x", ["fixture-\u0391ctive"]: 1 } }, { status: 400 }) });
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(result.used).toBe(2);
+      expect(result.grantSpent).toBe(true);
+      expect(JSON.parse(result.text)).toEqual({ error: { message: "x", "[REDACTED]": 1 } });
     });
 
     test.each([
