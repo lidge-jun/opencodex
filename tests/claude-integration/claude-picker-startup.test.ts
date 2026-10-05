@@ -101,8 +101,7 @@ test("fresh production restarts retain fingerprint and issue no trust mutations,
   const run = (trusted: boolean) => {
     const child = Bun.spawnSync({ cmd: [process.execPath, "-e", `
       import { readFileSync, writeFileSync } from "node:fs";
-      import * as pickerPreparation from "../../src/claude/intercept/picker-ca-startup";
-import { startClaudeIntercept, getClaudePickerController } from ${JSON.stringify(runtimeUrl)};
+      import { startClaudeIntercept, getClaudePickerController } from ${JSON.stringify(runtimeUrl)};
       import { createPickerRuntime } from ${JSON.stringify(pickerUrl)};
       import { pickerCaFingerprints, pickerCaCertPath } from ${JSON.stringify(caUrl)};
       import { applyDesktopPickerProfile } from ${JSON.stringify(profileUrl)};
