@@ -203,7 +203,11 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       if (!logged) options.log?.(`picker ${method} ${category} ${status}`);
       logged = true;
     };
+    // Set once the client side closes before the response finished: the upstream error that
+    // tearing it down raises is then expected, not a relay failure to answer or log.
+    let clientGone = false;
     const fail = () => {
+      if (clientGone) return;
       if (res.headersSent) res.destroy();
       else { res.writeHead(502, { "Content-Length": "0" }); res.end(); log(502); }
     };
@@ -281,10 +285,14 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       fail();
     });
     req.on("error", () => upReq.destroy());
-    res.on("close", () => { if (!res.writableEnded) upReq.destroy(); });
+    const onClientClose = () => {
+      if (!res.writableEnded) clientGone = true;
+      upReq.destroy();
+    };
+    res.on("close", () => { if (!res.writableEnded) onClientClose(); });
     // Bun's compat response skips its close event for a HEAD reset before end(); the stream's own
     // close always fires. Destroying an upstream request that already completed is a no-op.
-    if (h2) (req as Http2ServerRequest).stream.once("close", () => upReq.destroy());
+    if (h2) (req as Http2ServerRequest).stream.once("close", onClientClose);
     req.pipe(upReq);
   };
   server.on("request", relay);

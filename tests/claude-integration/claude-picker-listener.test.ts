@@ -514,7 +514,9 @@ for (const [offer, protocol] of [["h2", "h2"], ["http/1.1", "http/1.1"]] as cons
         ALPNProtocols: offer === "h2" ? ["h2", "http/1.1"] : ["http/1.1"] }, () => ready.resolve());
       socket.on("error", ready.reject);
       await wait(ready.promise);
-      expect(socket.alpnProtocol).toBe(protocol);
+      // Bun's native HTTP/1.1 server does not report its ALPN choice; the contract is "never h2".
+      if (protocol === "h2") expect(socket.alpnProtocol).toBe("h2");
+      else expect(socket.alpnProtocol).not.toBe("h2");
       if (protocol === "h2") {
         socket.on("data", () => sessionLogged.resolve());
         socket.write(Buffer.concat([Buffer.from("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"),
