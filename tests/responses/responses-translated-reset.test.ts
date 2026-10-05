@@ -328,7 +328,9 @@ describe("reset replacement error confidentiality", () => {
           : chatSuccess() });
     expect(result.status).toBe(400);
     expect(result.text).not.toContain(credential);
-    expect(JSON.parse(result.text)).toEqual(genericBody);
+    // The combo owner reformats the consumed failure; it can only restate the sanitized projection.
+    expect(JSON.parse(result.text).error.message).toContain(genericBody.error.message);
+    expect(result.text).not.toContain("context length exceeded");
     expect(result.bodies).toHaveLength(2);
   });
 
