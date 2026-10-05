@@ -1,4 +1,5 @@
 import { UsageActivation } from "../../src/codex/desktop-compatibility/usage-activation";
+import { evaluateUsageRewrite } from "../../src/codex/desktop-compatibility/usage-policy";
 import { afterEach, describe, expect, test } from "bun:test";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { X509Certificate } from "node:crypto";
@@ -17,8 +18,48 @@ const usage = { account_id: account.id, user_id: account.userId, plan_type: "pro
 const exchange = { method: "GET", pathname: "/backend-api/wham/usage/stream", status: 200 };
 const frame = (data = usage, sequence = 7) => JSON.stringify({ version: 1, stream_id: "fixture", sequence, usage: data });
 const consent = { scope: "account-ui-compatibility" as const, accountWideConsent: true };
+const usableAlternatives = [
+  ["credits", { ...usage, credits: { ...usage.credits, has_credits: true } }],
+  ["unlimited credits", { ...usage, credits: { ...usage.credits, unlimited: true } }],
+  ["active Reserve", { ...usage, rate_limit_upsell: { banner_type: "luna_reserve" },
+    additional_rate_limits: [{ limit_name: "gpt-reserve", rate_limit: { allowed: true } }] }],
+] as const;
 const stopped: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const stop of stopped.splice(0)) await stop(); resetOptionalShutdownHooksForTests(); });
+
+describe("compatibility leaves usable account entitlements unchanged", () => {
+  for (const mode of ["observe", "apply"] as const) for (const pathname of ["/backend-api/wham/usage", exchange.pathname]) {
+    for (const [label, original] of usableAlternatives) test(`${mode} ${pathname} preserves ${label}`, () => {
+      const before = structuredClone(original);
+      const result = evaluateUsageRewrite(original, { enabled: true, mode, pathname, status: 200, account });
+      expect(result.eligible).toBe(false); expect(result.changed).toBe(false);
+      expect(result.value).toBe(original); expect(original).toEqual(before);
+    });
+  }
+  for (const mode of ["observe", "apply"] as const) {
+    for (const [label, extra] of [
+      ["unknown upsell", { rate_limit_upsell: "luna_reserve" }],
+      ["unknown additional limits", { additional_rate_limits: {} }],
+      ["unknown additional entry", { additional_rate_limits: [null] }],
+      ["unknown Reserve allowance", { additional_rate_limits: [{ limit_name: "gpt-reserve", rate_limit: { allowed: "true" } }] }],
+    ] as const) test(`${mode} leaves ${label} unchanged`, () => {
+      const original = { ...usage, ...extra };
+      const result = evaluateUsageRewrite(original, { enabled: true, mode, pathname: exchange.pathname, status: 200, account });
+      expect(result.eligible).toBe(false); expect(result.changed).toBe(false); expect(result.value).toBe(original);
+    });
+    for (const [label, extra] of [
+      ["no Reserve", { additional_rate_limits: null, rate_limit_upsell: null }],
+      ["exhausted Reserve", { rate_limit_upsell: { banner_type: "luna_reserve" },
+        additional_rate_limits: [{ limit_name: "gpt-reserve", rate_limit: { allowed: false } }] }],
+      ["unrelated allowance", { additional_rate_limits: [{ limit_name: "another-model", rate_limit: { allowed: true } }] }],
+    ] as const) test(`${mode} retains the ordinary exhaustion policy with ${label}`, () => {
+      const original = { ...usage, ...extra };
+      const result = evaluateUsageRewrite(original, { enabled: true, mode, pathname: exchange.pathname, status: 200, account });
+      expect(result.eligible).toBe(true); expect(result.changed).toBe(mode === "apply");
+      expect(result.value).toEqual(mode === "apply" ? { ...original, rate_limit: { ...original.rate_limit, allowed: true, limit_reached: false } } : original);
+    });
+  }
+});
 
 describe("bounded compatibility usage controller", () => {
   test("an open stream is not an observed account snapshot or proof of native composer recovery", async () => {
@@ -41,8 +82,10 @@ describe("bounded compatibility usage controller", () => {
   for (const [label, replacement] of [
     ["available", { ...usage, rate_limit: { ...usage.rate_limit, allowed: true, limit_reached: false } }],
     ["protected", { ...usage, spend_control: { reached: true } }],
+    ...usableAlternatives,
   ] as const) test(`${label} usage ends the trial and later exhaustion cannot silently rearm it`, async () => {
     const ctl = new UsageRelayController(account, async () => account, async () => account, Date.now, Date.now() + 600000);
+    await ctl.rewriteJson(frame(replacement), exchange); expect((await ctl.activate(consent)).accepted).toBe(false);
     await ctl.rewriteJson(frame(), exchange); expect((await ctl.activate(consent)).accepted).toBe(true);
     expect(await ctl.rewriteJson(frame(replacement), exchange)).toBeNull();
     expect(ctl.snapshot().mode).toBe("observe"); expect(ctl.snapshot().outputs).toBe(0);
@@ -50,15 +93,19 @@ describe("bounded compatibility usage controller", () => {
     expect(ctl.snapshot().mode).toBe("observe");
     expect((await ctl.activate(consent)).accepted).toBe(true);
   });
-  test("recovery supersedes an exhausted response waiting for its build check", async () => {
-    let waiting = false, entered!: () => void, release!: (value: boolean) => void;
+  for (const [label, replacement] of [
+    ["available", { ...usage, rate_limit: { ...usage.rate_limit, allowed: true, limit_reached: false } }],
+    ...usableAlternatives,
+  ] as const) test(`${label} recovery supersedes an exhausted response waiting for its build check`, async () => {
+    let waiting = false, pendingChecks = 0, entered!: () => void, release!: (value: boolean) => void;
     const started = new Promise<void>(resolve => { entered = resolve; });
     const ctl = new UsageRelayController(account, async () => account, async () => account, Date.now, Date.now() + 600000, 180000,
-      () => waiting ? (entered(), new Promise<boolean>(resolve => { release = resolve; })) : true);
+      () => waiting && pendingChecks++ === 0 ? (entered(), new Promise<boolean>(resolve => { release = resolve; })) : true);
     await ctl.rewriteJson(frame(), exchange); await ctl.activate(consent);
     waiting = true; const pending = ctl.rewriteJson(frame(), exchange); await started;
-    await ctl.rewriteJson(frame({ ...usage, rate_limit: { ...usage.rate_limit, allowed: true, limit_reached: false } }), exchange);
-    release(true); expect(await pending).toBeNull(); expect(ctl.snapshot().mode).toBe("observe");
+    const recovery = await ctl.rewriteJson(frame(replacement), exchange);
+    release(true); const stale = await pending;
+    expect(recovery).toBeNull(); expect(stale).toBeNull(); expect(ctl.snapshot().mode).toBe("observe");
     expect(ctl.snapshot().outputs).toBe(0);
   });
   test("returning to observation supersedes activation during its asynchronous context check", async () => {

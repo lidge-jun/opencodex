@@ -973,6 +973,8 @@ that every Codex build or exhausted-account state can recover its composer.
    response alone does not establish that the composer recovered.
 
 An original response showing available usage or a protected state ends the trial immediately.
+Available credits or active Luna Reserve also leave the response unchanged and end the trial,
+even when ordinary usage is exhausted. This preserves the app's existing entitlement state.
 If eligible exhaustion appears again, another explicit trial is required; the earlier consent
 does not silently reactivate correction.
 

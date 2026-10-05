@@ -125,6 +125,9 @@ three-minute, explicitly confirmed account-UI trial after a fresh supported exha
 snapshot. They cannot assert selected-provider isolation. Two usage gate booleans may
 change; quota windows, credits, spending limits and other responses remain original.
 An original available or protected usage record disarms Apply and advances its generation.
+Available credits, unlimited credits and active Luna Reserve are ineligible for correction even
+when the ordinary rate limit is exhausted. Their original snapshots disarm Apply too; unknown
+Reserve schemas pass unchanged. Neither observation nor correction changes entitlement state.
 Later exhaustion does not resume that trial; it requires another explicit activation.
 Pending response checks from the previous generation cannot emit a correction after recovery.
 Native identity verification also binds an opaque reader-local credential generation from a stable file-stat/content snapshot. Replacement, token rotation and A-to-B-to-A restoration invalidate pending identity checks and response correction; they require a fresh observation runtime. Neither credential hashes nor tokens appear in public status. `tests/clients/desktop-compatibility-native-identity.test.ts` exercises delayed verification and build-check races with synthetic auth files.

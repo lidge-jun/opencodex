@@ -41,6 +41,16 @@ export function evaluateUsageRewrite(value: unknown, context: UsageRewriteContex
   const credits = value.credits;
   if (!record(credits) || typeof credits.has_credits !== 'boolean' || typeof credits.unlimited !== 'boolean') return unchanged('unknown-credit-schema');
   if (credits.overage_limit_reached != null && credits.overage_limit_reached !== false) return unchanged('overage-restriction');
+  // These entitlements already keep the native gate open. Rewriting the ordinary
+  // rate limit would unnecessarily change the app's Reserve activation predicate.
+  if (credits.has_credits || credits.unlimited) return unchanged('credits-available');
+  const upsell = value.rate_limit_upsell, additional = value.additional_rate_limits;
+  if (upsell != null && !record(upsell)) return unchanged('unknown-reserve-schema');
+  if (additional != null && (!Array.isArray(additional) || additional.some(limit => !record(limit)
+    || limit.limit_name === 'gpt-reserve' && (!record(limit.rate_limit) || typeof limit.rate_limit.allowed !== 'boolean')))) return unchanged('unknown-reserve-schema');
+  if (record(upsell) && upsell.banner_type === 'luna_reserve' && Array.isArray(additional)
+    && additional.some(limit => record(limit) && limit.limit_name === 'gpt-reserve'
+      && record(limit.rate_limit) && limit.rate_limit.allowed === true)) return unchanged('reserve-active');
   if (context.mode !== 'apply') return { value, changed: false, eligible: true, reason: 'observe-only' };
   return {
     value: { ...value, rate_limit: { ...rate, allowed: true, limit_reached: false } },
