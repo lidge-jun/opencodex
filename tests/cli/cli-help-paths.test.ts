@@ -60,6 +60,8 @@ describe("explicit CLI help paths", () => {
       expect(result.stdout).toBe(full.stdout);
       expect(result.stdout).toContain("--legacy-openai --yes");
       expect(result.stdout).toContain("--ocx-compaction <thread-id> --yes");
+      expect(result.stdout).toContain("default: install if absent, otherwise repair");
+      expect(result.stdout).not.toContain("install/update/start");
       expect(result.stdout).not.toContain("__tray-start");
     }
   });
@@ -88,6 +90,73 @@ describe("explicit CLI help paths", () => {
     expect(result.stdout).toContain("--quota");
     expect(result.stdout).toContain("Parent help: ocx help account");
     expect(result.stdout).not.toContain("not the full operand grammar");
+  });
+
+  test("top-level status and logout help includes capability flags and targeting details", () => {
+    for (const [name, expected] of [
+      ["status", ["--json  Emit the status envelope as JSON.", "Reads /healthz plus local config"]],
+      ["logout", ["--live  Use the selected public-OAuth runtime logout", "--json  Emit the validated task result", "Live does not sign out Codex/native-main"]],
+    ] as const) {
+      const explicit = help(["help", name]);
+      const appended = help([name, "--help"]);
+      expect(explicit.status).toBe(0);
+      expect(appended.status).toBe(0);
+      expect(explicit.stderr).toBe("");
+      expect(appended.stderr).toBe("");
+      expect(appended.stdout).toBe(explicit.stdout);
+      expect(explicit.stdout).toContain("Declared flags:");
+      for (const text of expected) expect(explicit.stdout).toContain(text);
+    }
+  });
+
+  test("top-level capability supplements preserve alias usage and child navigation", () => {
+    const lines: string[] = [];
+    printSubcommandUsage("api-key", ["api-key"], { write: text => lines.push(text) });
+    const output = lines.join("\n");
+    expect(output).toContain("Usage: ocx api-key ");
+    expect(output).toContain("--json");
+    expect(output).toContain("ocx help access key list");
+    expect(output).toContain("Canonical help: ocx help access key");
+    expect(output).not.toContain("Parent help:");
+  });
+
+  test("route family help names combo and policy and retains policy topic links", () => {
+    const result = help(["route", "--help"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: ocx route <combo|policy> <subcommand>");
+    expect(result.stdout).toContain("Manage combo routing and routing profiles.");
+    expect(result.stdout).toContain("ocx help route policy list");
+    expect(result.stdout).not.toContain("combo is currently the supported routing resource");
+  });
+
+  test("restart help distinguishes verified restart, newer-CLI restrictions and ensure fallback", () => {
+    const result = help(["restart", "--help"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("graceful restart of the verified running proxy, preserving routing");
+    expect(result.stdout).toContain("If no proxy is running, use the normal `ocx ensure` start policy");
+    expect(result.stdout).toContain("standalone macOS/Linux proxies");
+    expect(result.stdout).toContain("ocx service restart");
+    expect(result.stdout).not.toContain("Equivalent to stop + ensure");
+  });
+
+  test("ZCode help describes supported current stores and legacy ownership refusal", () => {
+    const result = help(["zcode", "--help"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("provider_config.json with schemaVersion 1");
+    expect(result.stdout).toContain("ocx zcode disable");
+    expect(result.stdout).toContain("Unknown store schemas are refused");
+    expect(result.stdout).not.toContain("where that file exists, enable is refused");
+  });
+
+  test("OpenCode help describes reasoning variants for both V1 and V2", () => {
+    const result = help(["opencode", "--help"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("V1 receives reasoning-effort variant maps; V2 receives native variant arrays");
+    expect(result.stdout).not.toContain("Only the V2 block");
   });
 
   test("command-side help with operands falls back to known help without writes", () => {
