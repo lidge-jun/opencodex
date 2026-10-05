@@ -35,7 +35,7 @@ import {
   restoreOwnershipCollision,
   type IntegrationClientId,
 } from "./registry";
-import { declaredIntegrationTarget, resolveIntegrationTarget, type IntegrationTarget } from "./target";
+import { declaredIntegrationTarget, resolveIntegrationTarget, type IneffectiveWrite, type IneffectiveWriteReason, type IntegrationTarget } from "./target";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { buildIntegrationContribution, classifyIntegration, exportContextOf, readPath, type IntegrationState, type StateReason } from "./state";
 import { inspectKiloCandidates } from "./kilo-candidates";
@@ -100,6 +100,13 @@ export interface IntegrationMutationPlan {
    */
   readonly willChange: boolean;
   readonly refusalReason?: RefusalReason;
+  /**
+   * `superseded_store` only: why the store the client reads is not written. The store's location
+   * stays on the status row (`supersededBy`); the plan names no file.
+   */
+  readonly supersededReason?: IneffectiveWriteReason;
+  /** `missing-store` only: the document that recreates the store, so the remedy can name it. */
+  readonly missingStoreDocument?: string;
   readonly profileId?: number;
 }
 
@@ -246,6 +253,11 @@ export interface PlanFingerprintInput {
    * flip as a store appearing.
    */
   readonly ineffectiveWrite: string | null;
+  /**
+   * The same finding as `ineffectiveWrite`, unflattened, for the refusal's description. It is
+   * descriptive only: the bound token above is what decides and what the fingerprint covers.
+   */
+  readonly ineffective?: IneffectiveWrite | null;
   /** Exact current bytes, or null when the target is missing. Missing and empty are not equal. */
   readonly before: string | null;
   readonly contribution: ManagedContribution | null;
@@ -498,6 +510,12 @@ export function buildMutationPlan(input: PlanInput): IntegrationMutationPlan {
     canApply: outcome.kind !== "refuse",
     willChange: outcome.kind === "change",
     ...(outcome.kind === "refuse" ? { refusalReason: outcome.reason } : {}),
+    ...(outcome.kind === "refuse" && outcome.reason === "superseded_store" && input.ineffective
+      ? {
+          supersededReason: input.ineffective.why,
+          ...(input.ineffective.emptyDocument === undefined ? {} : { missingStoreDocument: input.ineffective.emptyDocument }),
+        }
+      : {}),
     ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
   });
 }
@@ -702,6 +720,7 @@ export function previewIntegration(input: IntegrationWriteInput, request: Previe
     // Loopback-only clients cannot carry the admission header a non-loopback bind requires.
     admissionBlocked: isLoopbackOnly(observed.clientId) && shouldInjectApiAuthHeader(input.config),
     ineffectiveWrite: observed.ineffectiveWrite,
+    ineffective: observed.target.ineffective,
     before: observed.before,
     contribution: observed.contribution,
     record: observed.record,
