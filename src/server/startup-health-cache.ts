@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { codexAutoStartEnabled } from "../config";
-import { deriveStartupHealth, type StartupHealth } from "../codex/autostart-health";
+import { deriveStartupHealth, startupHealthProbeBudgetMs, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { diagnoseCodexShim } from "../codex/shim";
 import { durableBunPath } from "../lib/bun-runtime";
@@ -11,7 +11,7 @@ import type { OcxConfig } from "../types";
 import { truncateRetainedUtf8 } from "../lib/admission";
 
 const CACHE_TTL_MS = 30_000;
-const PROBE_TIMEOUT_MS = probeTimeoutMs();
+const PROBE_TIMEOUT_MS = startupHealthProbeBudgetMs();
 const INITIAL_PROBE_WAIT_MS = PROBE_TIMEOUT_MS + 500;
 const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 
@@ -31,10 +31,6 @@ const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
  * bound in both cases: a wedged probe is still abandoned, and the caller still
  * receives the previous reading rather than waiting on it.
  */
-function probeTimeoutMs(): number {
-  return process.platform === "win32" ? 15_000 : 5_000;
-}
-
 /** The probe bound, so a test's own budget cannot fall below what it must wait for. */
 export function startupHealthProbeTimeoutMs(): number {
   return PROBE_TIMEOUT_MS;

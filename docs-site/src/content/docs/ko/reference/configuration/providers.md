@@ -31,7 +31,7 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | 공급자별로 마지막에 선택한 상한입니다. 꺼도 선택값이 남으며, 저장된 값만으로는 상한이 활성화되지 않습니다. 활성 값이 저장된 선택값보다 우선합니다. |
 | `contextCapValue?` | `number` | `350000` | 처음 켤 때 쓰는 기본값입니다. 다시 켜면 공급자별 선택값을 복원합니다. `setAll: true`와 함께 전역 값을 바꾸면 활성 상한만 갱신합니다. 값 없이 `setAll: true`를 보내면 설정된 모든 공급자의 상한을 현재 전역 값으로 켭니다. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth가 관리하는 ChatGPT/Codex 풀 계정 메타데이터입니다. 비밀 정보는 `codex-accounts.json`에 따로 저장됩니다. |
-| `pausedCodexAccountIds?` | `string[]` | `[]` | 일시 중지된 `__main__` 계정을 포함해, 재개될 때까지 Pool 선택에서 제외되는 계정입니다. |
+| `pausedCodexAccountIds?` | `string[]` | `[]` | 일시 중지된 `__main__` 계정을 포함해, 재개될 때까지 Pool 선택에서 제외되는 계정입니다. 수동 일시 중지 및 재개는 같은 계정과 워크스페이스의 기존 기본 로그인 및 풀 항목에도 적용됩니다. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 임의의 공개 model selector를 저장된 Codex 계정 target에 연결하는 선택적 map입니다. 계정 한정 선택기 행이 활성화되어 있으면 target이 존재하는 각 selector는 Codex picker에 별도의 `<selector>/<native-openai-model>` row를 추가하며, 각 row는 해당 계정만 사용합니다. selector가 하나라도 활성화되면 bare native row는 picker에서 숨겨지지만, 명시적으로 비활성화하지 않는 한 해당 id는 계속 routing 가능하고 raw `/v1/models`에 표시됩니다. |
 | `codexAccountPickerEnabled?` | `boolean` | map이 비어 있으면 꺼짐 | 유효한 `codexAccountNamespaces` 매핑에서 account-qualified Codex 선택기 행을 생성할지 제어합니다. `true`는 매핑된 행의 표시를 허용합니다. 비어 있지 않은 map에서 생략하면 이전 버전과의 호환성을 위해 활성화된 것으로 취급되며, map이 비어 있으면 꺼집니다. `false`는 매핑을 삭제하거나 명시적 `<selector>/<native-openai-model>` 라우팅을 비활성화하지 않은 채 생성 행을 숨기고 선택기에 bare native 행을 복원합니다. |
 | `activeCodexAccountId?` | `string` | — | 다음 요청에 수동으로 선택한 Pool 계정입니다. 선택하면 thread 결속이 해제되며, 진행 중인 요청은 캡처한 자격 증명을 유지합니다. |

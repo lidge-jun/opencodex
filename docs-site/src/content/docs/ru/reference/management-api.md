@@ -359,7 +359,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | Показать/обновить список либо удалить аккаунты Codex. POST сохранён только как отключённый endpoint совместимости; успешный DELETE включает `catalogRefreshPending`. | POST всегда возвращает 403 `manual_import_disabled`; 400 при неверных данных DELETE |
 | `PUT /api/codex-auth/accounts/alias` | Задать или очистить alias аккаунта | 400 invalid account/alias |
-| `PUT /api/codex-auth/accounts/pause` | Поставить один аккаунт на паузу или снять её | 400 invalid account/state; 404 missing account |
+| `PUT /api/codex-auth/accounts/pause` | Вручную приостановить или возобновить аккаунт и существующие записи основного аккаунта и пула с той же идентичностью; возвращает `affectedAccountIds` | 400 неверный аккаунт/состояние; 404 аккаунт не найден; 503 данные идентичности основного аккаунта заняты или недоступны для чтения |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Очистить runtime cooldown для одного аккаунта или для всех | 400 invalid id |
 | `GET, PUT /api/codex-auth/active` | Прочитать или выбрать активный аккаунт | 400 invalid or missing account; 409 paused/legacy-row conflict |

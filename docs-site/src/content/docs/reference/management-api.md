@@ -290,6 +290,17 @@ the client window after edits, eviction, query changes or restart. Invalid curso
 for older servers. This reduces response bytes for stable windows; server projection remains bounded
 by the current window size.
 
+Successful `/api/logs` `displayMetrics.decodeTokPerSecond` values carry
+`timingBasis: "generation-window" | "legacy-post-visible-output"` alongside `kind`, `value`
+and `estimated: true`; attempt values identify their own window. Unavailable results keep their
+existing `reason` and no timing basis. The field is derived only at read time: stored JSONL,
+end-to-end `tokPerSecond`, request-history DTOs and aggregate throughput are unchanged.
+Older DTOs can omit the field; clients must treat the timing basis as unknown in that case.
+The dashboard names these methods **Generation window** and **After visible output**, with
+**Timing unknown** for a missing or unfamiliar basis. Request details show **Output rate during
+generation (est.)**, **Output rate after first visible output (est.)**, or **Output rate (est.;
+timing method unknown)** and a visible explanation of the timing method when a rate is available.
+
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/logs` | Query filtered in-memory request logs | — |
@@ -677,7 +688,7 @@ manager. Its routes are:
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | List/refresh or delete Codex accounts. POST is retained as a disabled compatibility endpoint; successful DELETE responses include `catalogRefreshPending`. | POST always returns 403 `manual_import_disabled`; 400 invalid DELETE input |
 | `PUT /api/codex-auth/accounts/alias` | Set or clear an account alias | 400 invalid account/alias |
-| `PUT /api/codex-auth/accounts/pause` | Pause or resume one account | 400 invalid account/state; 404 missing account |
+| `PUT /api/codex-auth/accounts/pause` | Manually pause or resume an account and its existing matching main/pool entries; returns `affectedAccountIds` | 400 invalid account/state; 404 missing account; 503 main identity busy or unreadable |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Pause accounts whose quota is exhausted | Mutation-lock failures become 503 |
 | `PUT /api/codex-auth/accounts/credits` | Allow or stop spending ChatGPT credits after the usage limit. Body `{ id, creditsAfterLimit }` for one account, including `__main__`: true adds the id to `creditCodexAccountIds`, false removes it. Body `{ all }` for the global switch: true lists `__main__` and every pool account, false clears the list. Applies to the next selection. | 400 invalid id or non-boolean value; 404 missing account |
 | `PUT /api/settings` with `codexQuotaAutoRefresh: { id, window, enabled }` | Enable or disable 5-hour or weekly automatic window activation for one account | 400 invalid id/window/state; 404 missing account; 409 unavailable window |

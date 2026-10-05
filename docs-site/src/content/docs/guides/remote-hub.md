@@ -33,6 +33,10 @@ listener, not the management port. Local clients use the configured loopback com
   service definition, support bundle, screenshot, or command line.
 - The data admission token is delivered through the owner-only `service-api-token` file or
   `OCX_API_TOKEN_FILE`. It is not a management credential.
+- A configured client's `allowedModels` must include both the executor and any separately billed
+  Advisor model used by managed native Anthropic Messages. Bare model IDs and the hub's configured
+  `provider/model` names are accepted. A disallowed or unnamed Advisor destination returns HTTP 403
+  before provider dispatch; provider-only and unrestricted keys retain their existing scope.
 - A raw management admin token can perform ordinary administration, but it cannot mint a browser
   session or authorize consent-bearing actions such as starring the repository. Those actions
   require a server-issued `gui-session`, matching browser origin, and CSRF token.

@@ -371,7 +371,7 @@ Codex. Ses routes sont les suivantes :
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | Répertorier, actualiser ou supprimer des comptes Codex. POST est conservé comme point de terminaison de compatibilité désactivé ; les réponses DELETE réussies incluent `catalogRefreshPending`. | POST renvoie toujours 403 `manual_import_disabled` ; 400 entrée DELETE invalide |
 | `PUT /api/codex-auth/accounts/alias` | Définir ou supprimer un alias de compte | 400 invalide account/alias |
-| `PUT /api/codex-auth/accounts/pause` | Suspendre ou reprendre un compte | 400 invalide account/state ; 404 compte manquant |
+| `PUT /api/codex-auth/accounts/pause` | Suspendre ou reprendre manuellement un compte et ses entrées principales ou du pool existantes de même identité ; renvoie `affectedAccountIds` | 400 compte/état invalide ; 404 compte introuvable ; 503 identité du compte principal occupée ou illisible |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Suspendre les comptes dont le quota est épuisé | Les échecs de verrouillage de mutation deviennent 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Effacer le temps de recharge d'exécution pour un compte ou tous les comptes | 400 identifiant invalide |
 | `GET, PUT /api/codex-auth/active` | Lire ou sélectionner le compte actif | 400 compte invalide ou manquant ; 409 conflit avec un compte suspendu ou une ancienne ligne |

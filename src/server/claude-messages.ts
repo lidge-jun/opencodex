@@ -1205,6 +1205,7 @@ async function handleClaudeMessagesWithBudget(
     return await handleNativeMessages({
       req, config, logCtx, ...(logIds ? { logIds } : {}),
       route: nativeMessagesRoute, body: nativeBody, requestedModel, translatorBudget, selector: nativeSelector,
+      modelScope: resolveAdmissionModelScope(config, logIds?.admission),
       // Compatibility identity is an opaque request-local handle, separate from credentials.
       clientIdentity: captureAnthropicClientIdentity(req.headers),
       callerAnthropicBeta: req.headers.get("anthropic-beta"),

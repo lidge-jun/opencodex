@@ -74,6 +74,12 @@ barrier: a timeout verdict alone does not make the home removable. The contract 
 
 ## Service-manager probe
 
+CLI status and doctor give the attested startup-health read the isolated probe budget plus
+1.5 seconds (6.5 seconds on POSIX, 16.5 seconds on Windows), covering the endpoint's child
+settlement grace. The read client passes the same deadline to the direct local transport, so its
+default 10-second exchange bound does not cut the Windows read short. Identity/proof validation
+and local fallback on timeout remain mandatory.
+
 `src/service-manager-probe.ts` (`inspectServiceManagerInstallation`) reports what the platform
 service manager has installed for opencodex, read-only and fail-closed. It reads the service
 definition itself and parses the `CODEX_HOME` and `OPENCODEX_HOME` values embedded in it, because

@@ -2,6 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "messages-native-scope.test.ts": "claude-integration",
     "cli-log-view-filter.test.ts": "cli", "cli-usage-model-search.test.ts": "cli", "cli-companion-usage.test.ts": "cli", "cli-account-key-quota.test.ts": "cli",
     "cli-observe-snapshot.test.ts": "cli", "cli-access-data-plane.test.ts": "cli", "cli-access-key-guard.test.ts": "cli", "cli-access-rename.test.ts": "cli",
     "cli-access-audio.test.ts": "cli", "cli-access-audio-live.test.ts": "cli", "cli-log-follow.test.ts": "cli", "cli-injection-follow.test.ts": "cli",
@@ -530,6 +531,7 @@
     "codex-app-server-processes.test.ts": "codex-integration",
     "codex-app-server-restart-service.test.ts": "codex-integration",
     "codex-auth-api.test.ts": "codex-integration",
+    "codex-linked-account-pause.test.ts": "codex-integration",
     "codex-auth-cancel-ownership.test.ts": "codex-integration",
     "codex-auth-collision.test.ts": "codex-integration",
     "codex-auth-context.test.ts": "codex-integration",
@@ -1160,6 +1162,7 @@
     "main-quota-window-observation.test.ts": "codex-integration",
     "management-anthropic-reset-grants.test.ts": "server",
     "management-api-logs-metrics.test.ts": "server",
+    "management-api-logs-timing-basis.test.ts": "server",
     "management-client-config-route.test.ts": "server",
     "management-inference-port.test.ts": "server",
     "management-google-tool-schema-policy.test.ts": "server",

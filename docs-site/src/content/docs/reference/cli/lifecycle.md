@@ -290,6 +290,11 @@ section, so the two commands should agree on restart protection. If you are diag
 compare the reported live startup verdict with the local service details rather than treating the shell
 probe as more authoritative.
 
+The live read allows the bounded service probe to finish: up to 6.5 seconds on macOS/Linux
+and 16.5 seconds on Windows when the diagnostic cache is cold or expired. Cached reads return
+promptly. A timeout still falls back to local diagnostics; a healthy `/healthz` alone does not
+establish restart protection.
+
 The `clients=pending-restart(...)` diagnostic lists Codex CLI clients that predate the routing
 injection. On macOS, Electron renderer, utility, and crashpad helpers under Codex.app's framework
 are excluded from that client list, including helpers whose executable paths contain spaces.
