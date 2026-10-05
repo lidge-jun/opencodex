@@ -262,7 +262,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const writtenProfile = current.claudeCode.desktopProfile;
         const markerBaseline = captureDesktopAppliedMarker(writtenProfile);
         const result = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(
-          current.port ?? 10100,
+          // Live bound port, not config: a CLI override or ephemeral bind must not strand Desktop (#6598).
+          managementInferencePort({ config: current, deps }) ?? 10100,
           [...desktopVisibleNativeSlugs(current)],
           routed,
           current.apiKeys?.[0]?.key,
