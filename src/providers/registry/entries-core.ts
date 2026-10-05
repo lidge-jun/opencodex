@@ -1,4 +1,13 @@
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "../kiro-models";
+import {
+  DSH_ACCOUNT_MODELS,
+  DSH_ACCOUNT_DEFAULT_MODEL,
+  DSH_ACCOUNT_MODEL_CONTEXT_WINDOWS,
+  DSH_ACCOUNT_MODEL_INPUT_MODALITIES,
+  DSH_ACCOUNT_MODEL_MAX_OUTPUT_TOKENS,
+  DSH_ACCOUNT_MODEL_REASONING_EFFORTS,
+  DSH_ACCOUNT_MODEL_DISPLAY_NAMES,
+} from "../dsh-account-models";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_MODEL_EFFORTS, DEVIN_DEFAULT_EFFORTS } from "../../adapters/devin/live-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "../antigravity-models";
 import {
@@ -473,6 +482,25 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     defaultMaxOutputTokens: 64_000,
     // The proprietary generate wire has no verified per-request serialization flag.
     parallelToolCalls: false,
+  },
+  {
+    id: "dsh-account",
+    label: "DeepSeek Account (DSH)",
+    adapter: "dsh-account",
+    baseUrl: "https://api.deepseek.com/anthropic",
+    authKind: "oauth",
+    oauthId: "dsh-account",
+    featured: false,
+    dashboardPreset: true,
+    note: "Import-first: reuses your installed and signed-in DeepSeek Harness Desktop account. Add account imports the grant from ~/.dsh/.credentials.yaml and verifies it with the DeepSeek platform.",
+    dashboardUrl: "https://platform.deepseek.com",
+    defaultModel: DSH_ACCOUNT_DEFAULT_MODEL,
+    models: [...DSH_ACCOUNT_MODELS],
+    modelContextWindows: DSH_ACCOUNT_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: DSH_ACCOUNT_MODEL_INPUT_MODALITIES,
+    modelMaxOutputTokens: DSH_ACCOUNT_MODEL_MAX_OUTPUT_TOKENS,
+    modelReasoningEfforts: DSH_ACCOUNT_MODEL_REASONING_EFFORTS,
+    modelDisplayNames: DSH_ACCOUNT_MODEL_DISPLAY_NAMES,
   },
   {
     id: "orcarouter-oauth",

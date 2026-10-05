@@ -62,6 +62,7 @@ const OAUTH_LABELS: Record<string, string> = {
   // it is a deprecated alias that startup migration rewrites to `devin`, so a
   // stored row can never reach this map under the old id.
   devin: "Devin",
+  "dsh-account": "DeepSeek Account (DSH)",
 };
 
 export const oauthLabel = (id: string) => OAUTH_LABELS[id] ?? id;

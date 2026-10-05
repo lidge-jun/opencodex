@@ -1,5 +1,7 @@
 # Providers And Adapters
 
+`src/oauth/dsh.ts` imports only profiles with a nonempty authoritative DeepSeek account ID after a successful business response. Missing IDs fail closed; email, phone and display name never supply a slot identity. DSH parser/transport failures expose fixed error codes instead of credential or profile fragments. DSH reauthentication uses the shared account-ID comparison in `src/oauth/index.ts`. The DSH credential file stays read-only and is read only during explicit import. `src/providers/quota/dsh-account.ts` accepts only successful business responses with summary data and returns authoritative empty quota without deriving percentages from wallet amounts.
+
 Anthropic account pause, model routes, and quota labels follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
 
 Managed native Anthropic serving UUID and observed CLI header continuity follow [native Messages](data-planes/protocol-paths.md#managed-native-messages); generated Responses retain the adapter's compatibility fingerprint.

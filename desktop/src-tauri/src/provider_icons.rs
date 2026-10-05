@@ -36,6 +36,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("commandcode", "commandcode-color.svg"),
     ("cursor", "cursor-color.svg"),
     ("deepseek", "deepseek-color.svg"),
+    ("dsh-account", "deepseek-color.svg"),
     ("devin", "devin.svg"),
     ("firepass", "firepass-color.svg"),
     ("fireworks", "fireworks-color.svg"),

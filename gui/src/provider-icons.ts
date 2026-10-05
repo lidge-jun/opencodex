@@ -14,6 +14,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   commandcode: "commandcode-color.svg",
   cursor: "cursor-color.svg",
   deepseek: "deepseek-color.svg",
+  "dsh-account": "deepseek-color.svg",
   /*
    * One mark for the merged Devin provider. `devin` is Cognition's cloud; the
    * former `devin-cli` row was folded into it (CLI-credential import is now
@@ -141,6 +142,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   cursor: "Cursor",
   deepseek: "DeepSeek",
   zed: "Zed",
+  "dsh-account": "DeepSeek Account (DSH)",
   // "Devin", not the registry's "Cognition (Devin/Windsurf)". This label sits in
   // a narrow provider rail beside one-word names like Cursor and Kimi, and the
   // long form is the registry's disambiguation for an add-provider list, not a
