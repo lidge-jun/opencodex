@@ -193,7 +193,9 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     if (h2 && !isRelayableH2Target(req.method, req.url)) { refuse(400); return; }
     if (activeUpstreams >= maxActiveUpstreams) { refuse(503); return; }
     const method = req.method ?? "GET";
-    const pathname = new URL(req.url ?? "/", "https://claude.ai").pathname;
+    let pathname: string;
+    // A target like "//[" reads as an authority and throws; refuse it like any unrelayable target.
+    try { pathname = new URL(req.url ?? "/", "https://claude.ai").pathname; } catch { refuse(400); return; }
     const bootstrap = isPickerBootstrapRequest(method, pathname);
     const category = bootstrap ? "bootstrap" : "other";
     let logged = false;

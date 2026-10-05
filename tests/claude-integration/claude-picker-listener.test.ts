@@ -868,3 +868,18 @@ boundedPickerTest("the upstream budget refuses excess h2 streams without dialing
     expect(requests).toBe(3);
   } finally { session.destroy(); await wait(f.close()); }
 });
+boundedPickerTest("an h2 target the URL parser rejects is refused without upstream and the session stays usable", async wait => {
+  let requests = 0;
+  const f = await fixture((_req, res) => { requests++; res.end("next stream succeeds"); });
+  const session = openH2(f);
+  try {
+    const refused = await wait(h2Exchange(session, "//[").complete);
+    expect(refused.status).toBe(400);
+    expect(refused.body.length).toBe(0);
+    expect(requests).toBe(0);
+    const received = await wait(h2Exchange(session, "/next").complete);
+    expect(received.status).toBe(200);
+    expect(received.body.toString()).toBe("next stream succeeds");
+    expect(f.logs).toEqual(["picker session h2", "picker request refused 400", "picker GET other 200"]);
+  } finally { session.destroy(); await wait(f.close()); }
+});
