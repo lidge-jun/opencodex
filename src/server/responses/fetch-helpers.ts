@@ -206,7 +206,11 @@ export async function sendWithConnectionPolicy(
   const maxRedirects = 5;
 
   while (true) {
-    const response = await physicalFetch(currentInput, {
+    // A body-bearing Request is single-use: each physical send takes a clone so the
+    // same-origin redirect reconstruction below can still read the original. Strings
+    // and init-carried bodies are replayable and pass through untouched.
+    const sendInput = currentInput instanceof Request ? currentInput.clone() : currentInput;
+    const response = await physicalFetch(sendInput, {
       ...init,
       ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
       headers,

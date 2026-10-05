@@ -369,6 +369,35 @@ describe("same-origin 307 and 308 redirect following", () => {
     expect(calls[1]!.input).toBe(redirectTarget);
   });
 
+  test("follows 307 for a body-bearing Request input and replays its body", async () => {
+    const payload = JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "hello" }] });
+    const sent: Request[] = [];
+    const fakeFetch = (async (input, _init) => {
+      expect(input).toBeInstanceOf(Request);
+      sent.push(input as Request);
+      return sent.length === 1
+        ? new Response("redirecting", { status: 307, headers: { location: redirectTarget } })
+        : new Response("success", { status: 200 });
+    }) as typeof fetch;
+
+    const response = await sendWithConnectionPolicy(fakeFetch, new Request(startUrl, {
+      method: "POST",
+      headers: { "authorization": "Bearer key-123", "content-type": "application/json" },
+      body: payload,
+    }), {});
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("success");
+    expect(sent).toHaveLength(2);
+    expect(sent[0]!.url).toBe(startUrl);
+    expect(sent[1]!.url).toBe(redirectTarget);
+    for (const request of sent) {
+      expect(request.method).toBe("POST");
+      expect(request.headers.get("authorization")).toBe("Bearer key-123");
+      expect(await request.text()).toBe(payload);
+    }
+  });
+
   test("refuses to follow cross-origin redirect to preserve credentials and prevent SSRF", async () => {
     const crossOriginTarget = "https://evil.attacker.com/steal";
     const calls: { input: Parameters<typeof fetch>[0]; init?: RequestInit }[] = [];
