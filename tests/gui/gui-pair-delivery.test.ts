@@ -213,7 +213,7 @@ describe("one-use local CLI pairing intent", () => {
       expect(existsSync(path)).toBe(false);
       expect(existsSync(`${path}.consuming`)).toBe(false);
     } finally {
-      for (const child of consumers) { try { child.stdin.end(); } catch {} }
+      for (const child of consumers) { try { child.stdin.end(); } catch { continue; } }
       await Promise.all(consumers.map(child => child.exited));
       intent.dispose();
     }

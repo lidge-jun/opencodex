@@ -30,6 +30,16 @@ function location(capability: string, configDir: string): { dir: string; path: s
   const dir = join(configDir, "gui-pair-intents");
   return { dir, path: join(dir, digest(`opencodex-gui-pair-intent-v1\n${capability}`)) };
 }
+function releaseConsumeLock(path: string, identity: BigIntStats): boolean {
+  try {
+    if (!same(identity, lstatSync(path, { bigint: true }))) return false;
+    rmdirSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function removeOwned(path: string, identity: BigIntStats): void {
   try {
     if (same(identity, lstatSync(path, { bigint: true }))) unlinkSync(path);
@@ -144,9 +154,7 @@ export function consumeGuiPairIntent(capability: string | null, proof: string | 
       if (fd !== undefined) closeSync(fd);
     } finally {
       if (consumeLock && consumeLockIdentity) {
-        try {
-          if (same(consumeLockIdentity, lstatSync(consumeLock, { bigint: true }))) rmdirSync(consumeLock);
-        } catch {}
+        releaseConsumeLock(consumeLock, consumeLockIdentity);
       }
     }
   }
