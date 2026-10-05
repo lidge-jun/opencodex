@@ -69,6 +69,20 @@ describe("account argument redaction", () => {
       });
     }
   }
+  for (const args of [
+    ["list", "openai", "--code", "--token", SECRET],
+    ["list", "--token", SECRET, "--bogus"],
+    ["current", "--token", SECRET],
+    ["list", "openai", "--code", "--api-key=" + SECRET],
+  ]) {
+    test(`${args.join(" ")} never prints a credential operand`, async () => {
+      const f = fixture();
+      error.mockClear();
+      expect(await cmdAccount([...args, "--json"], { ...f.deps, baseUrl: "http://127.0.0.1:32100" })).toBe(1);
+      expect(JSON.stringify(error.mock.calls)).not.toContain(SECRET);
+      expect(f.calls).toEqual([]);
+    });
+  }
 });
 
 describe("login flow-specific options", () => {

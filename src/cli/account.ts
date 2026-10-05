@@ -94,9 +94,10 @@ function consumeFlag(args: string[], flag: string): boolean {
 function leftoverArgsError(args: string[]): string | null {
   if (args.length === 0) return null;
   const shown = redactSecretArgs(args);
-  const unknown = shown.filter(a => a.startsWith("-"));
+  // Flags plus redaction markers only: a stray positional may be a credential operand.
+  const unknown = shown.filter(a => a.startsWith("-") || a === "<redacted>");
   return unknown.length > 0
-    ? `Unknown flag(s): ${shown.join(", ")}`
+    ? `Unknown flag(s): ${unknown.join(", ")}`
     : `Unexpected argument(s): ${shown.join(", ")}`;
 }
 
@@ -185,7 +186,9 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
   // stays a cheap local read (#2566). --refresh bypasses the server-side TTL.
   const wantsQuota = consumeFlag(rest, "--quota");
   const refreshQuota = consumeFlag(rest, "--refresh");
-  const name = rest.shift();
+  // An option-shaped token is never the provider: leave it for the leftover check so a
+  // credential option keeps its operand redacted.
+  const name = rest[0]?.startsWith("-") ? undefined : rest.shift();
   const leftover = leftoverArgsError(rest);
   if (leftover) {
     console.error(leftover);
@@ -272,7 +275,9 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
 
 async function cmdCurrent(rest: string[], deps: AccountDeps): Promise<number> {
   const wantsJson = consumeFlag(rest, "--json");
-  const name = rest.shift();
+  // An option-shaped token is never the provider: leave it for the leftover check so a
+  // credential option keeps its operand redacted.
+  const name = rest[0]?.startsWith("-") ? undefined : rest.shift();
   const leftover = leftoverArgsError(rest);
   if (!name || leftover) {
     if (leftover) console.error(leftover);
@@ -373,7 +378,9 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
  * named `auto` cannot shadow the verb that returns the pool to automatic selection. */
 async function cmdClear(rest: string[], deps: AccountDeps): Promise<number> {
   const wantsJson = consumeFlag(rest, "--json");
-  const name = rest.shift();
+  // An option-shaped token is never the provider: leave it for the leftover check so a
+  // credential option keeps its operand redacted.
+  const name = rest[0]?.startsWith("-") ? undefined : rest.shift();
   const leftover = leftoverArgsError(rest);
   if (!name || leftover) {
     if (leftover) console.error(leftover);

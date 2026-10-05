@@ -26,6 +26,10 @@ const SECRET_OPTIONS = [
   "--pairing-code-env",
 ];
 
+function isSecretOptionToken(token: string): boolean {
+  return SECRET_OPTIONS.includes(token) || SECRET_OPTIONS.some(option => token.startsWith(`${option}=`));
+}
+
 /**
  * Replace credential values before they are reported back.
  *
@@ -65,9 +69,14 @@ export function redactSecretArgs(args: string[], redactValues = false): string[]
         out.push("--");
         valueIndex++;
       }
-      if (args[valueIndex] !== undefined) {
+      const next = args[valueIndex];
+      // A following credential option is not this option's value: leave it for the
+      // next iteration so its own operand is redacted too (`--code --token SECRET`).
+      if (next !== undefined && !isSecretOptionToken(next)) {
         out.push("<redacted>");
         index = valueIndex;
+      } else if (next !== undefined) {
+        index = valueIndex - 1;
       }
       continue;
     }

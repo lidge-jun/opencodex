@@ -53,9 +53,10 @@ function consumeFlagValue(args: string[], flag: string): string | undefined {
 function rejectUnknownArgs(args: string[], usage: string): void {
   if (args.length === 0) return;
   const shown = redactSecretArgs(args);
-  const unknown = shown.filter(a => a.startsWith("-"));
+  // Flags plus redaction markers only: a stray positional may be a credential operand.
+  const unknown = shown.filter(a => a.startsWith("-") || a === "<redacted>");
   if (unknown.length > 0) {
-    console.error(`Unknown flag(s): ${shown.join(", ")}`);
+    console.error(`Unknown flag(s): ${unknown.join(", ")}`);
   } else {
     console.error(`Unexpected argument(s): ${shown.join(", ")}`);
   }
