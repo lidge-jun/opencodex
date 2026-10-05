@@ -161,8 +161,10 @@ export function withLocalCaPublication<T>(dir: string, lockName: string, work: (
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   // Publication-local only: a private DACL can be changed only by the owner,
   // SYSTEM or Administrators. Every memo hit still checks lstat identity via same().
-  // Include bigint birthtimeNs to distinguish recycled SQLite sidecar file IDs;
-  // NTFS creation time survives same-volume rename, so staged entries keep their memo.
+  // bigint birthtimeNs adds discrimination for recycled SQLite sidecar file IDs; it is not a
+  // uniqueness guarantee (NTFS tunneling can restore creation times). Safety rests on the
+  // verified-private directory DACL. Creation time survives same-volume rename, so staged
+  // entries keep their memo.
   const verified = new Map<string, AclLevel>();
   const strength = { owner: 0, inherited: 1, private: 2 };
   const checkAcl: AclCheck = Object.assign((path: string, stat: BigIntStats, level: AclLevel = "private") => {

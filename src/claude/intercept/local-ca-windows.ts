@@ -9,14 +9,24 @@ const SID = /^S-1-(?:\d+-)+\d+$/i;
 
 function nativeAclRunner(path: string, timeoutMs: number): IcaclsResult {
   // Encode the path as data, not PowerShell syntax. SID-form rules avoid localized account names.
+  // .NET only: Get-Acl/ConvertTo-Json/ForEach-Object are module-autoloaded cmdlets, and
+  // autoload resolves them through the per-profile module analysis cache. With a fresh or
+  // redirected LOCALAPPDATA that rebuild scans every PSModulePath module and can exceed the
+  // inspection budget (hosted Windows runners: 30 s timeouts during `ocx start`); it also lets
+  // a module earlier on PSModulePath shadow the cmdlet. SIDs, ints and booleans need no escaping;
+  // the JSON quote is [char]34 so the -Command argument carries no double quotes to re-parse.
   const encodedPath = Buffer.from(path, "utf8").toString("base64");
   const script = [
     "$ErrorActionPreference='Stop'",
     `$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))`,
-    "$a=Get-Acl -LiteralPath $p",
     "$s=[System.Security.Principal.SecurityIdentifier]",
-    "$r=@($a.GetAccessRules($true,$true,$s)|ForEach-Object {@{sid=$_.IdentityReference.Value;type=[int]$_.AccessControlType;rights=[long]$_.FileSystemRights}})",
-    "@{owner=$a.GetOwner($s).Value;protected=$a.AreAccessRulesProtected;rules=$r}|ConvertTo-Json -Depth 4 -Compress",
+    "$q=[char]34",
+    "$c=[System.Security.AccessControl.AccessControlSections]'Owner,Access'",
+    "if([System.IO.Directory]::Exists($p)){$a=[System.Security.AccessControl.DirectorySecurity]::new($p,$c)}else{$a=[System.Security.AccessControl.FileSecurity]::new($p,$c)}",
+    "$r=foreach($x in $a.GetAccessRules($true,$true,$s)){'{'+$q+'sid'+$q+':'+$q+$x.IdentityReference.Value+$q+','+$q+'type'+$q+':'+[int]$x.AccessControlType+','+$q+'rights'+$q+':'+[long]$x.FileSystemRights+'}'}",
+    "$o='{'+$q+'owner'+$q+':'+$q+$a.GetOwner($s).Value+$q+','+$q+'protected'+$q+':'+$(if($a.AreAccessRulesProtected){'true'}else{'false'})+','+$q+'rules'+$q+':['+(@($r) -join ',')+']}'",
+    "[Console]::Out.Write($o)",
+    "[Console]::Out.Flush()",
   ].join(";");
   const result = Bun.spawnSync([resolveTrustedWindowsPowerShellExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
     stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: timeoutMs, windowsHide: true,
