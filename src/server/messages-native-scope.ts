@@ -26,8 +26,8 @@ export function nativeMessagesToolScopeDenial(
   }
   if (Array.isArray(body.messages)) for (const message of body.messages) {
     if (!isRec(message) || message.role !== "system" || !Array.isArray(message.content)) continue;
-    // A temporary lifetime still covers the current turn, so an addition always counts. Only a
-    // permanent removal withdraws a declaration; a temporary one keeps it scoped (fail closed).
+    // Upstream rejects tool changes in turn-scoped messages; do not depend on that. An addition
+    // always counts, and only a permanent removal withdraws a declaration (fail closed).
     const permanent = message.clear_at === undefined || message.clear_at === "never";
     for (const block of message.content) {
       if (!isRec(block) || !isRec(block.tool)) continue;
