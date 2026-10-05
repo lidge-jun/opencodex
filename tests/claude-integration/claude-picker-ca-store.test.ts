@@ -289,7 +289,8 @@ test("metadata replaced between lstat and open fails before credential access", 
   const dir = root();
   const fake = memoryPickerCaStore();
   ensurePickerCa(dir, { persistent: true, rotation: "startup", store: fake.store });
-  const path = join(dir, "claude-picker", "authority.json");
+  // The picker canonicalizes its config directory (macOS tmpdir is /var -> /private/var).
+  const path = join(filesystem.realpathSync(dir), "claude-picker", "authority.json");
   const original = readFileSync(path, "utf8");
   const open = filesystem.openSync;
   let replaced = false;
