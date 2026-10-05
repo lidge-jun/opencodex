@@ -68,6 +68,7 @@
     "codex-credits-settings.test.ts": "codex-integration",
     "codex-credits-probes.test.ts": "codex-integration",
     "codex-credits-after-limit.test.ts": "codex-integration",
+    "codex-pool-credit-policy.test.ts": "codex-integration",
     "codex-credits-after-limit-main.test.ts": "codex-integration",
     "service-desktop-startup-health.test.ts": "service",
     "service-desktop-startup.test.ts": "service",

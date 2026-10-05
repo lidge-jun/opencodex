@@ -72,3 +72,8 @@ marks an account allowed to spend, independent of the display switch, which stil
 routing. Coverage: `tests/codex-integration/codex-credits-after-limit.test.ts`,
 `tests/codex-integration/codex-credits-after-limit-main.test.ts` and
 `gui/tests/codex-credit-spend.test.tsx`.
+
+
+## Stored-account authentication policy
+
+Exact pool selectors also honor the credits-after-limit policy. `pool-credit-policy.ts` reads cached usage and configured plan metadata without credential I/O. Authentication checks before and after credential acquisition; provider overrides, materialization and recovery rechecks retain the live policy privately by context identity. `createCodexAuthDispatchGuard` rechecks live credit policy at HTTP and Responses WebSocket dispatch after pacing or retry backoff, alongside the independent Reserve guard. A policy refusal releases unused probes and never quarantines a valid credential. Coverage: `tests/codex-integration/codex-pool-credit-policy.test.ts`.

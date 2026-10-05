@@ -231,7 +231,7 @@ post-namespace request fail with HTTP 400.
 The option-aware `openai` provider uses `openai-responses` with `authMode: "forward"`. Pool mode
 resolves main plus added accounts through affinity/quota/cooldown ownership; Direct forwards only
 the allowed Codex/OpenAI auth/session headers from the current request and short-circuits pool
-state. `openai-apikey` uses its configured key and canonical API base URL. Missing credentials fail
+state. Stored Pool credentials follow the [credit policy](../codex-account-controls.md#stored-account-authentication-policy) through refresh copies and physical HTTP/WebSocket dispatch; a policy refusal before transport contact announces no replay send. `openai-apikey` uses its configured key and canonical API base URL. Missing credentials fail
 within their route; neither route falls through to the other. See
 [`openai-tiers.md`](../providers/openai-tiers.md).
 

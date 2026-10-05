@@ -3,8 +3,9 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../../src/codex/auth-api";
+import { clearAccountNeedsReauth, clearAccountQuota, isAccountNeedsReauth, updateAccountQuota } from "../../src/codex/auth-api";
 import { codexPoolAffinityKey } from "../../src/codex/auth-context";
+import { setAccountQuotaFromParsed } from "../../src/codex/quota";
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
@@ -17,6 +18,8 @@ import {
   REQUEST_PACING_MAX_QUEUE_DEPTH,
   resetProviderRequestPacingForTest,
   setProviderRequestPacingLimitsForTest,
+  providerRequestPacingStatus,
+  waitForProviderRequestSlot,
 } from "../../src/providers/request-pacing";
 import {
   clearResponseStateForTests,
@@ -314,6 +317,7 @@ beforeEach(() => {
   releaseSpendHome = acquireOwnedSpendHome();
   clearAccountNeedsReauth(ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
+  clearAccountQuota();
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearResponseStateMemoryForTests();
@@ -329,6 +333,7 @@ afterEach(() => {
   clearCompactHandoffRoutesForTests();
   clearAccountNeedsReauth(ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
+  clearAccountQuota();
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   resetAgentTaskRecoveryState();
@@ -455,6 +460,132 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(response.status).toBe(200);
     expect(harness.refreshes).toEqual(["refresh-grant"]);
     expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+  });
+
+  test.each(["/v1/responses", "/v1/responses/compact"] as const)(
+    "a credit hold landing during the forced refresh answers the credit policy, not a refresh failure (%s)",
+    async path => {
+      const harness = installHarness({
+        refresh() {
+          // The account crosses the limit while the token endpoint is in flight: the
+          // replay's materialization must read the live hold, not the admission-time one.
+          updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+          return Response.json({
+            access_token: "refreshed-access",
+            refresh_token: "rotated-refresh",
+            expires_in: 3600,
+          });
+        },
+      });
+      const response = path === "/v1/responses/compact"
+        ? await handleResponsesCompact(request(path), config(), { model: "", provider: "" } as RequestLogContext)
+        : await handleResponses(request(path), config(), { model: "", provider: "" } as RequestLogContext);
+      const body = await response.text();
+
+      // A policy refusal is not an incomplete refresh: the client gets the actionable 429,
+      // the rotated grant stays stored, and nothing replays on the refreshed bearer.
+      expect(response.status).toBe(429);
+      expect(body).toContain("spending credits");
+      expect(body).not.toContain("credential refresh did not complete");
+      expect(harness.sends).toEqual(["Bearer rejected-access"]);
+      expect(harness.refreshes).toEqual(["refresh-grant"]);
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+      expect(readStoredGeneration()).toBe(4);
+    },
+  );
+
+  test.each(["/v1/responses", "/v1/responses/compact"] as const)(
+    "a credit hold while the initial request waits for pacing refuses without sending (%s)", async path => {
+      const cfg = config();
+      cfg.providers.openai!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+      const blocker = await waitForProviderRequestSlot("openai", cfg.providers.openai!, "gpt-5.5");
+      const harness = installHarness();
+      const pending = path === "/v1/responses/compact"
+        ? handleResponsesCompact(request(path, { model: "work/gpt-5.5" }), cfg, { model: "", provider: "" } as RequestLogContext)
+        : handleResponses(request(path, { model: "work/gpt-5.5" }), cfg, { model: "", provider: "" } as RequestLogContext);
+      try {
+        for (let attempt = 0; attempt < 500 && providerRequestPacingStatus("openai", cfg.providers.openai!).queued === 0; attempt++) await Bun.sleep(1);
+        expect(providerRequestPacingStatus("openai", cfg.providers.openai!).queued).toBe(1);
+        updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+        blocker?.release();
+        const response = await pending;
+        expect(response.status).toBe(429);
+        expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(1);
+        expect(await response.text()).toContain("spending credits");
+        expect(harness.sends).toEqual([]);
+        expect(harness.refreshes).toEqual([]);
+        expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+      } finally { blocker?.release(); resetProviderRequestPacingForTest(); }
+    },
+  );
+
+  test.each([false, true])("portable compaction rechecks queued stored-account credits (opt-in=%s)", async optedIn => {
+    const cfg = config(); cfg.codexMainAccountHardLock = false;
+    cfg.providers.openai!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+    cfg.providers.backup = { adapter: "openai-chat", authMode: "key", apiKey: "backup-test-key", baseUrl: "https://backup.example.test" };
+    cfg.creditCodexAccountIds = optedIn ? [ACCOUNT_ID] : [];
+    updateAccountQuota(ACCOUNT_ID, 99, Date.now() + 3_600_000);
+    const blocker = await waitForProviderRequestSlot("openai", cfg.providers.openai!, "gpt-5.5");
+    const harness = installHarness({ responseForSend: () => Response.json({ id: "resp_summary", object: "response", status: "completed",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "summary" }] }] }) });
+    const pending = handleResponses(request("/v1/responses", { model: "work/gpt-5.5", input: [
+      { type: "message", role: "user", content: "history" }, { type: "compaction_trigger" },
+    ] }), cfg, { model: "", provider: "" } as RequestLogContext,
+    { compactionRoutingOverride: { sourceModel: "backup/model" } });
+    try {
+      for (let attempt = 0; attempt < 500 && providerRequestPacingStatus("openai", cfg.providers.openai!).queued === 0; attempt++) await Bun.sleep(1);
+      expect(providerRequestPacingStatus("openai", cfg.providers.openai!).queued).toBe(1);
+      updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+      setAccountQuotaFromParsed(ACCOUNT_ID, { credits: { hasCredits: true, balance: 42.5, observedAt: Date.now() } });
+      blocker?.release();
+      const response = await pending;
+      expect(response.status).toBe(optedIn ? 200 : 429);
+      const body = await response.text();
+      expect(body).toContain(optedIn ? "compaction" : "spending credits");
+      expect(harness.sends).toEqual(optedIn ? ["Bearer rejected-access"] : []);
+      expect(harness.refreshes).toEqual([]);
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+    } finally { blocker?.release(); resetProviderRequestPacingForTest(); }
+  });
+
+  test("a post-refresh credit hold in the pacing queue does not announce a replay send", async () => {
+    const cfg = config();
+    cfg.providers.openai!.requestPacing = { enabled: true, minIntervalMs: 200 };
+    const harness = installHarness();
+    let dispatchSignals = 0;
+    const pending = handleResponses(request("/v1/responses"), cfg, { model: "", provider: "" } as RequestLogContext,
+      { onStoredPool401ReplayDispatched: () => { dispatchSignals++; } });
+    try {
+      for (let attempt = 0; attempt < 500 && !(harness.refreshes.length && providerRequestPacingStatus("openai", cfg.providers.openai!).queued); attempt++) await Bun.sleep(1);
+      expect(harness.refreshes).toEqual(["refresh-grant"]);
+      expect(providerRequestPacingStatus("openai", cfg.providers.openai!).queued).toBe(1);
+      updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+      const response = await pending;
+      expect(response.status).toBe(429);
+      expect(dispatchSignals).toBe(0);
+      expect(harness.sends).toEqual(["Bearer rejected-access"]);
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+    } finally { resetProviderRequestPacingForTest(); }
+  });
+
+  test("a credit hold during same-account model recovery returns a policy response without replay", async () => {
+    const gatedModel = "gpt-daybreak-blue-latest";
+    const harness = installHarness({ responseForSend: () => Response.json({
+      detail: `The '${gatedModel}' model is not supported when using Codex with a ChatGPT account.`,
+    }, { status: 400 }) });
+    const response = await handleResponses(request("/v1/responses", { model: gatedModel }), config(),
+      { model: "", provider: "" } as RequestLogContext, {
+        resolveCodexModelEntitlements: async () => {
+          if (harness.sends.length) updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+          return { modelsByAccount: new Map([[ACCOUNT_ID, new Set([gatedModel])]]),
+            confirmedAccountIds: new Set([ACCOUNT_ID]), credentialIdentities: new Map() };
+        },
+      });
+    expect(response.status).toBe(429);
+    expect(await response.text()).toContain("spending credits");
+    expect(harness.sends).toEqual(["Bearer rejected-access"]);
+    expect(harness.refreshes).toEqual([]);
     expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
   });
 

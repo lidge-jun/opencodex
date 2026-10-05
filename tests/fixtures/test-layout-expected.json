@@ -74,6 +74,7 @@
   "codex-config-preservation.test.ts": "codex-integration", "codex-credits.test.ts": "codex-integration",
   "codex-credits-settings.test.ts": "codex-integration", "codex-credits-probes.test.ts": "codex-integration",
     "codex-credits-after-limit.test.ts": "codex-integration",
+    "codex-pool-credit-policy.test.ts": "codex-integration",
   "codex-credits-after-limit-main.test.ts": "codex-integration", "service-desktop-startup-health.test.ts": "service",
   "service-desktop-startup.test.ts": "service", "startup-health-packaged-probe.test.ts": "server",
   "discovered-native-models.test.ts": "codex-integration", "responses-hosted-image-delivery.test.ts": "responses",

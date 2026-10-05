@@ -100,6 +100,9 @@ import {
 } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { cancelBodyOnAbort } from "../../lib/abort";
+import { createCodexAuthDispatchGuard, releaseCodexAuthContextProbeLease, unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
+import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 
@@ -344,6 +347,8 @@ export async function prepareAdapterExchange(
             dispatchOverride: oauthDispatch(builtInitialRequest),
             providerName: route.providerName,
             modelId: route.modelId,
+            beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+              ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
           }),
         }));
     } else {
@@ -384,6 +389,8 @@ export async function prepareAdapterExchange(
               dispatchOverride: oauthDispatch(builtInitialRequest),
               providerName: route.providerName,
               modelId: route.modelId,
+              beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+                ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
             }));
         },
         {
@@ -406,6 +413,13 @@ export async function prepareAdapterExchange(
     upstream.abort();
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
+    const codexRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
+      now: Date.now(), accountSelector: route.codexAccountNamespace,
+    });
+    if (codexRefusal) {
+      releaseCodexAuthContextProbeLease(admissionState.authCtx);
+      return codexRefusal;
+    }
     // A pause committed during pacing is local admission policy, not a failed upstream.
     if (refusal instanceof OAuthAccountPausedError) {
       return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
@@ -550,6 +564,8 @@ export async function prepareAdapterExchange(
                   dispatchOverride: oauthDispatch(retryRequest),
                   providerName: route.providerName,
                   modelId: route.modelId,
+                  beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+                    ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
                 }),
               });
             });
@@ -601,6 +617,8 @@ export async function prepareAdapterExchange(
                     dispatchOverride: oauthDispatch(retryRequest),
                     providerName: route.providerName,
                     modelId: route.modelId,
+                    beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+                      ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
                   }));
               },
               {
@@ -624,6 +642,15 @@ export async function prepareAdapterExchange(
           retryRequest.releaseBodyObservation?.();
         }
       } catch (err) {
+        const codexRefusal = !options.abortSignal?.aborted && mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
+          now: Date.now(), accountSelector: route.codexAccountNamespace,
+        });
+        if (codexRefusal) {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          releaseCodexAuthContextProbeLease(admissionState.authCtx);
+          return { failed: codexRefusal };
+        }
         if (preserveFailureResponse && !replacementAdmitted && !options.abortSignal?.aborted)
           return { failed: preserveFailureResponse };
         cleanupUpstreamAbort();

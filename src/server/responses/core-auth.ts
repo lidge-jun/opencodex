@@ -41,6 +41,7 @@ import { markLocalRequestLogRefusal } from "../request-log";
 import { CODEX_POOL_REFRESH_INCOMPLETE_LOG_REASON } from "../../codex/pool-refresh-backoff";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import { forceRefreshMainAccountToken } from "../../codex/main-account";
+import { rebindPoolCreditPolicy } from "../../codex/pool-credit-policy";
 
 /** Keep synthesized Claude identity out of request headers reused by policy/combo fallback. */
 export function withClaudeNativeSession(headers: Headers, provider: OcxProviderConfig, sessionId?: string): Headers {
@@ -474,6 +475,9 @@ export async function refreshPoolForwardAuth(args: {
       generation: refreshed.generation,
       poolQuotaWriter: capturePoolQuotaWriter(authCtx.accountId, refreshed),
     };
+    // The spread dropped the WeakMap-bound credit policy: without the live binding a hold or
+    // opt-out landing during the refresh await would go unchecked on every no-override path.
+    rebindPoolCreditPolicy(authCtx, refreshedAuthCtx);
     const provider = applyCodexAuthContextToProvider(
       stripCodexRuntimeProviderFields(route.provider),
       refreshedAuthCtx,
@@ -496,6 +500,15 @@ export async function refreshPoolForwardAuth(args: {
         response: formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication"),
       };
     }
+    // The credential itself refreshed; a policy refusal raised afterwards (a credit hold or an
+    // opt-out that landed during the await) is not a refresh failure. Map it the same way the
+    // admission path does — a reset-bound 429, never a 503 telling the caller to sign in — and
+    // never quarantine a valid account for a policy refusal.
+    const policyResponse = mapCodexAuthContextErrorToResponse(error, {
+      accountSelector: route.codexAccountNamespace,
+      now: Date.now(),
+    });
+    if (policyResponse) return { ok: false, quarantine: false, response: policyResponse };
     return {
       ok: false,
       quarantine: false,
