@@ -190,13 +190,8 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     // An already selected owned profile proves that another successful enable still relies on
     // this CA. Keep its trust even when the current request is refused.
     if (inspect().kind === "applied") return true;
-    try {
-      const ca = ensurePickerCa(deps.configDir, { persistent: !!deps.persistentAuthority, store: deps.persistentAuthority?.store });
-      const result = await untrustPickerCa(
-        pickerCaCertPath(deps.configDir), pickerCaFingerprints(ca.certPem).sha1, deps.security, platform,
-      );
-      return result.ok;
-    } catch { return false; }
+    // Compensation needs only the published public root, never a signing identity.
+    return untrustCurrentCa();
   }
 
   function withTrustFailure(status: DesktopPickerStatus, trustFailed: boolean): DesktopPickerStatus {

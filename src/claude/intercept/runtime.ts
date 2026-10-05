@@ -32,6 +32,15 @@ import { buildClaudeInterceptEnv, migrateClaudeInterceptSettings } from "./setti
  * tunnels may be terminated by the picker runtime (src/claude/intercept/picker-runtime.ts).
  */
 
+const PICKER_AUTHORITY_ERROR_CODES = new Set([
+  "picker_ca_store_unavailable", "picker_ca_store_missing", "picker_ca_store_invalid",
+  "picker_ca_store_readback_failed", "picker_ca_metadata_mismatch", "picker_ca_metadata_unsafe",
+  "picker_ca_metadata_invalid", "picker_ca_live_owner", "picker_ca_pending_untrust",
+  "picker_ca_pending_untrust_invalid", "picker_ca_pending_untrust_unsafe", "picker_ca_pending_untrust_changed",
+  "picker_ca_config_unsafe", "picker_ca_directory_unsafe", "picker_ca_rotation_requires_startup",
+  "picker_ca_unsupported_platform",
+]);
+
 export const CLAUDE_INTERCEPT_PORT_OFFSET = 100;
 
 export function claudeInterceptEnabled(config: Pick<OcxConfig, "claudeCode" | "runtimeRole">): boolean {
@@ -226,11 +235,14 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
       } catch (error) {
         pickerBlocked = true;
         pickerReason = "failed";
-        console.warn(`⚠ Claude Desktop picker CA cleanup deferred: ${error instanceof Error ? error.message : String(error)}`);
+        // Native and filesystem errors may include private contents or paths. Emit only an exact
+        // application-owned code; arbitrary diagnostic text never crosses this boundary.
+        const code = error instanceof Error && PICKER_AUTHORITY_ERROR_CODES.has(error.message) ? error.message : null;
+        console.warn(code === "picker_ca_pending_untrust"
+          ? "⚠ Claude Desktop picker disabled: the previous certificate could not be untrusted"
+          : `⚠ Claude Desktop picker disabled: picker authority unavailable${code ? ` (${code})` : ""}`);
       }
       if (pickerBlocked) {
-        pickerReason = "failed";
-        console.warn("⚠ Claude Desktop picker disabled: the previous certificate could not be untrusted");
         if (pickerProfile.kind === "applied") {
           // Keep Desktop's actual pinned egress alive without ever constructing a TLS terminator.
           const port = Number(new URL(pickerProfile.proxyUrl).port);

@@ -12,6 +12,15 @@ import { memoryPickerCaStore } from "../helpers/picker-ca-store";
 const roots: string[] = [];
 const root = () => { const value = mkdtempSync(join(tmpdir(), "ocx-picker-store-")); roots.push(value); return value; };
 afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+/** Keep non-link assertions active; only a native Windows file-link privilege gap is unavailable. */
+function fileSymlink(target: string, path: string): boolean {
+  try { symlinkSync(target, path, "file"); return true; }
+  catch (error) {
+    if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+    console.warn("[picker-ca-store test] Windows denied file symlink creation (EPERM); file-link assertions unavailable");
+    return false;
+  }
+}
 const caUrl = pathToFileURL(join(import.meta.dir, "../../src/claude/intercept/picker-ca.ts")).href;
 const helperUrl = pathToFileURL(join(import.meta.dir, "../helpers/picker-ca-store.ts")).href;
 function fresh(dir: string, extra = "", timeout = 10_000) {
@@ -87,7 +96,7 @@ test("a live predecessor refuses before a credential write or initialization jou
 test("canonical config aliases share the credential namespace and authority", () => {
   const dir = root();
   const alias = join(root(), "alias");
-  symlinkSync(dir, alias);
+  symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
   const fake = memoryPickerCaStore();
   const entries: string[] = [];
   const store = (service: string, account: string) => { entries.push(`${service}/${account}`); return fake.store(service, account); };
@@ -149,9 +158,10 @@ for (const boundary of ["authority.json", "ca.pem", "ca-owner.json"] as const) {
     const failed = fresh(dir, `
       import { spyOn } from "bun:test";
       import * as fs from "node:fs";
+      import { basename } from "node:path";
       const rename = fs.renameSync;
       spyOn(fs, "renameSync").mockImplementation((from, to) => {
-        if (String(to).endsWith("/${boundary}")) throw new Error("injected publication failure");
+        if (basename(String(to)) === "${boundary}") throw new Error("injected publication failure");
         return rename(from, to);
       });
     `);
@@ -266,8 +276,9 @@ test("metadata mismatch and symlink recovery records fail before credential muta
   expect(() => { ensurePickerCa(dir, { persistent: true, rotation: "startup", store: fake.store }); }).toThrow("picker_ca_metadata_mismatch");
   writeFileSync(path, original);
   const target = join(dir, "external-public-state"); writeFileSync(target, original);
-  symlinkSync(target, join(dir, "claude-picker", "authority-init.json"));
-  expect(() => { ensurePickerCa(dir, { persistent: true, rotation: "startup", store: fake.store }); }).toThrow("picker_ca_metadata_unsafe");
+  if (fileSymlink(target, join(dir, "claude-picker", "authority-init.json"))) {
+    expect(() => { ensurePickerCa(dir, { persistent: true, rotation: "startup", store: fake.store }); }).toThrow("picker_ca_metadata_unsafe");
+  }
   expect(readFileSync(target, "utf8")).toBe(original);
   expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(ca.certPem);
   expect(fake.writes).toBe(1);
@@ -280,13 +291,18 @@ test("unsafe picker directory or lock cannot reach the credential store", () => 
     const fake = memoryPickerCaStore();
     if (pathKind === "directory") {
       writeFileSync(join(outside, "ca.key"), "must remain untouched");
-      symlinkSync(outside, join(dir, "claude-picker"));
+      symlinkSync(outside, join(dir, "claude-picker"), process.platform === "win32" ? "junction" : "dir");
     } else {
       // Prepare normal public state, then replace only the lease path with a symlink.
       ensurePickerCa(dir);
       const lock = join(dir, "claude-picker", "ca.lock.sqlite");
       rmSync(lock);
-      const target = join(outside, "lock"); writeFileSync(target, "external"); symlinkSync(target, lock);
+      const target = join(outside, "lock"); writeFileSync(target, "external");
+      if (!fileSymlink(target, lock)) {
+        expect(readFileSync(target, "utf8")).toBe("external");
+        expect(fake.writes).toBe(0);
+        continue;
+      }
     }
     let calls = 0;
     expect(() => { ensurePickerCa(dir, { persistent: true, rotation: "startup", store: (service, account) => { calls++; return fake.store(service, account); } }); }).toThrow();

@@ -1,8 +1,9 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
+import * as pickerPreparation from "../../src/claude/intercept/picker-ca-startup";
 import { startClaudeIntercept, getClaudePickerController, getClaudePickerRuntime } from "../../src/claude/intercept/runtime";
 import { createPickerRuntime } from "../../src/claude/intercept/picker-runtime";
 import { startConnectProxy } from "../../src/claude/intercept/connect-proxy";
@@ -100,7 +101,8 @@ test("fresh production restarts retain fingerprint and issue no trust mutations,
   const run = (trusted: boolean) => {
     const child = Bun.spawnSync({ cmd: [process.execPath, "-e", `
       import { readFileSync, writeFileSync } from "node:fs";
-      import { startClaudeIntercept, getClaudePickerController } from ${JSON.stringify(runtimeUrl)};
+      import * as pickerPreparation from "../../src/claude/intercept/picker-ca-startup";
+import { startClaudeIntercept, getClaudePickerController } from ${JSON.stringify(runtimeUrl)};
       import { createPickerRuntime } from ${JSON.stringify(pickerUrl)};
       import { pickerCaFingerprints, pickerCaCertPath } from ${JSON.stringify(caUrl)};
       import { applyDesktopPickerProfile } from ${JSON.stringify(profileUrl)};
@@ -243,4 +245,30 @@ test("disarm during async predecessor cleanup prevents a later TLS listener from
     expect(listeners).toBe(0);
     expect(runtime.selectTunnel("claude.ai", 443)).toEqual({ kind: "blind" });
   } finally { release(); await runtime.stop(); }
+});
+
+test("startup preparation diagnostics distinguish cleanup and sanitize authority failures", async () => {
+  for (const [message, expected] of [
+    ["picker_ca_pending_untrust", "⚠ Claude Desktop picker disabled: the previous certificate could not be untrusted"],
+    ["picker_ca_store_unavailable", "⚠ Claude Desktop picker disabled: picker authority unavailable (picker_ca_store_unavailable)"],
+    ["picker_ca_metadata_mismatch", "⚠ Claude Desktop picker disabled: picker authority unavailable (picker_ca_metadata_mismatch)"],
+    ["picker_ca_native_error PRIVATE-KEY-DIAGNOSTIC", "⚠ Claude Desktop picker disabled: picker authority unavailable"],
+  ]) {
+    const { root, config } = setup(); config.claudeCode!.desktopMode = "first-party";
+    const warnings: string[] = [];
+    const warn = spyOn(console, "warn").mockImplementation(line => { warnings.push(String(line)); });
+    const prepare = spyOn(pickerPreparation, "preparePersistentPickerAuthority").mockRejectedValue(new Error(message));
+    try {
+      const handle = await startClaudeIntercept({ config, configDir: root, publicPort: 10100,
+        dispatch: async () => new Response(), loadPickerRoutes: routes, pickerPlatform: "darwin",
+        pickerCaStore: () => { throw new Error("must not touch credential store"); },
+        pickerSecurity: async () => { throw new Error("must not touch OS trust"); },
+        startProxy: async (_port, options) => startConnectProxy(0, options),
+      });
+      handles.push(handle);
+      expect(warnings).toEqual([expected]);
+      expect(warnings.join(" ")).not.toContain("PRIVATE-KEY-DIAGNOSTIC");
+      expect(handle?.pickerReason).toBe("failed");
+    } finally { prepare.mockRestore(); warn.mockRestore(); }
+  }
 });
