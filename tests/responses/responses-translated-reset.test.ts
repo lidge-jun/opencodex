@@ -217,6 +217,32 @@ describe("reset replacement error confidentiality", () => {
     });
 
     test.each([
+      ["nested JSON short escape", "fixture/credential-v1", "invalid request: fixture\\/credential-v1"],
+      ["uppercase hex numeric reference", credential, "invalid request: &#X66;ixture-active-credential-v1"],
+      ["numeric reference without semicolon", credential, "invalid request: &#102ixture-active-credential-v1"],
+      ["legacy named reference without semicolon", "fixture&credential-v1", "invalid request: fixture&ampcredential-v1"],
+    ])(`${adapter} withholds unresolved diagnostic encoding (%s)`, async (_name, apiKey, message) => {
+      const result = await probe({ provider: { adapter, apiKey }, answer: ordinal => ordinal === 1
+        ? reset() : Response.json({ error: { message } }, { status: 400 }) });
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(result.used).toBe(2);
+      expect(result.grantSpent).toBe(true);
+      expect(JSON.parse(result.text)).toEqual({ error: { message: "[REDACTED]" } });
+    });
+
+    test(`${adapter} preserves diagnostic URL query parameters with an unrelated credential`, async () => {
+      const message = "see https://x.test/a?b=1&c=2 for details";
+      const result = await probe({ provider: { adapter, apiKey: credential }, answer: ordinal => ordinal === 1
+        ? reset() : Response.json({ error: { message } }, { status: 400 }) });
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(2);
+      expect(result.used).toBe(2);
+      expect(result.grantSpent).toBe(true);
+      expect(JSON.parse(result.text)).toEqual({ error: { message } });
+    });
+
+    test.each([
       ["number", "867530912345", { message: "invalid request", code: 867530912345, count: 17, flag: false },
         { message: "invalid request", code: "[REDACTED]", count: 17, flag: false }],
       ["boolean", "true", { message: "x", code: true }, { message: "x", code: "[REDACTED]" }],

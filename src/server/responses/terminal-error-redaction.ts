@@ -2,6 +2,9 @@ import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib
 import { foldForMatching, NAMED_ENTITY_PLACEHOLDER } from "../../lib/redact-folding";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 
+// An exact credential match cannot be proven while undecoded encoding syntax remains.
+const UNRESOLVED_ENCODING = /\\["\\/bfnrt]|&#|&[A-Za-z][A-Za-z0-9]{0,31}(?![A-Za-z0-9;=])/;
+
 function maskEncodedCredentials(text: string, secrets: string[]): string {
   let view = text;
   let offsets = Array.from({ length: text.length + 1 }, (_, index) => index);
@@ -16,6 +19,7 @@ function maskEncodedCredentials(text: string, secrets: string[]): string {
   }
   // Never expose a diagnostic whose encoding exceeds the bounded matching view.
   if (foldForMatching(view).folded !== view) return REDACTED_SECRET;
+  if (UNRESOLVED_ENCODING.test(view)) return REDACTED_SECRET;
   const ranges: Array<{ start: number; end: number }> = [];
   for (const secret of secrets) {
     let needle = secret;
