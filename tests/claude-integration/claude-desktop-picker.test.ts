@@ -295,3 +295,20 @@ test("a restart is asked for only after this process changed the profile, never 
   second.state.lastBootstrapAt = Date.now() + 1;
   expect((await changed.status()).reason).toBe("active");
 });
+
+test("startup enable never adds or removes trust when trust is lost", async () => {
+  const trust = pickerSecurity({ trusted: false, addTrust: true });
+  const events: string[] = [];
+  const controller = controllerFor({ security: trust.run, events });
+  const result = await controller.enable({ persist: false, context: "server", allowTrustPrompt: false });
+  expect(result).toMatchObject({ reason: "trust_pending", effective: false, hint: "ocx claude desktop picker trust" });
+  expect(trust.calls.some(call => ["add-trusted-cert", "remove-trusted-cert", "delete-certificate"].includes(call[0]!))).toBe(false);
+  expect(events).toEqual([]);
+});
+
+test("startup enable reuses actually listed trusted CA without trust mutations", async () => {
+  const trust = pickerSecurity({ trusted: true });
+  const controller = controllerFor({ security: trust.run });
+  expect((await controller.enable({ persist: false, context: "server", allowTrustPrompt: false })).effective).toBe(true);
+  expect(trust.calls.map(call => call[0])).toEqual(["find-certificate", "verify-cert", "trust-settings-export"]);
+});

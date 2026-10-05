@@ -1,3 +1,4 @@
+import { memoryPickerCaStore } from "../helpers/picker-ca-store";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { connect, createServer } from "node:net";
@@ -322,6 +323,7 @@ describe("startClaudeIntercept wiring", () => {
       dispatch: async () => new Response("unused"),
       loadPickerRoutes: async () => ({ nativeSlugs: [], routedModels: [] }),
       createPicker,
+      pickerCaStore: memoryPickerCaStore().store, pickerPlatform: "darwin" as NodeJS.Platform,
     };
   }
 
@@ -372,7 +374,7 @@ describe("startClaudeIntercept wiring", () => {
         refreshIntervalMs: 3_600_000,
       }),
       pickerSecurity: trust.run,
-      pickerPlatform: "darwin",
+      pickerCaStore: memoryPickerCaStore().store, pickerPlatform: "darwin",
     });
     try {
       // The restart reuses this process's authority, so cleanup must NOT untrust it — the applied
@@ -418,7 +420,7 @@ describe("startClaudeIntercept wiring", () => {
       loadPickerRoutes: async () => ({ nativeSlugs: [], routedModels: [] }),
       createPicker: () => fake,
       pickerSecurity: trust.run,
-      pickerPlatform: "darwin",
+      pickerCaStore: memoryPickerCaStore().store, pickerPlatform: "darwin",
     });
     try {
       expect(handle).not.toBeNull();
@@ -461,14 +463,14 @@ describe("startClaudeIntercept wiring", () => {
       stop: async () => {},
     } as unknown as PickerRuntime;
     const handle = await startClaudeIntercept({
-      config: config({ claudeCode: { intercept: { port } } }),
+      config: config({ claudeCode: { desktopMode: "first-party", intercept: { port } } }),
       publicPort: 10100,
       configDir: root,
       dispatch: async () => new Response("unused"),
       loadPickerRoutes: async () => ({ nativeSlugs: [], routedModels: [] }),
       createPicker: () => fake,
       pickerSecurity: run,
-      pickerPlatform: "darwin",
+      pickerCaStore: memoryPickerCaStore().store, pickerPlatform: "darwin",
     });
     try {
       expect(handle).not.toBeNull();
@@ -495,14 +497,14 @@ describe("startClaudeIntercept wiring", () => {
       stop: async () => {},
     } as unknown as PickerRuntime;
     const handle = await startClaudeIntercept({
-      config: config({ claudeCode: { intercept: { port } } }),
+      config: config({ claudeCode: { desktopMode: "first-party", intercept: { port } } }),
       publicPort: 10100,
       configDir: root,
       dispatch: async () => new Response("unused"),
       loadPickerRoutes: async () => ({ nativeSlugs: [], routedModels: [] }),
       createPicker: () => fake,
       pickerSecurity: trust.run,
-      pickerPlatform: "darwin",
+      pickerCaStore: memoryPickerCaStore().store, pickerPlatform: "darwin",
     });
     try {
       expect(handle).not.toBeNull();
@@ -566,7 +568,7 @@ describe("startClaudeIntercept wiring", () => {
         ...(boundPort === egressPort ? { dialUpstream: () => connect({ host: "127.0.0.1", port: upstreamPort }) } : {}),
       }),
       pickerSecurity: broken,
-      pickerPlatform: "darwin",
+      pickerCaStore: memoryPickerCaStore().store, pickerPlatform: "darwin",
     });
     try {
       expect(handle).not.toBeNull();
@@ -615,7 +617,7 @@ describe("startClaudeIntercept wiring", () => {
         pickerSecurity: async args => args[0] === "find-certificate"
           ? { code: 0, stdout: `SHA-1 hash: ${sha1}\n`, stderr: "" }
           : { code: 1, stdout: "", stderr: "" },
-        pickerPlatform: "darwin",
+        pickerCaStore: memoryPickerCaStore().store, pickerPlatform: "darwin",
       });
       expect(handle?.pickerProxyPort).toBeNull();
       expect(handle).toMatchObject({ pickerReason: "port_in_use", pickerFailurePort: pickerPort });
@@ -647,7 +649,7 @@ describe("startClaudeIntercept wiring", () => {
         calls.push(args[0]!);
         return { code: 0, stdout: "", stderr: "" };
       },
-      pickerPlatform: "darwin",
+      pickerCaStore: memoryPickerCaStore().store, pickerPlatform: "darwin",
     });
     try {
       expect(handle?.pickerProxyPort).toBe(pickerPort);
@@ -698,7 +700,7 @@ describe("startClaudeIntercept wiring", () => {
         refreshIntervalMs: 3_600_000,
       }),
       pickerSecurity: trust.run,
-      pickerPlatform: "darwin",
+      pickerCaStore: memoryPickerCaStore().store, pickerPlatform: "darwin",
     });
     try {
       // The rotation must not pivot through the previous profile: no placeholder is created, the
@@ -736,6 +738,7 @@ describe("startClaudeIntercept wiring", () => {
     }));
     const trust = keychain({ trusted: true });
     const listener = fakeListener();
+    const store = memoryPickerCaStore().store;
     const startOpts = () => ({
       config: config({ claudeCode: { intercept: { port } } }),
       publicPort: 10100,
@@ -751,7 +754,7 @@ describe("startClaudeIntercept wiring", () => {
         refreshIntervalMs: 3_600_000,
       }),
       pickerSecurity: trust.run,
-      pickerPlatform: "darwin" as NodeJS.Platform,
+      pickerCaStore: store, pickerPlatform: "darwin" as NodeJS.Platform,
     });
     // Occupy the picker port: this restart cannot bind it.
     const squatter = createServer();

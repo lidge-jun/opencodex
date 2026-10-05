@@ -1,3 +1,4 @@
+import { memoryPickerCaStore } from "../helpers/picker-ca-store";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,7 +63,7 @@ async function startPicker(saved: OcxConfig, onDispatch?: (req: Request) => Resp
     ...(onDispatch ? { desiredClients: () => ({ desktop: true, cli: false }) } : {}),
     loadPickerRoutes: async () => ({ nativeSlugs: [], routedModels: [{ provider: "xai", id: "grok-4.7", contextWindow: 256_000 }] }),
     pickerSecurity: security,
-    pickerPlatform: "darwin",
+    pickerCaStore: memoryPickerCaStore().store, pickerPlatform: "darwin",
     // A probe that closes before startup does not reserve anything: the lifecycle's own
     // ephemeral TLS listener or another process can take the observed pair. Bind the real proxy
     // handlers directly on port 0 so the kernel owns both allocations until teardown.
