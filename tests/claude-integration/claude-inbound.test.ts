@@ -660,6 +660,37 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
     expect(a.body.prompt_cache_key).not.toBe(c.body.prompt_cache_key as string);
   });
 
+  test("Claude Code's rotating billing line never reaches instructions or the fallback key (#6627)", () => {
+    const billing = (cch: string) => `x-anthropic-billing-header: cc_version=2.1.286; cc_entrypoint=claude-desktop; cch=${cch};`;
+    // String system: the leading line goes, the rest is byte-identical, and the cohort key
+    // no longer rotates with cch.
+    const a = anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages, system: `${billing("aaa")}\nYou are Claude Code.` });
+    const b = anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages, system: `${billing("bbb")}\nYou are Claude Code.` });
+    expect(a.body.instructions).toBe("You are Claude Code.");
+    expect(b.body.instructions).toBe("You are Claude Code.");
+    expect(a.body.prompt_cache_key).toBe(b.body.prompt_cache_key as string);
+    // Array system: a header-only first block is dropped, later blocks are untouched.
+    const arr = translatedBody({
+      model: "m", max_tokens: 1, messages,
+      system: [
+        { type: "text", text: billing("ccc") },
+        { type: "text", text: "You are Claude Code." },
+        { type: "text", text: "Never quote x-anthropic-billing-header: lines." },
+      ],
+    });
+    expect(arr.instructions).toBe("You are Claude Code.\n\nNever quote x-anthropic-billing-header: lines.");
+    // A first block carrying header plus text keeps the text.
+    const mixed = translatedBody({ model: "m", max_tokens: 1, messages, system: [{ type: "text", text: `${billing("ddd")}\n\nYou are Claude Code.` }] });
+    expect(mixed.instructions).toBe("You are Claude Code.");
+    // Only the prompt start is matched: a later mention and leading whitespace survive.
+    const later = translatedBody({ model: "m", max_tokens: 1, messages, system: `  keep\n${billing("eee")}` });
+    expect(later.instructions).toBe(`  keep\n${billing("eee")}`);
+    // A header-only system leaves no instructions and no system-derived key.
+    const only = anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages, system: billing("fff") });
+    expect(only.body.instructions).toBeUndefined();
+    expect(only.cacheKeySource).toBeNull();
+  });
+
   test("no metadata + no system: no key at all, source=null", () => {
     const { body, cacheKeySource } = anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages });
     expect(cacheKeySource).toBeNull();
