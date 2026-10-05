@@ -224,14 +224,14 @@ describe("storedPoolReplayDispatchNotifier", () => {
   function pacedExecutor(options: { pacing: () => Promise<void> }) {
     const sends: string[] = [];
     const unpaced = Object.assign(
-      async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      async (input: Parameters<typeof fetch>[0]) => {
         sends.push(String(input));
         return new Response("ok");
       },
       { preconnect: () => {} },
     );
     const wrapped = Object.assign(
-      async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
         await options.pacing();
         return unpaced(input, init);
       },
@@ -375,9 +375,13 @@ describe("same-origin 307 and 308 redirect following", () => {
     const fakeFetch = (async (input, _init) => {
       expect(input).toBeInstanceOf(Request);
       sent.push(input as Request);
-      return sent.length === 1
-        ? new Response("redirecting", { status: 307, headers: { location: redirectTarget } })
-        : new Response("success", { status: 200 });
+      if (sent.length === 1) {
+        // Consume the first body before returning the redirect: the helper sends a
+        // clone, and the redirect reconstruction has to survive that consumption.
+        expect(await (input as Request).text()).toBe(payload);
+        return new Response("redirecting", { status: 307, headers: { location: redirectTarget } });
+      }
+      return new Response("success", { status: 200 });
     }) as typeof fetch;
 
     const response = await sendWithConnectionPolicy(fakeFetch, new Request(startUrl, {
@@ -394,8 +398,36 @@ describe("same-origin 307 and 308 redirect following", () => {
     for (const request of sent) {
       expect(request.method).toBe("POST");
       expect(request.headers.get("authorization")).toBe("Bearer key-123");
-      expect(await request.text()).toBe(payload);
     }
+    // The first body was consumed above; the replayed second send carries the payload.
+    expect(await sent[1]!.text()).toBe(payload);
+  });
+
+  test("refuses to follow redirect when init.body is a single-use stream", async () => {
+    const calls: { input: Parameters<typeof fetch>[0]; init?: RequestInit }[] = [];
+    const fakeFetch = (async (input, init) => {
+      calls.push({ input, init });
+      return new Response("streamed redirect", {
+        status: 307,
+        headers: { location: redirectTarget },
+      });
+    }) as typeof fetch;
+
+    const response = await sendWithConnectionPolicy(fakeFetch, startUrl, {
+      method: "POST",
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{}"));
+          controller.close();
+        },
+      }),
+    });
+
+    // The first send drains the stream, so a replay would send an empty body:
+    // the 3xx is returned to the caller instead of being followed.
+    expect(response.status).toBe(307);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.input).toBe(startUrl);
   });
 
   test("refuses to follow cross-origin redirect to preserve credentials and prevent SSRF", async () => {
@@ -439,4 +471,3 @@ describe("same-origin 307 and 308 redirect following", () => {
     expect(response.status).toBe(307);
   });
 });
-

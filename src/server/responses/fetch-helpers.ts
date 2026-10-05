@@ -200,6 +200,10 @@ export async function sendWithConnectionPolicy(
   const largeCodexBody = typeof body === "string"
     && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
+  // A streamed init.body is single-use: the first physical send consumes it, so a redirected
+  // replay would send an already-drained stream. Follow redirects only for replayable bodies
+  // (strings, buffers, blobs) and leave the 3xx with the caller for that request.
+  const nonReplayableInitBody = body instanceof ReadableStream;
 
   let currentInput = input;
   let redirectCount = 0;
@@ -221,7 +225,8 @@ export async function sendWithConnectionPolicy(
       ...{ [UPSTREAM_REWRITTEN]: true },
     });
 
-    if ((response.status === 307 || response.status === 308) && redirectCount < maxRedirects) {
+    if (!nonReplayableInitBody && (response.status === 307 || response.status === 308)
+      && redirectCount < maxRedirects) {
       const location = response.headers.get("location");
       if (location) {
         try {
@@ -285,12 +290,12 @@ export function providerFetch(
   const egressBinding: ProviderEgressBinding = { providerName, provider };
   // Resolved per request, not once per wrapper: `providers.<name>.noProxy` is evaluated against
   // the destination, so two requests through the same executor can legitimately take different
-  // routes. A malformed value throws and rejects the request rather than degrading to the
-  // global proxy or to direct, either of which would read as success at the call site.
+  // routes. A malformed value throws and rejects the request rather than degrading to
+  // the global proxy or to direct, either of which would read as success at the call site.
   const egressFor = (input: Parameters<typeof globalThis.fetch>[0]) => resolveProviderEgress({
     providerName,
     provider,
-    url: typeof input === "string" ? input : input instanceof URL ? input : input.url,
+    url: typeof input === "string" ? input : input instanceof URL ? input.url : input.url,
   });
   // The built-in executor forwards its init to a transport that honours the proxy option.
   const configuredFetch = markEgressTransparentExecutor(Object.assign(
@@ -335,8 +340,8 @@ export function providerFetch(
       // is decided inside `dispatch`, which runs after this, so the fresh-connection policy
       // wins regardless of what any caller or hook put in the header.
       options.beforeDispatch?.(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
-      // No proxy option is attached here: a `dispatchOverride` may rebuild this request against
-      // a different destination, so the route is decided at the physical send instead.
+      // No proxy option is attached here: a `dispatchOverride` may rebuild this request against a
+      // different destination, so the route is decided at the physical send instead.
       const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 };
       return options.dispatchOverride
         ? options.dispatchOverride(input, dispatchInit, dispatch)
@@ -410,7 +415,6 @@ export function providerFetch(
 }
 
 
-
 /**
  * Wrap a provider fetch so `onDispatch` fires immediately before the send, not before pacing.
  *
@@ -442,14 +446,13 @@ export function storedPoolReplayDispatchNotifier(
     },
     { preconnect: unpacedSource.preconnect },
   ) as ProviderFetch["unpacedFetch"];
-  const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-    return sendTrackingRequestSlot(await executor.waitForPacing?.(init?.signal ?? undefined), () => unpaced!(input, init));
-  };
-  return Object.assign(wrapped, {
-    preconnect: executor.preconnect,
-    waitForPacing: executor.waitForPacing,
-    unpacedFetch: unpaced,
-  }) as ProviderFetch;
+  const wrapped = Object.assign(
+    async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      return sendTrackingRequestSlot(await executor.waitForPacing?.(init?.signal ?? undefined), () => unpaced!(input, init));
+    },
+    { preconnect: executor.preconnect },
+  ) as ProviderFetch;
+  return wrapped;
 }
 
 /**
