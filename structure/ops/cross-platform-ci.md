@@ -11,9 +11,16 @@ request verifies Linux and TypeScript: Linux runs the suite in four shards with 
 `changes` job's native path filter selects the change. `dev` pushes start nothing — dev
 integration is covered by the pull-request run — while `main` and `preview` must remain push
 triggers because `release.yml` requires a successful push-event run for the exact release SHA
-and does not accept a pull-request run. Windows runs the full suite in nine shards only on manual
-`workflow_dispatch` with `lane=all` (or an empty lane), and an aggregate green `ci` check
-legitimately includes deliberate skips for every job the event did not request.
+and does not accept a pull-request run. Windows runs the full suite in nine shards on a
+Windows-sensitive pull request, on the nightly schedule, and on `workflow_dispatch` with
+`lane=all` (or an empty lane); it never joins the push run `release.yml` gates on. A pull request
+is Windows-sensitive when the `changes` job's `windows` path filter matches or an added
+`src/`/`tests/` line names a Windows marker; `scripts/ci/windows-sensitive-diff.sh` makes that call,
+treating the diff as data and selecting Windows when it cannot read the base parent. Wherever they run, `ci` requires them. The daily
+`schedule` runs main's workflow (GitHub schedules only the default branch) against one dev SHA the
+`changes` job resolves and every checkout reads, and requests the macOS control as well. An
+aggregate green `ci` check legitimately includes deliberate skips for every job the event did not
+request.
 
 This scoping accepts a real coverage loss: a green pull request no longer proves the macOS suite,
 the Rust toolchain, or the app bundle. Those regressions are caught at the promotion push to
@@ -58,10 +65,15 @@ batch runner still sweeps a crashed or timed-out batch one file per process, but
 failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
 jobs this run actually requested, then requires `success` from every one of them and `skipped`
 from every job the event did not request — so a job that was requested and never started can no
-longer report as a deliberate skip. On a `lane=all` dispatch the gate additionally reads the
+longer report as a deliberate skip. Whenever Windows is requested the gate additionally reads the
 run's own job list through the Actions API and requires nine concrete successful `windows N/9`
 results, because a matrix rollup can report `success` when one matrix leg is skipped. A
 release that requires Windows proof still dispatches it for the exact publish SHA.
+Test sandboxes keep the runner's `LOCALAPPDATA`, so Windows PowerShell 5.1 children reuse the
+image's warm module-analysis cache. Replacing it with a freshly built seed made every child
+re-analyze modules and timed out seven shards on the first run of #6670.
+Startup ACL reads use .NET, never module-autoloaded `Get-Acl`/`Set-Acl`
+(`tests/ci-workflows/ci-review-lanes.test.ts` scans `src/`).
 Across the jobs, the workflow runs:
 
 ```bash

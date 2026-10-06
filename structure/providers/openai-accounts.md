@@ -222,6 +222,14 @@ materialization checks cancellation before returning ownership. Connectivity-onl
 completion is neutral: HTTP 101 does not prove inference or quota recovery, and a normal close
 may follow a protocol error. Explicit transport errors/timeouts settle once during cleanup.
 
+`resolveCallerOwnedOpenAiSidecar` in `src/providers/openai-sidecar.ts` is the one Pool-mode path
+that forwards the caller's own credential: a native voice join for a call the client created itself
+(`existingCall`) can only be joined by that login. It reuses the Direct passthrough — explicit bearer
+whose claim matches `chatgpt-account-id`, never an admission secret — so matched-main hard-lock and
+credits refusals surface instead of a Pool detour, and no Pool outcome is recorded. Coverage:
+`tests/server/server-live-existing-call.test.ts` and
+`tests/codex-integration/main-account-hard-lock-auth.test.ts`.
+
 The dashboard presents one OpenAI Codex card with accessible Pool/Direct controls and a separate,
 unchanged API-key card. `PATCH /api/providers?name=openai` persists exactly one
 `codexAccountMode`, clears affinity/quota cache, primes only when entering Pool, and does not refresh

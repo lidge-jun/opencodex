@@ -75,8 +75,8 @@ describe("the narrow checks stay narrow", () => {
     const narrow = (changes?.steps ?? []).find(step => step.id === "narrow");
     expect(changes?.outputs?.setup_action).toBe("${{ steps.narrow.outputs.setup_action }}");
     expect(changes?.outputs?.remote_helper).toBe("${{ steps.narrow.outputs.remote_helper }}");
-    expect(narrow?.env?.SETUP_ACTION).toBe("${{ steps.filter.outputs.setup_action }}");
-    expect(narrow?.env?.REMOTE_HELPER).toBe("${{ steps.filter.outputs.remote_helper }}");
+    expect(narrow?.env?.SETUP_ACTION).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.setup_action }}");
+    expect(narrow?.env?.REMOTE_HELPER).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.remote_helper }}");
     expect(narrow?.run).toContain("exit 1");
   });
 });

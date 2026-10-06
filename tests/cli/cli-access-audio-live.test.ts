@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Readable } from "node:stream";
 import { handleAccessAudioCommand, type AccessAudioDeps } from "../../src/cli/access-audio";
 import { resolveAudioClient } from "../../src/server/audio-client";
+import { isolationBudgetMs } from "../helpers/ci-watchdog";
 import type { OcxConfig } from "../../src/types";
 
 const KEY = "ocx_data_audio_live_synthetic";
@@ -125,7 +126,9 @@ describe("live audio readiness and bounded closure", () => {
     { type: "session.started", session: { id: " " } },
   ])("native open and non-readiness events cannot claim readiness", async frame => {
     const f = fixture([JSON.stringify(frame)]);
-    expect(await handleAccessAudioCommand(argv, deps(f.server.port!, { audioReadyTimeoutMs: 20 }))).toBe(1);
+    // The ready timer starts before the socket opens; a 20 ms budget can expire before the
+    // client sends session.update on a loaded runner (macOS control, run 37457452698).
+    expect(await handleAccessAudioCommand(argv, deps(f.server.port!, { audioReadyTimeoutMs: isolationBudgetMs(20) }))).toBe(1);
     expect(JSON.parse(output())).toMatchObject({ ready: false });
     await f.closeObserved;
     expect(f.messages.map((m: unknown) => (m as { type: string }).type)).toEqual(["session.update", "session.close"]);

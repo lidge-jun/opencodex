@@ -35,7 +35,7 @@ test("a change under structure/ selects a job that runs the structure gate", () 
   // The whole defect was that nothing satisfied this. Read the condition off the
   // job rather than naming the job, so renaming it does not quietly pass.
   expect(filters.structure).toContain("structure/**");
-  expect(changes?.outputs?.structure).toBe("${{ steps.filter.outputs.structure }}");
+  expect(changes?.outputs?.structure).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.structure }}");
 
   const selected = Object.entries(workflow.jobs ?? {})
     .filter(([, job]) => job.if?.includes("needs.changes.outputs.structure == 'true'"))
