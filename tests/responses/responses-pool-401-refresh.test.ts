@@ -812,7 +812,10 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
 
   test("a post-refresh credit hold in the pacing queue does not announce a replay send", async () => {
     const cfg = config();
-    cfg.providers.openai!.requestPacing = { enabled: true, minIntervalMs: 200 };
+    // The replay must still be inside the pacing interval after the forced refresh. On hosted
+    // Windows runners refresh plus replay preparation takes several hundred ms, so 200 ms elapsed
+    // before the replay reached the queue and it was never observed as queued.
+    cfg.providers.openai!.requestPacing = { enabled: true, minIntervalMs: 2_000 };
     const harness = installHarness();
     let dispatchSignals = 0;
     const pending = handleResponses(request("/v1/responses"), cfg, { model: "", provider: "" } as RequestLogContext,
