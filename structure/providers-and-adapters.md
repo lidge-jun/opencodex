@@ -1,6 +1,6 @@
 # Providers And Adapters
 
-Devin combines only [consecutive same-ID tool results](adapters/registry.md#devin-consecutive-tool-results), preserving intervening message slots, image parts and error markers without mutating the parsed request.
+Devin combines only [consecutive same-ID tool results](adapters/registry.md#devin-consecutive-tool-results), using linear accumulation while preserving intervening message slots, image parts and error markers without mutating the parsed request.
 
 Anthropic account pause, model routes, and quota labels follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
 
