@@ -14,6 +14,8 @@ import { captureMainQuotaWriter, clearMainAccountInfoCache, getMainAccountInfoCa
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { isMainAccountRefreshGrantRejected, setMainAccountPlan } from "../../src/codex/main-account";
 import { clearAccountQuota, getAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { CODEX_CREDITS_FRESHNESS_MS, hasSpendableCodexCredits } from "../../src/codex/quota-types";
+import { WHAM_REQUEST_TIMEOUT_MS } from "../../src/codex/quota-recovery-timing";
 import { clearCodexUpstreamHealth, getCodexQuotaHealthSnapshot, recordCodexUpstreamOutcome } from "../../src/codex/routing";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
@@ -68,6 +70,25 @@ function usage(percent = 0): Response {
   return Response.json({ plan_type: "plus", rate_limit: {
     primary_window: { used_percent: percent, limit_window_seconds: 18_000, reset_at: 1 },
   } });
+}
+
+function creditRecoveryConfig(now: number, observedAt = now - CODEX_CREDITS_FRESHNESS_MS + 60_000,
+  resetAt = now + 3_600_000): OcxConfig {
+  clearAccountQuota(MAIN);
+  setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: resetAt,
+    credits: { hasCredits: true, unlimited: false, balance: 5, allowed: true,
+      overageLimitReached: false, observedAt } }, undefined, captureMainQuotaWriter(accountId));
+  return { ...config(), codexMainAccountHardLock: false, creditCodexAccountIds: [MAIN] };
+}
+
+function creditUsage(restriction?: string): Response {
+  return Response.json({ plan_type: "plus", rate_limit: {
+    primary_window: { used_percent: 100, limit_window_seconds: 604_800,
+      reset_at: Math.floor((Date.now() + 3_600_000) / 1000) },
+    secondary_window: null, tertiary_window: null,
+  }, credits: { has_credits: restriction !== "empty", unlimited: false,
+    balance: restriction === "empty" ? 0 : 5, overage_limit_reached: restriction === "overage" },
+  spend_control: { reached: restriction === "spending-off" } });
 }
 
 /**
@@ -133,6 +154,88 @@ afterEach(async () => {
     else process.env.CODEX_HOME = previousCodexHome;
     removeTreeWithRetry(home);
   }
+});
+
+describe("opted-in main credit evidence recovery", () => {
+  test("renews before credit expiry without extending the admission clock", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const initialObservation = now;
+      const cfg = creditRecoveryConfig(now, initialObservation);
+      const expectedBearer = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")).tokens.access_token;
+      const calls = fetchWith(async (_url, init) => {
+        expect(new Headers(init?.headers).get("chatgpt-account-id")).toBe(accountId);
+        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${expectedBearer}`);
+        return creditUsage();
+      });
+      now += CODEX_CREDITS_FRESHNESS_MS - sweeper.STATE_SWEEP_INTERVAL_MS - WHAM_REQUEST_TIMEOUT_MS;
+      await runMainAccountHardLockRecovery(cfg);
+      expect(calls).toEqual([]);
+      now++;
+      expect(hasSpendableCodexCredits(getMainPolicyQuota(), now)).toBe(true);
+      await runMainAccountHardLockRecovery(cfg);
+      expect(calls).toEqual([whamUrl]);
+      expect(getMainPolicyQuota()).toMatchObject({ weeklyPercent: 100,
+        credits: { observedAt: now, allowed: true, hasCredits: true, balance: 5 } });
+      now = initialObservation + CODEX_CREDITS_FRESHNESS_MS + 1;
+      expect(hasSpendableCodexCredits(getMainPolicyQuota(), now)).toBe(true);
+      await runMainAccountHardLockRecovery(cfg);
+      expect(calls).toEqual([whamUrl]);
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+    } finally { clock.mockRestore(); }
+  });
+
+  test.each(["no-consent", "paused", "reauth", "fresh", "reset", "hard-lock"])(
+    "%s does not trigger the credit renewal path", async condition => {
+      const now = Date.now();
+      const cfg = creditRecoveryConfig(now, condition === "fresh" ? now : undefined,
+        condition === "reset" ? now - 1 : undefined);
+      if (condition === "no-consent") cfg.creditCodexAccountIds = [];
+      if (condition === "paused") cfg.pausedCodexAccountIds = [MAIN];
+      if (condition === "reauth") markAccountNeedsReauth(MAIN);
+      if (condition === "hard-lock") cfg.codexMainAccountHardLock = true;
+      const calls = fetchWith(async () => creditUsage());
+      await runMainAccountHardLockRecovery(cfg);
+      expect(calls).toEqual([]);
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+    });
+
+  test.each(["empty", "spending-off", "overage"])(
+    "%s preserves refusal and bounds repeated renewal attempts", async restriction => {
+      const cfg = creditRecoveryConfig(Date.now());
+      const calls = fetchWith(async () => creditUsage(restriction));
+      await runMainAccountHardLockRecovery(cfg);
+      expect(calls).toEqual([whamUrl]);
+      expect(hasSpendableCodexCredits(getMainPolicyQuota())).toBe(false);
+      expect(getMainPolicyQuota()?.weeklyPercent).toBe(100);
+      await runMainAccountHardLockRecovery(cfg);
+      expect(calls).toEqual([whamUrl]);
+      expect(isAccountNeedsReauth(MAIN)).toBe(false);
+    });
+
+  test("credit renewal retains upstream Retry-After until a real later observation", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const cfg = creditRecoveryConfig(now);
+      const previousObservation = getMainPolicyQuota()?.credits?.observedAt;
+      let reads = 0;
+      const calls = fetchWith(async () => ++reads === 1
+        ? new Response("{}", { status: 429, headers: { "Retry-After": "900" } }) : creditUsage());
+      await runMainAccountHardLockRecovery(cfg);
+      now += 899_999;
+      await runMainAccountHardLockRecovery(cfg);
+      expect(calls).toEqual([whamUrl]);
+      expect(getMainPolicyQuota()?.credits?.observedAt).toBe(previousObservation);
+      expect(hasSpendableCodexCredits(getMainPolicyQuota(), now)).toBe(false);
+      now++;
+      await runMainAccountHardLockRecovery(cfg);
+      expect(calls).toEqual([whamUrl, whamUrl]);
+      expect(getMainPolicyQuota()?.credits?.observedAt).toBe(now);
+      expect(hasSpendableCodexCredits(getMainPolicyQuota(), now)).toBe(true);
+    } finally { clock.mockRestore(); }
+  });
 });
 
 describe("main hard-lock background recovery", () => {
