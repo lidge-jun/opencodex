@@ -219,15 +219,14 @@ test("without a caller credential a join keeps the Pool selection", async () => 
 
 test("a caller whose account header disagrees with its token is never forwarded", async () => {
   const config = poolConfig();
-  const resolved = await joinCall(
+  const resolved = expectResolved(await joinCall(
     config,
     { style: "frameless-path", callId: "rtc_mismatch" },
     callerHeaders({ "chatgpt-account-id": "acct-someone-else" }),
-  ).catch((error: unknown) => error);
-  // A refusal (response or auth error) is fine; forwarding the mismatched bearer is not.
-  if (!(resolved instanceof Response) && !(resolved instanceof Error)) {
-    expect((resolved as Resolved).headers.authorization).not.toBe(`Bearer ${CALLER_TOKEN}`);
-  }
+  ));
+  // The mismatched bearer is not an explicit caller credential, so Pool selection answers.
+  expect(resolved.headers.authorization).not.toBe(`Bearer ${CALLER_TOKEN}`);
+  expect(POOL_ACCOUNTS).toContain(resolved.headers["chatgpt-account-id"]);
 });
 
 test("the proxy admission secret is refused before any upstream is chosen", async () => {
