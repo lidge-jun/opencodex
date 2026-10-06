@@ -11,7 +11,7 @@
  * HTTP/1.1 server, unchanged. Upstream is one HTTP/1.1 request per client request on both paths.
  * Only the bounded bootstrap response is held; other bodies and upgraded sockets relay as streams.
  */
-import { createSecureServer } from "node:http2";
+import { constants as h2Constants, createSecureServer } from "node:http2";
 import type { Http2ServerRequest, Http2ServerResponse, ServerHttp2Session } from "node:http2";
 import { createServer, request as httpsRequest } from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -34,6 +34,10 @@ export interface PickerListenerOptions {
   maxEncodedBytes?: number;
   /** Test seam: concurrent upstream requests; production uses PICKER_MAX_ACTIVE_UPSTREAMS. */
   maxActiveUpstreams?: number;
+  /** Test seams: production uses the fixed upload concurrency and deadline limits below. */
+  maxActiveUploads?: number;
+  uploadIdleTimeoutMs?: number;
+  uploadTimeoutMs?: number;
   log?: (line: string) => void;
 }
 export interface PickerListenerHandle { port: number; close(): Promise<void> }
@@ -47,6 +51,10 @@ export const PICKER_MAX_HEADER_BYTES = 64 * 1024;
  * Desktop uses (a handful of SSE subscriptions plus bursts of ordinary calls).
  */
 export const PICKER_MAX_ACTIVE_UPSTREAMS = 256;
+/** Reserve half the aggregate capacity for requests whose upload is already complete. */
+export const PICKER_MAX_ACTIVE_UPLOADS = 128;
+export const PICKER_UPLOAD_IDLE_TIMEOUT_MS = 30_000;
+export const PICKER_UPLOAD_TIMEOUT_MS = 300_000;
 /** Advertised per HTTP/2 connection; Chromium queues further requests rather than failing them. */
 export const PICKER_MAX_CONCURRENT_STREAMS = 100;
 /** A connection that has not sent a complete ClientHello by then is dropped. */
@@ -152,7 +160,11 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
   const upstream = options.upstream ?? { host: "claude.ai", port: 443, servername: "claude.ai" };
   const cap = options.maxEncodedBytes ?? BOOTSTRAP_MAX_ENCODED_BYTES;
   const maxActiveUpstreams = options.maxActiveUpstreams ?? PICKER_MAX_ACTIVE_UPSTREAMS;
+  const maxActiveUploads = options.maxActiveUploads ?? PICKER_MAX_ACTIVE_UPLOADS;
+  const uploadIdleMs = options.uploadIdleTimeoutMs ?? PICKER_UPLOAD_IDLE_TIMEOUT_MS;
+  const uploadMs = options.uploadTimeoutMs ?? PICKER_UPLOAD_TIMEOUT_MS;
   let activeUpstreams = 0;
+  let activeUploads = 0;
   const upgrades = new Set<Duplex>();
   const spliced = new Set<Socket>();
   const h2Sockets = new Set<Duplex>();
@@ -184,14 +196,33 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     // reason phrase differs, and sendHead branches on it.
     const res = relayRes as ServerResponse;
     const h2 = req.httpVersionMajor === 2;
+    // Bun's h2 compat response emits finish only after both stream halves close.
+    const responseWritable = h2 ? (req as Http2ServerRequest).stream : res;
+    // Framing, not method, determines whether a peer can keep sending a body. A bodyless h2
+    // request carries END_STREAM on its headers; HTTP/1.1 needs length or chunked framing.
+    const uploading = h2 ? !(req as Http2ServerRequest).stream.endAfterHeaders
+      : req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
+    const closeInput = () => {
+      if (h2) {
+        const stream = (req as Http2ServerRequest).stream;
+        if (!stream.closed && !stream.destroyed) stream.close(h2Constants.NGHTTP2_CANCEL);
+      } else if (!req.destroyed) req.destroy();
+    };
     // Refusals answer with an empty response and a fixed log line that carries no request data.
     const refuse = (status: 400 | 503) => {
-      res.writeHead(status, { "Content-Length": "0" });
+      // Do not leave a refused, still-uploading stream behind after delivering its empty reply.
+      if (uploading) {
+        req.once("error", () => res.destroy());
+        responseWritable.once("finish", closeInput);
+      }
+      res.writeHead(status, { "Content-Length": "0", ...(!h2 && uploading ? { Connection: "close" } : {}) });
       res.end();
       options.log?.(`picker request refused ${status}`);
     };
     if (h2 && !isRelayableH2Target(req.method, req.url)) { refuse(400); return; }
-    if (activeUpstreams >= maxActiveUpstreams) { refuse(503); return; }
+    if (activeUpstreams >= maxActiveUpstreams || (uploading && activeUploads >= maxActiveUploads)) {
+      refuse(503); return;
+    }
     const method = req.method ?? "GET";
     let pathname: string;
     // A target like "//[" reads as an authority and throws; refuse it like any unrelayable target.
@@ -215,6 +246,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     const headers = upstreamRequestHeaders(req, omit);
     if (bootstrap) headers.push("Accept-Encoding", narrowBootstrapAcceptEncoding());
     let upReq: ReturnType<typeof httpsRequest>;
+    let upstreamResponded = false;
     try {
       // The HTTP/1.1 client validates the method, path and header values synchronously.
       upReq = httpsRequest({
@@ -222,6 +254,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
         ca: upstream.ca, rejectUnauthorized: true, agent: false,
         method, path: req.url, headers, maxHeaderSize: PICKER_MAX_HEADER_BYTES,
         }, upRes => {
+        upstreamResponded = true;
         const status = upRes.statusCode ?? 502;
         const originalHeaders = filteredHeaders(upRes.rawHeaders);
         const sendHead = (raw: string[]) => {
@@ -293,6 +326,46 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     // Bun's compat response skips its close event for a HEAD reset before end(); the stream's own
     // close always fires. Destroying an upstream request that already completed is a no-op.
     if (h2) (req as Http2ServerRequest).stream.once("close", onClientClose);
+    if (uploading) {
+      activeUploads++;
+      let uploadFinished = false;
+      const finishUpload = () => {
+        if (uploadFinished) return;
+        uploadFinished = true;
+        activeUploads--;
+        clearTimeout(idleTimer);
+        clearTimeout(totalTimer);
+        req.off("data", progress);
+      };
+      const expireUpload = (kind: "idle" | "deadline") => {
+        if (uploadFinished) return;
+        // Cancellation is stream-scoped on h2. Never impose a response/SSE lifetime limit.
+        clientGone = true;
+        req.unpipe(upReq);
+        upReq.destroy();
+        closeInput();
+        finishUpload();
+        options.log?.(`picker upload expired ${kind}`);
+      };
+      const idleTimer = setTimeout(() => expireUpload("idle"), uploadIdleMs);
+      const totalTimer = setTimeout(() => expireUpload("deadline"), uploadMs);
+      idleTimer.unref(); totalTimer.unref();
+      const progress = (chunk: Buffer) => { if (chunk.length > 0) idleTimer.refresh(); };
+      req.on("data", progress);
+      req.once("end", finishUpload);
+      req.once("close", finishUpload);
+      // Upstream close can precede draining a successful reply to a slow downstream. Keep
+      // upload deadlines armed until that writable finishes, then cancel only its unread input.
+      const stopUnfinishedUpload = () => {
+        if (!uploadFinished) { closeInput(); finishUpload(); }
+      };
+      upReq.once("close", () => {
+        if (!upstreamResponded && !res.writableEnded) stopUnfinishedUpload();
+      });
+      responseWritable.once("finish", stopUnfinishedUpload);
+      res.once("close", stopUnfinishedUpload);
+      if (h2) (req as Http2ServerRequest).stream.once("close", finishUpload);
+    }
     req.pipe(upReq);
   };
   server.on("request", relay);

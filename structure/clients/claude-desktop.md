@@ -195,10 +195,9 @@ Production always uses the configured adjacent ports. Lifecycle tests inject onl
 factory and bind the real handlers on kernel-assigned ports; this preserves request handling while
 avoiding the false reservation created by probing and closing a port pair before the ephemeral TLS
 listener starts. The injected factory does not change production port selection.
-The User-Agent is a routing hint, not a trust boundary: a client that fakes it reaches only what
-any local process already reaches (the `api.anthropic.com` intercept is on the Claude Code proxy
-too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
-because each terminator presents a certificate only its intended client trusts. `claude.ai:443` is
+The User-Agent is a routing hint, not client authentication. Each terminator presents the
+certificate intended for that client; the `claude.ai` relay verifies upstream and adds no credential.
+Listener-wide concurrency and upload-lifetime bounds protect the shared relay capacity separately. `claude.ai:443` is
 intercepted only while the runtime's cached
 decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
@@ -214,6 +213,21 @@ HTTP/1.1 request per client request. Incoming requests and ordinary upstream res
 a 64 KiB header allowance for browser session cookies; Bun enforces the HTTP/2 inbound bound
 natively, counting name + value + 32 bytes per field and rejecting an oversized stream with
 `RST_STREAM ENHANCE_YOUR_CALM` before the request handler runs.
+The relay retains a 256-request aggregate ceiling and allows at most 128 unfinished uploads
+across both HTTP versions and all sessions, leaving headroom for bodyless requests under the aggregate ceiling.
+Upload framing, not the method, selects that sub-budget. Each unfinished upload has a 30-second
+idle deadline and a five-minute absolute deadline; progress refreshes only the former. Expiry
+cancels its upstream and only its h2 stream (or its HTTP/1.1 connection). Completion clears
+upload timers and frees upload admission without timing out a long response/SSE stream.
+Early replies cancel unfinished input only after the downstream writable finishes; upstream
+request closure alone does not prove a buffered reply was delivered. Upload deadlines remain
+armed during that wait. Cancellation, failure and shutdown release upload capacity once.
+Rejected uploads close after their empty reply's writable finishes, using the underlying h2
+stream's finish event rather than its compatibility response's stream-close-dependent finish.
+These bounds do not authenticate clients or guarantee availability under sustained churn or
+exhaustion by completed requests. `tests/claude-integration/claude-picker-upload.test.ts` covers
+cross-session admission, both protocol deadlines, progress, headers-only refusals, byte-exact
+early replies under backpressure, SSE admission reuse, failure and shutdown cleanup.
 The picker CA (`picker-ca.ts`) carries critical
 name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its exportable
 signing identity is protected by the OS credential store and scoped to the canonical config directory;

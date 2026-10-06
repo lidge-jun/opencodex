@@ -2,6 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "claude-picker-upload.test.ts": "claude-integration",
     "messages-native-scope.test.ts": "claude-integration",
     "cli-log-view-filter.test.ts": "cli", "cli-usage-model-search.test.ts": "cli", "cli-companion-usage.test.ts": "cli", "cli-account-key-quota.test.ts": "cli",
     "cli-observe-snapshot.test.ts": "cli", "cli-access-data-plane.test.ts": "cli", "cli-access-key-guard.test.ts": "cli", "cli-access-rename.test.ts": "cli",

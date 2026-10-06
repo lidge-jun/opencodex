@@ -316,6 +316,11 @@ applies to it as well. Desktop and CLI catalog rewrites share bounded row and me
 if adding routed models would exceed a limit, OpenCodex returns the original Anthropic catalog
 unchanged rather than publishing a partial list.
 
+The picker relay limits unfinished uploads separately from its overall request capacity. An upload
+closes after 30 seconds without body progress or five minutes total; finish or retry the upload
+rather than keeping it open. These deadlines stop when the request body completes and do not
+limit a long-lived response or SSE subscription. Excess uploads receive an empty 503 response.
+
 ### Use opencodex models from the Desktop Code tab (first-party bindings)
 
 In first-party mode the Code tab's model picker belongs to claude.ai: its rows (Opus 5.5,
