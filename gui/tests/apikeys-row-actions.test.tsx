@@ -221,3 +221,26 @@ test("a reveal that answers after the key was deleted stays discarded", async ()
   expect(keyButton(container).textContent).toBe("ocx_data_aaaaaaaa...");
   expect(container.querySelector(".awi-keylist-copy")).toBeNull();
 });
+
+test("a copy the clipboard refuses says so beside the key", async () => {
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => Promise.reject(new Error("denied")) } });
+  const container = await mount({ onRevealKey: async () => "ocx_data_" + "a".repeat(40) });
+  await act(async () => { keyButton(container).click(); });
+  await act(async () => { button(container, "Copy").click(); });
+  expect(container.querySelector(".awi-keylist-keycell [role=\"alert\"]")?.textContent)
+    .toBe("Could not copy. Select the key and copy it manually.");
+  expect(button(container, "Copy")).toBeDefined();
+});
+
+test("a successful copy shows Copied and then returns to Copy", async () => {
+  const written: string[] = [];
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (v: string) => { written.push(v); } } });
+  const full = "ocx_data_" + "a".repeat(40);
+  const container = await mount({ onRevealKey: async () => full });
+  await act(async () => { keyButton(container).click(); });
+  await act(async () => { button(container, "Copy").click(); });
+  expect(written).toEqual([full]);
+  expect(button(container, "Copied")).toBeDefined();
+  await act(async () => { await wait(2050); });
+  expect(button(container, "Copy")).toBeDefined();
+});

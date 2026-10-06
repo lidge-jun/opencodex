@@ -52,6 +52,8 @@ export default function ApiKeysListPanel({
   const [revealPendingId, setRevealPendingId] = useState<string | null>(null);
   const [revealFailedId, setRevealFailedId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copyFailedId, setCopyFailedId] = useState<string | null>(null);
+  const copiedTimer = useRef<number | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [confirmArmed, setConfirmArmed] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -96,11 +98,36 @@ export default function ApiKeysListPanel({
     }
   };
 
-  const copyKey = (id: string, value: string) => {
-    const write = navigator.clipboard?.writeText?.(value);
-    if (!write) return;
-    void write.then(() => setCopiedId(id), () => setCopiedId(null));
+  const copyFailed = (id: string) => {
+    setCopiedId(current => current === id ? null : current);
+    setCopyFailedId(id);
   };
+
+  const copyKey = (id: string, value: string) => {
+    setCopyFailedId(null);
+    let write: Promise<void> | undefined;
+    try {
+      write = navigator.clipboard?.writeText?.(value);
+    } catch {
+      write = undefined;
+    }
+    if (!write) {
+      copyFailed(id);
+      return;
+    }
+    write.then(() => {
+      setCopiedId(id);
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => {
+        setCopiedId(current => current === id ? null : current);
+        copiedTimer.current = null;
+      }, 2000);
+    }, () => copyFailed(id));
+  };
+
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+  }, []);
 
   const confirmDelete = async (id: string) => {
     if (!onDelete || !confirmArmed || deletingId) return;
@@ -186,6 +213,9 @@ export default function ApiKeysListPanel({
                             >
                               {copiedId === k.id ? t("api.copied") : t("api.copy")}
                             </button>
+                          )}
+                          {copyFailedId === k.id && (
+                            <span className="awi-delete-error awi-keylist-inline-error" role="alert">{t("api.key.copyFailedShort")}</span>
                           )}
                           {revealFailedId === k.id && (
                             <span className="awi-delete-error awi-keylist-inline-error" role="alert">{t("api.key.revealFailed")}</span>
