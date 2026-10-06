@@ -12,6 +12,8 @@
  */
 import { createRequire } from "node:module";
 import { realpathSync } from "node:fs";
+import { existsSync, rmdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { isRealBunBinary } from "./bun-binary-validator.mjs";
 import { isStandaloneBinary } from "./standalone";
@@ -185,4 +187,84 @@ export function durableBunRuntime(): DurableBunRuntime {
  */
 export function durableBunPath(): string {
   return durableBunRuntime().path;
+}
+
+/**
+ * Demonstrate that `bunPath` can create and remove a directory inside
+ * `targetDir`, by spawning it. Some Windows app-sandbox/WDAC policies deny
+ * profile writes to executables living under sandbox-tagged trees: the same
+ * binary bytes pass from one path and get EPERM from another, and the failure
+ * only shows up at runtime (observed: the service wrapper crash-looping on
+ * `mkdir` of its ownership lease). Durable artifacts bake a bun path, so the
+ * selection probes before baking. Windows-only: elsewhere the answer is
+ * uniformly "yes" and no probe child is worth spawning.
+ */
+export function probeBunWriteAccess(bunPath: string, targetDir: string): boolean {
+  if (process.platform !== "win32") return true;
+  const key = `${bunPath}\0${targetDir}`;
+  const memoized = writeAccessProbeResults.get(key);
+  if (memoized !== undefined) return memoized;
+  let granted = false;
+  if (isRealBunBinary(bunPath)) {
+    const probe = join(targetDir, `.ocx-bun-write-probe-${process.pid}-${Date.now().toString(36)}`);
+    const script = `import{mkdirSync,rmdirSync}from"node:fs";try{mkdirSync(${JSON.stringify(probe)});rmdirSync(${JSON.stringify(probe)})}catch{process.exit(1)}`;
+    try {
+      const result = Bun.spawnSync([bunPath, "-e", script], {
+        stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 20_000, windowsHide: true,
+      });
+      granted = result.exitCode === 0 && !existsSync(probe);
+    } catch {
+      granted = false;
+    }
+    try { rmdirSync(probe); } catch { /* probe child already cleaned up */ }
+  }
+  writeAccessProbeResults.set(key, granted);
+  return granted;
+}
+const writeAccessProbeResults = new Map<string, boolean>();
+
+/**
+ * Durable-artifact runtime selection with the Windows sandbox write-block in
+ * mind: when the bundled binary cannot write into the directory the managed
+ * service will need (the opencodex config dir), bake a demonstrably-writable
+ * runtime instead of one that crash-loops at startup. Candidates are the
+ * runtime running this selection, a `bun.exe` on PATH (name lookup only — the
+ * executable still comes from a probed absolute path), and the two common
+ * installer locations. Provenance for a fallback is reported as "process":
+ * it names a real running binary, and no existing source fits better.
+ */
+export function sandboxAwareBunRuntime(runtime: DurableBunRuntime, targetDir: string): DurableBunRuntime {
+  if (process.platform !== "win32") return runtime;
+  // A non-binary path (placeholder, fixture, or another platform's layout in tests)
+  // cannot be judged blocked — only a real binary that fails the probe is evidence.
+  if (runtime.source !== "bundled" || !isRealBunBinary(runtime.path) || probeBunWriteAccess(runtime.path, targetDir)) return runtime;
+  for (const candidate of windowsWritableBunCandidates()) {
+    if (samePath(candidate, runtime.path)) continue;
+    if (probeBunWriteAccess(candidate, targetDir)) {
+      return { path: candidate, source: "process", overrideEnv: BUN_OVERRIDE_ENV };
+    }
+  }
+  return runtime;
+}
+
+function windowsWritableBunCandidates(): string[] {
+  const candidates: string[] = [];
+  if (isRealBunBinary(process.execPath)) candidates.push(process.execPath);
+  try {
+    const found = Bun.spawnSync(["C:\\Windows\\System32\\where.exe", "bun.exe"], {
+      stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 10_000, windowsHide: true,
+    });
+    if (found.exitCode === 0 && found.stdout) {
+      for (const line of found.stdout.toString().split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (trimmed) candidates.push(trimmed);
+      }
+    }
+  } catch {
+    // where.exe is System32-fixed and should exist; common locations below still apply.
+  }
+  const appdata = process.env.APPDATA?.trim();
+  if (appdata) candidates.push(join(appdata, "npm", "node_modules", "bun", "bin", "bun.exe"));
+  candidates.push(join(homedir(), ".bun", "bin", "bun.exe"));
+  return candidates;
 }

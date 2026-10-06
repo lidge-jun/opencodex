@@ -1,8 +1,9 @@
 import { describe, it, expect, afterAll, afterEach } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, reportedBunRuntimeSource, withProcessRuntimeProvenance } from "../../src/lib/bun-runtime";
+import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, probeBunWriteAccess, reportedBunRuntimeSource, sandboxAwareBunRuntime, withProcessRuntimeProvenance } from "../../src/lib/bun-runtime";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -256,5 +257,45 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
       expect(spawnCount).toBeGreaterThan(0);
       expect(directStampCount + detachedStartStampCount).toBe(spawnCount);
     }
+  });
+});
+
+describe("sandboxAwareBunRuntime (Windows sandbox write-block)", () => {
+  it("returns the runtime unchanged off Windows", () => {
+    if (process.platform === "win32") return;
+    const runtime = { path: "/nonexistent/bun", source: "bundled" as const, overrideEnv: "OPENCODEX_BUN_PATH" };
+    expect(sandboxAwareBunRuntime(runtime, tmp)).toEqual(runtime);
+    expect(probeBunWriteAccess("/nonexistent/bun", tmp)).toBe(true);
+  });
+
+  it("returns the runtime unchanged when the provenance is not bundled", () => {
+    if (process.platform !== "win32") return;
+    const runtime = { path: process.execPath, source: "process" as const, overrideEnv: "OPENCODEX_BUN_PATH" };
+    expect(sandboxAwareBunRuntime(runtime, tmp)).toEqual(runtime);
+  });
+
+  describe.skipIf(process.platform !== "win32")("on Windows", () => {
+    it("probe reports false when the target cannot be written", () => {
+      const blocker = join(tmp, "probe-blocker-file");
+      writeFileSync(blocker, "x", "utf8");
+      expect(probeBunWriteAccess(process.execPath, join(blocker, "probe"))).toBe(false);
+    });
+
+    it("keeps the bundled runtime when it can write the target dir", () => {
+      const bundled = bundledBunPath();
+      if (!bundled || !probeBunWriteAccess(bundled, tmp)) return;
+      const runtime = { path: bundled, source: "bundled" as const, overrideEnv: "OPENCODEX_BUN_PATH" };
+      expect(sandboxAwareBunRuntime(runtime, tmp)).toEqual(runtime);
+    });
+
+    it("falls back to a writable runtime when the sandbox denies the bundled binary", () => {
+      const bundled = bundledBunPath();
+      const configDir = process.env.OPENCODEX_HOME?.trim() || join(homedir(), ".opencodex");
+      if (!bundled || probeBunWriteAccess(bundled, configDir)) return;
+      const runtime = { path: bundled, source: "bundled" as const, overrideEnv: "OPENCODEX_BUN_PATH" };
+      const checked = sandboxAwareBunRuntime(runtime, configDir);
+      expect(checked.path).not.toBe(bundled);
+      expect(probeBunWriteAccess(checked.path, configDir)).toBe(true);
+    });
   });
 });

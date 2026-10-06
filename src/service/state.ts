@@ -5,7 +5,7 @@ import { expandUserPath, getConfigDir } from "../config";
 import { atomicWriteFileStreamed } from "../config/atomic-write";
 import { resolveCodexHomeDir, type CodexHomeDeps } from "../codex/home";
 import { resolveCodexSqliteHome } from "../codex/paths";
-import { durableBunRuntime, type BunRuntimeSource, type DurableBunRuntime } from "../lib/bun-runtime";
+import { durableBunRuntime, sandboxAwareBunRuntime, type BunRuntimeSource, type DurableBunRuntime } from "../lib/bun-runtime";
 import { WINSW_SHA256, WINSW_VERSION } from "../lib/winsw";
 import { isTransientServiceLauncherPath } from "../lib/transient-service-path";
 export { filterTransientServicePath, isTransientServiceLauncherPath } from "../lib/transient-service-path";
@@ -54,11 +54,14 @@ export function cliEntry(runtime: DurableBunRuntime = durableBunRuntime()): { bu
   // standalone Bun is later removed. The CLI entry lives at src/cli/index.ts.
   //
   // Path and provenance come from ONE resolution so the marker can never describe a
-  // different binary than the one actually baked.
+  // different binary than the one actually baked. On Windows the bundled binary is
+  // write-probed against the config dir first: sandbox policies that deny it profile
+  // writes would otherwise bake a binary that crash-loops at service start.
+  const checked = sandboxAwareBunRuntime(runtime, getConfigDir());
   return {
-    bun: runtime.path,
-    bunRuntimeSource: runtime.source,
-    cli: runtime.source === "standalone" || isStandaloneBinary() ? null : join(serviceSourceDir, "cli", "index.ts"),
+    bun: checked.path,
+    bunRuntimeSource: checked.source,
+    cli: checked.source === "standalone" || isStandaloneBinary() ? null : join(serviceSourceDir, "cli", "index.ts"),
   };
 }
 

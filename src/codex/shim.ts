@@ -9,10 +9,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, delimiter, dirname, extname, join, posix, win32 } from "node:path";
-import { durableBunRuntime } from "../lib/bun-runtime";
+import { durableBunRuntime, sandboxAwareBunRuntime } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { isWslRuntime, wslAutomountRoot } from "./home";
+import { getConfigDir } from "../config";
 import { truncateRetainedUtf8 } from "../lib/admission";
 import {
   buildUnixCodexShim,
@@ -110,7 +111,9 @@ function cliEntry(): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: str
   // (Unix / Windows cmd / Windows PowerShell) receive it via this entry.
   // This module lives in src/codex/, the CLI entry in src/cli/index.ts.
   // Path and provenance resolve together so the marker always describes this binary.
-  const runtime = durableBunRuntime();
+  // Same sandbox write-probe as the service entry: a shim baking a binary the
+  // sandbox denies profile writes would launch a proxy that crash-loops.
+  const runtime = sandboxAwareBunRuntime(durableBunRuntime(), getConfigDir());
   return { bun: runtime.path, bunRuntimeSource: runtime.source, cli: join(import.meta.dir, "..", "cli", "index.ts") };
 }
 
