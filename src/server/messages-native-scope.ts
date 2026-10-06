@@ -36,7 +36,10 @@ export function nativeMessagesToolScopeDenial(
         const definition = tool.definition;
         if (typeof definition.name !== "string") { anonymous.push(definition); continue; }
         // A temporary replacement keeps the declaration it shadows in scope as well.
-        definitions.set(definition.name, permanent ? [definition] : [...definitions.get(definition.name) ?? [], definition]);
+        // These arrays belong to this check, not to the caller's declarations.
+        const declarations = permanent ? [] : definitions.get(definition.name) ?? [];
+        declarations.push(definition);
+        definitions.set(definition.name, declarations);
         withdrawn.delete(definition.name);
       } else if (tool.type === "tool_reference" && typeof tool.name === "string") {
         if (block.type === "tool_removal" && permanent) withdrawn.add(tool.name);
