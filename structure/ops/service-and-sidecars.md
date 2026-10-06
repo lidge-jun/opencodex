@@ -454,6 +454,16 @@ endpoint can never restart. Focused coverage is `tests/update/update-stop-classi
 
 ## Restart handoff
 
+During drain, `src/server/index.ts` rejects new data-plane work with HTTP 503 and
+an explicit JSON envelope: `error.type` is `server_error`, `error.code` is
+`server_restarting`, and `error.message` is "OpenCodex is restarting; retry this request."
+The response keeps `Content-Type: application/json`, `Retry-After: 5`, and the
+receiving listener's CORS policy, including on the unauthenticated loopback listener.
+Codex maps a 503 with `server_is_overloaded` to non-retryable `ServerOverloaded`;
+`server_restarting` falls through to retryable `UnexpectedStatus`. This drain-only
+response bypasses the shared provider-overload mapping in `src/lib/errors.ts`.
+`tests/codex-integration/issue-452-empty-503.test.ts` pins its body and both listeners' CORS.
+
 A dashboard drain-and-restart (`src/server/management/system-restart.ts`, which is also the restart
 after a join into a Child) and the client runtime's standalone recycle (`src/client/runtime.ts`)
 replace their process through `src/server/restart-replacement.ts`. Every replacement `ocx start`

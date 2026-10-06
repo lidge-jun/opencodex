@@ -206,7 +206,7 @@ holder is refused with the same message the owner check prints (intentional stay
 `OCX_SERVICE=1`, using the [Windows wrapper protocol](ops/docs-and-release.md#windows-service-wrapper-and-incomplete-updates)), and a holder that does not identify as opencodex
 is reported as such rather than called foreign, because an identity probe cannot distinguish a
 foreign server from an unreachable one. An explicit `--port` still never hops — it waits for the
-pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS". A restart replacement that finds its own draining parent waits for it instead ([restart handoff](ops/service-and-sidecars.md#restart-handoff)).
+pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS". A restart replacement that finds its own draining parent waits for it instead ([restart handoff](ops/service-and-sidecars.md#restart-handoff)). During drain, `src/server/index.ts` answers new data-plane work with HTTP 503 JSON `server_restarting`, `Retry-After: 5`, and receiving-listener CORS; the same handoff section owns that response contract.
 
 Every `startServer` invocation acquires the `src/lib/spend-ledger-owner.ts` SQLite writer lease
 for its resolved OpenCodex state directory before loading configuration or binding a listener.
