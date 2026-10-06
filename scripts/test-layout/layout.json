@@ -761,7 +761,7 @@
     "cursor-adapter.test.ts": "providers/cursor",
     "cursor-arg-normalize.test.ts": "providers/cursor",
     "cursor-blob-integrity.test.ts": "providers/cursor",
-    "cursor-blob.test.ts": "providers/cursor",
+    "cursor-blob-claude-client-tools.test.ts": "providers/cursor", "cursor-blob.test.ts": "providers/cursor",
     "cursor-call-id.test.ts": "providers/cursor",
     "cursor-cancel-provenance.test.ts": "providers/cursor",
     "cursor-catalog.test.ts": "providers/cursor",
