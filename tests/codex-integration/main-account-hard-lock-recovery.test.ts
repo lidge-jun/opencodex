@@ -72,6 +72,7 @@ function usage(percent = 0): Response {
   } });
 }
 
+/** Seed an opted-in full window with independently timed credit evidence. */
 function creditRecoveryConfig(now: number, observedAt = now - CODEX_CREDITS_FRESHNESS_MS + 60_000,
   resetAt = now + 3_600_000): OcxConfig {
   clearAccountQuota(MAIN);
@@ -81,6 +82,7 @@ function creditRecoveryConfig(now: number, observedAt = now - CODEX_CREDITS_FRES
   return { ...config(), codexMainAccountHardLock: false, creditCodexAccountIds: [MAIN] };
 }
 
+/** Return a WHAM observation with a full included window and explicit credit controls. */
 function creditUsage(restriction?: string): Response {
   return Response.json({ plan_type: "plus", rate_limit: {
     primary_window: { used_percent: 100, limit_window_seconds: 604_800,

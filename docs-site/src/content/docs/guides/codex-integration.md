@@ -1049,6 +1049,8 @@ When an account reaches 100% on a usage window and still holds credits, upstream
 
 For the main account, enabling **Use credits after limit** also lets the existing recovery cycle refresh its credit balance before the cached observation expires while a usage window is full. This is an authenticated usage lookup, not a model validation request. An empty balance, a spending restriction, a failed refresh or the separate main-account hard lock can still prevent requests from serving.
 
+The main-account refusal explains whether spending is disabled, the reported balance is unavailable, spending is restricted, or the balance cannot be verified. If previously spendable balance information has expired, the request is still refused but can receive a shorter retry hint. That hint only suggests when to check again; it does not guarantee recovery or shorten a known upstream delay. **Use credits** grants permission, not a balance: a fresh zero balance still refuses, and incomplete usage information does not renew old balance evidence.
+
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
 
 ### Cancelling main-account device reauthentication

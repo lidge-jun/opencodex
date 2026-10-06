@@ -44,6 +44,11 @@ receives no traffic and therefore no new observation, so the reading has to end 
 window without a reset is not trusted.
 Fresh spendable-credit evidence follows the [WHAM credit contract](providers/openai-tiers.md#spendable-codex-credits); included-plan refusal is not a credit-spending veto.
 
+Main refusal messages identify disabled spending, reported balance unavailability, spending
+restrictions or unverified/expired balance information. A shorter check-again hint applies only
+to expired evidence that was otherwise spendable; it never grants funds or overrides the
+independent hard lock, actual upstream delay or recovery worker's backoff.
+
 The hold is checked wherever plan exclusion is checked in `src/codex/routing/selection.ts`: the
 eligible list (its pool filter and its main branch), `isCodexAccountSelectable`, and
 `codexAccountBlockReason`, which reports `credits_off`. `isCodexAccountRotationExcluded` carries

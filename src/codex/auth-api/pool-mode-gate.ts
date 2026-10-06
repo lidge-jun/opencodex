@@ -82,6 +82,7 @@ let mainHardLockRecoveryAttempt: { identity: number; credential: number; after: 
 /** Metadata-only recovery on the existing sweep; failures retain the observed policy block. */
 export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise<void> {
   if (mainHardLockRecoveryInFlight) return mainHardLockRecoveryInFlight;
+  /** Schedule a real credit observation while leaving actual-time admission unchanged. */
   const creditRecoveryNeeded = (): boolean => {
     const now = Date.now();
     const quota = getMainPolicyQuota();

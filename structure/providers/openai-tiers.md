@@ -324,6 +324,15 @@ profile ownership, credential generations, single-flight, query pacing and failu
 in force. The hard lock remains independent, and refreshing usage never redeems reset credits or
 validates a pending account through inference.
 
+Main-account credit refusals distinguish disabled consent, reported balance unavailability,
+spending restrictions and unverified evidence. Only an opted-in observation that was spendable
+at its own valid timestamp and has since expired receives a shorter client check-again hint.
+`src/codex/auth-context.ts` keeps the same 429 error and real usage `resetAt`, while its existing
+`cooldownUntil` respects the sweep-plus-WHAM allowance and later same-generation query or
+account-wide cooldown deadlines. The hint does not promise recovery or a WHAM dispatch;
+worker-private backoff still governs actual reads. Missing-credit responses do not renew the
+credit clock, and a fresh zero balance never becomes spendable through consent or retry alone.
+
 Credit parsing, expiry, partial updates and reset-ticket separation are covered in
 `tests/codex-integration/codex-quota-parser-parity.test.ts`; selection and bulk-pause behavior
 are covered in `tests/codex-integration/codex-credits-after-limit.test.ts` and
