@@ -20,6 +20,11 @@ parts as one JSON string before constructing its caption. The exact count includ
 one pair of quotes, escaping, UTF-8 and surrogate pairs spanning parts, without a
 joined or encoded measurement copy. The cumulative 256 KiB request budget admits
 its exact boundary; `tests/providers/ollama/ollama-native-v4.test.ts` covers this rule.
+Adapter-build budget refusals use the existing HTTP 413 formatter in initial and recovery
+builds. Its wire error type/code is `request_too_large`, with the standard translation-buffer
+message; `translation_buffer_limit` is the internal verdict. Ollama endpoint and adapter
+abort-guard regressions cover refusal before the initial send or any recovery send.
+Existing client-cancellation and deliberately preserved recovery-refusal precedence remain.
 
 The Google tool-schema loss report retains fixed categories, bounded counts, and endpoint class
 only. It copies no request content and adds no bytes to the upstream wire; see the

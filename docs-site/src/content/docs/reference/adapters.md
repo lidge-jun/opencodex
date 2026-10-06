@@ -134,7 +134,7 @@ be configured on a separately named custom or self-hosted Ollama provider with
   text, after any pending call/result pair. Unknown call IDs and mismatched tool identities remain
   invalid; this does not create or execute another tool call.
   Generated attribution for late outputs shares a 256 KiB per-request JSON-byte budget. Exceeding
-  that budget refuses the request with HTTP 400 instead of truncating tool identities or output.
+  that budget refuses the request with HTTP 413 `request_too_large` instead of truncating tool identities or output.
   `tool_choice: "none"` and `auto` behave normally; **`required` or an exact named choice fails
   closed**, because Ollama's `/api/chat` has no `tool_choice` field to enforce it with.
 - **Structured output is refused on canonical Ollama Cloud.** Ollama currently documents structured

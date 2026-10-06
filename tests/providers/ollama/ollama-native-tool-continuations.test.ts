@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { TranslatorBudgetExceededError } from "../../../src/lib/translator-budget";
 import { createOllamaNativeAdapter } from "../../../src/adapters/ollama-native";
 import { parseRequest } from "../../../src/responses/parser";
-import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
+import { handleResponses } from "../../../src/server/responses/core";
+import type { RequestLogContext } from "../../../src/server/request-log";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 
 const provider = { adapter: "ollama-native", baseUrl: "https://ollama.com/v1", authMode: "key",
   apiKey: "inert-fixture-key", liveModels: false, models: ["deepseek-v4.1-flash"] } as OcxProviderConfig;
@@ -129,5 +132,64 @@ describe("Ollama late-result attribution budget", () => {
       '[ocx] additional output for previously issued tool "exec" (bounded-call):\nlate',
     );
     expect(messages.filter((message: { role: string }) => message.role === "user")).toHaveLength(1_024);
+  });
+
+  test("an overflowing replay surfaces the established HTTP 413, not a 400", async () => {
+    // The budget throw leaves the builder inside handleResponses' adapter-dispatch. The
+    // established refusal for a translator-budget error is 413 translation_buffer_limit;
+    // a 400 invalid_request_error would hide the size verdict from the client.
+    const config = {
+      port: 0,
+      defaultProvider: "local-llm",
+      providers: {
+        // A name outside the provider registry: the builtin "ollama" entry resolves to
+        // openai-chat, which is not the adapter under test.
+        "local-llm": {
+          adapter: "ollama-native",
+          baseUrl: "http://127.0.0.1:11434",
+          authMode: "local",
+          allowPrivateNetwork: true,
+          models: ["deepseek-v4.1-flash"],
+        },
+      },
+    } as unknown as OcxConfig;
+    const upstreamCalls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      upstreamCalls.push(String(input));
+      return new Response("unexpected upstream contact", { status: 500 });
+    }) as typeof fetch;
+    // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+    const releaseSpendHome = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(
+        new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "local-llm/deepseek-v4.1-flash",
+            stream: false,
+            input: history("a".repeat(32_768), 16),
+          }),
+        }),
+        config,
+        { model: "", provider: "" } as RequestLogContext,
+        {},
+      );
+      expect(response.status).toBe(413);
+      const json = await response.json() as { error?: { message?: string; type?: string; code?: string } };
+      // The Responses error formatter classifies every local budget 413 alike; the
+      // identifying contract on this wire is status + request_too_large + this message.
+      expect(json.error).toMatchObject({
+        message: "request translation buffer exceeded the safe limit",
+        type: "request_too_large",
+        code: "request_too_large",
+      });
+      // A local refusal never reaches Ollama.
+      expect(upstreamCalls).toEqual([]);
+    } finally {
+      releaseSpendHome();
+      globalThis.fetch = originalFetch;
+    }
   });
 });
