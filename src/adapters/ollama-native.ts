@@ -31,7 +31,7 @@ import {
 } from "../lib/translator-budget";
 import { redactSecretString, SENSITIVE_KEY_PATTERN } from "../lib/redact";
 import { parseDataUrl } from "./image";
-import { jsonUtf8Bytes } from "../lib/json-byte-size";
+import { jsonStringPartsUtf8Bytes, jsonUtf8Bytes } from "../lib/json-byte-size";
 import {
   ollamaNativeChatUrl,
   ollamaNativeEndpointKind,
@@ -397,10 +397,10 @@ function buildNativeMessages(
         // fabricating another executable call. Unknown/mismatched identities still fail above.
         // Generated attribution is not present in the inbound size estimate. Reserve its
         // JSON wire bytes before joining strings, across all late outputs and all calls.
-        // The parts-array estimate is conservative and counts escapes without serializing.
+        // Count the joined JSON string exactly, without constructing a measurement copy.
         const attribution = ['[ocx] additional output for previously issued tool "',
           call.wireName, '" (', call.id, '):\n', message.isError ? "ERROR: " : ""];
-        lateAttributionBytes += jsonUtf8Bytes(attribution, NATIVE_MAX_LATE_ATTRIBUTION_BYTES - lateAttributionBytes);
+        lateAttributionBytes += jsonStringPartsUtf8Bytes(attribution, NATIVE_MAX_LATE_ATTRIBUTION_BYTES - lateAttributionBytes);
         const translated = contentToNative(message.content, "late tool result");
         const late: OllamaNativeMessage = { role: "user",
           content: attribution.join("") + translated.content,

@@ -15,6 +15,12 @@ the translator budget, which is why so many documents link here rather than rest
 
 ## Request-copy accounting
 
+Native Ollama late-output attribution uses `src/lib/json-byte-size.ts` to count the
+parts as one JSON string before constructing its caption. The exact count includes
+one pair of quotes, escaping, UTF-8 and surrogate pairs spanning parts, without a
+joined or encoded measurement copy. The cumulative 256 KiB request budget admits
+its exact boundary; `tests/providers/ollama/ollama-native-v4.test.ts` covers this rule.
+
 The Google tool-schema loss report retains fixed categories, bounded counts, and endpoint class
 only. It copies no request content and adds no bytes to the upstream wire; see the
 [Google provider contract](../providers/google.md#google-tool-schema-loss-reporting).
