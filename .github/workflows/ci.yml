@@ -1048,39 +1048,6 @@ jobs:
           cd gui
           bun run build
 
-      # The first process to load a module graph on a fresh Windows runner pays a first-read
-      # cost for every file it touches, and later processes load the same graph quickly. On dev
-      # dispatches a proxy child that normally starts in 2-5 s took 10-45 s when it was the
-      # first in its shard to read that graph (settings, native-main owner, Claude picker
-      # restart, web-search switch and sibling ensure cases; runs 37360604391, 37447563941,
-      # 37455044893, 37457452698), and the failure moved to whichever timed assertion read the
-      # graph first. Reading every source, helper and dependency file once here, outside any
-      # timed test, makes this step the first reader. It loads no module and writes nothing.
-      - name: Warm the source file cache
-        shell: bash
-        run: |
-          set -euo pipefail
-          started=$SECONDS
-          # The single-quoted argument is JavaScript; bash must not expand it.
-          # shellcheck disable=SC2016
-          bun -e '
-            const roots = ["src", "tests", "scripts", "node_modules"];
-            const paths = [];
-            for (const root of roots) {
-              const glob = new Bun.Glob("**/*.{ts,tsx,mts,mjs,js,cjs,json}");
-              for await (const path of glob.scan({ cwd: root, onlyFiles: true, followSymlinks: false })) {
-                paths.push(root + "/" + path);
-              }
-            }
-            let bytes = 0;
-            for (let i = 0; i < paths.length; i += 64) {
-              const sizes = await Promise.all(paths.slice(i, i + 64).map(path => Bun.file(path).arrayBuffer().then(b => b.byteLength, () => 0)));
-              for (const size of sizes) bytes += size;
-            }
-            console.log("read " + paths.length + " files, " + (bytes / 1048576).toFixed(1) + " MiB");
-          ' || echo "::warning::source file cache warm-up exited non-zero"
-          echo "source file cache warmed in $(( SECONDS - started ))s"
-
       - name: Test in fresh-process batches
         # --timeout: the Linux batches and the macOS control both pass 60000; this leg was
         # the only one left on Bun's 5s default, and it is the slowest hardware on the board.
