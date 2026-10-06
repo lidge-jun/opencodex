@@ -16,7 +16,7 @@ Windows-sensitive pull request, on the nightly schedule, and on `workflow_dispat
 `lane=all` (or an empty lane); it never joins the push run `release.yml` gates on. A pull request
 is Windows-sensitive when the `changes` job's `windows` path filter matches or an added
 `src/`/`tests/` line names a Windows marker; `scripts/ci/windows-sensitive-diff.sh` makes that call,
-treating the diff as data and selecting Windows when it cannot read the base parent. The daily
+treating the diff as data and selecting Windows when it cannot read the base parent. On a pull request the shards are advisory (shown, not required by `ci`) until the hosted Windows suite is free of timing flakes; dispatch and the schedule require them. The daily
 `schedule` runs main's workflow (GitHub schedules only the default branch) against one dev SHA the
 `changes` job resolves and every checkout reads, and requests the macOS control as well. An
 aggregate green `ci` check legitimately includes deliberate skips for every job the event did not

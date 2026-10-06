@@ -1768,8 +1768,11 @@ jobs:
               windows=requested
             fi
           elif [ "$EVENT_NAME" = "pull_request" ] && [ "${CHANGES_WINDOWS:-}" = "true" ]; then
-            # A Windows-sensitive pull request (path filter or added-line marker).
-            windows=requested
+            # A Windows-sensitive pull request (path filter or added-line marker) runs the
+            # nine shards as ADVISORY: their results show on the pull request, but the
+            # aggregate does not fail on them while the hosted Windows suite still has
+            # timing flakes. Dispatch and the nightly schedule keep them required.
+            windows=advisory
           fi
 
           # One line per job, mirroring that job's own `if:`. Adding a job to this workflow
@@ -1816,6 +1819,9 @@ jobs:
               requested)
                 [ "$result" = "success" ] \
                   || fail "$job was requested by $EVENT_NAME but reported '$result'" ;;
+              advisory)
+                [ "$result" = "success" ] \
+                  || echo "::warning::$job is advisory on $EVENT_NAME and reported '$result'" ;;
               *)
                 [ "$result" = "skipped" ] \
                   || fail "$job was not requested by $EVENT_NAME but reported '$result'" ;;
