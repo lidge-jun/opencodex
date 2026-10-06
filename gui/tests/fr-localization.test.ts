@@ -36,6 +36,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "models.aliasAuto",
   // "Zoom" is the ordinary French word for page zoom too.
   "zoom.label",
+  // "Actions" is the ordinary French word for a row's action column, read only by screen readers.
+  "api.colActions",
   "common.github",
   // Product names and ordinary French words whose correct spelling is identical to English.
   "remote.pairingCommandWindows",
