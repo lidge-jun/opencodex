@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { accessSync, constants, readFileSync, realpathSync } from "node:fs";
+import { accessSync, constants, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { readPid } from "../config/process-state";
 import { resolveServiceOwnership, sameServiceOwnershipSubject, type ServiceOwnershipResolution } from "./state";
 
@@ -29,11 +29,28 @@ interface DesktopStartupDeps {
   ownership?: () => ServiceOwnershipResolution;
   readPid?: () => number | null;
   run?: typeof run;
+  env?: NodeJS.ProcessEnv;
+  proc?: ProcReader;
 }
+
+/** Linux process identity from procfs: executable target and parent pid. */
+interface ProcReader {
+  exe(pid: number): string;
+  parent(pid: number): number;
+}
+const procfs: ProcReader = {
+  exe: pid => readlinkSync(`/proc/${pid}/exe`),
+  // comm may contain spaces or parentheses, so fields are counted after the last ')'.
+  parent: pid => {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  },
+};
 
 /** Cheap ownership-only snapshot: no launchd/process probes on the server request path. */
 export function desktopStartupOwnership(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
-  if ((deps.platform ?? process.platform) !== "darwin") return undefined;
+  const platform = deps.platform ?? process.platform;
+  if (platform !== "darwin" && platform !== "linux") return undefined;
   const owner = (deps.ownership ?? resolveServiceOwnership)();
   return owner.kind === "owned" && owner.ownership.owner === "desktop"
     ? deriveDesktopStartup({ owned: true, loginEnabled: false, running: false }) : undefined;
@@ -90,4 +107,66 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
     // Unreadable launchd/process evidence never grants protection or releases the claim.
     return deriveDesktopStartup({ ...facts, running: false });
   }
+}
+
+/** XDG autostart entry written by the desktop app's login item (`tauri-plugin-autostart`). */
+function linuxLoginApp(entry: string): string | null {
+  const fields = new Map<string, string>();
+  let section = "";
+  for (const raw of entry.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("[")) { section = line; continue; }
+    const at = line.indexOf("=");
+    if (section === "[Desktop Entry]" && at > 0 && !fields.has(line.slice(0, at).trim())) {
+      fields.set(line.slice(0, at).trim(), line.slice(at + 1).trim());
+    }
+  }
+  if (fields.get("Type") !== "Application" || fields.get("Hidden") === "true"
+    || fields.get("X-GNOME-Autostart-enabled") === "false") return null;
+  const exec = /^(?:"([^"]+)"|(\S+)) --autostart$/.exec(fields.get("Exec") ?? "");
+  const app = exec?.[1] ?? exec?.[2];
+  return app && isAbsolute(app) && app.endsWith("/opencodex-desktop") ? app : null;
+}
+
+/** Read-only Linux desktop ownership, XDG login entry and live parent/child checks via procfs. */
+export function diagnoseLinuxDesktopStartup(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
+  if ((deps.platform ?? process.platform) !== "linux") return undefined;
+  const ownership = deps.ownership ?? resolveServiceOwnership;
+  const owner = ownership();
+  if (owner.kind !== "owned" || owner.ownership.owner !== "desktop") return undefined;
+  const facts = { owned: true, loginEnabled: false, running: false };
+  const proc = deps.proc ?? procfs;
+  const pidReader = deps.readPid ?? readPid;
+  try {
+    const env = deps.env ?? process.env;
+    const configured = env.XDG_CONFIG_HOME;
+    const config = configured && isAbsolute(configured) ? configured : join(deps.home ?? homedir(), ".config");
+    const id = readFileSync(join(config, "com.opencodex.desktop", "install-id"), "utf8").trim();
+    if (id !== owner.ownership.installId) return deriveDesktopStartup(facts);
+    const login = linuxLoginApp(readFileSync(join(config, "autostart", "OpenCodex.desktop"), "utf8"));
+    if (!login) return deriveDesktopStartup(facts);
+    const app = realpathSync(login);
+    const proxy = realpathSync(join(dirname(app), "ocx"));
+    accessSync(app, constants.X_OK);
+    accessSync(proxy, constants.X_OK);
+    facts.loginEnabled = true;
+    const pid = pidReader();
+    if (pid !== null) {
+      const parent = proc.parent(pid);
+      facts.running = realpathSync(proc.exe(pid)) === proxy && parent > 1
+        && realpathSync(proc.exe(parent)) === app && pidReader() === pid;
+    }
+    const currentOwner = ownership();
+    if (currentOwner.kind === "unknown" || !sameServiceOwnershipSubject(owner, currentOwner)) facts.running = false;
+    return deriveDesktopStartup(facts);
+  } catch {
+    // Unreadable login or procfs evidence never grants protection or releases the claim.
+    return deriveDesktopStartup({ ...facts, running: false });
+  }
+}
+
+/** Platform dispatch for the full (probing) desktop startup diagnostic. */
+export function diagnoseDesktopStartup(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
+  return (deps.platform ?? process.platform) === "linux" ? diagnoseLinuxDesktopStartup(deps) : diagnoseMacDesktopStartup(deps);
 }

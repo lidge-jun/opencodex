@@ -74,6 +74,7 @@
     "codex-sidecar-credit-policy.test.ts": "codex-integration",
     "codex-credits-after-limit-main.test.ts": "codex-integration",
     "service-desktop-startup-health.test.ts": "service",
+    "service-desktop-startup-linux.test.ts": "service",
     "service-desktop-startup.test.ts": "service",
     "startup-health-packaged-probe.test.ts": "server",
     "discovered-native-models.test.ts": "codex-integration",

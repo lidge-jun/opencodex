@@ -78,7 +78,7 @@
     "codex-credits-after-limit.test.ts": "codex-integration",
     "codex-pool-credit-policy.test.ts": "codex-integration",
     "codex-sidecar-credit-policy.test.ts": "codex-integration",
-  "codex-credits-after-limit-main.test.ts": "codex-integration", "service-desktop-startup-health.test.ts": "service",
+  "codex-credits-after-limit-main.test.ts": "codex-integration", "service-desktop-startup-health.test.ts": "service", "service-desktop-startup-linux.test.ts": "service",
   "service-desktop-startup.test.ts": "service", "startup-health-packaged-probe.test.ts": "server",
   "discovered-native-models.test.ts": "codex-integration", "responses-hosted-image-delivery.test.ts": "responses",
   "responses-hosted-image-display.test.ts": "responses", "responses-hosted-image-limits.test.ts": "responses",
