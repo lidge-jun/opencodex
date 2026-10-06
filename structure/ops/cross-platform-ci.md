@@ -72,6 +72,9 @@ release that requires Windows proof still dispatches it for the exact publish SH
 Test sandboxes keep the runner's `LOCALAPPDATA`, so Windows PowerShell 5.1 children reuse the
 image's warm module-analysis cache. Replacing it with a freshly built seed made every child
 re-analyze modules and timed out seven shards on the first run of #6670.
+The sandbox also pins `BUN_RUNTIME_TRANSPILER_CACHE_PATH` to one shared directory: Bun keeps that cache
+under the home directory, so a sandboxed home made the first child of every batch or fixture
+re-transpile each large module, 10-45 s on a busy Windows shard against 2-5 s warm.
 Startup ACL reads use .NET, never module-autoloaded `Get-Acl`/`Set-Acl`
 (`tests/ci-workflows/ci-review-lanes.test.ts` scans `src/`).
 Across the jobs, the workflow runs:

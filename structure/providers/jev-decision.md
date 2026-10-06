@@ -54,7 +54,11 @@ the usage aggregate reports per-backend counts and latency with older rows as `u
 
 `src/combos/jev.ts` extracts bounded user-task, previous-assistant, and latest-tool-output text plus
 the tool name and boolean signals; raw image data, tool arguments, encrypted reasoning, headers, and
-the JEV credential are excluded. It owns the joint target/effort choice map, strict response
+the JEV credential are excluded. All three text samples omit recognized Codex protected envelopes
+and Claude Code `<system-reminder>` blocks before clipping, including nested and unclosed blocks.
+Only an envelope-only `codex_internal_context` goal outside a reminder may supply a fallback task;
+reminder-only text supplies no task. Reminder-free inputs keep their existing sampling behavior.
+It owns the joint target/effort choice map, strict response
 validation, canonical `jev-latest` destination, default four-second deadline, no-redirect policy, bounded response,
 and caller-cancellation propagation. Missing credentials or safe state, transport failures, and invalid
 answers fail open to the first eligible target; no response can escape the configured choice map.

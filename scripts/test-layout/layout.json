@@ -388,7 +388,7 @@
     "claude-gateway-cache.test.ts": "claude-integration",
     "claude-inbound-cache-stabilize.test.ts": "claude-integration",
     "claude-inbound-debug.test.ts": "claude-integration",
-    "claude-inbound.test.ts": "claude-integration",
+    "claude-inbound.test.ts": "claude-integration", "claude-inbound-tool-reference.test.ts": "claude-integration",
     "claude-output-schema-strict.test.ts": "claude-integration",
     "claude-intercept-integration.test.ts": "server",
     "claude-intercept-local-ca.test.ts": "claude-integration",

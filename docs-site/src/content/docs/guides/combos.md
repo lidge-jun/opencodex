@@ -474,9 +474,11 @@ The decision state is deliberately bounded: up to 500 characters of the current 
 240-character previous-assistant tail, a 520-character latest-tool-output tail, the tool name, and
 boolean image/tool signals may be sent to the selected decision backend. It excludes credentials,
 request headers, raw image bytes, tool arguments, encrypted reasoning, and full conversation history.
-Use a decision method only for content you are willing to send to that backend. Recognized OpenCodex machine-context
-envelopes are removed from all three text samples, but ordinary assistant and tool-output text is
-not a secret scanner and may still contain sensitive content. TypeSafe states that Jev is not
+Use a decision method only for content you are willing to send to that backend. Recognized Codex machine-context
+envelopes and Claude Code `<system-reminder>` blocks are removed from all three text samples before
+clipping, so injected reminders do not displace the actual task. The original model request is
+unchanged. This is not a secret scanner: ordinary assistant and tool-output text may still contain
+sensitive content. TypeSafe states that Jev is not
 trained on customer requests, but its terms set no fixed retention period for submitted state and
 offer zero data retention only on enterprise plans
 ([models](https://docs.typesafe.ai/models), [legal](https://docs.typesafe.ai/legal)). TypeSafe
