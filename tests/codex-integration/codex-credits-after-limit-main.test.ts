@@ -16,7 +16,7 @@ import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../../src/codex/a
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import * as mainAccount from "../../src/codex/main-account";
 import * as authCollision from "../../src/codex/auth-collision";
-import { captureMainQuotaWriter, getMainQuotaCredentialGeneration, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
+import { captureMainQuotaWriter, clearMainAccountInfoCache, getMainQuotaCredentialGeneration, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, getAccountQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { CODEX_CREDITS_FRESHNESS_MS, hasSpendableCodexCredits, type CodexSpendableCredits } from "../../src/codex/quota-types";
 import { fetchCodexUsage, resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
@@ -116,6 +116,8 @@ beforeEach(() => {
   process.env.CODEX_HOME = home;
   setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
   setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+  // A new fixture home with the same account/bearer must not inherit another case's recovery generation.
+  clearMainAccountInfoCache();
   resetMainCodexAccountIdentityTrackingForTests();
   clearAccountQuota();
   clearThreadAccountMap();
@@ -132,6 +134,7 @@ beforeEach(() => {
 
 afterEach(() => {
   mock.restore();
+  clearMainAccountInfoCache();
   clearAccountQuota();
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
@@ -307,6 +310,7 @@ test.each([true, false])("a later WHAM200 with credits empty or omitted still re
       reset_at: Math.floor((now + DAY_MS) / 1000) }, secondary_window: null, tertiary_window: null },
     ...(empty ? { credits: { has_credits: false, unlimited: false, balance: 0 } } : {}) }));
   await runMainAccountHardLockRecovery(cfg);
+  expect(fetchSpy).toHaveBeenCalledTimes(1);
   const { error, response } = await creditRefusal(cfg, now);
   expect(error.message).toContain(empty ? "no spendable balance" : "information has expired");
   expect(response.headers.get("Retry-After")).toBe(empty ? String(DAY_MS / 1000) : "68");
