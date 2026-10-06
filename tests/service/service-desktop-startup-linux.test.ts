@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deriveStartupHealth, startupHealthSummary } from "../../src/codex/autostart-health";
@@ -63,16 +63,118 @@ test("matching install, XDG login entry and the app supervising its sidecar gran
   expect(startupHealthSummary(health)).toBe("protected by desktop app at login and its proxy supervisor");
 });
 
-test("XDG_CONFIG_HOME relocates the install id and login entry", () => {
+test("XDG_CONFIG_HOME relocates only the install id; autostart remains under HOME", () => {
   const f = fixture();
   const moved = join(f.home, "xdg");
   mkdirSync(join(moved, "com.opencodex.desktop"), { recursive: true });
-  mkdirSync(join(moved, "autostart"), { recursive: true });
   writeFileSync(join(moved, "com.opencodex.desktop", "install-id"), "installation-a");
-  expect(diagnoseLinuxDesktopStartup({ ...f.deps, env: { XDG_CONFIG_HOME: moved } })).toMatchObject({ owned: true, loginEnabled: false, viable: false });
-  writeFileSync(join(moved, "autostart", "OpenCodex.desktop"), `[Desktop Entry]\nType=Application\nExec="${f.app}" --autostart\n`);
+  writeFileSync(f.idPath, "stale-default-install");
   expect(diagnoseLinuxDesktopStartup({ ...f.deps, env: { XDG_CONFIG_HOME: moved } })).toMatchObject({ viable: true });
+  mkdirSync(join(moved, "autostart"), { recursive: true });
+  writeFileSync(join(moved, "autostart", "OpenCodex.desktop"), `[Desktop Entry]\nType=Application\nExec=${f.app} --autostart\n`);
+  rmSync(f.entryPath);
+  expect(diagnoseLinuxDesktopStartup({ ...f.deps, env: { XDG_CONFIG_HOME: moved } })).toMatchObject({ viable: false });
 });
+
+for (const field of ["OnlyShowIn=GNOME;", "NotShowIn=GNOME;", "TryExec=/missing", "OnlyShowIn=", "NotShowIn=", "TryExec="]) {
+  test(`conditional autostart entry is not credited: ${field}`, () => {
+    const f = fixture(); f.entry(`${f.app} --autostart`, `\n${field}`);
+    expect(diagnoseLinuxDesktopStartup(f.deps)).toMatchObject({ owned: true, loginEnabled: false, viable: false });
+  });
+}
+
+for (const command of [
+  (app: string) => `"${app}" --autostart`,
+  (app: string) => `'${app}' --autostart`,
+  (app: string) => `${app.replace("/usr/", "/%Z/usr/")} --autostart`,
+  (app: string) => `${app.replace("/usr/", "/%f/usr/")} --autostart`,
+  (app: string) => `${app.replace("/usr/", "/escaped\\/usr/")} --autostart`,
+  (app: string) => `${app.replace("/usr/", "/has space/usr/")} --autostart`,
+  (app: string) => `${app} --autostart extra`,
+]) {
+  test(`ambiguous Exec is not credited: ${command("/usr/opencodex-desktop")}`, () => {
+    const f = fixture();
+    // Make the literal path real so rejection tests parsing, not a missing executable.
+    const exec = command(f.app);
+    const literal = exec.slice(0, exec.indexOf(" --autostart")).replace(/^["']|["']$/g, "");
+    mkdirSync(join(literal, ".."), { recursive: true });
+    writeFileSync(literal, "fixture"); chmodSync(literal, 0o700);
+    if (literal !== f.app) {
+      const proxy = join(literal, "..", "ocx");
+      writeFileSync(proxy, "fixture"); chmodSync(proxy, 0o700);
+      f.state.exe[100] = proxy; f.state.exe[200] = literal;
+    }
+    f.entry(exec);
+    expect(diagnoseLinuxDesktopStartup(f.deps)).toMatchObject({ owned: true, loginEnabled: false, viable: false });
+  });
+}
+
+test("an opencodex-desktop symlink to another executable cannot grant protection", () => {
+  const f = fixture();
+  const target = join(f.home, "usr", "bin", "sh");
+  writeFileSync(target, "fixture"); chmodSync(target, 0o700);
+  rmSync(f.app); symlinkSync(target, f.app);
+  f.state.exe[200] = target;
+  expect(diagnoseLinuxDesktopStartup(f.deps)).toMatchObject({ owned: true, loginEnabled: false, viable: false });
+});
+
+test("a desktop symlink uses the ocx beside its resolved executable", () => {
+  const f = fixture();
+  const alias = join(f.home, "alias", "opencodex-desktop");
+  mkdirSync(join(alias, "..")); symlinkSync(f.app, alias); f.entry(`${alias} --autostart`);
+  expect(diagnoseLinuxDesktopStartup(f.deps)).toMatchObject({ viable: true });
+  const outside = join(f.home, "outside-ocx");
+  writeFileSync(outside, "fixture"); chmodSync(outside, 0o700);
+  rmSync(f.proxy); symlinkSync(outside, f.proxy); f.state.exe[100] = outside;
+  expect(diagnoseLinuxDesktopStartup(f.deps)).toMatchObject({ owned: true, viable: false });
+});
+
+test("AppImage registration cannot credit the executable running inside its mount", () => {
+  const f = fixture();
+  const image = join(f.home, "OpenCodex.AppImage");
+  writeFileSync(image, "fixture"); chmodSync(image, 0o700); f.entry(`${image} --autostart`);
+  expect(diagnoseLinuxDesktopStartup(f.deps)).toMatchObject({ owned: true, loginEnabled: false, viable: false });
+});
+
+type F = ReturnType<typeof fixture>;
+const changes: [string, (f: F) => void][] = [
+  ["install-id", f => writeFileSync(f.idPath, "different-install")],
+  ["Hidden=true", f => f.entry(`${f.app} --autostart`, "\nHidden=true")],
+  ["valid entry contents", f => f.entry(`${f.app} --autostart`, "\n# rewritten")],
+  ["desktop executable", f => {
+    const target = join(f.home, "replacement", "opencodex-desktop");
+    mkdirSync(join(target, "..")); writeFileSync(target, "fixture"); chmodSync(target, 0o700);
+    const proxy = join(target, "..", "ocx"); writeFileSync(proxy, "fixture"); chmodSync(proxy, 0o700);
+    rmSync(f.app); symlinkSync(target, f.app); f.state.exe[200] = target; f.state.exe[100] = proxy;
+  }],
+  ["proxy executable", f => {
+    const target = join(f.home, "replacement-ocx");
+    writeFileSync(target, "fixture"); chmodSync(target, 0o700);
+    rmSync(f.proxy); symlinkSync(target, f.proxy); f.state.exe[100] = target;
+  }],
+  ["executable permission", f => chmodSync(f.app, 0o600)],
+  ["proxy permission", f => chmodSync(f.proxy, 0o600)],
+  ["PID", f => { f.state.pid = 101; }],
+  ["parent relationship", f => { f.state.parent[100] = 300; f.state.exe[300] = f.app; }],
+  ["child process executable", f => { f.state.exe[100] = f.app; }],
+  ["parent process executable", f => { f.state.exe[200] = f.proxy; }],
+  ["ownership", f => { f.state.owner = { kind: "none", revision: 2 }; }],
+];
+for (const [name, mutate] of changes) {
+  test(`final evidence read fails closed after ${name} changes`, () => {
+    const f = fixture();
+    const original = f.deps.ownership;
+    let changed = false;
+    f.deps.ownership = () => {
+      const result = original();
+      // Change evidence after the first process/PID checks, immediately before the final read.
+      if (f.state.ownerReads === 2 && !changed) { changed = true; mutate(f); }
+      return result;
+    };
+    expect(diagnoseLinuxDesktopStartup(f.deps)).toMatchObject({ owned: true, viable: false });
+    expect(changed).toBe(true);
+  });
+}
 
 test("failed identity, login entry or process evidence retains the durable desktop claim", () => {
   type F = ReturnType<typeof fixture>;

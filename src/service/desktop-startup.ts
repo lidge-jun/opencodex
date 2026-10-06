@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { readPid } from "../config/process-state";
 import { resolveServiceOwnership, sameServiceOwnershipSubject, type ServiceOwnershipResolution } from "./state";
 
@@ -109,7 +109,7 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
   }
 }
 
-/** XDG autostart entry written by the desktop app's login item (`tauri-plugin-autostart`). */
+/** HOME-based autostart entry written by the desktop app's login item (`tauri-plugin-autostart`). */
 function linuxLoginApp(entry: string): string | null {
   const fields = new Map<string, string>();
   let section = "";
@@ -123,13 +123,14 @@ function linuxLoginApp(entry: string): string | null {
     }
   }
   if (fields.get("Type") !== "Application" || fields.get("Hidden") === "true"
-    || fields.get("X-GNOME-Autostart-enabled") === "false") return null;
-  const exec = /^(?:"([^"]+)"|(\S+)) --autostart$/.exec(fields.get("Exec") ?? "");
-  const app = exec?.[1] ?? exec?.[2];
-  return app && isAbsolute(app) && app.endsWith("/opencodex-desktop") ? app : null;
+    || fields.get("X-GNOME-Autostart-enabled") === "false"
+    || ["OnlyShowIn", "NotShowIn", "TryExec"].some(key => fields.has(key))) return null;
+  // Credit only the backend's simple Exec form; desktop quoting/escaping/field codes are unsupported.
+  const app = /^([^\s"'\\%`><~|&;$*?#()]+) --autostart$/.exec(fields.get("Exec") ?? "")?.[1];
+  return app && isAbsolute(app) && basename(app) === "opencodex-desktop" ? app : null;
 }
 
-/** Read-only Linux desktop ownership, XDG login entry and live parent/child checks via procfs. */
+/** Read-only Linux desktop ownership, HOME login entry and live parent/child checks via procfs. */
 export function diagnoseLinuxDesktopStartup(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
   if ((deps.platform ?? process.platform) !== "linux") return undefined;
   const ownership = deps.ownership ?? resolveServiceOwnership;
@@ -140,25 +141,40 @@ export function diagnoseLinuxDesktopStartup(deps: DesktopStartupDeps = {}): Desk
   const pidReader = deps.readPid ?? readPid;
   try {
     const env = deps.env ?? process.env;
+    const home = deps.home ?? homedir();
     const configured = env.XDG_CONFIG_HOME;
-    const config = configured && isAbsolute(configured) ? configured : join(deps.home ?? homedir(), ".config");
-    const id = readFileSync(join(config, "com.opencodex.desktop", "install-id"), "utf8").trim();
-    if (id !== owner.ownership.installId) return deriveDesktopStartup(facts);
-    const login = linuxLoginApp(readFileSync(join(config, "autostart", "OpenCodex.desktop"), "utf8"));
-    if (!login) return deriveDesktopStartup(facts);
-    const app = realpathSync(login);
-    const proxy = realpathSync(join(dirname(app), "ocx"));
-    accessSync(app, constants.X_OK);
-    accessSync(proxy, constants.X_OK);
-    facts.loginEnabled = true;
-    const pid = pidReader();
-    if (pid !== null) {
-      const parent = proc.parent(pid);
-      facts.running = realpathSync(proc.exe(pid)) === proxy && parent > 1
-        && realpathSync(proc.exe(parent)) === app && pidReader() === pid;
+    const config = configured && isAbsolute(configured) ? configured : join(home, ".config");
+    // auto-launch 0.5.0 uses HOME for autostart; Tauri app_config_dir uses XDG for install-id.
+    const capture = () => {
+      const id = readFileSync(join(config, "com.opencodex.desktop", "install-id"), "utf8");
+      if (id.trim() !== owner.ownership.installId) return null;
+      const entry = readFileSync(join(home, ".config", "autostart", "OpenCodex.desktop"), "utf8");
+      const login = linuxLoginApp(entry);
+      if (!login) return null;
+      const app = realpathSync(login);
+      if (basename(app) !== "opencodex-desktop") return null;
+      const proxy = realpathSync(join(dirname(app), "ocx"));
+      if (dirname(proxy) !== dirname(app) || basename(proxy) !== "ocx") return null;
+      accessSync(app, constants.X_OK);
+      accessSync(proxy, constants.X_OK);
+      const pid = pidReader();
+      const parent = pid !== null ? proc.parent(pid) : null;
+      const child = pid !== null ? realpathSync(proc.exe(pid)) : null;
+      const parentApp = parent !== null && parent > 1 ? realpathSync(proc.exe(parent)) : null;
+      const running = pid !== null && child === proxy && parentApp === app && pidReader() === pid;
+      const currentOwner = ownership();
+      if (currentOwner.kind === "unknown" || !sameServiceOwnershipSubject(owner, currentOwner)) return null;
+      return { id, entry, login, app, proxy, pid, parent, child, parentApp, running };
+    };
+    const first = capture();
+    if (!first) return deriveDesktopStartup(facts);
+    const final = capture();
+    // Re-read the entire evidence chain, including files, targets and the exact parent PID.
+    // A changed or unreadable snapshot cannot retain protection from the first read.
+    if (final && JSON.stringify(first) === JSON.stringify(final)) {
+      facts.loginEnabled = true;
+      facts.running = final.running;
     }
-    const currentOwner = ownership();
-    if (currentOwner.kind === "unknown" || !sameServiceOwnershipSubject(owner, currentOwner)) facts.running = false;
     return deriveDesktopStartup(facts);
   } catch {
     // Unreadable login or procfs evidence never grants protection or releases the claim.
