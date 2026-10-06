@@ -794,6 +794,7 @@ function assertMainAccountPolicy(
         error.message = "Codex main account reached its usage limit, and the latest credit information reports no spendable balance."
           + " Allowing credits does not provide a balance. Refresh quotas or wait for the limit to reset.";
       } else if (observed && now - credits.observedAt > CODEX_CREDITS_FRESHNESS_MS
+        // Check flags/balance at observation time; checking now would always reject this expired snapshot.
         && hasSpendableCodexCredits(quota, credits.observedAt)) {
         // This suggests when to check again, never when recovery or a WHAM send is guaranteed.
         // Worker-private delays remain intact; known upstream/query deadlines cannot be shortened.
