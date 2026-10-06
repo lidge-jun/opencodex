@@ -1048,43 +1048,6 @@ jobs:
           cd gui
           bun run build
 
-      # Windows PowerShell 5.1 resolves an autoloaded cmdlet through its module
-      # analysis cache, and a fresh or redirected LOCALAPPDATA rebuilds that cache
-      # by scanning every PSModulePath module: 20-27 s per child against ~3.7 s
-      # with a warm cache (devlog/_fin/260906_release_244_publish/020_integrate.md).
-      # Test sandboxes redirect the profile, so each one used to pay that rebuild.
-      # Build one seed here, from this bash step so the module environment matches
-      # the test step, with the System32 engine the product spawns. scripts/test.ts
-      # copies the seed into every sandbox; nothing ever writes the seed itself.
-      # PowerShell serializes the cache after a delay, so wait for a nonempty file
-      # and export the seed only once it exists.
-      - name: Prewarm the PowerShell module analysis cache
-        shell: bash
-        run: |
-          set -euo pipefail
-          seed="${RUNNER_TEMP}\\ocx-ps-module-analysis-seed\\ModuleAnalysisCache"
-          started=$SECONDS
-          # The single-quoted argument is PowerShell source; bash must not expand it.
-          # shellcheck disable=SC2016
-          PSModuleAnalysisCachePath="$seed" "${SYSTEMROOT}/System32/WindowsPowerShell/v1.0/powershell.exe" \
-            -NoLogo -NoProfile -NonInteractive -Command '
-              $p = $env:PSModuleAnalysisCachePath
-              [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($p))
-              $null = Get-Module -ListAvailable
-              $null = Get-Command -Name Get-Acl, Set-Acl, Get-CimInstance
-              $deadline = [DateTime]::UtcNow.AddSeconds(60)
-              while ([DateTime]::UtcNow -lt $deadline) {
-                if ([System.IO.File]::Exists($p) -and ([System.IO.FileInfo]::new($p)).Length -gt 0) { break }
-                [System.Threading.Thread]::Sleep(500)
-              }
-            ' || echo "::warning::PowerShell module cache prewarm exited non-zero"
-          if [ -s "$(cygpath -u "$seed")" ]; then
-            echo "OCX_TEST_PS_MODULE_ANALYSIS_SEED=$seed" >> "$GITHUB_ENV"
-            echo "module analysis cache seeded in $(( SECONDS - started ))s"
-          else
-            echo "::warning::PowerShell module analysis cache was not written; sandboxes seed from the runner profile"
-          fi
-
       - name: Test in fresh-process batches
         # --timeout: the Linux batches and the macOS control both pass 60000; this leg was
         # the only one left on Bun's 5s default, and it is the slowest hardware on the board.
@@ -1769,10 +1732,9 @@ jobs:
             fi
           elif [ "$EVENT_NAME" = "pull_request" ] && [ "${CHANGES_WINDOWS:-}" = "true" ]; then
             # A Windows-sensitive pull request (path filter or added-line marker) runs the
-            # nine shards as ADVISORY: their results show on the pull request, but the
-            # aggregate does not fail on them while the hosted Windows suite still has
-            # timing flakes. Dispatch and the nightly schedule keep them required.
-            windows=advisory
+            # nine shards and requires them, exactly as dispatch and the schedule do. A
+            # shard that only fails on a pull request is a regression in that pull request.
+            windows=requested
           fi
 
           # One line per job, mirroring that job's own `if:`. Adding a job to this workflow
@@ -1819,9 +1781,6 @@ jobs:
               requested)
                 [ "$result" = "success" ] \
                   || fail "$job was requested by $EVENT_NAME but reported '$result'" ;;
-              advisory)
-                [ "$result" = "success" ] \
-                  || echo "::warning::$job is advisory on $EVENT_NAME and reported '$result'" ;;
               *)
                 [ "$result" = "skipped" ] \
                   || fail "$job was not requested by $EVENT_NAME but reported '$result'" ;;

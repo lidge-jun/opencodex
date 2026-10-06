@@ -363,7 +363,7 @@ describe("Windows and nightly CI contracts", () => {
     const slice = script.slice(start, last + "RESULTS_EOF".length);
     for (const [event, lane, windows, expectWindows, expectControl] of [
       ["schedule", "", undefined, "requested", "requested"],
-      ["pull_request", "", "true", "advisory", "not-requested"],
+      ["pull_request", "", "true", "requested", "not-requested"],
       ["pull_request", "", "false", "not-requested", "not-requested"],
       ["pull_request", "", undefined, "not-requested", "not-requested"],
       ["push", "", "true", "not-requested", "not-requested"],

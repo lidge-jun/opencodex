@@ -16,7 +16,7 @@ Windows-sensitive pull request, on the nightly schedule, and on `workflow_dispat
 `lane=all` (or an empty lane); it never joins the push run `release.yml` gates on. A pull request
 is Windows-sensitive when the `changes` job's `windows` path filter matches or an added
 `src/`/`tests/` line names a Windows marker; `scripts/ci/windows-sensitive-diff.sh` makes that call,
-treating the diff as data and selecting Windows when it cannot read the base parent. On a pull request the shards are advisory (shown, not required by `ci`) until the hosted Windows suite is free of timing flakes; dispatch and the schedule require them. The daily
+treating the diff as data and selecting Windows when it cannot read the base parent. Wherever they run, `ci` requires them. The daily
 `schedule` runs main's workflow (GitHub schedules only the default branch) against one dev SHA the
 `changes` job resolves and every checkout reads, and requests the macOS control as well. An
 aggregate green `ci` check legitimately includes deliberate skips for every job the event did not
@@ -69,10 +69,9 @@ longer report as a deliberate skip. Whenever Windows is requested the gate addit
 run's own job list through the Actions API and requires nine concrete successful `windows N/9`
 results, because a matrix rollup can report `success` when one matrix leg is skipped. A
 release that requires Windows proof still dispatches it for the exact publish SHA.
-Before its tests each Windows shard prewarms a Windows PowerShell 5.1 module-analysis cache
-seed and exports `OCX_TEST_PS_MODULE_ANALYSIS_SEED`; `createIsolatedTestEnvironment` in
-`scripts/test.ts` copies that seed (or the inherited cache) into each sandbox and pins
-`PSModuleAnalysisCachePath`, so a redirected profile no longer rebuilds the cache in every child.
+Test sandboxes keep the runner's `LOCALAPPDATA`, so Windows PowerShell 5.1 children reuse the
+image's warm module-analysis cache. Replacing it with a freshly built seed made every child
+re-analyze modules and timed out seven shards on the first run of #6670.
 Startup ACL reads use .NET, never module-autoloaded `Get-Acl`/`Set-Acl`
 (`tests/ci-workflows/ci-review-lanes.test.ts` scans `src/`).
 Across the jobs, the workflow runs:

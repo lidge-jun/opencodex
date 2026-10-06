@@ -21,13 +21,11 @@ import {
   LIVE_INSTALL_CREDENTIAL_ENV,
   ensureGuiDependencies,
   inspectChangedRun,
-  pinPowerShellModuleAnalysisCache,
   resolveBunTestArgs,
   resolveBunTestPlan,
   runTestLane,
   selectChangedComparisonRef,
   SERIAL_FULL_SUITE_FILES,
-  TEST_PS_MODULE_ANALYSIS_SEED_ENV,
 } from "../../scripts/test";
 import {
   NESTED_LIVE_LOCK_RECEIPT_KEY,
@@ -123,112 +121,6 @@ function initChangedRunFixture(): { cwd: string; base: string } {
   const base = commitFixture(cwd, "base.txt", "base\n", "base");
   return { cwd, base };
 }
-
-describe("PowerShell module analysis cache pin", () => {
-  test("does nothing outside Windows", () => {
-    const root = mkdtempSync(join(tmpdir(), "opencodex-ps-cache-"));
-    try {
-      for (const platform of ["linux", "darwin"] as const) {
-        expect(pinPowerShellModuleAnalysisCache(root, { PSModuleAnalysisCachePath: "seed" }, platform))
-          .toEqual({ set: {}, drop: [] });
-      }
-      expect(existsSync(join(root, "ps-module-analysis-cache"))).toBe(false);
-    } finally {
-      removeTreeWithRetry(root);
-    }
-  });
-
-  test("copies the explicit seed into an owned writable file without changing the seed", () => {
-    const root = mkdtempSync(join(tmpdir(), "opencodex-ps-cache-"));
-    const seed = join(root, "seed");
-    writeFileSync(seed, "warmed analysis cache");
-    try {
-      const result = pinPowerShellModuleAnalysisCache(root, {
-        [TEST_PS_MODULE_ANALYSIS_SEED_ENV]: seed,
-        PSModuleAnalysisCachePath: join(root, "other-seed"),
-      }, "win32");
-      const owned = join(root, "ps-module-analysis-cache", "ModuleAnalysisCache");
-      expect(result.set).toEqual({
-        PSModuleAnalysisCachePath: owned, [TEST_PS_MODULE_ANALYSIS_SEED_ENV]: seed,
-      });
-      expect(readFileSync(owned, "utf8")).toBe("warmed analysis cache");
-      writeFileSync(owned, "sandbox rewrite");
-      expect(readFileSync(seed, "utf8")).toBe("warmed analysis cache");
-    } finally {
-      removeTreeWithRetry(root);
-    }
-  });
-
-  test("uses an inherited case variant as seed and drops every variant", () => {
-    const root = mkdtempSync(join(tmpdir(), "opencodex-ps-cache-"));
-    const seed = join(root, "seed");
-    writeFileSync(seed, "inherited cache");
-    try {
-      const result = pinPowerShellModuleAnalysisCache(root, {
-        PSMODULEANALYSISCACHEPATH: seed,
-        PSModuleAnalysisCachePath: seed,
-        [TEST_PS_MODULE_ANALYSIS_SEED_ENV]: "relative-seed",
-      }, "win32");
-      expect(result.drop).toEqual(["PSMODULEANALYSISCACHEPATH", "PSModuleAnalysisCachePath"]);
-      expect(readFileSync(result.set.PSModuleAnalysisCachePath!, "utf8")).toBe("inherited cache");
-      expect(result.set[TEST_PS_MODULE_ANALYSIS_SEED_ENV]).toBe("relative-seed");
-    } finally {
-      removeTreeWithRetry(root);
-    }
-  });
-
-  test("pins a missing seed path so the first child can warm its own cache", () => {
-    const root = mkdtempSync(join(tmpdir(), "opencodex-ps-cache-"));
-    try {
-      const result = pinPowerShellModuleAnalysisCache(root, {
-        [TEST_PS_MODULE_ANALYSIS_SEED_ENV]: join(root, "missing"),
-      }, "win32");
-      expect(result.set.PSModuleAnalysisCachePath).toBe(join(root, "ps-module-analysis-cache", "ModuleAnalysisCache"));
-      expect(existsSync(dirname(result.set.PSModuleAnalysisCachePath!))).toBe(true);
-      expect(existsSync(result.set.PSModuleAnalysisCachePath!)).toBe(false);
-    } finally {
-      removeTreeWithRetry(root);
-    }
-  });
-
-  test("two sandbox roots own independent copies of the same seed", () => {
-    const root = mkdtempSync(join(tmpdir(), "opencodex-ps-cache-"));
-    const seed = join(root, "seed");
-    writeFileSync(seed, "shared read-only seed");
-    try {
-      const baseEnv = { [TEST_PS_MODULE_ANALYSIS_SEED_ENV]: seed };
-      const first = pinPowerShellModuleAnalysisCache(join(root, "first"), baseEnv, "win32").set.PSModuleAnalysisCachePath!;
-      const second = pinPowerShellModuleAnalysisCache(join(root, "second"), baseEnv, "win32").set.PSModuleAnalysisCachePath!;
-      expect(first).not.toBe(second);
-      writeFileSync(first, "first sandbox");
-      expect(readFileSync(second, "utf8")).toBe("shared read-only seed");
-      expect(readFileSync(seed, "utf8")).toBe("shared read-only seed");
-    } finally {
-      removeTreeWithRetry(root);
-    }
-  });
-
-  test("does not copy a symlink seed", () => {
-    const root = mkdtempSync(join(tmpdir(), "opencodex-ps-cache-"));
-    const target = join(root, "target");
-    const seed = join(root, "seed-link");
-    writeFileSync(target, "target cache");
-    try {
-      try {
-        symlinkSync(target, seed, "file");
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (process.platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "ENOTSUP")) return;
-        throw error;
-      }
-      const result = pinPowerShellModuleAnalysisCache(root, { [TEST_PS_MODULE_ANALYSIS_SEED_ENV]: seed }, "win32");
-      expect(existsSync(result.set.PSModuleAnalysisCachePath!)).toBe(false);
-      expect(readFileSync(target, "utf8")).toBe("target cache");
-    } finally {
-      removeTreeWithRetry(root);
-    }
-  });
-});
 
 describe("test runner captured output", () => {
   // This describe's first real lane pays Bun's test-runner bootstrap inside its child timeout.
