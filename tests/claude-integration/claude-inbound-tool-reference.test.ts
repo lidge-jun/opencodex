@@ -28,8 +28,8 @@ describe("translated Claude tool references", () => {
     expect(body.input).toEqual([
       { type: "function_call", call_id: "search_1", name: "ToolSearch", arguments: "{}" },
       { type: "function_call_output", call_id: "search_1", output: [
-        { type: "input_text", text: "Tool loaded: WebFetch" },
-        { type: "input_text", text: "Tool loaded: mcp__docs__lookup" },
+        { type: "input_text", text: "Tool loaded: WebFetch\n" },
+        { type: "input_text", text: "Tool loaded: mcp__docs__lookup\n" },
       ] },
       { type: "message", role: "user", content: [{ type: "input_text", text: "Continue the original task." }] },
     ]);
@@ -48,11 +48,28 @@ describe("translated Claude tool references", () => {
     expect(body.input[1]).toEqual({ type: "function_call_output", call_id: "search_1", output: [
       { type: "input_text", text: "[tool error]" },
       { type: "input_text", text: "Before" },
-      { type: "input_text", text: "Tool loaded: Read" },
+      { type: "input_text", text: "\nTool loaded: Read\n" },
       { type: "input_image", image_url: "https://example.invalid/fixture.png" },
       { type: "input_text", text: "After" },
     ] });
     expect(reference).toEqual({ type: "tool_reference", tool_name: "Read" });
+  });
+
+  test("loaded names stay line-separated after the parser joins text-only output", () => {
+    const parsed = parseRequest(anthropicToResponsesBody(request([
+      { type: "text", text: "Before" },
+      { type: "tool_reference", tool_name: "Read" },
+      { type: "tool_reference", tool_name: "Write" },
+      { type: "text", text: "After" },
+    ])));
+    const result = parsed.context.messages.find((message) => message.role === "toolResult");
+    expect(result?.content).toBe("Before\nTool loaded: Read\nTool loaded: Write\nAfter");
+    const onlyRefs = parseRequest(anthropicToResponsesBody(request([
+      { type: "tool_reference", tool_name: "WebFetch" },
+      { type: "tool_reference", tool_name: "mcp__docs__lookup" },
+    ])));
+    expect(onlyRefs.context.messages.find((message) => message.role === "toolResult")?.content)
+      .toBe("Tool loaded: WebFetch\nTool loaded: mcp__docs__lookup\n");
   });
 
   test("missing, non-string and empty names do not fabricate loaded tools", () => {
