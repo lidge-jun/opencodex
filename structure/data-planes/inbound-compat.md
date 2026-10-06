@@ -42,11 +42,13 @@ and a refused forward request releases its probe lease. `LiveCallBinding` record
 exactly this reason, so a reconnect is judged on the call it rejoins rather than on a default.
 
 The native voice path in `src/server/live.ts` applies the same predicate but can name less. It
-records nothing about the calls it relays, so a join, and a call-create that sends no session
+records only which call ids it created (`src/server/live-native-calls.ts`), never their model or
+account, so a join, and a call-create that sends no session
 model, name no destination at all; a key carrying a model list is refused there rather than
 admitted against an assumed default, while a provider-only scope and an unscoped key are
-unchanged. Coverage lives in `tests/server/api-key-scope-audio.test.ts` and
-`tests/server/api-key-scope-live.test.ts`.
+unchanged, on both join credentials described under streaming audio. Coverage lives in
+`tests/server/api-key-scope-audio.test.ts`, `tests/server/api-key-scope-live.test.ts` and
+`tests/server/server-live-existing-call.test.ts`.
 
 ## Streaming audio
 
@@ -69,6 +71,19 @@ It does not proxy WebRTC media or execute delegation requests. Standalone Framel
 to gpt-live-1-codex; gpt-live-1 is an explicit alias. Dictation and Frameless event formats remain
 separate. Coverage lives in `tests/server/audio-client.test.ts`,
 `tests/server/audio-dictation.test.ts` and `tests/server/live-call-bindings.test.ts`.
+
+A native sideband join (`/v1/live/<id>`, `/v1/realtime/calls/<id>`, `/v1/realtime?call_id=<id>`)
+is authenticated as whoever owns the call. A call `handleLive` created was negotiated under the
+account the Pool selected, so its id is recorded from the create's Location — extracted exactly as
+openai/codex reads it — and its join keeps Pool selection and thread affinity (openai/codex #35830).
+Any other call was created by the client with its own ChatGPT login: ChatGPT voice handing a call to
+a Codex thread, or Codex Desktop when its renderer owns the call, both arriving as a V3
+`existingCall` join. That join forwards the caller's own explicit ChatGPT credential through the
+Direct passthrough, never the proxy admission secret, and falls back to Pool selection only when the
+caller presents none. The id registry is process-local, holds ids only, keeps at most 1024 for six
+hours, and evicts oldest first; a restart, expiry or eviction makes a created call look
+caller-owned to a later rejoin. Coverage lives in `tests/server/live-native-calls.test.ts` and
+`tests/server/server-live-existing-call.test.ts`.
 
 Translated Claude timeline reminders use the Chat adapter's
 [chronological instruction ordering](../providers/chat-compat.md#chronological-in-conversation-instructions)
