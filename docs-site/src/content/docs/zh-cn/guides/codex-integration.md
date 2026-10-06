@@ -327,6 +327,8 @@ fallback 行为，参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
 
 在 **Codex Set → Multi-auth** 中，打开 **Codex Auth** 标题栏中的 **Codex 额度** 开关，即可在 Week 下方显示主账号和各池账号最近查询到的积分。默认关闭，并保存为 `showCodexCredits`。余额按地区格式显示；上游报告时会显示无限额或超额使用上限警告。由于没有积分总上限，条形表示可用状态而非百分比。此开关仅控制显示，新登录需等待其自身的查询结果。
 
+主账号允许在额度耗尽后使用积分时，现有恢复周期会在用量窗口已满且缓存观察即将过期时刷新积分余额。这是已认证的用量查询，不发送模型验证请求。余额为空、支出限制、刷新失败或独立的主账号硬锁仍可能阻止请求。
+
 后台重新验证是独立功能，默认关闭。它要求 Token Guardian、`openai` 的 `proactive` 刷新策略及 `tokenGuardian.codexWarmupEnabled`，并跳过等待注册验证的账号。
 
 ### 账号停止处理请求的原因

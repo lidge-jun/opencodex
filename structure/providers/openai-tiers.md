@@ -316,6 +316,14 @@ payloads cannot clear cooldowns, actual request refusals still drive cooldown/fa
 default-on main-account hard lock retains its separate local admission policy. Registration
 warmup remains conservative and does not spend paid credits to validate an exhausted account.
 
+For an opted-in, unpaused main account with a currently full usage window, the existing
+`src/codex/auth-api/pool-mode-gate.ts` recovery sweep refreshes authenticated WHAM evidence before
+its credit observation expires. Scheduling looks ahead by the shared sweep interval and WHAM
+timeout; admission still evaluates the actual clock and the original spending controls. Native
+profile ownership, credential generations, single-flight, query pacing and failure backoff remain
+in force. The hard lock remains independent, and refreshing usage never redeems reset credits or
+validates a pending account through inference.
+
 Credit parsing, expiry, partial updates and reset-ticket separation are covered in
 `tests/codex-integration/codex-quota-parser-parity.test.ts`; selection and bulk-pause behavior
 are covered in `tests/codex-integration/codex-credits-after-limit.test.ts` and

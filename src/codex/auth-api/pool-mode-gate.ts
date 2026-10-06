@@ -1,15 +1,18 @@
-import { codexAccountUsesCreditsAfterLimit } from "../account-credit-use";
+import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "../account-credit-use";
 import { nextCodexUsageQueryAt, nextQuotaQueryDelay, pruneRemovedCodexPoolUsageAccounts } from "../quota-query-backoff";
 import { CODEX_PRIORITY_FAILBACK_REFRESH_MS } from "../account-priority";
 import { codexQuotaHasFreshUsage } from "../quota-observation-freshness";
 import { getCodexAccountCredential, getValidCodexToken, readCodexAccountRecord } from "../account-store";
-import { getAccountQuota, isCompleteCodexQuotaRecoverySnapshot } from "../quota";
+import { getAccountQuota, getMainPolicyQuota, isCompleteCodexQuotaRecoverySnapshot } from "../quota";
+import { isCodexAccountPaused } from "../account-pause";
+import { hasSpendableCodexCredits } from "../quota-types";
+import { WHAM_REQUEST_TIMEOUT_MS } from "../quota-recovery-timing";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
 import { claimDueCodexQuotaRecoveryProbes, settleCodexQuotaRecoveryProbe } from "../routing";
 import { readCodexTokens } from "../auth-collision";
 import { isAccountNeedsReauth } from "../account-runtime-state";
 import { getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
-import { captureConfigGeneration, registerStateSweepAfterTick } from "../../lib/state-store-sweeper";
+import { captureConfigGeneration, registerStateSweepAfterTick, STATE_SWEEP_INTERVAL_MS } from "../../lib/state-store-sweeper";
 import { observeMainQuotaCredential, getMainQuotaCredentialGeneration, captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive } from "../main-account-cache";
 import { getMainAccountHardLockStatus } from "../main-account-hard-lock";
 import type { OcxConfig } from "../../types";
@@ -79,11 +82,21 @@ let mainHardLockRecoveryAttempt: { identity: number; credential: number; after: 
 /** Metadata-only recovery on the existing sweep; failures retain the observed policy block. */
 export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise<void> {
   if (mainHardLockRecoveryInFlight) return mainHardLockRecoveryInFlight;
+  const creditRecoveryNeeded = (): boolean => {
+    const now = Date.now();
+    const quota = getMainPolicyQuota();
+    // Only schedule an earlier real observation. Admission still uses the actual clock,
+    // and a successful WHAM response supplies its own identity-bound observedAt.
+    return codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)
+      && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
+      && codexUsageLimitResetAt(quota, undefined, now) !== undefined
+      && !hasSpendableCodexCredits(quota, now + STATE_SWEEP_INTERVAL_MS + WHAM_REQUEST_TIMEOUT_MS);
+  };
   const status = getMainAccountHardLockStatus(config);
-  if (status.state !== "blocked") { mainHardLockRecoveryAttempt = undefined; return; }
+  if (status.state !== "blocked" && !creditRecoveryNeeded()) { mainHardLockRecoveryAttempt = undefined; return; }
   if (isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
   // A predicted reset is a scheduling hint, never proof that the hard lock can be lifted.
-  if (status.resetAt !== undefined && status.resetAt > Date.now()) return;
+  if (status.state === "blocked" && status.resetAt !== undefined && status.resetAt > Date.now()) return;
   // Reconcile the owned physical credential before skipping work for an older one.
   reconcileMainCodexAccountRuntimeState();
   const physical = readCodexTokens();
@@ -98,7 +111,7 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
   if (!lease) return;
   mainHardLockRecoveryInFlight = (async () => {
     reconcileMainCodexAccountRuntimeState();
-    if (getMainAccountHardLockStatus(config).state !== "blocked"
+    if ((getMainAccountHardLockStatus(config).state !== "blocked" && !creditRecoveryNeeded())
       || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
     const identityGeneration = captureMainAccountIdentityGeneration();
     try {
@@ -138,7 +151,7 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
         if (transientAuth) mainHardLockRecoveryAttempt = undefined;
         else {
           const delay = nextQuotaQueryDelay(previousDelay || undefined);
-          mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked"
+          mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked" || creditRecoveryNeeded()
             ? { identity: identityGeneration, credential, delay, after: Math.max(Date.now() + delay, queryAfter) }
             : undefined;
         }
