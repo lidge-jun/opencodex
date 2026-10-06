@@ -6,6 +6,8 @@ import { deriveStartupHealth, startupHealthSummary } from "../../src/codex/autos
 import { desktopStartupOwnership, diagnoseDesktopStartup, diagnoseLinuxDesktopStartup } from "../../src/service/desktop-startup";
 import type { ServiceOwnershipResolution } from "../../src/service/state";
 
+// Fixtures use POSIX paths, execute bits and symlinks, and the diagnostic only runs on Linux.
+const linuxTest = test.skipIf(process.platform === "win32");
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -53,7 +55,7 @@ const healthBase = {
   serviceConflict: false, serviceSupported: true, shimInstalled: false, shimHealthy: false,
 };
 
-test("matching install, XDG login entry and the app supervising its sidecar grant desktop protection on Linux", () => {
+linuxTest("matching install, XDG login entry and the app supervising its sidecar grant desktop protection on Linux", () => {
   const { deps } = fixture();
   const desktop = diagnoseLinuxDesktopStartup(deps);
   expect(desktop).toEqual({ owned: true, loginEnabled: true, running: true, viable: true });
@@ -63,7 +65,7 @@ test("matching install, XDG login entry and the app supervising its sidecar gran
   expect(startupHealthSummary(health)).toBe("protected by desktop app at login and its proxy supervisor");
 });
 
-test("a relocated XDG_CONFIG_HOME is not credited: the HOME-based entry is outside its autostart path", () => {
+linuxTest("a relocated XDG_CONFIG_HOME is not credited: the HOME-based entry is outside its autostart path", () => {
   const f = fixture();
   const moved = join(f.home, "xdg");
   mkdirSync(join(moved, "com.opencodex.desktop"), { recursive: true });
@@ -79,7 +81,7 @@ Exec=${f.app} --autostart
 });
 
 for (const field of ["OnlyShowIn=GNOME;", "NotShowIn=GNOME;", "TryExec=/missing", "OnlyShowIn=", "NotShowIn=", "TryExec="]) {
-  test(`conditional autostart entry is not credited: ${field}`, () => {
+  linuxTest(`conditional autostart entry is not credited: ${field}`, () => {
     const f = fixture(); f.entry(`${f.app} --autostart`, `\n${field}`);
     expect(diagnoseLinuxDesktopStartup(f.deps)).toMatchObject({ owned: true, loginEnabled: false, viable: false });
   });
@@ -94,7 +96,7 @@ for (const command of [
   (app: string) => `${app.replace("/usr/", "/has space/usr/")} --autostart`,
   (app: string) => `${app} --autostart extra`,
 ]) {
-  test(`ambiguous Exec is not credited: ${command("/usr/opencodex-desktop")}`, () => {
+  linuxTest(`ambiguous Exec is not credited: ${command("/usr/opencodex-desktop")}`, () => {
     const f = fixture();
     // Make the literal path real so rejection tests parsing, not a missing executable.
     const exec = command(f.app);
@@ -111,7 +113,7 @@ for (const command of [
   });
 }
 
-test("an opencodex-desktop symlink to another executable cannot grant protection", () => {
+linuxTest("an opencodex-desktop symlink to another executable cannot grant protection", () => {
   const f = fixture();
   const target = join(f.home, "usr", "bin", "sh");
   writeFileSync(target, "fixture"); chmodSync(target, 0o700);
@@ -120,7 +122,7 @@ test("an opencodex-desktop symlink to another executable cannot grant protection
   expect(diagnoseLinuxDesktopStartup(f.deps)).toMatchObject({ owned: true, loginEnabled: false, viable: false });
 });
 
-test("a desktop symlink uses the ocx beside its resolved executable", () => {
+linuxTest("a desktop symlink uses the ocx beside its resolved executable", () => {
   const f = fixture();
   const alias = join(f.home, "alias", "opencodex-desktop");
   mkdirSync(join(alias, "..")); symlinkSync(f.app, alias); f.entry(`${alias} --autostart`);
@@ -131,7 +133,7 @@ test("a desktop symlink uses the ocx beside its resolved executable", () => {
   expect(diagnoseLinuxDesktopStartup(f.deps)).toMatchObject({ owned: true, viable: false });
 });
 
-test("AppImage registration cannot credit the executable running inside its mount", () => {
+linuxTest("AppImage registration cannot credit the executable running inside its mount", () => {
   const f = fixture();
   const image = join(f.home, "OpenCodex.AppImage");
   writeFileSync(image, "fixture"); chmodSync(image, 0o700); f.entry(`${image} --autostart`);
@@ -163,7 +165,7 @@ const changes: [string, (f: F) => void][] = [
   ["ownership", f => { f.state.owner = { kind: "none", revision: 2 }; }],
 ];
 for (const [name, mutate] of changes) {
-  test(`final evidence read fails closed after ${name} changes`, () => {
+  linuxTest(`final evidence read fails closed after ${name} changes`, () => {
     const f = fixture();
     const original = f.deps.ownership;
     let changed = false;
@@ -178,7 +180,7 @@ for (const [name, mutate] of changes) {
   });
 }
 
-test("failed identity, login entry or process evidence retains the durable desktop claim", () => {
+linuxTest("failed identity, login entry or process evidence retains the durable desktop claim", () => {
   type F = ReturnType<typeof fixture>;
   const mutations: ((f: F) => void)[] = [
     f => writeFileSync(f.idPath, "different-install"),
@@ -204,7 +206,7 @@ test("failed identity, login entry or process evidence retains the durable deskt
   }
 });
 
-test("Linux desktop ownership never recommends the service it superseded", () => {
+linuxTest("Linux desktop ownership never recommends the service it superseded", () => {
   const f = fixture();
   expect(desktopStartupOwnership(f.deps)).toEqual({ owned: true, loginEnabled: false, running: false, viable: false });
   f.state.pid = null;
@@ -214,7 +216,7 @@ test("Linux desktop ownership never recommends the service it superseded", () =>
   expect(startupHealthSummary(health)).not.toContain("ocx service");
 });
 
-test("other platforms and absent, CLI or unknown ownership cannot grant Linux desktop protection", () => {
+linuxTest("other platforms and absent, CLI or unknown ownership cannot grant Linux desktop protection", () => {
   const f = fixture();
   expect(diagnoseLinuxDesktopStartup({ ...f.deps, platform: "win32" })).toBeUndefined();
   expect(f.state.ownerReads).toBe(0);
