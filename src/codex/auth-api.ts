@@ -20,6 +20,7 @@ export { listCodexAuthAccountsSnapshot, refreshCodexQuotaForActivation, listCode
 export type { MainAccountInfoSnapshot } from "./auth-api/main-account-probe";
 export { fetchMainAccountInfoSnapshot, fetchMainAccountInfo } from "./auth-api/main-account-probe";
 export { PoolQuotaProbeBusyError, seedCodexAuthAdmissionForTests, fetchPoolAccountQuota } from "./auth-api/pool-quota-probe";
+export { runMainCreditFreshnessRefresh, MAIN_CREDITS_REFRESH_AFTER_MS } from "./auth-api/main-credit-freshness";
 export type { PrimeCodexPoolQuotasOptions } from "./auth-api/pool-mode-gate";
 export {
   runCodexCooldownRecoveryProbes,

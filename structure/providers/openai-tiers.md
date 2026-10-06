@@ -316,10 +316,21 @@ payloads cannot clear cooldowns, actual request refusals still drive cooldown/fa
 default-on main-account hard lock retains its separate local admission policy. Registration
 warmup remains conservative and does not spend paid credits to validate an exhausted account.
 
+Usage headers never re-observe a balance, and the request path does not read WHAM for a main
+quota it already holds, so the main login's credit evidence has its own keeper. While main is in
+`creditCodexAccountIds`, a usage window is full, the hard lock is not blocking and the cached
+credits are still spendable, the existing cooldown-recovery sweep re-reads main WHAM once that
+evidence is `MAIN_CREDITS_REFRESH_AFTER_MS` (three minutes) old, through the native-main claim and
+the shared usage-query pacing. That lands a new observation before the five-minute horizon, so
+the main credit hold never opens a gap between dashboard polls or while the dashboard is hidden.
+Retracted, empty or refused credits, accounts without consent and reauth-pending logins make no
+read. This is metadata only: it never clears a cooldown, a hard lock or a retraction.
+
 Credit parsing, expiry, partial updates and reset-ticket separation are covered in
 `tests/codex-integration/codex-quota-parser-parity.test.ts`; selection and bulk-pause behavior
 are covered in `tests/codex-integration/codex-credits-after-limit.test.ts` and
-`tests/codex-integration/codex-credits-after-limit-main.test.ts`, alongside the general routing,
+`tests/codex-integration/codex-credits-after-limit-main.test.ts`; the main credit refresh is covered in
+`tests/codex-integration/main-credit-freshness.test.ts`, alongside the general routing,
 bulk-pause and recovery suites `tests/codex-integration/codex-routing.test.ts`,
 `tests/codex-integration/codex-auth-api.test.ts` and `tests/codex-integration/codex-cooldown-recovery.test.ts`.
 

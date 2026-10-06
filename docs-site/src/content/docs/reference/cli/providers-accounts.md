@@ -315,6 +315,9 @@ list. Receipts are `{ok, id, creditsAfterLimit}` or `{ok, all, ids}`; retain the
 actual returned IDs and read back `ocx account list openai --json`. Showing credit
 balances with `--show-codex-credits` does not enable this policy. Do not enable
 credits to recover from a failed login or quota read.
+While the main login has paid-credit use on and a usage window is full, the proxy
+re-reads its credit balance in the background every few minutes, so requests keep
+using credits without the dashboard being open.
 
 ### Quota activation and reset-grant observations
 

@@ -21,6 +21,7 @@ import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { withNativeMainCredentialClaim, isNativeMainClaimUnavailable } from "./http";
 import type { PoolQuotaResult } from "./pool-quota-probe";
 import { fetchMainAccountInfoAttempt, fetchMainAccountInfo, MAIN_CACHE_TTL } from "./main-account-probe";
+import { runMainCreditFreshnessRefresh } from "./main-credit-freshness";
 import { fetchPoolAccountQuota, PoolQuotaProbeBusyError, POOL_CACHE_TTL, POOL_QUOTA_REFRESH_CONCURRENCY } from "./pool-quota-probe";
 import { getRuntimeConfig, configuredPoolAccount, mapWithConcurrency } from "./runtime-config";
 
@@ -162,6 +163,7 @@ export function registerCodexCooldownRecoveryProbeWorker(config: OcxConfig): voi
     afterTick: () => {
       void runCodexCooldownRecoveryProbes(config);
       void runMainAccountHardLockRecovery(config);
+      void runMainCreditFreshnessRefresh(config);
     },
   });
 }
