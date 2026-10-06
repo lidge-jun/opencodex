@@ -23,7 +23,7 @@ import { fetchCodexUsage, resetQuotaQueryBackoffForTests } from "../../src/codex
 import { runMainAccountHardLockRecovery } from "../../src/codex/auth-api/pool-mode-gate";
 import { captureConfigGeneration, STATE_SWEEP_INTERVAL_MS } from "../../src/lib/state-store-sweeper";
 import { WHAM_REQUEST_TIMEOUT_MS } from "../../src/codex/quota-recovery-timing";
-import { codexAuthContextErrorResponse } from "../../src/server/responses/codex-auth-error";
+import { mapCodexAuthContextErrorToResponse } from "../../src/server/responses/codex-auth-error";
 import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexQuotaHealthSnapshot, pickLowestUsageCodexAccount, recordCodexUpstreamOutcome } from "../../src/codex/routing";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
@@ -88,7 +88,7 @@ async function creditRefusal(cfg: OcxConfig, now: number) {
   expect(error.resetAt).toBe(now + DAY_MS);
   expect(isAccountNeedsReauth(MAIN)).toBe(false);
   expect(shouldMarkAccountNeedsReauthForCodexAuthFailure(error)).toBe(false);
-  const response = codexAuthContextErrorResponse(error, { now })!;
+  const response = mapCodexAuthContextErrorToResponse(error, { now })!;
   expect(response.status).toBe(429);
   const body = await response.json();
   expect(body.error.type).toBe("rate_limit_error");
