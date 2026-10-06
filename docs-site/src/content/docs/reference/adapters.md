@@ -55,7 +55,8 @@ transport; it does not infer subscription attribution from the inbound protocol.
   tool message as the anchor.
 - **Rewrites Codex's GPT-5 identity prompt** to a model-agnostic intro so routed models don't claim to
   be OpenAI.
-- For translated `Qwen3.8-27B` requests, a text-only developer reminder after the leading system
+- For translated `Qwen3.8-27B` requests (including gateway-namespaced ids such as
+  `openai/Qwen3.8-27B`), a text-only developer reminder after the leading system
   message stays in its conversation slot but is sent as `user`. The model's
   [chat template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja)
   rejects later `system` messages and does not accept `developer`, while later `user` messages
