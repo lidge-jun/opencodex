@@ -794,6 +794,19 @@ depend on them for long unattended runs.
 
 <!-- TODO(WP5 GUI): Add the sidecar settings-screen walkthrough after the GUI controls ship. -->
 
+## Client tools on Cursor routes
+
+When Claude Code uses a Cursor-backed model, OpenCodex preserves recognized client tool names
+such as `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, and `Task` in the Cursor catalog, tool
+guidance, and replayed calls. This keeps the names consistent with Claude Code's instructions.
+Denied Cursor-native execution frames direct the model to the client tools available that turn.
+
+A mixed catalog containing a bare Codex `exec_command` or `shell_command` bridge uses wire
+aliases such as `ocx_client_Read` to avoid Cursor tool collisions; calls returned to Claude Code
+still use its original tool names. Namespaced MCP tools keep their namespaced identities.
+OpenCodex includes these aliases in Cursor's transport byte budget, so a tool whose definition
+would exceed the limit is omitted for that turn.
+
 ## Reasoning effort
 
 Claude Code's `/effort` setting is preserved across the adapter:
@@ -818,6 +831,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | Assistant text | `output_text` |
 | Assistant `tool_use` | `function_call` (`input` → JSON-stringified `arguments`) |
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
+| `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result; preserves loaded-tool names without adding declarations or enabling translated server-side deferral |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
 | Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |

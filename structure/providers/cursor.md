@@ -52,6 +52,30 @@ In external Cursor turns using code mode or shell aliases, the bounded leading-c
 
 > Decision record: [ADR-0048](../decisions/ADR-0048-cursor-native-exec.md)
 
+## Client tool wire names and transport budget
+
+`src/adapters/cursor/tool-naming.ts` derives client wire names from the turn's tool catalog.
+Recognized bare Claude client tools such as `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, and
+`Task` keep their names when the catalog has no bare Codex `exec_command` or `shell_command`
+bridge. When either bare bridge is present, those tools receive the `ocx_client_` prefix to avoid
+Cursor-private tool collisions. Other non-proxy-owned bare tools always receive that prefix;
+proxy-owned execution/edit tools and namespaced MCP tools retain their existing identities.
+Registration, guidance, denied-native-exec redirects, live call mapping, and protobuf history
+replay use this catalog-dependent rule. Return mapping restores the client's semantic tool name.
+Request construction resolves accepted bare wire aliases in forced and allowed-tool choices to
+semantic names against the original catalog, retaining only the originally selected identities
+before prompt and budget filtering so a removed bridge cannot invalidate registration or widen
+the choice to a namespaced sibling.
+
+`src/adapters/cursor/tool-definitions.ts` measures actual repeated protobuf entries using the
+same catalog context for tool-choice matching and wire naming as registration.
+`src/adapters/cursor/request-builder.ts` passes the eligible catalog to every admission and
+eviction size calculation, so both serialized name fields include alias bytes. The transport
+budget remains 330 tools and 120,000 bytes. If a bridge is omitted, surviving Claude tools can
+use shorter bare names; the eligible-catalog measurement remains conservative in that case.
+`tests/providers/cursor/cursor-blob-claude-client-tools.test.ts` covers replay naming and mixed
+catalogs exactly at, and immediately above, the byte limit.
+
 ## Structured final output
 
 Cursor's Connect wire has no native Responses `text.format` schema field. The adapter preserves

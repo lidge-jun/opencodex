@@ -71,10 +71,26 @@ registration, including installations under `Program Files`. Previously enabled
 registrations are updated once on launch. Startup entries you disabled in the tray
 or Task Manager remain disabled.
 
-## Startup safety on macOS
+## Startup safety on macOS and Linux
 
 Startup safety reports **Desktop app** protection when OpenCodex's recorded ownership,
 **Start at Login** registration, and live supervision of its bundled proxy all match.
+On Linux, the pinned autostart backend writes the login entry to
+`~/.config/autostart/OpenCodex.desktop`, even when `$XDG_CONFIG_HOME` is set. Startup
+safety reads that entry and the desktop install-id under `~/.config`. When
+`$XDG_CONFIG_HOME` points elsewhere, the login session searches a different autostart
+directory, so startup safety stays **At risk** instead of crediting the entry.
+The entry counts only while it is not marked `Hidden=true` or
+`X-GNOME-Autostart-enabled=false`, and has no `OnlyShowIn`, `NotShowIn`, or `TryExec`
+condition. Its `Exec` must be an unquoted absolute path to `opencodex-desktop`, without
+spaces, escapes, or field codes, followed by exactly `--autostart`. The resolved
+executable must still be named `opencodex-desktop`, with its bundled `ocx` beside it.
+Startup safety reads the full evidence chain twice and grants protection only when
+both reads agree.
+
+AppImage installations remain **At risk**: the autostart backend registers the outer
+AppImage path, while the live desktop process runs inside its mount. Startup safety
+cannot verify that relationship and does not credit AppImage protection.
 A missing or stale check remains **At risk**. If the desktop app owns the proxy but
 protection cannot be verified, reopen OpenCodex and check **Start at Login**. Service
 and launcher installation or repair stays disabled while that ownership remains;

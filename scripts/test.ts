@@ -88,6 +88,15 @@ export function createIsolatedTestEnvironment(
       // whichever adapter collected the metadata. Naming the file keeps the sandbox
       // (git still writes nothing here) while leaving git's own trust decisions intact.
       GIT_CONFIG_GLOBAL: baseEnv.GIT_CONFIG_GLOBAL ?? join(homedir(), ".gitconfig"),
+      // Pin Bun's runtime transpiler cache for the same reason. Bun keeps it under the home
+      // directory (macOS: ~/Library/Caches/bun/@t@), so a sandboxed HOME/USERPROFILE handed every
+      // batch, and every fixture that gives its child its own HOME, an empty cache: the first child
+      // re-transpiled each large module (73 src files are over the 50 KB cache threshold). On a busy
+      // Windows shard that first child took 10-45 s where later ones took 2-5 s, failing whichever
+      // timed case happened to spawn it. The cache holds transpiled source only, so sharing it keeps
+      // the sandbox. An explicit value, including "" or "0" to disable it, is kept as given.
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: baseEnv.BUN_RUNTIME_TRANSPILER_CACHE_PATH
+        ?? join(hostTemp, "ocx-test-bun-transpiler-cache"),
       HOME: root,
       USERPROFILE: root,
       OPENCODEX_HOME: opencodexHome,

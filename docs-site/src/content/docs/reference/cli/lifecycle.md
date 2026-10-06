@@ -879,6 +879,11 @@ Migration restores the recorded native launcher without replacing a newer launch
 then installs the private wrapper. If private installation fails after native restoration, the native
 launcher stays restored and the operation can be retried. Missing or unusable native launchers require
 package-manager repair; OpenCodex does not guess another installation or rewrap the manager's path.
+Migration also refuses when the recorded `codex-shim.json` is not a regular file owned by you or is
+group- or world-writable. Older releases wrote that file with the process umask, so a umask of `002`
+left it at mode `0664`. The refusal names the file and the `chmod 600` that clears only the
+group- or world-writable refusal. Symlink and foreign-owner refusals remain; OpenCodex does not
+change the permissions itself.
 
 Launcher installation alone does not prove that Codex requests will use OpenCodex. After a runnable
 install, the command checks the current Codex routing and reports a warning instead of a green result

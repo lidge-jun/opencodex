@@ -31,7 +31,7 @@ against `api.openai.com`, so every OpenAI-compatible gateway was assumed not to 
 role until proven otherwise, and the instruction silently lost `developer` precedence.
 
 The translated `Qwen3.8-27B` Chat route follows its [pinned template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja): a late `system` raises, `developer` is unsupported, and a late `user` renders in place.
-Text-only developer items therefore keep their content and slot but use the `user` wire role,
+Gateway-namespaced ids such as LiteLLM's `openai/Qwen3.8-27B` match too. Text-only developer items therefore keep their content and slot but use the `user` wire role,
 losing developer precedence. Other models retain the mapping above; native Chat passthrough
 is unchanged. The rule is recorded in `tests/fixtures/qwen38-27b-chat-template-contract.json`
 and exercised by `tests/adapters/openai/openai-chat-qwen38-leading-system.test.ts`.

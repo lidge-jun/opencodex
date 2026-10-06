@@ -107,7 +107,7 @@ export function cursorNativeExecRedirectHint(
   // A request with no client tools but configured MCP tools still gets those named; a request that
   // advertises nothing at all keeps the default bridge wording.
   const names = [...new Set([
-    ...clientTools.map(cursorToolWireName),
+    ...clientTools.map(tool => cursorToolWireName(tool, clientTools)),
     ...mcpToolDefs.map(def => `mcp_${def.providerIdentifier}_${def.name}`),
   ])];
   if (names.length === 0) return undefined;

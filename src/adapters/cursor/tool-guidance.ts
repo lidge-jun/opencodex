@@ -1,6 +1,6 @@
 import type { OcxRequestOptions, OcxTool } from "../../types";
 import { CODE_MODE_HOST_CONTRACT_SENTENCE, CODE_MODE_RESULT_ECHO_SENTENCE } from "../exec-tool-result-normalize";
-import { CODEX_SHELL_BRIDGE_TOOL_NAMES, CODEX_TOOL_SEARCH_TOOL, CODEX_UNIFIED_EXEC_TOOL, clientSemanticToolNameFromCursorWire, cursorRequestAdvertisesApplyPatch, cursorRequestHasExecutionPath, cursorRequestHasShellAlias, cursorRequestUsesCodeMode, cursorToolAllowedByChoice, cursorToolWireName, isCodexShellBridgeToolName, isCursorExecutionPathTool, isCursorStructuredEditToolName } from "./tool-naming";
+import { CODEX_SHELL_BRIDGE_TOOL_NAMES, CODEX_TOOL_SEARCH_TOOL, CODEX_UNIFIED_EXEC_TOOL, clientSemanticToolNameFromCursorWire, cursorRequestAdvertisesApplyPatch, cursorRequestHasExecutionPath, cursorRequestHasShellAlias, cursorRequestUsesCodeMode, cursorToolAllowedByChoice, cursorToolWireName, isBareCodexShellBridgeTool, isClaudeClientBareToolName, isCodexShellBridgeToolName, isCursorExecutionPathTool, isCursorStructuredEditToolName } from "./tool-naming";
 
 export const CURSOR_SHELL_ALIAS_SYSTEM_NOTE =
   'Shell commands use the Codex shell bridge tool shown in this turn\'s catalog (`shell_command` or `exec_command`) with JSON arguments like {"cmd":"..."}. The long `mcp_opencodex-responses_*` display name is the same tool. Prefer it over Cursor-native Shell.';
@@ -129,7 +129,15 @@ function advertisedCoversNeighbor(wireNames: readonly string[], neighbor: (typeo
   return NEIGHBOR_AGENT_TOOL_ALIASES[neighbor].some(alias => advertised.has(alias.toLowerCase()));
 }
 
-function unavailableNeighborAgentToolNames(wireNames: readonly string[]): string[] {
+function unavailableNeighborAgentToolNames(
+  wireNames: readonly string[],
+  catalog?: readonly Pick<OcxTool, "namespace" | "name">[],
+): string[] {
+  if (
+    catalog
+    && !catalog.some(isBareCodexShellBridgeTool)
+    && catalog.some(tool => !tool.namespace && isClaudeClientBareToolName(tool.name))
+  ) return [];
   return NEIGHBOR_AGENT_TOOL_NAMES.filter(name => !advertisedCoversNeighbor(wireNames, name));
 }
 
@@ -149,7 +157,7 @@ export function buildCursorToolGuidanceSystemNote(
   const wireNames = [...new Set(
     tools
       .filter(tool => cursorToolAllowedByChoice(tool, toolChoice, tools))
-      .map(tool => cursorToolWireName(tool)),
+      .map(tool => cursorToolWireName(tool, tools)),
   )];
   if (wireNames.length === 0) return undefined;
 
@@ -170,7 +178,7 @@ export function buildCursorToolGuidanceSystemNote(
     ?.filter(tool => !tool.namespace && isCursorStructuredEditToolName(tool.name))
     .map(tool => tool.name) ?? [];
   const discoveryTools = discoveryToolLabel(wireNames);
-  const unavailableNeighborNames = unavailableNeighborAgentToolNames(wireNames);
+  const unavailableNeighborNames = unavailableNeighborAgentToolNames(wireNames, tools);
   // Host-shell-neutral: the Codex client executes bridge commands, and may differ from
   // the OpenCodex proxy OS (LAN/SSH remote-proxy). Always cover PowerShell 5.1 pitfalls.
   const hostShellNote = hasBareExec

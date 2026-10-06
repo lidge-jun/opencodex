@@ -4,7 +4,7 @@ import type { OcxRequestOptions, OcxTool } from "../../types";
 import { McpToolDefinitionSchema, McpToolsSchema, type McpToolDefinition } from "./gen/agent_pb";
 import { CURSOR_EDIT_FILE_TOOL, CURSOR_MULTI_EDIT_TOOL, cursorRequestAdvertisesApplyPatch, cursorToolAllowedByChoice, cursorToolWireName, OCX_RESPONSES_TOOL_PROVIDER } from "./tool-naming";
 import { CURSOR_EDIT_FILE_INPUT_SCHEMA, CURSOR_MULTI_EDIT_INPUT_SCHEMA, cursorToolInputSchema } from "./tool-schemas";
-export { OCX_RESPONSES_TOOL_PROVIDER, CODEX_EXEC_COMMAND_TOOL, CODEX_SHELL_COMMAND_TOOL, CODEX_UNIFIED_EXEC_TOOL, CODEX_WAIT_TOOL, CODEX_APPLY_PATCH_TOOL, CODEX_TOOL_SEARCH_TOOL, CURSOR_EDIT_FILE_TOOL, CURSOR_MULTI_EDIT_TOOL, CURSOR_STRUCTURED_EDIT_TOOLS, CURSOR_EXEC_COMMAND_TOOL, CODEX_SHELL_BRIDGE_TOOL_NAMES, isCodexShellBridgeToolName, resolveShellBridgeAliasKey, cursorToolChoiceAliases, isBareCodexShellBridgeTool, isCursorExecutionPathTool, isCursorWaitTool, isCursorCodeModeExecTool, cursorRequestUsesCodeMode, cursorRequestHasShellAlias, cursorRequestAdvertisesApplyPatch, isCursorStructuredEditToolName, isCursorSyntheticStructuredEditTool, cursorToolWireName, normalizeCursorWireName, normalizeCursorTextToolMarkers, responsesToolNameFromCursorWire, cursorToolAllowedByChoice } from "./tool-naming";
+export { OCX_RESPONSES_TOOL_PROVIDER, CODEX_EXEC_COMMAND_TOOL, CODEX_SHELL_COMMAND_TOOL, CODEX_UNIFIED_EXEC_TOOL, CODEX_WAIT_TOOL, CODEX_APPLY_PATCH_TOOL, CODEX_TOOL_SEARCH_TOOL, CURSOR_EDIT_FILE_TOOL, CURSOR_MULTI_EDIT_TOOL, CURSOR_STRUCTURED_EDIT_TOOLS, CURSOR_EXEC_COMMAND_TOOL, CODEX_SHELL_BRIDGE_TOOL_NAMES, isCodexShellBridgeToolName, resolveShellBridgeAliasKey, cursorToolChoiceAliases, isBareCodexShellBridgeTool, isCursorExecutionPathTool, isCursorWaitTool, isCursorCodeModeExecTool, cursorRequestUsesCodeMode, cursorRequestHasShellAlias, cursorRequestAdvertisesApplyPatch, isCursorStructuredEditToolName, isCursorSyntheticStructuredEditTool, CLAUDE_CLIENT_BARE_TOOL_NAMES, isClaudeClientBareToolName, isCursorBareClientToolWireAliased, cursorToolWireName, normalizeCursorWireName, normalizeCursorTextToolMarkers, responsesToolNameFromCursorWire, cursorToolAllowedByChoice } from "./tool-naming";
 export { CURSOR_EXEC_COMMAND_INPUT_SCHEMA, CURSOR_FREEFORM_INPUT_SCHEMA, CURSOR_EDIT_FILE_INPUT_SCHEMA, CURSOR_MULTI_EDIT_INPUT_SCHEMA, CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA, cursorToolInputSchema, cursorToolArgNormalizeSchema, shellBridgeRequiredCommandKeys, defaultShellBridgeArgNormalizeSchema, cursorShellBridgeDropError, nonEmptyShellBridgeCommandFromArgs, cursorShellBridgeArgsValid } from "./tool-schemas";
 export { CURSOR_SHELL_ALIAS_SYSTEM_NOTE, CURSOR_GENERIC_TOOL_USE_USER_HINT, isGenericToolUseCountDemoPrompt, requestedCursorToolUseCount, shouldAppendCursorGenericToolUseHint, appendCursorGenericToolUseHint, shouldUseNativeExecOnlyForGenericToolUse, cursorToolsForActivePrompt, buildCursorToolGuidanceSystemNote } from "./tool-guidance";
 
@@ -80,10 +80,11 @@ export function encodeCursorInputSchema(schema: unknown): Uint8Array {
 export function buildCursorToolDefinitions(
   tools: readonly OcxTool[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
+  catalog: readonly OcxTool[] = tools ?? [],
 ): McpToolDefinition[] {
   if (!tools?.length) return [];
-  return tools.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, tools)).map(tool => {
-    const wireName = cursorToolWireName(tool);
+  return tools.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, catalog)).map(tool => {
+    const wireName = cursorToolWireName(tool, catalog);
     return create(McpToolDefinitionSchema, {
       name: wireName,
       toolName: wireName,
@@ -98,15 +99,17 @@ export function buildCursorToolDefinitions(
 export function cursorMcpToolsEncodedSize(
   tools: readonly OcxTool[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
+  catalog: readonly OcxTool[] = tools ?? [],
 ): number {
-  const definitions = buildCursorToolDefinitions(tools, toolChoice);
+  const definitions = buildCursorToolDefinitions(tools, toolChoice, catalog);
   return toBinary(McpToolsSchema, create(McpToolsSchema, { mcpTools: definitions })).byteLength;
 }
 
-/** Exact additive contribution of one repeated McpToolDefinition entry. */
+/** Exact additive contribution of one entry, using the registration catalog for wire naming and choice. */
 export function cursorMcpToolEncodedSize(
   tool: OcxTool,
   toolChoice?: OcxRequestOptions["toolChoice"],
+  catalog: readonly OcxTool[] = [tool],
 ): number {
-  return cursorMcpToolsEncodedSize([tool], toolChoice);
+  return cursorMcpToolsEncodedSize([tool], toolChoice, catalog);
 }
