@@ -125,6 +125,37 @@ function directSidecarHeaders(
   return selected;
 }
 
+/**
+ * The caller's own ChatGPT credential for a call the caller created itself.
+ *
+ * A V3 `existingCall` sideband join attaches to a WebRTC call that ChatGPT voice or Codex Desktop
+ * created with the caller's login, so only that login can join it; a Pool-selected account is a
+ * different ChatGPT account and the upstream refuses the handshake. This hands the join the same
+ * caller-owned headers Codex Direct mode forwards: an explicit bearer whose token claim matches
+ * its `chatgpt-account-id`, never the proxy admission secret, materialized through the same main
+ * policy (hard lock, credits), whose refusals surface as `CodexAccountCooldownError`.
+ * Returns undefined when the caller presents no such credential.
+ */
+export function resolveCallerOwnedOpenAiSidecar(
+  candidates: readonly OpenAiForwardSidecarCandidate[],
+  incomingHeaders: Headers,
+  config: OcxConfig,
+  options: { admission?: Pick<DataPlaneAdmission, "source">; codexAuthPolicy?: CodexAuthPolicyConfig } = {},
+): ResolvedOpenAiForwardSidecar | undefined {
+  const candidate = candidates[0];
+  if (!candidate) return undefined;
+  try {
+    validateForwardAdmissionCredential(incomingHeaders, config);
+  } catch (error) {
+    if (error instanceof ForwardAdmissionCredentialError) return undefined;
+    throw error;
+  }
+  if (!hasCallerCodexBearer(incomingHeaders)) return undefined;
+  const headers = directSidecarHeaders(incomingHeaders, options.codexAuthPolicy ?? config, options.admission);
+  if (!headers) return undefined;
+  return { ...candidate, authContext: { kind: "main", accountId: null }, headers };
+}
+
 export async function resolveFirstUsableOpenAiSidecar(
   candidates: readonly OpenAiForwardSidecarCandidate[],
   incomingHeaders: Headers,
