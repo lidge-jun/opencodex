@@ -112,13 +112,11 @@ function readIncompleteOwner(path) {
 /** The current executable at the recorded PID, identity unverified; null if unreadable within a second. */
 function processImage(pid) {
   try {
-    if (process.platform === "win32") {
-      const listed = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
-        encoding: "utf8", timeout: 1_000, windowsHide: true,
-      });
-      const match = /^"([^"]+)","(\d+)"/.exec((listed.stdout ?? "").trim());
-      return listed.status === 0 && match && Number(match[2]) === pid ? match[1] : null;
-    }
+    // This module also runs in the Node npm/pnpm launcher, before Bun is available.
+    // Without a kernel-backed system-directory resolver, omit the optional Windows
+    // image label rather than searching the caller's directory/PATH or trusting env roots.
+    // PID, liveness, age and lease ownership decisions do not depend on this label.
+    if (process.platform === "win32") return null;
     const listed = spawnSync("ps", ["-o", "comm=", "-p", String(pid)], { encoding: "utf8", timeout: 1_000 });
     const command = (listed.stdout ?? "").trim();
     return listed.status === 0 && command ? basename(command) : null;

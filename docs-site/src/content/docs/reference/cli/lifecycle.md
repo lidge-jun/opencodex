@@ -827,6 +827,9 @@ that PID now. Wait for the operation to finish and retry; do not delete the lock
 process based only on this PID. A later mutation attempt can reclaim a stale lease once its
 age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
 
+
+On Windows, this shared Node/Bun diagnostic does not launch an executable to look up the image name; the recorded PID, liveness, lease age and recovery guidance remain available.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
 On macOS and Linux, install a private autostart wrapper at `<OPENCODEX_HOME>/bin/codex` and a

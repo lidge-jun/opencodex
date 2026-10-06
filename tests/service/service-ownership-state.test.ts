@@ -7,7 +7,8 @@
  * therefore lasted until the next repair — from a tray helper, from `ocx update`, from a
  * doctor suggestion — and nothing said it had gone.
  */
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
+import * as childProcess from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
@@ -682,6 +683,29 @@ describe("a busy runtime mutation lease names its holder (#6492)", () => {
     expect(line).toContain("Runtime mutation lease busy at ");
     expect(line).toContain("(recorded PID 6236 [alive, python.exe, identity unverified], lease age 212s); ");
     expect(line).toContain("stale leases are reclaimed after 30s once the recorded PID is no longer alive.");
+  });
+
+  test("Windows busy-lease diagnostics never search for an executable", () => {
+    hold(6236);
+    const paths = [serviceStatePath()];
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const spawned = spyOn(childProcess, "spawnSync").mockImplementation(() => ({
+      status: 0, stdout: '"untrusted-tasklist.exe","6236"', stderr: "", pid: 1,
+      output: [null, '"untrusted-tasklist.exe","6236"', ""], signal: null,
+    }));
+    try {
+      Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+      const options = { now: () => 2_000, processAlive: () => true };
+      expect(inspectOwnershipMutationLease(paths, options)).toMatchObject({ pid: 6236, alive: true, image: null });
+      expect(ownershipMutationLeaseStatusLine(paths, options)).toContain("recorded PID 6236 [alive, identity unverified]");
+      expect(() => acquireOwnershipMutationLease(paths, { ...options, waitMs: 0 }))
+        .toThrow("another process owns the runtime mutation lease");
+      expect(spawned).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+      spawned.mockRestore();
+    }
+    expect(existsSync(lockDir())).toBe(true);
   });
 
   test("inspection only reads: a dead, stale holder is reported, not reclaimed", () => {
