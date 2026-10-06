@@ -2330,6 +2330,7 @@ export const ko: Record<TKey, string> = {
   "api.key.revealHint": "클릭하면 전체 키가 보입니다",
   "api.key.hideHint": "클릭하면 전체 키를 숨깁니다",
   "api.key.revealFailed": "전체 키를 불러오지 못했습니다.",
+  "api.key.revealDenied": "저장된 키를 표시하려면 운영자가 승인한 세션이 필요합니다. 이 브라우저를 페어링해 계속하거나, 신뢰된 인증으로 로그인하세요.",
   "api.key.copyFailedShort": "복사하지 못했습니다. 키를 선택해 직접 복사하세요.",
   "api.key.deleteRowAria": "{name} 삭제",
   "api.key.deleteShort": "삭제",

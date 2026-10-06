@@ -2813,6 +2813,7 @@ export const vi: Record<TKey, string> = {
   "api.key.revealHint": "Nhấp để hiện toàn bộ khóa",
   "api.key.hideHint": "Nhấp để ẩn toàn bộ khóa",
   "api.key.revealFailed": "Không tải được toàn bộ khóa.",
+  "api.key.revealDenied": "Hiển thị khóa đã lưu yêu cầu phiên được vận hành cho phép. Ghép nối trình duyệt này để tiếp tục, hoặc đăng nhập qua danh tính tin cậy.",
   "api.key.copyFailedShort": "Không sao chép được. Hãy chọn key và sao chép thủ công.",
   "api.key.deleteRowAria": "Xóa {name}",
   "api.key.deleteShort": "Xóa",

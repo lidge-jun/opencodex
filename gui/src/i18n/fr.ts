@@ -2795,6 +2795,7 @@ export const fr: Record<TKey, string> = {
   "api.key.revealHint": "Cliquez pour afficher la clé complète",
   "api.key.hideHint": "Cliquez pour masquer la clé complète",
   "api.key.revealFailed": "Impossible de charger la clé complète.",
+  "api.key.revealDenied": "Afficher une clé enregistrée nécessite une session autorisée par l'opérateur. Associez ce navigateur pour continuer, ou connectez-vous via une identité de confiance.",
   "api.key.copyFailedShort": "Copie impossible. Sélectionnez la clé et copiez-la manuellement.",
   "api.key.deleteRowAria": "Supprimer {name}",
   "api.key.deleteShort": "Supprimer",

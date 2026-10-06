@@ -188,7 +188,7 @@ exchange. Pairing accepts no admin/data credential substitute and consumes a gra
 full origin predicate succeeds.
 
 The server issues a local in-memory session for five minutes or a remote session for twelve hours,
-with 128 live sessions maximum. Every session is bound to the exact server and browser origins;
+with 128 live sessions maximum. Stored-key reads require a current pairing or trusted Tailscale-identity session, not automatic loopback issuance or admin tokens. `POST /api/keys/reveal` uses `createManagementSessionControl().canRevealDataKeys` before and after body reception; absent controls deny. Every session is bound to the exact server and browser origins;
 state-changing requests additionally require the session CSRF token. A raw admin token remains
 ordinary management authority only and cannot satisfy consent routes. The dashboard never attaches
 its management session to `/v1/*` requests, and pages containing a session bootstrap are served with

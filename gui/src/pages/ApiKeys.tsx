@@ -15,6 +15,7 @@ import { readSessionListCacheEntry, writeSessionListCacheEntry } from "../sessio
 import { createBoundedFetch } from "../bounded-fetch";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
+import { useKeyDisclosure } from "../use-key-disclosure";
 import ApiKeysWorkspace from "../components/apikeys-workspace/ApiKeysWorkspace";
 import {
   DEFAULT_ENDPOINTS,
@@ -29,6 +30,7 @@ import {
   type ApiKeyEntry,
   type ModelTestResult,
   type ModelTests,
+  type RevealKeyResult,
 } from "./api-keys-utils";
 
 interface KeysResponse extends UsageReadMetadata {
@@ -151,6 +153,13 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   const [rotationSecret, setRotationSecret] = useState<{ id: string; key: string; rotationId: string } | null>(null);
   const [rotationCopied, setRotationCopied] = useState(false);
   const creatingRef = useRef(false);
+  const clearDisclosure = useCallback(() => {
+    setNewKey(null);
+    setCopied(false);
+    setRotationSecret(null);
+    setRotationCopied(false);
+  }, []);
+  const disclosure = useKeyDisclosure(apiBase, active, clearDisclosure);
 
   const fetchKeys = useCallback(async (signal: AbortSignal): Promise<CachedKeysShape> => {
     const res = await fetch(`${apiBase}/api/keys`, { signal });
@@ -266,6 +275,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   }, [modelQuery, models]);
 
   const handleCreate = async (name?: string): Promise<boolean> => {
+    const generation = disclosure.generation.current;
     if (creatingRef.current) return false;
     creatingRef.current = true;
     setCreating(true);
@@ -278,6 +288,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         body: JSON.stringify({ name: effectiveName || "default" }),
       });
       const data = await readJsonOrThrow<CreateKeyResponse>(res, t("api.createFailed"));
+      if (!disclosure.current(generation)) return false;
       if (typeof data?.key !== "string" || data.key.length === 0) {
         setActionError(t("api.createFailed"));
         return false;
@@ -322,8 +333,10 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   };
 
   /** The full key for one row. Read-only, but bounded like the mutations so a
-   *  stalled connection releases the cell's pending state. */
-  const handleReveal = async (id: string): Promise<string | null> => {
+   *  stalled connection releases the cell's pending state. The 401/403 standing
+   *  refusal is reported apart from transient failures so the list can offer
+   *  the remedy — pairing — instead of a bare "try again". */
+  const handleReveal = async (id: string): Promise<RevealKeyResult> => {
     const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
     try {
       const res = await fetch(`${apiBase}/api/keys/reveal`, {
@@ -333,11 +346,14 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         signal: bounded.signal,
         cache: "no-store",
       });
-      if (!res.ok) return null;
+      if (res.status === 401 || res.status === 403) return { ok: false, kind: "denied" };
+      if (!res.ok) return { ok: false, kind: "failed" };
       const body = await res.json() as { key?: unknown };
-      return typeof body.key === "string" && body.key ? body.key : null;
+      return typeof body.key === "string" && body.key
+        ? { ok: true, key: body.key }
+        : { ok: false, kind: "failed" };
     } catch {
-      return null;
+      return { ok: false, kind: "failed" };
     } finally {
       bounded.clear();
     }
@@ -369,6 +385,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   };
 
   const handleRotationStart = async (id: string): Promise<boolean> => {
+    const generation = disclosure.generation.current;
     setActionError(null);
     const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
     try {
@@ -379,6 +396,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         signal: bounded.signal,
       });
       const data = await readJsonOrThrow<StartRotationResponse>(res, t("api.rotation.startFailed"));
+      if (!disclosure.current(generation)) return false;
       if (!data || typeof data.key !== "string" || !data.key || typeof data.rotationId !== "string" || !data.rotationId) return false;
       setRotationSecret({ id, key: data.key, rotationId: data.rotationId });
       refreshKeys();
@@ -413,10 +431,12 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
 
   const copyRotationSecret = async () => {
     if (!rotationSecret) return;
+    const generation = disclosure.generation.current;
     try {
       await navigator.clipboard.writeText(rotationSecret.key);
+      if (!disclosure.current(generation)) return;
       setRotationCopied(true);
-      window.setTimeout(() => setRotationCopied(false), 2000);
+      window.setTimeout(() => { if (disclosure.current(generation)) setRotationCopied(false); }, 2000);
     } catch {
       setActionError(t("api.key.copyFailed"));
     }
@@ -424,11 +444,13 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
 
   const copyKey = async () => {
     if (!newKey) return;
+    const generation = disclosure.generation.current;
     setActionError(null);
     try {
       await navigator.clipboard.writeText(newKey);
+      if (!disclosure.current(generation)) return;
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      window.setTimeout(() => { if (disclosure.current(generation)) setCopied(false); }, 2000);
     } catch {
       // The one-time key is the only string in the product with no second
       // chance, so a silent failure here is the worst kind. Keep it on screen.
@@ -542,7 +564,9 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       ) : (
         <>
           <ApiKeysWorkspace
+        key={apiBase}
         active={active}
+        onPairingStart={() => disclosure.invalidate()}
         keys={keys}
         apiBase={apiBase}
         attributionSince={attributionSince}

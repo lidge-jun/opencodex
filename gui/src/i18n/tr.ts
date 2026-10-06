@@ -2814,6 +2814,7 @@ export const tr: Record<TKey, string> = {
   "api.key.revealHint": "Tam anahtarı göstermek için tıklayın",
   "api.key.hideHint": "Tam anahtarı gizlemek için tıklayın",
   "api.key.revealFailed": "Tam anahtar yüklenemedi.",
+  "api.key.revealDenied": "Kaydedilmiş bir anahtarı göstermek, operatörün yetkilendirdiği bir oturum gerektirir. Devam etmek için bu tarayıcıyı eşleştirin veya güvenilir bir kimlikle oturum açın.",
   "api.key.copyFailedShort": "Kopyalanamadı. Anahtarı seçip elle kopyalayın.",
   "api.key.deleteRowAria": "{name} sil",
   "api.key.deleteShort": "Sil",

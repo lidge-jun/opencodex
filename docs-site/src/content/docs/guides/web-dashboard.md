@@ -268,7 +268,24 @@ they have been synchronized. See
 
 ## Remote Hub sessions, keys, and usage
 
-In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place, and clicking a key shows its full value with a **Copy** button. Revealing a key needs a signed-in dashboard session; the admin token cannot read key values.
+In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place. Clicking a key can show its full value with a **Copy** button only from an independently authorized session.
+
+### Reading an existing API key
+
+Showing a stored key's full value requires a dashboard session established by explicit pairing or
+trusted Tailscale identity. An automatic local dashboard session can still show the masked key list,
+but cannot reveal existing values; a raw admin token cannot call this session-only action either.
+Use the existing [dashboard pairing flow](/guides/remote-hub/#pairing-this-browser-with-a-hub) to establish an
+operator-authorized session before requesting a stored value; a refused reveal states the requirement
+on the page and, on the same-origin standalone transport, offers the local pairing form in place. Pair
+again if that session expires or is revoked. Ordinary dashboard sign-in, key creation, rotation, and
+deletion are unchanged.
+
+On a standalone dashboard opened at its same-origin loopback address, a refused reveal offers the
+local pairing form. After pairing, click the key again to request its value. Pairing itself never
+reveals a key. Displayed key values and copy feedback are cleared when the shared session is lost,
+pairing starts, you leave this panel, hide the browser tab, or switch servers. This also clears
+newly created and replacement values, so copy a one-time value before leaving the panel.
 
 The dashboard's management plane is separate from direct client→hub model traffic. **Connect → API Keys** shows pending rotations, displays a replacement secret only once, and requires explicit commit or abort. Browser logout invalidates only the current remote session. Connected usage is the hub store filtered by the client's `apiKeyId`; disconnected usage is local, with no mirroring.
 

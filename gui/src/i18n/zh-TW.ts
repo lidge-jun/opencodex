@@ -2068,6 +2068,7 @@ export const zhTW: Record<TKey, string> = {
   "api.key.revealHint": "點擊顯示完整金鑰",
   "api.key.hideHint": "點擊隱藏完整金鑰",
   "api.key.revealFailed": "無法載入完整金鑰。",
+  "api.key.revealDenied": "顯示已儲存的金鑰需要經操作員授權的工作階段。請配對此瀏覽器以繼續，或透過受信任的身分登入。",
   "api.key.copyFailedShort": "無法複製。請選取金鑰後手動複製。",
   "api.key.deleteRowAria": "刪除 {name}",
   "api.key.deleteShort": "刪除",

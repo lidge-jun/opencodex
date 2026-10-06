@@ -2303,6 +2303,7 @@ export const zh: Record<TKey, string> = {
   "api.key.revealHint": "点击显示完整密钥",
   "api.key.hideHint": "点击隐藏完整密钥",
   "api.key.revealFailed": "无法加载完整密钥。",
+  "api.key.revealDenied": "显示已存储的密钥需要经操作员授权的会话。请配对此浏览器以继续，或通过受信任的身份登录。",
   "api.key.copyFailedShort": "无法复制。请选中密钥后手动复制。",
   "api.key.deleteRowAria": "删除 {name}",
   "api.key.deleteShort": "删除",

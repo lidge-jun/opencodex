@@ -2722,6 +2722,7 @@ export const ja: Record<TKey, string> = {
   "api.key.revealHint": "クリックでキー全体を表示",
   "api.key.hideHint": "クリックでキー全体を隠す",
   "api.key.revealFailed": "キー全体を読み込めませんでした。",
+  "api.key.revealDenied": "保存済みキーの表示には、オペレーターが認可したセッションが必要です。続行するにはこのブラウザーをペアリングするか、信頼された ID でサインインしてください。",
   "api.key.copyFailedShort": "コピーできませんでした。キーを選択して手動でコピーしてください。",
   "api.key.deleteRowAria": "{name} を削除",
   "api.key.deleteShort": "削除",
