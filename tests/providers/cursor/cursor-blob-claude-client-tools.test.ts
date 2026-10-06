@@ -7,6 +7,9 @@ import {
 } from "../../../src/adapters/cursor/native-exec";
 import { resetAppOwnedMemoryForTests } from "../../../src/lib/app-owned-memory";
 import { encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
+import { applyCursorToolBudget, CURSOR_TOOL_BYTES_LIMIT } from "../../../src/adapters/cursor/request-builder";
+import { cursorMcpToolEncodedSize, cursorMcpToolsEncodedSize } from "../../../src/adapters/cursor/tool-definitions";
+import type { OcxTool } from "../../../src/types";
 import { resetCursorCallIdProvenanceForTests } from "../../../src/adapters/cursor/call-id";
 import {
   AgentClientMessageSchema,
@@ -101,4 +104,54 @@ describe("Cursor blob handshake", () => {
     }
   });
 
+});
+
+describe("Cursor Claude client tool catalog budget", () => {
+  test("individual sizes use catalog wire names and aliased tool choices", () => {
+    const bridge: OcxTool = { name: "exec_command", parameters: {} };
+    const read: OcxTool = { name: "Read", parameters: {} };
+    const tools = [bridge, read];
+    expect(tools.reduce((sum, tool) => sum + cursorMcpToolEncodedSize(tool, "auto", tools), 0))
+      .toBe(cursorMcpToolsEncodedSize(tools, "auto"));
+    const choice = { name: "ocx_client_Read" };
+    expect(cursorMcpToolEncodedSize(read, choice, tools)).toBeGreaterThan(0);
+    expect(cursorMcpToolEncodedSize(read, choice, tools)).toBe(cursorMcpToolsEncodedSize(tools, choice));
+    expect(cursorMcpToolEncodedSize(bridge, choice, tools)).toBe(0);
+  });
+
+  test("omits a Claude tool when its mixed-catalog wire alias exceeds the byte limit", () => {
+    const bridge: OcxTool = { name: "exec_command", parameters: {} };
+    const read: OcxTool = { name: "Read", description: "x".repeat(118_450), parameters: {} };
+    const tools = [bridge, read];
+    expect(cursorMcpToolsEncodedSize([bridge]) + cursorMcpToolsEncodedSize([read]))
+      .toBe(CURSOR_TOOL_BYTES_LIMIT);
+    expect(cursorMcpToolsEncodedSize(tools)).toBe(CURSOR_TOOL_BYTES_LIMIT + 22);
+
+    const budget = applyCursorToolBudget(tools, "auto");
+    expect(cursorMcpToolsEncodedSize(budget.tools)).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+    expect(budget.tools).toEqual([bridge]);
+    expect(budget.omitted).toEqual([read]);
+    expect(applyCursorToolBudget([read], "auto").tools).toEqual([read]);
+  });
+
+  test.each(["exec_command", "shell_command"])(
+    "retains a mixed catalog exactly at the byte limit with %s",
+    (name) => {
+      const bridge: OcxTool = { name, parameters: {} };
+      const read: OcxTool = { name: "Read", description: "x".repeat(118_450), parameters: {} };
+      const overhead = cursorMcpToolsEncodedSize([bridge, read]) - CURSOR_TOOL_BYTES_LIMIT;
+      read.description = read.description!.slice(overhead);
+      expect(cursorMcpToolsEncodedSize([bridge, read])).toBe(CURSOR_TOOL_BYTES_LIMIT);
+      const budget = applyCursorToolBudget([bridge, read], "auto");
+      expect(budget.tools).toEqual([bridge, read]);
+      expect(budget.omitted).toEqual([]);
+      expect(cursorMcpToolsEncodedSize(budget.tools)).toBe(CURSOR_TOOL_BYTES_LIMIT);
+
+      const tooLarge = { ...read, description: read.description + "x" };
+      const overflow = applyCursorToolBudget([bridge, tooLarge], "auto");
+      expect(overflow.tools).toEqual([bridge]);
+      expect(overflow.omitted).toEqual([tooLarge]);
+      expect(cursorMcpToolsEncodedSize(overflow.tools)).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+    },
+  );
 });

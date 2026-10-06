@@ -102,8 +102,8 @@ export function applyCursorToolBudget(
   const tryKeep = (tool: OcxTool): boolean => {
     if (keptSet.has(tool) || kept.length >= CURSOR_TOOL_COUNT_LIMIT) return keptSet.has(tool);
     // Repeated protobuf message fields serialize as concatenated tag/length/value entries,
-    // so each one-entry wrapper size is the exact additive contribution to McpTools.
-    const candidateBytes = cursorMcpToolEncodedSize(tool, toolChoice);
+    // so each wrapper uses the same catalog-dependent names and choice as registration.
+    const candidateBytes = cursorMcpToolEncodedSize(tool, toolChoice, eligible);
     if (keptBytes + candidateBytes > CURSOR_TOOL_BYTES_LIMIT) return false;
     kept.push(tool);
     keptSet.add(tool);
@@ -129,7 +129,7 @@ export function applyCursorToolBudget(
       if (!occupant || isCursorExecutionPathTool(occupant)) continue;
       kept.splice(i, 1);
       keptSet.delete(occupant);
-      keptBytes -= cursorMcpToolEncodedSize(occupant, toolChoice);
+      keptBytes -= cursorMcpToolEncodedSize(occupant, toolChoice, eligible);
       if (kept.length < CURSOR_TOOL_COUNT_LIMIT && keptBytes + needBytes <= CURSOR_TOOL_BYTES_LIMIT) {
         return;
       }
@@ -141,7 +141,7 @@ export function applyCursorToolBudget(
   // earlier same-priority pins; evict wait/patch/filler rather than ship wait-only.
   for (const tool of eligible) {
     if (!isCursorExecutionPathTool(tool) || keptSet.has(tool)) continue;
-    const need = cursorMcpToolEncodedSize(tool, toolChoice);
+    const need = cursorMcpToolEncodedSize(tool, toolChoice, eligible);
     if (need > CURSOR_TOOL_BYTES_LIMIT) continue;
     evictNonExecutionPath(need);
     tryKeep(tool);
@@ -157,7 +157,7 @@ export function applyCursorToolBudget(
       keptSet.delete(tool);
       const index = kept.indexOf(tool);
       if (index >= 0) kept.splice(index, 1);
-      keptBytes -= cursorMcpToolEncodedSize(tool, toolChoice);
+      keptBytes -= cursorMcpToolEncodedSize(tool, toolChoice, eligible);
     }
   }
 

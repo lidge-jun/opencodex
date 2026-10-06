@@ -80,10 +80,11 @@ export function encodeCursorInputSchema(schema: unknown): Uint8Array {
 export function buildCursorToolDefinitions(
   tools: readonly OcxTool[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
+  catalog: readonly OcxTool[] = tools ?? [],
 ): McpToolDefinition[] {
   if (!tools?.length) return [];
-  return tools.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, tools)).map(tool => {
-    const wireName = cursorToolWireName(tool, tools);
+  return tools.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, catalog)).map(tool => {
+    const wireName = cursorToolWireName(tool, catalog);
     return create(McpToolDefinitionSchema, {
       name: wireName,
       toolName: wireName,
@@ -98,15 +99,17 @@ export function buildCursorToolDefinitions(
 export function cursorMcpToolsEncodedSize(
   tools: readonly OcxTool[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
+  catalog: readonly OcxTool[] = tools ?? [],
 ): number {
-  const definitions = buildCursorToolDefinitions(tools, toolChoice);
+  const definitions = buildCursorToolDefinitions(tools, toolChoice, catalog);
   return toBinary(McpToolsSchema, create(McpToolsSchema, { mcpTools: definitions })).byteLength;
 }
 
-/** Exact additive contribution of one repeated McpToolDefinition entry. */
+/** Exact additive contribution of one entry, using the registration catalog for wire naming and choice. */
 export function cursorMcpToolEncodedSize(
   tool: OcxTool,
   toolChoice?: OcxRequestOptions["toolChoice"],
+  catalog: readonly OcxTool[] = [tool],
 ): number {
-  return cursorMcpToolsEncodedSize([tool], toolChoice);
+  return cursorMcpToolsEncodedSize([tool], toolChoice, catalog);
 }
