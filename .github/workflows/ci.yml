@@ -63,6 +63,20 @@ on:
         type: choice
         default: all
         options: [all, release-gates, macos-control]
+  # Nightly safety net. The Windows shards run on a pull request only when the
+  # changes job judges it Windows-sensitive, so anything that slips past that
+  # filter must still be caught within a day: a scheduled run requests the full
+  # lane=all matrix (nine Windows shards and the macOS control included).
+  #
+  # GitHub runs schedules from the DEFAULT branch, which is main, so this
+  # trigger activates only once this file reaches main by promotion, and the
+  # workflow definition is main's. Every test checkout reads
+  # needs.changes.outputs.checkout_ref, which the changes job resolves to ONE
+  # dev commit on a schedule, so the run tests dev and every job tests the same
+  # SHA. Its check runs attach to main's head commit; release.yml accepts only a
+  # push-event run, so a scheduled run can never qualify a release.
+  schedule:
+    - cron: "17 18 * * *"
 
 permissions:
   contents: read
@@ -88,8 +102,12 @@ concurrency:
   # `github.run_id` is unique per run, so each dispatch is a group of one: it
   # cancels nothing and nothing cancels it, including a second dispatch of the
   # same ref.
-  group: cross-platform-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  #
+  # A scheduled run is keyed the same way. Keyed on the ref it would share
+  # refs/heads/main with a promotion push and, with cancel-in-progress, cancel
+  # the very run release.yml waits for.
+  group: cross-platform-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'schedule' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' }}
 
 jobs:
   # Which Windows runner this run is allowed to use.
@@ -118,6 +136,8 @@ jobs:
   #
   # `push` on main/preview requires the push permission, and
   # `workflow_dispatch` requires write access, so both carry a trusted author.
+  # A schedule runs main's workflow against a dev commit that already merged
+  # through review, the same trust as a push.
   # A trusted author is not audited code: merging a contributor PR into `dev`
   # fires `push`, and its dependencies and postinstall hooks then run here.
   select-windows-runner:
@@ -141,7 +161,7 @@ jobs:
           set -euo pipefail
           trusted=no
           case "$EVENT_NAME" in
-            push|workflow_dispatch) trusted=yes ;;
+            push|workflow_dispatch|schedule) trusted=yes ;;
           esac
 
           # Repository variable OCX_SELF_HOSTED_WINDOWS is an OPERATIONAL switch,
@@ -197,6 +217,14 @@ jobs:
       # skipping the check it selects.
       setup_action: ${{ steps.narrow.outputs.setup_action }}
       remote_helper: ${{ steps.narrow.outputs.remote_helper }}
+      # Whether this pull request needs the nine Windows shards: the windows path
+      # filter below OR an added src/tests line naming a Windows marker. Computed
+      # by scripts/ci/windows-sensitive-diff.sh, which validates its input and
+      # treats the diff as data.
+      windows: ${{ steps.windows.outputs.windows }}
+      # The commit every test job checks out. Empty (the event's own commit)
+      # except on a schedule, where it is the one dev SHA resolved below.
+      checkout_ref: ${{ steps.nightly.outputs.checkout_ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -205,6 +233,9 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          # The pull request merge commit plus its first parent, the base tip,
+          # so the Windows marker scan can diff exactly this pull request.
+          fetch-depth: 2
 
       - name: Detect changed areas
         id: filter
@@ -341,6 +372,32 @@ jobs:
             # real only on macOS and Windows, so its job lints and tests the crate on all three.
             remote_helper:
               - 'native/remote-workspace-helper/**'
+            # Paths whose change selects the nine Windows suite shards on a pull
+            # request. These carry the Windows service, update, shim, intercept,
+            # ACL and process code, and the harness every Windows shard runs.
+            # scripts/ci/windows-sensitive-diff.sh adds the content markers.
+            windows:
+              - 'src/lib/windows-*'
+              - 'src/lib/*acl*'
+              - 'src/service/**'
+              - 'src/update/**'
+              - 'src/claude/intercept/**'
+              - 'src/codex/shim*'
+              - 'src/codex/app-server-processes.ts'
+              - 'src/codex/desktop-app/**'
+              - 'src/config/process-state.ts'
+              - 'src/cli/update-restart*'
+              - 'src/server/local-management-read-client.ts'
+              - 'src/server/startup-health-cache.ts'
+              - 'src/tray/**'
+              - 'scripts/test.ts'
+              - 'scripts/test-*.ts'
+              - 'scripts/ci/**'
+              - 'tests/preload.ts'
+              - 'tests/helpers/**'
+              - '.github/workflows/ci.yml'
+              - 'package.json'
+              - 'bun.lock'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
             # bin/ocx.mjs executes it: without that entry an ordinary source PR
@@ -457,6 +514,38 @@ jobs:
             esac
           done
 
+      - name: Decide whether the Windows shards run
+        id: windows
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PATH_SELECTED: ${{ steps.filter.outputs.windows }}
+        run: bash scripts/ci/windows-sensitive-diff.sh
+
+      # A scheduled run starts from main's head. Resolve dev ONCE so the nine
+      # Windows shards, the macOS control and every other job test one commit,
+      # however long the queue between them. contents: read already covers it.
+      - name: Resolve the commit a scheduled run tests
+        id: nightly
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo 'checkout_ref=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/dev" --jq .sha)"
+          if ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
+            printf '::error::could not resolve dev to a commit SHA\n'
+            exit 1
+          fi
+          printf 'checkout_ref=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+          printf 'Scheduled run: workflow from %s, testing dev at %s\n' "$GITHUB_SHA" "$sha" >> "$GITHUB_STEP_SUMMARY"
+          printf 'scheduled run tests dev at %s (workflow %s)\n' "$sha" "$GITHUB_SHA"
+
   # The suite, split by file across four Linux runners.
   #
   # `scripts/ci/run-bun-test-batches.sh` assigns files to shards by the per-file
@@ -496,6 +585,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
@@ -552,6 +642,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -591,6 +682,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -626,6 +718,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -713,6 +806,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
@@ -764,8 +858,9 @@ jobs:
     needs: changes
     # Diagnostic-only lanes stay off the ordinary release gates: list every lane
     # that should run this job, so a new lane defaults to skipping the diagnostic.
+    # The nightly schedule is the full lane=all matrix, so it runs this job too.
     if: >-
-      github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')
     runs-on: macos-latest
     # Unsharded full-membership control, one worker in sequential fresh batches.
     # Long-lived Bun isolate pools repeatedly wedged while synchronously reaping
@@ -780,6 +875,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
@@ -826,7 +922,9 @@ jobs:
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
 
-  # Windows runs only when a maintainer asks for it by hand.
+  # Windows runs on a Windows-sensitive pull request, on the nightly schedule,
+  # and on a lane=all (or default) dispatch. It is never part of the push run
+  # release.yml gates on.
   #
   # It left the PR lane first (16m23s against a 6-minute Linux critical path;
   # the ceiling was raised twice rather than the gap closed — #711 vs #653,
@@ -842,11 +940,18 @@ jobs:
   # release.yml gates on a successful push-event run of this workflow, which
   # now means Linux + macOS + the gates; Windows re-enters the gate when the
   # tracked failures are fixed, not before.
+  #
+  # Dispatch-only proved too late. #6639, #6556, #6605 and #6606 each landed with
+  # green pull-request CI while breaking Windows, and the breakage surfaced days
+  # later on a manual dispatch. So a pull request whose changes job reports
+  # windows=true (a Windows path, or an added src/tests line naming a Windows
+  # marker; see scripts/ci/windows-sensitive-diff.sh) now runs the nine shards,
+  # and the daily schedule catches whatever that filter misses.
   platform-windows:
     name: windows ${{ matrix.shard }}/9
-    needs: select-windows-runner
+    needs: [changes, select-windows-runner]
     if: >-
-      github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all') || github.event_name == 'pull_request' && needs.changes.outputs.windows == 'true'
     runs-on: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
     # Sharded like the Linux legs. The single-leg run reached 30 minutes on a
     # green suite and was killed in cleanup; four shards put each leg inside the
@@ -919,6 +1024,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # Same reason as the Linux shards and the macOS control: this leg runs the
           # whole suite, and tests/ci-workflows/release-version-line.test.ts reads release tags.
           # Without tags the check sees an empty set and cannot fail.
@@ -938,6 +1044,43 @@ jobs:
         run: |
           cd gui
           bun run build
+
+      # Windows PowerShell 5.1 resolves an autoloaded cmdlet through its module
+      # analysis cache, and a fresh or redirected LOCALAPPDATA rebuilds that cache
+      # by scanning every PSModulePath module: 20-27 s per child against ~3.7 s
+      # with a warm cache (devlog/_fin/260906_release_244_publish/020_integrate.md).
+      # Test sandboxes redirect the profile, so each one used to pay that rebuild.
+      # Build one seed here, from this bash step so the module environment matches
+      # the test step, with the System32 engine the product spawns. scripts/test.ts
+      # copies the seed into every sandbox; nothing ever writes the seed itself.
+      # PowerShell serializes the cache after a delay, so wait for a nonempty file
+      # and export the seed only once it exists.
+      - name: Prewarm the PowerShell module analysis cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          seed="${RUNNER_TEMP}\\ocx-ps-module-analysis-seed\\ModuleAnalysisCache"
+          started=$SECONDS
+          # The single-quoted argument is PowerShell source; bash must not expand it.
+          # shellcheck disable=SC2016
+          PSModuleAnalysisCachePath="$seed" "${SYSTEMROOT}/System32/WindowsPowerShell/v1.0/powershell.exe" \
+            -NoLogo -NoProfile -NonInteractive -Command '
+              $p = $env:PSModuleAnalysisCachePath
+              [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($p))
+              $null = Get-Module -ListAvailable
+              $null = Get-Command -Name Get-Acl, Set-Acl, Get-CimInstance
+              $deadline = [DateTime]::UtcNow.AddSeconds(60)
+              while ([DateTime]::UtcNow -lt $deadline) {
+                if ([System.IO.File]::Exists($p) -and ([System.IO.FileInfo]::new($p)).Length -gt 0) { break }
+                [System.Threading.Thread]::Sleep(500)
+              }
+            ' || echo "::warning::PowerShell module cache prewarm exited non-zero"
+          if [ -s "$(cygpath -u "$seed")" ]; then
+            echo "OCX_TEST_PS_MODULE_ANALYSIS_SEED=$seed" >> "$GITHUB_ENV"
+            echo "module analysis cache seeded in $(( SECONDS - started ))s"
+          else
+            echo "::warning::PowerShell module analysis cache was not written; sandboxes seed from the runner profile"
+          fi
 
       - name: Test in fresh-process batches
         # --timeout: the Linux batches and the macOS control both pass 60000; this leg was
@@ -998,6 +1141,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1051,6 +1195,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1080,6 +1225,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1116,6 +1262,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1144,6 +1291,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         id: bun
@@ -1181,6 +1329,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -1214,6 +1363,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1257,6 +1407,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       # Deliberately NO setup-bun: prove `npm install -g` works without a
       # separately-installed Bun. The launcher uses the bundled `bun` dependency.
@@ -1313,6 +1464,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -1390,6 +1542,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Install Tauri Linux dependencies
         run: |
@@ -1534,6 +1687,7 @@ jobs:
           CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
           CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
           CHANGES_DESKTOP: ${{ needs.changes.outputs.desktop }}
+          CHANGES_WINDOWS: ${{ needs.changes.outputs.windows }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1597,7 +1751,11 @@ jobs:
           fi
           dispatch=not-requested
           windows=not-requested
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            # The nightly safety net is the full lane=all matrix.
+            dispatch=requested
+            windows=requested
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             # Mirror the diagnostic job allowlist; release-gates requests neither suite.
             if [ -z "$LANE" ] || [ "$LANE" = "all" ] || [ "$LANE" = "macos-control" ]; then
               dispatch=requested
@@ -1606,6 +1764,9 @@ jobs:
             if [ -z "$LANE" ] || [ "$LANE" = "all" ]; then
               windows=requested
             fi
+          elif [ "$EVENT_NAME" = "pull_request" ] && [ "${CHANGES_WINDOWS:-}" = "true" ]; then
+            # A Windows-sensitive pull request (path filter or added-line marker).
+            windows=requested
           fi
 
           # One line per job, mirroring that job's own `if:`. Adding a job to this workflow

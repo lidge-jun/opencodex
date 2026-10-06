@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, win32 } from "node:path";
 import {
   acquireTestRunLock,
   resolveWrappedTestRunLockPath,
@@ -33,6 +33,52 @@ export const LIVE_INSTALL_CREDENTIAL_ENV = [
   "OPENCODEX_ADMIN_AUTH_TOKEN",
   "OCX_API_TOKEN_FILE",
 ] as const;
+
+export const TEST_PS_MODULE_ANALYSIS_SEED_ENV = "OCX_TEST_PS_MODULE_ANALYSIS_SEED";
+
+export function pinPowerShellModuleAnalysisCache(
+  root: string,
+  baseEnv: Record<string, string | undefined>,
+  platform: NodeJS.Platform = process.platform,
+): { set: Record<string, string>; drop: string[] } {
+  if (platform !== "win32") return { set: {}, drop: [] };
+  const drop = Object.keys(baseEnv).filter(key => key.toLowerCase() === "psmoduleanalysiscachepath");
+  const explicitSeed = baseEnv[TEST_PS_MODULE_ANALYSIS_SEED_ENV];
+  const localAppData = Object.entries(baseEnv).find(([key]) => key.toLowerCase() === "localappdata")?.[1];
+  const seed = explicitSeed && (win32.isAbsolute(explicitSeed) || isAbsolute(explicitSeed))
+    ? explicitSeed
+    : drop.map(key => baseEnv[key]).find(value => !!value)
+      ?? (localAppData ? join(localAppData, "Microsoft", "Windows", "PowerShell", "ModuleAnalysisCache") : undefined);
+  const directory = join(root, "ps-module-analysis-cache");
+  const owned = join(directory, "ModuleAnalysisCache");
+  mkdirSync(directory, { recursive: true });
+  // Fresh/redirected LOCALAPPDATA costs 5.1 autoload 20–27s per child (devlog/_fin/
+  // 260906_release_244_publish/020_integrate.md). Product spawns only System32 WindowsPowerShell
+  // 5.1; pwsh shares this path and at worst rebuilds. Each sandbox owns its writable copy:
+  // concurrent sandboxes never share it, and the developer/runner seed is never written.
+  if (seed) {
+    try {
+      const source = lstatSync(seed);
+      if (source.isFile() && !source.isSymbolicLink()) {
+        copyFileSync(seed, owned);
+        if (lstatSync(owned).size !== source.size || lstatSync(seed).size !== source.size) {
+          rmSync(owned, { force: true });
+        }
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!code || !["ENOENT", "ESTALE", "EACCES", "EPERM"].includes(code)) throw error;
+      rmSync(owned, { force: true });
+    }
+  }
+  return {
+    set: {
+      PSModuleAnalysisCachePath: owned,
+      ...(explicitSeed !== undefined ? { [TEST_PS_MODULE_ANALYSIS_SEED_ENV]: explicitSeed } : {}),
+    },
+    drop,
+  };
+}
 
 export function createIsolatedTestEnvironment(
   baseEnv: Record<string, string | undefined> = process.env,
@@ -67,11 +113,14 @@ export function createIsolatedTestEnvironment(
   writeTestTempOwner(root, baseEnv[TEST_RUN_ID_ENV]);
   const inherited = { ...baseEnv };
   for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete inherited[name];
+  const moduleAnalysisCache = pinPowerShellModuleAnalysisCache(root, baseEnv);
+  for (const name of moduleAnalysisCache.drop) delete inherited[name];
 
   return {
     root,
     env: {
       ...inherited,
+      ...moduleAnalysisCache.set,
       // Captured BEFORE HOME is overwritten: once the child starts with a rewritten
       // HOME, `homedir()` returns the sandbox, so this hand-off is the only way the
       // real-home write guard can still know which path to protect.
