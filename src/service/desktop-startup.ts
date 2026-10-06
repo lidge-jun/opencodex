@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { readPid } from "../config/process-state";
 import { resolveServiceOwnership, sameServiceOwnershipSubject, type ServiceOwnershipResolution } from "./state";
 
@@ -146,7 +146,7 @@ export function diagnoseLinuxDesktopStartup(deps: DesktopStartupDeps = {}): Desk
     const config = configured && isAbsolute(configured) ? configured : join(home, ".config");
     // auto-launch 0.5.0 writes autostart under HOME; Tauri app_config_dir uses XDG for install-id.
     // A relocated XDG_CONFIG_HOME puts that entry outside the session's autostart search path.
-    if (config !== join(home, ".config")) return deriveDesktopStartup(facts);
+    if (resolve(config) !== resolve(home, ".config")) return deriveDesktopStartup(facts);
     const capture = () => {
       const id = readFileSync(join(config, "com.opencodex.desktop", "install-id"), "utf8");
       if (id.trim() !== owner.ownership.installId) return null;

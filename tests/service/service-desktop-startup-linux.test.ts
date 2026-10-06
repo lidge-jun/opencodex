@@ -78,6 +78,7 @@ Exec=${f.app} --autostart
 `);
   expect(diagnoseLinuxDesktopStartup({ ...f.deps, env: { XDG_CONFIG_HOME: moved } })).toMatchObject({ viable: false });
   expect(diagnoseLinuxDesktopStartup({ ...f.deps, env: { XDG_CONFIG_HOME: join(f.home, ".config") } })).toMatchObject({ viable: true });
+  expect(diagnoseLinuxDesktopStartup({ ...f.deps, env: { XDG_CONFIG_HOME: `${join(f.home, ".config")}/` } })).toMatchObject({ viable: true });
 });
 
 for (const field of ["OnlyShowIn=GNOME;", "NotShowIn=GNOME;", "TryExec=/missing", "OnlyShowIn=", "NotShowIn=", "TryExec="]) {
