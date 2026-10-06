@@ -50,6 +50,27 @@ test("busy child lease leaves config bytes, permissions and files unchanged", ()
   expect({ bytes: readFileSync(configPath, "utf8"), mode: statSync(configPath).mode, files: readdirSync(h.config) }).toEqual(before);
 });
 
+test("NTFS file ids above 2^53 are admitted as home identity", () => {
+  // Windows runners hand out directory ids with the MFT sequence in the high bits; the marker must
+  // not depend on which id a temp directory happens to receive.
+  const h = home();
+  const captured = readUpdateRestartHome();
+  const large = { ...captured, config: { ...captured.config, ino: 2 ** 60 + 4096 }, codex: { ...captured.codex, dev: 2 ** 56 } };
+  const marker = { home: large, version: "2.77.0", port: 10100, hostname: "127.0.0.1", deadlineAt: Date.now() + 5000 };
+  writeFileSync(join(h.config, "config.json"), '{"hostname":"127.0.0.1"}\n');
+  const seen: unknown[] = [];
+  expect(() => admitUpdateRestartChild(["start", "--port", "10100"], {
+    env: { [UPDATE_RESTART_CHILD_ENV]: JSON.stringify(marker) }, version: () => "2.77.0",
+    checkHome: home => { seen.push(home); }, checkState: () => {},
+    acquire: () => { throw new Error("lease busy"); },
+  })).toThrow("lease busy");
+  expect(seen).toEqual([large]);
+  for (const ino of [Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
+    const bad = JSON.stringify({ ...marker, home: { ...large, config: { ...large.config, ino } } });
+    expect(() => admitUpdateRestartChild(["start", "--port", "10100"], { env: { [UPDATE_RESTART_CHILD_ENV]: bad } })).toThrow("update_restart_child_marker_invalid");
+  }
+});
+
 test("production parent guard rejects client and hostname drift before stop", () => {
   const h = home(); const config = join(h.config, "config.json");
   writeFileSync(config, JSON.stringify({ hostname: "127.0.0.1" }));

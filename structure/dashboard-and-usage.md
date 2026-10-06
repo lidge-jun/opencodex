@@ -123,7 +123,7 @@ The sidebar exposes eight rows (`gui/src/nav-groups.ts` `NAV_GROUPS`), in order:
 | Surface | Shape |
 | --- | --- |
 | Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). |
-| API keys | Rail plus per-key detail; masked values only (`gui/src/components/apikeys-workspace/`). |
+| API keys | Key table plus per-key detail (`gui/src/components/apikeys-workspace/`). The list payload carries masked prefixes only; each row deletes in place behind a two-step confirm, and clicking a key fetches the full value from `POST /api/keys/reveal`, which refuses every principal but a dashboard session and answers `no-store`. |
 | Storage | Rail plus cleanup and trash detail (`gui/src/components/storage-workspace/`). |
 | Subagents | Featured-roster selection workspace (`gui/src/components/subagents-workspace/`). |
 | Combos | Rail, detail panel, and an add flow (`gui/src/components/ComboWorkspace.tsx`). |

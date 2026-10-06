@@ -580,3 +580,18 @@ describe("Windows redemption owner and effective-DACL policy", () => {
     expect(s.pairingGrants.size).toBe(1); expect(existsSync(path)).toBe(false);
   }, 45_000);
 });
+
+test("pairing ACL script reads descriptors through .NET, never through module-autoloaded cmdlets", () => {
+  // Autoloaded cmdlets resolve through the per-profile module analysis cache; a fresh or redirected
+  // LOCALAPPDATA rebuilds it by scanning every PSModulePath module and outlasted the 30 s budget on
+  // hosted Windows runners. A module earlier on PSModulePath could also shadow the cmdlet.
+  const source = readFileSync(repoPath("src/lib/windows-owner-acl.ts"), "utf8");
+  const start = source.indexOf("const ACL_SCRIPT = String.raw`");
+  const script = source.slice(start, source.indexOf("`;", start));
+  expect(start).toBeGreaterThan(-1);
+  for (const cmdlet of ["Get-Acl", "ConvertTo-Json", "ForEach-Object", "New-Object", "Get-Item", "Select-Object", "Where-Object"]) {
+    expect(script).not.toContain(cmdlet);
+  }
+  expect(script).toContain("[System.Security.AccessControl.DirectorySecurity]::new($path, $sections)");
+  expect(script).toContain("[System.Security.AccessControl.FileSecurity]::new($path, $sections)");
+});

@@ -1164,6 +1164,21 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }, 200, req, config);
   }
 
+  if (url.pathname === "/api/keys/reveal" && req.method === "POST") {
+    if (principal !== "gui-session") {
+      return jsonResponse({ error: "dashboard session required" }, 403, req, config);
+    }
+    const body = await readJsonBody(req);
+    if (!body || Object.keys(body).length !== 1 || typeof body.id !== "string" || !body.id) {
+      return jsonResponse({ error: "invalid body" }, 400, req, config);
+    }
+    const entry = config.apiKeys?.find(key => key.id === body.id);
+    if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const response = jsonResponse({ key: entry.key }, 200, req, config);
+    response.headers.set("Cache-Control", "no-store");
+    return response;
+  }
+
   if (url.pathname === "/api/keys/rotate" && req.method === "POST") {
     const body = await readJsonBody(req);
     if (!body || Object.keys(body).length !== 1 || typeof body.id !== "string" || !body.id) {

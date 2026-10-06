@@ -19,7 +19,11 @@ const PRIVATE_DACL_FLAGS = 0x1004; // DiscretionaryAclPresent | DiscretionaryAcl
 const FULL_CONTROL = 2032127;
 
 // This script is constant. Literal paths are environment data, never PowerShell source.
-// Enumerate the descriptor Get-Acl reports. GetAccessRules projects away unsupported ACE details, so the
+// Read the descriptor through .NET (Owner, Group and Access, as Get-Acl does). Get-Acl is a module-autoloaded
+// cmdlet: PowerShell 5.1 resolves it through the per-profile module analysis cache, and with a fresh or
+// redirected LOCALAPPDATA that rebuild scans every PSModulePath module and can outlast the inspection budget
+// (hosted Windows runners: the pairing CLI timed out at 30 s). Every call below is a .NET member, so nothing
+// autoloads and no module on PSModulePath can shadow the read. GetAccessRules projects away unsupported ACE details, so the
 // ACEs are read from the serialized descriptor instead. .NET canonicalizes it first: compatible entries for the
 // same principal merge and entries that grant nothing drop, but another principal's entry is never folded into
 // the user's, and the owner is untouched. The policy is therefore the effective DACL, not the on-disk bytes.
@@ -36,10 +40,13 @@ try {
   $administrators=[System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
   $enabled=$principal.IsInRole($administrators)
   [Console]::WriteLine(('U|{0}|{1}|{2}' -f $identity.User.Value,$identity.Owner.Value,$enabled))
+  $sections=[System.Security.AccessControl.AccessControlSections]'Owner,Group,Access'
   for ($i=0; $i -lt $count; $i++) {
     $path=[Environment]::GetEnvironmentVariable(('OCX_ACL_PATH_{0}' -f $i))
     if ([string]::IsNullOrEmpty($path)) { throw 'path' }
-    $acls=@(Get-Acl -LiteralPath $path)
+    if ([System.IO.Directory]::Exists($path)) { $acl=[System.Security.AccessControl.DirectorySecurity]::new($path, $sections) }
+    else { $acl=[System.Security.AccessControl.FileSecurity]::new($path, $sections) }
+    $acls=@($acl)
     if ($acls.Count -ne 1) { throw 'acl' }
     $bytes=$acls[0].GetSecurityDescriptorBinaryForm()
     $raw=[System.Security.AccessControl.RawSecurityDescriptor]::new([byte[]]$bytes, 0)

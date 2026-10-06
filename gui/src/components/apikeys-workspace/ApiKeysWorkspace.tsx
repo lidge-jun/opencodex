@@ -74,6 +74,8 @@ export interface ApiKeysWorkspaceProps {
   onDismissNewKey: () => void;
   onCopyKey: () => void;
   onDelete: (id: string) => Promise<boolean>;
+  /** Full key for a click-to-reveal in the key table; absent hides the control. */
+  onRevealKey?: (id: string) => Promise<string | null>;
   onRename: (id: string, name: string) => Promise<boolean>;
   onRotationStart?: (id: string) => Promise<boolean>;
   onRotationCommit?: (id: string, rotationId: string) => Promise<boolean>;
@@ -125,6 +127,7 @@ export default function ApiKeysWorkspace({
   onDismissNewKey,
   onCopyKey,
   onDelete,
+  onRevealKey,
   onRename,
   onRotationStart,
   onRotationCommit,
@@ -531,6 +534,8 @@ export default function ApiKeysWorkspace({
                     usageMetadata={usageMetadata}
                     localeTag={localeTag}
                     busy={mutationPending}
+                    onDelete={onDelete}
+                    onReveal={onRevealKey}
                     onSelect={id => {
                       setSelectedId(id);
                       clearDeleteConfirm();
