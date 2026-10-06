@@ -638,8 +638,10 @@ export interface OcxProviderConfig {
   modelMaxOutputTokens?: Record<string, number>;
   /**
    * Hard floor on the output token budget. The effective `max_tokens` sent to the upstream
-   * is `max(declared, minMaxOutputTokens)`. Guards against callers that send a tiny budget
-   * which, for reasoning-heavy models, leaves zero tokens for actual content.
+   * is `max(declared, minMaxOutputTokens)`; when nothing is declared, the floor itself is
+   * sent. Guards against callers that send a tiny budget which, for reasoning-heavy models,
+   * leaves zero tokens for actual content. Unlike the omit-only fallbacks above, this can
+   * raise a caller-declared budget. Honored by the `openai-chat` adapter only.
    */
   minMaxOutputTokens?: number;
   /**
