@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { TranslatorBudgetExceededError } from "../../../src/lib/translator-budget";
 import { createOllamaNativeAdapter } from "../../../src/adapters/ollama-native";
 import { parseRequest } from "../../../src/responses/parser";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
@@ -87,5 +88,46 @@ describe("Ollama code-mode additional output replay (#6574)", () => {
     const ghost = { type: "custom_tool_call_output", call_id: "never-issued", output: "ghost" };
     expect(() => build([user("start"), ghost])).toThrow(/orphan tool result/);
     expect(() => build([exec, output("done"), wait, ghost])).toThrow(/has no originating call/);
+  });
+});
+
+
+/** Replayed identities occur once in input; late carriers must not replicate them without a bound. */
+describe("Ollama late-result attribution budget", () => {
+  const commentary = { type: "message", role: "assistant", content: [{ type: "output_text", text: "settled" }] };
+  const history = (name: string, count: number, id = "bounded-call", namespace?: string): unknown[] => [
+    { type: "function_call", call_id: id, name, ...(namespace === undefined ? {} : { namespace }), arguments: "{}" },
+    { type: "function_call_output", call_id: id, output: "first" },
+    commentary,
+    ...Array.from({ length: count }, () => ({ type: "function_call_output", call_id: id, output: "late" })),
+  ];
+
+  test("long replayed names cannot grow one request through repeated late carriers", () => {
+    expect(() => build(history("a".repeat(32_768), 16))).toThrow(TranslatorBudgetExceededError);
+  });
+
+  test("namespace bytes count toward the same generated-attribution budget", () => {
+    expect(() => build(history("exec", 32, "namespaced-call", "n".repeat(8_192))))
+      .toThrow(TranslatorBudgetExceededError);
+  });
+
+  test("JSON escapes count as wire bytes, not only string length", () => {
+    expect(() => build(history("\u0000".repeat(1_024), 48))).toThrow(TranslatorBudgetExceededError);
+  });
+
+  test("the budget is shared by distinct settled calls in the request", () => {
+    const first = history("a".repeat(8_192), 20, "call-one");
+    const second = history("b".repeat(8_192), 20, "call-two");
+    expect(build(first).at(-1).content).toContain("call-one");
+    expect(build(second).at(-1).content).toContain("call-two");
+    expect(() => build([...first, ...second])).toThrow(TranslatorBudgetExceededError);
+  });
+
+  test("ordinary repeated progress retains its complete attribution and content", () => {
+    const messages = build(history("exec", 1_024));
+    expect(messages.at(-1).content).toBe(
+      '[ocx] additional output for previously issued tool "exec" (bounded-call):\nlate',
+    );
+    expect(messages.filter((message: { role: string }) => message.role === "user")).toHaveLength(1_024);
   });
 });

@@ -31,6 +31,7 @@ import {
 } from "../lib/translator-budget";
 import { redactSecretString, SENSITIVE_KEY_PATTERN } from "../lib/redact";
 import { parseDataUrl } from "./image";
+import { jsonUtf8Bytes } from "../lib/json-byte-size";
 import {
   ollamaNativeChatUrl,
   ollamaNativeEndpointKind,
@@ -110,6 +111,7 @@ const NATIVE_THINK_VALUES = new Set(["low", "medium", "high", "max"]);
 const NATIVE_TOOL_ID_MAX_LENGTH = 256;
 const NATIVE_TOOL_NAME_MAX_BYTES = 1024;
 const NATIVE_MAX_PENDING_TOOL_CALLS = 128;
+const NATIVE_MAX_LATE_ATTRIBUTION_BYTES = 256 * 1024;
 // Account for the retained Map key and call bookkeeping in addition to the provider's name.
 const NATIVE_TOOL_CALL_BOOKKEEPING_BYTES = 128;
 const NATIVE_TOOL_ID_CONTROL = /[\u0000-\u001f\u007f]/u;
@@ -325,6 +327,7 @@ function buildNativeMessages(
   reservedToolCallIds.clear();
   let pending: PendingToolBatch | undefined;
   const issuedCalls = new Map<string, PendingToolCall>();
+  let lateAttributionBytes = 0;
   // Codex records mid-turn injections (a PostToolUse hook verdict, a context notice) between an
   // assistant tool call and that call's own tool result. Native Ollama needs the call and its
   // results adjacent, so those conversational messages wait here instead of closing the batch
@@ -392,9 +395,15 @@ function buildNativeMessages(
         // Reopening a settled batch would split a later call/result pair. Keep known late
         // output explicitly attributed as conversation text instead of dropping it or
         // fabricating another executable call. Unknown/mismatched identities still fail above.
+        // Generated attribution is not present in the inbound size estimate. Reserve its
+        // JSON wire bytes before joining strings, across all late outputs and all calls.
+        // The parts-array estimate is conservative and counts escapes without serializing.
+        const attribution = ['[ocx] additional output for previously issued tool "',
+          call.wireName, '" (', call.id, '):\n', message.isError ? "ERROR: " : ""];
+        lateAttributionBytes += jsonUtf8Bytes(attribution, NATIVE_MAX_LATE_ATTRIBUTION_BYTES - lateAttributionBytes);
         const translated = contentToNative(message.content, "late tool result");
         const late: OllamaNativeMessage = { role: "user",
-          content: `[ocx] additional output for previously issued tool "${call.wireName}" (${call.id}):\n${message.isError ? "ERROR: " : ""}${translated.content}`,
+          content: attribution.join("") + translated.content,
           ...(translated.images ? { images: translated.images } : {}),
         };
         if (pending) deferred.push(late);
