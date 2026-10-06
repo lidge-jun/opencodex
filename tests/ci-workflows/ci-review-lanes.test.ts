@@ -150,7 +150,7 @@ describe("CI review lanes", () => {
     expect(changesJob?.outputs?.ci).toBe("${{ steps.scope.outputs.ci }}");
     expect(scopeStep?.id).toBe("scope");
     expect(scopeStep?.shell).toBe("bash");
-    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ steps.filter.outputs.ci }}");
+    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.ci }}");
     expect(scopeStep?.run).not.toContain("${{");
     expect(scopeStep?.run).toContain('case "$CI_SCOPE" in');
     expect(scopeStep?.run).toContain("true|false)");

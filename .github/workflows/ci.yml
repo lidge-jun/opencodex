@@ -208,10 +208,13 @@ jobs:
       # shape-checked by the same validation step as `native`.
       keyring_matrix: ${{ steps.matrices.outputs.keyring_matrix }}
       npm_global_matrix: ${{ steps.matrices.outputs.npm_global_matrix }}
-      gui: ${{ steps.filter.outputs.gui }}
-      packaging: ${{ steps.filter.outputs.packaging }}
-      docs: ${{ steps.filter.outputs.docs }}
-      structure: ${{ steps.filter.outputs.structure }}
+      # A scheduled run starts from main, so its path filter diffs main and would
+      # scope jobs by the wrong commit. The nightly safety net selects every scope
+      # instead, here and in the validation steps below, so it is the full matrix.
+      gui: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.gui }}
+      packaging: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.packaging }}
+      docs: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.docs }}
+      structure: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.structure }}
       # Narrow scopes for two paths the ci filter leaves out on purpose. Both are re-emitted by the
       # validation step below, so a malformed filter output fails this job instead of silently
       # skipping the check it selects.
@@ -423,8 +426,8 @@ jobs:
         id: scope
         shell: bash
         env:
-          CI_SCOPE: ${{ steps.filter.outputs.ci }}
-          DESKTOP_SCOPE: ${{ steps.filter.outputs.desktop }}
+          CI_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.ci }}
+          DESKTOP_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.desktop }}
         run: |
           set -euo pipefail
           case "$CI_SCOPE" in
@@ -450,7 +453,7 @@ jobs:
         id: matrices
         shell: bash
         env:
-          NATIVE_SELECTED: ${{ steps.filter.outputs.native }}
+          NATIVE_SELECTED: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.native }}
         run: |
           set -euo pipefail
           case "$NATIVE_SELECTED" in
@@ -498,8 +501,8 @@ jobs:
         id: narrow
         shell: bash
         env:
-          SETUP_ACTION: ${{ steps.filter.outputs.setup_action }}
-          REMOTE_HELPER: ${{ steps.filter.outputs.remote_helper }}
+          SETUP_ACTION: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.setup_action }}
+          REMOTE_HELPER: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.remote_helper }}
         run: |
           set -euo pipefail
           for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER"; do
