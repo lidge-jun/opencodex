@@ -326,6 +326,93 @@ describe("GET /api/keys", () => {
   });
 });
 
+describe("POST /api/keys/reveal", () => {
+  async function dashboardHeaders(server: { url: URL }): Promise<Record<string, string>> {
+    const bootstrap = await fetch(new URL("/opencodex-session", server.url));
+    expect(bootstrap.status).toBe(200);
+    const html = await bootstrap.text();
+    const token = html.match(/name="opencodex-session-token" content="([^"]+)"/)?.[1];
+    const csrf = html.match(/name="opencodex-session-csrf" content="([^"]+)"/)?.[1];
+    expect(token).toBeDefined();
+    expect(csrf).toBeDefined();
+    return {
+      "Content-Type": "application/json",
+      Origin: server.url.origin,
+      "x-opencodex-api-key": token!,
+      "x-opencodex-gui-origin": server.url.origin,
+      "x-opencodex-csrf-token": csrf!,
+    };
+  }
+
+  test("a dashboard session receives the full current key with no-store", async () => {
+    saveConfig(baseConfig());
+    const server = startServer(0);
+    try {
+      const created = await keysRequest(server, "POST", { name: "reveal" });
+      const id = created.json.id as string;
+      await managementRequest(server, "/api/keys/rotate", "POST", { id });
+      const response = await fetch(new URL("/api/keys/reveal", server.url), {
+        method: "POST", headers: await dashboardHeaders(server), body: JSON.stringify({ id }),
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({ key: created.json.key });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("an admin token cannot reveal a key even with forged dashboard headers", async () => {
+    saveConfig(baseConfig());
+    const server = startServer(0);
+    try {
+      const created = await keysRequest(server, "POST", { name: "private" });
+      const response = await fetch(new URL("/api/keys/reveal", server.url), {
+        method: "POST",
+        headers: { ...await dashboardHeaders(server), "x-opencodex-api-key": ADMIN_TOKEN },
+        body: JSON.stringify({ id: created.json.id }),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: "dashboard session required" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("an unknown id returns 404 when apiKeys is absent", async () => {
+    saveConfig(baseConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/keys/reveal", server.url), {
+        method: "POST", headers: await dashboardHeaders(server), body: JSON.stringify({ id: "missing" }),
+      });
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "key not found" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects invalid bodies with 400", async () => {
+    saveConfig(baseConfig());
+    const server = startServer(0);
+    try {
+      const created = await keysRequest(server, "POST", { name: "keep" });
+      const headers = await dashboardHeaders(server);
+      const bodies: unknown[] = [{ id: created.json.id, extra: true }, { id: 42 }, { id: "" },
+        {}, null, [], "plain string", true];
+      for (const body of [...bodies.map(value => JSON.stringify(value)), "{not json", ""]) {
+        const response = await fetch(new URL("/api/keys/reveal", server.url), { method: "POST", headers, body });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: "invalid body" });
+      }
+      expect(loadConfig().apiKeys?.[0]?.key).toBe(created.json.key as string);
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
 describe("PATCH /api/keys", () => {
   test("renames a key without echoing key material", async () => {
     saveConfig(baseConfig());
