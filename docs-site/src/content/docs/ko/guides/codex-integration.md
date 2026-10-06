@@ -35,7 +35,10 @@ codex 0.146(openai/codex#35830)부터는 `experimental_realtime_ws_base_url`이 
 WebSocket을 `api.openai.com`에 직접 붙입니다. Pool 모드에서는 통화가 opencodex가 고른 계정으로
 만들어지므로, 앱 자체 로그인으로 직접 붙는 join은 `realtime websocket handshake failed`(404)로
 실패합니다. 주입된 키는 join을 다시 opencodex(`GET /v1/live/{callId}`)로 보내고, Pool은 그
-session/thread 쌍에 묶어 둔 계정(프로세스 로컬 바인딩)을 그대로 씁니다. Direct 모드는 두 요청 모두
+session/thread 쌍에 묶어 둔 계정(프로세스 로컬 바인딩)을 그대로 씁니다. 클라이언트가 직접 만든
+통화는 예외입니다. ChatGPT 음성이 통화를 Codex 스레드로 넘기거나 Codex Desktop이 통화를 직접
+만들면 그 통화는 내 ChatGPT 로그인 소유이고 sideband join만 opencodex에 도착하므로, opencodex는
+그 join을 Pool 계정이 아니라 호출자 자신의 ChatGPT 자격 증명으로 보냅니다. Direct 모드는 두 요청 모두
 호출자의 현재 bearer를 쓰므로, 이 키는 join을 프록시 경로에 붙잡아 두는 역할만 합니다. 이 키는
 loopback `openai_base_url` 형태에서만 쓰이고, 그 키와 함께 제거되며, 사용자가 직접 적은
 `experimental_realtime_ws_base_url`은 덮어쓰지 않습니다.

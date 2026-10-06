@@ -99,11 +99,19 @@ test("push and pull_request still supersede an older head on their own ref", () 
 });
 
 test("every trigger this workflow declares is one the cases above cover", () => {
-  // A fourth trigger would arrive with no decision recorded about whether it
+  // A new trigger would arrive with no decision recorded about whether it
   // supersedes anything, and would inherit the push answer by accident.
-  expect(Object.keys(workflow.on ?? {}).sort()).toEqual(["pull_request", "push", "workflow_dispatch"]);
+  expect(Object.keys(workflow.on ?? {}).sort()).toEqual(["pull_request", "push", "schedule", "workflow_dispatch"]);
 });
 
 test("the evaluator refuses an expression it does not model", () => {
   expect(() => render("${{ startsWith(github.ref, 'refs/tags/') }}", push("1"))).toThrow(/unsupported expression term/);
+});
+
+test("scheduled runs on main never share the push group or cancel earlier runs", () => {
+  const scheduled = (run_id: string): GithubContext => ({ event_name: "schedule", ref: "refs/heads/main", run_id });
+  const mainPush: GithubContext = { event_name: "push", ref: "refs/heads/main", run_id: "3" };
+  expect(concurrency(scheduled("1")).group).not.toBe(concurrency(mainPush).group);
+  expect(concurrency(scheduled("1")).group).not.toBe(concurrency(scheduled("2")).group);
+  expect(concurrency(scheduled("1")).cancels).toBe("false");
 });

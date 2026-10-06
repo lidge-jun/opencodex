@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readBoundedCodexConfig } from "../../src/codex/inject/bounded-config-reader";
+import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot } from "../helpers/repo-root";
 
@@ -11,6 +12,12 @@ import { repoRoot } from "../helpers/repo-root";
 // binds CODEX_CONFIG_PATH to CODEX_HOME at module load, so each case runs in a child
 // whose env is fixed before the module graph loads. The child timeout stays below
 // the test timeout so a wedged child fails as a timeout, not a hanging test.
+// Each child cold-imports the management API graph: 2-5 s on a Windows CI shard,
+// and over 10 s for the first child of a busy batch (run 37447563941), so a flat
+// 10 s bound reported contention rather than a wedge.
+const ISOLATED_CHILD_TIMEOUT_MS = watchdogMs(10_000);
+// spawnSync blocks the loop, so the per-test bound has to outlast the child it waits on.
+const ISOLATED_TEST_TIMEOUT_MS = ISOLATED_CHILD_TIMEOUT_MS + 5_000;
 const ISOLATED_PROVIDER_CONFIG = {
   port: 10100,
   defaultProvider: "openai",
@@ -48,7 +55,7 @@ function runIsolatedSettingsRequest(options: {
       OCX_TEST_ROUTE_CONFIG: JSON.stringify(options.routeConfig),
     },
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: ISOLATED_CHILD_TIMEOUT_MS,
   });
   if (child.status !== 0) {
     // A timeout or spawn failure leaves no output; surface status/signal/error
@@ -79,7 +86,7 @@ function runIsolatedCodexScript(options: {
       OPENCODEX_HOME: join(options.root, "opencodex"),
     },
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: ISOLATED_CHILD_TIMEOUT_MS,
   });
   if (child.status !== 0) {
     const cause = child.error ? ` (${child.error.name}: ${child.error.message})` : "";
@@ -203,7 +210,7 @@ test("GET /api/settings reports external Codex ownership without an apply attemp
   } finally {
     removeTreeWithRetry(root);
   }
-}, 15_000);
+}, ISOLATED_TEST_TIMEOUT_MS);
 
 test("GET /api/settings survives an unreadable config.toml during ownership detection", () => {
   // existsSync passes but readFileSync throws: config.toml as a directory is a
@@ -242,7 +249,7 @@ test("GET /api/settings survives an unreadable config.toml during ownership dete
   } finally {
     removeTreeWithRetry(root);
   }
-}, 15_000);
+}, ISOLATED_TEST_TIMEOUT_MS);
 
 test.skipIf(process.platform === "win32")(
   "GET /api/settings refuses a config.toml FIFO without blocking",
@@ -326,7 +333,7 @@ test("PUT /api/settings keeps the undetermined-ownership explanation on a locked
   } finally {
     removeTreeWithRetry(root);
   }
-}, 15_000);
+}, ISOLATED_TEST_TIMEOUT_MS);
 
 test("readBoundedCodexConfig returns null only for a config absent at lookup", () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-bounded-reader-"));
@@ -454,7 +461,7 @@ test("native restore tolerates a config.toml over the observation bound", () => 
   } finally {
     removeTreeWithRetry(root);
   }
-}, 15_000);
+}, ISOLATED_TEST_TIMEOUT_MS);
 
 test("PUT /api/settings reports external Codex ownership when the integration is disabled", () => {
   // clientIntegrations.codex = false trips the apply gate before the injector runs, so
@@ -498,7 +505,7 @@ test("PUT /api/settings reports external Codex ownership when the integration is
   } finally {
     removeTreeWithRetry(root);
   }
-}, 15_000);
+}, ISOLATED_TEST_TIMEOUT_MS);
 
 test("post-gate injector read failure retains undetermined ownership and null effective state", () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-settings-post-gate-"));
@@ -529,4 +536,4 @@ test("post-gate injector read failure retains undetermined ownership and null ef
       authSource: { presentsCodexAccount: null },
     } });
   } finally { removeTreeWithRetry(root); }
-}, 15000);
+}, ISOLATED_TEST_TIMEOUT_MS);
