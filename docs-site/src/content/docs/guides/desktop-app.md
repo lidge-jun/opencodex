@@ -77,8 +77,9 @@ Startup safety reports **Desktop app** protection when OpenCodex's recorded owne
 **Start at Login** registration, and live supervision of its bundled proxy all match.
 On Linux, the pinned autostart backend writes the login entry to
 `~/.config/autostart/OpenCodex.desktop`, even when `$XDG_CONFIG_HOME` is set. Startup
-safety reads that HOME-based entry; the desktop install-id separately follows
-`$XDG_CONFIG_HOME` (or `~/.config` by default).
+safety reads that entry and the desktop install-id under `~/.config`. When
+`$XDG_CONFIG_HOME` points elsewhere, the login session searches a different autostart
+directory, so startup safety stays **At risk** instead of crediting the entry.
 The entry counts only while it is not marked `Hidden=true` or
 `X-GNOME-Autostart-enabled=false`, and has no `OnlyShowIn`, `NotShowIn`, or `TryExec`
 condition. Its `Exec` must be an unquoted absolute path to `opencodex-desktop`, without

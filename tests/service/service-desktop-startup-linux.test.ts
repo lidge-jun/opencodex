@@ -63,17 +63,19 @@ test("matching install, XDG login entry and the app supervising its sidecar gran
   expect(startupHealthSummary(health)).toBe("protected by desktop app at login and its proxy supervisor");
 });
 
-test("XDG_CONFIG_HOME relocates only the install id; autostart remains under HOME", () => {
+test("a relocated XDG_CONFIG_HOME is not credited: the HOME-based entry is outside its autostart path", () => {
   const f = fixture();
   const moved = join(f.home, "xdg");
   mkdirSync(join(moved, "com.opencodex.desktop"), { recursive: true });
   writeFileSync(join(moved, "com.opencodex.desktop", "install-id"), "installation-a");
-  writeFileSync(f.idPath, "stale-default-install");
-  expect(diagnoseLinuxDesktopStartup({ ...f.deps, env: { XDG_CONFIG_HOME: moved } })).toMatchObject({ viable: true });
-  mkdirSync(join(moved, "autostart"), { recursive: true });
-  writeFileSync(join(moved, "autostart", "OpenCodex.desktop"), `[Desktop Entry]\nType=Application\nExec=${f.app} --autostart\n`);
-  rmSync(f.entryPath);
   expect(diagnoseLinuxDesktopStartup({ ...f.deps, env: { XDG_CONFIG_HOME: moved } })).toMatchObject({ viable: false });
+  mkdirSync(join(moved, "autostart"), { recursive: true });
+  writeFileSync(join(moved, "autostart", "OpenCodex.desktop"), `[Desktop Entry]
+Type=Application
+Exec=${f.app} --autostart
+`);
+  expect(diagnoseLinuxDesktopStartup({ ...f.deps, env: { XDG_CONFIG_HOME: moved } })).toMatchObject({ viable: false });
+  expect(diagnoseLinuxDesktopStartup({ ...f.deps, env: { XDG_CONFIG_HOME: join(f.home, ".config") } })).toMatchObject({ viable: true });
 });
 
 for (const field of ["OnlyShowIn=GNOME;", "NotShowIn=GNOME;", "TryExec=/missing", "OnlyShowIn=", "NotShowIn=", "TryExec="]) {
