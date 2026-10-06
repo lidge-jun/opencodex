@@ -72,6 +72,9 @@ release that requires Windows proof still dispatches it for the exact publish SH
 Test sandboxes keep the runner's `LOCALAPPDATA`, so Windows PowerShell 5.1 children reuse the
 image's warm module-analysis cache. Replacing it with a freshly built seed made every child
 re-analyze modules and timed out seven shards on the first run of #6670.
+Before its tests each Windows shard reads every `src/`, `tests/`, `scripts/` and root
+`node_modules/` source file once ("Warm the source file cache"), so the first child to load a
+module graph is not also the first reader of its files; that first read cost 10-45 s in timed cases.
 Startup ACL reads use .NET, never module-autoloaded `Get-Acl`/`Set-Acl`
 (`tests/ci-workflows/ci-review-lanes.test.ts` scans `src/`).
 Across the jobs, the workflow runs:
