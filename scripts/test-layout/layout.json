@@ -432,6 +432,7 @@
     "cli-capabilities.test.ts": "cli",
     "cli-api-protocols.test.ts": "cli",
     "cli-catalog-prewarm.test.ts": "cli",
+    "cli-ensure-readiness.test.ts": "cli",
     "cli-codex-cli-update.test.ts": "cli",
     "cli-codex-log-guard-compact.test.ts": "cli",
     "cli-codex-log-guard-protection.test.ts": "cli",
