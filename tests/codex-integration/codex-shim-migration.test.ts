@@ -80,6 +80,22 @@ describe.skipIf(process.platform === "win32")("legacy Unix shim migration", () =
     expect(installCodexShim()).toMatchObject({ installed: false, runnable: true });
   }));
 
+  test("group-writable legacy state (umask 002) refuses with the path and the chmod that unblocks migration", () => fixture(f => {
+    fs.chmodSync(f.statePath, 0o664);
+    const raw = fs.readFileSync(f.statePath, "utf8");
+    const refused = installCodexShim();
+    expect(refused).toMatchObject({ installed: false, refused: true });
+    expect(refused.message).toContain(`Private Codex artifact is not an owned regular file: ${f.statePath}`);
+    expect(refused.message).toContain("group- or world-writable (mode 0664)");
+    expect(refused.message).toContain(`run chmod 600 '${f.statePath}' and retry`);
+    expect(fs.readFileSync(f.statePath, "utf8")).toBe(raw);
+    expect(fs.readFileSync(f.native, "utf8")).toBe(f.legacyBytes);
+    fs.chmodSync(f.statePath, 0o600);
+    const installed = installCodexShim();
+    expect(installed.installed, installed.message).toBe(true);
+    expect(readState()).toMatchObject({ schema: 2, launcherPath: f.native });
+  }));
+
   test("regular backup restoration retains its inode", () => fixture(f => {
     fs.unlinkSync(f.backup);
     fs.writeFileSync(f.backup, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
