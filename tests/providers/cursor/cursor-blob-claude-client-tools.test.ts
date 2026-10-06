@@ -7,8 +7,9 @@ import {
 } from "../../../src/adapters/cursor/native-exec";
 import { resetAppOwnedMemoryForTests } from "../../../src/lib/app-owned-memory";
 import { encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
-import { applyCursorToolBudget, CURSOR_TOOL_BYTES_LIMIT } from "../../../src/adapters/cursor/request-builder";
-import { cursorMcpToolEncodedSize, cursorMcpToolsEncodedSize } from "../../../src/adapters/cursor/tool-definitions";
+import { applyCursorToolBudget, createCursorRequest, CURSOR_TOOL_BYTES_LIMIT } from "../../../src/adapters/cursor/request-builder";
+import { buildCursorToolDefinitions, cursorMcpToolEncodedSize, cursorMcpToolsEncodedSize } from "../../../src/adapters/cursor/tool-definitions";
+import { parseRequest } from "../../../src/responses/parser";
 import type { OcxTool } from "../../../src/types";
 import { resetCursorCallIdProvenanceForTests } from "../../../src/adapters/cursor/call-id";
 import {
@@ -107,6 +108,62 @@ describe("Cursor blob handshake", () => {
 });
 
 describe("Cursor Claude client tool catalog budget", () => {
+  test.each([
+    { bridge: true, name: "Read", expected: ["Read"] },
+    { bridge: true, name: "ocx_client_Read", expected: ["Read"] },
+    { bridge: false, name: "Read", expected: ["Read"] },
+    { bridge: false, name: "ocx_client_Read", expected: [] },
+  ])("registers forced $name with bridge=$bridge after choice filtering", ({ bridge, name, expected }) => {
+    const parsed = parseRequest({
+      model: "cursor/auto", input: "read a file",
+      tools: [...(bridge ? ["exec_command"] : []), "Read", "Write"].map(name => ({ type: "function", name, parameters: {} })),
+      tool_choice: { type: "function", name },
+    });
+    const request = createCursorRequest(parsed);
+    expect(buildCursorToolDefinitions(request.tools, request.toolChoice).map(tool => tool.toolName)).toEqual(expected);
+  });
+
+  test.each([
+    { allowed: ["ocx_client_Read"], expected: ["Read"] },
+    { allowed: ["exec_command", "ocx_client_Read"], expected: ["exec_command", "ocx_client_Read"] },
+  ])("registers allowed aliases $allowed after choice filtering", ({ allowed, expected }) => {
+    const parsed = parseRequest({
+      model: "cursor/auto", input: "read a file",
+      tools: ["exec_command", "Read", "Write"].map(name => ({ type: "function", name, parameters: {} })),
+      tool_choice: { type: "allowed_tools", mode: "required", tools: allowed.map(name => ({ type: "function", name })) },
+    });
+    const request = createCursorRequest(parsed);
+    expect(buildCursorToolDefinitions(request.tools, request.toolChoice).map(tool => tool.toolName)).toEqual(expected);
+  });
+
+  test.each(["function", "allowed_tools"])("keeps an aliased %s choice scoped to its original bare identity", type => {
+    const parsed = parseRequest({
+      model: "cursor/auto", input: "read a file",
+      tools: [
+        { type: "function", name: "exec_command", parameters: {} },
+        { type: "function", name: "Read", parameters: {} },
+        { type: "namespace", name: "mcp__remote", tools: [{ type: "function", name: "Read", parameters: {} }] },
+      ],
+      tool_choice: type === "function"
+        ? { type, name: "ocx_client_Read" }
+        : { type, mode: "required", tools: [{ type: "function", name: "ocx_client_Read" }] },
+    });
+    const request = createCursorRequest(parsed);
+    expect(request.tools?.map(tool => [tool.namespace, tool.name])).toEqual([[undefined, "Read"]]);
+    expect(buildCursorToolDefinitions(request.tools, request.toolChoice).map(tool => tool.toolName)).toEqual(["Read"]);
+  });
+
+  test("preserves both allowed semantic names when a literal name shadows a generated alias", () => {
+    const parsed = parseRequest({
+      model: "cursor/auto", input: "read a file",
+      tools: ["exec_command", "Read", "ocx_client_Read"].map(name => ({ type: "function", name, parameters: {} })),
+      tool_choice: { type: "allowed_tools", mode: "required", tools: ["Read", "ocx_client_Read"].map(name => ({ type: "function", name })) },
+    });
+    const request = createCursorRequest(parsed);
+    expect(buildCursorToolDefinitions(request.tools, request.toolChoice).map(tool => tool.toolName))
+      .toEqual(["Read", "ocx_client_ocx_client_Read"]);
+  });
+
   test("individual sizes use catalog wire names and aliased tool choices", () => {
     const bridge: OcxTool = { name: "exec_command", parameters: {} };
     const read: OcxTool = { name: "Read", parameters: {} };

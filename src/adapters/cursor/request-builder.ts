@@ -509,8 +509,21 @@ export function createCursorRequest(
 ): CursorRunRequest {
   const messages = cursorRequestMessagesFromRaw(parsed.context.messages);
   const activeText = [...messages].reverse().find(message => message.role === "user" || message.role === "developer")?.content ?? "";
-  const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
-  const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);
+  const catalog = parsed.context.tools ?? [];
+  const originalChoice = parsed.options.toolChoice;
+  // Resolve accepted bare wire aliases before filtering can remove their shell-bridge context.
+  // Keep the original selection so a semantic name cannot widen to a namespaced sibling.
+  const selectedTools = catalog.filter(tool => cursorToolAllowedByChoice(tool, originalChoice, catalog));
+  const semanticChoiceName = (name: string): string => selectedTools.find(tool =>
+    !tool.namespace && cursorToolWireName(tool, catalog) === name
+    && cursorToolAllowedByChoice(tool, { name }, catalog))?.name ?? name;
+  const toolChoice = originalChoice && typeof originalChoice === "object"
+    ? "name" in originalChoice
+      ? { ...originalChoice, name: semanticChoiceName(originalChoice.name) }
+      : { ...originalChoice, allowedTools: originalChoice.allowedTools.map(semanticChoiceName) }
+    : originalChoice;
+  const visibleTools = cursorToolsForActivePrompt(selectedTools, activeText, toolChoice);
+  const budget = applyCursorToolBudget(visibleTools, toolChoice);
   const limitNote = catalogLimitNote(budget.tools, budget.omitted);
   const model = normalizeCursorModelId(
     parsed.modelId,
@@ -536,7 +549,7 @@ export function createCursorRequest(
     ...(budget.tools.length === 0 && !cursorClientThreadOwner(parsed)
       ? { suppressDefaultCursorToolCatalog: true }
       : {}),
-    ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
+    ...(toolChoice ? { toolChoice } : {}),
     ...(parsed.options.parallelToolCalls !== undefined ? { parallelToolCalls: parsed.options.parallelToolCalls } : {}),
   };
   const resolved = resolveCursorCheckpoint(parsed, request, options);
