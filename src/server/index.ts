@@ -463,9 +463,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     return serveGuiFile(rawPath) !== null;
   }
 
-  // Codex's codex-rs/codex-api/src/api_bridge.rs maps 503 + server_is_overloaded to
-  // ServerOverloaded, which protocol/src/error_tests.rs pins as non-retryable (#6642).
-  // Other 503 codes except slow_down fall through to retryable UnexpectedStatus.
+  // Codex maps 503 + server_is_overloaded to ServerOverloaded ("model at capacity"), retried
+  // only with retry advice that older clients ignore (#6642); server_restarting is a
+  // retryable UnexpectedStatus in every version and never reads as model capacity.
   // Keep JSON (empty / non-JSON 503 means "Unknown error", #452) and Retry-After.
   // Drain and busy run BEFORE auth/origin checks: use the receiving listener's policy
   // (#1102), because shared public `config` could echo a rebinding origin on loopback.

@@ -665,8 +665,8 @@ whether to star the repository.
 During a restart drain, new data-plane requests receive HTTP 503 with JSON
 `error.type: "server_error"`, `error.code: "server_restarting"`, and the message
 "OpenCodex is restarting; retry this request." Responses retain `Retry-After: 5`
-and the receiving listener's CORS policy. This code lets Codex classify the 503
-as retryable; provider overload errors retain their separate mapping.
+and the receiving listener's CORS policy. This code lets every Codex version retry
+the 503 without reporting model capacity; provider overload errors retain their separate mapping.
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |

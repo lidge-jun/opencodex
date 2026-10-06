@@ -459,8 +459,10 @@ an explicit JSON envelope: `error.type` is `server_error`, `error.code` is
 `server_restarting`, and `error.message` is "OpenCodex is restarting; retry this request."
 The response keeps `Content-Type: application/json`, `Retry-After: 5`, and the
 receiving listener's CORS policy, including on the unauthenticated loopback listener.
-Codex maps a 503 with `server_is_overloaded` to non-retryable `ServerOverloaded`;
-`server_restarting` falls through to retryable `UnexpectedStatus`. This drain-only
+Codex maps a 503 with `server_is_overloaded` to `ServerOverloaded` ("Selected model is at
+capacity"); current Codex retries it only when retry advice survives mapping, and older
+clients do not retry it at all. `server_restarting` falls through to retryable
+`UnexpectedStatus` in either case and never reports a restart as model capacity. This drain-only
 response bypasses the shared provider-overload mapping in `src/lib/errors.ts`.
 `tests/codex-integration/issue-452-empty-503.test.ts` pins its body and both listeners' CORS.
 
