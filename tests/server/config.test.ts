@@ -2325,6 +2325,11 @@ describe("opencodex config defaults", () => {
 
     expect(positiveIntegerRecordConfigError({ "glm-5.2": 128_000 }, "modelMaxOutputTokens")).toBeNull();
     expect(positiveIntegerRecordConfigError({ "glm-5.2": 0 }, "modelMaxOutputTokens")).not.toBeNull();
+
+    expect(positiveIntegerConfigError(4096, "minMaxOutputTokens")).toBeNull();
+    for (const invalid of [null, [], {}, 0, -1, 1.5, "4096", Number.POSITIVE_INFINITY]) {
+      expect(positiveIntegerConfigError(invalid, "minMaxOutputTokens")).not.toBeNull();
+    }
   });
 
   test("disk config rejects malformed output token defaults", () => {
@@ -2349,6 +2354,18 @@ describe("opencodex config defaults", () => {
     });
     expect(readConfigDiagnostics().source).toBe("fallback");
     expect(readConfigDiagnostics().error).toContain("providers.custom.modelMaxOutputTokens");
+
+    removeTreeWithRetry(testDir);
+    mkdirSync(testDir, { recursive: true });
+    writeConfig({
+      port: 10100,
+      providers: {
+        custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", minMaxOutputTokens: 0 },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("providers.custom.minMaxOutputTokens");
   });
 
   test("disk config rejects malformed modelMaxInputTokens", () => {

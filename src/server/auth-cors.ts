@@ -1048,6 +1048,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelAutoCompactTokenLimits: "editor",
   defaultMaxOutputTokens: "editor",
   modelMaxOutputTokens: "editor",
+  minMaxOutputTokens: "editor",
   modelCosts: "editor",
   headers: "redacted",
   forwardClientHeaders: "editor",

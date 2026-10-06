@@ -688,6 +688,17 @@ export const configSchema = z.object({
         message: maxOutputError,
       });
     }
+    const minMaxOutputError = positiveIntegerConfigError(
+      (provider as { minMaxOutputTokens?: unknown }).minMaxOutputTokens,
+      "minMaxOutputTokens",
+    );
+    if (minMaxOutputError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "minMaxOutputTokens"],
+        message: minMaxOutputError,
+      });
+    }
     const structuredOutputOptOutError = nonBlankStringArrayConfigError(
       (provider as { noStructuredOutputModels?: unknown }).noStructuredOutputModels,
       "noStructuredOutputModels",

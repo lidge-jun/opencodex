@@ -637,6 +637,12 @@ export interface OcxProviderConfig {
   /** Model-specific fallback output token budgets. Exact/model-pattern entries beat the provider default. */
   modelMaxOutputTokens?: Record<string, number>;
   /**
+   * Hard floor on the output token budget. The effective `max_tokens` sent to the upstream
+   * is `max(declared, minMaxOutputTokens)`. Guards against callers that send a tiny budget
+   * which, for reasoning-heavy models, leaves zero tokens for actual content.
+   */
+  minMaxOutputTokens?: number;
+  /**
    * Per-model display prices (USD per 1M tokens) keyed by exact model id —
    * opencode-style per-model pricing in ocx's flat `modelXxx` convention:
    * `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`.
