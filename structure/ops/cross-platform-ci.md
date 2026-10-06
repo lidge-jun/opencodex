@@ -20,14 +20,18 @@ the Rust toolchain, or the app bundle. Those regressions are caught at the promo
 `preview` or `main`, before publication, and on demand by explicit dispatch — a pull request
 that is green is not full-platform proof.
 
-Two paths sit outside the `ci` filter on purpose and get narrow jobs instead of the full matrix.
+Three paths sit outside the `ci` filter on purpose and get narrow jobs instead of the full matrix.
 A change under `.github/actions/` runs `setup-action` on Linux, Windows and macOS: it runs the
 composite Bun setup and requires the installed runtime to equal the version `package.json`
 declares. A change under `native/remote-workspace-helper/` runs `remote-helper` on the same three
 runners: `cargo fmt` on Linux, then `cargo clippy -D warnings` and `cargo test` everywhere, where
-the live confinement tests compile only on macOS and Windows. Both filters also list `ci.yml`,
-both stay pull-request scope like `docs` and `structure`, their outputs are validated before any
-job reads them, and the aggregate gate expects each job exactly when its filter output is `true`.
+the live confinement tests compile only on macOS and Windows. A change under `deploy/` (or to
+`docker/cloudflare-supervisor.ts` or its test) runs `cloudflare-deploy` on Linux: a frozen-lockfile
+install and `tsc` inside `deploy/cloudflare`, which the root typecheck does not reach, then
+`tests/service/cloudflare-deploy.test.ts`. The `setup_action` and `deploy` filters also list
+`ci.yml`, so an edit to the workflow verifies them; all three stay pull-request scope like `docs` and
+`structure`, have their outputs validated before any job reads them, and the aggregate gate expects
+each job exactly when its filter output is `true`.
 
 `privacy:scan` runs inside `gates`, and `gates` is scoped to the `ci` filter. The `privacy
 gate` job is its exact complement on pull requests — it runs wherever the `ci` filter declines —
