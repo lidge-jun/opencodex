@@ -87,7 +87,8 @@ then incomplete recovery, before its silent no-write return. Both dead-process a
 recovery warn without file contents or client identity when either artifact remains unrestored,
 return false and retain the journal, including when config was rewritten but profile removal failed.
 Only complete recovery with an actual write reports a restore; complete already-original recovery
-removes the stale journal silently. Ownership/hash checks and `profileRestoreFailed` remain intact.
+removes the stale journal silently, and warns instead when the journal file is still present
+afterwards (`removeJournal` ignores unlink errors such as a Windows lock). Ownership/hash checks and `profileRestoreFailed` remain intact.
 `tests/codex-integration/codex-journal-recovery.test.ts` covers these diagnostics and write flags.
 
 The source-built Docker image explicitly keeps `CODEX_HOME=/home/bun/.codex` separate

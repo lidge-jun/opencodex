@@ -87,6 +87,34 @@ describe("codex-journal recovery diagnostics", () => {
       expect(r.stderr).toBe("");
     });
 
+    test(`${owner}-owner no-rewrite recovery warns when the journal cannot be removed`, () => {
+      const journal = seed(owner, original, false);
+      const r = runScript(testDir, `${deadOwnerScript}
+        const fs = require("node:fs");
+        const { syncBuiltinESMExports } = require("node:module");
+        const journalPath = require("node:path").join(process.env.CODEX_HOME, "opencodex-journal.json");
+        const originalUnlink = fs.unlinkSync;
+        let denied = 0;
+        const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation((path) => {
+          if (path === journalPath) {
+            denied += 1;
+            throw Object.assign(new Error("fixture journal locked"), { code: "EBUSY" });
+          }
+          return originalUnlink(path);
+        });
+        syncBuiltinESMExports();
+        const { reconcileJournal } = require("./src/codex/journal");
+        try { console.log(JSON.stringify({ restored: reconcileJournal(), denied })); }
+        finally { unlinkSpy.mockRestore(); syncBuiltinESMExports(); killSpy.mockRestore(); }
+      `);
+      expect(r.status).toBe(0);
+      expect(JSON.parse(r.stdout)).toEqual({ restored: false, denied: 1 });
+      expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
+      expect(readFileSync(join(testDir, "opencodex-journal.json"), "utf8")).toBe(journal);
+      expect(r.stderr).toContain("the journal could not be removed");
+      expect(r.stderr).not.toContain("restored");
+    });
+
     for (const configRewritten of [false, true]) {
       test(`${owner}-owner incomplete recovery warns when ${configRewritten ? "config was rewritten" : "config is already original"} and profile unlink fails`, () => {
         const journal = seed(owner, configRewritten ? injected : original, true);

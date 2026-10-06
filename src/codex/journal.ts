@@ -380,6 +380,11 @@ export function restoreJournal(): boolean {
   return restoreJournalState().complete;
 }
 
+/** A no-rewrite recovery is quiet only when the stale journal is actually gone. */
+function warnIfJournalRetained(): void {
+  if (existsSync(JOURNAL_PATH)) console.error("⚠️ Codex journal recovery found nothing to restore, but the journal could not be removed; it will be retried on the next start.");
+}
+
 export interface ReconcileJournalOptions {
   activeClientApiKeyId?: string;
 }
@@ -407,7 +412,7 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
     }
     // Warn only when restore actually rewrote state; an already-original
     // snapshot still cleans itself up but has nothing to report.
-    if (!restored.configRewritten && !restored.profileRewritten) return false;
+    if (!restored.configRewritten && !restored.profileRewritten) { warnIfJournalRetained(); return false; }
     console.error(`⚠️  Uncommitted or mismatched client routing (${owner.apiKeyId}) was restored from the Codex journal.`);
     return true;
   }
@@ -432,7 +437,7 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
   // Warn only when restore actually rewrote state. A stale journal whose
   // artifacts are already original still cleans itself up (complete removes
   // it) but has nothing to report — claiming a restore then cries wolf.
-  if (!restored.configRewritten && !restored.profileRewritten) return false;
+  if (!restored.configRewritten && !restored.profileRewritten) { warnIfJournalRetained(); return false; }
   console.error(`⚠️  Previous session (PID ${pid}) did not shut down cleanly. Codex state restored from journal.`);
   return true;
 }
