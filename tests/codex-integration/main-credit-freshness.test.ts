@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerCodexCooldownRecoveryProbeWorker, runMainCreditFreshnessRefresh } from "../../src/codex/auth-api";
-import { MAIN_CREDITS_REFRESH_AFTER_MS } from "../../src/codex/auth-api/main-credit-freshness";
+import { registerCodexCooldownRecoveryProbeWorker } from "../../src/codex/auth-api";
+import { MAIN_CREDITS_REFRESH_AFTER_MS, runMainCreditFreshnessRefresh } from "../../src/codex/auth-api/main-credit-freshness";
 import { CodexMainAccountCreditsOffError, resolveCodexAuthContext } from "../../src/codex/auth-context";
 import { setCodexAccountCreditsAfterLimit } from "../../src/codex/account-credit-use";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
@@ -59,14 +59,14 @@ function bearer(): string {
 }
 
 /** Seed the observed main login with a weekly window and a credit balance observed `creditAgeMs` ago. */
-function seedMain(weeklyPercent: number, creditAgeMs: number, credits: "positive" | "retracted" = "positive"): void {
+function seedMain(weeklyPercent: number, creditAgeMs: number, credits: "positive" | "zero" | "retracted" = "positive"): void {
   const writer = captureMainQuotaWriter(accountId);
   if (!writer) throw new Error("fixture identity must be observed first");
   setAccountQuotaFromParsed(MAIN, {
     weeklyPercent, weeklyResetAt: Date.now() + DAY_MS,
-    credits: credits === "positive"
-      ? { hasCredits: true, balance: 42.5, observedAt: Date.now() - creditAgeMs }
-      : null,
+    credits: credits === "retracted"
+      ? null
+      : { hasCredits: true, balance: credits === "zero" ? 0 : 42.5, observedAt: Date.now() - creditAgeMs },
   }, undefined, writer);
 }
 
@@ -183,8 +183,11 @@ describe("main credit freshness refresh", () => {
       afterTick!();
       // Wait for the hook's own read; calling the refresh here would start one by itself.
       for (let attempt = 0; attempt < 200 && calls.length === 0; attempt++) await Bun.sleep(5);
-      expect(timer).not.toHaveBeenCalled();
       expect(calls).toEqual([whamUrl]);
+      // Join the hook's in-flight read so teardown never races it; fresh evidence makes no new read.
+      await runMainCreditFreshnessRefresh(cfg);
+      expect(calls).toEqual([whamUrl]);
+      expect(timer).not.toHaveBeenCalled();
     } finally {
       registration.mockRestore();
       timer.mockRestore();
@@ -195,6 +198,7 @@ describe("main credit freshness refresh", () => {
     ["fresh evidence", () => seedMain(100, 60_000)],
     ["included headroom", () => seedMain(50, MAIN_CREDITS_REFRESH_AFTER_MS)],
     ["retracted credits", () => seedMain(100, MAIN_CREDITS_REFRESH_AFTER_MS, "retracted")],
+    ["a known zero balance", () => seedMain(100, MAIN_CREDITS_REFRESH_AFTER_MS, "zero")],
   ] as const)("%s makes no WHAM request", async (_label, seed) => {
     seed();
     const calls = stubWham();

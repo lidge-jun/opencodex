@@ -321,10 +321,11 @@ quota it already holds, so the main login's credit evidence has its own keeper. 
 `creditCodexAccountIds`, a usage window is full, the hard lock is not blocking and the cached
 credits are still spendable, the existing cooldown-recovery sweep re-reads main WHAM once that
 evidence is `MAIN_CREDITS_REFRESH_AFTER_MS` (three minutes) old, through the native-main claim and
-the shared usage-query pacing. That lands a new observation before the five-minute horizon, so
-the main credit hold never opens a gap between dashboard polls or while the dashboard is hidden.
-Retracted, empty or refused credits, accounts without consent and reauth-pending logins make no
-read. This is metadata only: it never clears a cooldown, a hard lock or a retraction.
+the shared usage-query pacing. A successful read inside that margin extends the evidence before
+the five-minute horizon, independent of dashboard polls; pacing, an unavailable native-main claim
+or a failed read can still let it lapse, and the hold then applies as before. Retracted, empty,
+zero-balance or refused credits, accounts without consent, a blocking hard lock and reauth-pending
+logins make no read. This is metadata only: it never clears a cooldown, a hard lock or a retraction.
 
 Credit parsing, expiry, partial updates and reset-ticket separation are covered in
 `tests/codex-integration/codex-quota-parser-parity.test.ts`; selection and bulk-pause behavior

@@ -34,8 +34,10 @@ export async function runMainCreditFreshnessRefresh(config: OcxConfig): Promise<
   const quota = getMainPolicyQuota();
   const credits = quota?.credits;
   // Retracted, empty or refused credit evidence cannot lift the hold; leave it to explicit reads.
+  // Age is deliberately not checked here: a stale positive balance is exactly what to refresh.
   if (!credits || credits.hasCredits === false || credits.overageLimitReached === true
-    || credits.allowed === false) return;
+    || credits.allowed === false
+    || (credits.unlimited !== true && !(typeof credits.balance === "number" && credits.balance > 0))) return;
   if (codexUsageLimitResetAt(quota, undefined, now) === undefined) return;
   if (Number.isFinite(credits.observedAt) && now - credits.observedAt < MAIN_CREDITS_REFRESH_AFTER_MS) return;
   // The hard lock refuses the main login regardless of credits and paces its own recovery reads.
