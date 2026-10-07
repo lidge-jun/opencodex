@@ -202,7 +202,24 @@ describe("codex://threads paste in the conversation filter", () => {
     expect(unwrapLogConversationQuery(CODEX_THREAD_ID)).toBe(CODEX_THREAD_ID);
     expect(unwrapLogConversationQuery("codex://other/x")).toBe("codex://other/x");
     expect(unwrapLogConversationQuery("codex://threads/")).toBe("codex://threads/");
+    expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}?hostId=durable`)).toBe(CODEX_THREAD_ID);
+    expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}?hostId=remote-control%3Aexample-environment`)).toBe(CODEX_THREAD_ID);
+    expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}#frag`)).toBe(CODEX_THREAD_ID);
     expect(await hashLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}`)).toBe(digest32(CODEX_THREAD_ID));
+    expect(await hashLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}?hostId=durable`)).toBe(digest32(CODEX_THREAD_ID));
+  });
+
+  test("malformed or oversized pastes stay plain queries and never match", () => {
+    const slashFlood = `codex://threads/${"/".repeat(4000)}\u2028x`;
+    expect(unwrapLogConversationQuery(slashFlood)).toBe(slashFlood.trim());
+    expect(unwrapLogConversationQuery("codex://threads/id/extra")).toBe("codex://threads/id/extra");
+    const rows = [{ id: "hashed", conversationId: digest32(CODEX_THREAD_ID) }];
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, conversationId: slashFlood }, NOW)).toEqual([]);
+    expect(filterLogs(rows, {
+      ...DEFAULT_LOG_FILTER_STATE,
+      conversationId: `codex://threads/${CODEX_THREAD_ID}?hostId=durable`,
+      conversationQueryHash: digest32(CODEX_THREAD_ID),
+    }, NOW).map(row => row.id)).toEqual(["hashed"]);
   });
 
   test("filterLogs matches a stored digest or raw id behind the pasted link", async () => {

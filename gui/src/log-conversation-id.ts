@@ -17,13 +17,27 @@ function hasControlChars(value: string): boolean {
   return false;
 }
 
+const CODEX_THREAD_LINK_PREFIX = "codex://threads/";
+const LOG_CONVERSATION_LINK_MAX = 512;
+
 /**
- * Unwrap a pasted `codex://threads/<id>` deep link to the bare thread id.
+ * Unwrap a pasted `codex://threads/<id>` deep link to the bare thread id; query/fragment
+ * metadata (e.g. `?hostId=…`) is dropped. Bounded linear scan — no ambiguous regex.
  * Mirrors src/server/request-log-conversation.unwrapLogConversationQuery.
  */
 export function unwrapLogConversationQuery(query: string): string {
-  const unwrapped = /^codex:\/\/threads\/(.*?)\/*$/i.exec(query.trim())?.[1]?.trim();
-  return unwrapped || query.trim();
+  const trimmed = query.trim();
+  if (
+    trimmed.length > LOG_CONVERSATION_LINK_MAX ||
+    trimmed.length <= CODEX_THREAD_LINK_PREFIX.length ||
+    !trimmed.toLowerCase().startsWith(CODEX_THREAD_LINK_PREFIX)
+  ) {
+    return trimmed;
+  }
+  const rest = trimmed.slice(CODEX_THREAD_LINK_PREFIX.length);
+  const metaIndex = rest.search(/[?#]/);
+  const segment = (metaIndex === -1 ? rest : rest.slice(0, metaIndex)).replace(/\/+$/, "");
+  return segment !== "" && !/[/\s]/.test(segment) ? segment : trimmed;
 }
 
 /** SHA-256 hex prefix used as the persisted conversation id. */
