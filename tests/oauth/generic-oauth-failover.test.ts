@@ -426,11 +426,12 @@ describe("sidecar on429 wiring", () => {
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
     const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, (?:next|retry)Parsed)?\)/g) ?? [];
-    // Nine includes Antigravity auth rotation, Kiro branches, native passthrough, plus
-    // the Antigravity 403 verify-account arm, which replays through the same snapshot
-    // helper so the rotated bearer keeps its account-matched project.
+    // Ten includes Antigravity auth rotation, Kiro branches, native passthrough, the
+    // Antigravity 403 verify-account arm, which replays through the same snapshot helper
+    // so the rotated bearer keeps its account-matched project, and the web-search sidecar's
+    // structured VALIDATION_REQUIRED rotation (#6710), which uses the same helper.
     // The explicit count keeps a newly added rotation site from skipping identity pairing.
-    expect(snapshotUses.length).toBe(9);
+    expect(snapshotUses.length).toBe(10);
     expect(helperUses.length).toBe(snapshotUses.length);
     // The bearer is written in exactly one place — inside the helper. Any other occurrence is a
     // rotation site that skipped the pairing rules.
