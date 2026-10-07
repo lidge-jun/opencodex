@@ -504,10 +504,22 @@ export async function fetchPoolAccountQuota(
       credentialGeneration: readCodexAccountRecord(accountId)?.generation,
     };
   }
+  const record = readCodexAccountRecord(accountId);
+  // The token endpoint already called this grant revoked or expired. Only a re-login or a
+  // completed validation rewrites the record and drops the marker, so until then a passive read
+  // (dashboard poll, listing, priming, recovery probe) would only POST the dead refresh token again
+  // and log the same 401. Report the stored verdict the failed refresh would have produced. An
+  // explicit dashboard refresh and a post-reset readback keep their probe, and a source-linked
+  // credential spends no grant of its own, so none of them is held here.
+  if (!validatePending && afterDispatchSequence === undefined && record && record.deletedAt == null
+    && record.credential && !record.credential.sourceAuthPath
+    && record.lastCodexValidationTerminal === true && record.lastCodexValidationStatus === "failed") {
+    markAccountNeedsReauth(accountId, captureConfigGeneration(), record.generation);
+    return { quota: existing ?? null, needsReauth: true, reauthReason: "refresh_failed", credentialGeneration: record.generation };
+  }
   // A token refresh may increment the generation (and rotate the refresh token) before WHAM
   // completes. Join a flight whose starting or resolved generation is still current, but let a
   // replacement credential with the same pool id start its own request.
-  const record = readCodexAccountRecord(accountId);
   const flights = poolQuotaRefreshInFlight.get(accountId);
   const current = flights && [...flights].find(flight => {
     const generation = flight.state.resolvedCredentialGeneration
