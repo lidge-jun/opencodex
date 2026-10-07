@@ -1484,8 +1484,8 @@ export async function mergeAccountCredential(provider:string,accountId:string,cr
 export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string,writerGeneration=captureConfigGeneration(),reason?:"verify_account"):Promise<boolean>{const key=oauthAccountKey(provider,accountId);if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||account.paused||credentialGeneration(account.credential)!==generation)return false;if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;account.needsReauth=true;if(reason==="verify_account")account.needsReauthReason=reason;return true;},[provider,accountId,generation]);}
 
 /** Attention is projected only; refresh selection continues to use the stored terminal flag. */
-export function accountNeedsReauthForStatus(provider: string, account: ProviderAccount): boolean {
-  return account.needsReauth === true || (provider === "kiro" && account.credential.expires <= Date.now()
+export function accountNeedsReauthForStatus(provider: string, account: ProviderAccount, now = Date.now()): boolean {
+  return account.needsReauth === true || (provider === "kiro" && account.credential.expires <= now
     && account.refreshAttentionGeneration === credentialGeneration(account.credential));
 }
 

@@ -11,6 +11,8 @@ import type { OcxConfig } from "../../src/types";
 import { ManagementRequest } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { collectOAuthHealthEntriesForCli, projectStoredOAuthAccountHealth } from "../../src/oauth/health";
+import { collectOAuthDoctorChecks } from "../../src/cli/doctor";
 
 const envKeys = ["OPENCODEX_HOME", "HOME", "USERPROFILE", "LOCALAPPDATA", "KIROCLI_DB_PATH", "KIRO_CLI_DB_FILE", "KIROCLI_TOKEN_KEY", "KIRO_ACCESS_TOKEN", "KIRO_CREDS_FILE", "KIRO_CREDENTIALS_FILE", "KIRO_REGION", "KIRO_PROFILE_ARN"] as const;
 const profileArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/test";
@@ -227,16 +229,71 @@ describe("Kiro AWS SSO refresh attention", () => {
     expect(getLoginStatus("kiro").accounts?.[0]?.needsReauth).toBeUndefined();
   });
 
-  test("management status API exposes attention without internal evidence or secrets", async () => {
+  test("canonical health honors the supplied time at the attention expiry boundary", async () => {
     rejectRefresh();
     await expect(refresh()).rejects.toThrow();
-    const request = new ManagementRequest("http://localhost/api/oauth/status?provider=kiro");
+    const account = getAccountSet("kiro")!.accounts[0]!;
+    expect(projectStoredOAuthAccountHealth("kiro", account, stored.expires - 1, { observeOnly: true }))
+      .toEqual({ status: "healthy" });
+    expect(projectStoredOAuthAccountHealth("kiro", account, stored.expires, { observeOnly: true }))
+      .toEqual({ status: "reauth_required", reason: "refresh_failed" });
+    expect(account.needsReauth).toBeUndefined();
+  });
+
+  test("canonical health ignores stale attention generations and other providers", async () => {
+    rejectRefresh();
+    await expect(refresh()).rejects.toThrow();
+    const account = getAccountSet("kiro")!.accounts[0]!;
+    expect(projectStoredOAuthAccountHealth("kiro", {
+      ...account, credential: { ...account.credential, access: "replacement-access" },
+    }, stored.expires, { observeOnly: true })).toEqual({ status: "healthy" });
+    expect(projectStoredOAuthAccountHealth("xai", account, stored.expires, { observeOnly: true }))
+      .toEqual({ status: "healthy" });
+  });
+
+  test("collected CLI health and doctor warn at attention expiry without mutating quarantine", async () => {
+    rejectRefresh();
+    await expect(refresh()).rejects.toThrow();
+    const authPath = join(home, "auth.json");
+    const before = readFileSync(authPath, "utf8");
+    const deps = { findLiveProxyImpl: async () => null };
+    const valid = await collectOAuthHealthEntriesForCli(stored.expires - 1, deps);
+    expect(valid.entries.find(entry => entry.provider === "kiro")?.health).toEqual({ status: "healthy" });
+    const validChecks = await collectOAuthDoctorChecks(stored.expires - 1, deps);
+    expect(validChecks.some(check => check.level === "WARN" && check.message.includes("kiro"))).toBe(false);
+    const expired = await collectOAuthHealthEntriesForCli(stored.expires, deps);
+    expect(expired.entries.find(entry => entry.provider === "kiro")).toEqual({
+      provider: "kiro", accountId, health: { status: "reauth_required", reason: "refresh_failed" },
+      action: "run `ocx login kiro`",
+    });
+    const checks = await collectOAuthDoctorChecks(stored.expires, deps);
+    const warning = checks.find(check => check.level === "WARN" && check.message.includes("kiro"));
+    expect(warning?.message).toContain("requires reauthentication");
+    expect(warning?.message).toContain("ocx login kiro");
+    expect(warning?.message).not.toContain(accountId);
+    for (const secret of ["test-access", "test-refresh", "test-secret", "refreshAttentionGeneration", credentialGeneration(stored)]) {
+      expect(JSON.stringify({ expired, checks })).not.toContain(secret);
+    }
+    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(getAccountSet("kiro")!.accounts[0]!.needsReauth).toBeUndefined();
+  });
+
+  test.each(["status", "accounts"])("management %s API exposes attention without internal evidence or secrets", async endpoint => {
+    rejectRefresh();
+    await expect(refresh()).rejects.toThrow();
+    const request = new ManagementRequest(`http://localhost/api/oauth/${endpoint}?provider=kiro`);
     const config = { port: 0, defaultProvider: "kiro", providers: {} } as OcxConfig;
     const response = await handleManagementAPI(request, new URL(request.url), config);
     expect(response?.status).toBe(200);
     const body = await response!.json();
-    expect(body.loggedIn).toBe(false);
+    if (endpoint === "status") expect(body.loggedIn).toBe(false);
     expect(body.accounts[0].needsReauth).toBe(true);
+    if (endpoint === "accounts") {
+      expect(body.accounts[0].health).toEqual({ status: "reauth_required", reason: "refresh_failed" });
+      expect(body.accounts[0].healthLabel).toBe("Refresh failed");
+      expect(body.accounts[0].healthAction).toBe("run `ocx login kiro`");
+      expect(body.accounts[0].healthSummary).toContain("reauthentication required");
+    }
     for (const value of ["test-access", "test-refresh", "test-secret", "test-client", "refreshAttentionGeneration", credentialGeneration(stored)]) {
       expect(JSON.stringify(body)).not.toContain(value);
     }

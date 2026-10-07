@@ -119,7 +119,10 @@ refresh-attention evidence separate from terminal grant errors. Matching rotated
 are tried before the failure reaches `src/oauth/index.ts`. `src/oauth/store.ts` persists the
 failed credential generation under its mutation lock, respecting replacement, config reconciliation,
 and operator pause. Once that generation's access token expires, account summaries project
-`needsReauth: true` and the active login projects `loggedIn: false`. The internal terminal flag
+`needsReauth: true` and the active login projects `loggedIn: false`. `src/oauth/health.ts` uses
+the same generation/expiry predicate with its supplied observation time, so account-list health
+and CLI diagnostics project `reauth_required` with `refresh_failed`; `ocx doctor` warns with a
+login action. The internal terminal flag
 stays clear so a later refresh remains eligible; successful refresh or credential replacement
 clears the evidence. Desktop input errors, network failures, and 5xx responses create no evidence.
 No upstream description or credential metadata enters the status response.
