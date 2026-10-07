@@ -31,7 +31,7 @@ Définissez `OCX_PROBE_TIMEOUT_MS` pour relever les plafonds, par exemple `OCX_P
 
 ## Codes de sortie et confirmation
 
-Une commande réussie renvoie le code 0. Une syntaxe non valide, une commande ou une ressource inconnue, l’échec d’une opération d’API ou l’indisponibilité d’un service requis produit un code non nul. Plus précisément, `ocx health` renvoie 0 uniquement lorsque le proxy est sain, et 1 dans le cas contraire ; cette commande peut donc servir de sonde de service. Les scripts doivent tester le code de sortie plutôt que d’analyser le texte destiné aux utilisateurs.
+Une commande réussie renvoie le code 0. Une syntaxe non valide, une commande ou une ressource inconnue, l’échec d’une opération d’API ou l’indisponibilité d’un service requis produit un code non nul. Plus précisément, `ocx health` renvoie 0 uniquement lorsque le proxy est sain, 1 si aucun proxy sain n’est trouvé et 2 si les arguments sont invalides ; cette commande peut donc servir de sonde de service. Les scripts doivent tester le code de sortie plutôt que d’analyser le texte destiné aux utilisateurs.
 
 Les opérations de suppression destructive, d’importation, de consommation de crédits et de mise à jour qui annoncent une confirmation exigent `--yes` en mode non interactif. Ce drapeau constitue un consentement explicite : son absence ne doit jamais confirmer silencieusement l’opération.
 

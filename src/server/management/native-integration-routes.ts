@@ -51,7 +51,7 @@ import type { CodexNativeRestoreResult } from "../../codex/inject";
 import type { OcxConfig } from "../../types";
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
-import type { ManagementContext } from "./context";
+import { managementInferencePort, type ManagementContext } from "./context";
 
 export type NativeIntegrationClientId = "claude" | "grok" | "codex" | "claude-desktop";
 
@@ -540,7 +540,7 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
      * a stale config.hostname picks the wrong loopback policy branch entirely.
      */
     const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
-    const port = runtime?.port ?? (Number(ctx.url.port) || config.port);
+    const port = deps.liveListenPort?.() ?? runtime?.port ?? managementInferencePort(ctx);
     const hostname = runtime?.hostname ?? config.hostname;
 
     /*

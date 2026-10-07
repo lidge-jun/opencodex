@@ -209,3 +209,21 @@ describe("CLI help recovery", () => {
     expect(JSON.parse(admitted.stdout)).toEqual({ heads: names, calls: names });
   });
 });
+
+
+test.each([0, 1])("update dispatch preserves updater exit %s without executing the updater", code => {
+  const result = isolated(`import { mock } from "bun:test";
+    const updatePath = ${JSON.stringify(repoPath("src", "update", "index.ts"))};
+    const original = await import(updatePath);
+    mock.module(updatePath, () => ({
+      ...original, runUpdate: async () => { process.exitCode = ${code}; },
+    }));
+    const { dispatchCommand } = await import(${JSON.stringify(repoPath("src", "cli", "dispatch.ts"))});
+    const args = ["update"];
+    const status = await dispatchCommand({ kind: "command", command: "update", args }, { args });
+    console.log(JSON.stringify({ status }));
+    process.exit(status);`);
+  expect(result.status).toBe(code);
+  expect(JSON.parse(result.stdout)).toEqual({ status: code });
+  expect(result.stderr).toBe("");
+});

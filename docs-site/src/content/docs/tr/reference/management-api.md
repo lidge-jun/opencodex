@@ -390,7 +390,7 @@ devreder. Rotaları şunlardır:
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | Codex hesaplarını listeleyin/yenileyin veya silin. POST devre dışı bırakılmış bir uyumluluk uç noktası olarak tutulur; başarılı DELETE yanıtları `catalogRefreshPending` içerir. | POST her zaman 403 `manual_import_disabled` döndürür; 400 geçersiz DELETE girdisi |
 | `PUT /api/codex-auth/accounts/alias` | Bir hesap takma adını ayarlayın veya temizleyin | 400 geçersiz hesap/takma ad |
-| `PUT /api/codex-auth/accounts/pause` | Bir hesabı duraklatın veya devam ettirin | 400 geçersiz hesap/durum; 404 eksik hesap |
+| `PUT /api/codex-auth/accounts/pause` | Bir hesabı ve aynı kimliğe sahip mevcut ana hesap/havuz kayıtlarını elle duraklatın veya devam ettirin; `affectedAccountIds` döndürür | 400 geçersiz hesap/durum; 404 hesap bulunamadı; 503 ana hesap kimliği kullanımda veya okunamıyor |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Kotası tükenen hesapları duraklatın | Mutasyon kilidi arızaları 503 olur |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Bir hesap veya tüm hesaplar için çalışma zamanı soğuma süresini temizleyin | 400 geçersiz kimlik |
 | `GET, PUT /api/codex-auth/active` | Aktif hesabı okuyun veya seçin | 400 geçersiz veya eksik hesap; 409 duraklatılmış/eski satır çakışması |

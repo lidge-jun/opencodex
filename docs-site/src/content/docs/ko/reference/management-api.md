@@ -332,7 +332,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신하거나 삭제합니다. POST는 비활성화된 호환성 endpoint로만 유지되며, 성공한 DELETE는 `catalogRefreshPending`를 포함합니다. | POST는 항상 403 `manual_import_disabled`; DELETE 입력이 잘못되면 400 |
 | `PUT /api/codex-auth/accounts/alias` | 계정 alias를 설정하거나 지웁니다 | 400 잘못된 account/alias |
-| `PUT /api/codex-auth/accounts/pause` | 계정 하나를 일시 중지하거나 재개합니다 | 400 잘못된 account/state; 404 누락된 account |
+| `PUT /api/codex-auth/accounts/pause` | 계정과 동일한 로그인 정보를 가진 기존 메인/풀 항목을 수동으로 일시 중지하거나 재개합니다. `affectedAccountIds`를 반환합니다 | 400 잘못된 계정/상태; 404 계정 없음; 503 메인 계정의 로그인 정보가 사용 중이거나 읽을 수 없음 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | account 하나 또는 모든 account의 runtime cooldown을 지웁니다 | 400 잘못된 id |
 | `GET, PUT /api/codex-auth/active` | 활성 account를 읽거나 선택합니다 | 400 잘못되었거나 누락된 account; 409 paused/legacy-row 충돌 |

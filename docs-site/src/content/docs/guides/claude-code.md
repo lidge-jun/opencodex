@@ -275,24 +275,35 @@ Picker mode is part of first-party mode. On macOS it is on by default when first
 unless `claudeCode.intercept.picker: false` is set. It changes the first-party Desktop Code-tab picker
 so it lists available opencodex models by name. The first time it is enabled, macOS may ask you to
 trust a local certificate authority in the login keychain. That authority is constrained to `claude.ai`
-and its subdomains. Its signing key exists only inside the running OpenCodex process, so every
-OpenCodex restart publishes a fresh authority and macOS asks you to trust it again — approve the
-prompt, or later run `ocx claude desktop picker trust`, after each restart.
+and its subdomains. OpenCodex protects its exportable signing identity in the OS credential store
+and reuses the same validated certificate and key across normal restarts. No plaintext picker signing
+key is stored in the OpenCodex config directory. The full constrained CA validation and OS trust
+verification still apply. With the same approved identity and an available credential store, restarting
+OpenCodex does not add or remove Certificate Trust Settings. Startup restore never installs trust:
+if trust is missing, revoked or unknown, the picker stays pending. Run `ocx claude desktop picker on`
+or `ocx claude desktop picker trust` explicitly to grant trust.
 Startup also attempts to remove a legacy on-disk picker signing key before checking whether
 interception is enabled. Cleanup is best-effort and does not enable interception or block startup.
 
-On restart OpenCodex first removes the previous authority from the keychain. If that removal fails
-(for example because you decline the keychain prompt), the picker stays off for this run so two
-authorities are never trusted side by side. Desktop keeps its network connection: the proxy address
-in its profile still answers, but only as a plain relay that does not read claude.ai traffic, and the
-picker lists Anthropic's own models until the removal succeeds. OpenCodex remembers which certificate
-still needs removal and retries on the next restart; `ocx claude desktop picker status` shows the
-picker as unavailable meanwhile.
+One-time migration from an older picker identity may require consent to remove its previous trust.
+If cleanup cannot finish, the picker stays unavailable and the applied profile uses a blind relay
+until cleanup succeeds; `ocx claude desktop picker status` reports that state. macOS may separately
+ask you to unlock the keychain or approve an application's access to stored credentials. These native
+access prompts can still occur on restart or upgrade.
+
+Picker mode remains unsupported on Windows and Linux: OpenCodex starts no picker CA, credential-store
+or proxy work there. The main Claude intercept remains available with ownership, symlink, file-permission
+and Windows ACL checks protecting its local CA files.
 
 Picker mode allows up to 64 KiB of headers on incoming requests and ordinary HTTP
 responses, preserving browser session cookies. Larger upstream response headers return
 502 and log `upstream:headers-too-large`, without cookie values or request paths.
 Upgraded connections continue to relay bytes directly after the request handshake.
+
+Picker mode uses HTTP/2 with Claude Desktop so long-lived chat streams no longer use up
+Desktop's connections to claude.ai. Earlier versions could leave chat stuck on
+"Timed out loading session" while picker mode was on. If chat stops loading with picker mode
+on, turn it off with `ocx claude desktop picker off` and report the problem.
 
 While picker mode is on, Claude Desktop reaches the network through OpenCodex. If OpenCodex stops,
 Desktop is offline until you fully restart it or turn picker mode off. Check the state with
@@ -783,6 +794,19 @@ depend on them for long unattended runs.
 
 <!-- TODO(WP5 GUI): Add the sidecar settings-screen walkthrough after the GUI controls ship. -->
 
+## Client tools on Cursor routes
+
+When Claude Code uses a Cursor-backed model, OpenCodex preserves recognized client tool names
+such as `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, and `Task` in the Cursor catalog, tool
+guidance, and replayed calls. This keeps the names consistent with Claude Code's instructions.
+Denied Cursor-native execution frames direct the model to the client tools available that turn.
+
+A mixed catalog containing a bare Codex `exec_command` or `shell_command` bridge uses wire
+aliases such as `ocx_client_Read` to avoid Cursor tool collisions; calls returned to Claude Code
+still use its original tool names. Namespaced MCP tools keep their namespaced identities.
+OpenCodex includes these aliases in Cursor's transport byte budget, so a tool whose definition
+would exceed the limit is omitted for that turn.
+
 ## Reasoning effort
 
 Claude Code's `/effort` setting is preserved across the adapter:
@@ -807,6 +831,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | Assistant text | `output_text` |
 | Assistant `tool_use` | `function_call` (`input` → JSON-stringified `arguments`) |
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
+| `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result; preserves loaded-tool names without adding declarations or enabling translated server-side deferral |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
 | Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
@@ -909,21 +934,26 @@ Claude debug immediately clears the ring.
 
 ## GUI (Claude page)
 
-Claude has two tabs under **Connect** in the dashboard: **Claude** for Claude Code and **Claude Desktop**,
-and the Claude card on the Connect overview carries the same connection switch. Claude Code settings are one page with a
-single Save bar at the bottom (unsaved state, **Revert**, **Save**); the Claude connection switch
-is the last control and commits immediately, so **Save** never changes it. The page shows:
+Open **Connect → Claude** for the one-page Claude Code settings. The page shows these controls
+and sections in order:
 
-- Claude Desktop tab: **Connection mode** selector — gateway (default) or first-party — with the
-  running proxy port in first-party mode. Only **Save & apply** switches modes; **Save** alone
-  stores the gateway profile lanes for a later gateway apply and leaves the current mode as is
-- Inbound kill switch (enabled toggle)
-- Quickstart (`ocx claude`) and manual env block
-- Fast Mode selector (Auto / ON / OFF)
-- Auto-context toggle and compaction threshold dropdown
-- Subagent auto-registration toggle
-- Model interception (modelMap) editor
-- Live preview of picker aliases
+1. **Claude Code CLI first-party** switch
+2. **Get started** with `ocx claude` and the manual environment block
+3. **General** with compatibility, agent instructions, Fast Mode, and context controls
+4. **Background helper model** selector
+5. **Model interception** editor
+6. **Available models**, the live preview of Claude Code's `/model` picker aliases
+7. **Claude connection** switch, also available on the Claude card in the Connect overview
+
+The sticky Save bar shows **No changes** when the saved settings match the page, or
+**Unsaved changes** after you edit them. **Revert** discards unsaved edits; **Save** commits the
+editable settings. The **Claude connection** and **Claude Code CLI first-party** switches apply
+immediately. **Save** never changes either switch.
+
+**Claude Desktop** is a separate tab under **Connect**. Its **Connection mode** selector offers
+gateway (default) or first-party, with the running proxy port in first-party mode. Only
+**Save & apply** switches modes; **Save** alone stores the gateway profile lanes for a later
+gateway apply and leaves the current mode as is.
 
 `GET /api/claude-code` returns effective defaults, config, context-window registry, effective env,
 available route ids, aliases, and port. `PUT /api/claude-code` is partial and preserves omitted

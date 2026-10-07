@@ -88,9 +88,9 @@ import {
   runProxyRestart,
   runTrayProxyStart,
   type ProxyRestartLive,
-  type ProxyRestartResult,
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
+import { reportRestartFailure } from "./restart-failure";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
@@ -152,6 +152,7 @@ import {
   grokSyncFailureMessage,
   reconcileEnsureDesiredIntegrations,
 } from "./ensure-desired-integrations";
+import { ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting, waitForLiveProxy } from "./ensure-readiness";
 import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
 import { loadExportModels } from "../server/management/model-rows";
 
@@ -235,16 +236,10 @@ function parseStartCliOptions(): ReturnType<typeof parseStartOptions> {
   }
 }
 
-async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    // Runtime-state-first with identity: finds the proxy even when it started on a
-    // fallback port, and never mistakes a foreign 200 for our proxy.
-    const live = await findLiveProxy();
-    if (live) return live;
-    await new Promise(resolve => setTimeout(resolve, 150));
-  }
-  return null;
+async function waitForProxy(timeoutMs = 8_000, keepWaiting?: () => boolean): Promise<LiveProxy | null> {
+  // Runtime-state-first with identity: finds the proxy even when it started on a
+  // fallback port, and never mistakes a foreign 200 for our proxy.
+  return waitForLiveProxy({ find: findLiveProxy, timeoutMs, keepWaiting });
 }
 
 class StartCommandExit extends Error {
@@ -846,9 +841,13 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
     env: detachedStartEnvironment(),
   });
   options.onSpawn?.(child);
+  const spawnedAt = Date.now();
+  let childExited = false;
+  child.once("exit", () => { childExited = true; });
   child.unref();
 
-  const port = (await waitForProxy())?.port;
+  // A cold start can outlast 8 s on a busy Windows host; see ensure-readiness.ts.
+  const port = (await waitForProxy(ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting(spawnedAt, () => childExited)))?.port;
   if (!port) {
     console.error("❌ Proxy did not become healthy after starting.");
     process.exitCode = 1;
@@ -919,28 +918,6 @@ const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIM
 
 /** Reserve confirmation time within the shared restart deadline. */
 const RESTART_REOBSERVE_RESERVE_MS = 10_000;
-function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>): void {
-  if (result.phase === "identity") {
-    console.error("❌ Refusing to restart because the running proxy identity could not be attested.");
-  } else if (result.phase === "request") {
-    const code = result.error instanceof Error ? result.error.message : "";
-    if (code === "restart_capability_unsupported") {
-      console.error("❌ The running proxy predates process-bound restart support; no unsafe fallback was attempted.");
-      console.error("   After confirming this home owns the proxy, run `ocx stop` and then `ocx start` once.");
-    } else if (code === "restart_version_skew") {
-      console.error("❌ The running proxy reports a different OpenCodex version than this CLI; restarting in place would respawn the old installation.");
-      console.error("   Run `ocx stop` and then `ocx start` from this installation instead.");
-    } else if (code === "restart_package_tree_unsettled") {
-      console.error("❌ The proxy's package files are still being replaced; wait for the install to finish, then run `ocx restart` again.");
-    } else {
-      console.error("❌ Proxy restart request could not be confirmed; no fallback stop/start was attempted.");
-    }
-  } else if (result.phase === "replacement") {
-    console.error("❌ Proxy restart was accepted, but no identity-verified replacement became healthy in time.");
-  } else {
-    console.error("❌ Proxy was not running and the fallback start did not become healthy.");
-  }
-}
 async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
 ): Promise<boolean> {
@@ -968,7 +945,7 @@ async function handleProxyRestart(
     console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
     const update = await restartFromCurrentInstallation(candidate, deadlineAt, detachedStartEnvironment());
     if (update.ok) console.log(`✅ Proxy updated to ${update.live.version} (PID ${update.live.pid}).`);
-    else console.error(`❌ ${describeUpdateRestartFailure(update.code)} (${update.code})`);
+    else console.error(`❌ ${describeUpdateRestartFailure(update.code, update.reason)} (${update.code})`);
     process.exitCode = update.ok ? 0 : 1;
     return update.ok;
   }

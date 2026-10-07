@@ -222,6 +222,14 @@ materialization checks cancellation before returning ownership. Connectivity-onl
 completion is neutral: HTTP 101 does not prove inference or quota recovery, and a normal close
 may follow a protocol error. Explicit transport errors/timeouts settle once during cleanup.
 
+`resolveCallerOwnedOpenAiSidecar` in `src/providers/openai-sidecar.ts` is the one Pool-mode path
+that forwards the caller's own credential: a native voice join for a call the client created itself
+(`existingCall`) can only be joined by that login. It reuses the Direct passthrough — explicit bearer
+whose claim matches `chatgpt-account-id`, never an admission secret — so matched-main hard-lock and
+credits refusals surface instead of a Pool detour, and no Pool outcome is recorded. Coverage:
+`tests/server/server-live-existing-call.test.ts` and
+`tests/codex-integration/main-account-hard-lock-auth.test.ts`.
+
 The dashboard presents one OpenAI Codex card with accessible Pool/Direct controls and a separate,
 unchanged API-key card. `PATCH /api/providers?name=openai` persists exactly one
 `codexAccountMode`, clears affinity/quota cache, primes only when entering Pool, and does not refresh
@@ -255,6 +263,22 @@ Canonical forwarding alone can apply the optional client-output safety-buffering
 API-key and custom forward destinations preserve their metadata. See [Responses transport](../transports/responses.md).
 
 Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
+
+## Manual account pause and resume
+
+Manual pause/resume in `src/codex/auth-api/account-pause-group.ts` resolves existing native-main
+and pool entries by the full ChatGPT account/workspace id and normalized email. Matching entries
+share the operation; equal emails in different workspaces and different members of one workspace
+remain independent. Missing identity evidence never links entries. Main's ID and access tokens must
+agree on both workspace and member email; a disagreement returns 503. Main discovery, group publication
+and config persistence hold native-main admission and, when the home exists, the cross-process
+shared claim. Main reads use the claim's pinned auth path and bounded regular-file reader. A positively
+absent home or valid API-key-only envelope has no ChatGPT main identity: Pool-only grouping proceeds,
+and main remains independently addressable by id. An inaccessible existing home, busy claim, malformed
+credentials, or unreadable/nonregular/oversized auth file returns 503 before any group publication.
+All matching exclusions are set before active-account reconciliation, so a duplicate cannot be the fallback.
+The persisted format remains `pausedCodexAccountIds`; routing performs no extra identity reads.
+Automatic quota-protection and bulk-exhaustion policies retain their existing per-entry decisions.
 
 ## Automatic pool plan exclusions
 

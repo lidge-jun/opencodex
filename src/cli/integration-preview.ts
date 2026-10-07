@@ -1,5 +1,5 @@
 /** Preview and explicitly bound mutations use the existing management authority. */
-import type { IntegrationPlanOperation } from "../integrations/mutation-plan";
+import type { IntegrationMutationPlan, IntegrationPlanOperation } from "../integrations/mutation-plan";
 import { redactSecretString, redactUserPath } from "../lib/redact";
 import {
   CliUsageError, RuntimeApiError, printData, runtimeRequest, terminalSafeText,
@@ -144,6 +144,15 @@ const REFUSAL_GUIDANCE: Readonly<Record<string, string>> = {
   write_failed: "Inspect the client configuration and any recovery backup before retrying.",
 };
 
+/** A missing store is fixed by hand, so its refusal says with what; the path is on the status row. */
+function refusalGuidance(plan: IntegrationMutationPlan): string {
+  if (plan.supersededReason === "missing-store" && plan.missingStoreDocument !== undefined) {
+    return `The provider store this client reads is missing. Create it containing \`${plan.missingStoreDocument}\` `
+      + `(its path is supersededBy in \`ocx integration client status --client ${plan.clientId}\`), then apply again.`;
+  }
+  return REFUSAL_GUIDANCE[plan.refusalReason!]!;
+}
+
 function reportError(error: unknown): number {
   if (error instanceof CliUsageError) {
     console.error(`Error: ${error.message}`);
@@ -154,8 +163,12 @@ function reportError(error: unknown): number {
     const body = record(error.body) ? error.body : {};
     const stale = body.code === "integration_preview_stale";
     const unavailable = body.code === "integration_preview_unavailable";
+    // Local discovery found no proxy: nothing was sent, so name the start command instead of
+    // the generic management-host guidance. Server 503s always carry a body; this one has none.
+    const stopped = error.status === 503 && error.body === null && error.message.startsWith("Proxy is not running");
     console.error(stale ? "Error: Integration preview is stale. Run the explicit preview again and review its changes before retrying."
       : unavailable ? "Error: Integration preview is unavailable. Load the model catalog, then run the preview again."
+      : stopped ? "Error: Proxy is not running. Start the intended proxy with: ocx start. No request was sent."
       : error.status === 404 ? "Error: Integration operation or profile was not found. Inspect integration history and the selected profile."
       : error.status === 409 ? "Error: Integration change was refused. Inspect integration status and preview before retrying."
       : error.status === 503 ? "Error: Management API is unavailable. Check the proxy and run this command on its management host."
@@ -187,7 +200,7 @@ export async function handleIntegrationPreviewCommand(argv: string[], deps: Runt
       printData(plan, intent.json, [
         `${plan.clientId}${plan.profileId === undefined ? "" : `:${plan.profileId}`} ${plan.operation}: ${!plan.canApply ? `refused (${plan.refusalReason})` : !plan.willChange ? "no changes needed" : "ready for review"}`,
         ...plan.changes.map(change => `  ${change.kind} ${change.path}`),
-        ...(plan.canApply ? [`Fingerprint: ${plan.fingerprint}`] : [REFUSAL_GUIDANCE[plan.refusalReason!]!]),
+        ...(plan.canApply ? [`Fingerprint: ${plan.fingerprint}`] : [refusalGuidance(plan)]),
       ]);
       return 0;
     }

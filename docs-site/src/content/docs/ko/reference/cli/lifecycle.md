@@ -197,6 +197,8 @@ ocx status --json
 기존 필드는 안정적으로 유지되어야 합니다. 이 스키마는 API 키, OAuth 토큰, Authorization 헤더,
 요청 내용, 이메일, 계정 식별자를 의도적으로 제외합니다.
 
+실시간 읽기는 제한된 서비스 진단이 끝날 때까지 기다립니다. 진단 캐시가 비어 있거나 만료되면 macOS/Linux에서는 최대 6.5초, Windows에서는 최대 16.5초입니다. 캐시된 결과는 신속하게 반환됩니다. 시간 초과 시에는 기존대로 로컬 진단으로 전환합니다. `/healthz`가 정상이라는 사실만으로 재시작 보호가 유효함을 확인할 수는 없습니다.
+
 ### `ocx health [--json]`
 
 실행 중인 프록시의 신원 확인을 수행합니다. 일반 출력은 PID/포트를 보고하고, `--json`은
@@ -351,14 +353,7 @@ Windows에서 Task Scheduler 항목을 만들려면 권한 상승이 필요합�
 작업이나 외부 연산은 자동 권한 상승 표시를 절대 내지 못합니다. 대시보드 UAC 프롬프트를 승인하거나
 상승된 PowerShell 창에서 `ocx service install`을 다시 실행해 주세요.
 
-If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
-`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
-proxy is not running. The message includes the lock path, recorded PID, current liveness,
-executable name when available, and lease age. The process identity is unverified: the PID
-may have been reused, so liveness and executable name describe whichever process occupies
-that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
-process based only on this PID. A later mutation attempt can reclaim a stale lease once its
-age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+시작할 때 `another process owns the runtime mutation lease`가 보고되거나 `ocx service status`에 `Runtime mutation lease busy`가 표시되면, 프록시가 실행 중이 아니더라도 이 리스가 시작이나 서비스 변경을 막고 있는 것입니다. 메시지에는 잠금 경로, 기록된 PID, 그 PID가 현재 살아 있는지 여부, 확인할 수 있는 경우 실행 파일 이름, 리스 경과 시간이 들어 있습니다. 프로세스의 신원은 검증되지 않습니다. PID가 재사용되었을 수 있으므로, 생존 여부와 실행 파일 이름은 지금 그 PID를 쓰고 있는 프로세스에 대한 정보입니다. 작업이 끝날 때까지 기다린 뒤 다시 시도하세요. 이 PID만 보고 잠금을 삭제하거나 프로세스를 중지하지 마세요. 리스 경과 시간이 30초를 넘고 기록된 PID가 더 이상 살아 있지 않으면 이후의 변경 시도가 오래된 리스를 회수할 수 있습니다. `ocx service status`는 리스를 확인만 합니다.
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
@@ -466,7 +461,7 @@ npm에 게시하면 사용할 수 있게 됩니다.
 
 ## Remote Hub 클라이언트 라이프사이클
 
-`ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, `ocx connect rotate --pairing-code-stdin`을 사용합니다. `ocx disconnect`는 오프라인에서도 로컬 상태를 복원하지만 허브 키는 폐기하지 않습니다. 연결 중에는 `ocx connect revoke --admin-token-stdin`으로 저장된 `apiKeyId`를 폐기할 수 있고, 연결을 끊은 뒤에는 허브의 **Integrations → API Keys**를 사용해야 합니다. 비밀값은 stdin으로만 전달하고 argv에 넣지 마세요.
+`ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, `ocx connect rotate --pairing-code-stdin`을 사용합니다. `ocx disconnect`는 오프라인에서도 로컬 상태를 복원하지만 허브 키는 폐기하지 않습니다. 연결 중에는 `ocx connect revoke --admin-token-stdin`으로 저장된 `apiKeyId`를 폐기할 수 있고, 연결을 끊은 뒤에는 허브의 **연결 → API 키**를 사용해야 합니다. 비밀값은 stdin으로만 전달하고 argv에 넣지 마세요.
 
 ## Setup port validation
 

@@ -269,6 +269,7 @@ async function executeDescription(
     plan.settings,
     abortSignal,
     recordSidecarOutcome,
+    plan.forwardSidecar.beforeDispatch,
   );
 }
 

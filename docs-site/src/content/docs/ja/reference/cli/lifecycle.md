@@ -127,6 +127,8 @@ ocx status --json
 
 実際のオブジェクトには、`listen` (ポート、ホスト名、ランタイム/構成ソース)、構成ロード診断、およびバンドルされた Codex プラグイン診断も含まれています。 JSON スキーマは加算専用です。将来のバージョンではフィールドが追加される可能性がありますが、既存のフィールドは安定したままになるはずです。 API キー、OAuth トークン、認証ヘッダー、リクエスト コンテンツ、電子メール、アカウント ID は意図的に除外されます。
 
+ライブ読み取りは、時間制限のあるサービス診断が完了するまで待機します。診断キャッシュが空または期限切れの場合、macOS/Linux では最大 6.5 秒、Windows では最大 16.5 秒です。キャッシュ済みの読み取りは速やかに返ります。タイムアウト時は引き続きローカル診断にフォールバックします。`/healthz` が正常であることだけでは、再起動保護が有効とは確認できません。
+
 ### `ocx health [--json]`
 
 稼働中のプロキシの ID を確認します。ヒューマン出力は PID/ポートをレポートします。 `--json` は `{ok, pid, port}` を出力します。このコマンドは正常な場合のみ 0 で終了し、それ以外の場合は 1 で終了するため、サービス プローブに適しています。
@@ -230,14 +232,7 @@ Windows では、`ocx service status` は、ID 検証済みの OpenCodex プロ�
 
 Windows では、タスク スケジューラ エントリを作成するには昇格が必要です。認識されたローカライズされたアクセス拒否テキストは、既存のガイダンス パスを維持します。そのテキストが判読できない場合、フォールバックには、所有されているコマンド形状 `/create /tn opencodex-proxy /xml <non-empty-path> /f`、ステータス 1、および確認済みの非昇格トークンが必要です。ダッシュボードのスタートアップ セーフティ アクションは、UAC を自動的に要求できるようになります。そのフォールバックがトークンの状態を判断できない場合、元のスケジューラ エラーが保持されます。外部タスクおよび操作は、自動昇格マーカーを発行することはできません。ダッシュボードの UAC プロンプトを承認するか、管理者特権の PowerShell ウィンドウで `ocx service install` を再実行します。
 
-If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
-`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
-proxy is not running. The message includes the lock path, recorded PID, current liveness,
-executable name when available, and lease age. The process identity is unverified: the PID
-may have been reused, so liveness and executable name describe whichever process occupies
-that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
-process based only on this PID. A later mutation attempt can reclaim a stale lease once its
-age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+起動時に `another process owns the runtime mutation lease` と表示された場合、または `ocx service status` に `Runtime mutation lease busy` と表示された場合は、プロキシが動いていなくても、このリースが起動やサービスの変更を妨げています。メッセージにはロックのパス、記録された PID、その PID が現在生きているか、取得できた場合は実行ファイル名、リースの経過時間が含まれます。プロセスの同一性は検証されていません。PID は再利用されている可能性があるため、生存状態と実行ファイル名は、いまその PID を使っているプロセスについての情報です。処理が終わるのを待ってから再試行してください。この PID だけを根拠にロックを削除したり、プロセスを停止したりしないでください。リースの経過時間が 30 秒を超え、記録された PID が生きていなければ、後続の変更処理が古いリースを回収できます。`ocx service status` はリースを確認するだけです。
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
@@ -327,4 +322,4 @@ ocx update --tag preview
 
 ## Remote Hub クライアントのライフサイクル
 
-`ocx connect <url> --pairing-code-stdin`、`ocx connect status`、`ocx sync`、`ocx connect rotate --pairing-code-stdin` を使います。`ocx disconnect` はオフラインでローカル状態を復元しますが hub のキーは失効させません。接続中は `ocx connect revoke --admin-token-stdin` が保存済み `apiKeyId` を失効させ、切断後は hub の **Integrations → API Keys** を使います。秘密値は stdin だけで渡し、argv には入れません。
+`ocx connect <url> --pairing-code-stdin`、`ocx connect status`、`ocx sync`、`ocx connect rotate --pairing-code-stdin` を使います。`ocx disconnect` はオフラインでローカル状態を復元しますが hub のキーは失効させません。接続中は `ocx connect revoke --admin-token-stdin` が保存済み `apiKeyId` を失効させ、切断後は hub の **接続 → API キー** を使います。秘密値は stdin だけで渡し、argv には入れません。

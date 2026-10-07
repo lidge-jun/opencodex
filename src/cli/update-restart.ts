@@ -17,6 +17,7 @@ import { UPDATE_RESTART_CHILD_ENV, type UpdateRestartChildMarker } from "./updat
 import { assertUpdateRestartConfiguration, assertUpdateRestartHome, readUpdateRestartHome, type UpdateRestartHome } from "./update-restart-home";
 import { observeAttestedUpdateReplacement, stopAttestedUpdateTarget } from "./update-restart-transport";
 import type { UpdateRestartCandidate } from "./update-restart-candidate";
+import { INCOMPLETE_INSTALL_RECOVERY } from "./restart-failure";
 import { computeVersionSkew } from "./version-skew";
 
 export interface UpdateRestartChild { pid?: number; exitCode: number | null; signalCode: string | null }
@@ -35,7 +36,16 @@ export interface UpdateRestartIo {
   observe(deadlineAt: number, childPid: number): Promise<LiveProxy | null>;
   wait(ms: number): Promise<void>;
 }
-export type UpdateRestartResult = { ok: true; live: LiveProxy } | { ok: false; code: string };
+const ELIGIBILITY_REASONS = ["windows", "unsupported_platform", "foreground", "service", "shared_or_client",
+  "package_tree_fenced", "unverifiable_ancestry", "target_changed", "configuration_changed"] as const;
+export type UpdateRestartEligibilityReason = (typeof ELIGIBILITY_REASONS)[number];
+
+/** Carries only a closed reason code across the eligibility/transport boundary. */
+export class UpdateRestartEligibilityError extends Error {
+  constructor(readonly reason: UpdateRestartEligibilityReason) { super("Update restart eligibility refused"); }
+}
+export type UpdateRestartResult = { ok: true; live: LiveProxy }
+  | { ok: false; code: string; reason?: UpdateRestartEligibilityReason };
 
 function sameRuntime(candidate: UpdateRestartCandidate, current: RuntimePortState | null): boolean {
   const expected = candidate.runtime;
@@ -50,6 +60,7 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
   let lease: { release(): void } | undefined;
   // Recorded here because the stop transport sanitizes anything thrown by beforeStop.
   let runtimeRefused = false;
+  let eligibilityReason: UpdateRestartEligibilityReason | undefined;
   try {
     if (!parseStrictSemver(candidate.cliVersion) || candidate.cliVersion === "0.0.0"
       || computeVersionSkew(candidate.cliVersion, candidate.target.version).relation !== "cli-newer") {
@@ -63,7 +74,17 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
     const revalidate = () => {
       withinDeadline();
       io.checkHome(home);
-      if (!sameRuntime(candidate, io.runtime()) || !io.standalone(candidate.target)) throw new Error("target");
+      const currentRuntime = io.runtime();
+      if (!sameRuntime(candidate, currentRuntime)) {
+        eligibilityReason = currentRuntime?.siblingOfPort !== undefined ? "shared_or_client" : "target_changed";
+        throw new Error("target");
+      }
+      try {
+        if (!io.standalone(candidate.target)) throw new Error("target");
+      } catch (error) {
+        if (error instanceof UpdateRestartEligibilityError && ELIGIBILITY_REASONS.includes(error.reason)) eligibilityReason = error.reason;
+        throw error;
+      }
       if (!io.runtimeReady()) {
         runtimeRefused = true;
         throw new Error("runtime");
@@ -113,18 +134,35 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
     }
     throw new Error("deadline");
   } catch {
-    return { ok: false, code: runtimeRefused ? "update_restart_runtime_incomplete" : `update_restart_${phase}_failed` };
+    return { ok: false, code: runtimeRefused ? "update_restart_runtime_incomplete" : `update_restart_${phase}_failed`,
+      ...(eligibilityReason ? { reason: eligibilityReason } : {}) };
   }
   finally { lease?.release(); }
 }
 
 /** Sanitized, actionable text for each terminal update-restart code; it claims only what that phase proved. */
-export function describeUpdateRestartFailure(code: string): string {
+export function describeUpdateRestartFailure(code: string, reason?: UpdateRestartEligibilityReason): string {
+  if (reason && (code === "update_restart_eligibility_failed" || code === "update_restart_stop_failed")) {
+    const action = (() => {
+      switch (reason) {
+        case "windows": return "Restart from a newer CLI is unavailable on Windows. Run `ocx status`, then restart through the owning service or desktop app.";
+        case "unsupported_platform": return "Restart from a newer CLI requires macOS or Linux. Run `ocx status`, then use the owning lifecycle manager.";
+        case "service": return "An installed or active service owns lifecycle control. Run `ocx status`, then use the owning installation's `ocx service restart`.";
+        case "foreground": return "The proxy is attached to a parent process. Run `ocx status`; if it runs in a terminal, restart it in that terminal, otherwise use its owning app or supervisor.";
+        case "shared_or_client": return "This is a shared or connected-client runtime. Run `ocx status` and restart through its owning Hub, service or desktop app.";
+        case "package_tree_fenced": return `The proxy's package files are unsettled. Wait for the install to finish. ${INCOMPLETE_INSTALL_RECOVERY}`;
+        case "unverifiable_ancestry": return "The proxy's process ancestry or manager could not be verified. Run `ocx status` to identify its owner before restarting.";
+        case "configuration_changed": return "The selected configuration or connection changed. Run `ocx status` to inspect the intended proxy before restarting.";
+        case "target_changed": return "The captured proxy identity changed. Run `ocx status` to inspect the intended proxy before restarting.";
+      }
+    })();
+    return `${action} Nothing was stopped by this restart attempt.`;
+  }
   switch (code) {
     case "update_restart_runtime_incomplete":
-      return "This installation's Bun runtime is still being installed; nothing was stopped. Wait for the install to finish, then run `ocx restart` again.";
+      return `This installation's Bun runtime is incomplete; nothing was stopped. Wait for the install to finish, then run \`ocx restart\` again. ${INCOMPLETE_INSTALL_RECOVERY}`;
     case "update_restart_eligibility_failed":
-      return "The running proxy is not eligible for an update restart from this CLI (it is supervised, shared, or changed); nothing was stopped.";
+      return "The running proxy is not eligible for an update restart from this CLI (it is supervised, shared, or changed); nothing was stopped. Run `ocx status` to inspect the intended proxy.";
     case "update_restart_stop_failed":
       return "The guarded stop of the old proxy could not be confirmed; inspect `ocx status` before retrying.";
     case "update_restart_settle_failed":
@@ -132,7 +170,7 @@ export function describeUpdateRestartFailure(code: string): string {
     case "update_restart_prelaunch_failed":
       return "The old proxy stopped, but its home, ownership or deadline changed before launch, so nothing was launched. Check `ocx status`; if no proxy is running, run `ocx start`.";
     case "update_restart_runtime_failed":
-      return "The old proxy stopped, but this installation's Bun runtime did not finish installing in time, so nothing was launched. Run `ocx start` once the install completes.";
+      return `The old proxy stopped, but this installation's Bun runtime did not finish installing in time, so nothing was launched. ${INCOMPLETE_INSTALL_RECOVERY} Run \`ocx status\`; if no proxy is running, run \`ocx start\` once the install completes.`;
     case "update_restart_start_failed":
       return "The old proxy stopped, but the new proxy's launch could not be confirmed. Check `ocx status`; if no proxy is running, run `ocx start`.";
     case "update_restart_replacement_failed":
@@ -143,18 +181,29 @@ export function describeUpdateRestartFailure(code: string): string {
 }
 
 function standalone(target: UpdateRestartCandidate["target"]): boolean {
-  assertUpdateRestartConfiguration(target.hostname ?? "");
-  if (process.platform !== "darwin" && process.platform !== "linux") return false;
+  try { assertUpdateRestartConfiguration(target.hostname ?? ""); }
+  catch { throw new UpdateRestartEligibilityError("configuration_changed"); }
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    throw new UpdateRestartEligibilityError(process.platform === "win32" ? "windows" : "unsupported_platform");
+  }
   const host = probeHostname(target.hostname).replace(/^\[|\]$/g, "");
-  if (!isIP(host) || target.source !== "runtime" || target.role === "client" || target.packageTreeFenced) return false;
+  if (target.role === "client") throw new UpdateRestartEligibilityError("shared_or_client");
+  if (target.packageTreeFenced) throw new UpdateRestartEligibilityError("package_tree_fenced");
+  if (!isIP(host) || target.source !== "runtime") throw new UpdateRestartEligibilityError("unverifiable_ancestry");
   const command = readProcessCommandLine(target.pid);
-  if (!command || !isOcxStartCommandLine(command) || diagnoseService().installed
-    || inspectGuardedManagerTarget(target.pid, target.port).kind !== "absent") return false;
+  if (!command || !isOcxStartCommandLine(command)) throw new UpdateRestartEligibilityError("unverifiable_ancestry");
+  if (diagnoseService().installed) throw new UpdateRestartEligibilityError("service");
+  const manager = inspectGuardedManagerTarget(target.pid, target.port);
+  if (manager.kind !== "absent") throw new UpdateRestartEligibilityError(manager.kind === "bound" ? "service" : "unverifiable_ancestry");
+  let parent: string;
   try {
-    return execFileSync("ps", ["-o", "ppid=", "-p", String(target.pid)], {
+    parent = execFileSync("ps", ["-o", "ppid=", "-p", String(target.pid)], {
       encoding: "utf8", timeout: 1000, stdio: ["ignore", "pipe", "ignore"],
-    }).trim() === "1";
-  } catch { return false; }
+    }).trim();
+  } catch { throw new UpdateRestartEligibilityError("unverifiable_ancestry"); }
+  if (!/^[1-9]\d*$/.test(parent)) throw new UpdateRestartEligibilityError("unverifiable_ancestry");
+  if (parent !== "1") throw new UpdateRestartEligibilityError("foreground");
+  return true;
 }
 
 /** Production composition keeps stop/start side effects out of cli/index.ts. */

@@ -1,5 +1,7 @@
 # Providers And Adapters
 
+Devin combines only [consecutive same-ID tool results](adapters/registry.md#devin-consecutive-tool-results), using linear accumulation while preserving intervening message slots, image parts and error markers without mutating the parsed request.
+
 Anthropic account pause, model routes, and quota labels follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
 
 Managed native Anthropic serving UUID and observed CLI header continuity follow [native Messages](data-planes/protocol-paths.md#managed-native-messages); generated Responses retain the adapter's compatibility fingerprint.
@@ -472,6 +474,7 @@ recovery probe lease no search consumed is always returned.
 `tests/web-search/web-search-bridge-replay.test.ts` pins the restore and each of those refusals.
 A forward OpenAI search sidecar retries a 429 only when the requested delay fits both its retry ceiling and the remaining overall sidecar deadline. A delay that cannot fit returns and records the original 429 so pool routing retains quota evidence.
 One search makes at most three physical sends in total: connection-reset recovery and 429 replays draw from the same budget, and a budget spent with a 429 in hand ends with that 429 as the recorded outcome.
+OpenAI helpers recheck the resolved [stored-account credit policy](codex-account-controls.md#stored-account-authentication-policy) immediately before every physical send, including those retries. An unchanged caller-owned Direct credential is not governed by stored-pool consent.
 A leg whose
 upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes
 any cell it opened rather than leaving it in progress. Assistant text is not treated as a search

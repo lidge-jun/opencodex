@@ -148,9 +148,16 @@ unknown 表示 opencodex 無法確定設定是否仍指向自己的代理。外�
 Picker 模式是第一方模式的一部分。在 macOS 上選擇第一方時預設開啟；設定
 `claudeCode.intercept.picker: false` 後會保持關閉。它會修改第一方 Desktop 的 Code 分頁模型選擇器，
 依名稱列出可用的 opencodex 模型。首次開啟時，macOS 可能會要求你在登入鑰匙圈中信任本機憑證授權單位。
-該授權單位限制為 `claude.ai` 及其子網域。其簽章金鑰只存在於執行中的 OpenCodex 處理程序內，因此每次重新啟動
-OpenCodex 都會發佈新的授權單位，macOS 也會再次請求信任——請在每次重新啟動後核准該提示，或稍後執行
-`ocx claude desktop picker trust`。
+該授權單位限制為 `claude.ai` 及其子網域。可匯出的簽章身分由 OS 認證資料儲存區保護，一般重新啟動會重用相同的憑證與金鑰。
+OpenCodex 設定目錄不會儲存明文 Picker 簽章金鑰。受限 CA 的完整驗證與 OS 信任檢查仍然適用。
+已核准的身分不變且認證資料儲存區可用時，重新啟動不會新增或移除憑證信任設定。啟動復原絕不會安裝信任：
+若信任缺失、遭撤銷或無法確認，Picker 會維持待處理狀態。請明確執行 `ocx claude desktop picker on`
+或 `ocx claude desktop picker trust` 來授予信任。
+
+從舊身分進行一次性移轉時，清除原有信任可能需要同意。清理未完成時，Picker 無法使用，已套用的設定檔
+會使用不解密的中繼。macOS 也可能另外要求解鎖鑰匙圈或核准應用程式存取憑證，重新啟動或升級時也可能出現這些提示。
+Windows 與 Linux 仍不支援 Picker，不會啟動 Picker CA、認證資料儲存區或代理作業。主要 Claude 攔截功能仍可用，
+其本機 CA 檔案受到擁有者、符號連結、檔案權限及 Windows ACL 檢查保護。
 
 Picker 模式開啟期間，Claude Desktop 會透過 OpenCodex 存取網路。如果 OpenCodex 停止，Desktop 會離線，
 直到你完全重新啟動 Desktop 或關閉 Picker 模式。使用 `ocx claude desktop picker status` 查看狀態，
@@ -592,16 +599,18 @@ HMAC 等值標籤。**不會儲存提示文字、原始物件或跨執行穩定�
 
 ## GUI（Claude 頁面）
 
-儀表板的 **連線** 下有兩個分頁：用於 Claude Code 的 **Claude** 和 **Claude Desktop**。
-連線概覽中的 Claude 卡片也提供同一個連線開關。該頁面顯示：
+儀表板的 **連線 → Claude** 在同一頁面顯示 Claude Code 設定。**Claude Desktop** 是 **連線** 下的另一個分頁。連線概覽中的 Claude 卡片也提供同一個連線開關。
+頁面由上到下依序顯示：
 
-- 入站總開關（啟用開關）
-- 快速入門（`ocx claude`）和手動環境變數塊
-- Fast Mode 選擇器（Auto / ON / OFF）
-- 自動上下文開關和壓縮閾值下拉選單
-- 子代理自動註冊開關
-- 模型攔截（modelMap）編輯器
-- 選擇器別名即時預覽
+- **Claude Code CLI 第一方** 開關。
+- **開始使用**：`ocx claude` 和手動環境變數區塊。
+- **一般**：Fast Mode、自動上下文、壓縮閾值和子代理自動註冊設定。
+- **背景輔助模型**：選擇用於聊天摘要、主題識別等背景工作的模型。
+- **模型攔截**：將特定模型請求重新導向其他模型的 `modelMap` 編輯器。
+- **可用模型**：`/model` 選單中模型別名的即時預覽。
+- **Claude 連線** 開關。
+
+頁面底部的儲存列在捲動時保持可見，顯示 **沒有變更** 或 **有未儲存的變更**。**還原** 撤銷未儲存的設定變更；**儲存** 儲存編輯後的設定。**Claude 連線** 和 **Claude Code CLI 第一方** 開關立即生效；**儲存** 永遠不會改變這兩個開關的狀態。
 
 `GET /api/claude-code` 回傳有效預設值、設定、上下文視窗登錄表、有效環境變數、可用路由 ID、
 別名和埠。`PUT /api/claude-code` 接受部分更新並保留省略的欄位；`null` 會重置

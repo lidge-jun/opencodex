@@ -52,6 +52,9 @@ describe("Qwen3.8-27B leading-system template", () => {
     // Internal Eliza serves the same pinned template under dashed checkpoint ids.
     "qwen3-8-27b-fp8",
     "qwen3-8-27b-lora",
+    // Gateways prefix the served id with their own namespace (LiteLLM, #6674).
+    "openai/Qwen3.8-27B",
+    "hosted_vllm/Qwen/Qwen3.8-27B",
   ])("keeps a late reminder after the first user without an invalid system role: %s", modelId => {
     const messages = serialize(modelId);
     expect(messages).toEqual([
@@ -74,6 +77,10 @@ describe("Qwen3.8-27B leading-system template", () => {
     expect(serialize("other-model", { ...provider, foldDeveloperRoleToSystem: false })[2])
       .toEqual({ role: "developer", content: "Answer in one sentence." });
     expect(serialize("Qwen3.8-27B-FP8")[2]).toEqual({ role: "system", content: "Answer in one sentence." });
+    expect(serialize("openai/Qwen3.8-27B-FP8")[2]).toEqual({ role: "system", content: "Answer in one sentence." });
+    expect(serialize("openai/Qwen3.8-27B-Instruct")[2]).toEqual({ role: "system", content: "Answer in one sentence." });
+    expect(serialize("openai/Qwen3.8-27B", { ...provider, baseUrl: "https://api.openai.com/v1" })[2])
+      .toEqual({ role: "system", content: "Answer in one sentence." });
     expect(serialize("Qwen3.8-27B", { ...provider, baseUrl: "https://api.openai.com/v1" })[2])
       .toEqual({ role: "system", content: "Answer in one sentence." });
   });

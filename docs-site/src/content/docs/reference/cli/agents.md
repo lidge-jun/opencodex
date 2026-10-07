@@ -769,6 +769,23 @@ Usage errors exit 2 before any request is sent. `--json` prints the management A
 
 ## Client integrations
 
+### Basic integration commands
+
+| Command | Action |
+| --- | --- |
+| `ocx integration client status [--client <id>] [--profile <id>] [--json]` | Read all managed file integrations, one client, or Aside profiles. `show` and `list` alias `status`. |
+| `ocx integration client history [--client <id>] [--profile <id>] [--json]` | Read rollback operations and snapshot availability. `journal` aliases `history`. |
+| `ocx integration client enable --client <id> [--profile <id>] [--overwrite-conflict] [--json]` | Apply the managed file integration. Overwriting a conflicting block requires the explicit flag. |
+| `ocx integration client disable --client <id> [--profile <id>] [--json]` | Remove the selected managed integration through its runtime owner. |
+| `ocx integration client restore --op <opId> [--client aside --profile <id>] [--confirm-drift] [--json]` | Restore a recorded operation; replacing later edits requires explicit drift confirmation. |
+| `ocx integration native [list] [--json]` | Read native integration state. |
+| `ocx integration native <claude\|claude-desktop\|codex\|grok> <on\|off> [--json]` | Write the selected native client's configuration through its runtime owner. |
+
+These commands require a running proxy. `--profile` selects a nonnegative Aside account ID and
+requires `--client aside`; omitted profiles select the aggregate for reads and all profiles for
+unbound enable/disable. Native toggles change client configuration; Cursor has separate read-only
+inspection commands below. For preview and bound-write options, continue with the recipes below.
+
 ### Preview and recover managed file integrations
 
 ```bash

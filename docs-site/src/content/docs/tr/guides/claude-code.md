@@ -194,10 +194,20 @@ Picker modu first-party modunun bir parçasıdır. macOS'ta first-party seçildi
 açıktır; `claudeCode.intercept.picker: false` ayarlanırsa kapalı kalır. First-party Desktop'ın Code
 sekmesindeki model seçiciyi değiştirerek kullanılabilir opencodex modellerini adlarıyla listeler.
 İlk etkinleştirmede macOS, giriş anahtar zincirinde yerel bir sertifika yetkilisine güvenmenizi isteyebilir.
-Bu yetkili `claude.ai` ve alt alan adlarıyla sınırlıdır. İmza anahtarı yalnızca çalışan OpenCodex sürecinde
-bulunduğundan her OpenCodex yeniden başlatılmasında yeni bir yetkili yayımlanır ve macOS güveni yeniden ister —
-her yeniden başlatmadan sonra iletişim kutusunu onaylayın veya daha sonra `ocx claude desktop picker trust`
-komutunu çalıştırın.
+Bu yetkili `claude.ai` ve alt alan adlarıyla sınırlıdır. Dışa aktarılabilir imzalama kimliği işletim sisteminin
+kimlik bilgisi deposunda korunur ve normal yeniden başlatmalarda aynı sertifika ve anahtar yeniden kullanılır.
+OpenCodex yapılandırma dizininde düz metin picker imza anahtarı saklanmaz. Kısıtlı CA'nın tam doğrulaması ve
+sistemdeki güven denetimi devam eder. Onaylanmış kimlik aynıysa ve depo erişilebilirse yeniden başlatma,
+sertifika güven ayarlarını eklemez veya kaldırmaz. Başlangıçta geri yükleme hiçbir zaman güven yüklemez:
+güven eksik, iptal edilmiş veya bilinmiyorsa picker beklemede kalır. Güven vermek için açıkça
+`ocx claude desktop picker on` veya `ocx claude desktop picker trust` komutunu çalıştırın.
+
+Eski bir kimlikten bir defalık geçişte önceki güveni kaldırmak için onay gerekebilir. Temizlik tamamlanana
+kadar picker kullanılamaz ve uygulanmış profil şifre çözmeyen bir aktarma kullanır. macOS ayrıca anahtar
+zincirinin kilidini açmanızı veya uygulamanın kimlik bilgilerine erişimini onaylamanızı isteyebilir;
+bu istemler yeniden başlatma veya güncelleme sonrasında da çıkabilir. Windows ve Linux'ta picker desteklenmez:
+picker CA, kimlik bilgisi deposu veya proxy işlemleri başlatılmaz. Ana Claude yakalama işlevi kullanılabilir;
+yerel CA dosyaları için sahiplik, sembolik bağlantı, dosya izinleri ve Windows ACL denetimleri uygulanır.
 
 Picker modu açıkken Claude Desktop ağa OpenCodex üzerinden çıkar. OpenCodex durursa Desktop, tamamen yeniden
 başlatılana veya picker modu kapatılana kadar çevrimdışı kalır. Durumu `ocx claude desktop picker status`
@@ -789,17 +799,18 @@ hemen temizler.
 
 ## GUI (Claude sayfası)
 
-Kontrol panelinde **Bağlantı** altında iki sekme bulunur: Claude Code için **Claude** ve **Claude Desktop**.
-Bağlantı genel görünümündeki Claude kartında da aynı bağlantı anahtarı bulunur.
-Sayfa şunları gösterir:
+Kontrol panelinde **Bağlantı → Claude**, Claude Code ayarlarını tek sayfada gösterir. **Claude Desktop**, **Bağlantı** altında ayrı bir sekmedir. Bağlantı genel görünümündeki Claude kartında da aynı bağlantı anahtarı bulunur.
+Sayfadaki denetimler yukarıdan aşağıya şu sıradadır:
 
-- Gelen acil durdurma anahtarı (etkinleştirme geçişi)
-- Hızlı başlangıç (`ocx claude`) ve manuel ortam bloğu
-- Hızlı Mod seçici (Otomatik / AÇIK / KAPALI)
-- Otomatik bağlam geçişi ve sıkıştırma eşiği açılır menüsü
-- Alt ajan otomatik kayıt geçişi
-- Model müdahale (modelMap) düzenleyicisi
-- Seçici takma adlarının canlı önizlemesi
+- **Claude Code CLI first-party** anahtarı.
+- **Başlarken**: `ocx claude` ve manuel ortam bloğu.
+- **Genel**: Hızlı Mod, otomatik bağlam, sıkıştırma eşiği ve alt ajan otomatik kayıt ayarları.
+- **Arka plan yardımcı modeli**: sohbet özetleri ve konu tespiti gibi arka plan işleri için model seçimi.
+- **Model yakalama**: belirli model isteklerini başka modellere yönlendiren `modelMap` düzenleyicisi.
+- **Kullanılabilir modeller**: `/model` menüsündeki takma adların canlı önizlemesi.
+- **Claude bağlantısı** anahtarı.
+
+Sayfanın altında kaydırırken görünür kalan kaydetme çubuğu, **Değişiklik yok** veya **Kaydedilmemiş değişiklikler** durumunu gösterir. **Geri al**, kaydedilmemiş ayar değişikliklerini geri alır; **Kaydet**, düzenlenen ayarları kaydeder. **Claude bağlantısı** ve **Claude Code CLI first-party** anahtarları hemen uygulanır; **Kaydet** bu iki anahtarın durumunu hiçbir zaman değiştirmez.
 
 `GET /api/claude-code`, geçerli varsayılanları, yapılandırmayı, bağlam penceresi
 kayıt defterini, geçerli ortamı, kullanılabilir rota kimliklerini, takma adları

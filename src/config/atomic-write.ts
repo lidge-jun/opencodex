@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
+import { assertNotRealCodexHomeUnderTest, assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import {
   forgetEphemeralSecretPath,
   hardenSecretPath,
@@ -114,14 +114,19 @@ export function resolveWriteTarget(path: string): string {
 }
 
 function assertResolvedTargetAllowed(path: string, target: string): void {
+  // Codex-home files (catalog, models cache, journal, config.toml, profile) are addressed through
+  // CODEX_HOME, which falls back to os.homedir() when a test's teardown deletes it, and os.homedir()
+  // ignores HOME. That is how test runs rewrote the real catalog (#6529), so every atomic write
+  // whose directory is the real Codex home is refused under an armed test process.
+  let realParent: string | null = null;
+  try {
+    realParent = realpathSync(dirname(target));
+  } catch {
+    realParent = null;
+  }
+  assertNotRealCodexHomeUnderTest(realParent ?? dirname(target));
   if (target === path) {
-    let realParent: string;
-    try {
-      realParent = realpathSync(dirname(target));
-    } catch {
-      return;
-    }
-    if (realParent !== dirname(target)) assertNotRealHomeUnderTest(realParent);
+    if (realParent !== null && realParent !== dirname(target)) assertNotRealHomeUnderTest(realParent);
     return;
   }
   assertNotRealHomeUnderTest(dirname(target));

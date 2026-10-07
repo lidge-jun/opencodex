@@ -47,6 +47,7 @@ const TOOL_NAME_CHARS = 160;
 const VISIBLE_TEXT_CHUNK_CHARS = 16_384;
 
 const ENVELOPE_TAGS = [
+  "system-reminder",
   "codex_internal_context",
   "recommended_plugins",
   "environment_context",
@@ -302,7 +303,8 @@ function taskWithoutProtectedEnvelopes(text: string): string {
       }
     } else {
       if (stack.length === 0) appendTrimmedRange(visible, "\n", 0, 1);
-      if (!completedGoal && !goal && tag === "codex_internal_context") {
+      // A Codex goal quoted inside a Claude reminder is context, never a fallback task.
+      if (!completedGoal && !goal && tag === "codex_internal_context" && !stack.includes("system-reminder")) {
         goal = { sample: emptyTextSample(), pendingWhitespace: emptyTextSample() };
         goalDepth = stack.length;
       }

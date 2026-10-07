@@ -172,9 +172,18 @@ Picker 모드는 1P 모드의 일부예요. macOS에서 1P를 선택하면 기�
 `claudeCode.intercept.picker: false`를 설정하면 꺼져요. 1P Desktop의 Code 탭 모델 선택기를 바꿔서
 사용 가능한 opencodex 모델을 이름으로 보여줘요. 처음 켤 때 macOS 로그인 키체인에서 로컬 인증 기관을
 신뢰하라는 메시지가 표시될 수 있어요. 이 인증 기관은 `claude.ai`와 그 하위 도메인으로 제한돼요.
-서명 키는 실행 중인 OpenCodex 프로세스 안에만 존재하므로, OpenCodex를 다시 시작할 때마다 새 인증
-기관이 발행되고 macOS가 다시 신뢰를 요청해요. 다시 시작할 때마다 메시지를 승인하거나, 나중에
-`ocx claude desktop picker trust`를 실행하면 돼요.
+내보낼 수 있는 서명용 인증서와 키는 OS 자격 증명 저장소로 보호하며, 일반적인 재시작에서는 같은 것을 재사용해요.
+OpenCodex 설정 디렉터리에 Picker 서명 키를 평문으로 저장하지 않아요. 제한된 CA의 전체 검증과 OS 신뢰 확인은
+계속 적용돼요. 승인한 인증서와 키가 같고 자격 증명 저장소를 사용할 수 있다면 재시작 시 인증서 신뢰 설정을
+추가하거나 삭제하지 않아요. 시작 시 복원은 신뢰를 설치하지 않아요. 신뢰가 없거나 철회됐거나 확인할 수 없다면
+Picker는 대기 상태로 남아요. `ocx claude desktop picker on` 또는 `ocx claude desktop picker trust`를 직접 실행해
+신뢰를 부여하면 돼요.
+
+이전 인증서에서 한 번 마이그레이션할 때는 기존 신뢰를 제거하기 위한 동의가 필요할 수 있어요. 정리가 끝나지
+않으면 Picker는 사용할 수 없고 적용된 프로필은 복호화하지 않는 중계로 동작해요. 키체인 잠금 해제나 앱의
+자격 증명 접근 허용은 별도의 macOS 동작이며, 재시작이나 업데이트 때도 메시지가 나올 수 있어요.
+Windows와 Linux에서는 Picker를 지원하지 않으며 Picker CA, 자격 증명 저장소, 프록시 작업을 시작하지 않아요.
+기본 Claude 인터셉트는 계속 사용할 수 있고, 로컬 CA 파일에 소유자, 심볼릭 링크, 파일 권한, Windows ACL 검사를 적용해요.
 
 Picker 모드가 켜져 있는 동안 Claude Desktop의 네트워크는 OpenCodex를 거쳐요. OpenCodex가 중단되면
 Picker 모드를 끄거나 Desktop을 완전히 다시 시작할 때까지 Desktop은 오프라인이에요.
@@ -515,6 +524,7 @@ Claude Code의 `/effort` 설정은 어댑터에서도 유지돼요.
 | Assistant 텍스트 | `output_text` |
 | Assistant `tool_use` | `function_call`(`input` → JSON 문자열로 변환한 `arguments`) |
 | 사용자 `tool_result` | `function_call_output`(`is_error` → `[tool error]` 접두사) |
+| 도구 결과의 `tool_reference` | 짝지어진 결과에 `Tool loaded: <tool_name>` 텍스트로 보존합니다. 도구 선언을 추가하거나 번역 경로의 서버 측 지연 로딩을 활성화하지는 않습니다. |
 | `thinking` / `redacted_thinking` 재생 | 서명과 비공개 페이로드를 제한된 `ocxr1` 봉투에 담은 `reasoning` 항목 |
 | Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`) |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, 이름 지정 함수→`{type:"function",name}`, 호스팅 WebSearch/web_search→`{type:"web_search"}` |
@@ -610,16 +620,17 @@ role, `tool_use_id` 없는 `tool_result`, id/name 없는 `tool_use`, name 없는
 
 ## GUI(Claude 페이지)
 
-대시보드의 **연결** 아래에는 Claude Code용 **Claude**와 **Claude Desktop** 두 탭이 있어요.
-연결 개요의 Claude 카드에도 같은 연결 스위치가 있어요. 페이지에는 다음 항목이 표시돼요.
+대시보드의 **연결 → Claude**에서 Claude Code를 설정할 수 있어요. 설정은 한 페이지에 모여 있고, **Claude Desktop**은 **연결**의 별도 탭에서 설정해요. 페이지에는 다음 순서로 항목이 표시돼요.
 
-- 입력 차단 스위치(사용 토글)
-- 빠른 시작(`ocx claude`)과 수동 환경 블록
-- Fast Mode 선택기(Auto / ON / OFF)
-- 자동 컨텍스트 토글과 압축 임곗값 드롭다운
-- 서브에이전트 자동 등록 토글
-- 모델 가로채기(modelMap) 편집기
-- 선택기 별칭 실시간 미리 보기
+1. **Claude Code CLI 1P**: CLI의 first-party 모드를 켜고 끄는 스위치예요.
+2. **시작하기**: `ocx claude` 명령과 수동 설정용 환경 변수 블록이 있어요.
+3. **일반**: Fast Mode, 자동 컨텍스트, 압축 임곗값, 서브에이전트 자동 등록을 설정해요.
+4. **백그라운드 보조 모델**: 백그라운드 작업에 쓸 모델을 선택해요.
+5. **모델 가로채기**: `modelMap` 규칙을 편집해요.
+6. **사용 가능한 모델**: `/model` 선택기에 표시될 별칭을 미리 볼 수 있어요.
+7. **Claude 연결**: 전체 라우팅을 켜고 끄는 스위치예요. **연결** 개요의 Claude 카드에 있는 스위치와 같은 설정이에요.
+
+화면 아래의 저장 막대는 스크롤해도 계속 보여요. 변경 여부에 따라 **바뀐 설정 없음** 또는 **저장하지 않은 변경 사항**이 표시돼요. **되돌리기**를 누르면 저장하지 않은 설정 변경을 취소하고, **저장**을 누르면 적용해요. **Claude 연결**과 **Claude Code CLI 1P** 스위치는 즉시 적용되며 **저장**을 눌러도 바뀌지 않아요.
 
 `GET /api/claude-code`는 실제 기본값, 설정, 컨텍스트 창 레지스트리, 실제 환경, 사용 가능한 라우트
 ID, 별칭, 포트를 반환해요. `PUT /api/claude-code`는 부분 업데이트이며 생략한 필드를 유지해요.

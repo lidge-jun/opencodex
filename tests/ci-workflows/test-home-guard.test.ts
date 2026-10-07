@@ -334,6 +334,83 @@ const canSymlink = (() => {
     expect(probe.stdout).not.toContain("WRITE_ALLOWED");
   });
 
+  test("armed catalog, cache, journal and config writes and K permits reject the protected Codex home (#6529)", async () => {
+    const probeId = beginProbe("02b-codex-home-files");
+    const { realHome, codexHome } = sentinelHome();
+    // CODEX_HOME is deliberately left at the protected home: a teardown that deletes CODEX_HOME sends
+    // every Codex writer to os.homedir()/.codex, which is how test runs rewrote a live catalog.
+    const probe = await runProbe(probeId, `
+      import { join } from "node:path";
+      import { atomicWriteFile } from "${REPO_ROOT_URL}src/config/atomic-write";
+      import { withCatalogWriteSerialization } from "${REPO_ROOT_URL}src/codex/catalog-write-serialization";
+      const home = ${JSON.stringify(codexHome)};
+      const results = [];
+      for (const name of ["opencodex-catalog.json", "models_cache.json", "opencodex-journal.json", "config.toml"]) {
+        try { atomicWriteFile(join(home, name), "{}"); results.push(name + ":WRITTEN"); }
+        catch (err) { results.push(name + (String(err).includes("refusing to write the real Codex home") ? ":REFUSED" : ":OTHER")); }
+      }
+      let ran = false;
+      try { withCatalogWriteSerialization(home, () => { ran = true; }, { intent: "refresh", writer: "probe" }); results.push("K:GRANTED"); }
+      catch (err) { results.push(String(err).includes("refusing to write the real Codex home") ? "K:REFUSED" : "K:OTHER"); }
+      results.push(ran ? "callback:RAN" : "callback:SKIPPED");
+      console.log(JSON.stringify(results));
+    `, { OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: realHome, CODEX_HOME: codexHome });
+
+    expect(JSON.parse(probe.stdout.trim().split("\n").at(-1) ?? "[]")).toEqual([
+      "opencodex-catalog.json:REFUSED",
+      "models_cache.json:REFUSED",
+      "opencodex-journal.json:REFUSED",
+      "config.toml:REFUSED",
+      "K:REFUSED",
+      "callback:SKIPPED",
+    ]);
+    for (const name of ["opencodex-catalog.json", "models_cache.json", "opencodex-journal.json", "config.toml"]) {
+      expect(() => readFileSync(join(codexHome, name))).toThrow();
+    }
+  });
+
+  test("armed writes reached through the unset-CODEX_HOME fallback reject the protected Codex home (#6529)", async () => {
+    const probeId = beginProbe("02c-codex-home-fallback");
+    const { realHome, codexHome } = sentinelHome();
+    // A Codex home in use (Codex writes sessions/), so the default-home lookup settles on it.
+    mkdirSync(join(codexHome, "sessions"), { recursive: true });
+    // The incident path: CODEX_HOME absent, so every writer resolves os.homedir()/.codex.
+    const probe = await runProbe(probeId, `
+      import { join } from "node:path";
+      import { realpathSync } from "node:fs";
+      import { getCodexHome } from "${REPO_ROOT_URL}src/codex/paths";
+      import { atomicWriteFile } from "${REPO_ROOT_URL}src/config/atomic-write";
+      import { withCatalogWriteSerialization } from "${REPO_ROOT_URL}src/codex/catalog-write-serialization";
+      const home = getCodexHome();
+      const results = [home === realpathSync(${JSON.stringify(codexHome)}) ? "home:SENTINEL" : "home:OTHER"];
+      for (const name of ["opencodex-catalog.json", "models_cache.json", "opencodex-journal.json", "config.toml"]) {
+        try { atomicWriteFile(join(home, name), "{}"); results.push(name + ":WRITTEN"); }
+        catch (err) { results.push(name + (String(err).includes("refusing to write the real Codex home") ? ":REFUSED" : ":OTHER")); }
+      }
+      try { withCatalogWriteSerialization(home, () => null, { intent: "refresh", writer: "probe" }); results.push("K:GRANTED"); }
+      catch (err) { results.push(String(err).includes("refusing to write the real Codex home") ? "K:REFUSED" : "K:OTHER"); }
+      console.log(JSON.stringify(results));
+    `, {
+      OCX_TEST_HOME_GUARD: "1",
+      OCX_REAL_HOME: realHome,
+      HOME: realHome,
+      USERPROFILE: realHome,
+      CODEX_HOME: undefined,
+    });
+
+    expect(JSON.parse(probe.stdout.trim().split("\n").at(-1) ?? "[]")).toEqual([
+      "home:SENTINEL",
+      "opencodex-catalog.json:REFUSED",
+      "models_cache.json:REFUSED",
+      "opencodex-journal.json:REFUSED",
+      "config.toml:REFUSED",
+      "K:REFUSED",
+    ]);
+    for (const name of ["opencodex-catalog.json", "models_cache.json", "opencodex-journal.json", "config.toml"]) {
+      expect(() => readFileSync(join(codexHome, name))).toThrow();
+    }
+  });
+
   test.skipIf(!canSymlink)("armed + a symlink escaping a temp home into the protected home: refused", async () => {
     const probeId = beginProbe("03-symlink-file");
     // Atomic writes resolve their destination through symlinks, so a temp home whose

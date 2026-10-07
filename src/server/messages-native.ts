@@ -110,6 +110,8 @@ import { linkAbortSignal } from "./responses/core-lifetime";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
 import { sseFieldValue } from "../lib/sse-decoder";
+import { admissionModelDeniedResponse, type AdmissionModelScope } from "./admission-model-scope";
+import { nativeMessagesToolScopeDenial } from "./messages-native-scope";
 
 export {
   isNativeMessagesRouteEligible,
@@ -159,6 +161,7 @@ export interface HandleNativeMessagesOptions {
   callerAnthropicBeta?: string | null;
   clientIdentity?: AnthropicClientIdentity;
   sessionKey?: string | null;
+  modelScope?: AdmissionModelScope;
 }
 
 type FinishLog = (status: number, message?: string, meta?: FinalRequestLogMeta) => void;
@@ -349,6 +352,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     if (error instanceof OAuthLoginRequiredError) return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
     return null;
   };
+
+  const toolScopeDenial = nativeMessagesToolScopeDenial(options.modelScope, route.providerName, requestedModel, body);
+  if (toolScopeDenial) {
+    finishLog(403, toolScopeDenial.message);
+    return admissionModelDeniedResponse(toolScopeDenial);
+  }
 
   try {
     await prepareNativeBody(body, req.signal);

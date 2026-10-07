@@ -295,7 +295,7 @@ describe("GitHub Actions hardening", () => {
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
-    expect(macosControlJob?.if).toBe("github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
+    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
@@ -309,20 +309,15 @@ describe("GitHub Actions hardening", () => {
     expect(macosControlSteps.some(step => step.run?.includes("--shard"))).toBe(false);
     expect(macosControlSteps.some(step => step.run?.includes("coreutils") && step.run.includes("GITHUB_PATH"))).toBe(true);
 
-    // Windows is dispatch-only: it gates nothing, not even the shipping
-    // boundary. The sharded promotion run surfaced ~207 Windows-only failures
-    // that pre-date every released version, so the leg became a measurement
-    // tool a maintainer runs by hand, not a gate. Assert the positive
-    // condition and the absence of every automatic trigger — a stray
-    // `|| github.ref == ...` would restore a red leg to the release path.
+    // Windows-sensitive PRs and the daily schedule request Windows; release
+    // pushes still do not. Keep branch-ref shortcuts off this condition.
     const windowsIf = String((ci.jobs?.["platform-windows"] as { if?: string })?.if ?? "");
     expect(windowsIf).toBe(
-      "github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')",
+      "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all') || github.event_name == 'pull_request' && needs.changes.outputs.windows == 'true'",
     );
     expect(windowsIf).not.toContain("refs/heads/main");
     expect(windowsIf).not.toContain("refs/heads/preview");
     expect(windowsIf).not.toContain("refs/heads/dev");
-    expect(windowsIf).not.toContain("pull_request");
 
     // A lane=macos-control dispatch must skip Windows so a red Windows burn-down
     // cannot fail the unsharded macOS control run. A plain dispatch still runs
@@ -5290,8 +5285,8 @@ describe("GitHub Actions hardening", () => {
     expect(rootPkg).toContain('"doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts"');
     expect(rootPkg).toContain('"lint:gui": "cd gui && bun run lint"');
     expect(rootPkg).toContain('"lint:gui:if-changed": "bun scripts/lint-gui-if-changed.ts"');
-    // Gating steps include lint and React Doctor only on gui/ pushes.
-    expect(rootPkg).toContain("bun run typecheck && bun run lint:gui:if-changed && bun run test");
+    // Gating steps include the gui typecheck, lint, and React Doctor only on gui/ pushes.
+    expect(rootPkg).toContain("bun run typecheck && bun run typecheck:gui:if-changed && bun run lint:gui:if-changed && bun run test");
     expect(rootPkg).toContain("bun run privacy:scan && bun run doctor:gui:if-changed");
   });
 });

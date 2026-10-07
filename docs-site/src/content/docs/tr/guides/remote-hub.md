@@ -112,7 +112,7 @@ OAuth'u `POST /api/oauth/login` ile başlatın. Callback hub'a ulaşamıyorsa so
 
 Döndürme sırasında eski ve yeni anahtar aynı `apiKeyId` altında en fazla on dakika geçerlidir. Eski anahtar `service-api-token.prev` dosyasına alınır, yeni anahtar atomik olarak kurulur ve `/v1/catalog` ile doğrulanıp onaylanır. Sonuç belirsizse geçici yetkiyle komutu yeniden çalıştırın; iki adayı da doğrulamadan silmeyin.
 
-`ocx disconnect` hub çevrimdışıyken yerel durumu geri yükler ama hub anahtarını iptal etmez. Bağlantıdan sonra tek iptal yolu hub üzerindeki **Integrations → API Keys** sayfasıdır. `ocx connect revoke --admin-token-stdin` yalnızca bağlantı sürerken kullanılabilir.
+`ocx disconnect` hub çevrimdışıyken yerel durumu geri yükler ama hub anahtarını iptal etmez. Bağlantıdan sonra tek iptal yolu hub üzerindeki **Bağlantı → API Anahtarları** sayfasıdır. `ocx connect revoke --admin-token-stdin` yalnızca bağlantı sürerken kullanılabilir.
 
 ## Docker ve sorun giderme
 

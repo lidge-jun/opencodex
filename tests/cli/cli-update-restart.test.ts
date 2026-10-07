@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
-import { describeUpdateRestartFailure, runUpdateRestart, type UpdateRestartIo } from "../../src/cli/update-restart";
+import { describe, expect, spyOn, test } from "bun:test";
+import { describeUpdateRestartFailure, runUpdateRestart, UpdateRestartEligibilityError, type UpdateRestartIo } from "../../src/cli/update-restart";
 import type { UpdateRestartCandidate } from "../../src/cli/update-restart-candidate";
+import { reportRestartFailure } from "../../src/cli/restart-failure";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
 
 const candidate: UpdateRestartCandidate = {
@@ -147,4 +148,81 @@ describe("CLI update restart transaction", () => {
     expect(describeUpdateRestartFailure("update_restart_prelaunch_failed")).toContain("nothing was launched");
     expect(describeUpdateRestartFailure("update_restart_start_failed")).toContain("launch could not be confirmed");
   });
+});
+
+
+describe("CLI restart recovery guidance", () => {
+  test.each([
+    ["windows", "owning service or desktop app"], ["service", "ocx service restart"],
+    ["foreground", "restart it in that terminal"], ["shared_or_client", "ocx status"],
+    ["package_tree_fenced", "troubleshooting/update-failed"], ["unverifiable_ancestry", "ocx status"],
+    ["configuration_changed", "ocx status"], ["target_changed", "ocx status"],
+  ] as const)("preserves %s eligibility without stopping and gives its next action", async (reason, action) => {
+    const s = setup(); s.io.standalone = () => { throw new UpdateRestartEligibilityError(reason); };
+    const result = await runUpdateRestart(candidate, 5000, s.io);
+    expect(result).toEqual({ ok: false, code: "update_restart_eligibility_failed", reason });
+    expect(s.calls).toEqual(["acquire", "release"]);
+    if (!result.ok) expect(describeUpdateRestartFailure(result.code, result.reason)).toContain(action);
+  });
+
+  test("before-stop eligibility reason survives transport error sanitization", async () => {
+    const s = setup(); let checks = 0;
+    s.io.standalone = () => { if (++checks > 1) throw new UpdateRestartEligibilityError("service"); return true; };
+    s.io.stop = async (_candidate, _deadline, revalidate) => {
+      try { revalidate(); } catch { throw new Error("sanitized_transport_error"); }
+      s.calls.push("stop");
+    };
+    expect(await runUpdateRestart(candidate, 5000, s.io)).toEqual({ ok: false, code: "update_restart_stop_failed", reason: "service" });
+    expect(s.calls).toEqual(["acquire", "release"]);
+  });
+
+  test("unexpected eligibility exceptions never become a rendered reason", async () => {
+    const s = setup(); s.io.standalone = () => { throw new Error("PRIVATE_CANARY\u001b"); };
+    const result = await runUpdateRestart(candidate, 5000, s.io);
+    expect(result).toEqual({ ok: false, code: "update_restart_eligibility_failed" });
+    if (!result.ok) expect(describeUpdateRestartFailure(result.code, result.reason)).not.toContain("PRIVATE_CANARY");
+  });
+
+  test("older or incomparable CLI directs restart to the newer installation without downgrade commands", () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      reportRestartFailure({ ok: false, phase: "request", error: new Error("restart_version_skew") });
+      const text = errors.mock.calls.flat().join(" ");
+      expect(text).toContain("older than the running proxy"); expect(text).toContain("newer installation's ocx");
+      expect(text).toContain("which -a ocx"); expect(text).toContain("ocx status"); expect(text).toContain("No changes were made");
+      expect(text).not.toContain("ocx stop"); expect(text).not.toContain("ocx start");
+    } finally { errors.mockRestore(); }
+  });
+
+  test.each(["identity", "replacement", "request", "start"] as const)("%s restart failure names status without echoing an arbitrary error", phase => {
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      reportRestartFailure({ ok: false, phase, error: new Error("PRIVATE_CANARY") });
+      expect(errors.mock.calls.flat().join(" ")).toContain("ocx status");
+      expect(errors.mock.calls.flat().join(" ")).not.toContain("PRIVATE_CANARY");
+    } finally { errors.mockRestore(); }
+  });
+
+  test("unsettled-package refusals offer repair when the installer is no longer running", () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      reportRestartFailure({ ok: false, phase: "request", error: new Error("restart_package_tree_unsettled") });
+      const lines = [errors.mock.calls.flat().join(" "), describeUpdateRestartFailure("update_restart_runtime_incomplete"),
+        describeUpdateRestartFailure("update_restart_runtime_failed")];
+      for (const text of lines) {
+        expect(text).toContain("installer already exited or failed"); expect(text).toContain("stop any running proxy through its owner"); expect(text).toContain("reinstall with the same package manager");
+        expect(text).toContain("https://opencodex.me/troubleshooting/update-failed");
+      }
+    } finally { errors.mockRestore(); }
+  });
+});
+
+
+test("an unverified update home names status and the owning service recovery", () => {
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    reportRestartFailure({ ok: false, phase: "request", error: new Error("update_restart_home_unverified") });
+    const text = errors.mock.calls.flat().join(" ");
+    expect(text).toContain("ocx status"); expect(text).toContain("ocx service restart"); expect(text).toContain("No changes were made");
+  } finally { errors.mockRestore(); }
 });

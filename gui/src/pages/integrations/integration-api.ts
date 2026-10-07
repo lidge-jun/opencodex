@@ -57,6 +57,12 @@ export interface RaycastInstall {
   aiDirPresent: boolean;
 }
 
+/**
+ * Why a client's provider store is not written. `missing-store` is the one with a
+ * remedy the operator performs: create the store with `missingStoreDocument`.
+ */
+export type IntegrationSupersededReason = "owned-config-file" | "unestablished-schema" | "missing-store";
+
 export interface IntegrationStatus {
   clientId: FileIntegrationClientId;
   state: IntegrationState;
@@ -75,6 +81,10 @@ export interface IntegrationStatus {
    * Same role as `raycast`, whose plan can make a written file inert.
    */
   supersededBy?: string;
+  /** Why `supersededBy` is not written; the server sends it exactly when it sends the path. */
+  supersededReason?: IntegrationSupersededReason;
+  /** `missing-store` only: what to create the missing store with. */
+  missingStoreDocument?: string;
   snapshotCount: number;
   retentionDegraded: boolean;
   /** Aside's explicit account-backed profile scope and desired sync state. */
@@ -163,6 +173,9 @@ export interface IntegrationMutationPlan {
   canApply: boolean;
   willChange: boolean;
   refusalReason?: IntegrationRefusalReason;
+  /** `superseded_store` refusals only. The store's path is on the status row, not the plan. */
+  supersededReason?: IntegrationSupersededReason;
+  missingStoreDocument?: string;
   profileId?: number;
 }
 
@@ -251,7 +264,10 @@ const INTEGRATION_STATES: ReadonlySet<string> = new Set<IntegrationState>([
 const PLAN_OPERATIONS: readonly IntegrationPlanOperation[] = ["apply", "overwrite", "disable", "restore"];
 const PLAN_CHANGE_KINDS: readonly IntegrationPlanChangeKind[] = ["add", "replace", "remove", "snapshot", "ownership", "journal"];
 const PLAN_FOREIGN_EDITS: readonly IntegrationPlanForeignEdit[] = ["none", "unowned", "foreign-edit", "drift"];
-const PLAN_KEYS = new Set(["version", "clientId", "operation", "state", "foreignEdit", "changes", "fingerprint", "canApply", "willChange", "refusalReason", "profileId"]);
+const PLAN_KEYS = new Set(["version", "clientId", "operation", "state", "foreignEdit", "changes", "fingerprint", "canApply", "willChange", "refusalReason", "supersededReason", "missingStoreDocument", "profileId"]);
+const SUPERSEDED_REASONS: ReadonlySet<string> = new Set<IntegrationSupersededReason>(["owned-config-file", "unestablished-schema", "missing-store"]);
+/** Shown verbatim (and echoed by the CLI): one short printable-ASCII line, as a store's empty form is. */
+const MISSING_STORE_DOCUMENT = /^[\x20-\x7e]{1,64}$/;
 const PLAN_CHANGE_KEYS = new Set(["kind", "path"]);
 const PLAN_PSEUDO_PATHS = new Set(["$snapshot", "$ownership", "$journal"]);
 const PLAN_SCHEMA_PATHS = new Set([
@@ -308,7 +324,13 @@ export function parseIntegrationMutationPlan(value: unknown): IntegrationMutatio
     || !Array.isArray(value.changes) || value.changes.length > PLAN_CHANGE_LIMIT
     || (value.profileId !== undefined && (typeof value.profileId !== "number" || !Number.isSafeInteger(value.profileId) || value.profileId < 0))
     || (value.profileId !== undefined && value.clientId !== "aside")
-    || (value.refusalReason !== undefined && !REFUSAL_REASONS.has(String(value.refusalReason)))) {
+    || (value.refusalReason !== undefined && !REFUSAL_REASONS.has(String(value.refusalReason)))
+    || (value.supersededReason !== undefined
+      && (value.refusalReason !== "superseded_store" || typeof value.supersededReason !== "string"
+        || !SUPERSEDED_REASONS.has(value.supersededReason)))
+    || (value.missingStoreDocument !== undefined
+      && (value.supersededReason !== "missing-store" || typeof value.missingStoreDocument !== "string"
+        || !MISSING_STORE_DOCUMENT.test(value.missingStoreDocument)))) {
     throw invalidPreviewResponse();
   }
   const changes: IntegrationPlanChange[] = [];
@@ -345,6 +367,8 @@ export function parseIntegrationMutationPlan(value: unknown): IntegrationMutatio
     canApply: value.canApply,
     willChange: value.willChange,
     ...(value.refusalReason === undefined ? {} : { refusalReason: value.refusalReason as IntegrationRefusalReason }),
+    ...(value.supersededReason === undefined ? {} : { supersededReason: value.supersededReason as IntegrationSupersededReason }),
+    ...(value.missingStoreDocument === undefined ? {} : { missingStoreDocument: value.missingStoreDocument as string }),
     ...(value.profileId === undefined ? {} : { profileId: Number(value.profileId) }),
   };
 }

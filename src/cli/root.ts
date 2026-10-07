@@ -15,6 +15,7 @@ import { parseStopApproval } from "./stop-approval";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
+import { noteCredentialArgv, redactSecretArgs } from "./secret-args";
 
 export interface CliHead {
   kind: "version" | "help" | "ready" | "resolve" | "command";
@@ -78,7 +79,13 @@ export function parseCliHead(argv: string[]): CliHead {
   return { kind: "command", command, args };
 }
 
+export function uninstallArgsError(command: string | undefined, args: string[]): string | undefined {
+  if ((command !== "uninstall" && command !== "remove") || args.length <= 1) return undefined;
+  return `ocx ${command} does not accept arguments (got: ${redactSecretArgs(args.slice(1)).join(" ")}). No changes were made. See: ocx help ${command}`;
+}
+
 export async function runCli(argv: string[]): Promise<CliHead> {
+  noteCredentialArgv(argv);
   const head = parseCliHead(argv);
   switch (head.kind) {
     case "version":
@@ -128,6 +135,11 @@ export async function runCli(argv: string[]): Promise<CliHead> {
       if (head.command === "stop" && !parseStopApproval(head.args.slice(1)).ok) {
         console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
         process.exit(64);
+      }
+      const uninstallError = uninstallArgsError(head.command, head.args);
+      if (uninstallError) {
+        console.error(uninstallError);
+        process.exit(2);
       }
       maybeAutoRestoreCodexShim(head.command, head.args);
       return head;

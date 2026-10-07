@@ -49,7 +49,7 @@ The wire surfaces a client actually talks to.
 | [`data-planes/inbound-compat.md`](data-planes/inbound-compat.md) | Chat Completions inbound, Anthropic-shaped clients, and JSON-upstream streaming clients. |
 | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) | Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings. |
 | [`remote-workspace.md`](remote-workspace.md) | Opt-in workspace identity, executor grants, runtime adapters, management and dashboard integration. |
-| [`remote-link.md`](remote-link.md) | SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer and the private link store. |
+| [`remote-link.md`](remote-link.md) | SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery. |
 
 ### Tier 4 — Providers and adapters
 
@@ -142,6 +142,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/integrations/` | [`clients/integrations.md`](clients/integrations.md) |
 | `src/lab/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/lib/` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-spend.md`](transports/responses-spend.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `src/lib/gui-pair-intent.ts` | [`remote-link.md`](remote-link.md) |
+| `src/lib/windows-owner-acl.ts` | [`remote-link.md`](remote-link.md) |
 | `src/link/` | [`remote-link.md`](remote-link.md) |
 | `src/oauth/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/plugins/` | [`ops/plugins.md`](ops/plugins.md) |
@@ -155,6 +157,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/router.ts` | [`runtime.md`](runtime.md) |
 | `src/routing/` | [`catalog.md`](catalog.md) |
 | `src/server/` | [`runtime.md`](runtime.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/policy-fallback.md`](transports/policy-fallback.md)<br>[`transports/streaming-health.md`](transports/streaming-health.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/images.md`](data-planes/images.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`adapters/registry.md`](adapters/registry.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
+| `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
 | `src/service-manager-probe.ts` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |

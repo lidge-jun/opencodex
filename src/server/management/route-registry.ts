@@ -324,6 +324,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PATCH", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PATCH", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "POST", path: "/api/keys/reveal", module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "session-only", why: "Revealing a data key requires the gui-session principal; the admin token is refused." } },
   { method: "POST", path: "/api/keys/rotate", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/keys/rotate/commit", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/accounts/clear-cooldown", module: "server/management/oauth-account-routes", mutates: true },

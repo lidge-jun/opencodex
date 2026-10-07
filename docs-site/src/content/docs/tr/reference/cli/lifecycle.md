@@ -189,6 +189,12 @@ gelecekteki sürümler alanlar ekleyebilir, ancak mevcut alanlar kararlı
 kalmalıdır. API anahtarlarını, OAuth belirteçlerini, yetkilendirme başlıklarını,
 istek içeriğini, e-postaları ve hesap kimliklerini kasıtlı olarak hariç tutar.
 
+Canlı okuma, süre sınırı olan servis probunun tamamlanmasını bekler: tanılama
+önbelleği boşsa veya süresi dolmuşsa macOS/Linux'ta en fazla 6,5 saniye,
+Windows'ta en fazla 16,5 saniye. Önbellekten yapılan okumalar hızla sonuç döndürür.
+Zaman aşımında yine yerel tanılamalara dönülür; yalnızca `/healthz` sağlıklı diye
+yeniden başlatma korumasının etkin olduğu doğrulanamaz.
+
 ### `ocx health [--json]`
 
 Canlı proxy'yi kimlik kontrolünden geçirin. İnsan çıktısı PID/port bildirir;
@@ -430,14 +436,7 @@ ve Codex yönlendirmesini yerinde bırakır. Mevcut veya çakışan zamanlayıc�
 kayıtları güvenli olmayan en iyi çaba geri alması olarak silinmek yerine kapalı
 olarak başarısız olmaya devam eder.
 
-If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
-`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
-proxy is not running. The message includes the lock path, recorded PID, current liveness,
-executable name when available, and lease age. The process identity is unverified: the PID
-may have been reused, so liveness and executable name describe whichever process occupies
-that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
-process based only on this PID. A later mutation attempt can reclaim a stale lease once its
-age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+Başlatma sırasında `another process owns the runtime mutation lease` bildirilirse ya da `ocx service status` `Runtime mutation lease busy` gösterirse, proxy çalışmıyor olsa bile bu kiralama başlatmayı veya hizmet değişikliklerini engelliyordur. Mesaj; kilit yolunu, kayıtlı PID'yi, bu PID'nin şu anda canlı olup olmadığını, alınabildiyse yürütülebilir dosyanın adını ve kiralamanın yaşını içerir. Sürecin kimliği doğrulanmaz: PID yeniden kullanılmış olabilir, bu yüzden canlılık durumu ve yürütülebilir dosya adı o PID'yi şu anda kullanan süreci tanımlar. İşlemin bitmesini bekleyip yeniden deneyin; yalnızca bu PID'ye dayanarak kilidi silmeyin ya da bir süreci durdurmayın. Kiralamanın yaşı 30 saniyeyi aştığında ve kayıtlı PID artık canlı olmadığında, sonraki bir değişiklik girişimi eskimiş kiralamayı geri alabilir; `ocx service status` yalnızca onu inceler.
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
@@ -548,4 +547,4 @@ bunları npm'de yayınladığında kullanılabilir hale gelir.
 
 ## Remote Hub istemci yaşam döngüsü
 
-`ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync` ve `ocx connect rotate --pairing-code-stdin` kullanın. `ocx disconnect` yerel durumu çevrimdışı geri yükler ancak hub anahtarını iptal etmez. Bağlıyken `ocx connect revoke --admin-token-stdin` kayıtlı `apiKeyId` değerini iptal eder; bağlantıdan sonra hub üzerindeki **Integrations → API Keys** kullanılmalıdır. Sırlar yalnızca stdin üzerinden geçer, argv'ye yazılmaz.
+`ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync` ve `ocx connect rotate --pairing-code-stdin` kullanın. `ocx disconnect` yerel durumu çevrimdışı geri yükler ancak hub anahtarını iptal etmez. Bağlıyken `ocx connect revoke --admin-token-stdin` kayıtlı `apiKeyId` değerini iptal eder; bağlantıdan sonra hub üzerindeki **Bağlantı → API Anahtarları** kullanılmalıdır. Sırlar yalnızca stdin üzerinden geçer, argv'ye yazılmaz.

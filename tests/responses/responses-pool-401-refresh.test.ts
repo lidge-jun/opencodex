@@ -1,22 +1,42 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../../src/codex/auth-api";
+import { clearAccountNeedsReauth, clearAccountQuota, isAccountNeedsReauth, updateAccountQuota } from "../../src/codex/auth-api";
 import { codexPoolAffinityKey } from "../../src/codex/auth-context";
+import * as authContextModule from "../../src/codex/auth-context";
+import * as coreAuthModule from "../../src/server/responses/core-auth";
+import { prepareResponsesRequest } from "../../src/server/responses/request-prepare";
+import { handleComboResponses } from "../../src/server/responses/core";
+import type { ResponsesAdmissionState } from "../../src/server/responses/core-options";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import {
+  canAcquireTransientProbe,
+  clearPoolRecoveryState,
+  transientProbeDiagnostics,
+  TRANSIENT_PROBE_INTERVAL_MS,
+} from "../../src/routing/probe-lease";
+import { setAccountQuotaFromParsed } from "../../src/codex/quota";
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  CODEX_QUOTA_PROBE_INTERVAL_MS,
   peekConversationStateIssuer,
+  recordCodexUpstreamOutcome,
+  releaseCodexQuotaScopeProbeLease,
   resolveCodexAccountForThreadDetailed,
+  tryAcquireCodexQuotaScopeProbeLease,
 } from "../../src/codex/routing";
+import { scopedHealthFor } from "../../src/codex/routing/health-store";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import { clearCompactHandoffRoutesForTests } from "../../src/server/responses/compact";
 import {
   REQUEST_PACING_MAX_QUEUE_DEPTH,
   resetProviderRequestPacingForTest,
   setProviderRequestPacingLimitsForTest,
+  providerRequestPacingStatus,
+  waitForProviderRequestSlot,
 } from "../../src/providers/request-pacing";
 import {
   clearResponseStateForTests,
@@ -314,6 +334,7 @@ beforeEach(() => {
   releaseSpendHome = acquireOwnedSpendHome();
   clearAccountNeedsReauth(ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
+  clearAccountQuota();
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearResponseStateMemoryForTests();
@@ -329,6 +350,7 @@ afterEach(() => {
   clearCompactHandoffRoutesForTests();
   clearAccountNeedsReauth(ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
+  clearAccountQuota();
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   resetAgentTaskRecoveryState();
@@ -338,6 +360,203 @@ afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   removeTreeWithRetry(home);
+});
+
+describe("stored-account credit refusal before Responses dispatch (#6606)", () => {
+  let now: number;
+  let clock: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    now = Date.now();
+    clock = spyOn(Date, "now").mockReturnValue(now);
+    clearPoolRecoveryState();
+  });
+  afterEach(() => {
+    clock.mockRestore();
+    clearPoolRecoveryState();
+  });
+
+  function probeFixture(kind: "quota" | "transient") {
+    const cfg = config();
+    cfg.creditCodexAccountIds = [];
+    cfg.upstreamHostCircuitThreshold = 0;
+    cfg.upstreamFailoverThreshold = 3;
+    updateAccountQuota(ACCOUNT_ID, 99, now + 3_600_000);
+    const req = request("/v1/responses", { affined: true });
+    if (kind === "quota") {
+      recordCodexUpstreamOutcome(cfg, ACCOUNT_ID, 429, {
+        now: now - CODEX_QUOTA_PROBE_INTERVAL_MS - 1_000,
+        resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+        modelId: "gpt-5.5",
+        fixedAccount: true,
+      });
+    } else {
+      const key = codexPoolAffinityKey(req.headers)!;
+      expect(resolveCodexAccountForThreadDetailed(key, cfg, now, "shared"))
+        .toMatchObject({ status: "selected", accountId: ACCOUNT_ID });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        recordCodexUpstreamOutcome(cfg, ACCOUNT_ID, 503, { now, modelId: "gpt-5.5" });
+      }
+    }
+    return { cfg, req };
+  }
+
+  function expectProbeHeld(ctx: authContextModule.CodexAuthContext, kind: "quota" | "transient") {
+    expect(ctx.kind).toBe("pool");
+    if (ctx.kind !== "pool") throw new Error("expected a stored pool probe");
+    if (kind === "quota") {
+      expect(ctx.probeLeaseId).toBeDefined();
+      expect(ctx.probeQuotaScope).toBe("shared");
+      expect(scopedHealthFor(ACCOUNT_ID, "shared")?.probeLeaseId).toBe(ctx.probeLeaseId);
+    } else {
+      expect(ctx.transientProbe).toBeDefined();
+      expect(transientProbeDiagnostics(ACCOUNT_ID, now)).toMatchObject({
+        held: true, leaseId: ctx.transientProbe!.lease.leaseId,
+      });
+      expect(canAcquireTransientProbe(ACCOUNT_ID, now + TRANSIENT_PROBE_INTERVAL_MS)).toBe(false);
+    }
+  }
+
+  function expectProbeReleased(kind: "quota" | "transient") {
+    if (kind === "quota") {
+      expect(scopedHealthFor(ACCOUNT_ID, "shared")?.probeLeaseId).toBeUndefined();
+      const lease = tryAcquireCodexQuotaScopeProbeLease(ACCOUNT_ID, "shared", now + CODEX_QUOTA_PROBE_INTERVAL_MS);
+      expect(lease).toBeTruthy();
+      if (lease) releaseCodexQuotaScopeProbeLease(ACCOUNT_ID, "shared", lease, now);
+    } else {
+      expect(transientProbeDiagnostics(ACCOUNT_ID, now).held).toBe(false);
+      expect(canAcquireTransientProbe(ACCOUNT_ID, now + TRANSIENT_PROBE_INTERVAL_MS)).toBe(true);
+    }
+  }
+
+  async function prepareProbe(req: Request, cfg: OcxConfig, state: ResponsesAdmissionState, abortSignal?: AbortSignal) {
+    const translatorBudget = createTranslatorBudget();
+    try {
+      return await prepareResponsesRequest({
+        req, config: cfg, logCtx: { model: "", provider: "" } as RequestLogContext,
+        options: { translatorBudget, abortSignal },
+      }, state, { handleResponses, handleComboResponses });
+    } finally {
+      translatorBudget.dispose();
+    }
+  }
+
+  // D1: change policy only after real materialization has acquired and used the quota probe.
+  for (const cancelled of [false, true]) {
+    test(`late materialization credit hold releases its quota probe (${cancelled ? "499" : "429"})`, async () => {
+      const { cfg, req } = probeFixture("quota");
+      const harness = installHarness();
+      const abort = new AbortController();
+      const materialize = authContextModule.materializeCodexUpstreamAuthAsync;
+      const materializeSpy = spyOn(authContextModule, "materializeCodexUpstreamAuthAsync")
+        .mockImplementation(async (...args) => {
+          const headers = await materialize(...args);
+          expectProbeHeld(args[1], "quota");
+          updateAccountQuota(ACCOUNT_ID, 100, now + 3_600_000);
+          if (cancelled) abort.abort();
+          return headers;
+        });
+      try {
+        const response = await handleResponses(req, cfg, { model: "", provider: "" } as RequestLogContext,
+          { abortSignal: abort.signal });
+        expect(materializeSpy).toHaveBeenCalledTimes(1);
+        expect(response.status).toBe(cancelled ? 499 : 429);
+        if (cancelled) expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
+        else {
+          expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(0);
+          expect(await response.text()).toContain("spending credits");
+        }
+        expect(harness.sends).toEqual([]);
+        expect(harness.refreshes).toEqual([]);
+        expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+        expect(readStoredGeneration()).toBe(3);
+        expectProbeReleased("quota");
+      } finally { materializeSpy.mockRestore(); }
+    });
+  }
+
+  // D2: auth resolution admits either kind of probe; a quota probe and transient trial never coexist.
+  for (const cancelled of [false, true]) {
+    test.each(["quota", "transient"] as const)(
+      `provider credit hold returns ${cancelled ? "499" : "429"} and releases the %s probe with host circuit disabled`,
+      async kind => {
+        const { cfg, req } = probeFixture(kind);
+        const harness = installHarness();
+        const abort = new AbortController();
+        const state: ResponsesAdmissionState = { pendingHostAdmissionLease: null, authCtx: { kind: "main", accountId: null } };
+        const resolveAuth = coreAuthModule.resolveResponsesCodexAuth;
+        const authSpy = spyOn(coreAuthModule, "resolveResponsesCodexAuth").mockImplementation(async (...args) => {
+          const result = await resolveAuth(...args);
+          expect(result.ok).toBe(true);
+          if (result.ok) {
+            expectProbeHeld(result.authCtx, kind);
+            updateAccountQuota(ACCOUNT_ID, 100, now + 3_600_000);
+            if (cancelled) abort.abort();
+          }
+          return result;
+        });
+        try {
+          const result = await prepareProbe(req, cfg, state, abort.signal);
+          expect(authSpy).toHaveBeenCalledTimes(1);
+          expect(result).toBeInstanceOf(Response);
+          if (!(result instanceof Response)) throw new Error("expected a pre-dispatch refusal");
+          expect(result.status).toBe(cancelled ? 499 : 429);
+          if (cancelled) expect(await result.json()).toMatchObject({ error: { code: "client_cancelled" } });
+          else {
+            expect(Number(result.headers.get("Retry-After"))).toBeGreaterThan(0);
+            expect(await result.text()).toContain("spending credits");
+          }
+          expect(state.pendingHostAdmissionLease).toBeNull();
+          expect(harness.sends).toEqual([]);
+          expect(harness.refreshes).toEqual([]);
+          expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+          expectProbeReleased(kind);
+        } finally {
+          authSpy.mockRestore();
+          authContextModule.releaseCodexAuthContextProbeLease(state.authCtx);
+        }
+      },
+    );
+  }
+
+  test.each(["quota", "transient"] as const)("unknown provider materialization error propagates after releasing the %s probe", async kind => {
+    const { cfg, req } = probeFixture(kind);
+    const harness = installHarness();
+    const state: ResponsesAdmissionState = { pendingHostAdmissionLease: null, authCtx: { kind: "main", accountId: null } };
+    const error = new Error("fixture provider materialization failure");
+    const applySpy = spyOn(authContextModule, "applyCodexAuthContextToProvider").mockImplementation((_provider, ctx) => {
+      expectProbeHeld(ctx, kind);
+      throw error;
+    });
+    try {
+      await expect(prepareProbe(req, cfg, state)).rejects.toBe(error);
+      expect(applySpy).toHaveBeenCalledTimes(1);
+      expect(state.pendingHostAdmissionLease).toBeNull();
+      expect(harness.sends).toEqual([]);
+      expect(harness.refreshes).toEqual([]);
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+      expectProbeReleased(kind);
+    } finally {
+      applySpy.mockRestore();
+      authContextModule.releaseCodexAuthContextProbeLease(state.authCtx);
+    }
+  });
+
+  test.each(["quota", "transient"] as const)("successful preparation retains the %s probe for downstream dispatch", async kind => {
+    const { cfg, req } = probeFixture(kind);
+    const harness = installHarness();
+    const state: ResponsesAdmissionState = { pendingHostAdmissionLease: null, authCtx: { kind: "main", accountId: null } };
+    try {
+      const result = await prepareProbe(req, cfg, state);
+      expect(result).not.toBeInstanceOf(Response);
+      if (result instanceof Response) throw new Error("expected successful preparation");
+      expect(result.selectedForwardHeaders.get("authorization")).toBe("Bearer rejected-access");
+      expectProbeHeld(state.authCtx, kind);
+      expect(state.pendingHostAdmissionLease).toBeNull();
+      expect(harness.sends).toEqual([]);
+      expect(harness.refreshes).toEqual([]);
+    } finally { authContextModule.releaseCodexAuthContextProbeLease(state.authCtx); }
+  });
 });
 
 describe("ordinary pool 401 refresh and replay (#2887)", () => {
@@ -455,6 +674,182 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(response.status).toBe(200);
     expect(harness.refreshes).toEqual(["refresh-grant"]);
     expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+  });
+
+  test.each(["/v1/responses", "/v1/responses/compact"] as const)(
+    "a credit hold landing during the forced refresh answers the credit policy, not a refresh failure (%s)",
+    async path => {
+      const harness = installHarness({
+        refresh() {
+          // The account crosses the limit while the token endpoint is in flight: the
+          // replay's materialization must read the live hold, not the admission-time one.
+          updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+          return Response.json({
+            access_token: "refreshed-access",
+            refresh_token: "rotated-refresh",
+            expires_in: 3600,
+          });
+        },
+      });
+      const response = path === "/v1/responses/compact"
+        ? await handleResponsesCompact(request(path), config(), { model: "", provider: "" } as RequestLogContext)
+        : await handleResponses(request(path), config(), { model: "", provider: "" } as RequestLogContext);
+      const body = await response.text();
+
+      // A policy refusal is not an incomplete refresh: the client gets the actionable 429,
+      // the rotated grant stays stored, and nothing replays on the refreshed bearer.
+      expect(response.status).toBe(429);
+      expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(0);
+      expect(body).toContain("spending credits");
+      expect(body).not.toContain("credential refresh did not complete");
+      expect(harness.sends).toEqual(["Bearer rejected-access"]);
+      expect(harness.refreshes).toEqual(["refresh-grant"]);
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+      expect(readStoredGeneration()).toBe(4);
+    },
+  );
+
+  for (const [path, signalSource] of [
+    ["/v1/responses", "request"],
+    ["/v1/responses", "effective"],
+    ["/v1/responses/compact", "request"],
+  ] as const) {
+    test(`post-refresh credit refusal yields to cancellation (${path}, ${signalSource})`, async () => {
+      const client = new AbortController();
+      const cfg = config();
+      cfg.creditCodexAccountIds = [];
+      const harness = installHarness();
+      const materialize = authContextModule.materializeCodexUpstreamAuthAsync;
+      const materializeSpy = spyOn(authContextModule, "materializeCodexUpstreamAuthAsync")
+        .mockImplementation(async (...args) => {
+          if (args[1].kind !== "pool" || args[1].accessToken !== "refreshed-access") {
+            return materialize(...args);
+          }
+          // Refresh has settled; abort when the real materializer rejects the new hold.
+          expect(readStoredGeneration()).toBe(4);
+          updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+          try {
+            return await materialize(...args);
+          } catch (error) {
+            client.abort();
+            throw error;
+          }
+        });
+      try {
+        const req = signalSource === "request"
+          ? new Request(request(path), { signal: client.signal })
+          : request(path);
+        const response = path === "/v1/responses/compact"
+          ? await handleResponsesCompact(req, cfg, { model: "", provider: "" } as RequestLogContext)
+          : await handleResponses(req, cfg, { model: "", provider: "" } as RequestLogContext,
+            signalSource === "effective" ? { abortSignal: client.signal } : {});
+        expect(response.status).toBe(499);
+        expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
+        expect(harness.sends).toEqual(["Bearer rejected-access"]);
+        expect(harness.refreshes).toEqual(["refresh-grant"]);
+        expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+        expect(readStoredGeneration()).toBe(4);
+      } finally {
+        materializeSpy.mockRestore();
+      }
+    });
+  }
+
+  test.each(["/v1/responses", "/v1/responses/compact"] as const)(
+    "a credit hold while the initial request waits for pacing refuses without sending (%s)", async path => {
+      const cfg = config();
+      cfg.providers.openai!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+      const blocker = await waitForProviderRequestSlot("openai", cfg.providers.openai!, "gpt-5.5");
+      const harness = installHarness();
+      const pending = path === "/v1/responses/compact"
+        ? handleResponsesCompact(request(path, { model: "work/gpt-5.5" }), cfg, { model: "", provider: "" } as RequestLogContext)
+        : handleResponses(request(path, { model: "work/gpt-5.5" }), cfg, { model: "", provider: "" } as RequestLogContext);
+      try {
+        for (let attempt = 0; attempt < 500 && providerRequestPacingStatus("openai", cfg.providers.openai!).queued === 0; attempt++) await Bun.sleep(1);
+        expect(providerRequestPacingStatus("openai", cfg.providers.openai!).queued).toBe(1);
+        updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+        blocker?.release();
+        const response = await pending;
+        expect(response.status).toBe(429);
+        expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(1);
+        expect(await response.text()).toContain("spending credits");
+        expect(harness.sends).toEqual([]);
+        expect(harness.refreshes).toEqual([]);
+        expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+      } finally { blocker?.release(); resetProviderRequestPacingForTest(); }
+    },
+  );
+
+  test.each([false, true])("portable compaction rechecks queued stored-account credits (opt-in=%s)", async optedIn => {
+    const cfg = config(); cfg.codexMainAccountHardLock = false;
+    cfg.providers.openai!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+    cfg.providers.backup = { adapter: "openai-chat", authMode: "key", apiKey: "backup-test-key", baseUrl: "https://backup.example.test" };
+    cfg.creditCodexAccountIds = optedIn ? [ACCOUNT_ID] : [];
+    updateAccountQuota(ACCOUNT_ID, 99, Date.now() + 3_600_000);
+    const blocker = await waitForProviderRequestSlot("openai", cfg.providers.openai!, "gpt-5.5");
+    const harness = installHarness({ responseForSend: () => Response.json({ id: "resp_summary", object: "response", status: "completed",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "summary" }] }] }) });
+    const pending = handleResponses(request("/v1/responses", { model: "work/gpt-5.5", input: [
+      { type: "message", role: "user", content: "history" }, { type: "compaction_trigger" },
+    ] }), cfg, { model: "", provider: "" } as RequestLogContext,
+    { compactionRoutingOverride: { sourceModel: "backup/model" } });
+    try {
+      for (let attempt = 0; attempt < 500 && providerRequestPacingStatus("openai", cfg.providers.openai!).queued === 0; attempt++) await Bun.sleep(1);
+      expect(providerRequestPacingStatus("openai", cfg.providers.openai!).queued).toBe(1);
+      updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+      setAccountQuotaFromParsed(ACCOUNT_ID, { credits: { hasCredits: true, balance: 42.5, observedAt: Date.now() } });
+      blocker?.release();
+      const response = await pending;
+      expect(response.status).toBe(optedIn ? 200 : 429);
+      const body = await response.text();
+      expect(body).toContain(optedIn ? "compaction" : "spending credits");
+      expect(harness.sends).toEqual(optedIn ? ["Bearer rejected-access"] : []);
+      expect(harness.refreshes).toEqual([]);
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+    } finally { blocker?.release(); resetProviderRequestPacingForTest(); }
+  });
+
+  test("a post-refresh credit hold in the pacing queue does not announce a replay send", async () => {
+    const cfg = config();
+    // The replay must still be inside the pacing interval after the forced refresh. On hosted
+    // Windows runners refresh plus replay preparation takes several hundred ms, so 200 ms elapsed
+    // before the replay reached the queue and it was never observed as queued.
+    cfg.providers.openai!.requestPacing = { enabled: true, minIntervalMs: 2_000 };
+    const harness = installHarness();
+    let dispatchSignals = 0;
+    const pending = handleResponses(request("/v1/responses"), cfg, { model: "", provider: "" } as RequestLogContext,
+      { onStoredPool401ReplayDispatched: () => { dispatchSignals++; } });
+    try {
+      for (let attempt = 0; attempt < 500 && !(harness.refreshes.length && providerRequestPacingStatus("openai", cfg.providers.openai!).queued); attempt++) await Bun.sleep(1);
+      expect(harness.refreshes).toEqual(["refresh-grant"]);
+      expect(providerRequestPacingStatus("openai", cfg.providers.openai!).queued).toBe(1);
+      updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+      const response = await pending;
+      expect(response.status).toBe(429);
+      expect(dispatchSignals).toBe(0);
+      expect(harness.sends).toEqual(["Bearer rejected-access"]);
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+    } finally { resetProviderRequestPacingForTest(); }
+  });
+
+  test("a credit hold during same-account model recovery returns a policy response without replay", async () => {
+    const gatedModel = "gpt-daybreak-blue-latest";
+    const harness = installHarness({ responseForSend: () => Response.json({
+      detail: `The '${gatedModel}' model is not supported when using Codex with a ChatGPT account.`,
+    }, { status: 400 }) });
+    const response = await handleResponses(request("/v1/responses", { model: gatedModel }), config(),
+      { model: "", provider: "" } as RequestLogContext, {
+        resolveCodexModelEntitlements: async () => {
+          if (harness.sends.length) updateAccountQuota(ACCOUNT_ID, 100, Date.now() + 3_600_000);
+          return { modelsByAccount: new Map([[ACCOUNT_ID, new Set([gatedModel])]]),
+            confirmedAccountIds: new Set([ACCOUNT_ID]), credentialIdentities: new Map() };
+        },
+      });
+    expect(response.status).toBe(429);
+    expect(await response.text()).toContain("spending credits");
+    expect(harness.sends).toEqual(["Bearer rejected-access"]);
+    expect(harness.refreshes).toEqual([]);
     expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
   });
 

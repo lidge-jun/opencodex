@@ -184,8 +184,14 @@
   border-top: 1px solid var(--border-soft, var(--border));
 }
 
+.ccw-savebar-error {
+  flex: 1 1 100%;
+  color: var(--red);
+  font-size: var(--text-label);
+}
+
 .ccw-savebar-state {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   color: var(--muted);
   font-size: var(--text-label);
@@ -201,3 +207,9 @@ html:has(.ccw-savebar) {
   scroll-padding-bottom: 72px;
 }
 
+
+/* Sidecar copy and controls wrap independently instead of competing for a fixed width. */
+.claudecode-sidecar-row { flex-wrap: wrap; align-items: flex-start; }
+.claudecode-sidecar-row .setting-copy { flex: 1 1 16rem; }
+.claudecode-sidecar-row .setting-controls { display: flex; flex-wrap: wrap; gap: var(--space-2); flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.claudecode-sidecar-row .setting-controls .input { flex: 1 1 13rem; min-width: 0; }

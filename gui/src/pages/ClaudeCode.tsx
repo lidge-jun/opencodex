@@ -125,6 +125,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     () => cached ? { draft: cached, baseline: cached, adoptNextRead: false } : null,
   );
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
   /*
@@ -329,6 +330,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     if (!state || !edit || saving) return;
     const submitted = edit.draft;
     setStatus("");
+    setSaveError("");
     setSaving(true);
     setEdit(current => current && { ...current, savePending: true });
     // Reads already in flight predate this Save; none of them may reach the draft or cache.
@@ -356,12 +358,13 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       // The submitted draft is what the server now holds; edits made meanwhile stay dirty.
       setEdit(current => acknowledgeSave(current, submitted));
       setOk(true);
+      setSaveError("");
       setStatus(t("claude.saved"));
       codeResource.refresh();
     } catch (error) {
       setEdit(current => current && { ...current, savePending: false });
       setOk(false);
-      setStatus(error instanceof Error && error.message ? error.message : t("claude.networkError"));
+      setSaveError(error instanceof Error && error.message ? error.message : t("claude.networkError"));
     } finally {
       setSaving(false);
     }
@@ -369,6 +372,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
 
   const revert = () => {
     setStatus("");
+    setSaveError("");
     setEdit(current => current && {
       draft: { state: revertEditable(current.draft.state, current.baseline.state), rows: current.baseline.rows },
       baseline: current.baseline,
@@ -477,6 +481,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       </div>
 
       <div className="ccw-savebar" role="region" aria-label={t("claude.saveBar.label")}>
+        {saveError && <span className="ccw-savebar-error" role="alert">{saveError}</span>}
         <span className={`ccw-savebar-state${dirty ? " dirty" : ""}`} aria-live="polite" aria-atomic="true">
           {dirty ? t("claude.saveBar.dirty") : t("claude.saveBar.clean")}
         </span>

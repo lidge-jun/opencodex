@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { codexWsUpstreamFetch } from "../../src/server/responses/ws-upstream";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
-import { CodexReserveHelperUnsupportedError, CodexReserveUnavailableError, createCodexReserveDispatchGuard } from "../../src/codex/auth-context";
+import { CodexPoolAccountCreditsOffError, CodexReserveHelperUnsupportedError, CodexReserveUnavailableError, createCodexAuthDispatchGuard, createCodexReserveDispatchGuard } from "../../src/codex/auth-context";
+import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { clearCodexUpstreamHealthForAccount } from "../../src/codex/routing";
 import { clearMainAccountInfoCache, observeMainQuotaCredential, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
@@ -58,6 +59,32 @@ afterEach(() => {
 });
 
 describe("synchronous Reserve dispatch callbacks on WebSocket", () => {
+  test("a pool credit hold during delayed WS open refuses create and releases the socket without fallback", async () => {
+    install();
+    const accountId = "credit-policy-ws-fixture";
+    const config = { creditCodexAccountIds: [] };
+    const ctx = { kind: "pool" as const, accountId, writerGeneration: 0, generation: 0,
+      accessToken: "fixture-reserve", chatgptAccountId: "fixture-workspace" };
+    setAccountQuotaFromParsed(accountId, { weeklyPercent: 99, weeklyResetAt: Date.now() + 3_600_000 });
+    let fallbacks = 0;
+    const fallback = Object.assign(async () => { fallbacks++; return new Response("unexpected"); }, { preconnect() {} });
+    const requestInit = init();
+    requestInit.body = JSON.stringify({ model: "gpt-5.5", input: "ping", stream: true });
+    try {
+      const pending = codexWsUpstreamFetch(URL, requestInit, fallback, "1.4.0", undefined,
+        createCodexAuthDispatchGuard(ctx, config, "gpt-5.5"));
+      const observed = pending.catch(error => error);
+      const socket = DelayedWebSocket.instances[0]!;
+      setAccountQuotaFromParsed(accountId, { weeklyPercent: 100, weeklyResetAt: Date.now() + 3_600_000 });
+      socket.dispatchEvent(new Event("open"));
+      expect(await observed).toBeInstanceOf(CodexPoolAccountCreditsOffError);
+      expect(socket.sent).toEqual([]);
+      expect(socket.closed).toBe(true);
+      expect(socket.listeners.size).toBe(0);
+      expect(fallbacks).toBe(0);
+    } finally { clearAccountQuota(accountId); }
+  });
+
   test.each([true, false])("valid-proof terminal helper with enabled-at-open=%s cannot confuse helper permission with conversation permission", async enabledAtOpen => {
     install();
     clearAccountNeedsReauth("__main__");

@@ -78,7 +78,8 @@ runtime the leak itself remains an upstream problem:
   continuation-size fields from this endpoint and offers a confirm-gated
   **Drain & restart** action: it shows
   the current active-turn count, waits up to 60s for active turns (reusing
-  the existing 503 + `Retry-After` drain), then aborts any remaining turns.
+  the existing HTTP 503 JSON `server_restarting` + `Retry-After: 5` drain),
+  then aborts any remaining turns.
   The running proxy owns restart authorization and drain coordination, then
   exits; an installed service manager launches the replacement when applicable.
   The action reports success only after a different, identity-verified process

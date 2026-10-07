@@ -141,9 +141,16 @@ unknown 表示 opencodex 无法确定设置是否仍指向自己的代理。外�
 Picker 模式是第一方模式的一部分。在 macOS 上选择第一方时默认开启；设置
 `claudeCode.intercept.picker: false` 后会保持关闭。它会修改第一方 Desktop 的 Code 标签页模型选择器，
 按名称列出可用的 opencodex 模型。首次开启时，macOS 可能会要求你在登录钥匙串中信任本地证书颁发机构。
-该颁发机构限制为 `claude.ai` 及其子域名。其签名密钥只存在于运行中的 OpenCodex 进程内，因此每次重启
-OpenCodex 都会发布新的颁发机构，macOS 也会再次请求信任——请在每次重启后批准该提示，或稍后运行
-`ocx claude desktop picker trust`。
+该颁发机构限制为 `claude.ai` 及其子域名。可导出的签名身份由 OS 凭据存储保护，普通重启会复用同一证书和密钥。
+OpenCodex 配置目录中不保存明文 Picker 签名密钥。受限 CA 的完整验证和 OS 信任检查仍然适用。
+已批准的身份不变且凭据存储可用时，重启不会添加或删除证书信任设置。启动恢复绝不会安装信任：
+若信任缺失、被撤销或无法确认，Picker 会保持待处理状态。请明确运行 `ocx claude desktop picker on`
+或 `ocx claude desktop picker trust` 来授予信任。
+
+从旧身份进行一次性迁移时，清除原有信任可能需要同意。清理未完成时，Picker 不可用，已应用的配置档案
+会使用不解密的中继。macOS 还可能单独要求解锁钥匙串或批准应用访问凭据，重启或升级时也可能出现这些提示。
+Windows 和 Linux 仍不支持 Picker，不会启动 Picker CA、凭据存储或代理工作。主要 Claude 拦截功能仍可用，
+其本地 CA 文件受到所有者、符号链接、文件权限及 Windows ACL 检查保护。
 
 Picker 模式开启期间，Claude Desktop 通过 OpenCodex 访问网络。如果 OpenCodex 停止，Desktop 会处于离线状态，
 直到你完全重启 Desktop 或关闭 Picker 模式。使用 `ocx claude desktop picker status` 查看状态，使用
@@ -516,16 +523,18 @@ HMAC 等值标签。**不会存储提示文本、原始对象或跨运行稳定�
 
 ## GUI（Claude 页面）
 
-仪表板的 **连接** 下有两个标签页：用于 Claude Code 的 **Claude** 和 **Claude Desktop**。
-连接概览中的 Claude 卡片也提供同一个连接开关。该页面显示：
+仪表板的 **连接 → Claude** 在同一页面显示 Claude Code 设置。**Claude Desktop** 是 **连接** 下的另一个标签页。连接概览中的 Claude 卡片也提供同一个连接开关。
+页面从上到下依次显示：
 
-- 入站总开关（启用开关）
-- 快速开始（`ocx claude`）和手动环境变量块
-- Fast Mode 选择器（Auto / ON / OFF）
-- 自动上下文开关和压缩阈值下拉菜单
-- 子代理自动注册开关
-- 模型拦截（modelMap）编辑器
-- 选择器别名实时预览
+- **Claude Code CLI 第一方** 开关。
+- **开始使用**：`ocx claude` 和手动环境变量块。
+- **常规**：Fast Mode、自动上下文、压缩阈值和子代理自动注册设置。
+- **后台辅助模型**：选择用于聊天摘要、主题识别等后台工作的模型。
+- **模型拦截**：将特定模型请求重定向到其他模型的 `modelMap` 编辑器。
+- **可用模型**：`/model` 菜单中模型别名的实时预览。
+- **Claude 连接** 开关。
+
+页面底部的保存栏在滚动时保持可见，显示 **没有更改** 或 **有未保存的更改**。**还原** 撤销未保存的设置更改；**保存** 保存编辑后的设置。**Claude 连接** 和 **Claude Code CLI 第一方** 开关立即生效；**保存** 永远不会改变这两个开关的状态。
 
 `GET /api/claude-code` 返回有效默认值、配置、上下文窗口注册表、有效环境变量、可用路由 ID、
 别名和端口。`PUT /api/claude-code` 接受部分更新并保留省略的字段；`null` 会重置

@@ -2,7 +2,7 @@ import { CAPABILITIES, type Capability } from "./capabilities";
 import { CLI_COMMANDS, findCommand, type CliCommandEntry } from "./registry";
 
 export type HelpResolution =
-  | { kind: "entry"; entry: CliCommandEntry; canonicalName: string; children: readonly Capability[] }
+  | { kind: "entry"; entry: CliCommandEntry; canonicalName: string; capability?: Capability; children: readonly Capability[] }
   | { kind: "capability"; path: string[]; capability: Capability; children: readonly Capability[] }
   | { kind: "prefix"; path: string[]; children: readonly Capability[] }
   | { kind: "models-context"; path: string[] }
@@ -79,6 +79,7 @@ export function resolveHelpPath(requested: readonly string[]): HelpResolution {
   const declared = CAPABILITIES.filter(capability => !findCommand(capability.command[0])?.hidden);
   if (requested.length === 1) return {
     kind: "entry", entry, canonicalName: path.join(" "),
+    capability: entry.hidden ? undefined : declared.find(candidate => candidate.command.length === path.length && startsWithPath(candidate.command, path)),
     children: entry.hidden ? [] : declared.filter(candidate => candidate.command.length > path.length && startsWithPath(candidate.command, path)),
   };
   if (path.length === 2 && path[0] === "models" && path[1] === "context") {

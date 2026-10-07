@@ -374,7 +374,7 @@ the pre-header row in `fetchWithResetRetry` and the WebSocket row alike:
 | --- | --- |
 | 2xx | Returned unchanged. |
 | 307, 308, 401, 402, 408, 409, 413, 429, or any 5xx | Body released; settles as the refusal. |
-| Any other status | Real status and body kept, marked non-replayable. |
+| Any other status | Real status and non-replayability kept; bounded client projection retains allowlisted error type and code and `x-should-retry: false` when present, withholds upstream body text and all other upstream headers, and emits a fixed generic message. |
 
 The refusal set is everything that would send again: the client retry table (408, 409, 429,
 every 5xx, which the Codex client retries whatever the headers say), a client following a

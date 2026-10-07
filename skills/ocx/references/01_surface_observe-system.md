@@ -1655,7 +1655,7 @@ JSON mode: `envelope`.
 
 Human-only handoff: ask the operator to perform this in their own terminal or dashboard; do not capture the secret-bearing result.
 
-Human-only raw configuration export handoff.
+Raw configuration export with an optional JSON file receipt.
 
 State-changing: yes.
 
@@ -1663,12 +1663,12 @@ Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit the result as JSON. |
+| `--json` | boolean | Emit a JSON receipt for a file destination; stdout export stays raw. |
 
 JSON mode: `payload`.
 
 - Local config/file operation; no management API request or automatic live convergence.
-- Human-only secret-bearing export: raw credentials are included. Keep the file and stdout out of agent transcripts. --json is accepted but does not alter this raw export.
+- Human-only secret-bearing export: raw credentials are included. Keep the file and stdout out of agent transcripts. --json emits {ok:true,path} for a file destination; export to - always emits the raw config.
 
 ### `ocx config import`
 

@@ -7,7 +7,7 @@ opencodex makes Codex route through the proxy by editing two things Codex reads:
 (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`) and its model catalog. Every edit is
 idempotent and reversible.
 
-The **Integrations** overview has a Codex switch for this native integration. Its switch shows
+The **Connect** overview has a Codex switch for this native integration. Its switch shows
 the latest saved desired state from OpenCodex's configuration, including immediately after a toggle, while the badge reports whether Codex is
 currently observed using the proxy; during cleanup those can briefly differ while the badge
 continues to report the observed state. Disabling names the effective Codex config
@@ -57,7 +57,11 @@ WebSocket at `api.openai.com` directly unless `experimental_realtime_ws_base_url
 Pool mode the call is created under the account opencodex selects, so a direct join under the app's
 own login fails with `realtime websocket handshake failed` (404). The injected key sends the join
 back through opencodex (`GET /v1/live/{callId}`), where the Pool reuses the account it bound to that
-session/thread pair (a process-local binding). In Direct mode both legs already use the caller's
+session/thread pair (a process-local binding). A call the client created itself is the exception:
+when ChatGPT voice hands a call to a Codex thread, or Codex Desktop creates the call on its own,
+the call belongs to your ChatGPT login and only its sideband join reaches opencodex, so opencodex
+forwards that join with the caller's own ChatGPT credential rather than a Pool account. In Direct
+mode both legs already use the caller's
 current bearer, so the key only keeps the join on the proxy path. It is written only on the loopback
 `openai_base_url` form, is removed together with it, and a user-owned
 `experimental_realtime_ws_base_url` is never overwritten.
@@ -953,8 +957,22 @@ and exit status. The command also works with the standalone `ocx` shipped in des
 packages: both the installation probe and the installed wrapper use that executable,
 without requiring a separate Bun installation or a source checkout.
 
-Use `ocx codex-shim status` to inspect it and `ocx codex-shim uninstall` to restore
-the saved Codex launcher.
+On macOS and Linux, activate the private wrapper in your current shell after other PATH setup.
+With the default OpenCodex home, run:
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+With a custom `OPENCODEX_HOME`, use the quoted path printed by `ocx codex-shim install`.
+Add that source line after other PATH setup in your shell startup file to activate future shells.
+OpenCodex does not edit that file or change the parent shell. Legacy in-place Unix shims are not
+auto-migrated; run `ocx codex-shim install` explicitly to migrate them.
+
+Use `ocx codex-shim status` to inspect it. On macOS and Linux, `ocx codex-shim uninstall`
+removes the private overlay files and leaves native Codex intact. Windows keeps in-place
+script wrappers; uninstall restores the saved launcher. See the
+[CLI lifecycle reference](/reference/cli/lifecycle/#ocx-codex-shim-installstatusuninstallremove).
 
 ## Routed models during Codex reserve mode
 
@@ -1424,3 +1442,10 @@ the experimental feature for production work.
 ## Streaming line endings
 
 The shared SSE decoder accepts LF, CRLF and standalone CR line endings, even when a delimiter spans network chunks. This allows compatible providers to stream events without requiring LF-only framing.
+
+
+### Account-qualified requests and credits
+
+Choosing an account-qualified model does not enable credit spending. Stored accounts obey **Use credits after limit** during authentication, when credentials are prepared, and before Responses HTTP or WebSocket dispatch after pacing or retry waits. A held request reports the credit policy, not an authentication failure; wait for the reset, choose another account, or explicitly enable that account’s credit spending.
+
+Stored-account vision and web-search helpers also recheck this policy before sending, including retries. If consent changes or a limit is reached after helper selection, the helper reports the policy refusal without sending that attempt. The standalone search relay returns a reset-bound 429. Caller-owned Direct credentials retain their existing behavior.

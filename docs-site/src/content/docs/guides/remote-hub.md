@@ -23,12 +23,20 @@ public-internet surface and is outside this deployment model.
 
 With management ingress enabled, the local dashboard command opens `http://127.0.0.1:<management port>` so the address matches the IPv4-only listener without resolving `localhost`.
 
+Client configurations exported or applied through that dashboard still target the inference
+listener, not the management port. Local clients use the configured loopback companion port
+(or the actual public listener port when the companion has no explicit port).
+
 ## Trust and consent boundaries
 
 - Provider and OAuth credentials stay on the hub. Never copy them into a client, image layer,
   service definition, support bundle, screenshot, or command line.
 - The data admission token is delivered through the owner-only `service-api-token` file or
   `OCX_API_TOKEN_FILE`. It is not a management credential.
+- A configured client's `allowedModels` must include both the executor and any separately billed
+  Advisor model used by managed native Anthropic Messages. Bare model IDs and the hub's configured
+  `provider/model` names are accepted. A disallowed or unnamed Advisor destination returns HTTP 403
+  before provider dispatch; provider-only and unrestricted keys retain their existing scope.
 - A raw management admin token can perform ordinary administration, but it cannot mint a browser
   session or authorize consent-bearing actions such as starring the repository. Those actions
   require a server-issued `gui-session`, matching browser origin, and CSRF token.
@@ -88,7 +96,7 @@ authority; recovery probes both files before committing or restoring. Never dele
 recovery reports that both candidates were rejected.
 
 `ocx disconnect` is local and works while the hub is offline. It restores local client state and
-does not revoke the hub key. After disconnect, revoke that key from **Integrations → API Keys** on
+does not revoke the hub key. After disconnect, revoke that key from **Connect → API Keys** on
 the hub. `ocx connect revoke --admin-token-stdin` is available only while still connected and uses
 the persisted `apiKeyId`; it accepts no id override. Browser session logout/expiry is separate from
 data-key rotation, revocation, and disconnect.
@@ -784,7 +792,7 @@ For a service rollback, stop the branch service and repair the prior release aga
   bound to loopback behind a TLS frontend. See [Giving the data listener TLS](#giving-the-data-listener-tls).
 - **Remote session ended:** sign in or pair again. Logout and expiry invalidate only the browser
   session, not a client data key.
-- **Outstanding revocation after disconnect:** use the hub dashboard's **Integrations → API Keys**
+- **Outstanding revocation after disconnect:** use the hub dashboard's **Connect → API Keys**
   page. It is the sole post-disconnect revocation path.
 ### Usage from a connected client
 

@@ -146,3 +146,31 @@ describe("ocx config display redaction", () => {
     }
   });
 });
+
+
+test.each([false, true])("raw config export to stdout JSON=%s remains the config document", json => {
+  const dir = freshConfig();
+  try {
+    const result = runCli(["config", "export", "-", ...(json ? ["--json"] : [])], { OPENCODEX_HOME: dir });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const config = JSON.parse(result.stdout);
+    expect(config.providers.openai.proxy).toBe("http://route_user:route_password@egress.test:3128");
+    expect(config.ok).toBeUndefined();
+  } finally { removeTreeWithRetry(dir); }
+});
+
+
+test("config validate stdin exits 1 with a single JSON failure payload", () => {
+  const dir = freshConfig();
+  try {
+    const result = spawnSync(process.execPath, [cliPath, "config", "validate", "-", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, OPENCODEX_HOME: dir, CODEX_HOME: isolatedCodexHome },
+      encoding: "utf8", input: '{"port":"invalid"}', timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(result.stderr).toBe("");
+  } finally { removeTreeWithRetry(dir); }
+});

@@ -22,6 +22,17 @@ invalid arguments with 64, while `doctor --json` is unsupported and exits 2.
 A successful local save or accepted restart request does not prove convergence;
 read the command receipt and re-check status after the requested operation.
 
+When live target discovery finds no proxy, policy/catalog commands, key-scoped usage and
+Aside profile sync report: “Proxy is not running. Start the intended proxy with: ocx start.
+No request was sent.” A management request that was sent can still have an uncertain write
+outcome; read back from the intended target before retrying. Legacy client-integration
+refusals add fixed recovery guidance keyed on the refusal reason (never the writer's own text);
+backup and residual-recovery notices remain available.
+
+`ocx system update run --yes` prints the accepted job ID and observed job state. Follow it
+with `ocx system update status <job-id>`; acceptance does not establish successful installation
+or restart. `--json` retains the complete server response.
+
 ## Setup
 
 ### `ocx init` · `ocx setup`
@@ -129,7 +140,17 @@ small placeholder an in-place npm install leaves before its postinstall, restart
 stopping anything; after a confirmed stop it waits for the runtime within the same deadline and
 launches nothing if it does not arrive. Windows, foreground, desktop-supervised, service,
 connected-client and sibling runtimes do not use this update path; use their owning lifecycle
-controls. A newer proxy or incomparable version still refuses an in-place downgrade.
+controls. A newer proxy or incomparable version still refuses an in-place downgrade. Use the newer
+installation's `ocx` to restart; inspect `which -a ocx` and `ocx status` to identify it.
+Eligibility refusals name the reason and next action: use the owning installation's
+`ocx service restart` for a service, the owning terminal for a foreground proxy, or the
+owning service/desktop app on Windows. Unknown ancestry or a changed target calls for
+`ocx status` before any restart.
+
+If package files or the Bun runtime remain incomplete after the installer exited or failed,
+run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or
+desktop app), then reinstall with the same package manager and start it again. See
+[Update failed](/troubleshooting/update-failed).
 
 When a proxy is running, ask that exact attested PID and port to restart in place, wait for its
 normal drain, and verify a different runtime PID on the same port. Managed routing and service
@@ -230,6 +251,10 @@ opencodex local config only if all restore steps succeeded. `remove` is an alias
 Config cleanup requires ownership metadata created by a fresh install; legacy or shared directories
 are left in place.
 
+Both commands accept no arguments. Unsupported flags (including `--dry-run` and `--yes`)
+exit with usage status 2 before preflight or teardown; no changes are made.
+For help, run `ocx help uninstall` or `ocx help remove`.
+
 ## Status and health
 
 ### `ocx status [--json]`
@@ -264,6 +289,11 @@ service and shim diagnostics. `ocx doctor` uses the same live-first rule for its
 section, so the two commands should agree on restart protection. If you are diagnosing a discrepancy,
 compare the reported live startup verdict with the local service details rather than treating the shell
 probe as more authoritative.
+
+The live read allows the bounded service probe to finish: up to 6.5 seconds on macOS/Linux
+and 16.5 seconds on Windows when the diagnostic cache is cold or expired. Cached reads return
+promptly. A timeout still falls back to local diagnostics; a healthy `/healthz` alone does not
+establish restart protection.
 
 The `clients=pending-restart(...)` diagnostic lists Codex CLI clients that predate the routing
 injection. On macOS, Electron renderer, utility, and crashpad helpers under Codex.app's framework
@@ -849,6 +879,11 @@ Migration restores the recorded native launcher without replacing a newer launch
 then installs the private wrapper. If private installation fails after native restoration, the native
 launcher stays restored and the operation can be retried. Missing or unusable native launchers require
 package-manager repair; OpenCodex does not guess another installation or rewrap the manager's path.
+Migration also refuses when the recorded `codex-shim.json` is not a regular file owned by you or is
+group- or world-writable. Older releases wrote that file with the process umask, so a umask of `002`
+left it at mode `0664`. The refusal names the file and the `chmod 600` that clears only the
+group- or world-writable refusal. Symlink and foreign-owner refusals remain; OpenCodex does not
+change the permissions itself.
 
 Launcher installation alone does not prove that Codex requests will use OpenCodex. After a runnable
 install, the command checks the current Codex routing and reports a warning instead of a green result
@@ -1056,7 +1091,7 @@ See [Hub observation and recovery](/guides/remote-workspace/#inspect-the-hub-wit
 
 ## Remote Hub client lifecycle
 
-Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, and `ocx connect rotate --pairing-code-stdin`. The initial catalog download fails after five seconds without incoming bytes, but active transfers may run longer; use `--catalog-timeout <seconds>` (1–120) to override that inactivity window. `ocx disconnect` restores local state offline and does not revoke the hub key. While connected only, `ocx connect revoke --admin-token-stdin` revokes the persisted `apiKeyId`; after disconnect use the hub's **Integrations → API Keys** page. Secrets are stdin-only and never belong in argv.
+Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, and `ocx connect rotate --pairing-code-stdin`. The initial catalog download fails after five seconds without incoming bytes, but active transfers may run longer; use `--catalog-timeout <seconds>` (1–120) to override that inactivity window. `ocx disconnect` restores local state offline and does not revoke the hub key. While connected only, `ocx connect revoke --admin-token-stdin` revokes the persisted `apiKeyId`; after disconnect use the hub's **Connect → API Keys** page. Secrets are stdin-only and never belong in argv.
 
 ## Setup port validation
 

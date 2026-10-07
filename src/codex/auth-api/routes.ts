@@ -24,6 +24,7 @@ import { inspectResetCredits, consumeResetCredits } from "./reset-credit-service
 import { getRuntimeConfig, saveRuntimeConfig, configuredPoolAccount } from "./runtime-config";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import { getEffectiveCodexAutoSwitchThreshold, isCodexAccountAutoSwitchThresholdKey, parseCodexAutoSwitchThreshold, setCodexAccountAutoSwitchThresholdOverride } from "../account-auto-switch";
+import { withCodexAccountPauseGroup } from "./account-pause-group";
 
 export async function handleCodexAuthAPI(
   req: Request,
@@ -100,18 +101,23 @@ export async function handleCodexAuthAPI(
       || (runtimeConfig.codexAccounts ?? []).some(account => isSelectableCodexPoolAccount(account) && account.id === id);
     if (!exists) return jsonResponse({ error: "Account not found" }, 404);
 
-    setCodexAccountPaused(runtimeConfig, id, body.paused);
-    if (body.paused) {
-      clearThreadAccountMapForAccount(id);
-      selectFallbackAfterPause(runtimeConfig, id);
-    }
-    saveRuntimeConfig(config, runtimeConfig);
-    return jsonResponse({
-      ok: true,
-      id,
-      paused: body.paused,
-      activeCodexAccountId: getEffectiveActiveCodexAccountId(runtimeConfig) ?? null,
-      appliesImmediately: true,
+    const paused = body.paused;
+    return withCodexAccountPauseGroup(runtimeConfig, id, accountIds => {
+      // Publish every exclusion before reconciling: a duplicate must never become the fallback.
+      for (const accountId of accountIds) setCodexAccountPaused(runtimeConfig, accountId, paused);
+      if (paused) {
+        for (const accountId of accountIds) clearThreadAccountMapForAccount(accountId);
+        for (const accountId of accountIds) selectFallbackAfterPause(runtimeConfig, accountId);
+      }
+      saveRuntimeConfig(config, runtimeConfig);
+      return jsonResponse({
+        ok: true,
+        id,
+        paused,
+        affectedAccountIds: accountIds,
+        activeCodexAccountId: getEffectiveActiveCodexAccountId(runtimeConfig) ?? null,
+        appliesImmediately: true,
+      });
     });
   }
 

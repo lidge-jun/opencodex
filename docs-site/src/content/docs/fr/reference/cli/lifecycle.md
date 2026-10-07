@@ -133,6 +133,8 @@ Exemple de structure abrégée :
 
 L’objet réel comprend également `listen` (port, nom d’hôte, source du runtime et de la configuration), les diagnostics de chargement de la configuration et les diagnostics du plug-in Codex intégré. Le schéma JSON est uniquement extensible : de futures versions peuvent ajouter des champs, mais les champs existants doivent rester stables. Les clés d’API, jetons OAuth, en-têtes d’autorisation, contenus de requêtes, adresses électroniques et identités de compte en sont volontairement exclus.
 
+La lecture en direct laisse la sonde de service à durée limitée se terminer : jusqu’à 6,5 secondes sous macOS/Linux et 16,5 secondes sous Windows lorsque le cache de diagnostic est vide ou expiré. Les lectures depuis le cache renvoient rapidement leur résultat. En cas de dépassement du délai, la commande se replie toujours sur les diagnostics locaux ; un `/healthz` sain ne suffit pas à confirmer que la protection contre les redémarrages est active.
+
 ### `ocx health [--json]`
 
 Vérifie l’identité du proxy actif. La sortie destinée aux utilisateurs indique le PID et le port ; `--json` produit `{ok, pid, port}`. La commande renvoie 0 uniquement lorsque le proxy est sain, et 1 dans le cas contraire, ce qui permet de l’utiliser comme sonde de service.
@@ -296,14 +298,7 @@ Lors d’une nouvelle installation où l’absence de la tâche OpenCodex dans l
 
 Ainsi, l’annulation ou le refus de l’UAC, comme l’impossibilité de revendiquer une nouvelle racine en toute sécurité, laisse en place le proxy fonctionnel et son routage Codex. Les inscriptions existantes ou conflictuelles continuent d’échouer de manière sûre au lieu d’être supprimées dans le cadre d’une annulation approximative.
 
-If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
-`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
-proxy is not running. The message includes the lock path, recorded PID, current liveness,
-executable name when available, and lease age. The process identity is unverified: the PID
-may have been reused, so liveness and executable name describe whichever process occupies
-that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
-process based only on this PID. A later mutation attempt can reclaim a stale lease once its
-age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+Si le démarrage signale `another process owns the runtime mutation lease` ou si `ocx service status` affiche `Runtime mutation lease busy`, le bail bloque le démarrage ou les modifications du service, même lorsque le proxy ne tourne pas. Le message indique le chemin du verrou, le PID enregistré, si ce PID est encore actif, le nom de l’exécutable lorsqu’il est disponible et l’âge du bail. L’identité du processus n’est pas vérifiée : le PID a pu être réutilisé, si bien que l’état actif et le nom de l’exécutable décrivent le processus qui occupe ce PID à présent. Attendez la fin de l’opération puis réessayez ; ne supprimez pas le verrou et n’arrêtez aucun processus sur la seule foi de ce PID. Une tentative de modification ultérieure peut récupérer un bail périmé dès que son âge dépasse 30 secondes et que le PID enregistré n’est plus actif ; `ocx service status` se contente de l’inspecter.
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
@@ -379,4 +374,4 @@ Les nouvelles versions deviennent disponibles lorsque le [workflow de publicatio
 
 ## Cycle de vie du client Remote Hub
 
-Utilisez `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync` et `ocx connect rotate --pairing-code-stdin`. `ocx disconnect` restaure l'état local hors ligne sans révoquer la clé du hub. Tant que le client est connecté, `ocx connect revoke --admin-token-stdin` révoque l'`apiKeyId` enregistré; après déconnexion, utilisez **Integrations → API Keys** sur le hub. Les secrets passent uniquement par stdin, jamais par argv.
+Utilisez `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync` et `ocx connect rotate --pairing-code-stdin`. `ocx disconnect` restaure l'état local hors ligne sans révoquer la clé du hub. Tant que le client est connecté, `ocx connect revoke --admin-token-stdin` révoque l'`apiKeyId` enregistré; après déconnexion, utilisez **Connexion → Clés API** sur le hub. Les secrets passent uniquement par stdin, jamais par argv.
