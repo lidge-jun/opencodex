@@ -57,6 +57,7 @@ import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 import { CODEX_UNIFIED_EXEC_TOOL, cursorRequestHasExecutionPath, cursorRequestHasShellAlias, cursorRequestUsesCodeMode, cursorToolWireName } from "./tool-naming";
 import { CODE_MODE_RESULT_ECHO_SENTENCE } from "../exec-tool-result-normalize";
 import type { OcxTool } from "../../types";
+import { cursorPlainNativeExecFallback, cursorPlainNativeExecRedirectHint, cursorUsesPlainToolWording } from "./tool-wording";
 
 export type CursorNativeExecDeps = CursorNativeNetworkDeps & CursorNativeToolDeps;
 
@@ -80,6 +81,8 @@ export interface CursorNativeExecContext extends CursorNativeExecDeps {
   structuredEditAvailable?: boolean;
   /** Catalog-aware redirect text for denied native fs/shell attempts (undefined = default bridge wording). */
   nativeExecRedirectHint?: string;
+  /** Claude-family Cursor targets receive factual redirects, without narration restrictions. */
+  plainToolWording?: boolean;
 }
 
 const REDIRECT_HINT_MAX_TOOLS = 16;
@@ -93,7 +96,9 @@ const REDIRECT_HINT_MAX_TOOLS = 16;
 export function cursorNativeExecRedirectHint(
   tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
   mcpToolDefs: readonly Pick<McpToolDefinition, "name" | "providerIdentifier">[] = [],
+  modelId?: string,
 ): string | undefined {
+  if (cursorUsesPlainToolWording(modelId)) return cursorPlainNativeExecRedirectHint(tools, mcpToolDefs);
   const clientTools = tools ?? [];
   if (cursorRequestHasShellAlias(clientTools)) return undefined;
   // Code mode (freeform unified `exec`, no bare shell bridge): the default bridge wording names
@@ -704,6 +709,9 @@ export function cursorBlobStoreDebugSnapshotForTests(): Array<{
 
 export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: CursorNativeExecContext = {}): Promise<Uint8Array[]> {
   const execCase = execMsg.message.case;
+  if (deps.plainToolWording && !deps.nativeExecRedirectHint) {
+    deps = { ...deps, nativeExecRedirectHint: cursorPlainNativeExecFallback([...(deps.clientToolDefs ?? []), ...(deps.mcpToolDefs ?? [])]) };
+  }
   if (execCase === "requestContextArgs") {
     const tools = [...(deps.mcpToolDefs ?? []), ...(deps.clientToolDefs ?? [])];
     return [execBytes(execMsg, "requestContextResult", create(RequestContextResultSchema, {
@@ -712,8 +720,8 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
   }
   if (!cursorUnsafeNativeLocalExecEnabled(deps)) {
     if (execCase === "readArgs") return [rejectReadExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
-    if (execCase === "writeArgs") return [rejectWriteExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
-    if (execCase === "deleteArgs") return [rejectDeleteExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
+    if (execCase === "writeArgs") return [rejectWriteExecForPolicy(execMsg, deps.nativeExecRedirectHint, deps.plainToolWording)];
+    if (execCase === "deleteArgs") return [rejectDeleteExecForPolicy(execMsg, deps.nativeExecRedirectHint, deps.plainToolWording)];
     if (execCase === "lsArgs") return [rejectLsExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
     if (execCase === "grepArgs") return [rejectGrepExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
     if (execCase === "shellArgs") return [rejectShellExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
@@ -723,8 +731,8 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
     if (execCase === "fetchArgs") return [rejectFetchExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
   }
   if (execCase === "readArgs") return [readExec(execMsg)];
-  if (execCase === "writeArgs") return [deps.rejectNativeFileMutations ? rejectWriteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true) : writeExec(execMsg)];
-  if (execCase === "deleteArgs") return [deps.rejectNativeFileMutations ? rejectDeleteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true) : deleteExec(execMsg)];
+  if (execCase === "writeArgs") return [deps.rejectNativeFileMutations ? rejectWriteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true, deps.plainToolWording) : writeExec(execMsg)];
+  if (execCase === "deleteArgs") return [deps.rejectNativeFileMutations ? rejectDeleteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true, deps.plainToolWording) : deleteExec(execMsg)];
   if (execCase === "lsArgs") return [lsExec(execMsg)];
   if (execCase === "grepArgs") return [grepExec(execMsg)];
   if (execCase === "shellArgs") return [shellExec(execMsg, deps.nativeExecRedirectHint)];

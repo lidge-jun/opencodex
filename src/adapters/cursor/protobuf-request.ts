@@ -224,6 +224,7 @@ function systemPromptBlobs(request: CursorRunRequest): RootBlobCandidate[] {
   const cursorToolGuidance = buildCursorToolGuidanceSystemNote(
     cursorToolsForActivePrompt(request.tools, activePromptText(request), request.toolChoice),
     request.toolChoice,
+    request.modelId,
   );
   if (cursorToolGuidance) prompts.push(cursorToolGuidance);
   return prompts.map(content => rootBlobCandidate({ role: "system", content }, "system"));

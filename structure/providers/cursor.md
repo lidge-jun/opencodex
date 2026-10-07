@@ -48,7 +48,25 @@ expose; separately listed namespaced tools remain callable as usual. A flat cata
 bridge or a non-freeform unified `exec` keeps the default bridge wording, and a catalog with no
 execution path at all keeps naming the request's actual client/MCP wire names.
 
-In external Cursor turns using code mode or shell aliases, the bounded leading-commentary guard in `src/adapters/cursor/envelope-echo.ts` counts `Shell`, `네이티브 셸`, and `네이티브 쉘` as one `shell` identity, including spacing variants and names split across text deltas. Korean aliases require a Unicode-aware left token boundary so wording embedded in a larger word or identifier is not counted; punctuation and following Korean grammatical suffixes remain supported. Rejection still requires a failure claim plus either an explicit redirect or at least two distinct native-tool identities; repeated aliases alone do not count as multiple tools.
+Explicit Claude-family targets (`claude-*`, including `cursor/claude-*` selections) receive
+factual tool guidance and native-exec redirects from `src/adapters/cursor/tool-wording.ts`:
+they name available catalog tools, state that Cursor-native tools are unavailable, and end with
+“Continue the task with that tool call.” An empty client/MCP catalog instead states that no client
+tools are available and asks for an answer without tools or a report of the limitation; it never
+names assumed shell/edit tools. Catalog-less dispatcher fallback uses its advertised definitions.
+They impose no tool-routing narration restrictions. `src/adapters/cursor.ts` leaves the routing-
+commentary sniffer unarmed for these targets so factual routing prose can precede a tool call;
+tool-envelope echo guards remain active under their existing predicates.
+`src/adapters/cursor/protobuf-request.ts` uses the final request model for system guidance;
+`src/adapters/cursor/live-transport.ts` re-derives the redirect and `plainToolWording` exec flag
+on every turn. The flag also covers catalog-less fallback and apply-patch mutation refusals.
+Other targets, including Auto/default whose underlying family is unknown, retain byte-identical
+legacy wording. Execution policy, tool names, argument schemas, and denial wire shapes are unchanged.
+`tests/providers/cursor/cursor-tool-wording.test.ts` covers encoded roots, per-turn target changes,
+all denied fs/shell/fetch frame kinds, empty catalogs, factual-prose continuations through the next
+tool call, and pre-change non-Claude wording snapshots.
+
+In non-Claude external Cursor turns using code mode or shell aliases, the bounded leading-commentary guard in `src/adapters/cursor/envelope-echo.ts` counts `Shell`, `네이티브 셸`, and `네이티브 쉘` as one `shell` identity, including spacing variants and names split across text deltas. Korean aliases require a Unicode-aware left token boundary so wording embedded in a larger word or identifier is not counted; punctuation and following Korean grammatical suffixes remain supported. Rejection still requires a failure claim plus either an explicit redirect or at least two distinct native-tool identities; repeated aliases alone do not count as multiple tools.
 
 > Decision record: [ADR-0048](../decisions/ADR-0048-cursor-native-exec.md)
 
@@ -62,6 +80,10 @@ Cursor-private tool collisions. Other non-proxy-owned bare tools always receive 
 proxy-owned execution/edit tools and namespaced MCP tools retain their existing identities.
 Registration, guidance, denied-native-exec redirects, live call mapping, and protobuf history
 replay use this catalog-dependent rule. Return mapping restores the client's semantic tool name.
+Claude factual redirects resolve each tool against the complete visible request catalog, regardless
+of declaration order, so their listed names match registration with or without a bare shell bridge.
+`tests/providers/cursor/cursor-tool-wording.test.ts` checks both bridge orders and no-bridge catalogs
+through redirect guidance and live transport request preparation.
 Request construction resolves accepted bare wire aliases in forced and allowed-tool choices to
 semantic names against the original catalog, retaining only the originally selected identities
 before prompt and budget filtering so a removed bridge cannot invalidate registration or widen

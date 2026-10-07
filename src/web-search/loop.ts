@@ -11,7 +11,7 @@ import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
 import type { WebSearchBackendId } from "./index";
-import { clearableDeadline } from "../lib/abort";
+import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
@@ -455,10 +455,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ...(recoveringEmptyAnswer ? { options: { ...parsed.options, toolChoice: "none" as const } } : {}),
       context: { ...parsed.context, messages: iterMessages, tools: recoveringEmptyAnswer ? [] : allTools },
     };
-    // One cumulative header deadline spans every pool-key 429 rotation in this model iteration.
+    // One cumulative header deadline spans key rotations and reset sends, excluding local pacing.
     // clear() stops only its timer after final headers; the direct turn signal remains attached to
     // the returned response body through AbortSignal.any().
-    let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+    let headerDeadline = pacingHeaderDeadline(connectTimeoutMs, signal);
     try {
       /**
        * Build and fetch one web-search iteration on the given adapter, under the iteration
@@ -491,7 +491,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
-        const requestFetch = deps.fetchForRequest?.(request, iterParsed) ?? routedProviderFetch;
+        const requestFetch = headerDeadline.pacedFetch(deps.fetchForRequest?.(request, iterParsed) ?? routedProviderFetch);
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
@@ -563,7 +563,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // The deliberate backoff must not consume the cumulative response-header deadline:
         // start a fresh one so the replay gets a new connect budget (504 stays reserved for real
         // upstream latency).
-        headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+        headerDeadline = pacingHeaderDeadline(connectTimeoutMs, signal);
         // Stall-watchdog seam between bounded retry fetches.
         yield { type: "heartbeat" };
         prepared = await fetchOnce(adapter, "rate-limit-429");
