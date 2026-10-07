@@ -40,24 +40,36 @@ export function unwrapLogConversationQuery(query: string): string {
   return segment !== "" && !/[/\s]/.test(segment) ? segment : trimmed;
 }
 
-/** SHA-256 hex prefix used as the persisted conversation id. */
-export async function hashLogConversationQuery(raw: string): Promise<string | undefined> {
-  const trimmed = unwrapLogConversationQuery(raw);
-  if (!trimmed) return undefined;
-  if (hasControlChars(trimmed)) return undefined;
-  if (trimmed.length > 4096) return undefined;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(trimmed));
-  return toHex(digest).slice(0, LOG_CONVERSATION_ID_LEN);
+/**
+ * The candidate ids a conversation query may legitimately match: the unwrapped link id
+ * and the untouched paste — a client may literally send a `codex://threads/…` session
+ * id, hashed whole for storage. Mirrors the server matcher's candidate set.
+ */
+function logConversationQueryCandidates(query: string): string[] {
+  const trimmed = query.trim();
+  const unwrapped = unwrapLogConversationQuery(trimmed);
+  return unwrapped === trimmed ? [unwrapped] : [unwrapped, trimmed];
+}
+
+/** SHA-256 hex prefixes used as persisted conversation ids, one per query candidate. */
+export async function hashLogConversationQuery(raw: string): Promise<string[]> {
+  const hashes: string[] = [];
+  for (const candidate of logConversationQueryCandidates(raw)) {
+    if (!candidate || hasControlChars(candidate) || candidate.length > 4096) continue;
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(candidate));
+    hashes.push(toHex(digest).slice(0, LOG_CONVERSATION_ID_LEN));
+  }
+  return hashes;
 }
 
 export function matchesLogConversationId(
   stored: string | undefined,
   query: string,
-  queryHash?: string,
+  queryHash?: readonly string[],
 ): boolean {
   if (!stored) return false;
-  const trimmed = unwrapLogConversationQuery(query);
-  if (!trimmed) return false;
-  if (stored === trimmed) return true;
-  return queryHash !== undefined && stored === queryHash;
+  const candidates = logConversationQueryCandidates(query);
+  if (!candidates.some(Boolean)) return false;
+  if (candidates.includes(stored)) return true;
+  return queryHash !== undefined && queryHash.includes(stored);
 }

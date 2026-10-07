@@ -87,6 +87,16 @@ describe("matchesLogConversationId", () => {
     }
   });
 
+  test("a literal codex://threads session id stays findable by its whole-string digest", () => {
+    const uri = "codex://threads/019f6482-67d5-77c2-a643-02daddaa7115";
+    const stored = digest32(uri);
+    expect(matchesLogConversationId(stored, uri)).toBe(true);
+    const withHost = `${uri}?hostId=durable`;
+    expect(matchesLogConversationId(digest32(withHost), withHost)).toBe(true);
+    expect(matchesLogConversationId(stored, withHost)).toBe(false);
+    expect(matchesLogConversationId(stored, "codex://threads/other-thread")).toBe(false);
+  });
+
   test("rejects malformed or oversized codex://threads pastes without backtracking", () => {
     const stored = digest32("019f6482-67d5-77c2-a643-02daddaa7115");
     const slashFlood = `codex://threads/${"/".repeat(4000)}\u2028x`;

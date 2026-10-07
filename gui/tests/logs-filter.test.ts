@@ -205,8 +205,19 @@ describe("codex://threads paste in the conversation filter", () => {
     expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}?hostId=durable`)).toBe(CODEX_THREAD_ID);
     expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}?hostId=remote-control%3Aexample-environment`)).toBe(CODEX_THREAD_ID);
     expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}#frag`)).toBe(CODEX_THREAD_ID);
-    expect(await hashLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}`)).toBe(digest32(CODEX_THREAD_ID));
-    expect(await hashLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}?hostId=durable`)).toBe(digest32(CODEX_THREAD_ID));
+    expect(await hashLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}`))
+      .toEqual([digest32(CODEX_THREAD_ID), digest32(`codex://threads/${CODEX_THREAD_ID}`)]);
+    expect(await hashLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}?hostId=durable`))
+      .toEqual([digest32(CODEX_THREAD_ID), digest32(`codex://threads/${CODEX_THREAD_ID}?hostId=durable`)]);
+    expect(await hashLogConversationQuery(CODEX_THREAD_ID)).toEqual([digest32(CODEX_THREAD_ID)]);
+  });
+
+  test("a literal codex://threads id a client sent still matches its whole-string digest", async () => {
+    const uri = `codex://threads/${CODEX_THREAD_ID}`;
+    const rows = [{ id: "literal", conversationId: digest32(uri) }];
+    const queryHash = await hashLogConversationQuery(uri);
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, conversationId: uri, conversationQueryHash: queryHash }, NOW)
+      .map(row => row.id)).toEqual(["literal"]);
   });
 
   test("malformed or oversized pastes stay plain queries and never match", () => {
@@ -218,7 +229,7 @@ describe("codex://threads paste in the conversation filter", () => {
     expect(filterLogs(rows, {
       ...DEFAULT_LOG_FILTER_STATE,
       conversationId: `codex://threads/${CODEX_THREAD_ID}?hostId=durable`,
-      conversationQueryHash: digest32(CODEX_THREAD_ID),
+      conversationQueryHash: [digest32(CODEX_THREAD_ID)],
     }, NOW).map(row => row.id)).toEqual(["hashed"]);
   });
 

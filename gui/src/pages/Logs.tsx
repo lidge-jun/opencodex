@@ -723,8 +723,11 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       setFilters(prev => prev.conversationQueryHash === undefined ? prev : { ...prev, conversationQueryHash: undefined });
       return;
     }
-    void hashLogConversationQuery(conversationQuery).then(hash => {
-      if (!cancelled) setFilters(prev => prev.conversationQueryHash === hash ? prev : { ...prev, conversationQueryHash: hash });
+    void hashLogConversationQuery(conversationQuery).then(hashes => {
+      if (!cancelled) setFilters(prev =>
+        prev.conversationQueryHash?.join(" ") === hashes.join(" ")
+          ? prev
+          : { ...prev, conversationQueryHash: hashes });
     });
     return () => { cancelled = true; };
   }, [conversationQuery]);

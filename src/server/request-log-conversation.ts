@@ -67,6 +67,18 @@ export function unwrapLogConversationQuery(query: string): string {
 }
 
 /**
+ * The candidate ids a conversation query may legitimately match. Unwrapping a pasted
+ * `codex://threads/<id>` link must add a match path, not replace one: a client can
+ * literally send a `codex://threads/…` session id, which is hashed whole for storage,
+ * so the untouched paste stays a candidate too.
+ */
+export function logConversationQueryCandidates(query: string): string[] {
+  const trimmed = query.trim();
+  const unwrapped = unwrapLogConversationQuery(trimmed);
+  return unwrapped === trimmed ? [unwrapped] : [unwrapped, trimmed];
+}
+
+/**
  * Filter match: accept either the persisted digest or the original preimage
  * (so pasting from Logs detail or the client-facing session id both work).
  */
@@ -75,11 +87,13 @@ export function matchesLogConversationId(
   query: string | undefined | null,
 ): boolean {
   if (!stored) return false;
-  const trimmed = unwrapLogConversationQuery(typeof query === "string" ? query : "");
-  if (!trimmed) return false;
-  if (stored === trimmed) return true;
-  const hashed = normalizeLogConversationId(trimmed);
-  return hashed !== undefined && stored === hashed;
+  for (const candidate of logConversationQueryCandidates(typeof query === "string" ? query : "")) {
+    if (!candidate) continue;
+    if (stored === candidate) return true;
+    const hashed = normalizeLogConversationId(candidate);
+    if (hashed !== undefined && stored === hashed) return true;
+  }
+  return false;
 }
 
 /**
