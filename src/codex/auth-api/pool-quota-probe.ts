@@ -495,6 +495,7 @@ export async function fetchPoolAccountQuota(
   validatePending = false,
   afterDispatchSequence?: number,
   recoveryProbeNow?: number,
+  explicitRefresh = false,
 ): Promise<PoolQuotaResult> {
   const existing = getAccountQuota(accountId);
   if (afterDispatchSequence === undefined && !forceRefresh && existing && Date.now() - existing.updatedAt < POOL_CACHE_TTL) {
@@ -509,9 +510,10 @@ export async function fetchPoolAccountQuota(
   // completed validation rewrites the record and drops the marker, so until then a passive read
   // (dashboard poll, listing, priming, recovery probe) would only POST the dead refresh token again
   // and log the same 401. Report the stored verdict the failed refresh would have produced. An
-  // explicit dashboard refresh and a post-reset readback keep their probe, and a source-linked
-  // credential spends no grant of its own, so none of them is held here.
-  if (!validatePending && afterDispatchSequence === undefined && record && record.deletedAt == null
+  // operator's explicit refresh command from any principal, a dashboard validation, and a post-reset
+  // readback keep their probe, and a source-linked credential spends no grant of its own, so none
+  // of them is held here.
+  if (!explicitRefresh && !validatePending && afterDispatchSequence === undefined && record && record.deletedAt == null
     && record.credential && !record.credential.sourceAuthPath
     && record.lastCodexValidationTerminal === true && record.lastCodexValidationStatus === "failed") {
     markAccountNeedsReauth(accountId, captureConfigGeneration(), record.generation);

@@ -144,7 +144,7 @@ export function registerPoolReauthCauseCases(
     expect(urls).toEqual(["https://auth.openai.com/oauth/token"]);
   });
 
-  test("a dead pool grant is probed again after an explicit dashboard refresh or a new credential", async () => {
+  test("a dead pool grant is probed again after an explicit refresh command or a new credential", async () => {
     const config = makeConfig();
     seedPoolAccount(config, {
       id: "pool-dead-grant-recovery",
@@ -160,10 +160,18 @@ export function registerPoolReauthCauseCases(
     await handleCodexAuthAPI(listReq, new URL(listReq.url), config);
     expect(urls).toHaveLength(1);
 
-    // An operator's dashboard refresh is the one passive-free path that may retry the grant.
+    // An explicit refresh command retries the grant once per command, whichever principal sends it:
+    // `ocx account refresh` arrives as a raw-admin POST, the dashboard button as a GUI session.
+    const adminRefreshReq = new Request("http://localhost/api/codex-auth/accounts/refresh", { method: "POST" });
+    await handleCodexAuthAPI(adminRefreshReq, new URL(adminRefreshReq.url), config);
+    expect(urls).toHaveLength(2);
     const refreshReq = new Request("http://localhost/api/codex-auth/accounts/refresh", { method: "POST" });
     await handleCodexAuthAPI(refreshReq, new URL(refreshReq.url), config, undefined, "gui-session");
-    expect(urls).toHaveLength(2);
+    expect(urls).toHaveLength(3);
+    // Passive listings stay held between those commands.
+    const passiveReq = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+    await handleCodexAuthAPI(passiveReq, new URL(passiveReq.url), config);
+    expect(urls).toHaveLength(3);
 
     // A re-login writes a new credential generation, which drops the terminal verdict.
     saveCodexAccountCredential("pool-dead-grant-recovery", {
@@ -175,7 +183,7 @@ export function registerPoolReauthCauseCases(
     expect(readCodexAccountRecord("pool-dead-grant-recovery")?.lastCodexValidationTerminal).toBeUndefined();
     const relistReq = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
     await handleCodexAuthAPI(relistReq, new URL(relistReq.url), config);
-    expect(urls).toHaveLength(3);
+    expect(urls).toHaveLength(4);
   });
 
   test("a transient pool token refresh failure does not raise reauthentication", async () => {
