@@ -593,7 +593,7 @@ manager children. A replacement refusal passes through owner-aware recovery: onl
 owner revives the stopped runtime; foreign ownership stays transferred and unknown ownership
 remains a reported recovery requirement. Dashboard restart delegates the lease token to its `service repair` child, and releases the lease before that refresh: the service manager spawns `ocx start` outside the worker's process tree with no token, so the managed child must take the lease itself (#5760). Before the direct-start fallthrough kills or spawns on the port, the worker takes the lease back — a refresh that stayed claimed stops the restart — and re-runs the recorded-owner veto under it because a claim could have landed during the unleased refresh window. Direct start holds the same lease through bind plus PID and runtime-address publication. If listener rollback cannot prove the socket closed, the process retains its lease until exit.
 The registration is never deleted; `ocx service install` releases the marker only after the
-registration succeeds. Busy lease diagnostics name the recorded PID, current liveness and executable, and lease age. The process identity is unverified because a PID may be reused.
+registration succeeds. Busy lease diagnostics name the recorded PID, current liveness, optional executable (omitted by default on Windows), and lease age. The process identity is unverified because a PID may be reused.
 
 Bun updater lease and recovery behavior follows the [update transaction contract](ops/service-and-sidecars.md#bun-updater-ownership-transaction).
 
