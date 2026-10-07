@@ -8,7 +8,7 @@ import { registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecover
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
-import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
+import { captureMainQuotaWriter, clearMainAccountInfoCache, getMainAccountInfoCache, isMainAccountIdentityGenerationLive, observeMainQuotaCredential, setMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { hasSpendableCodexCredits, type CodexSpendableCredits } from "../../src/codex/quota-types";
 import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
@@ -16,6 +16,7 @@ import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import * as mainAccount from "../../src/codex/main-account";
 import * as sweeper from "../../src/lib/state-store-sweeper";
+import * as quotaQueries from "../../src/codex/quota-query-backoff";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { getNativeMainProfileRequestCount, resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
 import { mapCodexAuthContextErrorToResponse } from "../../src/server/responses/codex-auth-error";
@@ -331,4 +332,69 @@ test.each([401, 403])("terminal passive WHAM %s retains recovery backoff without
   await runMainAccountHardLockRecovery(cfg);
   expect(calls).toEqual([whamUrl, whamUrl]);
   expect(isAccountNeedsReauth(MAIN)).toBe(false);
+});
+
+
+async function joinPassiveRenewal(explicitRefresh: boolean) {
+  const entered = deferred<void>();
+  const joined = deferred<void>();
+  const finish = deferred<Response>();
+  const originalQuery = quotaQueries.fetchCodexUsage;
+  let queries = 0;
+  spyOn(quotaQueries, "fetchCodexUsage").mockImplementation(<T>(...args: Parameters<typeof originalQuery>) => {
+    const read = originalQuery<T>(...args);
+    if (++queries === 2) joined.resolve();
+    return read;
+  });
+  fetchWith(async () => { entered.resolve(); return finish.promise; });
+  const renewal = runMainAccountHardLockRecovery(cfg);
+  await entered.promise;
+  const caller = fetchMainAccountInfoAttempt(true, 1, undefined, false, explicitRefresh, false, cfg);
+  await joined.promise; // The real single-flight join is pending before releasing WHAM.
+  expect(calls).toEqual([whamUrl]);
+  expect(isAccountNeedsReauth(MAIN)).toBe(false);
+  return { renewal, caller, finish };
+}
+
+test.each([
+  { status: 401, explicitRefresh: true }, { status: 403, explicitRefresh: true },
+  { status: 401, explicitRefresh: false }, { status: 403, explicitRefresh: false },
+])("ordinary caller joining passive renewal quarantines terminal WHAM %j", async ({ status, explicitRefresh }) => {
+  const { renewal, caller, finish } = await joinPassiveRenewal(explicitRefresh);
+  setMainAccountInfoCache({ email: null, plan: "plus", quota: null, ts: now });
+  finish.resolve(Response.json({ detail: { code: "invalid_workspace_selected" } }, { status }));
+  const [, result] = await Promise.all([renewal, caller]);
+  expect(calls).toEqual([whamUrl]);
+  expect(result.terminalAuthFailure).toBe(true);
+  expect(result.quotaRefresh).toEqual({ status: "http_error", httpStatus: status, code: "invalid_workspace_selected" });
+  expect(isAccountNeedsReauth(MAIN)).toBe(true);
+  expect(getMainAccountInfoCache()).toBeNull();
+  expect(isMainAccountIdentityGenerationLive(result.quotaRefreshGeneration!)).toBe(true);
+  expect(getNativeMainProfileRequestCount()).toBe(0);
+});
+
+test.each([true, false])("successful caller joining passive renewal clears quarantine only for explicit refresh=%j", async explicitRefresh => {
+  const { renewal, caller, finish } = await joinPassiveRenewal(explicitRefresh);
+  markAccountNeedsReauth(MAIN);
+  finish.resolve(usage());
+  const [, result] = await Promise.all([renewal, caller]);
+  expect(calls).toEqual([whamUrl]);
+  expect(result.quotaRefresh?.status).toBe("ok");
+  expect(isAccountNeedsReauth(MAIN)).toBe(!explicitRefresh);
+  expect(getNativeMainProfileRequestCount()).toBe(0);
+});
+
+test.each(["credential", "configuration"])("joined terminal-auth evidence cannot quarantine after %s changes", async fence => {
+  const { renewal, caller, finish } = await joinPassiveRenewal(true);
+  if (fence === "credential") writeMain(accountId, true);
+  else {
+    const generation = sweeper.captureConfigGeneration();
+    spyOn(sweeper, "captureConfigGeneration").mockReturnValue(generation + 1);
+  }
+  finish.resolve(Response.json({ detail: { code: "invalid_workspace_selected" } }, { status: 403 }));
+  const [, result] = await Promise.all([renewal, caller]);
+  expect(calls).toEqual([whamUrl]);
+  expect(result.terminalAuthFailure).toBeUndefined();
+  expect(isAccountNeedsReauth(MAIN)).toBe(false);
+  expect(getNativeMainProfileRequestCount()).toBe(0);
 });

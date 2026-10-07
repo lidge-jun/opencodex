@@ -295,6 +295,15 @@ export async function fetchMainAccountInfoWhileOwned(
         const current = credentialIsCurrent() && writerGeneration === captureConfigGeneration();
         if (!current) return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
           credentialChecked: true, hasCredential: true };
+        // Single-flight shares evidence, but each caller retains its own auth behavior.
+        if (!options.passive && admission.result.terminalAuthFailure) {
+          const diagnosticStillLive = admission.result.quotaRefreshGeneration !== undefined
+            && isMainAccountIdentityGenerationLive(admission.result.quotaRefreshGeneration);
+          clearMainAccountInfoCache();
+          markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID, writerGeneration);
+          return { ...admission.result, ...(diagnosticStillLive
+            ? { quotaRefreshGeneration: captureMainAccountIdentityGeneration() } : {}) };
+        }
         if (!options.passive && explicitRefresh && (admission.result.quotaRefresh?.status === "ok"
           || admission.result.quotaRefresh?.status === "not_reported")) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
         return admission.result;
