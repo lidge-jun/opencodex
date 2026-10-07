@@ -17,9 +17,18 @@ function hasControlChars(value: string): boolean {
   return false;
 }
 
+/**
+ * Unwrap a pasted `codex://threads/<id>` deep link to the bare thread id.
+ * Mirrors src/server/request-log-conversation.unwrapLogConversationQuery.
+ */
+export function unwrapLogConversationQuery(query: string): string {
+  const unwrapped = /^codex:\/\/threads\/(.*?)\/*$/i.exec(query.trim())?.[1]?.trim();
+  return unwrapped || query.trim();
+}
+
 /** SHA-256 hex prefix used as the persisted conversation id. */
 export async function hashLogConversationQuery(raw: string): Promise<string | undefined> {
-  const trimmed = raw.trim();
+  const trimmed = unwrapLogConversationQuery(raw);
   if (!trimmed) return undefined;
   if (hasControlChars(trimmed)) return undefined;
   if (trimmed.length > 4096) return undefined;
@@ -33,7 +42,7 @@ export function matchesLogConversationId(
   queryHash?: string,
 ): boolean {
   if (!stored) return false;
-  const trimmed = query.trim();
+  const trimmed = unwrapLogConversationQuery(query);
   if (!trimmed) return false;
   if (stored === trimmed) return true;
   return queryHash !== undefined && stored === queryHash;

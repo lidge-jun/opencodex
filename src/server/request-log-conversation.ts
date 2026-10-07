@@ -38,6 +38,16 @@ export function normalizeLogConversationId(raw: string | undefined | null): stri
 }
 
 /**
+ * Unwrap a pasted `codex://threads/<id>` deep link to the bare thread id. Codex's
+ * "copy session link" clipboard carries that URI form while clients send the bare id
+ * on the wire, so Logs search accepts either paste without changing what is persisted.
+ */
+export function unwrapLogConversationQuery(query: string): string {
+  const unwrapped = /^codex:\/\/threads\/(.*?)\/*$/i.exec(query.trim())?.[1]?.trim();
+  return unwrapped || query.trim();
+}
+
+/**
  * Filter match: accept either the persisted digest or the original preimage
  * (so pasting from Logs detail or the client-facing session id both work).
  */
@@ -46,7 +56,7 @@ export function matchesLogConversationId(
   query: string | undefined | null,
 ): boolean {
   if (!stored) return false;
-  const trimmed = typeof query === "string" ? query.trim() : "";
+  const trimmed = unwrapLogConversationQuery(typeof query === "string" ? query : "");
   if (!trimmed) return false;
   if (stored === trimmed) return true;
   const hashed = normalizeLogConversationId(trimmed);
