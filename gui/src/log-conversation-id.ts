@@ -53,13 +53,15 @@ function logConversationQueryCandidates(query: string): string[] {
 
 /** SHA-256 hex prefixes used as persisted conversation ids, one per query candidate. */
 export async function hashLogConversationQuery(raw: string): Promise<string[]> {
-  const hashes: string[] = [];
-  for (const candidate of logConversationQueryCandidates(raw)) {
-    if (!candidate || hasControlChars(candidate) || candidate.length > 4096) continue;
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(candidate));
-    hashes.push(toHex(digest).slice(0, LOG_CONVERSATION_ID_LEN));
-  }
-  return hashes;
+  const candidates = logConversationQueryCandidates(raw).filter(
+    candidate => candidate !== "" && !hasControlChars(candidate) && candidate.length <= 4096,
+  );
+  const digests = await Promise.all(
+    candidates.map(candidate =>
+      crypto.subtle.digest("SHA-256", new TextEncoder().encode(candidate)),
+    ),
+  );
+  return digests.map(digest => toHex(digest).slice(0, LOG_CONVERSATION_ID_LEN));
 }
 
 export function matchesLogConversationId(
