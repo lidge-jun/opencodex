@@ -65,6 +65,7 @@ describe("retained reasoning public wire contracts", () => {
     expect(await response.json()).toEqual({ output: [item] });
     expect(calls).toEqual(["https://chatgpt.com/backend-api/codex/responses/compact",
       "https://chatgpt.com/backend-api/codex/responses"]);
+    if (maxTokens === 1) expect(readdirSync(join(home, "reasoning-archive"))).toEqual([]);
   });
 
   test.each(["openai-responses", "openai-chat"] as const)("ordinary %s turns replay retained text as history, not new reasoning", async adapter => {
@@ -169,7 +170,74 @@ describe("retained reasoning public wire contracts", () => {
     expect(sent).toContain(path);
     expect(JSON.stringify(body.output)).toContain(path);
     expect(JSON.stringify(body.output)).toContain("conclusions only");
-    expect(JSON.stringify(body.output)).toContain("推理保留提示");
+    expect(JSON.stringify(body.output)).toContain("[reasoning retention notice]");
     expect(JSON.stringify(body.output)).not.toContain("large original reasoning");
+  });
+
+  test.each(["http-error", "failed", "incomplete", "empty-summary", "non-json", "transport-error", "cancelled", "cancelled-body"])(
+    "%s removes only the new archive and preserves a previous successful archive", async outcome => {
+      const config = keyProviderConfig();
+      config.reasoningRetention = { maxTokens: 1 };
+      const body = { model: "gw/some-model", input: [reasoning("original reasoning"),
+        { type: "message", role: "user", content: "question" }] };
+      globalThis.fetch = (async () => jsonResponse(completedPayload("successful summary"))) as typeof fetch;
+      const successful = await handleResponsesCompact(compactionRequest(body), config, { model: "", provider: "" });
+      expect(successful.status).toBe(200);
+      const summary = await successful.text();
+      const archiveDir = join(home, "reasoning-archive");
+      const previousFiles = readdirSync(archiveDir);
+      expect(previousFiles).toHaveLength(1);
+      expect(summary).toContain(join(archiveDir, previousFiles[0]!));
+      // Repeated client attempts must not accumulate unreferenced files either.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const abort = new AbortController();
+        globalThis.fetch = (async () => {
+          expect(readdirSync(archiveDir)).toHaveLength(2);
+          if (outcome === "http-error") return new Response("upstream rejected", { status: 400 });
+          if (outcome === "non-json") return new Response("not JSON", { headers: { "content-type": "application/json" } });
+          if (outcome === "transport-error") throw new Error("upstream transport failed");
+          if (outcome === "cancelled") {
+            abort.abort();
+            throw abort.signal.reason;
+          }
+          if (outcome === "cancelled-body") return new Response(new ReadableStream({
+            pull(controller) {
+              abort.abort();
+              controller.enqueue(new TextEncoder().encode(JSON.stringify(completedPayload("late summary"))));
+              controller.close();
+            },
+          }), { headers: { "content-type": "application/json" } });
+          if (outcome === "empty-summary") return jsonResponse(completedPayload(""));
+          return jsonResponse({ ...completedPayload("partial summary"), status: outcome });
+        }) as typeof fetch;
+        const response = await handleResponsesCompact(compactionRequest(body, abort.signal), config, { model: "", provider: "" });
+        expect(response.status).toBe(outcome === "http-error" ? 400 : outcome.startsWith("cancelled") ? 499 : 502);
+        expect((await response.json() as { output?: unknown }).output).toBeUndefined();
+        expect(readdirSync(archiveDir)).toEqual(previousFiles);
+        expect(readFileSync(join(archiveDir, previousFiles[0]!), "utf-8")).toBe("original reasoning");
+      }
+    },
+  );
+
+  test.each([true, false])("same-request retries reuse one archive (successful=%s)", async successful => {
+    const config = keyProviderConfig({ retryOn429: { attempts: 1, intervalMs: 1, maxIntervalMs: 1 } });
+    config.reasoningRetention = { maxTokens: 1 };
+    const archiveDir = join(home, "reasoning-archive");
+    const sentArchives: string[][] = [];
+    globalThis.fetch = (async () => {
+      sentArchives.push(readdirSync(archiveDir));
+      return sentArchives.length === 2 && successful ? jsonResponse(completedPayload("retry summary"))
+        : Response.json({ error: { message: "rate limit" } }, { status: 429 });
+    }) as typeof fetch;
+    const response = await handleResponsesCompact(compactionRequest({ model: "gw/some-model",
+      input: [reasoning("original reasoning"), { type: "message", role: "user", content: "question" }] }),
+      config, { model: "", provider: "" });
+    expect(response.status).toBe(successful ? 200 : 429);
+    const summary = await response.text();
+    expect(sentArchives).toHaveLength(2);
+    expect(sentArchives[0]).toHaveLength(1);
+    expect(sentArchives[1]).toEqual(sentArchives[0]);
+    expect(readdirSync(archiveDir)).toEqual(successful ? sentArchives[0]! : []);
+    if (successful) expect(summary).toContain(join(archiveDir, sentArchives[0]![0]!));
   });
 });

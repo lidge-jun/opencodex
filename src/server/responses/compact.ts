@@ -1,5 +1,6 @@
 import { capturePoolQuotaWriter } from "../../codex/account-store";
 import { join } from "node:path";
+import { rmSync } from "node:fs";
 import { previewXaiOauthWireModel } from "./core-normalize";
 import {
   admissionModelDeniedResponse,
@@ -1451,113 +1452,128 @@ export async function handleResponsesCompact(
     maxContextPercent: config.reasoningRetention?.maxContextPercent,
     maxTokens: config.reasoningRetention?.maxTokens,
   });
-  const inputItems = retention.input;
-  const internalBody = {
-    ...raw,
-    // Canonical ChatGPT Responses rejects non-streaming turns. Daybreak cannot use the
-    // native compact endpoint either, so run its synthetic compaction as SSE and collapse
-    // the completed event back into the v1 compact JSON contract below. Combo-dispatched
-    // turns also go out as SSE: failover can land on a canonical child that rejects a
-    // non-streaming turn, and every combo-capable provider already serves streaming traffic.
-    stream: isCanonicalOpenAiForwardProvider(route.provider) || accountGatedCompactWireModel || route.combo ? true : false,
-    input: [...inputItems, { type: "compaction_trigger" }],
-  };
-  const internalHeaders = new Headers({ "content-type": "application/json" });
-  for (const name of FORWARD_HEADERS) {
-    const value = req.headers.get(name);
-    if (value) internalHeaders.set(name, value);
-  }
-  const internalReq = new Request("http://localhost/v1/responses", {
-    method: "POST",
-    headers: internalHeaders,
-    body: JSON.stringify(internalBody),
-  });
-  linkRequestSessionLane(req, internalReq);
-  // The routed compaction turn is a handoff inside the same logical request, so it draws the
-  // REMAINDER. Minting here is what let a native attempt spend three sends and the routed
-  // fallback spend four more.
-  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride, ...(admission ? { admission } : {}) });
-  if (!response.ok) return response;
-  let json: { output?: unknown[]; status?: unknown; error?: unknown };
-  if (response.headers.get("content-type")?.includes("text/event-stream")) {
-    if (!response.body) {
-      return formatErrorResponse(502, "server_error", "compaction turn returned an empty event stream");
+  let keepArchive = false;
+  try {
+    const inputItems = retention.input;
+    const internalBody = {
+      ...raw,
+      // Canonical ChatGPT Responses rejects non-streaming turns. Daybreak cannot use the
+      // native compact endpoint either, so run its synthetic compaction as SSE and collapse
+      // the completed event back into the v1 compact JSON contract below. Combo-dispatched
+      // turns also go out as SSE: failover can land on a canonical child that rejects a
+      // non-streaming turn, and every combo-capable provider already serves streaming traffic.
+      stream: isCanonicalOpenAiForwardProvider(route.provider) || accountGatedCompactWireModel || route.combo ? true : false,
+      input: [...inputItems, { type: "compaction_trigger" }],
+    };
+    const internalHeaders = new Headers({ "content-type": "application/json" });
+    for (const name of FORWARD_HEADERS) {
+      const value = req.headers.get(name);
+      if (value) internalHeaders.set(name, value);
     }
-    const terminal = { status: "incomplete" as "completed" | "failed" | "incomplete" };
-    let completed: { id?: unknown; output?: unknown; status?: unknown } | undefined;
-    await new Promise<void>(resolve => {
-      consumeForInspection(
-        response.body!,
-        status => { terminal.status = status; },
-        req.signal,
-        resolve,
-        undefined,
-        undefined,
-        value => { completed = value; },
-      );
+    const internalReq = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: internalHeaders,
+      body: JSON.stringify(internalBody),
     });
+    linkRequestSessionLane(req, internalReq);
+    // The routed compaction turn is a handoff inside the same logical request, so it draws the
+    // REMAINDER. Minting here is what let a native attempt spend three sends and the routed
+    // fallback spend four more.
+    const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride, ...(admission ? { admission } : {}) });
+    if (req.signal.aborted) {
+      void response.body?.cancel(req.signal.reason).catch(() => undefined);
+      return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    }
+    if (!response.ok) return response;
+    let json: { output?: unknown[]; status?: unknown; error?: unknown };
+    if (response.headers.get("content-type")?.includes("text/event-stream")) {
+      if (!response.body) {
+        return formatErrorResponse(502, "server_error", "compaction turn returned an empty event stream");
+      }
+      const terminal = { status: "incomplete" as "completed" | "failed" | "incomplete" };
+      let completed: { id?: unknown; output?: unknown; status?: unknown } | undefined;
+      await new Promise<void>(resolve => {
+        consumeForInspection(
+          response.body!,
+          status => { terminal.status = status; },
+          req.signal,
+          resolve,
+          undefined,
+          undefined,
+          value => { completed = value; },
+        );
+      });
+      if (req.signal.aborted) {
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
+      if (terminal.status !== "completed" || !completed) {
+        return formatErrorResponse(502, "upstream_error", `compaction turn did not complete (status: ${terminal.status})`);
+      }
+      json = completed as { output?: unknown[]; status?: unknown; error?: unknown };
+    } else {
+      try {
+        json = await response.json() as { output?: unknown[]; status?: unknown; error?: unknown };
+      } catch {
+        return formatErrorResponse(502, "server_error", "compaction turn returned a non-JSON response");
+      }
+    }
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
-    if (terminal.status !== "completed" || !completed) {
-      return formatErrorResponse(502, "upstream_error", `compaction turn did not complete (status: ${terminal.status})`);
+    // The internal turn answers 200 even when it failed or was truncated, so the body
+    // has to be inspected. Reporting a failure beats installing "(no summary
+    // available)" as replacement history and silently losing the conversation (#422).
+    if (json.error) {
+      const message = typeof json.error === "string"
+        ? json.error
+        : (json.error as { message?: unknown })?.message;
+      return formatErrorResponse(502, "upstream_error", typeof message === "string" ? message : "compaction turn failed");
     }
-    json = completed as { output?: unknown[]; status?: unknown; error?: unknown };
-  } else {
-    try {
-      json = await response.json() as { output?: unknown[]; status?: unknown; error?: unknown };
-    } catch {
-      return formatErrorResponse(502, "server_error", "compaction turn returned a non-JSON response");
+    if (json.status !== "completed") {
+      return formatErrorResponse(
+        502,
+        "upstream_error",
+        `compaction turn did not complete (status: ${String(json.status ?? "unknown")})`,
+      );
     }
-  }
-  // The internal turn answers 200 even when it failed or was truncated, so the body
-  // has to be inspected. Reporting a failure beats installing "(no summary
-  // available)" as replacement history and silently losing the conversation (#422).
-  if (json.error) {
-    const message = typeof json.error === "string"
-      ? json.error
-      : (json.error as { message?: unknown })?.message;
-    return formatErrorResponse(502, "upstream_error", typeof message === "string" ? message : "compaction turn failed");
-  }
-  if (json.status !== "completed") {
-    return formatErrorResponse(
-      502,
-      "upstream_error",
-      `compaction turn did not complete (status: ${String(json.status ?? "unknown")})`,
+    const compactionItems = (json.output ?? []).filter(
+      (item): item is { type: string; encrypted_content?: string } =>
+        !!item && typeof item === "object" && (item as { type?: string }).type === "compaction",
     );
-  }
-  const compactionItems = (json.output ?? []).filter(
-    (item): item is { type: string; encrypted_content?: string } =>
-      !!item && typeof item === "object" && (item as { type?: string }).type === "compaction",
-  );
-  if (compactionItems.length !== 1) {
-    return formatErrorResponse(
-      502,
-      "invalid_response_error",
-      `compaction turn produced ${compactionItems.length} compaction items, expected exactly 1`,
-    );
-  }
-  // Native Responses backends return a real opaque OpenAI-encrypted compaction item. OCX cannot
-  // and should not decrypt it; preserve that item for /responses/compact callers. Synthetic
-  // routed summaries are our `ocx1:` envelope and must be decoded into v1 history items.
-  if (typeof compactionItems[0]!.encrypted_content === "string"
-    && compactionItems[0]!.encrypted_content.trim().length > 0
-    && !compactionItems[0]!.encrypted_content.startsWith("ocx1:")) {
-    const result = new Response(JSON.stringify({ output: compactionItems }), {
-      headers: { "Content-Type": "application/json" },
-    });
+    if (compactionItems.length !== 1) {
+      return formatErrorResponse(
+        502,
+        "invalid_response_error",
+        `compaction turn produced ${compactionItems.length} compaction items, expected exactly 1`,
+      );
+    }
+    // Native Responses backends return a real opaque OpenAI-encrypted compaction item. OCX cannot
+    // and should not decrypt it; preserve that item for /responses/compact callers. Synthetic
+    // routed summaries are our `ocx1:` envelope and must be decoded into v1 history items.
+    if (typeof compactionItems[0]!.encrypted_content === "string"
+      && compactionItems[0]!.encrypted_content.trim().length > 0
+      && !compactionItems[0]!.encrypted_content.startsWith("ocx1:")) {
+      const result = new Response(JSON.stringify({ output: compactionItems }), {
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!options.compactionRoutingOverride) rememberCompactHandoffRoute(req, admission, raw.model);
+      return result;
+    }
+    const encrypted = compactionItems[0]!.encrypted_content;
+    const decoded = typeof encrypted === "string" ? decodeCompactionSummary(encrypted) : null;
+    // An empty `ocx1:` envelope decodes to "" rather than null, so length is what matters.
+    if (decoded === null || decoded.trim().length === 0) {
+      return formatErrorResponse(502, "invalid_response_error", "compaction turn produced an empty summary");
+    }
+    const summary = appendRetentionNotice(decoded, retention.archived);
+    const output = [...buildCompactV1Output(extractCompactUserMessages(inputItems), summary),
+      ...(retention.retainedReasoning ?? [])];
     if (!options.compactionRoutingOverride) rememberCompactHandoffRoute(req, admission, raw.model);
+    const result = new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
+    keepArchive = true;
     return result;
+  } finally {
+    // Only a readable replacement summary publishes this request's archive path.
+    if (!keepArchive && retention.archived) rmSync(retention.archived.path, { force: true });
   }
-  const encrypted = compactionItems[0]!.encrypted_content;
-  const decoded = typeof encrypted === "string" ? decodeCompactionSummary(encrypted) : null;
-  // An empty `ocx1:` envelope decodes to "" rather than null, so length is what matters.
-  if (decoded === null || decoded.trim().length === 0) {
-    return formatErrorResponse(502, "invalid_response_error", "compaction turn produced an empty summary");
-  }
-  const summary = appendRetentionNotice(decoded, retention.archived);
-  const output = [...buildCompactV1Output(extractCompactUserMessages(inputItems), summary),
-    ...(retention.retainedReasoning ?? [])];
-  if (!options.compactionRoutingOverride) rememberCompactHandoffRoute(req, admission, raw.model);
-  return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
 }

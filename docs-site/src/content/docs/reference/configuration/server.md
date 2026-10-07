@@ -752,10 +752,14 @@ Repeated compaction withholds those messages again. Ordinary subsequent turns re
 Both fields are optional and default at runtime to `20` percent and `100000` estimated tokens.
 The effective limit is the smaller of the percentage of the compacting model's context window
 and the absolute token cap; when the context window is unknown, only the absolute cap applies.
+The estimate includes each retained message's historical-context frame, not just its reasoning text.
 Above the limit, readable text is written verbatim under the resolved OpenCodex home's
 `reasoning-archive/` (normally `~/.opencodex/reasoning-archive/`). The summarizer receives a
 path note instead of the text, and the finished readable summary includes a notice naming that file.
-New archives are private to the user on POSIX. Failed compaction returns no replacement history.
+New archives are private to the user on POSIX. An archive is provisional until a readable summary
+returns its path: failures, cancellation, invalid summaries, and opaque compaction responses remove
+the current attempt's file. Internal retries reuse it; previously successful archives are preserved.
+Failed compaction returns no replacement history.
 
 **Dashboard → Overview → Reasoning retention** edits both limits; **Restore defaults** removes
 the override. GET/PUT `/api/settings` exposes `reasoningRetention`: null clears the block,
