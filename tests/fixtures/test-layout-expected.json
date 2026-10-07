@@ -683,7 +683,7 @@
   "main-account-hard-lock-auth.test.ts": "codex-integration",
   "main-account-hard-lock-default.test.ts": "codex-integration",
   "main-account-hard-lock-policy.test.ts": "codex-integration",
-  "main-account-hard-lock-recovery.test.ts": "codex-integration",
+  "main-account-hard-lock-recovery.test.ts": "codex-integration", "main-account-credit-renewal.test.ts": "codex-integration",
   "main-account-policy-binding-wait.test.ts": "codex-integration",
   "main-device-reauth-api.test.ts": "codex-integration", "main-device-reauth-ui.test.ts": "gui",
   "main-device-reauth.test.ts": "codex-integration", "main-quota-evidence-validation.test.ts": "codex-integration",

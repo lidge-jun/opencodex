@@ -317,21 +317,20 @@ default-on main-account hard lock retains its separate local admission policy. R
 warmup remains conservative and does not spend paid credits to validate an exhausted account.
 
 For an opted-in, unpaused main account with a currently full usage window, the existing
-`src/codex/auth-api/pool-mode-gate.ts` recovery sweep refreshes authenticated WHAM evidence before
-its credit observation expires. Scheduling looks ahead by the shared sweep interval and WHAM
-timeout; admission still evaluates the actual clock and the original spending controls. Native
-profile ownership, credential generations, single-flight, query pacing and failure backoff remain
-in force. The hard lock remains independent, and refreshing usage never redeems reset credits or
-validates a pending account through inference.
+`src/codex/auth-api/pool-mode-gate.ts` recovery sweep renews credit observations from three minutes
+of age, leaving time for token preparation before the five-minute freshness limit. Only valid,
+previously spendable positive or unlimited evidence bound to the same physical account schedules
+renewal; missing, zero, restricted or retracted credits do not. Admission still uses the actual
+clock and original spending controls. Native profile ownership, generation fences, single-flight,
+query pacing and failure backoff remain in force, including upstream Retry-After. Eligibility is
+checked again after token preparation. The independent hard lock still applies.
 
-Main-account credit refusals distinguish disabled consent, reported balance unavailability,
-spending restrictions and unverified evidence. Only an opted-in observation that was spendable
-at its own valid timestamp and has since expired receives a shorter client check-again hint.
-`src/codex/auth-context.ts` keeps the same 429 error and real usage `resetAt`, while its existing
-`cooldownUntil` respects the sweep-plus-WHAM allowance and later same-generation query or
-account-wide cooldown deadlines. The hint does not promise recovery or a WHAM dispatch;
-worker-private backoff still governs actual reads. Missing-credit responses do not renew the
-credit clock, and a fresh zero balance never becomes spendable through consent or retry alone.
+Credit renewal supplies the passive option to `src/codex/auth-api/main-account-probe.ts`, including
+identity retries: WHAM success and terminal 401/403 responses never set or clear needs-reauth in
+this mode. Native token preparation also preserves the traffic quarantine. Other callers retain
+the existing auth behavior. Failed or incomplete observations never renew the credit clock;
+refreshing usage does not redeem reset credits or validate pending accounts through inference.
+Coverage: `tests/codex-integration/main-account-credit-renewal.test.ts`.
 
 Credit parsing, expiry, partial updates and reset-ticket separation are covered in
 `tests/codex-integration/codex-quota-parser-parity.test.ts`; selection and bulk-pause behavior

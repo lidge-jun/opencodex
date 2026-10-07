@@ -1,7 +1,5 @@
 import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt } from "./pool-credit-policy";
-import { CODEX_CREDITS_FRESHNESS_MS, hasSpendableCodexCredits } from "./quota-types";
-import { nextCodexUsageQueryAt } from "./quota-query-backoff";
-import { WHAM_REQUEST_TIMEOUT_MS } from "./quota-recovery-timing";
+import { hasSpendableCodexCredits } from "./quota-types";
 import { noteMainAccountActivity } from "./main-account-external-usage";
 import { codexAccountPriorityFailbackEnabled } from "./account-priority";
 import type { PoolQuotaWriter } from "./quota-types";
@@ -72,7 +70,7 @@ import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, getMainPolicyQuota, parseUs
 import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "./account-credit-use";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
-import { captureConfigGeneration, STATE_SWEEP_INTERVAL_MS } from "../lib/state-store-sweeper";
+import { captureConfigGeneration } from "../lib/state-store-sweeper";
 import { extractAccountId, extractEmail } from "../oauth/chatgpt";
 import {
   resolveMainAccountHardLockThresholds,
@@ -84,7 +82,6 @@ import {
   captureMainAccountIdentityGeneration,
   captureMainQuotaWriter,
   getObservedMainQuotaIdentityKey,
-  getMainQuotaCredentialGeneration,
   isMainQuotaWriterLive,
   matchesMainQuotaCredential,
   observeMainQuotaCredential,
@@ -775,40 +772,7 @@ function assertMainAccountPolicy(
     const status = getMainAccountHardLockStatus(config);
     if (status.state === "blocked") throw new CodexMainAccountHardLockError(status.resetAt, status.thresholds);
     const creditsResetAt = mainCreditsHoldResetAt(config);
-    if (creditsResetAt !== undefined) {
-      const error = new CodexMainAccountCreditsOffError(creditsResetAt);
-      const quota = getMainPolicyQuota();
-      const credits = quota?.credits;
-      const now = Date.now();
-      const observed = credits && Number.isFinite(credits.observedAt)
-        && credits.observedAt >= 0 && credits.observedAt <= now;
-      if (!codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)) {
-        error.message = "Codex main account reached its usage limit, and spending ChatGPT credits is off for this account."
-          + " Wait for the limit to reset or allow the main account under \"Use credits\" in Codex Auth.";
-      } else if (credits?.allowed === false || credits?.overageLimitReached === true) {
-        error.message = "Codex main account reached its usage limit, and the latest credit information reports a spending restriction."
-          + " Wait for the limit to reset or review the account's credit spending controls.";
-      } else if (observed && !(credits.hasCredits === false && credits.unlimited === true)
-        && (credits.hasCredits === false || (credits.unlimited !== true
-          && typeof credits.balance === "number" && Number.isFinite(credits.balance) && credits.balance <= 0))) {
-        error.message = "Codex main account reached its usage limit, and the latest credit information reports no spendable balance."
-          + " Allowing credits does not provide a balance. Refresh quotas or wait for the limit to reset.";
-      } else if (observed && now - credits.observedAt > CODEX_CREDITS_FRESHNESS_MS
-        // Check flags/balance at observation time; checking now would always reject this expired snapshot.
-        && hasSpendableCodexCredits(quota, credits.observedAt)) {
-        // This suggests when to check again, never when recovery or a WHAM send is guaranteed.
-        // Worker-private delays remain intact; known upstream/query deadlines cannot be shortened.
-        error.cooldownUntil = Math.max(now + STATE_SWEEP_INTERVAL_MS + WHAM_REQUEST_TIMEOUT_MS,
-          nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${getMainQuotaCredentialGeneration()}`) ?? 0,
-          getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, undefined, now)?.cooldownUntil ?? 0);
-        error.message = "Codex main account reached its usage limit, and its credit balance information has expired."
-          + " Spending credits is enabled, but a fresh balance observation is required. Retry later or refresh quotas in Codex Auth.";
-      } else {
-        error.message = "Codex main account reached its usage limit, and its spendable credit balance cannot be verified."
-          + " Refresh quotas for current balance information or wait for the limit to reset.";
-      }
-      throw error;
-    }
+    if (creditsResetAt !== undefined) throw new CodexMainAccountCreditsOffError(creditsResetAt);
   }
   // Only an admitted request is opencodex's own use of the main account. Counting a refused one
   // would hide outside usage from the warning exactly while the lock is holding.

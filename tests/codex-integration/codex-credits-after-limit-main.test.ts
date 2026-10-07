@@ -16,16 +16,11 @@ import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../../src/codex/a
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import * as mainAccount from "../../src/codex/main-account";
 import * as authCollision from "../../src/codex/auth-collision";
-import { captureMainQuotaWriter, clearMainAccountInfoCache, getMainQuotaCredentialGeneration, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
+import { captureMainQuotaWriter, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, getAccountQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
-import { CODEX_CREDITS_FRESHNESS_MS, hasSpendableCodexCredits, type CodexSpendableCredits } from "../../src/codex/quota-types";
-import { fetchCodexUsage, resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
-import { runMainAccountHardLockRecovery } from "../../src/codex/auth-api/pool-mode-gate";
-import { captureConfigGeneration, STATE_SWEEP_INTERVAL_MS } from "../../src/lib/state-store-sweeper";
-import { WHAM_REQUEST_TIMEOUT_MS } from "../../src/codex/quota-recovery-timing";
-import { mapCodexAuthContextErrorToResponse } from "../../src/server/responses/codex-auth-error";
-import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexQuotaHealthSnapshot, pickLowestUsageCodexAccount, recordCodexUpstreamOutcome } from "../../src/codex/routing";
-import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import { hasSpendableCodexCredits } from "../../src/codex/quota-types";
+import { clearCodexUpstreamHealth, clearThreadAccountMap, pickLowestUsageCodexAccount } from "../../src/codex/routing";
+import { setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -71,31 +66,6 @@ function mainWeekly(percent: number, resetAt: number): void {
     credits: { hasCredits: true, balance: 42.5, observedAt: Date.now() } }, undefined, writer);
 }
 
-/** Seed current full-window policy with a separate, explicitly controlled credit observation. */
-function mainCreditObservation(now: number, credits: CodexSpendableCredits | null): void {
-  clearAccountQuota(MAIN);
-  setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: now + DAY_MS,
-    credits }, undefined, captureMainQuotaWriter(accountId)!);
-  observeMainQuotaCredential(bearer(), accountId);
-}
-
-/** Exercise caller-owned admission and the production HTTP error mapping without auth-file I/O. */
-async function creditRefusal(cfg: OcxConfig, now: number) {
-  const headers = new Headers({ authorization: `Bearer ${bearer()}`, "chatgpt-account-id": accountId });
-  const error = await resolveCodexAuthContext(headers, cfg, "direct", { requestScopedMainCredential: true })
-    .catch(cause => cause);
-  expect(error).toBeInstanceOf(CodexMainAccountCreditsOffError);
-  expect(error.resetAt).toBe(now + DAY_MS);
-  expect(isAccountNeedsReauth(MAIN)).toBe(false);
-  expect(shouldMarkAccountNeedsReauthForCodexAuthFailure(error)).toBe(false);
-  const response = mapCodexAuthContextErrorToResponse(error, { now })!;
-  expect(response.status).toBe(429);
-  const body = await response.json();
-  expect(body.error.type).toBe("rate_limit_error");
-  expect(body.error.message).toBe(error.message);
-  return { error, response };
-}
-
 function addPoolAccount(cfg: OcxConfig): void {
   cfg.codexAccounts = [{ id: POOL, email: "pool@example.test", isMain: false }];
   saveCodexAccountCredential(POOL, {
@@ -115,16 +85,12 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
   setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
-  setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
-  // A new fixture home with the same account/bearer must not inherit another case's recovery generation.
-  clearMainAccountInfoCache();
   resetMainCodexAccountIdentityTrackingForTests();
   clearAccountQuota();
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountNeedsReauth(MAIN);
   clearAccountNeedsReauth(POOL);
-  resetQuotaQueryBackoffForTests();
   mainAccount.setMainAccountPlan(null);
   writeFileSync(join(home, "auth.json"), JSON.stringify({
     tokens: { access_token: bearer(), refresh_token: "fixture-refresh", account_id: accountId },
@@ -134,17 +100,14 @@ beforeEach(() => {
 
 afterEach(() => {
   mock.restore();
-  clearMainAccountInfoCache();
   clearAccountQuota();
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountNeedsReauth(MAIN);
   clearAccountNeedsReauth(POOL);
-  resetQuotaQueryBackoffForTests();
   resetMainCodexAccountIdentityTrackingForTests();
   mainAccount.setMainAccountPlan(null);
   setIcaclsRunnerForTests(null);
-  setAsyncIcaclsRunnerForTests(null);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -208,116 +171,6 @@ test("main credit consent without a fresh balance cannot release a full window",
   } }, undefined, writer);
   await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
     .rejects.toBeInstanceOf(CodexMainAccountCreditsOffError);
-});
-
-test.each([false, true])("only expired spendable evidence gets a short check-again hint (unlimited=%j)", async unlimited => {
-  const now = Date.now();
-  spyOn(Date, "now").mockReturnValue(now);
-  const cfg = config();
-  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
-  mainCreditObservation(now, { observedAt: now - CODEX_CREDITS_FRESHNESS_MS - 1,
-    hasCredits: true, unlimited, ...(unlimited ? {} : { balance: 5 }) });
-  const forbidden = () => { throw new Error("credit refusal read physical main"); };
-  spyOn(authCollision, "readCodexTokens").mockImplementation(forbidden);
-  spyOn(mainAccount, "getMainAccountToken").mockImplementation(forbidden);
-  spyOn(mainAccount, "getValidMainAccountToken").mockImplementation(forbidden);
-  const { error, response } = await creditRefusal(cfg, now);
-  expect(error.cooldownUntil).toBe(now + STATE_SWEEP_INTERVAL_MS + WHAM_REQUEST_TIMEOUT_MS);
-  expect(response.headers.get("Retry-After")).toBe("68");
-  expect(error.message).toContain("information has expired");
-  expect(error.message).not.toContain("spending ChatGPT credits is off");
-});
-
-test.each(["consent-off", "no-credits", "zero-balance", "spending-off", "overage"])(
-  "%s retains the real reset deadline and reports the actual blocker", async condition => {
-    const now = Date.now();
-    spyOn(Date, "now").mockReturnValue(now);
-    const cfg = config();
-    setCodexAccountCreditsAfterLimit(cfg, MAIN, condition !== "consent-off");
-    mainCreditObservation(now, { observedAt: now, hasCredits: condition !== "no-credits",
-      balance: condition === "zero-balance" ? 0 : 5, unlimited: false,
-      allowed: condition !== "spending-off", overageLimitReached: condition === "overage" });
-    const { error, response } = await creditRefusal(cfg, now);
-    expect(error.cooldownUntil).toBe(now + DAY_MS);
-    expect(response.headers.get("Retry-After")).toBe(String(DAY_MS / 1000));
-    expect(error.message).toContain(condition === "consent-off" ? "spending ChatGPT credits is off"
-      : condition === "spending-off" || condition === "overage" ? "spending restriction" : "no spendable balance");
-    expect(error.message).not.toContain("information has expired");
-  });
-
-test.each(["missing", "balance-missing", "flags-missing", "future", "invalid-time", "negative-time", "invalid-balance", "inconsistent"])(
-  "%s evidence stays unverified rather than claiming expired spendable funds", async condition => {
-    const now = Date.now();
-    spyOn(Date, "now").mockReturnValue(now);
-    const cfg = config();
-    setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
-    const credits: CodexSpendableCredits = { observedAt: now - CODEX_CREDITS_FRESHNESS_MS - 1,
-      hasCredits: true, balance: 5 };
-    if (condition === "balance-missing") delete credits.balance;
-    if (condition === "flags-missing") delete credits.hasCredits;
-    if (condition === "future") credits.observedAt = now + 60_000;
-    if (condition === "invalid-time") credits.observedAt = Number.NaN;
-    if (condition === "negative-time") credits.observedAt = -1;
-    if (condition === "invalid-balance") credits.balance = Number.NaN;
-    if (condition === "inconsistent") { credits.hasCredits = false; credits.unlimited = true; }
-    mainCreditObservation(now, condition === "missing" ? null : credits);
-    const { error, response } = await creditRefusal(cfg, now);
-    expect(error.cooldownUntil).toBe(now + DAY_MS);
-    expect(response.headers.get("Retry-After")).toBe(String(DAY_MS / 1000));
-    expect(error.message).toContain("cannot be verified");
-    expect(error.message).not.toContain("information has expired");
-  });
-
-test.each([true, false])("the short hint respects only the current WHAM credential's Retry-After (%j)", async sameCredential => {
-  const now = Date.now();
-  spyOn(Date, "now").mockReturnValue(now);
-  const cfg = config();
-  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
-  mainCreditObservation(now, { observedAt: now - CODEX_CREDITS_FRESHNESS_MS - 1, hasCredits: true, balance: 5 });
-  spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 429, headers: { "Retry-After": "900" } }));
-  const generation = getMainQuotaCredentialGeneration() + (sameCredential ? 0 : 1);
-  const query = await fetchCodexUsage(`main:${captureConfigGeneration()}:${generation}`, {});
-  if (!query || query.kind !== "owner") throw new Error("fixture WHAM query was not dispatched");
-  query.settle(false);
-  const { error, response } = await creditRefusal(cfg, now);
-  expect(error.cooldownUntil).toBe(now + (sameCredential ? 900_000 : 68_000));
-  expect(response.headers.get("Retry-After")).toBe(sameCredential ? "900" : "68");
-});
-
-test("a real account-wide cooldown is never shortened by the stale-credit hint", async () => {
-  const now = Date.now();
-  spyOn(Date, "now").mockReturnValue(now);
-  const cfg = config();
-  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
-  mainCreditObservation(now, { observedAt: now - CODEX_CREDITS_FRESHNESS_MS - 1, hasCredits: true, balance: 5 });
-  recordCodexUpstreamOutcome(cfg, MAIN, 429, { now, retryAfter: "900" });
-  const deadline = getCodexQuotaHealthSnapshot(MAIN, undefined, now)!.cooldownUntil!;
-  const { error, response } = await creditRefusal(cfg, now);
-  expect(error.cooldownUntil).toBe(deadline);
-  expect(response.headers.get("Retry-After")).toBe(String(Math.ceil((deadline - now) / 1000)));
-});
-
-test.each([true, false])("a later WHAM200 with credits empty or omitted still refuses (%j)", async empty => {
-  let now = Math.floor(Date.now() / 1000) * 1000;
-  spyOn(Date, "now").mockImplementation(() => now);
-  const cfg = config();
-  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
-  const observedAt = now - CODEX_CREDITS_FRESHNESS_MS - 1;
-  mainCreditObservation(now, { observedAt, hasCredits: true, balance: 5 });
-  expect((await creditRefusal(cfg, now)).response.headers.get("Retry-After")).toBe("68");
-  const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ plan_type: "plus",
-    rate_limit: { primary_window: { used_percent: 100, limit_window_seconds: 604_800,
-      reset_at: Math.floor((now + DAY_MS) / 1000) }, secondary_window: null, tertiary_window: null },
-    ...(empty ? { credits: { has_credits: false, unlimited: false, balance: 0 } } : {}) }));
-  await runMainAccountHardLockRecovery(cfg);
-  expect(fetchSpy).toHaveBeenCalledTimes(1);
-  const { error, response } = await creditRefusal(cfg, now);
-  expect(error.message).toContain(empty ? "no spendable balance" : "information has expired");
-  expect(response.headers.get("Retry-After")).toBe(empty ? String(DAY_MS / 1000) : "68");
-  if (!empty) expect(getAccountQuota(MAIN)?.credits?.observedAt).toBe(observedAt);
-  now += 68_000;
-  await runMainAccountHardLockRecovery(cfg);
-  expect(fetchSpy).toHaveBeenCalledTimes(1);
 });
 
 test("by default a full main login is refused as a cooldown that names its reset", async () => {

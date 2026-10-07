@@ -479,6 +479,8 @@ false. Exact-account and Direct routes are unchanged.
 
 ## Main-account policy observations
 
+Opted-in main-account credit renewal follows the [spendable credit contract](openai-tiers.md#spendable-codex-credits). The existing background sweep prepares a token before WHAM, rechecks eligibility, and uses a passive probe that neither sets nor clears needs-reauth, including after identity retries. Other probes keep their existing auth behavior.
+
 The main-account admission policy defaults to 90% for short windows and 98% for long windows;
 `codexMainAccountHardLockThresholds` permits ordered integer thresholds from 80 through 100.
 Policy evidence retention uses the minimum configurable 80%, so a partial update or elapsed reset
