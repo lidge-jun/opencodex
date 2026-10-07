@@ -499,7 +499,7 @@ unvalidated Bun builds is unchanged (`src/lib/bun-stream-caps.ts`).
 
 ## Startup safety
 
-Startup safety credits macOS `desktop` protection only after matching the durable app ownership, enabled and loaded login item, and live app-to-bundled-proxy process relationship. This does not claim an independently installed CLI service. Missing or stale evidence remains at risk. The durable desktop claim remains visible when identity, login registration, or supervision fails; service/shim install and repair controls and their copyable commands stay disabled until ownership changes. Recovery guidance asks the user to reopen OpenCodex and check Start at Login. Compiled startup probes use the standalone-aware self-launch argument builder.
+Startup safety credits macOS and Linux `desktop` protection only after matching the durable app ownership, enabled and loaded login item (Linux: enabled XDG autostart entry), and live app-to-bundled-proxy process relationship. This does not claim an independently installed CLI service. Missing or stale evidence remains at risk. The durable desktop claim remains visible when identity, login registration, or supervision fails; service/shim install and repair controls and their copyable commands stay disabled until ownership changes. Recovery guidance asks the user to reopen OpenCodex and check Start at Login. Compiled startup probes use the standalone-aware self-launch argument builder.
 
 **Startup safety** is reachable by route (`/#startup`) and rendered by the app, but it is not a
 sidebar entry: it is entered from the dashboard's startup-state row, which links there whether the

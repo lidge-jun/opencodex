@@ -19,6 +19,7 @@ import {
   cursorToolWireName,
   isGenericToolUseCountDemoPrompt,
   nonEmptyShellBridgeCommandFromArgs,
+  responsesToolNameFromCursorWire,
 } from "../../../src/adapters/cursor/tool-definitions";
 import type { OcxTool } from "../../../src/types";
 
@@ -823,6 +824,83 @@ describe("Cursor code mode tool guidance", () => {
     expect(note).not.toContain("is Codex code mode");
     expect(note).not.toContain("V8 isolate");
     expect(note).not.toContain("Host contract for the nested helpers");
+  });
+
+  test("preserves Claude Code client bare tool wire names when no Codex shell bridge is advertised", () => {
+    const claudeTools: OcxTool[] = [
+      { name: "Bash", description: "Run a bash command", parameters: { type: "object", properties: { command: { type: "string" } } } },
+      { name: "Read", description: "Read a file", parameters: {} },
+      { name: "Edit", description: "Edit a file", parameters: {} },
+      { name: "Write", description: "Write a file", parameters: {} },
+      { name: "Grep", description: "Search file contents", parameters: {} },
+      { name: "Glob", description: "Find files by glob", parameters: {} },
+      { name: "Task", description: "Spawn an agent task", parameters: {} },
+      { name: "GetDynamicTools", description: "Get dynamic tools", parameters: {} },
+    ];
+
+    for (const tool of claudeTools) {
+      expect(cursorToolWireName(tool, claudeTools)).toBe(tool.name);
+    }
+
+    const defs = buildCursorToolDefinitions(claudeTools);
+    expect(defs.map(tool => tool.toolName)).toEqual([
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "Grep",
+      "Glob",
+      "Task",
+      "GetDynamicTools",
+    ]);
+
+    // When no shell bridge is advertised, guidance should not warn about neighboring-agent tool names or ocx_client_*
+    const note = buildCursorToolGuidanceSystemNote(claudeTools);
+    expect(note).toBeDefined();
+    expect(note).not.toContain("neighboring-agent tool names");
+    expect(note).not.toContain("ocx_client_");
+  });
+
+  test("aliases client tools when Codex shell bridge is present in catalog", () => {
+    const toolsWithBridge: OcxTool[] = [
+      { name: "exec_command", description: "Codex shell", parameters: {} },
+      { name: "Glob", description: "Client tool", parameters: {} },
+      { name: "Read", description: "Client tool", parameters: {} },
+    ];
+
+    expect(cursorToolWireName({ name: "Glob" }, toolsWithBridge)).toBe("ocx_client_Glob");
+    expect(cursorToolWireName({ name: "Read" }, toolsWithBridge)).toBe("ocx_client_Read");
+    expect(cursorToolWireName({ name: "exec_command" }, toolsWithBridge)).toBe("exec_command");
+
+    const defs = buildCursorToolDefinitions(toolsWithBridge);
+    expect(defs.map(tool => tool.toolName)).toEqual([
+      "exec_command",
+      "ocx_client_Glob",
+      "ocx_client_Read",
+    ]);
+
+    const note = buildCursorToolGuidanceSystemNote(toolsWithBridge);
+    expect(note).toBeDefined();
+    if (!note) throw new Error("Expected Cursor tool guidance note");
+    expect(note).toContain("`ocx_client_Glob`");
+    expect(note).toContain("`ocx_client_Read`");
+    expect(note).toContain("neighboring-agent tool names");
+
+    // Both bare and prefixed response names map back to Read
+    const nameMap = new Map<string, string>([
+      [cursorToolWireName({ name: "Read" }, toolsWithBridge), "Read"],
+    ]);
+    expect(responsesToolNameFromCursorWire("ocx_client_Read", nameMap)).toBe("Read");
+    expect(responsesToolNameFromCursorWire("Read", nameMap)).toBe("Read");
+  });
+
+  test("preserves neighboring-agent tool warning for MCP-only catalogs without Claude bare tools", () => {
+    const mcpCatalog: OcxTool[] = [
+      { name: "read_file", namespace: "mcp__fs", description: "Read file", parameters: {} },
+    ];
+    const note = buildCursorToolGuidanceSystemNote(mcpCatalog);
+    expect(note).toBeDefined();
+    expect(note).toContain("neighboring-agent tool names");
   });
 });
 

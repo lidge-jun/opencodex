@@ -297,7 +297,10 @@ in such a message are always checked, and only a permanent removal withdraws a d
 Ordinary custom schemas, arguments and historical tool
 results remain opaque. Provider-only and unrestricted admissions retain their existing scope.
 `tests/claude-integration/messages-native-scope.test.ts` covers refusal with zero upstream sends
-and byte-preserving allowed tool definitions through both credential lanes.
+and byte-preserving allowed tool definitions through both credential lanes. Temporary declarations append to checker-owned lists instead of copying
+the accumulated prefix, so collection work is linear in the declarations visited. Permanent
+replacement, withdrawal and denied-shadow checks remain unchanged; this is not a request-size
+or wall-time guarantee.
 
 `buildAnthropicMessagesPassthroughRequest` in `src/adapters/anthropic/passthrough.ts` builds the
 request from that body: the top-level allowlist (`model, messages, system, max_tokens, metadata,

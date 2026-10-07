@@ -454,6 +454,18 @@ endpoint can never restart. Focused coverage is `tests/update/update-stop-classi
 
 ## Restart handoff
 
+During drain, `src/server/index.ts` rejects new data-plane work with HTTP 503 and
+an explicit JSON envelope: `error.type` is `server_error`, `error.code` is
+`server_restarting`, and `error.message` is "OpenCodex is restarting; retry this request."
+The response keeps `Content-Type: application/json`, `Retry-After: 5`, and the
+receiving listener's CORS policy, including on the unauthenticated loopback listener.
+Codex maps a 503 with `server_is_overloaded` to `ServerOverloaded` ("Selected model is at
+capacity"); current Codex retries it only when retry advice survives mapping, and older
+clients do not retry it at all. `server_restarting` falls through to retryable
+`UnexpectedStatus` in either case and never reports a restart as model capacity. This drain-only
+response bypasses the shared provider-overload mapping in `src/lib/errors.ts`.
+`tests/codex-integration/issue-452-empty-503.test.ts` pins its body and both listeners' CORS.
+
 A dashboard drain-and-restart (`src/server/management/system-restart.ts`, which is also the restart
 after a join into a Child) and the client runtime's standalone recycle (`src/client/runtime.ts`)
 replace their process through `src/server/restart-replacement.ts`. Every replacement `ocx start`
@@ -509,6 +521,6 @@ src/update/async-check.ts uses the existing owner-bound registry target with a b
 
 The desktop badge snapshot in src/update/desktop-badge.ts is process-local display state keyed by a Tauri session id. A 60-second shell heartbeat renews receipt time; entries expire after 180 seconds and the store retains at most 32 sessions. It is separate from the package version cache and from the updater job/ownership transaction. A proxy restart reports unknown until a bound desktop shell republishes; no update installation can be authorized by this snapshot.
 
-MacOS desktop startup diagnostics use `src/service/desktop-startup.ts` to read the ownership record, launchd login registration and exact parent/child executable paths without mutating them. A durable desktop claim survives a failed identity or supervision check; only fresh matching identity, enabled login registration, and live supervision grant protection. Ownership and PID are re-read before crediting the result. The startup-health subprocess uses `selfLaunchArgv` to support both source and compiled entrypoints.
+Desktop startup diagnostics use `src/service/desktop-startup.ts` to read the ownership record, the login registration (macOS: launchd; Linux: the `~/.config/autostart/OpenCodex.desktop` entry that auto-launch writes, credited only when `XDG_CONFIG_HOME` is unset or `~/.config`; it must launch an unquoted absolute `opencodex-desktop` with exactly `--autostart`, without conditional keys, and not be hidden or disabled) and exact parent/child executable paths (Linux: `/proc/<pid>/exe` and the parent pid from `/proc/<pid>/stat`) without mutating them. A durable desktop claim survives a failed identity or supervision check; only fresh matching identity, enabled login registration, and live supervision grant protection. On macOS, ownership and PID are re-read before crediting the result; on Linux, the complete evidence chain is read twice and both reads must agree. The startup-health subprocess uses `selfLaunchArgv` to support both source and compiled entrypoints.
 
 On Linux, a dashboard update worker started from the systemd user service is launched through an executable regular file at a trusted absolute path — `/usr/bin/systemd-run`, `/bin/systemd-run`, `/usr/local/bin/systemd-run` (local installs), or `/run/current-system/sw/bin/systemd-run` (the NixOS layout) — with `--user --scope --quiet --collect` (`src/update/worker-launch.ts`), so it leaves the service cgroup before the updater stops `opencodex-proxy.service`; the default `KillMode=control-group` otherwise kills it with the proxy (#5750). The inherited `PATH` is never searched, and each candidate's resolved target — plus every ancestor directory able to substitute it — must be root-owned and not group/world-writable: a trusted-path symlink into a user-replaceable directory is skipped, as is a group-writable `/usr/local/bin`, rather than exec'd under the service account. Candidates are tried in order and a path whose no-op scope probe fails falls through to the next trusted path; the probe applies only when `INVOCATION_ID` is set, and every other case keeps the plain detached spawn. The management route resolves the launcher with `resolveSystemdRunAsync` before spawning, so first-request probing overlaps other work instead of blocking the event loop for up to twenty seconds. `--scope` moves `systemd-run` itself into the scope and then execs the worker, so the recorded PID is the worker's (`tests/update/update-worker-launch.test.ts`).

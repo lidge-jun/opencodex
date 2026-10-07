@@ -524,30 +524,44 @@ export function mapOcxMessagesToDevin(
   if (system) items.push({ role: "system", content: system });
 
   let previousToolResult: ChatHistoryItem | undefined;
+  let textChunks: string[] | undefined;
+  const flushText = () => {
+    if (previousToolResult && textChunks) previousToolResult.content = textChunks.join("\n\n");
+    textChunks = undefined;
+  };
   for (const message of parsed.context.messages) {
     // Original-message adjacency matters even when an intervening message maps to nothing.
-    if (message.role !== "toolResult") previousToolResult = undefined;
+    if (message.role !== "toolResult") {
+      flushText();
+      previousToolResult = undefined;
+    }
     const mapped = mapOneMessage(message, parsed.modelId, options);
     if (!mapped) continue;
     if (mapped.role === "tool") {
       if (previousToolResult && previousToolResult.tool_call_id === mapped.tool_call_id) {
         const previous = previousToolResult;
-        previous.content = typeof previous.content === "string" && typeof mapped.content === "string"
-          ? `${previous.content}\n\n${mapped.content}`
-          : [
-              ...(typeof previous.content === "string"
-                ? [{ type: "text" as const, text: previous.content }] : previous.content),
-              { type: "text", text: "\n\n" },
-              ...(typeof mapped.content === "string"
-                ? [{ type: "text" as const, text: mapped.content }] : mapped.content),
-            ];
+        if (textChunks && typeof mapped.content === "string") {
+          textChunks.push(mapped.content);
+        } else {
+          flushText();
+          // mapOneMessage owns these wire arrays; append without recopying their prefix.
+          const parts: ContentPart[] = typeof previous.content === "string"
+            ? [{ type: "text", text: previous.content }] : previous.content;
+          parts.push({ type: "text", text: "\n\n" });
+          if (typeof mapped.content === "string") parts.push({ type: "text", text: mapped.content });
+          else for (const part of mapped.content) parts.push(part);
+          previous.content = parts;
+        }
         if (mapped.is_error) previous.is_error = true;
         continue;
       }
+      flushText();
       previousToolResult = mapped;
+      textChunks = typeof mapped.content === "string" ? [mapped.content] : undefined;
     }
     items.push(mapped);
   }
+  flushText();
   return items;
 }
 
@@ -795,7 +809,7 @@ export function createDevinAdapter(
         // An admitted HTTP turn owns globally shared capacity until this call
         // emits. Without an explicit wait allowance, preserve the typed reset
         // delay in generated diagnostic wording and return immediately.
-        const signedMessages = mapOcxMessagesToDevin(parsed);
+        const signedMessages = messages; // Reuse the history already mapped above.
         // A Claude signature is replayed because it is what carries the reasoning into this
         // turn, but Cognition streams Claude's thinking as a summary the signature does not
         // cover, and some replays are refused with invalid_argument before any output. That

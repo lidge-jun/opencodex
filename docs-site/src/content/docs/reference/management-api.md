@@ -662,6 +662,12 @@ whether to star the repository.
 
 ### System lifecycle
 
+During a restart drain, new data-plane requests receive HTTP 503 with JSON
+`error.type: "server_error"`, `error.code: "server_restarting"`, and the message
+"OpenCodex is restarting; retry this request." Responses retain `Retry-After: 5`
+and the receiving listener's CORS policy. This code lets every Codex version retry
+the 503 without reporting model capacity; provider overload errors retain their separate mapping.
+
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/system/memory` | Return scalar process, heap, stream, response-state, watchdog, and active-turn metrics. Response-state diagnostics include spill-write status, consecutive failures, fixed privacy-safe failure class, and last failure/success timestamps. `spillLastWriteFailureOrigin` is `retry_returned_timeout`, `timeout_memo_refusal`, or null; cumulative `spillAclRetryReturnedTimeouts` and `spillAclTimeoutMemoRefusals` count terminal failed publications. See [Windows spill diagnostics](/troubleshooting/windows-memory/) for process-local semantics. Raw errors and paths are never returned. | — |

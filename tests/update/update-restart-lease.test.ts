@@ -219,14 +219,27 @@ async function serviceManagerChildAuthority(box: Sandbox): Promise<string> {
   return paths.at(-1)!;
 }
 
+/**
+ * A real lease holder in a separate process. It acquires through the lease module alone, on the
+ * paths this process resolved for the sandbox (sandbox() already proved them contained), and
+ * re-checks containment before it touches anything.
+ *
+ * It deliberately does not re-resolve them by importing src/service/state.ts. That import pulls
+ * in the whole config graph (~460 modules, ~1 s of CPU in a cold Bun child), and on hosted
+ * Windows runners a cold import of that size has a multi-second I/O-latency tail: holders were
+ * measured spending 8 s of wall time on ~0.6 s of CPU inside it, which is the acknowledgment
+ * budget below (B8, dev f924820652). The holder's job is to hold the real lease; that a
+ * service-manager child resolves the same authority from its stored environment is proven
+ * separately by serviceManagerChildAuthority().
+ */
 function spawnHolder(box: Sandbox, behavior: "release" | "ignore-eof" | "missing-ack" = "release"): FixtureChild {
   const ready = join(box.root, "holder-ready.json");
   const released = join(box.root, "holder-released");
+  const statePaths = serviceStatePaths();
   const child = trackChild(box, Bun.spawn([process.execPath, "-e", `
     const { writeFileSync, renameSync } = await import("node:fs");
     const { relative, isAbsolute, sep } = await import("node:path");
-    const { serviceStatePaths } = await import(${JSON.stringify(SERVICE_STATE_MODULE_URL)});
-    const paths = serviceStatePaths();
+    const paths = ${JSON.stringify(statePaths)};
     for (const candidate of paths) {
       const rel = relative(${JSON.stringify(box.root)}, candidate);
       if (!rel || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) throw new Error("holder authority escaped");
