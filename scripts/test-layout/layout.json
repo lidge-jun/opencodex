@@ -385,7 +385,7 @@
     "claude-first-party-agent-sync.test.ts": "claude-integration",
     "claude-first-party-union.test.ts": "claude-integration",
     "claude-gateway-cache.test.ts": "claude-integration",
-    "claude-inbound-cache-stabilize.test.ts": "claude-integration",
+    "claude-inbound-cache-stabilize.test.ts": "claude-integration", "claude-inbound-token-footer.test.ts": "claude-integration",
     "claude-inbound-debug.test.ts": "claude-integration",
     "claude-inbound.test.ts": "claude-integration", "claude-inbound-tool-reference.test.ts": "claude-integration",
     "claude-output-schema-strict.test.ts": "claude-integration",

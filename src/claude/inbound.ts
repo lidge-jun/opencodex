@@ -445,6 +445,7 @@ function translateAnthropicRequest(
       // a matching suffix or metadata.user_id.
       const stabilized = stabilizeClaudeInstructionsForPromptCache(joinedSystem);
       if (stabilized.instructions) body.instructions = stabilized.instructions;
+      // Token footers are dropped; append nothing if no other notice remains.
       if (stabilized.dynamicNotice) {
         input.push({
           type: "message",
