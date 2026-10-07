@@ -54,8 +54,9 @@ function ReasoningRetentionControls({ apiBase }: { apiBase: string }) {
       pending.current = null;
     };
   }, [load]);
-  const valid = percent.trim() !== "" && Number.isFinite(Number(percent)) && Number(percent) > 0 && Number(percent) <= 100
-    && tokens.trim() !== "" && Number.isSafeInteger(Number(tokens)) && Number(tokens) > 0;
+  const validPercent = percent.trim() !== "" && Number.isFinite(Number(percent)) && Number(percent) > 0 && Number(percent) <= 100;
+  const validTokens = tokens.trim() !== "" && Number.isSafeInteger(Number(tokens)) && Number(tokens) > 0;
+  const valid = validPercent && validTokens;
   const changed = Number(percent) !== (saved?.maxContextPercent ?? 20) || Number(tokens) !== (saved?.maxTokens ?? 100000);
   const save = async (reset = false) => {
     if (pending.current || saved === undefined || (!reset && !valid)) return;
@@ -83,15 +84,19 @@ function ReasoningRetentionControls({ apiBase }: { apiBase: string }) {
     <p className="muted setting-hint">{t("reasoningRetention.description")}</p>
     <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
       <label className="field-label" htmlFor="reasoning-retention-percent">{t("reasoningRetention.percent")}
-        <input id="reasoning-retention-percent" className="input" type="number" min="0" max="100" step="any" value={percent} disabled={disabled} onInput={e => { setPercent(e.currentTarget.value); setFeedback(null); }} />
+        <input id="reasoning-retention-percent" className="input" type="number" min="0" max="100" step="any" value={percent} disabled={disabled}
+          aria-invalid={!validPercent || undefined} aria-describedby={!validPercent ? "reasoning-retention-error" : undefined}
+          onInput={e => { setPercent(e.currentTarget.value); setFeedback(null); }} />
       </label>
       <label className="field-label" htmlFor="reasoning-retention-tokens">{t("reasoningRetention.tokens")}
-        <input id="reasoning-retention-tokens" className="input" type="number" min="1" step="1" value={tokens} disabled={disabled} onInput={e => { setTokens(e.currentTarget.value); setFeedback(null); }} />
+        <input id="reasoning-retention-tokens" className="input" type="number" min="1" step="1" value={tokens} disabled={disabled}
+          aria-invalid={!validTokens || undefined} aria-describedby={!validTokens ? "reasoning-retention-error" : undefined}
+          onInput={e => { setTokens(e.currentTarget.value); setFeedback(null); }} />
       </label>
       <button type="button" className="btn btn-primary" disabled={disabled || !valid || !changed} onClick={() => { void save(); }}>{t("common.save")}</button>
       <button type="button" className="btn btn-ghost" disabled={disabled || (saved === null && !changed)} onClick={() => { void save(true); }}>{t("reasoningRetention.reset")}</button>
     </div>
-    {!valid && <div className="notice notice-err" role="alert">{t("reasoningRetention.invalid")}</div>}
+    {!valid && <div id="reasoning-retention-error" className="notice notice-err" role="alert">{t("reasoningRetention.invalid")}</div>}
     {loadError && <div className="notice notice-err" role="alert">{t("reasoningRetention.loadFailed")} <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(); }}>{t("common.retry")}</button></div>}
     {feedback === "failed" && <div className="notice notice-err" role="alert">{t("reasoningRetention.saveFailed")}</div>}
     {feedback === "saved" && <div className="muted setting-hint" role="status">{t("reasoningRetention.saved")}</div>}

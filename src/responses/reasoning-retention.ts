@@ -118,11 +118,13 @@ export function applyReasoningRetention(
   // absolute cap alone stands guard.
   const windowKnown = typeof window === "number" && Number.isInteger(window) && window > 0;
   const limit = windowKnown ? Math.min(Math.floor(window * (percent / 100)), cap) : cap;
-  const tokens = estimateTokens(texts.join("\n"));
+  const framedTexts = texts.map(text => RETAINED_PREFIX + text + RETAINED_SUFFIX);
+  // Budget the historical context that is actually replayed, including every block's frame.
+  const tokens = estimateTokens(framedTexts.join("\n"));
   if (tokens <= limit) return {
     input: retained,
-    retainedReasoning: texts.map(text => ({ type: "message", role: "user",
-      content: [{ type: "input_text", text: RETAINED_PREFIX + text + RETAINED_SUFFIX }] })),
+    retainedReasoning: framedTexts.map(text => ({ type: "message", role: "user",
+      content: [{ type: "input_text", text }] })),
   };
 
   mkdirSync(options.archiveDir, { recursive: true, mode: 0o700 });
@@ -152,9 +154,9 @@ export function applyReasoningRetention(
 export function appendRetentionNotice(summary: string, archived: ReasoningArchive | undefined): string {
   if (!archived) return summary;
   const limitDescription = archived.windowKnown === false
-    ? "上下文窗口未知，本次按绝对上限 " + (archived.cap ?? "未知") + " tokens 计算"
-    : "超过上下文窗口 " + archived.percent + "% 对应的保留阈值（本次有效上限 " + (archived.cap ?? "未知") + " tokens）";
-  return summary + "\n\n[推理保留提示] 本会话的思维链约 " + archived.tokens + " tokens，" + limitDescription
-    + "，已归档到本地文件 " + archived.path
-    + "。压缩摘要仅覆盖结论；需要完整推理过程时读取该文件。";
+    ? "absolute cap of " + (archived.cap ?? "unknown") + " tokens (context window unknown)"
+    : archived.percent + "% of the context window (effective cap: " + (archived.cap ?? "unknown") + " tokens)";
+  return summary + "\n\n[reasoning retention notice] Reasoning of ~" + archived.tokens + " tokens exceeded " + limitDescription
+    + " and was archived locally at " + archived.path
+    + ". This summary covers conclusions only; read that file for the full reasoning.";
 }

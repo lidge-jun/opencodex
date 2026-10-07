@@ -87,6 +87,26 @@ test("invalid numeric limits disable save and expose validation", async () => {
   }
   expect(writes).toEqual([]);
 });
+test.each([["percent", "0", "tokens", "12.5"], ["tokens", "1.5", "percent", "50000"]])(
+  "only invalid %s is associated with the validation alert", async (id, invalidValue, otherId, validValue) => {
+    await render();
+    await change(id!, invalidValue!);
+    const invalid = container.querySelector<HTMLInputElement>(`#reasoning-retention-${id}`)!;
+    const valid = container.querySelector<HTMLInputElement>(`#reasoning-retention-${otherId}`)!;
+    expect(invalid.getAttribute("aria-invalid")).toBe("true");
+    expect(invalid.getAttribute("aria-describedby")).toBe("reasoning-retention-error");
+    expect(valid.getAttribute("aria-invalid")).toBeNull();
+    expect(valid.getAttribute("aria-describedby")).toBeNull();
+    expect(container.querySelector("#reasoning-retention-error")?.getAttribute("role")).toBe("alert");
+    expect(button("Save").disabled).toBe(true);
+    await change(id!, validValue!);
+    expect(invalid.getAttribute("aria-invalid")).toBeNull();
+    expect(invalid.getAttribute("aria-describedby")).toBeNull();
+    expect(container.querySelector("#reasoning-retention-error")).toBeNull();
+    expect(button("Save").disabled).toBe(false);
+    expect(writes).toEqual([]);
+  },
+);
 test("save failures keep edits and load failures can retry", async () => {
   failLoad = true; await render();
   expect(button("Save").disabled).toBe(true);

@@ -77,11 +77,41 @@ describe("applyReasoningRetention", () => {
     const text = "  exact\n原文  ";
     const input = [{ type: "reasoning", summary: [{ type: "summary_text", text: "display-only" }],
       encrypted_content: encodeReasoningEnvelope({ txt: text, sig: "provider-signature", krc: "opaque" }) }];
-    const result = applyReasoningRetention(input, { archiveDir: setup(), maxTokens: estimateTokens(text) });
+    // The 137-character frame plus 10 Latin and two CJK characters estimates to 39 tokens.
+    const result = applyReasoningRetention(input, { archiveDir: setup(), maxTokens: 39 });
     expect(collectReasoningTexts(result.retainedReasoning)).toEqual([text]);
     expect(JSON.stringify(result.retainedReasoning)).not.toContain("provider-signature");
     expect(result.archived).toBeUndefined();
-    expect(applyReasoningRetention(input, { archiveDir: dir, maxTokens: estimateTokens(text) - 1 }).archived).toBeDefined();
+    expect(applyReasoningRetention(input, { archiveDir: dir, maxTokens: 38 }).archived).toBeDefined();
+  });
+
+  test.each([1_000, undefined])("many short reasoning blocks include each retained frame in the budget (window=%s)", contextWindow => {
+    const texts = Array<string>(100).fill("x");
+    const result = applyReasoningRetention(texts.map(reasoningItem), {
+      archiveDir: setup(), contextWindow, maxContextPercent: 20, maxTokens: 100,
+    });
+    expect(result.retainedReasoning).toBeUndefined();
+    // 100 frames of 138 Latin characters plus 99 separators: ceil(13899 / 4) = 3475.
+    expect(result.archived?.tokens).toBe(3_475);
+    expect(result.archived?.cap).toBe(100);
+    expect(readFileSync(result.archived!.path, "utf-8")).toBe(texts.join("\n\n---\n\n"));
+  });
+
+  test.each([true, false])("framed reasoning fits the inclusive cap and is not framed twice on replay (known window=%s)", windowKnown => {
+    const archiveDir = setup();
+    // The protocol frame has 137 Latin characters: three payload characters make 35 tokens.
+    const limits = windowKnown ? { contextWindow: 175, maxTokens: 100 } : { maxTokens: 35 };
+    const result = applyReasoningRetention([reasoningItem("xxx")], { archiveDir, ...limits });
+    expect(result.archived).toBeUndefined();
+    expect(collectReasoningTexts(result.retainedReasoning)).toEqual(["xxx"]);
+    expect(estimateTokens(result.retainedReasoning![0]!.content[0]!.text)).toBe(35);
+    const repeated = applyReasoningRetention(result.retainedReasoning, { archiveDir, ...limits });
+    expect(repeated).toEqual(result);
+    const smallerLimits = windowKnown ? { contextWindow: 170, maxTokens: 100 } : { maxTokens: 34 };
+    const over = applyReasoningRetention(result.retainedReasoning, { archiveDir, ...smallerLimits });
+    expect(over.archived?.cap).toBe(34);
+    expect(over.archived?.tokens).toBe(35);
+    expect(readFileSync(over.archived!.path, "utf-8")).toBe("xxx");
   });
 
   test("archive write failure leaves original input intact for a client retry", () => {
@@ -99,7 +129,7 @@ describe("applyReasoningRetention", () => {
     const result = applyReasoningRetention(input, { archiveDir, maxContextPercent: 20 });
     expect(result.archived).toBeDefined();
     expect(result.archived!.cap).toBe(100_000);
-    expect(appendRetentionNotice("summary", result.archived)).toContain("上下文窗口未知");
+    expect(appendRetentionNotice("summary", result.archived)).toContain("context window unknown");
   });
 
   test.skipIf(process.platform === "win32")("new archives are private to the user on POSIX", () => {
@@ -202,15 +232,20 @@ describe("appendRetentionNotice", () => {
     expect(appendRetentionNotice("summary", undefined)).toBe("summary");
   });
 
-  test("appends a visible notice naming the archive path and the share", () => {
+  test.each([true, false])("appends an English notice with the archive path and numeric limits (known window=%s)", windowKnown => {
     const text = appendRetentionNotice("summary", {
       path: "/tmp/archive.md",
       tokens: 5000,
       percent: 20,
+      cap: 2000,
+      windowKnown,
     });
-    expect(text).toContain("summary");
+    expect(text).toStartWith("summary\n\n[reasoning retention notice]");
     expect(text).toContain("/tmp/archive.md");
-    expect(text).toContain("20%");
-    expect(text).toContain("本次有效上限");
+    expect(text).toContain("5000 tokens");
+    expect(text).toContain("2000 tokens");
+    expect(text).toContain(windowKnown ? "20% of the context window" : "context window unknown");
+    expect(text).toContain("read that file for the full reasoning");
+    expect(text).not.toMatch(/[\u4e00-\u9fff]/);
   });
 });
