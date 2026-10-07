@@ -1060,7 +1060,7 @@
     "kiro-images.test.ts": "providers/kiro",
     "kiro-leased-responses.test.ts": "providers/kiro",
     "kiro-model-catalog.test.ts": "providers/kiro", "kiro-model-preference.test.ts": "providers/kiro",
-    "kiro-oauth.test.ts": "providers/kiro",
+    "kiro-oauth.test.ts": "providers/kiro", "oauth-kiro-refresh-attention.test.ts": "oauth",
     "kiro-pool-load-settings.test.ts": "providers/kiro",
     "kiro-pool-rank.test.ts": "providers/kiro",
     "kiro-reasoning-roundtrip.test.ts": "providers/kiro",

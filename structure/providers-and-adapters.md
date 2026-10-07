@@ -114,6 +114,16 @@ wire type for a known field or a varint longer than ten bytes, keep last-good; a
 with nothing measurable is authoritative-empty. Only Devin's credential host extends its quota
 cache identity; generic OAuth pause still suppresses per-account probes.
 
+Kiro AWS SSO token refresh in `src/oauth/kiro.ts` retains HTTP 400 `invalid_request` as
+refresh-attention evidence separate from terminal grant errors. Matching rotated CLI credentials
+are tried before the failure reaches `src/oauth/index.ts`. `src/oauth/store.ts` persists the
+failed credential generation under its mutation lock, respecting replacement, config reconciliation,
+and operator pause. Once that generation's access token expires, account summaries project
+`needsReauth: true` and the active login projects `loggedIn: false`. The internal terminal flag
+stays clear so a later refresh remains eligible; successful refresh or credential replacement
+clears the evidence. Desktop input errors, network failures, and 5xx responses create no evidence.
+No upstream description or credential metadata enters the status response.
+
 Kiro's account quota cache persists quota and an optional exhaustion verdict under one
 opaque account key and a non-secret login identity. Hydration admits only matching live
 accounts and bounds quota and verdict independently by reset and ten-minute TTL; a failed
