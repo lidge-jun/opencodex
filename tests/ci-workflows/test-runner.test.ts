@@ -494,6 +494,15 @@ describe("test runner transpiler cache isolation", () => {
       const source = join(isolated.root, "cacheable-fixture.ts");
       // Above the pinned Bun runtime's cache threshold; no production code or credential is loaded.
       writeFileSync(source, `const value: string = ${JSON.stringify("x".repeat(70_000))}; console.log(value.length);`);
+      // A hit only reads; a miss for the identical input must add or rewrite an entry. Seal the
+      // first home's entries at a sentinel mtime, then the second home proves reuse by adding
+      // nothing, rewriting nothing, and leaving no cache anywhere else in the sandbox.
+      const sealedAt = new Date("2001-01-01T00:00:00Z");
+      const sandboxPiles = () => readdirSync(isolated.root, { recursive: true })
+        .map(String)
+        .filter(entry => entry.endsWith(".pile"))
+        .sort();
+      let sealed: string[] | undefined;
       for (const name of ["first-home", "second-home"]) {
         const home = join(isolated.root, name);
         mkdirSync(home);
@@ -505,8 +514,23 @@ describe("test runner transpiler cache isolation", () => {
         expect(child.exitCode, new TextDecoder().decode(child.stderr)).toBe(0);
         expect(new TextDecoder().decode(child.stdout).trim()).toBe("70000");
         expect(readdirSync(home)).toEqual([]);
+        const piles = sandboxPiles();
+        if (sealed === undefined) {
+          expect(piles.length).toBeGreaterThan(0);
+          for (const entry of piles) {
+            const file = join(isolated.root, entry);
+            expect(pathIsContainedBy(cache, file, process.platform === "win32" ? "win32" : "posix"))
+              .toBe(true);
+            utimesSync(file, sealedAt, sealedAt);
+          }
+          sealed = piles;
+        } else {
+          expect(piles).toEqual(sealed);
+          for (const entry of sealed) {
+            expect(statSync(join(isolated.root, entry)).mtimeMs).toBe(sealedAt.getTime());
+          }
+        }
       }
-      expect(readdirSync(cache).some(name => name.endsWith(".pile"))).toBe(true);
       expect(dirname(cache)).toBe(isolated.root);
     } finally { isolated.cleanup(); }
   }, { timeout: SPAWN_BUDGET_MS * 3 });
