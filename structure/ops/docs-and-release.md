@@ -338,7 +338,7 @@ so the management route stays the single domain schema.
 
 The source runs on Bun, but the published package does **not** require a user-installed Bun.
 `package.json` `bin` points at `bin/ocx.mjs` (a Node shim), and the Bun runtime ships as the `bun`
-npm dependency (esbuild-style: a tiny main package plus platform-specific `@oven/bun-*`
+npm dependency pinned to `1.4.2` (esbuild-style: a tiny main package plus platform-specific `@oven/bun-*`
 `optionalDependencies`, finalized by the dependency's own `postinstall: node install.js`).
 
 Invariants:
