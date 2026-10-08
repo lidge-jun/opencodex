@@ -231,7 +231,7 @@ the existing repository-scoped open-PR lookup runs; absent or ambiguous matches 
 
 `pull_request_target`, `issues`, and `schedule` workflows always load from the repository default branch, not from `dev`. Landing a change to one of them on `dev` does not change live behavior until it is promoted, so those files follow the promotion model rather than ordinary integration.
 
-CI setup uses the [Bun runtime and test-runner pins](../runtime.md#bun-runtime-and-test-runner): test jobs (including development-version validation) choose `test-runner`, while release packaging, desktop/widget compilation and runtime smokes keep the default `runtime` role. Local layout verification resolves that test pin, and `gui/package.json` runs `scripts/test-with-pinned-bun.ts` to preserve its working directory, configuration and arguments on the same pin.
+CI setup uses the [Bun runtime and test-runner pins](../runtime.md#bun-runtime-and-test-runner): test jobs (including development-version validation) choose `test-runner`, while release packaging, desktop/widget compilation and runtime smokes keep the default `runtime` role. Local layout verification resolves that test pin, and `gui/package.json` runs `scripts/test-with-pinned-bun.ts` to preserve its working directory, configuration and arguments on the same pin. The wrapper forwards SIGINT, SIGTERM and SIGHUP, waits for child exit and preserves interruption status (130, 143 or 129).
 
 `scripts/test.ts` owns `SERIAL_FULL_SUITE_FILES`, the shared process-isolation roster. Local
 full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files

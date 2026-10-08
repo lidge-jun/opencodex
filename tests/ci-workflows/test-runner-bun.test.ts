@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveTestRunnerBun, type TestRunnerBunDeps } from "../../scripts/lib/test-runner-bun";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { testRunnerBun } from "../../package.json";
 
 function fixture(overrides: Partial<TestRunnerBunDeps> = {}): TestRunnerBunDeps {
   return {
@@ -125,7 +126,7 @@ describe("pinned test runner Bun", () => {
     const cwd = repoPath("gui");
     writeFileSync(file, `import { expect, test } from "bun:test";
 test("selected", () => {
-  expect(Bun.version).toBe("1.4.0");
+  expect(Bun.version).toBe(${JSON.stringify(testRunnerBun)});
   expect(process.cwd()).toBe(${JSON.stringify(cwd)});
 });
 test("excluded failure", () => { throw new Error("fixture failure"); });
@@ -144,4 +145,59 @@ test("excluded failure", () => { throw new Error("fixture failure"); });
       removeTreeWithRetry(root);
     }
   });
+
+  // Windows kill("SIGTERM") terminates directly rather than delivering a catchable signal.
+  test.skipIf(process.platform === "win32")("wrapper forwards SIGTERM, waits for the child and preserves exit 143", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-test-wrapper-signal-"));
+    const file = join(root, "signal.test.ts");
+    const pidFile = join(root, "child.pid");
+    const signalFile = join(root, "child.signal");
+    writeFileSync(file, `import { test } from "bun:test";
+import { writeFileSync } from "node:fs";
+test("sleep until interrupted", async () => {
+  process.on("SIGTERM", () => {
+    writeFileSync(${JSON.stringify(signalFile)}, "SIGTERM");
+    setTimeout(() => process.exit(0), 75);
+  });
+  writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+  await new Promise(() => {});
+}, 60_000);
+`);
+    const wrapper = Bun.spawn([
+      process.execPath, repoPath("scripts", "test-with-pinned-bun.ts"), "--isolate", file,
+    ], { cwd: root, stdout: "ignore", stderr: "ignore" });
+    let exitTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const readyDeadline = Date.now() + 10_000;
+      while (!existsSync(pidFile)) {
+        if (Date.now() >= readyDeadline || wrapper.exitCode !== null) throw new Error("wrapper child did not become ready");
+        await Bun.sleep(20);
+      }
+      const childPid = Number(readFileSync(pidFile, "utf8"));
+      expect(childPid).toBeGreaterThan(0);
+      wrapper.kill("SIGTERM");
+      const exitCode = await Promise.race([
+        wrapper.exited,
+        new Promise<never>((_, reject) => {
+          exitTimer = setTimeout(() => reject(new Error("wrapper did not exit after SIGTERM")), 5_000);
+        }),
+      ]);
+      expect(exitCode).toBe(143);
+      let childStatus: string | undefined;
+      try { process.kill(childPid, 0); } catch (error) { childStatus = (error as NodeJS.ErrnoException).code; }
+      expect(childStatus).toBe("ESRCH");
+      expect(readFileSync(signalFile, "utf8")).toBe("SIGTERM");
+    } finally {
+      clearTimeout(exitTimer);
+      if (wrapper.exitCode === null) try { wrapper.kill("SIGKILL"); } catch { /* already exited */ }
+      if (existsSync(pidFile)) {
+        const pid = Number(readFileSync(pidFile, "utf8"));
+        if (Number.isSafeInteger(pid) && pid > 0) {
+          try { process.kill(pid, "SIGKILL"); } catch { /* child already exited */ }
+        }
+      }
+      await Promise.race([wrapper.exited, Bun.sleep(1_000)]);
+      removeTreeWithRetry(root);
+    }
+  }, 20_000);
 });

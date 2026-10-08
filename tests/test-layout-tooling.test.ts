@@ -7,6 +7,7 @@ import { repoPath, repoRoot } from "./helpers/repo-root";
 import { listTestFiles, planMoves } from "../scripts/test-layout/plan";
 import { runMove } from "../scripts/test-layout/move";
 import { runVerify } from "../scripts/test-layout/verify";
+import { testRunnerBun } from "../package.json";
 import {
   anchors,
   currentPath,
@@ -442,7 +443,7 @@ describe("move end to end", () => {
         const report = runVerify({ root, domains: ["server", "providers"], layoutPath, log: () => {} });
         expect(report.testExit).toBe(0);
         // The test itself runs on the required pin, so its executable is the resolver's first choice.
-        expect(Bun.version).toBe("1.4.0");
+        expect(Bun.version).toBe(testRunnerBun);
         expect(spawn.mock.calls.at(-1)?.[0]).toEqual([
           process.execPath, "test", "--isolate", "tests/server", "tests/providers",
         ]);
