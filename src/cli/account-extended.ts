@@ -1,6 +1,6 @@
 import { isAnthropicOAuthInstance } from "../providers/anthropic-instance";
 import { loadConfig } from "../config";
-import { cmdAnthropicAccountThreshold } from "./account-anthropic-threshold";
+import { anthropicProviderIdentityError, cmdAnthropicAccountThreshold } from "./account-anthropic-threshold";
 import { isReservedCodexAccountWord, reportCodexAccountTargetError, resolveCodexAccountTarget } from "./account-target";
 import { hasPassiveAccountQuota } from "../providers/quota";
 import { closeSync, openSync, readSync, readFileSync, statSync } from "node:fs";
@@ -1129,7 +1129,8 @@ export async function cmdRoutes(args: string[], deps: AccountDeps): Promise<numb
     writing ? { provider, routes: clear ? null : routes } : undefined);
   if (response.status === 0) return proxyUnreachable(response.transportError);
   if (response.status !== 200) return apiError(response.json, "failed to manage Anthropic routes", response.status);
-  if (response.json.provider !== provider) return apiError({}, "invalid Anthropic routes identity", 400);
+  const identityError = anthropicProviderIdentityError(response.json, provider, "Anthropic routes");
+  if (identityError !== undefined) return identityError;
   if (wantsJson) console.log(JSON.stringify(response.json, null, 2));
   else console.log(JSON.stringify(response.json.routes ?? [], null, 2));
   return 0;

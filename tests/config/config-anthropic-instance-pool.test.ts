@@ -306,6 +306,9 @@ describe("explicit Anthropic helper instance preferences", () => {
     expect(validateConfigCandidate(config).ok).toBe(true);
     config.webSearchSidecar.anthropicInstance = "anthropic2";
     config.claudeCode.webSearchSidecar = { backend: "xai" };
+    // An override that leaves the Anthropic backend drops the inherited pool, as the runtime does.
+    expect(validateConfigCandidate(config).ok).toBe(true);
+    config.claudeCode.webSearchSidecar = { backend: "xai", anthropicInstance: "anthropic2" };
     expectRejected(config, "claudeCode.webSearchSidecar.anthropicInstance");
   });
 

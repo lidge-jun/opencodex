@@ -424,6 +424,12 @@ const POPULATED_SPECS = [
     hash: "dashboard",
     async run(page) {
       const T = TEXT.en;
+      // A first-run sub-agent advisory dialog can cover the dashboard; it is unrelated to Pool 2.
+      const advisory = page.getByRole("button", { name: "Continue", exact: true });
+      if (await advisory.isVisible().catch(() => false)) {
+        await advisory.click();
+        await advisory.waitFor({ state: "hidden" }).catch(() => {});
+      }
       const grid = await visible(page.locator(".dash-sidecar-grid"), "sidecar cards (.dash-sidecar-grid)");
       const triggers = page.locator(`button[aria-haspopup="listbox"][aria-label="${T.pool}"]`);
       await waitCount(triggers, 2, `"${T.pool}" selects (web search + vision)`);

@@ -1,6 +1,11 @@
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { apiError, apiJson, proxyUnreachable, resolveBaseUrl, type AccountDeps } from "./account-api";
 
+/** A 200 that names another pool is refused locally; there is no upstream status to forward. */
+export function anthropicProviderIdentityError(json: Record<string, unknown>, provider: AnthropicInstanceId, label: string): number | undefined {
+  return json.provider === provider ? undefined : apiError({}, `invalid ${label} identity`, 400);
+}
+
 /** A separate account selector prevents accidentally changing the whole Anthropic pool. */
 export async function cmdAnthropicAccountThreshold(args: string[], action: string, wantsJson: boolean, deps: AccountDeps, provider: AnthropicInstanceId = "anthropic"): Promise<number> {
   const selector = args.indexOf("--account");
