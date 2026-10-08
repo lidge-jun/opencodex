@@ -64,7 +64,8 @@ function prepareStore(root: string, values: readonly [OAuthCredentials, OAuthCre
     port: 10100,
     defaultProvider: "anthropic",
     providers: Object.fromEntries(instances.map(instance => [instance, {
-      adapter: "anthropic" as const, authMode: "oauth" as const, models: ["claude-sonnet-4-6"],
+      adapter: "anthropic" as const, authMode: "oauth" as const, baseUrl: "https://api.anthropic.com",
+      models: ["claude-sonnet-4-6"],
     }])),
   };
   const configBytes = JSON.stringify(config) + "\n";
