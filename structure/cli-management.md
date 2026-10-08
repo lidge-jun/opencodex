@@ -72,6 +72,8 @@ Management route declarations describe actual HTTP calls only; local Lab automat
 
 ## Integration inspection, recovery and maintenance
 
+`src/cli/capabilities-integrations.ts` declares `commandcode restore` and its dedicated restore/preview routes separately from generic integration restore. Its generated operating reference preserves the client-bound command, supported flags, and refusal on older proxies without those routes.
+
 `src/cli/integration-input.ts` shares pure profile paths/validation and owns exact optional Droid-map/fingerprint grammar. `src/cli/integration-preview.ts` handles explicit preview and new-option writes; `src/cli/integration-plan-dto.ts` validates value-free plans without runtime imports from GUI/planner/writer code. The original direct mutation bodies remain when new options are absent. Refused and no-op previews are completed observations; stale commits return a re-preview instruction without adopting a replacement token. The server owns coordinated binding and writes.
 
 `src/cli/integration-journal.ts` addresses exact global/Aside/profile history with an explicit confirmation. It reports retired records separately from incomplete snapshot cleanup. `src/cli/integration-aside-sync.ts` retains the existing attested helper and its original dependency object rather than selecting a different transport through synthesized baseUrl. Empty, malformed and partial outcomes remain distinct. New fixed runtime requests reject redirects; this is not a global legacy transport rewrite.
