@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import { createCertificateAuthority } from "../../src/claude/intercept/local-ca"
 import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "../../src/claude/intercept/picker-ca";
 import { pickerCaCertPath, pickerCaFingerprints } from "../../src/claude/intercept/picker-ca";
 import { watchdogMs } from "../helpers/ci-watchdog";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { memoryPickerCaStore } from "../helpers/picker-ca-store";
 import { saveConfig } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
@@ -21,7 +22,7 @@ const priorHome = process.env.OPENCODEX_HOME;
 const priorDesktop = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
 afterEach(async () => {
   for (const handle of handles.splice(0)) await handle?.stop();
-  for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of roots.splice(0)) removeTreeWithRetry(dir);
   if (priorHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = priorHome;
   if (priorDesktop === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR; else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = priorDesktop;
 });

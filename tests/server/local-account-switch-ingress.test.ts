@@ -1,7 +1,8 @@
 // Moved out of server-management-auth.test.ts, which sits at the 2000-line ratchet threshold.
 // Proves the account-switch capability survives the real server ingress and reaches the handler.
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
@@ -53,7 +54,7 @@ afterEach(async () => {
   restore("OPENCODEX_HOME", previous.home);
   restore("OPENCODEX_API_AUTH_TOKEN", previous.dataToken);
   restore("OPENCODEX_ADMIN_AUTH_TOKEN", previous.adminToken);
-  if (testHome) rmSync(testHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  if (testHome) removeTreeWithRetry(testHome);
   testHome = "";
 });
 

@@ -1,6 +1,7 @@
 // INV-PICKER-02: the outgoing public picker CA survives process replacement until a confirmed untrust clears it.
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -100,7 +101,7 @@ test("a replacement process retries the recorded predecessor before rotating and
     expect(readPendingPickerCaUntrust(root)).toBeNull();
   } finally {
     occupied.stop(true);
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   }
 });
 
@@ -128,7 +129,7 @@ test("controller enable with pending cleanup does not request trust", async () =
     expect(calls).toEqual([]);
     expect(readPendingPickerCaUntrust(root)).not.toBeNull();
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   }
 });
 
@@ -145,6 +146,6 @@ test("replacement defers a pending certificate still published by a live owner",
     expect(readPendingPickerCaUntrust(root)).toEqual(pending);
     expect(pickerCaFingerprints(readFileSync(pickerCaCertPath(root), "utf8")).sha1).toBe(pending.sha1);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   }
 });

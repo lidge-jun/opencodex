@@ -2,7 +2,7 @@
  * #563 — memory-card drain-and-restart acceptance + respawn policy.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { consumeSiblingHandoff } from "../../src/codex/sibling-handoff";
@@ -62,7 +62,7 @@ test("a sibling replacement environment carries a one-use handoff before restart
     removeRuntimePort(process.pid);
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   }
 });
 
@@ -972,3 +972,4 @@ describe("POST /api/system/restart", () => {
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
