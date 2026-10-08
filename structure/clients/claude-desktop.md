@@ -214,6 +214,20 @@ HTTP/1.1 request per client request. Incoming requests and ordinary upstream res
 a 64 KiB header allowance for browser session cookies; Bun enforces the HTTP/2 inbound bound
 natively, counting name + value + 32 bytes per field and rejecting an oversized stream with
 `RST_STREAM ENHANCE_YOUR_CALM` before the request handler runs.
+The relay retains its 256-request aggregate ceiling across both HTTP versions and all sessions.
+Upload framing, not the method, determines whether input cleanup is needed: HTTP/2 headers
+without END_STREAM, or HTTP/1.1 transfer encoding or a positive Content-Length.
+Rejected unfinished uploads close after their empty reply's writable finishes; HTTP/2 uses the
+underlying stream's finish event rather than the compatibility response's finish event, which
+waits for both stream halves to close. HTTP/1.1 refusals advertise `Connection: close`.
+Early replies cancel unfinished input only after the downstream writable finishes or the response
+closes; upstream request closure alone does not prove a buffered reply was delivered. An upstream
+that closes without responding also cancels unfinished input. HTTP/2 cancellation affects only
+that stream; HTTP/1.1 destroys the request. Body completion removes the input-cleanup listeners,
+leaving long-lived responses and SSE subscriptions independent of upload cleanup.
+`tests/claude-integration/claude-picker-upload.test.ts` covers headers-only refusals on both
+protocols, byte-exact early replies under backpressure, completed uploads with SSE, cancellation,
+failure and shutdown cleanup, and healthy sibling streams.
 The picker CA (`picker-ca.ts`) carries critical
 name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its exportable
 signing identity is protected by the OS credential store and scoped to the canonical config directory;
