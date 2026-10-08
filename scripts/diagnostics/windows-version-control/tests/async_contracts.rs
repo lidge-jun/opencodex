@@ -50,7 +50,16 @@ const baseline=budgets.translatorLiveBudgetCountForTests();
 const budget=budgets.createTranslatorBudget();
 const source=new Response('synthetic-eof',{status:201,headers:{'x-fixture':'kept'}});
 const eof=lifetime.finalizeOwnedTranslatorBudget(source,budget,new AbortController().signal);
-return {answers,eof:{text:await eof.text(),status:eof.status,header:eof.headers.get('x-fixture'),remaining:budgets.translatorLiveBudgetCountForTests()-baseline}};
+const eofResult={text:await eof.text(),status:eof.status,header:eof.headers.get('x-fixture'),remaining:budgets.translatorLiveBudgetCountForTests()-baseline};
+const cancelledEnvelopes=[];
+for(const wrap of [lifetime.finalizeOwnedTranslatorBudget,budgets.finalizeTranslatorBudgetResponse]){
+ const controller=new AbortController(); controller.abort(new Error('synthetic-client-gone'));
+ const budget=budgets.createTranslatorBudget(); budget.observeAcceptedRequestCopy(1024);
+ const source=Response.json({error:{code:'client_cancel'}},{status:499,headers:{'x-fixture':'kept'}});
+ const response=wrap(source,budget,controller.signal);
+ cancelledEnvelopes.push({status:response.status,header:response.headers.get('x-fixture'),remaining:budgets.translatorLiveBudgetCountForTests()-baseline,bytes:budget.snapshot().currentBytes,body:await response.json()});
+}
+return {answers,eof:eofResult,cancelledEnvelopes};
 "#,
     );
     for answer in result["answers"].as_array().unwrap() {
@@ -72,6 +81,13 @@ return {answers,eof:{text:await eof.text(),status:eof.status,header:eof.headers.
     assert_eq!(result["eof"]["status"], 201);
     assert_eq!(result["eof"]["header"], "kept");
     assert_eq!(result["eof"]["remaining"], 0);
+    for response in result["cancelledEnvelopes"].as_array().unwrap() {
+        assert_eq!(response["status"], 499);
+        assert_eq!(response["header"], "kept");
+        assert_eq!(response["remaining"], 0);
+        assert_eq!(response["bytes"], 0);
+        assert_eq!(response["body"]["error"]["code"], "client_cancel");
+    }
 }
 
 #[test]

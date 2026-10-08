@@ -65,6 +65,8 @@ HTTP owners in `src/server/responses/core.ts`, `src/server/chat-completions.ts` 
 
 Disposed budgets ignore late call, reservation, charge and observation work; reservations created before disposal cannot resurrect per-turn or aggregate counters. The same contract checks both accounting scopes after abort, even while upstream cancellation remains pending.
 
+A handler's already-rendered 499 cancellation envelope remains readable when wrapping starts with an aborted request; its dead request budget is disposed immediately. Live response streams still propagate later aborts as errors rather than successful EOF.
+
 Devin's [Messages ordering buffer](../clients/claude-desktop.md#devin-messages-output-ordering) charges retained
 semantic events consumed from the independently bounded adapter queue to the shared translator
 budget until downstream delivery. Cancellation and overflow release held events before producer shutdown.

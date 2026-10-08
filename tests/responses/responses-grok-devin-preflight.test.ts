@@ -373,7 +373,7 @@ test("cancellation before the first event aborts the producer", async () => {
   await started.promise;
   controller.abort();
   const response = await pending;
-  await response.text();
+  await expect(response.text()).rejects.toBe(controller.signal.reason);
   expect(aborted).toBe(true);
   expect(calls).toBe(1);
 });

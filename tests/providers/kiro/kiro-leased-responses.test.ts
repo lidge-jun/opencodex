@@ -169,7 +169,7 @@ test("an abandoned response body releases its lease when the request aborts", as
   expect(accountInFlight("kiro", id!)).toBe(1);
   controller.abort();
   expect(accountInFlight("kiro", id!)).toBe(0);
-  await response.body?.cancel();
+  await expect(response.body!.cancel()).rejects.toBe(controller.signal.reason);
 });
 
 test("cancellation during Kiro credential recovery cannot install a replacement lease", async () => {

@@ -376,7 +376,9 @@ export function resetTranslatorAggregateForTests(): void {
 }
 
 export function finalizeTranslatorBudgetResponse(response: Response, budget: TranslatorBudget, signal?: AbortSignal): Response {
-  if (!response.body) {
+  // A handler can finish cancellation by rendering its 499 envelope before wrapping.
+  // Preserve that existing error body while immediately releasing its dead request budget.
+  if (!response.body || (signal?.aborted && response.status === 499)) {
     budget.dispose();
     return response;
   }
