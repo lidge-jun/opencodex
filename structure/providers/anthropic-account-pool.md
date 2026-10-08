@@ -1,5 +1,33 @@
 # Anthropic Account Pool
 
+## Instance identity and credential registration
+
+`src/providers/anthropic-instance-id.ts` owns the fixed `anthropic` and `anthropic2`
+identifiers. The registry declares both as Anthropic OAuth family members; they share
+one adapter and model metadata. `src/providers/anthropic-instance.ts` distinguishes
+instance identity from configured admission. Pool 2 requires an enabled OAuth row
+pointing at the first-party API. A same-named custom destination keeps its transport.
+
+`src/types/anthropic-account-pool.ts` defines the shared configuration shape.
+`src/oauth/anthropic-pool-config.ts` reads the primary pool from the top-level
+`anthropicAccountPool` and Pool 2 from its provider row, without inheriting the
+primary pool's settings. Malformed native preference remains false on tolerant load;
+strict write diagnostics reject unsupported field locations.
+
+`src/oauth/anthropic-oauth-definitions.ts` shares the OAuth engine while Pool 2
+disables local Claude CLI import and continuity. `src/oauth/store-anthropic-instance.ts`
+checks cross-instance token fingerprints and bearer-bound UUID proofs inside the
+existing auth-store write lock. Display identities do not establish a duplicate.
+Refresh intent paths and credential-owner checks retain the actual instance.
+Pool 2 config publication rechecks the latest provider row under the config mutation
+lock; a collision preserves the custom row and reports any already-written orphan
+credential. No default-provider change accompanies that publication.
+
+Regression coverage: `tests/providers/anthropic-instance.test.ts`,
+`tests/config/anthropic-instance-pool-config.test.ts`,
+`tests/oauth/oauth-anthropic-instance-registration.test.ts`, and
+`tests/oauth/oauth-anthropic-instance-refresh.test.ts`.
+
 ## Anthropic account pause
 
 Anthropic OAuth shares `ProviderAccount.paused` in the protected auth store with generic
