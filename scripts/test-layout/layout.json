@@ -283,7 +283,7 @@
     "catalog-verbosity-default.test.ts": "codex-integration",
     "catalog-vision-sidecar-modalities.test.ts": "codex-integration",
     "catalog-zero-credit-picker.test.ts": "codex-integration",
-    "chat-completions-deferred-tools.test.ts": "responses",
+    "chat-completions-deferred-tools.test.ts": "responses", "passthrough-deferred-tools.test.ts": "responses",
     "chat-completions-endpoint.test.ts": "responses",
     "chat-completions-pool-mode.test.ts": "responses",
     "chat-conversation-affinity.test.ts": "responses",
