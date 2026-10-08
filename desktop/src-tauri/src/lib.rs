@@ -321,6 +321,9 @@ pub fn run() {
                     .inner_size(1100.0, 720.0)
                     .visible(false)
                     .user_agent(&window::webview_user_agent())
+                    // Keep dashboard HTML drag/drop (including chat panes) in the webview;
+                    // Tauri's native drop handler intercepts it on Windows.
+                    .disable_drag_drop_handler()
                     // Cmd on macOS, Ctrl elsewhere, with + / - / 0. WebView2 zooms natively; on
                     // macOS and Linux Tauri injects a keydown polyfill whose one IPC call is granted
                     // to the loopback dashboard by `capabilities/dashboard-zoom.json`.

@@ -273,9 +273,8 @@ test("a pruned explicit selection still compares the fallback acceptance cursor"
     return jsonResponse({ ...snapshot, sessions: pruned ? [fallback] : [old, fallback] });
   });
   const { host, act, button } = await mountRemotePage("/pruned-selection-fixture");
-  await act(async () => { (host.querySelector('button[aria-label="Sessions"]') as HTMLButtonElement).click(); });
-  const option = [...win.document.querySelectorAll('[role="option"]')].find(element => element.textContent?.includes("Older session"));
-  expect(option).toBeDefined();
+  const option = host.querySelector(`button[data-session-open="${SESSION_ID}"]`);
+  expect(option).not.toBeNull();
   await act(async () => { (option as unknown as HTMLButtonElement).click(); });
   pruned = true;
   await act(async () => { button("Refresh").click(); });

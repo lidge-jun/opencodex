@@ -55,6 +55,9 @@ a page with an overlay title bar and no strip cannot be dragged or zoomed at all
 Linux keep the native title bar: the shell ships no min/max/close widgets of its own, and the
 sidebar-top layout applies unchanged beneath it.
 
+The main webview disables Tauri’s native drag/drop handler in `desktop/src-tauri/src/lib.rs` so
+the dashboard receives HTML drag/drop events for session pane placement, including on Windows.
+
 ## Startup, quit and the tray
 
 The window is created and shown before anything is registered, resolved, probed or started, and
