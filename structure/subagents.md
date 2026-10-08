@@ -322,7 +322,7 @@ Codex overrides a child's spawn-time model with the root `model` key of
 `$CODEX_HOME/agents/<role>.toml`, so that pin decides which model a role runs on.
 `src/codex/agent-role-models.ts` is opencodex's only writer into those files, and it writes only
 that one key, only when a user picks a role's model in the dashboard's omo (Codex / LazyCodex)
-section on the Codex tab (`PUT /api/codex-agent-roles/{role}`) or with `ocx agent roles set`,
+section on the omo tab (`PUT /api/codex-agent-roles/{role}`) or with `ocx agent roles set`,
 and only while LazyCodex is detected. No sync, startup, or
 catalog path calls it, and opencodex never creates, repairs, or removes a role file.
 

@@ -199,7 +199,6 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
                 >
                   {t("integrations.codex.openService")}
                 </button>
-                <LazyCodexRoleModels apiBase={apiBase} active={active} />
               </section>
             )}
             {definition.id === "grok" && <Grok apiBase={apiBase} active={active} />}
@@ -218,6 +217,8 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
                 active={active}
               />
             )}
+            {/* Shown only when LazyCodex is detected, so a Pi-based omo install sees nothing new here. */}
+            {definition.id === "omo" && <LazyCodexRoleModels apiBase={apiBase} active={active} />}
           </div>
         );
       })}
