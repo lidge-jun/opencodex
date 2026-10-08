@@ -44,8 +44,14 @@ try {
 "#,
     );
     assert!(result["calls"].as_u64().unwrap() >= 3);
-    assert_eq!(result["early"], false, "removal overtook a live normal runner");
-    assert_eq!(result["middle"], false, "removal overtook the next ACL command");
+    assert_eq!(
+        result["early"], false,
+        "removal overtook a live normal runner"
+    );
+    assert_eq!(
+        result["middle"], false,
+        "removal overtook the next ACL command"
+    );
     assert_eq!(result["timedOutOnly"], false);
     assert_eq!(result["activeGuard"], true);
     assert_eq!(result["ok"], true);
