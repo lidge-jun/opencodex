@@ -99,7 +99,12 @@ async function runWriters(values: readonly [OAuthCredentials, OAuthCredentials],
     const deadline = Date.now() + readyBudgetMs;
     while (!readyPaths.every(path => existsSync(path))) {
       if (children.some(child => child.exitCode !== null || child.signalCode !== null)) {
-        throw new Error("Anthropic registration writer exited before start barrier");
+        const diagnostics = children.map((child, index) => {
+          const path = join(root, `${instances[index]}-failure.json`);
+          return { instance: instances[index], exitCode: child.exitCode, signalCode: child.signalCode,
+            failure: existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null };
+        });
+        throw new Error(`Anthropic registration writer exited before start barrier: ${JSON.stringify(diagnostics)}`);
       }
       if (Date.now() >= deadline) throw new Error("Anthropic registration ready barrier deadline exceeded");
       await Bun.sleep(10);

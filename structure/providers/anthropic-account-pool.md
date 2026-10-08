@@ -23,8 +23,8 @@ Pool 2 config publication rechecks the latest provider row under the config muta
 lock; a collision preserves the custom row and reports any already-written orphan
 credential. No default-provider change accompanies that publication.
 
-Regression coverage: `tests/providers/anthropic-instance.test.ts`,
-`tests/config/anthropic-instance-pool-config.test.ts`,
+Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
+`tests/config/config-anthropic-instance-pool.test.ts`,
 `tests/oauth/oauth-anthropic-instance-registration.test.ts`, and
 `tests/oauth/oauth-anthropic-instance-refresh.test.ts`.
 

@@ -18,15 +18,15 @@ UUID each physical send carried). No suite is copied with a string replace.
 
 | IDs | WP | Test file |
 |---|---|---|
-| REG-01, REG-03, CFG-01, STATE-05, STATE-12 | wp2 | `tests/providers/anthropic-instance.test.ts` |
+| REG-01, REG-03, CFG-01, STATE-05, STATE-12 | wp2 | `tests/providers/provider-anthropic-instance.test.ts` |
 | REG-02, REG-06, WIRE-05, WIRE-15, UX-02, UX-07 | wp3 | `tests/claude-integration/anthropic2-native-routing.test.ts` |
 | REG-04, STATE-13, AUTH-01 | wp3 | `tests/adapters/anthropic/anthropic-instance-isolation.test.ts` |
-| REG-05 | wp2 | `tests/providers/anthropic-instance.test.ts` (apikey, compatible adapter, claude-cli excluded) |
+| REG-05 | wp2 | `tests/providers/provider-anthropic-instance.test.ts` (apikey, compatible adapter, claude-cli excluded) |
 | REG-07, AUX-07 | wp3 | `tests/adapters/anthropic/anthropic-instance-isolation.test.ts` (explicit combo keeps targets) |
 | UX-01, UX-03 | wp4 | `tests/codex-integration/anthropic2-catalog.test.ts` |
 | UX-04, UX-05 | wp4 | `gui/tests/anthropic2-provider-surfaces.test.tsx` |
 | UX-06 | wp4 | `tests/cli/cli-anthropic2-account.test.ts` |
-| CFG-02, CFG-03, CFG-04, STATE-11 (salvage half) | wp2 | `tests/config/anthropic-instance-pool-config.test.ts` |
+| CFG-02, CFG-03, CFG-04, STATE-11 (salvage half) | wp2 | `tests/config/config-anthropic-instance-pool.test.ts` |
 | CFG-05 | wp5 | single PR: B is advertised only in the PR that carries every slice |
 
 ## Credentials

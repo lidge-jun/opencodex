@@ -51,8 +51,8 @@
 
 ## Tests (new files, registered in both layout inventories)
 
-- `tests/providers/anthropic-instance.test.ts` — exact IDs, `anthropic-apikey`/compatible adapters excluded, B seed is a deep copy, B absent from default config.
-- `tests/config/anthropic-instance-pool-config.test.ts` — A/B locations, no inheritance, misplaced field rejected, `anthropicInstance` validation.
+- `tests/providers/provider-anthropic-instance.test.ts` — exact IDs, `anthropic-apikey`/compatible adapters excluded, B seed is a deep copy, B absent from default config.
+- `tests/config/config-anthropic-instance-pool.test.ts` — A/B locations, no inheritance, misplaced field rejected, `anthropicInstance` validation.
 - `tests/oauth/oauth-anthropic-instance-registration.test.ts` — duplicate token / verified UUID rejected across instances, distinct accounts with equal IDs accepted, B local-cli refused, collision guard.
 
 ## wp2 execution
@@ -102,7 +102,7 @@ Routing/native callers stay with wp3; wp2 proves the foundation contracts, not r
 
 | Worker | Owns (exclusive writes) | New tests |
 |---|---|---|
-| W2-config | `src/providers/registry/types.ts`, `registry/model-ids.ts`, `registry/entries-core.ts`, `src/providers/registry.ts` (232-line baseline cap: net growth 0), `src/providers/derive.ts`, `src/types/anthropic-account-pool.ts` (new), `src/types/config.ts`, `src/types/provider.ts`, `src/config/schema/*`, `src/config/diagnostics.ts`, `src/generated/model-metadata.ts` (generator output only) | `tests/providers/anthropic-instance.test.ts`, `tests/config/anthropic-instance-pool-config.test.ts` |
+| W2-config | `src/providers/registry/types.ts`, `registry/model-ids.ts`, `registry/entries-core.ts`, `src/providers/registry.ts` (232-line baseline cap: net growth 0), `src/providers/derive.ts`, `src/types/anthropic-account-pool.ts` (new), `src/types/config.ts`, `src/types/provider.ts`, `src/config/schema/*`, `src/config/diagnostics.ts`, `src/generated/model-metadata.ts` (generator output only) | `tests/providers/provider-anthropic-instance.test.ts`, `tests/config/config-anthropic-instance-pool.test.ts` |
 | W2-oauth | `src/oauth/index.ts` (1996/1999: extract first), `src/oauth/anthropic-oauth-definitions.ts` (new), `src/oauth/store.ts`, `src/oauth/store-anthropic-instance.ts` (new, duplicate guard), `src/oauth/anthropic-continuity.ts`, `src/oauth/anthropic.ts`, `src/oauth/token-guardian.ts`, `src/oauth/login-cli.ts` | `tests/oauth/oauth-anthropic-instance-registration.test.ts`, `tests/oauth/oauth-anthropic-instance-refresh.test.ts` |
 
 Main owns the leaf files above, both layout inventories and every `structure/` edit. Workers do not run tests,
@@ -126,4 +126,4 @@ model-metadata generator. Workers report the layout entries their new tests need
   `nativeMessages` loads as `false`, a malformed pool container loads as absent, unrelated providers survive)
   and applies the same tolerance to B's nested field; strict rejection applies only to validated writes and
   diagnostics. W2-config adds A and B cases for both paths next to `tests/config/config-load-degrade.test.ts`
-  behaviour in `tests/config/anthropic-instance-pool-config.test.ts`.
+  behaviour in `tests/config/config-anthropic-instance-pool.test.ts`.
