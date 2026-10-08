@@ -58,6 +58,9 @@ async function modelCandidates(slugs: readonly string[], models: readonly Catalo
   ]);
   const nativeSlugs = catalog.listCatalogNativeSlugs();
   const routed = new Map(models.map(model => [catalog.catalogModelSlug(model), model]));
+  // A routed model that declares no levels still gets the ladder Codex shows for it, the same one
+  // the Models page lists, so its proposal carries an effort instead of none.
+  const written = catalog.catalogModelLadders(slugs);
   const unitPrice = (provider: string, modelId: string): number | null => {
     const cost = resolveMatchedPrice(provider, modelId)?.cost4;
     return cost ? cost.input + cost.output : null;
@@ -65,11 +68,13 @@ async function modelCandidates(slugs: readonly string[], models: readonly Catalo
   return slugs.map(slug => {
     const row = routed.get(slug);
     if (row) {
+      const declared = row.reasoningEfforts?.length ? row.reasoningEfforts : undefined;
+      const defaultEffort = declared ? row.defaultReasoningEffort : written.get(slug)?.defaultEffort;
       return {
         model: slug,
         unitPrice: unitPrice(row.provider, row.id),
-        efforts: row.reasoningEfforts ?? [],
-        ...(row.defaultReasoningEffort ? { defaultEffort: row.defaultReasoningEffort } : {}),
+        efforts: declared ?? written.get(slug)?.efforts ?? [],
+        ...(defaultEffort ? { defaultEffort } : {}),
       };
     }
     if (nativeSlugs.includes(slug)) {

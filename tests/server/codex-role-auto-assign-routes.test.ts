@@ -101,6 +101,32 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
     expect(byRole.bare.status).toBe("unsized");
   });
 
+  test("a routed model that declares no levels takes the ladder and default Codex shows for it", async () => {
+    const levels = ["low", "medium", "high", "xhigh"].map(effort => ({ effort, description: effort }));
+    writeFileSync(join(root, "codex", "opencodex-catalog.json"), JSON.stringify({
+      models: [{ slug: "stub/small", supported_reasoning_levels: levels, default_reasoning_level: "medium" }],
+    }));
+    const bare: CatalogModel = { id: "small", provider: "stub" };
+    const result = await handleManagementAPI(
+      new Request("http://localhost/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" }),
+      new URL("http://localhost/api/codex-agent-roles/auto-assign"),
+      config,
+      { ...deps, fetchAllModels: async () => [bare, routed("big", ["low", "medium", "high", "xhigh"])] },
+    );
+    const body = await result!.json() as Record<string, any>;
+    const explorer = (body.proposals as any[]).find(p => p.role === "explorer");
+    expect(explorer).toMatchObject({ proposedModel: "stub/small", proposedEffort: "low" });
+    answer = { text: JSON.stringify({ roles: { explorer: sized("fast", "measured") } }) };
+    const measured = await handleManagementAPI(
+      new Request("http://localhost/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" }),
+      new URL("http://localhost/api/codex-agent-roles/auto-assign"),
+      config,
+      { ...deps, fetchAllModels: async () => [bare] },
+    );
+    const again = await measured!.json() as Record<string, any>;
+    expect((again.proposals as any[]).find(p => p.role === "explorer")).toMatchObject({ proposedEffort: "medium" });
+  });
+
   test("an unusable sizing answer or a failed call leaves roles unsized", async () => {
     answer = { text: "explorer should be fast" };
     let result = await call("/api/codex-agent-roles/auto-assign", { method: "POST", body: JSON.stringify({ model: "stub/other" }) });
