@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   getValidAccessTokenForAccount,
+  refreshGenericAccountWithLock,
   OAuthLoginRequiredError,
   OAUTH_PROVIDERS,
 } from "../../src/oauth";
 import type { OAuthCredentials } from "../../src/oauth/types";
+import { ChatGptTokenError } from "../../src/oauth/chatgpt";
 import { getAccountCredential, getAccountSet, saveCredential } from "../../src/oauth/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -203,5 +205,82 @@ describe("generic OAuth refresh lock + CAS", () => {
     await expect(pending).rejects.toBeInstanceOf(OAuthLoginRequiredError);
     expect(getAccountCredential("kimi", accountId)?.access).toBe("replacement");
     expect(getAccountSet("kimi")!.accounts.find(a => a.id === accountId)!.needsReauth).toBeUndefined();
+  });
+});
+
+describe("ChatGPT refresh through the registered provider", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  async function seedExpiredChatgpt(): Promise<string> {
+    await saveCredential("chatgpt", {
+      access: "chatgpt-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "chatgpt-acct",
+    });
+    return getAccountSet("chatgpt")!.activeAccountId;
+  }
+
+  test("a nested terminal endpoint response marks the account needsReauth", async () => {
+    const accountId = await seedExpiredChatgpt();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return Response.json({ error: { code: "refresh_token_expired", message: "synthetic private text" } }, { status: 401 });
+    }) as typeof fetch;
+    await expect(getValidAccessTokenForAccount("chatgpt", accountId)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+    expect(getAccountSet("chatgpt")!.accounts.find(a => a.id === accountId)!.needsReauth).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  test("a transient endpoint failure does not mark needsReauth and a later refresh can recover", async () => {
+    const accountId = await seedExpiredChatgpt();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) return Response.json({ error: "invalid_grant", error_description: "revoked" }, { status: 503 });
+      return Response.json({ access_token: "chatgpt-fresh", refresh_token: "rt-new", expires_in: 3600 });
+    }) as typeof fetch;
+    await expect(getValidAccessTokenForAccount("chatgpt", accountId)).rejects.toBeInstanceOf(ChatGptTokenError);
+    expect(getAccountSet("chatgpt")!.accounts.find(a => a.id === accountId)!.needsReauth).toBeUndefined();
+    await expect(getValidAccessTokenForAccount("chatgpt", accountId)).resolves.toBe("chatgpt-fresh");
+    expect(getAccountCredential("chatgpt", accountId)?.refresh).toBe("rt-new");
+    expect(calls).toBe(2);
+  });
+
+  test("the registry forwards caller cancellation and releases the refresh lock", async () => {
+    const accountId = await seedExpiredChatgpt();
+    const caller = new AbortController();
+    let started!: () => void;
+    const began = new Promise<void>(resolve => { started = resolve; });
+    globalThis.fetch = ((_url: unknown, init?: RequestInit) => new Promise<Response>((_, reject) => {
+      started();
+      init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+    })) as typeof fetch;
+    const pending = refreshGenericAccountWithLock("chatgpt", accountId, OAUTH_PROVIDERS.chatgpt!,
+      getAccountCredential("chatgpt", accountId)!, { signal: caller.signal });
+    const reason = new DOMException("synthetic cancellation", "AbortError");
+    const rejected = pending.catch((error: unknown) => error);
+    await began;
+    caller.abort(reason);
+    expect(await rejected).toBe(reason);
+    expect(getAccountSet("chatgpt")!.accounts.find(a => a.id === accountId)!.needsReauth).toBeUndefined();
+    globalThis.fetch = (async () => Response.json({ access_token: "recovered", refresh_token: "rt-new", expires_in: 3600 })) as typeof fetch;
+    await expect(getValidAccessTokenForAccount("chatgpt", accountId)).resolves.toBe("recovered");
+  });
+
+  test("a late terminal response cannot mark a replacement credential needsReauth", async () => {
+    const accountId = await seedExpiredChatgpt();
+    let release!: (response: Response) => void;
+    let started!: () => void;
+    const began = new Promise<void>(resolve => { started = resolve; });
+    globalThis.fetch = (() => new Promise<Response>(resolve => { release = resolve; started(); })) as typeof fetch;
+    const pending = getValidAccessTokenForAccount("chatgpt", accountId);
+    await began;
+    await saveCredential("chatgpt", {
+      access: "replacement", refresh: "replacement-rt", expires: Date.now() + 3_600_000, accountId: "chatgpt-acct",
+    });
+    release(Response.json({ error: "refresh_token_invalidated" }, { status: 401 }));
+    await expect(pending).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+    expect(getAccountCredential("chatgpt", accountId)?.refresh).toBe("replacement-rt");
+    expect(getAccountSet("chatgpt")!.accounts.find(a => a.id === accountId)!.needsReauth).toBeUndefined();
   });
 });

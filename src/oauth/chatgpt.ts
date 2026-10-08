@@ -1,6 +1,50 @@
 import { OAuthCallbackFlow } from "./callback-server";
 import type { OAuthController, OAuthCredentials } from "./types";
 import { generatePKCE } from "./pkce";
+import { classifyChatgptRefreshFailure } from "../codex/chatgpt-refresh-failure";
+
+/**
+ * Per-fetch deadline for ChatGPT auth endpoint calls. The deviceauth grant got the
+ * same bound in #3898 after one stuck TCP connection held the login slot for the
+ * whole grant; a hung refresh would pin the refresh intent lock indefinitely.
+ */
+export const CHATGPT_FETCH_TIMEOUT_MS = 30_000;
+
+function chatGptFetchSignal(signal?: AbortSignal, timeoutMs = CHATGPT_FETCH_TIMEOUT_MS): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+/**
+ * Token-endpoint failure carrying the HTTP status, the allowlisted OAuth error code,
+ * and a terminal verdict (revoked/expired grant) taken from the same classifier the
+ * Codex pool's refresh path uses — a dead grant must mark needsReauth, not retry.
+ */
+export class ChatGptTokenError extends Error {
+  constructor(
+    public readonly httpStatus: number,
+    public readonly oauthError: string | undefined,
+    public readonly terminal: boolean,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ChatGptTokenError";
+  }
+}
+
+async function chatGptTokenError(response: Response, label: string): Promise<ChatGptTokenError> {
+  const body = await response.text().catch(() => "");
+  const failure = classifyChatgptRefreshFailure(response.status, body);
+  // The message carries the status and the allowlisted OAuth code only — never the
+  // free-text `error_description`, which can echo OAuth material into log surfaces
+  // (the same closed vocabulary the pool's noteChatgptRefreshFailure logs with).
+  return new ChatGptTokenError(
+    response.status,
+    failure.code,
+    failure.reason !== "unknown",
+    `${label} failed: ${response.status} code=${failure.code ?? "none"}`,
+  );
+}
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTH_URL = "https://auth.openai.com/oauth/authorize";
@@ -212,22 +256,11 @@ export class ChatGPTOAuthFlow extends OAuthCallbackFlow {
         redirect_uri: redirectUri,
         code_verifier: this.#verifier,
       }).toString(),
+      signal: chatGptFetchSignal(this.ctrl.signal),
     });
-    if (!resp.ok) {
-      const errDesc = await safeErrorDescription(resp);
-      throw new Error(`ChatGPT token exchange failed: ${resp.status} ${errDesc}`);
-    }
+    if (!resp.ok) throw await chatGptTokenError(resp, "ChatGPT token exchange");
     return credsFromToken((await resp.json()) as Record<string, unknown>);
   }
-}
-
-function safeErrorDescription(resp: Response): Promise<string> {
-  return resp.text().catch(() => "").then(text => {
-    try {
-      const parsed = JSON.parse(text) as { error?: string; error_description?: string };
-      return [parsed.error, parsed.error_description].filter(Boolean).join(": ") || `HTTP ${resp.status}`;
-    } catch { return `HTTP ${resp.status}`; }
-  });
 }
 
 /**
@@ -255,7 +288,7 @@ export async function loginChatGPT(
 // Codex-rs uses JSON for refresh — intentional divergence; both accepted by auth.openai.com.
 export async function refreshChatGPTToken(
   refreshToken: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<OAuthCredentials> {
   const resp = await fetch(TOKEN_URL, {
     method: "POST",
@@ -265,11 +298,8 @@ export async function refreshChatGPTToken(
       client_id: CLIENT_ID,
       refresh_token: refreshToken,
     }).toString(),
-    signal: options.signal,
+    signal: chatGptFetchSignal(options.signal, options.timeoutMs),
   });
-  if (!resp.ok) {
-    const errDesc = await safeErrorDescription(resp);
-    throw new Error(`ChatGPT refresh failed: ${resp.status} ${errDesc}`);
-  }
+  if (!resp.ok) throw await chatGptTokenError(resp, "ChatGPT refresh");
   return credsFromToken((await resp.json()) as Record<string, unknown>);
 }
