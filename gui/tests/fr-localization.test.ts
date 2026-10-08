@@ -152,6 +152,9 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "api.clientConfig.clientCline",
   "integrations.tab.kilo",
   "api.clientConfig.clientKilo",
+  // Command Code is a product name, identical in every locale.
+  "integrations.tab.commandcode",
+  "api.clientConfig.clientCommandCode",
   // Factory Droid is a product name, identical in every locale.
   "integrations.tab.droid",
   "api.clientConfig.clientDroid",
