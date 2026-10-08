@@ -160,14 +160,18 @@ describe("credential-scoped key quota", () => {
     const config: OcxConfig = { port: 0, defaultProvider: "cloud-copy", providers: { "cloud-copy": provider } };
     const before = JSON.stringify(config);
     expect(providerApiKeyQuotaMode("cloud-copy", provider)).toBe("probe");
+    const seen: string[] = [];
     globalThis.fetch = (async (input, init) => {
-      expect(String(input)).toBe("https://ollama.com/api/usage");
+      const url = String(input);
+      seen.push(url);
+      expect(url).toBe("https://ollama.com/api/balance");
       expect(init?.redirect).toBe("error");
       const first = new Headers(init?.headers).get("authorization") === "Bearer fixture-first";
-      return Response.json({ limits: { monthly: { usage: first ? 0.25 : 0.75 } } });
+      return Response.json({ included: { monthly: { remaining_percent: first ? 75 : 25 } } });
     }) as typeof globalThis.fetch;
     const rows = await fetchProviderApiKeyQuotas(config, "cloud-copy");
     expect(rows.map(row => row.quota?.monthlyPercent)).toEqual([25, 75]);
+    expect(seen).toEqual(["https://ollama.com/api/balance", "https://ollama.com/api/balance"]);
     expect(JSON.stringify(config)).toBe(before);
     expect(providerApiKeyQuotaMode("cloud-copy", { ...provider, baseUrl: "https://ollama.example.invalid" })).toBe("unsupported");
   });
