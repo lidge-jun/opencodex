@@ -41,6 +41,7 @@
   "trustedDependencies": [
     "bun"
   ],
+  "testRunnerBun": "1.4.0",
   "scripts": {
     "dev": "bun run src/cli/index.ts start",
     "dev:proxy": "bun run src/cli/index.ts start",

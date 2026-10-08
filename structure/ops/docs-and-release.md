@@ -229,9 +229,9 @@ the existing repository-scoped open-PR lookup runs; absent or ambiguous matches 
 | `.github/workflows/react-doctor.yml` | `pull_request` (opened, synchronize, reopened, ready_for_review) and `push` to `main`; no path filter | React-focused static review. Findings fail the job; write-scoped outputs stay disabled, a contract pinned by `tests/ci-workflows/ci-workflows.test.ts`. |
 | `.github/workflows/stale-needs-info.yml` | `schedule` only (daily 06:15 UTC); deliberately no manual dispatch | Closes issues left in needs-info past the grace period. Manual dispatch is omitted so a branch-selected run cannot execute that branch's body with issue write scope. |
 
-`pull_request_target`, `issues`, and `schedule` workflows always load from the repository default
-branch, not from `dev`. Landing a change to one of them on `dev` does not change live behavior until
-it is promoted, so those files follow the promotion model rather than ordinary integration.
+`pull_request_target`, `issues`, and `schedule` workflows always load from the repository default branch, not from `dev`. Landing a change to one of them on `dev` does not change live behavior until it is promoted, so those files follow the promotion model rather than ordinary integration.
+
+CI setup uses the [Bun runtime and test-runner pins](../runtime.md#bun-runtime-and-test-runner): test jobs (including development-version validation) choose `test-runner`, while release packaging, desktop/widget compilation and runtime smokes keep the default `runtime` role.
 
 `scripts/test.ts` owns `SERIAL_FULL_SUITE_FILES`, the shared process-isolation roster. Local
 full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files
