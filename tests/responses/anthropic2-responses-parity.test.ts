@@ -22,6 +22,7 @@ beforeEach(async () => {
   responses = await import("../../src/server/responses");
   chat = await import("../../src/server/chat-completions");
   messages = await import("../../src/server/claude-messages");
+  (await import("../../src/responses/reasoning-replay-cache")).clearReasoningReplayCacheForTests();
   seen = []; toolReply = false;
   // Explicit opt-out makes the Messages input exercise the scoped Responses bridge.
   f.config.protocols = { rollout: { managedMessagesNative: false, managedMessagesNativeOAuth: false } };
@@ -73,7 +74,7 @@ type Surface = "responses" | "chat" | "messages";
 async function send(surface: Surface, instance: AnthropicInstanceId, body: Record<string, unknown>, model = f.model) {
   const path = surface === "responses" ? "/v1/responses" : surface === "chat" ? "/v1/chat/completions" : "/v1/messages";
   const req = new Request(`http://localhost${path}`, { method: "POST", headers: {
-    "content-type": "application/json", "session-id": f.sessionKey, authorization: "Bearer access-token-value-test-caller-excluded",
+    "content-type": "application/json", "session-id": `${f.sessionKey}-${instance}`, authorization: "Bearer access-token-value-test-caller-excluded",
   }, body: JSON.stringify({ model: `${instance}/${model}`, stream: false, ...body }) });
   const log: RequestLogContext = { model: "", provider: "" };
   const response = surface === "responses" ? await responses.handleResponses(req, f.config, log)
