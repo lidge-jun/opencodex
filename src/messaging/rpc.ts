@@ -16,14 +16,14 @@ interface Pending {
   method: Method;
 }
 
-/** Metadata discovery plus one text-only queue method; no session/turn/permission mutation. */
+/** Metadata discovery plus one text-only queue method; no lifecycle/turn/permission mutation. */
 export class LocalMessageRpc implements LocalMetadataClient {
   private nextId = 0;
   private readonly pending = new Map<number, Pending>();
   private closed = false;
   private readonly abort: () => void;
 
-  /** Bind connection failure and operation cancellation to all pending metadata requests. */
+  /** Bind connection failure and operation cancellation to all pending requests. */
   private constructor(private readonly socket: LocalSocket, private readonly budget: MessageBudget,
     private readonly rpcTimeoutMs: number) {
     this.abort = () => this.close(budget.signal.reason);
@@ -110,7 +110,9 @@ export class LocalMessageRpc implements LocalMetadataClient {
       const queued = isRecord(raw) ? raw.queuedSubmission : null;
       if (!isRecord(queued) || typeof queued.id !== "string" || !queued.id || queued.id.length > 4096
         || queued.clientUserMessageId !== messageId || !Array.isArray(queued.input) || queued.input.length !== 1
-        || !isRecord(queued.input[0]) || queued.input[0].type !== "text" || queued.input[0].text !== text) {
+        || !isRecord(queued.input[0]) || queued.input[0].type !== "text" || queued.input[0].text !== text
+        || (queued.input[0].text_elements !== undefined
+          && (!Array.isArray(queued.input[0].text_elements) || queued.input[0].text_elements.length !== 0))) {
         throw this.invalidMetadata();
       }
       return { status: "queued" };
@@ -167,7 +169,11 @@ export class LocalMessageRpc implements LocalMetadataClient {
       if (typeof raw.id !== "number" || !Number.isSafeInteger(raw.id)
         || Object.hasOwn(raw, "result") === Object.hasOwn(raw, "error")) throw new Error();
       const pending = this.pending.get(raw.id);
-      if (!pending) return;
+      if (!pending) {
+        // During a one-shot submission an uncorrelated response cannot acknowledge our write.
+        if ([...this.pending.values()].some(request => request.method === "thread/queue/add")) throw new Error();
+        return;
+      }
       let rejection: LocalMessagingError | undefined;
       if (Object.hasOwn(raw, "error")) {
         const error = raw.error;

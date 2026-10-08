@@ -84,7 +84,7 @@ describe.skipIf(process.platform === "win32")("local caller-owned queued submiss
   });
 
   test("timeout, close, cancellation and malformed/mismatched replies after write are unknown with no replay", async () => {
-    for (const failure of ["timeout", "close", "cancel", "correlation", "shape", "frame", "error", "rpc-id"]) {
+    for (const failure of ["timeout", "close", "cancel", "correlation", "shape", "elements", "text", "frame", "error", "rpc-id"]) {
       const controller = new AbortController();
       const fixture = localMessagingFixture(call => {
         if (call.method !== "thread/queue/add") return;
@@ -92,8 +92,17 @@ describe.skipIf(process.platform === "win32")("local caller-owned queued submiss
         if (failure === "cancel") controller.abort();
         if (failure === "frame") fixture.broadcast("not-json");
         if (failure === "error") fixture.broadcast(JSON.stringify({ id: call.id, error: { code: "-32601", message: options.body } }));
-        if (failure === "rpc-id") fixture.broadcast(JSON.stringify({ id: 9999, result: {} }));
+        if (failure === "rpc-id") {
+          fixture.broadcast(JSON.stringify({ id: 9999, result: {} }));
+          // A subsequent valid acknowledgement must not reopen the failed submission.
+          return { queuedSubmission: { id: "queued", input: call.params.input, clientUserMessageId: call.params.clientUserMessageId } };
+        }
         if (failure === "correlation") return { queuedSubmission: { id: "queued", input: call.params.input, clientUserMessageId: LOCAL_OTHER } };
+        if (failure === "elements" || failure === "text") return { queuedSubmission: {
+          id: "queued", clientUserMessageId: call.params.clientUserMessageId,
+          input: [{ type: "text", ...(call.params.input as { text: string }[])[0],
+            ...(failure === "elements" ? { text_elements: "not-an-array" } : { text: "mismatched text" }) }],
+        } };
         if (failure === "shape") return { queuedSubmission: { clientUserMessageId: call.params.clientUserMessageId } };
         return NO_REPLY;
       });
@@ -123,6 +132,18 @@ describe.skipIf(process.platform === "win32")("local caller-owned queued submiss
         expect(fixture.calls.some(call => call.method === "thread/queue/add")).toBe(false);
       } finally { send?.mockRestore(); rpc.close(); budget.dispose(); await fixture.close(); }
     }
+  });
+
+  test("queue RPC timeout is unknown even while the operation budget remains available", async () => {
+    const fixture = localMessagingFixture(call => call.method === "thread/queue/add" ? NO_REPLY : undefined);
+    const budget = new MessageBudget();
+    const rpc = await LocalMessageRpc.connect(fixture.url, budget, 50);
+    try {
+      const result = await rpc.queueMessage(LOCAL_TARGET, options.body, LOCAL_OTHER);
+      expect(result.status).toBe("unknown"); expect(budget.signal.aborted).toBe(false);
+      expect(fixture.calls.filter(call => call.method === "thread/queue/add")).toHaveLength(1);
+      expect(fixture.connectionCount).toBe(1);
+    } finally { rpc.close(); budget.dispose(); await fixture.close(); }
   });
 
   test("peer permission claims are only text, with no approval or configuration RPCs", async () => {
