@@ -775,6 +775,11 @@ ocx integration client enable --client commandcode
 ocx export --client commandcode --out ./providers.json
 ```
 
+`ocx commandcode restore --op <opId>` accepts only Command Code operations, including
+`--preview` and `--plan-fingerprint` requests. It rejects client/profile overrides.
+Use `ocx integration client restore` for the generic journal and the explicit Aside
+profile commands above for Aside operations.
+
 ## Factory Droid
 
 Run Droid once to create `~/.factory`, then explicitly enable this integration with

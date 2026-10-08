@@ -318,6 +318,20 @@ function invalidClientResponse(ctx: ManagementContext): Response {
   }, 400, ctx.req, ctx.config);
 }
 
+/** Bind an explicitly scoped restore before profile delegation or mutation. */
+function restoreClientScopeResponse(ctx: ManagementContext, opId: string, expectedClientId: unknown): Response | null {
+  if (expectedClientId === undefined) return null;
+  if (typeof expectedClientId !== "string" || !isIntegrationClientId(expectedClientId)) return invalidClientResponse(ctx);
+  try {
+    const operation = integrationStore().findOperation(opId);
+    if (!operation) return jsonResponse({ error: "integration operation not found", code: "integration_operation_not_found", opId }, 404, ctx.req, ctx.config);
+    if (operation.clientId !== expectedClientId) return jsonResponse({ error: "integration operation belongs to a different client", code: "integration_client_mismatch" }, 409, ctx.req, ctx.config);
+    return null;
+  } catch (error) {
+    return internalErrorResponse(error, ctx);
+  }
+}
+
 function isStringRecord(value: unknown): value is Record<string, string> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     && Object.values(value).every(item => typeof item === "string");
@@ -786,6 +800,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
       return jsonResponse({ error: "confirmDrift must be a boolean", code: "invalid_confirm_drift" }, 400, req, ctx.config);
     }
     const opId = parsed.opId.trim();
+    const scopeResponse = restoreClientScopeResponse(ctx, opId, parsed.expectedClientId);
+    if (scopeResponse) return scopeResponse;
     try {
       const store = integrationStore();
       const operation = store.findOperation(opId);
@@ -837,6 +853,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     }
 
     const opId = parsed.opId.trim();
+    const scopeResponse = restoreClientScopeResponse(ctx, opId, parsed.expectedClientId);
+    if (scopeResponse) return scopeResponse;
     const confirmDrift = parsed.confirmDrift ?? false;
     const restoreBinding = planBindingOf(parsed);
     if (restoreBinding === "half") return halfBoundResponse(ctx);

@@ -130,6 +130,11 @@ ocx integration client history --client hermes
 ocx integration client restore --op <opId> [--confirm-drift]
 ```
 
+`ocx commandcode restore --op <opId>`는 Command Code 작업만 복원합니다.
+`--preview`와 `--plan-fingerprint`에도 같은 조건이 적용되며, 클라이언트나
+프로필을 바꾸는 옵션은 받지 않습니다. 일반 작업 기록은 위의
+`ocx integration client restore`를, Aside 작업은 아래의 프로필 전용 명령을 사용하세요.
+
 `--overwrite-conflict`는 **Replace**의 터미널 명령입니다.
 
 ```bash

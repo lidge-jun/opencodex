@@ -83,7 +83,7 @@ The Factory Droid integration page edits the
 is included in the existing preview and confirmation request, with editing
 disabled while confirmation is open. Changing API target, client or profile discards drafts and confirmation state. The page reloads committed values after a
 successful mutation or restore. No separate settings-save endpoint bypasses the
-integration writer or its ownership checks.
+integration writer or its ownership checks. Client-specific restore requests retain their [expected client identity](clients/integrations.md#command-code) through preview and commit; unscoped generic restore remains available.
 
 Account refresh actions follow the [credential refresh-lock identity contract](catalog.md#accounts-namespaces-and-pool-rotation): a held unreadable lock is distinct from one this process may release, and path-probe errors preserve the callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction. The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui` starts
 the proxy when needed and opens `http://localhost:<port>`, or `http://127.0.0.1:<management port>` when `hub.managementIngress.enabled` is true — see [the hub management dashboard address](runtime.md#hub-management-dashboard-address).
