@@ -533,6 +533,9 @@ async function handleChatCompletionsWithBudget(
       // below could never restore this one -- the translated client was told the provider
       // throttled the turn, and handed a two-second wait to send it again.
       classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+    } else if (upstreamCode === "claude_subscription_cooldown") {
+      classified.code = "claude_subscription_cooldown";
+      classified.type = "rate_limit_error";
     } else if (upstreamCode === "model_not_found") {
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";

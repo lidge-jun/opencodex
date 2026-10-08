@@ -214,7 +214,7 @@ describe("codebuddy stream-json event mapping", () => {
     expect(events).toEqual([{
       type: "done",
       stopReason: "stop",
-      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, cachedInputTokens: 2, cacheReadInputTokens: 2 },
+      usage: { inputTokens: 12, outputTokens: 5, totalTokens: 17, cachedInputTokens: 2, cacheReadInputTokens: 2 },
     }]);
   });
 
@@ -474,9 +474,9 @@ describe("codebuddy stream-json event mapping", () => {
       type: "result",
       usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 200 },
     })).toEqual({
-      inputTokens: 0,
+      inputTokens: 200,
       outputTokens: 0,
-      totalTokens: 0,
+      totalTokens: 200,
       cacheCreationInputTokens: 200,
     });
     // Cache-creation-only through the partial fold too: message_start carries it before any delta.
@@ -486,9 +486,9 @@ describe("codebuddy stream-json event mapping", () => {
       state,
     );
     expect(state.partialUsage).toEqual({
-      inputTokens: 0,
+      inputTokens: 7,
       outputTokens: 0,
-      totalTokens: 0,
+      totalTokens: 7,
       cacheCreationInputTokens: 7,
     });
   });
@@ -523,21 +523,21 @@ describe("codebuddy stream-json event mapping", () => {
       state,
     );
     expect(state.partialUsage).toEqual({
-      inputTokens: 15, outputTokens: 5, totalTokens: 20, cachedInputTokens: 3, cacheReadInputTokens: 3,
+      inputTokens: 18, outputTokens: 5, totalTokens: 23, cachedInputTokens: 3, cacheReadInputTokens: 3,
     });
     // Assistant-frame usage snapshots participate in the same fold.
     mapStreamMessageToEvents(
       { type: "assistant", message: { role: "assistant", content: [], usage: { input_tokens: 10, output_tokens: 9 } } },
       state,
     );
-    expect(state.partialUsage).toMatchObject({ inputTokens: 15, outputTokens: 9, totalTokens: 24 });
+    expect(state.partialUsage).toMatchObject({ inputTokens: 18, outputTokens: 9, totalTokens: 27 });
     // message_start carries input tokens in Anthropic-shaped streams; a capture-only tool leg
     // terminates at message_stop before any result frame, so this snapshot must be recorded.
     mapStreamMessageToEvents(
       { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 40, output_tokens: 0 } } } },
       state,
     );
-    expect(state.partialUsage).toMatchObject({ inputTokens: 40, outputTokens: 9, totalTokens: 49 });
+    expect(state.partialUsage).toMatchObject({ inputTokens: 43, outputTokens: 9, totalTokens: 52 });
     // A terminal result frame carries its own usage and does not consult partialUsage.
     const events = mapStreamMessageToEvents(
       { type: "result", subtype: "success", is_error: false, usage: { input_tokens: 30, output_tokens: 2 } },

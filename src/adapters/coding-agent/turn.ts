@@ -121,6 +121,8 @@ export interface CodingAgentTurnInput {
    * The MCP handler never executes the client tool.
    */
   toolBridge?: CodingAgentToolBridgeInput;
+  /** Family-specific replay projection; other coding-agent providers keep their existing layout. */
+  conversationInput?: typeof buildConversationInput;
   deps: CodingAgentDeps;
 }
 
@@ -134,6 +136,9 @@ export interface CodingAgentToolBridgeInput {
   tools: ReadonlyArray<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
   /** CLI-emitted tool name (`mcp__<server>__<tool>`) to the request's wire tool name. */
   emittedNameMap: Map<string, string>;
+  /** Claude replay may emit an exact selected wire name instead of its MCP transport name.
+   * These aliases are output-only: they never enter the CLI's --allowedTools list. */
+  acceptWireToolNames?: boolean;
   /** Tool_use blocks accepted in one assistant message. */
   maxTurnToolCalls: number;
   /** Render prior tool calls with the CLI-emitted names. Off by default so CodeBuddy history is unchanged. */
@@ -225,6 +230,9 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   }
 
   const toolBridge = input.toolBridge;
+  const wireToolNames = toolBridge?.acceptWireToolNames
+    ? new Set(toolBridge.emittedNameMap.values())
+    : undefined;
   const writeToolBridgeFile = deps.writeToolBridgeFile ?? writeFile;
   let toolBridgeDir: string | undefined;
   let toolBridgeMcpConfigPath: string | undefined;
@@ -429,7 +437,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       const vendorNameByWire = toolBridge?.projectHistoryToolNames
         ? new Map([...toolBridge.emittedNameMap].map(([emitted, wire]) => [wire, emitted]))
         : undefined;
-      for (const line of buildConversationInput(parsed, { maxHistoryChars: historyCharLimit, vendorNameByWire })) stdin.write(`${line}\n`);
+      for (const line of (input.conversationInput ?? buildConversationInput)(parsed, { maxHistoryChars: historyCharLimit, vendorNameByWire })) stdin.write(`${line}\n`);
       stdin.end();
     }
     const stdout = child.stdout;
@@ -523,7 +531,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             break;
           }
           if (toolBridge && event.type === "tool_call_start") {
-            const wireName = toolBridge.emittedNameMap.get(event.name);
+            const wireName = toolBridge.emittedNameMap.get(event.name)
+              ?? (wireToolNames?.has(event.name) ? event.name : undefined);
             if (wireName === undefined) {
               emitOnce({
                 type: "error",

@@ -292,7 +292,7 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
       type: "done",
       stopReason: "tool_use",
       endTurn: false,
-      usage: { inputTokens: 15, outputTokens: 5, totalTokens: 20, cachedInputTokens: 3, cacheReadInputTokens: 3 },
+      usage: { inputTokens: 18, outputTokens: 5, totalTokens: 23, cachedInputTokens: 3, cacheReadInputTokens: 3 },
     });
   });
 

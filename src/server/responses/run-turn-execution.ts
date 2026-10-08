@@ -52,6 +52,7 @@ import { planWebSearch } from "../../web-search";
 import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
 import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
 import { orderDevinMessagesOutput } from "../../claude/devin-output-order";
+import { claudeUsagePreflight } from "../../adapters/claude-cli/usage-admission";
 
 // LOCAL PATCH (runturn-websearch): top-level fields route binding or the
 // adapter itself may write during a turn. Iteration-local `turnParsed` objects
@@ -166,6 +167,33 @@ export async function executeResponsesRunTurn(
   const releaseSearchProbeLease = (): void => {
     sidecarState.openAiSidecar?.releaseProbeLease?.();
   };
+  // Publish the known subscription pause before headers or a CLI turn, preserving its reset
+  // across both Responses and translated Chat instead of presenting a retryable generic 502.
+  if (transportState.runTurnAdapter.name === "claude-cli") {
+    let usage: Awaited<ReturnType<typeof claudeUsagePreflight>>;
+    try {
+      usage = await claudeUsagePreflight(parsed.modelId);
+    } catch (error) {
+      // The outer cleanup does not own the sidecar's probe lease: hand it back before rethrowing.
+      releaseSearchProbeLease();
+      throw error;
+    }
+    if (usage.state === "exhausted") {
+      cancelResponseCompletion();
+      releaseSearchProbeLease();
+      const refusal = new Response(JSON.stringify({ error: {
+        type: "rate_limit_error", code: "claude_subscription_cooldown", param: null,
+        message: usage.message ?? "Claude subscription usage is exhausted.",
+      } }), {
+        status: 429,
+        headers: { "Content-Type": "application/json",
+          ...(usage.resetAt ? { "Retry-After": String(Math.max(1, Math.ceil((usage.resetAt - Date.now()) / 1000))) } : {}),
+        },
+      });
+      markResponseNonReplayable(refusal);
+      return refusal;
+    }
+  }
   // When Codex declared hosted web_search and a sidecar plan resolves, drive
   // the routed model through the same search interception the fetch-path loop
   // runs — injected as a function tool, calls intercepted, results appended to

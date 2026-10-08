@@ -1118,10 +1118,16 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   (`--system-prompt-file`), so the turn answers the client's contract rather than the harness
   persona. The folded prompt is staged in a private per-turn file (mode `0600`) and passed by path,
   because process arguments are world-readable through process listing; a request that carries
-  neither a system nor a developer prompt gets an empty file, which replaces the preset with nothing.
-- **Tool ownership:** v1 is text and reasoning only, exactly like the CodeBuddy and Qoder presets:
-  with no tool channel, approval, sandboxing and execution stay with the client. The shared
-  capture-only tool bridge is the documented follow-up.
+  neither a system nor a developer prompt gets only the fixed conversation-replay instructions.
+- **Conversation caching:** each message is replayed as a separate stable text block, with the
+  current message formatted identically to its later history representation. Long history is cut
+  only at whole-message checkpoints. Tool catalogs serialize deterministically. Claude Code
+  controls cache breakpoints; cache improvement must be measured on the actual workload.
+- **Tool ownership:** an isolated capture-only MCP catalog exposes only the client's selected
+  tools. The CLI captures intent, while approval, sandboxing, execution and returned results stay
+  with Codex, Pi, or another client. Built-in tools and other MCP servers remain disabled.
+- **Usage totals:** input totals include fresh input, cache reads and cache writes exactly once.
+  These processing counts are not a formula for the subscription's usage percentage.
 - **Destination:** the canonical row names `https://api.anthropic.com` because that is where the
   subscription's traffic lands. OpenCodex never sends that request itself, and overriding the base
   URL fails closed rather than handing the turn to another environment.

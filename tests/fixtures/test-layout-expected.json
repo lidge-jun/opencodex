@@ -67,7 +67,8 @@
   "codex-shim-fnm.test.ts": "codex-integration",
   "claude-intercept-cleanup.test.ts": "claude-integration",
   "droid-managed-reasoning-defaults.test.ts": "clients", "management-droid-reasoning-defaults.test.ts": "server",
-  "droid-reasoning-defaults.test.ts": "responses", "claude-intercept-on-demand.test.ts": "claude-integration",
+  "droid-reasoning-defaults.test.ts": "responses", "claude-cli-efficiency.test.ts": "providers",
+  "claude-cli-installed-regressions.test.ts": "providers", "claude-cli-client-http.test.ts": "providers", "claude-intercept-on-demand.test.ts": "claude-integration",
   "main-account-hard-lock-thresholds.test.ts": "codex-integration",
   "main-account-external-usage.test.ts": "codex-integration", "jev-decision-model-config.test.ts": "routing",
   "cli-combo-partial-update.test.ts": "cli", "desktop-app-server-shim.test.ts": "clients",
@@ -1159,6 +1160,7 @@
   "link-fingerprint.test.ts": "clients", "cli-link.test.ts": "cli",
   "link-management-routes.test.ts": "server", "link-compensation.test.ts": "clients",
   "web-search-run-turn-loop.test.ts": "web-search", "responses-run-turn-web-search.test.ts": "responses",
+  "responses-claude-preflight-lease.test.ts": "responses",
   "server-combo-cooldown-recording.test.ts": "server", "injection-routing-drift.test.ts": "codex-integration",
   "injection-routing-healer.test.ts": "codex-integration", "injection-routing-heal-apply.test.ts": "codex-integration",
   "cli-start-routing-heal-wiring.test.ts": "cli", "cli-status-codex-routing-drift.test.ts": "cli"
