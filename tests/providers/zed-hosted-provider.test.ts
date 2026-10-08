@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { constants, createPublicKey, publicEncrypt } from "node:crypto";
+import { constants, createHash, createPublicKey, publicEncrypt } from "node:crypto";
 import { createZedAdapter, zedEventStream, type ZedProvider } from "../../src/adapters/zed";
 import { setIcaclsRunnerForTests, resetHardenedStateForTests } from "../../src/lib/windows-secret-acl";
 import { getValidAccessTokenSnapshot } from "../../src/oauth";
@@ -22,6 +22,10 @@ import {
 } from "../../src/providers/zed";
 import { parseRequest } from "../../src/responses/parser";
 import type { OcxProviderConfig } from "../../src/types";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } from "../../src/lib/spend-reservation-ledger";
+import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 
 const originalFetch = globalThis.fetch;
 
@@ -295,6 +299,72 @@ describe("Zed Hosted AI provider", () => {
       role: "user",
       content: [{ type: "input_text", text: "hello zed openai" }],
     });
+  });
+});
+
+describe("Zed inference send accounting", () => {
+  async function fixture(limit: number, full = false) {
+    const catalog = [jsonResponse({ default_organization_id: "org-1" }),
+      jsonResponse({ token: "llm-token-1" }), jsonResponse({ models: [{ id: "gpt-5.6", provider: "open_ai" }] })];
+    globalThis.fetch = (async () => {
+      const response = catalog.shift();
+      if (!response) throw new Error("unexpected Zed catalog fetch");
+      return response;
+    }) as typeof globalThis.fetch;
+    const adapter = withTestTranslatorBudget(createZedAdapter({ adapter: "zed", authMode: "oauth",
+      baseUrl: "https://zed-proxy.example.test/v1/", apiKey: "access-token" }));
+    const parsed = parseRequest({ model: "gpt-5.6", input: "hello", stream: true });
+    parsed._zedAuthContext = { userId: "user-1" };
+    const request = await adapter.buildRequest(parsed);
+    const salt = "5".repeat(64);
+    const poolAlias = createHash("sha256").update(`${salt}\0pool\0zed-canonical`).digest("hex").slice(0, 32);
+    const ledger = createSpendReservationLedger({ salt, policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 100 }, maxTrackedSends: full ? 1 : 10,
+      canonicalProviderIds: ["zed-canonical"], poolAliases: { [poolAlias]: "zed-canonical" },
+    } });
+    if (full) expect(ledger.reserveSeed({ sendId: "occupied", scopes: { poolId: "zed-canonical" },
+      inputTokens: 1, outputCeilingTokens: 0 }).reserved).toBe(true);
+    const tracker = createRequestSpendTracker({ provider: "Zed display label", spendPoolId: "zed-canonical",
+      spendInputEstimateTokens: 10 }, undefined, ledger);
+    const budget = createRequestExecutionBudget({ maxTotalModelSends: limit, baseSendAllowance: limit,
+      finalRecoveryAllowance: 0, maxAlternateTargetSends: 0, maxTargetTransitions: 0 }, undefined, tracker);
+    return { adapter, request, ledger, tracker, budget };
+  }
+
+  test("NORMAL seed refusal makes zero completion executor calls", async () => {
+    const { adapter, request, budget } = await fixture(2, true);
+    let calls = 0;
+    await expect(adapter.fetchResponse!(request, { sendBudget: budget,
+      executor: (async () => { calls++; return new Response("unexpected"); }) as typeof globalThis.fetch,
+    })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+    expect(calls).toBe(0);
+    expect(budget.physicalStarted).toBe(0);
+  });
+
+  for (const limit of [1, 2]) test(`401 replay respects physical L=${limit} and canonical pool accounting`, async () => {
+    const { adapter, request, ledger, tracker, budget } = await fixture(limit);
+    const calls: string[] = [];
+    const physical: Array<{ ordinal: number; recovery?: string }> = [];
+    let completions = 0;
+    const result = adapter.fetchResponse!(request, { sendBudget: budget, onPhysicalSend: send => physical.push(send),
+      executor: (async (input) => {
+        const url = String(input);
+        calls.push(url);
+        if (new URL(url).pathname === "/client/llm_tokens") return jsonResponse({ token: "llm-token-2" });
+        expect(url).toBe("https://zed-proxy.example.test/v1/completions");
+        return ++completions === 1 ? new Response("expired", { status: 401 }) : new Response("ok");
+      }) as typeof globalThis.fetch,
+    });
+    if (limit === 1) await expect(result).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+    else expect(await (await result).text()).toBe("ok");
+    expect(completions).toBe(limit);
+    expect(calls.filter(url => new URL(url).pathname === "/client/llm_tokens")).toHaveLength(1);
+    expect(physical).toEqual(limit === 1 ? [{ ordinal: 1 }] : [{ ordinal: 1 }, { ordinal: 2, recovery: "oauth-401" }]);
+    expect(budget.used).toBe(limit);
+    expect(budget.physicalStarted).toBe(limit);
+    tracker.requestFinalSettlement(limit === 2 ? { inputTokens: 7, outputTokens: 0 } : undefined);
+    expect(ledger.snapshot("pool", "zed-canonical")).toMatchObject({ settled: limit === 2 ? 7 : 0, unresolved: 10 });
+    expect(ledger.snapshot("pool", "Zed display label")?.settled ?? 0).toBe(0);
   });
 });
 

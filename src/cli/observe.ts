@@ -129,7 +129,9 @@ async function explain(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   rejectArgs(args, USAGE);
   const encoded = encodeURIComponent(requestId);
   const result = await runtimeRequest(`/api/request-history/${encoded}/route-decision`, {}, deps);
-  printData(result, wantsJson, wantsJson ? undefined : [JSON.stringify(result, null, 2)]);
+  // One entry per line: printData escapes control characters per entry, so a single
+  // pretty-printed string would print its line breaks as literal `\x0a`.
+  printData(result, wantsJson, wantsJson ? undefined : JSON.stringify(result, null, 2).split("\n"));
 }
 
 async function rebuildIndex(argv: string[], deps: RuntimeApiDeps): Promise<void> {

@@ -703,6 +703,7 @@ function failedBlocks(name: string, newline: string): readonly string[] {
  * @param providerExecutedCallTypes - Call types executed by the provider.
  * @param declaredBare - Explicitly declared bare tool names without namespace provenance.
  * @param declaredCustom - Current bare custom declarations eligible for code-mode recovery.
+ * @param enforceDeclaredToolNames - Refuse undeclared calls; normalization remains active when false.
  * @returns An SSE block rewrite function.
  */
 export function createUndeclaredToolCallGuardBlockRewrite(
@@ -711,6 +712,7 @@ export function createUndeclaredToolCallGuardBlockRewrite(
   providerExecutedCallTypes: ProviderExecutedCallTypes = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
   declaredBare?: ReadonlySet<string>,
   declaredCustom?: ReadonlySet<string>,
+  enforceDeclaredToolNames = true,
 ): SseBlockRewrite {
   let tripped = false;
   return (block: string) => {
@@ -723,7 +725,9 @@ export function createUndeclaredToolCallGuardBlockRewrite(
     } catch {
       return [block];
     }
-    const name = undeclaredToolCallName(parsed, declared, declaredNamelessClientCallTypes, providerExecutedCallTypes, declaredBare, declaredCustom);
+    const name = enforceDeclaredToolNames
+      ? undeclaredToolCallName(parsed, declared, declaredNamelessClientCallTypes, providerExecutedCallTypes, declaredBare, declaredCustom)
+      : undefined;
     if (name !== undefined) {
       tripped = true;
       return failedBlocks(name, block.includes("\r\n") ? "\r\n" : "\n");

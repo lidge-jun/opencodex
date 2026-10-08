@@ -11,11 +11,13 @@
  * while older families (Haiku 4.5, Sonnet 4.x, Opus <= 4.6) 400 on `adaptive` — so both wire
  * shapes must stay. Verified against api.anthropic.com: sonnet-5, fable-5, opus-4-7 and opus-4-8
  * require adaptive; haiku-4-5 and sonnet-4-5 reject it; opus-4-6/sonnet-4-6 accept both.
+ * Haiku 5.5 requires adaptive (platform.claude.com Haiku 5.5 migration guide, 2026-10-08).
  */
 const ADAPTIVE_THINKING_FAMILY_MINIMUMS: Record<string, readonly [major: number, minor: number]> = {
   sonnet: [5, 0],
   opus: [4, 7],
   fable: [0, 0],
+  haiku: [5, 5],
 };
 
 /**
@@ -88,11 +90,13 @@ export function usesBetweenToolsFloor(modelId: string): boolean {
  * need no disable at all. Seeded with the family where the defect reproduces
  * (#545); widen only with vendor evidence, since a wrong entry here turns a
  * silent truncation into a 400. Sonnet 5.5 dropped `disabled` again, so the
- * Sonnet range ends there and `usesBetweenToolsFloor` takes over.
+ * Sonnet range ends there and `usesBetweenToolsFloor` takes over. Haiku 5.5+ accepts disable
+ * at high effort or below; send no effort with it (Haiku 5.5 migration guide, 2026-10-08).
  */
 export function supportsExplicitThinkingDisable(modelId: string): boolean {
   const parsed = claudeFamilyVersion(modelId);
-  return parsed?.family === "sonnet" && atLeast(parsed, [5, 0]) && !atLeast(parsed, [5, 5]);
+  return (parsed?.family === "sonnet" && atLeast(parsed, [5, 0]) && !atLeast(parsed, [5, 5]))
+    || (parsed?.family === "haiku" && atLeast(parsed, [5, 5]));
 }
 
 /**
@@ -111,6 +115,7 @@ export function rejectsForcedToolChoice(modelId: string): boolean {
  * Families that 400 on any non-default `temperature`, `top_p` or `top_k` ("temperature is deprecated
  * for this model."), with or without thinking. Live 2026-09-29: Opus 4.7, 4.8, 5 and 5.5,
  * Sonnet 5 and 5.5, Fable 5 and 5.1 reject them; Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept them.
+ * Haiku 5.5 rejects them too (Haiku 5.5 migration guide, read 2026-10-08).
  * `temperature: 1` (the default) is accepted everywhere, but the adapter drops the field rather than
  * guess which value a caller meant as default.
  */
@@ -118,6 +123,7 @@ const SAMPLING_REJECTION_FAMILY_MINIMUMS: Record<string, readonly [major: number
   sonnet: [5, 0],
   opus: [4, 7],
   fable: [0, 0],
+  haiku: [5, 5],
 };
 
 export function rejectsSamplingParameters(modelId: string): boolean {

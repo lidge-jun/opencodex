@@ -185,6 +185,17 @@ export interface ExportContext {
    */
   config?: OcxConfig;
   droidReasoningDefaults?: DroidReasoningDefaults;
+  /**
+   * The parsed target document, when the caller has one in hand.
+   *
+   * A client whose reader picks between two roots needs the bytes on disk to
+   * choose: Command Code resolves `document.provider ?? document.providers`, so
+   * writing the singular root into a document that already carries the plural one
+   * leaves the user's providers unreadable rather than merging with them. Absent
+   * for `ocx export`, which has no target file — the builder then writes its
+   * default root, exactly as before.
+   */
+  document?: unknown;
 }
 
 /** Namespaced model selector to one of that model's declared reasoning efforts. */
@@ -206,6 +217,7 @@ export type ExportClientId =
   | "raycast"
   | "omo"
   | "cline"
+  | "commandcode"
   | "kilo"
   | "droid";
 

@@ -24,6 +24,8 @@ Runnable capability parents also expose their declared descendants. Nested help 
 
 A declaration may carry `usage`, the exact synopsis for a verified leaf. `capabilityInvocation` and matching still use canonical command tokens. `src/cli/capabilities-command.ts` projects `usage` only when present, preserving the previous JSON object shape otherwise. The help renderer then uses the exact Usage line and omits that leaf's incomplete-grammar disclaimer. A declaration without usage keeps the prior Command/partial-grammar presentation. Root aliases, hidden entries, head-only invocations and the models-context special topic retain their existing semantics.
 
+The agents/routing leaf also declares local `message sessions` and `message send`; their command-local transport and receipt contract belongs to [local messaging](local-messaging.md#command-local-cli). These declarations import no messaging handlers and preserve baseline capability order. The operating-reference generator places the two verbs in the agents/routing chapter.
+
 ## Generated operating reference
 
 `scripts/generate-ocx-skill-surface.ts` renders the compact `skills/ocx/references/01_management_surface.md` index and eight flat domain chapters from the same capability data. The index retains canonical fragment forwarders and links to complete chapter entries. Counts derive from declarations; grouping does not choose runtime dispatch or grant authority. Unknown roots and duplicate anchors are rejected rather than silently omitted.
@@ -69,6 +71,8 @@ Management route declarations describe actual HTTP calls only; local Lab automat
 `src/cli/v2-input.ts` parses target/output/acknowledgment before effects and protects literal hint text after the terminator. `src/cli/v2-runtime.ts` has no parent-local-writer import and validates the management state/advisory/catalog contract. `src/cli/v2-local-output.ts` reads actual local state and validates unknown injected sync results before projection. Local mode/keep and changed feature toggles retain their sync call even without a discovered port; other verbs do not gain new synchronization. Live failure never invokes local writers, and partial native state never becomes an implicit rollback claim.
 
 ## Integration inspection, recovery and maintenance
+
+`src/cli/capabilities-integrations.ts` declares `commandcode restore` and its dedicated restore/preview routes separately from generic integration restore. Its generated operating reference preserves the client-bound command, supported flags, and refusal on older proxies without those routes.
 
 `src/cli/integration-input.ts` shares pure profile paths/validation and owns exact optional Droid-map/fingerprint grammar. `src/cli/integration-preview.ts` handles explicit preview and new-option writes; `src/cli/integration-plan-dto.ts` validates value-free plans without runtime imports from GUI/planner/writer code. The original direct mutation bodies remain when new options are absent. Refused and no-op previews are completed observations; stale commits return a re-preview instruction without adopting a replacement token. The server owns coordinated binding and writes.
 

@@ -231,6 +231,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/client-integrations/restore", module: "server/management/integration-routes", mutates: true },
   { method: "POST", path: "/api/client-integrations/preview", module: "server/management/integration-routes", mutates: false },
   { method: "POST", path: "/api/client-integrations/restore/preview", module: "server/management/integration-routes", mutates: false },
+  { method: "POST", path: "/api/client-integrations/commandcode/restore", module: "server/management/integration-routes", mutates: true },
+  { method: "POST", path: "/api/client-integrations/commandcode/restore/preview", module: "server/management/integration-routes", mutates: false },
   // server/management/lab-automation-routes
   { method: "GET", path: "/api/lab/automation", module: "server/management/lab-automation-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "GET", path: "/api/lab/automation/runs", module: "server/management/lab-automation-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
@@ -324,7 +326,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PATCH", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PATCH", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
-  { method: "POST", path: "/api/keys/reveal", module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "session-only", why: "Revealing a data key requires the gui-session principal; the admin token is refused." } },
+  { method: "POST", path: "/api/keys/reveal", module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "session-only", why: "Stored-key reads require a current pairing or trusted Tailscale-identity session; automatic loopback sessions and admin tokens are refused." } },
   { method: "POST", path: "/api/keys/rotate", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/keys/rotate/commit", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/accounts/clear-cooldown", module: "server/management/oauth-account-routes", mutates: true },

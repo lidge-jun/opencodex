@@ -320,7 +320,7 @@ OpenCodex tracks process-retained state in the categories below. Each has a docu
   store, which is pinned and never evicted.
 - **4 observed buffers** (translator accumulators, image/OAuth/Grok tails) are
   monitored for in-flight byte pressure without eviction.
-- **28 state-store registrations** handle expiry sweeps (60 s interval) and
+- **31 state-store registrations** handle expiry sweeps (60 s interval) and
   config-generation reconciliation so stale provider/account keys are removed.
 - **Path and fingerprint memos** (workspace metadata, hardened identities, installation
   salts, mode-hint capabilities) use insertion-order LRU caps (8–128 entries).
@@ -458,8 +458,8 @@ Acknowledging a report is not the same as triaging it, and no first-response tar
 
 ## Development
 
-Source development requires the `bun` CLI on your `PATH`. This is separate from the published npm
-package's bundled Bun runtime, which is used only by installed `ocx` commands.
+Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own
+Bun runtime for installed `ocx` commands; package scripts may also resolve Bun through that bundled dependency.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

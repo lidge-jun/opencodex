@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { localCleartextAddressAllowed } from "../../src/lib/provider-outbound";
 import {
   JEV_DECISION_TIMEOUT_DEFAULT_MS as SERVER_TIMEOUT_DEFAULT_MS,
   JEV_DECISION_TIMEOUT_MAX_MS as SERVER_TIMEOUT_MAX_MS,
@@ -160,9 +161,25 @@ describe("JEV decision service in the combo workspace", () => {
   });
 
   test("the GUI endpoint check is the server's", () => {
-    for (const url of ["http://h/v1/systemone", "http://h/v1/systemone/", "http://h/v1", "not a url", ""]) {
+    for (const url of ["https://decisions.example/v1/decisions", "http://localhost/v1/systemone", "http://127.0.0.1/v1/systemone/", "http://h/v1", "not a url", ""]) {
       expect(jevDecisionRowIssue({ adapter: "jev-decision", baseUrl: url, defaultModel: "m" }) === null)
         .toBe(isSystemOneEndpoint(url));
+    }
+    for (const url of ["http://decisions.example/v1/systemone", "http://10.example.com/v1/systemone", "ftp://decisions.example/v1/systemone", "https://user:pass@example.test/v1/decisions", "https://decisions.example/v1/decisions?key=secret", "https://decisions.example/v1/decisions#fragment",
+      "https://decisions.example/v1/decisions?", "https://decisions.example/v1/decisions#", "https://decisions.example/v1/decisions?#",
+      "https://@decisions.example/v1/decisions", "https://:@decisions.example/v1/decisions",
+      "https:\t//@decisions.example/v1/decisions", "https:\n//:@decisions.example/v1/decisions", "https://decisions.example/v1/de\rcisions"]) {
+      expect(isSystemOneEndpoint(url)).toBeFalse();
+    }
+    expect(isSystemOneEndpoint("https://decisions.example/v1/user@decisions")).toBeTrue();
+  });
+
+  test("HTTP endpoint literals match the transport's local address allowlist", () => {
+    for (const address of ["127.0.0.1", "127.255.255.254", "10.0.0.1", "172.16.0.1", "172.31.255.254", "192.168.1.1",
+      "::1", "::ffff:127.0.0.1", "fc00::1", "fdff::1", "172.15.0.1", "172.32.0.1", "192.169.1.1", "8.8.8.8",
+      "0.0.0.0", "100.64.0.1", "169.254.169.254", "198.18.0.1", "::", "fe80::1", "::ffff:10.0.0.1", "64:ff9b::1"]) {
+      const host = address.includes(":") ? `[${address}]` : address;
+      expect(isSystemOneEndpoint(`http://${host}/v1/systemone`)).toBe(localCleartextAddressAllowed(address));
     }
   });
 

@@ -279,17 +279,18 @@ describe("proactive Anthropic routing stays opt-in", () => {
     // #6340 folded the 429 and proven-403 paths into rotateAnthropicAccountOnRefusal and
     // recordAnthropicAccountRefusal; the 429 entry points delegate to them.
     const source = await Bun.file("src/oauth/anthropic-routing.ts").text();
-    const start = source.indexOf("export function rotateAnthropicAccountOnRefusal");
+    // Inspect the shared instance implementation, not the legacy A delegation wrapper.
+    const start = source.indexOf("  function rotateAnthropicAccountOnRefusal");
     expect(start).toBeGreaterThan(-1);
-    const body = source.slice(start, source.indexOf("\n}", start));
+    const body = source.slice(start, source.indexOf("\n  }", start));
     const recordCall = body.indexOf("if (!recordAnthropicAccountRefusal(");
     expect(recordCall, "the rotator no longer uses the recorder's quorum gate").toBeGreaterThan(-1);
     expect(body.slice(0, recordCall), "the rotator added a pool-only gate before recording")
       .not.toContain("isAnthropicAccountPoolEnabled");
 
-    const recordStart = source.indexOf("export function recordAnthropicAccountRefusal");
+    const recordStart = source.indexOf("  function recordAnthropicAccountRefusal");
     expect(recordStart).toBeGreaterThan(-1);
-    const recordBody = source.slice(recordStart, source.indexOf("\n}", recordStart));
+    const recordBody = source.slice(recordStart, source.indexOf("\n  }", recordStart));
     const gate = recordBody.split("\n").find(line =>
       line.trimStart().startsWith("if (") && line.includes("isAnthropicAccountPoolEnabled"));
     expect(gate, "the recorder no longer checks the pool flag").toBeDefined();

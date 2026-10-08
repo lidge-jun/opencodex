@@ -1,8 +1,8 @@
 /**
  * Dashboard memory-card drain-and-restart (#563).
  *
- * Longer than POST /api/stop's short drain: waits up to 60s for active turns,
- * then respawns. Never runs restoreNativeCodex / stripGrokConfig — this is a
+ * Waits up to 60s for active turns unless a manual API caller explicitly opts
+ * into a shorter grace, with the existing 60s cleanup watchdog, then respawns. Never runs restoreNativeCodex / stripGrokConfig — this is a
  * recycle to reclaim RSS, not a teardown.
  *
  * Respawn policy (matches real supervisor configs in src/service.ts):
@@ -37,6 +37,7 @@
  *   Checked before the service rule: that app, not a service manager, is the parent.
  */
 import {
+  abortAndReleaseAllTurns,
   acquireTemporaryDrain,
   beginShutdownDrain,
   drainAndShutdown,
@@ -64,8 +65,11 @@ import { spawnReplacementStart } from "../restart-replacement";
 export { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../../lib/system-restart-contract";
 export { waitForReplacementReady, type ReplacementReadinessIo } from "../restart-replacement";
 export const DEADLINE_LISTENER_STOP_TIMEOUT_MS = 5_000;
+const RESTART_RESPONSE_FLUSH_DELAY_MS = 200;
 
 export interface SystemRestartIo {
+  /** Cancel and release admitted turns without stopping the listener or process. */
+  abortActiveTurns?: () => void;
   acquireTemporaryDrain?: () => { release(): void } | null;
   drainAndShutdown?: typeof drainAndShutdown;
   /** True when a background service can actually respawn this process after exit(1). */
@@ -92,6 +96,11 @@ export interface SystemRestartIo {
   now?: () => number;
 }
 
+export interface SystemRestartOptions {
+  /** Explicit API opt-in; omission preserves the existing 60s drain. */
+  drainGraceMs?: number;
+}
+
 export interface SystemRestartAdmission {
   /** Only the caller that created this pending restart receives its veto. */
   onAccepted?: (veto: () => void) => void;
@@ -100,8 +109,9 @@ export interface SystemRestartAdmission {
 }
 
 let restartIo: SystemRestartIo = {};
-/** Prevents double-scheduling in the 200ms window before drainAndShutdown sets draining. */
+/** Prevents double-scheduling during the 200ms response-flush window. */
 let restartAccepted = false;
+let acceptedDrainGraceMs = MEMORY_DRAIN_RESTART_MS;
 
 type RestartDrainOutcome = "completed" | "failed" | "rejected" | "deadline";
 type BoundedSettlementOutcome = "completed" | "rejected" | "deadline";
@@ -173,6 +183,7 @@ export function noteExplicitShutdownRequested(): void {
 export function setSystemRestartIoForTests(io: SystemRestartIo = {}): void {
   restartIo = io;
   restartAccepted = false;
+  acceptedDrainGraceMs = MEMORY_DRAIN_RESTART_MS;
   explicitShutdownRequested = false;
 }
 
@@ -324,10 +335,10 @@ async function completeDeadlineRestartHandoff(
 
 /**
  * Accept a drain-and-restart request. Returns immediately; the drain +
- * respawn runs on a short timer so the HTTP response can flush first.
+ * respawn waits 200ms for the HTTP response to flush; shorter grace cuts turns separately.
  * Idempotent while already draining: returns the accepted shape again.
  */
-export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: SystemRestartAdmission = {}): {
+export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: SystemRestartAdmission = {}, options: SystemRestartOptions = {}): {
   accepted: true;
   alreadyDraining: boolean;
   activeTurnCount: number;
@@ -337,16 +348,22 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
     ?? io.isDraining
     ?? isShutdownDraining;
   const alreadyDraining = restartAccepted || shutdownActive();
+  const drainGraceMs = alreadyDraining
+    ? (restartAccepted ? acceptedDrainGraceMs : MEMORY_DRAIN_RESTART_MS)
+    : (options.drainGraceMs ?? MEMORY_DRAIN_RESTART_MS);
   const activeTurnCount = (io.getActiveTurnCount ?? getActiveTurnCount)();
   const schedule = io.schedule ?? ((fn, ms) => { setTimeout(() => { void fn(); }, ms); });
 
   if (!alreadyDraining) {
     restartAccepted = true;
+    acceptedDrainGraceMs = drainGraceMs;
     const automatic = Boolean(admission.onAccepted);
     const temporaryDrain = automatic
       ? (io.acquireTemporaryDrain ?? (() => acquireTemporaryDrain("automatic-restart")))()
       : null;
+    let cancelEarlyCut: (() => void) | undefined;
     const releasePending = () => {
+      cancelEarlyCut?.();
       temporaryDrain?.release();
       restartAccepted = false;
     };
@@ -363,12 +380,26 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
       releasePending();
     });
     const now = io.now ?? Date.now;
-    const restartDeadlineMs = now() + MEMORY_DRAIN_RESTART_MS;
+    const acceptedAtMs = now();
+    const restartDeadlineMs = acceptedAtMs + MEMORY_DRAIN_RESTART_MS;
+    const drainDeadlineMs = acceptedAtMs + drainGraceMs;
+    const scheduleDeadline = io.scheduleDeadline ?? ((fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      return () => clearTimeout(timer);
+    });
     // Reject new data-plane traffic immediately (503), before the 200ms response-flush delay.
     if (!automatic) {
       if (io.beginShutdownDrain) io.beginShutdownDrain();
       else if (io.setDraining) io.setDraining(true);
       else beginShutdownDrain();
+    }
+    // A shorter grace cuts admitted turns at acceptance + grace, but listener stop
+    // and process exit must still wait for the full response-flush window.
+    if (!vetoed && drainGraceMs < RESTART_RESPONSE_FLUSH_DELAY_MS) {
+      cancelEarlyCut = scheduleDeadline(() => {
+        if (vetoed) return;
+        (io.abortActiveTurns ?? (() => abortAndReleaseAllTurns(new Error("server shutdown"))))();
+      }, drainGraceMs);
     }
     schedule(async () => {
       if (vetoed) return;
@@ -390,12 +421,11 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
       // closes the listener and makes both the server ref and runtime metadata stale.
       const restartPort = (io.listenPort ?? resolveListenPort)();
       const drain = io.drainAndShutdown ?? drainAndShutdown;
-      const remainingMs = Math.max(0, restartDeadlineMs - now());
-      const drainPromise = Promise.resolve().then(() => drain(undefined, remainingMs));
-      const scheduleDeadline = io.scheduleDeadline ?? ((fn, ms) => {
-        const timer = setTimeout(fn, ms);
-        return () => clearTimeout(timer);
-      });
+      // Bound active/scoped-drain waiting independently of cleanup and readiness.
+      // A cut turn may already have executed upstream; never replay it automatically.
+      const drainPromise = Promise.resolve().then(
+        () => drain(undefined, Math.max(0, drainDeadlineMs - now())),
+      );
       const drainOutcome = await waitForRestartDrain(drainPromise, restartDeadlineMs, now, scheduleDeadline);
       if (!canHandoff()) return;
       const exitProcess = io.exitProcess ?? ((code: number) => { process.exit(code); });
@@ -451,13 +481,13 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
       }
       (io.markRecycling ?? markRecyclingForExit)();
       exitProcess(drainOutcome === "failed" || drainOutcome === "rejected" ? 1 : 0);
-    }, 200);
+    }, RESTART_RESPONSE_FLUSH_DELAY_MS);
   }
 
   return {
     accepted: true,
     alreadyDraining,
     activeTurnCount,
-    drainTimeoutMs: MEMORY_DRAIN_RESTART_MS,
+    drainTimeoutMs: drainGraceMs,
   };
 }

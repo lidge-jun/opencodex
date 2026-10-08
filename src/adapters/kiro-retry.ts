@@ -183,12 +183,12 @@ async function fetchWithResetRecovery(
         sendClass: "transient", targetKey: destination, rebasedTarget: destinationRebased,
       });
       destinationRebased = false;
-      if (decision && (!decision.allowed || !decision.permit.use())) {
+      if (decision && !decision.allowed) {
         throw new SendBudgetExhaustedError(destination);
       }
       // Reported after admission and before dispatch, so a refused send is never counted and an
       // admitted one is counted exactly once whichever way the fetch below settles.
-      notePhysicalSend(attempt > 0);
+      const permit = decision?.allowed ? decision.permit : undefined;
       const requestUrl = request.url;
       try {
         const headers = new Headers(request.headers);
@@ -201,7 +201,12 @@ async function fetchWithResetRecovery(
           ...(recovered ? { keepalive: false } : {}),
         }, timeoutMs, ctx.abortSignal, ctx.stream, (async (input, init) => {
           try {
-            return await (executor.unpacedFetch ?? executor)(input, init);
+            const run = async (): Promise<Response> => {
+              if (permit && !permit.use()) throw new SendBudgetExhaustedError(destination);
+              notePhysicalSend(attempt > 0);
+              return (executor.unpacedFetch ?? executor)(input, init);
+            };
+            return await (permit?.execute ? permit.execute(run) : run());
           } catch (error) {
             if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
             const signal = init?.signal;
@@ -224,7 +229,7 @@ async function fetchWithResetRecovery(
           baseDelayMs: RESET_RETRY_BASE_MS,
           maxDelayMs: RESET_RETRY_MAX_MS,
         }), ctx.abortSignal);
-      }
+      } finally { permit?.release(); }
     } finally {
       releaseProviderRequestSlot(slot);
     }

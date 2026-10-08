@@ -41,6 +41,8 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   "claude-opus-5-5-fast": ["low", "medium", "high", "xhigh", "max"],
   // 260929 preemptive Sonnet 5.5: Anthropic documents low..max; flat ids like Opus 5.5 until the
   // live GetUsableModels roster lists the model.
+  // 261008 preemptive Haiku 5.5: flat regular low..max ids, per Cursor docs.
+  "claude-haiku-5-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-sonnet-5-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
   "glm-5.2": ["high", "max"],

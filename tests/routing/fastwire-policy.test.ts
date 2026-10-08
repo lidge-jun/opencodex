@@ -703,13 +703,13 @@ describe("FastWire config and registry validation", () => {
     // neither can inherit the OpenAI adapter default. Every other provider still gets its
     // wire from defaultFastWireForAdapter.
     const declared = PROVIDER_REGISTRY.filter(entry => entry.fastWire !== undefined);
-    expect(declared.map(entry => entry.id).sort()).toEqual(["anthropic", "anthropic-apikey", "cursor"]);
+    expect(declared.map(entry => entry.id).sort()).toEqual(["anthropic", "anthropic-apikey", "anthropic2", "cursor"]);
     expect(declared.find(entry => entry.id === "cursor")?.fastWire).toEqual({
       kind: "cursor-variant",
       canonicalToWire: { priority: "fast" },
       foreignCallerTiers: "drop",
     });
-    for (const id of ["anthropic", "anthropic-apikey"]) {
+    for (const id of ["anthropic", "anthropic2", "anthropic-apikey"]) {
       expect(declared.find(entry => entry.id === id)?.fastWire).toEqual({
         kind: "anthropic-speed",
         canonicalToWire: { priority: "fast" },

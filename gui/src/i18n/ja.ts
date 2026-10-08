@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  "sidecar.pool": "アカウントプール",
+  "sidecar.poolCurrent": "現在のリクエストのプール",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · プール2",
+  "sidecar.poolMixed": "この明示的な選択では、メインのリクエストと異なるプールを使用する場合があります。",
+  "provider.name.anthropic2": "Anthropic · プール2",
   "nav.claude": "Claude",
   "claude.pageSub": "Claude Code の OpenCodex ルーティングと設定を管理します。",
 
@@ -1933,6 +1939,7 @@ export const ja: Record<TKey, string> = {
   "integrations.tab.dsh": "DSH",
   "integrations.tab.mcode": "MiniMax Code",
   "integrations.tab.zcode": "ZCode",
+  "integrations.tab.commandcode": "Command Code",
   "integrations.tab.prime": "Prime Agent",
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
@@ -2156,6 +2163,7 @@ export const ja: Record<TKey, string> = {
   "integrations.semantics.dsh": "OpenCodex が管理するのは $DSH_HOME/profiles/desktop/cordis.patch.yml（DSH 0.1.7 以降が読む Desktop プロファイル。存在しない間は $DSH_HOME/settings.yaml）の llm-pi-ai 行にある opencodex プロバイダーだけです。DSH はこのプロバイダーをホットリロードし、既定のモデルと deepseek-official は変更しません。現在はループバック専用で、実際の認証情報は書き込みません。",
   "integrations.semantics.mcode": "custom_provider.opencodex のみを管理します。既定モデルと MiniMax ログインは変更しません。",
   "integrations.semantics.zcode": "~/.zcode/v2/config.json の provider.opencodex のみを管理します。Z.ai ログインと他のプロバイダーは変更しません。変更後は ZCode を再起動してください。",
+  "integrations.semantics.commandcode": "~/.commandcode/providers.json の OpenCodex プロバイダー項目のみを管理します。他のプロバイダーや設定は変更しません。",
   "integrations.semantics.prime": "Prime Agent の models.json 内の providers.opencodex のみを管理します。場所は ~/.prime/agent ですが、PRIME_AGENT_CODING_AGENT_DIR が設定されている場合はそちらが優先されます。他のプロバイダーとモデルオーバーライドは変更しません。新しいセッションから適用されます。",
   "integrations.semantics.aside": "このプロファイルの ~/.aside/u/<id>/models.json 内の providers.opencodex のみを管理します。他のプロバイダーは変更しません。適用後は Aside を完全に終了してから開き直してください。",
   "integrations.semantics.raycast": "Raycast の providers.yaml に OpenCodex のプロバイダーエントリを追加し、ルーティングされたすべてのモデルを Raycast AI のモデル選択に表示します。Raycast Pro が必要です。",
@@ -2722,6 +2730,8 @@ export const ja: Record<TKey, string> = {
   "api.key.revealHint": "クリックでキー全体を表示",
   "api.key.hideHint": "クリックでキー全体を隠す",
   "api.key.revealFailed": "キー全体を読み込めませんでした。",
+  "api.key.revealDenied": "保存済みキーの表示には、オペレーターが認可したセッションが必要です。続行するにはこのブラウザーをペアリングするか、信頼された Tailscale ID でサインインしてください。",
+  "api.key.mutationHidden": "キーの作成またはローテーションの開始は完了しましたが、セッションまたは画面が変わったため、一度だけ表示される値を非表示にしました。",
   "api.key.copyFailedShort": "コピーできませんでした。キーを選択して手動でコピーしてください。",
   "api.key.deleteRowAria": "{name} を削除",
   "api.key.deleteShort": "削除",
@@ -2748,6 +2758,7 @@ export const ja: Record<TKey, string> = {
   "api.clientConfig.clientDsh": "DeepSeek Harness (DSH)",
   "api.clientConfig.clientMcode": "MiniMax Code",
   "api.clientConfig.clientZcode": "ZCode",
+  "api.clientConfig.clientCommandCode": "Command Code",
   "api.clientConfig.clientPrime": "Prime Agent",
   "api.clientConfig.clientAside": "Aside",
   "api.clientConfig.clientRaycast": "Raycast",

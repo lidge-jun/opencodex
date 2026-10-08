@@ -9,7 +9,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode(?!-kilo)|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command(?!-code-client)|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode(?!-kilo)|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -114,7 +114,8 @@
         "^aside-profile(?!s-routes)",
         "^cline-(?:client|writer)(?:-|[.])",
         "^opencode-kilo-",
-        "^(?:desktop|omp|pi|prime|remote|sync)-"
+        "^(?:desktop|omp|pi|prime|remote|sync)-",
+        "^command-code-client(?:-|[.])"
       ]
     },
     "service": {

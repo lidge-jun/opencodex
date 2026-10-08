@@ -1,3 +1,4 @@
+import { isBuiltinAnthropicInstanceRow } from "../providers/anthropic-instance";
 /**
  * Generic OAuth multi-account 429 failover (#2568).
  *
@@ -157,7 +158,8 @@ export function kiroAutoSelection(
 
 /** True when this provider participates in generic rotation at all. */
 export function isGenericFailoverProvider(providerName: string, provider: OcxProviderConfig): boolean {
-  return provider.authMode === "oauth" && !EXCLUDED_PROVIDERS.has(providerName);
+  return provider.authMode === "oauth" && !EXCLUDED_PROVIDERS.has(providerName)
+    && !isBuiltinAnthropicInstanceRow(providerName, provider);
 }
 
 /**

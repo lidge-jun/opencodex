@@ -23,6 +23,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "raycast",
   "omo",
   "cline",
+  "commandcode",
   "kilo",
   "droid",
 ] as const;

@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
+  "sidecar.pool": "Pool de comptes",
+  "sidecar.poolCurrent": "Pool de la requête actuelle",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · Pool 2",
+  "sidecar.poolMixed": "Ce choix explicite peut utiliser un autre pool que la requête principale.",
+  "provider.name.anthropic2": "Anthropic · Pool 2",
   "nav.claude": "Claude",
   "claude.pageSub": "Routage et paramètres OpenCodex pour Claude Code.",
 
@@ -2038,6 +2044,7 @@ export const fr: Record<TKey, string> = {
   "integrations.tab.dsh": "DSH",
   "integrations.tab.mcode": "MiniMax Code",
   "integrations.tab.zcode": "ZCode",
+  "integrations.tab.commandcode": "Command Code",
   "integrations.tab.prime": "Prime Agent",
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
@@ -2261,6 +2268,7 @@ export const fr: Record<TKey, string> = {
   "integrations.semantics.dsh": "OpenCodex gère uniquement le fournisseur opencodex de la ligne llm-pi-ai dans $DSH_HOME/profiles/desktop/cordis.patch.yml, le profil Desktop que lit DSH 0.1.7+ ($DSH_HOME/settings.yaml tant que ce profil n’existe pas). DSH recharge ce fournisseur à chaud ; votre modèle par défaut et deepseek-official restent inchangés. Seule l’adresse de bouclage est actuellement prise en charge ; aucun identifiant réel n’est écrit.",
   "integrations.semantics.mcode": "Gère uniquement custom_provider.opencodex. Votre modèle par défaut et votre connexion MiniMax restent inchangés.",
   "integrations.semantics.zcode": "Gère uniquement provider.opencodex dans ~/.zcode/v2/config.json. Votre connexion Z.ai et les autres fournisseurs restent inchangés. Redémarrez ZCode après toute modification.",
+  "integrations.semantics.commandcode": "Gère uniquement l’entrée du fournisseur OpenCodex dans ~/.commandcode/providers.json. Vos autres fournisseurs et paramètres restent inchangés.",
   "integrations.semantics.prime": "Gère uniquement providers.opencodex dans le models.json de Prime Agent — ~/.prime/agent, sauf si PRIME_AGENT_CODING_AGENT_DIR le redirige. Vos autres fournisseurs et surcharges de modèles restent inchangés. S'applique aux nouvelles sessions.",
   "integrations.semantics.aside": "Gère uniquement providers.opencodex dans le fichier ~/.aside/u/<id>/models.json de ce profil. Vos autres fournisseurs restent inchangés. Quittez complètement Aside et relancez-le après application.",
   "integrations.semantics.raycast": "Ajoute une entrée de fournisseur OpenCodex dans le providers.yaml de Raycast afin que chaque modèle routé apparaisse dans le sélecteur de modèles de Raycast AI. Raycast Pro requis.",
@@ -2795,6 +2803,8 @@ export const fr: Record<TKey, string> = {
   "api.key.revealHint": "Cliquez pour afficher la clé complète",
   "api.key.hideHint": "Cliquez pour masquer la clé complète",
   "api.key.revealFailed": "Impossible de charger la clé complète.",
+  "api.key.revealDenied": "Afficher une clé enregistrée nécessite une session autorisée par l'opérateur. Associez ce navigateur pour continuer, ou connectez-vous via une identité Tailscale de confiance.",
+  "api.key.mutationHidden": "La clé a été créée ou sa rotation a démarré, mais la valeur à usage unique a été masquée car la session ou la vue a changé.",
   "api.key.copyFailedShort": "Copie impossible. Sélectionnez la clé et copiez-la manuellement.",
   "api.key.deleteRowAria": "Supprimer {name}",
   "api.key.deleteShort": "Supprimer",
@@ -2847,6 +2857,7 @@ export const fr: Record<TKey, string> = {
   "api.clientConfig.clientDsh": "DeepSeek Harness (DSH)",
   "api.clientConfig.clientMcode": "MiniMax Code",
   "api.clientConfig.clientZcode": "ZCode",
+  "api.clientConfig.clientCommandCode": "Command Code",
   "api.clientConfig.clientPrime": "Prime Agent",
   "api.clientConfig.clientAside": "Aside",
   "api.clientConfig.clientRaycast": "Raycast",

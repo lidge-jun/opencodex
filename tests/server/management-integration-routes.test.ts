@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import { createIntegrationStateStore, type IntegrationStateStore } from "../../s
 import { applyIntegration } from "../../src/integrations/writer";
 import type { IntegrationWriterLockSeams } from "../../src/integrations/writer-lock";
 import { handleManagementAPI } from "../../src/server/management-api";
+import * as asideRoutes from "../../src/server/management/aside-profile-routes";
 import { loadExportModels, resetExportSnapshotForTests } from "../../src/server/management/model-rows";
 import {
   setIntegrationMutationFlightTestHooks,
@@ -788,6 +789,142 @@ describe("refusals", () => {
     expect(body.message).toBe(`${configPath} is not a regular file`);
     expect(existsSync(configPath)).toBe(true);
     expect(store.listOperations()).toHaveLength(0);
+  });
+});
+
+describe("restore expected-client boundary", () => {
+  const endpoints = ["/api/client-integrations/restore", "/api/client-integrations/restore/preview",
+    "/api/client-integrations/commandcode/restore", "/api/client-integrations/commandcode/restore/preview"];
+  beforeEach(async () => { resetExportSnapshotForTests(); await loadExportModels(config, []); });
+  afterEach(() => { resetExportSnapshotForTests(); });
+
+  function witness() {
+    return { home: storeContentWitness(home), store: storeContentWitness(storeRoot),
+      records: store.readRecords(), journal: store.listOperations(),
+      snapshots: store.listOperations().map(entry => store.readSnapshot(entry)) };
+  }
+
+  for (const endpoint of endpoints) {
+    // Dedicated paths must enforce the client even when older/custom callers omit the body field.
+    const identity = endpoint.includes("/commandcode/") ? {} : { expectedClientId: "commandcode" };
+    test.each([null, 7, false, {}, [], "", "unknown", " commandcode "].map(expectedClientId => ({ expectedClientId })))(`invalid expectedClientId is rejected before lookup at ${endpoint}: %j`, async ({ expectedClientId }) => {
+      const before = witness();
+      const response = await previewApi(endpoint, { opId: "missing", expectedClientId });
+      expect({ status: response.status, code: (await response.json() as { code: string }).code, after: witness() })
+        .toEqual({ status: 400, code: "invalid_integration_client", after: before });
+    });
+
+    test(`unknown scoped operation stays not found at ${endpoint}`, async () => {
+      const before = witness();
+      const delegate = spyOn(asideRoutes, "asideRestoreResponse");
+      try {
+        const response = await previewApi(endpoint, { opId: "missing", ...identity });
+        expect({ status: response.status, code: (await response.json() as { code: string }).code,
+          delegates: delegate.mock.calls.length, after: witness() })
+          .toEqual({ status: 404, code: "integration_operation_not_found", delegates: 0, after: before });
+      } finally { delegate.mockRestore(); }
+    });
+
+    test.each(["plain", "confirmed drift", "valid fingerprint"])(`foreign restore preserves config, ownership, snapshots and journal at ${endpoint}: %s`, async mode => {
+      const path = installHermes();
+      writeFileSync(path, "providers: {}\n# original\n");
+      expect((await put("hermes", true)).status).toBe(200);
+      const opId = store.listOperations("hermes")[0]!.opId;
+      const confirmDrift = mode !== "plain";
+      if (confirmDrift) writeFileSync(path, `${readFileSync(path, "utf8")}# foreign edit\n`);
+      const body: Record<string, unknown> = { opId, confirmDrift, ...identity };
+      if (mode === "valid fingerprint") {
+        const preview = await previewApi(endpoints[1]!, { opId, confirmDrift });
+        expect(preview.status).toBe(200);
+        const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+        expect(plan.canApply).toBe(true);
+        body.operation = "restore"; body.planFingerprint = plan.fingerprint;
+      }
+      const before = witness();
+      const delegate = spyOn(asideRoutes, "asideRestoreResponse");
+      try {
+        const response = await previewApi(endpoint, body);
+        expect({ status: response.status, code: (await response.json() as { code: string }).code,
+          delegates: delegate.mock.calls.length, after: witness() })
+          .toEqual({ status: 409, code: "integration_client_mismatch", delegates: 0, after: before });
+      } finally { delegate.mockRestore(); }
+    });
+
+    test.each(["root", "profile-only"])(`Aside operation cannot escape the expected client at ${endpoint}: %s`, async location => {
+      mkdirSync(join(home, ".aside/u/1"), { recursive: true });
+      writeFileSync(join(home, ".aside/accounts.json"), JSON.stringify({ currentAccountId: 1, accounts: [{ id: 1, name: "Fixture" }] }));
+      const path = join(home, ".aside/u/1/models.json");
+      writeFileSync(path, '{"providers":{}}\n');
+      const applied = await putOverwrite("aside/profiles/1", { enabled: true });
+      expect(applied.status).toBe(200);
+      const profileStore = createIntegrationStateStore(join(storeRoot, "aside-profiles/1"));
+      const operation = profileStore.listOperations("aside")[0]!;
+      expect(operation).toBeDefined();
+      expect(store.findOperation(operation.opId)).toBeNull();
+      if (location === "root") store.appendJournal(operation);
+      const before = witness();
+      const delegate = spyOn(asideRoutes, "asideRestoreResponse");
+      try {
+        const response = await previewApi(endpoint, { opId: operation.opId, ...identity, confirmDrift: true });
+        expect({ status: response.status, code: (await response.json() as { code: string }).code,
+          delegates: delegate.mock.calls.length, after: witness() })
+          .toEqual({ status: location === "root" ? 409 : 404,
+            code: location === "root" ? "integration_client_mismatch" : "integration_operation_not_found", delegates: 0, after: before });
+      } finally { delegate.mockRestore(); }
+    });
+  }
+
+  for (const endpoint of endpoints.slice(2)) {
+    test(`conflicting body identity cannot replace the path owner at ${endpoint}`, async () => {
+      const path = installHermes();
+      writeFileSync(path, "providers: {}\n");
+      expect((await put("hermes", true)).status).toBe(200);
+      const opId = store.listOperations("hermes")[0]!.opId;
+      const before = witness();
+      const delegate = spyOn(asideRoutes, "asideRestoreResponse");
+      try {
+        const response = await previewApi(endpoint, { opId, expectedClientId: "hermes", confirmDrift: true });
+        expect({ status: response.status, code: (await response.json() as { code: string }).code,
+          delegates: delegate.mock.calls.length, after: witness() })
+          .toEqual({ status: 409, code: "integration_client_mismatch", delegates: 0, after: before });
+      } finally { delegate.mockRestore(); }
+    });
+  }
+
+  for (const scopedPath of [false, true]) {
+  test.each(["plain", "bound"])(`same-client commandcode restore succeeds (scoped path ${scopedPath}): %s`, async mode => {
+    const spec = INTEGRATION_CLIENTS.commandcode;
+    mkdirSync(spec.detectDir(routeEnv, home), { recursive: true });
+    const path = spec.configPath(routeEnv, home);
+    const original = '{"providers":{}}\n';
+    writeFileSync(path, original);
+    expect((await put("commandcode", true)).status).toBe(200);
+    const opId = store.listOperations("commandcode")[0]!.opId;
+    const body: Record<string, unknown> = { opId, ...(scopedPath ? {} : { expectedClientId: "commandcode" }) };
+    const before = witness();
+    const preview = await previewApi(endpoints[scopedPath ? 3 : 1]!, body);
+    expect(preview.status).toBe(200);
+    const plan = await preview.json() as { clientId: string; canApply: boolean; fingerprint: string };
+    expect(plan.clientId).toBe("commandcode"); expect(plan.canApply).toBe(true);
+    expect(witness()).toEqual(before);
+    if (mode === "bound") { body.operation = "restore"; body.planFingerprint = plan.fingerprint; }
+    const response = await previewApi(endpoints[scopedPath ? 2 : 0]!, body);
+    expect(response.status).toBe(200);
+    expect(readFileSync(path, "utf8")).toBe(original);
+    expect(store.listOperations("commandcode")[0]!.kind).toBe("restore");
+  });
+  }
+
+  test("generic unscoped preview and restore retain foreign-client compatibility", async () => {
+    const path = installHermes();
+    writeFileSync(path, "providers: {}\n");
+    expect((await put("hermes", true)).status).toBe(200);
+    const opId = store.listOperations("hermes")[0]!.opId;
+    const preview = await previewApi(endpoints[1]!, { opId });
+    expect(preview.status).toBe(200);
+    expect((await preview.json() as { clientId: string }).clientId).toBe("hermes");
+    expect((await restore({ opId })).status).toBe(200);
+    expect(readFileSync(path, "utf8")).toBe("providers: {}\n");
   });
 });
 

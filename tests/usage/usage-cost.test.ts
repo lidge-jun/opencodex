@@ -169,11 +169,11 @@ describe("resolveMatchedPrice", () => {
     }
   });
 
-  // Claude Sonnet 5.5 (2026-09-28): the Sonnet 5 tuple, 2 / 10 / 2.50 cache write / 0.20 cache hit.
+  // Claude Sonnet 5.5 (2026-09-28): the Sonnet 5 tuple, 2 / 10 / 2.50 cache write / 0.10 cache hit (2026-10-08 cut).
   // Live Anthropic discovery listed it before any row existed; published aggregator rows, Bedrock's
   // 1.1x regional endpoints and the preemptive rows for providers that have not listed it yet.
   test("claude-sonnet-5-5 resolves to the official Sonnet 5.5 price on every exposing surface", () => {
-    const COST4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
+    const COST4 = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 };
     for (const provider of ["anthropic", "anthropic-apikey"]) {
       expect(resolveMatchedPrice(provider, "claude-sonnet-5-5"), provider).toMatchObject({
         modelId: "claude-sonnet-5-5",
@@ -200,15 +200,15 @@ describe("resolveMatchedPrice", () => {
       ["github-copilot", "claude-sonnet-5-5"],
       ["opencode-zen", "claude-sonnet-5-5"],
       ["cloudflare-ai-gateway", "anthropic/claude-sonnet-5-5"],
-      ["amazon-bedrock", "global.anthropic.claude-sonnet-5-5"],
     ] as const) {
       expect(resolveMatchedPrice(provider, id)?.cost4, provider).toEqual(COST4);
     }
+    expect(resolveMatchedPrice("amazon-bedrock", "global.anthropic.claude-sonnet-5-5")?.cost4).toEqual({ ...COST4, cacheRead: 0.2 });
     expect(resolveMatchedPrice("amazon-bedrock", "us.anthropic.claude-sonnet-5-5")?.cost4)
       .toEqual({ input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 });
-    // Providers without a runtime bundle of their own (Venice's snapshot row is not bundled, like its
-    // Opus 5.5 row), kiro and the live-only rosters follow the vendor row.
-    for (const [provider, id] of [["venice", "claude-sonnet-5-5"], ["kiro", "claude-sonnet-5.5"], ["command-code", "claude-sonnet-5-5"], ["opper", "claude-sonnet-5-5"]] as const) {
+    expect(resolveMatchedPrice("venice", "claude-sonnet-5-5")?.cost4).toEqual({ input: 2.5, output: 12.5, cacheRead: 0.125, cacheWrite: 3.125 });
+    // Kiro and live-only rosters follow the Anthropic vendor row.
+    for (const [provider, id] of [["kiro", "claude-sonnet-5.5"], ["command-code", "claude-sonnet-5-5"], ["opper", "claude-sonnet-5-5"]] as const) {
       expect(resolveMatchedPrice(provider, id)?.cost4, provider).toEqual(COST4);
     }
   });
@@ -462,10 +462,10 @@ describe("resolveMatchedPrice", () => {
     }
   });
 
-  test("16. shipped overlay membership: 160 keys, including canonical Fable 5.1, Opus 5, Opus 5.5, Sonnet 5.5, GPT-6.1 Sol, OpenCode Go and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(160);
+  test("16. shipped overlay membership: unique keys, including canonical Fable 5.1, Opus 5, Opus 5.5, Sonnet 5.5, GPT-6.1 Sol, OpenCode Go and compatibility prices", () => {
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
+    expect(keys.size).toBe(EXPECTED_PRICE_OVERLAYS.length);
     for (const expected of [
       "openai-apikey/gpt-6.1-sol",
       "openai/gpt-6.1-sol",

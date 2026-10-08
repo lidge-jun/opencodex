@@ -5,7 +5,7 @@ export interface OwnershipMutationLeaseOptions {
   readonly processAlive?: (pid: number) => boolean;
   readonly beforeRelease?: (lockPath: string) => void;
   readonly joinToken?: string;
-  /** Names the current executable at the recorded PID, identity unverified; defaults to `tasklist` or `ps`. */
+  /** Names the current executable at the recorded PID, identity unverified; uses `ps` on POSIX and omits the default image lookup on Windows. */
   readonly processImage?: (pid: number) => string | null;
 }
 

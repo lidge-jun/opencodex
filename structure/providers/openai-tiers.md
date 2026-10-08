@@ -316,6 +316,22 @@ payloads cannot clear cooldowns, actual request refusals still drive cooldown/fa
 default-on main-account hard lock retains its separate local admission policy. Registration
 warmup remains conservative and does not spend paid credits to validate an exhausted account.
 
+For an opted-in, unpaused main account with a currently full usage window, the existing
+`src/codex/auth-api/pool-mode-gate.ts` recovery sweep renews credit observations from three minutes
+of age, leaving time for token preparation before the five-minute freshness limit. Only valid,
+previously spendable positive or unlimited evidence bound to the same physical account schedules
+renewal; missing, zero, restricted or retracted credits do not. Admission still uses the actual
+clock and original spending controls. Native profile ownership, generation fences, single-flight,
+query pacing and failure backoff remain in force, including upstream Retry-After. Eligibility is
+checked again after token preparation. The independent hard lock still applies.
+
+Credit renewal supplies the passive option to `src/codex/auth-api/main-account-probe.ts`, including
+identity retries: WHAM success and terminal 401/403 responses never set or clear needs-reauth in
+this mode. Native token preparation also preserves the traffic quarantine. Other callers retain
+the existing auth behavior. Failed or incomplete observations never renew the credit clock;
+refreshing usage does not redeem reset credits or validate pending accounts through inference.
+Coverage: `tests/codex-integration/main-account-credit-renewal.test.ts`.
+
 Credit parsing, expiry, partial updates and reset-ticket separation are covered in
 `tests/codex-integration/codex-quota-parser-parity.test.ts`; selection and bulk-pause behavior
 are covered in `tests/codex-integration/codex-credits-after-limit.test.ts` and

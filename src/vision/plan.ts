@@ -11,7 +11,7 @@ import {
   modelAcceptsImageInput,
 } from "./eligibility";
 import { normalizeVisionReasoningForModel } from "./reasoning";
-import { resolveSidecarAuth } from "../sidecar/auth";
+import { inheritedAnthropicInstance, resolveSidecarAuth, resolveAnthropicHelperInstance, resolveAnthropicSidecarAuth, withAnthropicHelperRefusal } from "../sidecar/auth";
 import { DEFAULT_VISION_TIMEOUT_MS, MAX_VISION_TIMEOUT_MS, MIN_VISION_TIMEOUT_MS } from "./timeout-bounds";
 import { carriesImages } from "./image-rewrite";
 
@@ -50,8 +50,9 @@ export interface AnthropicVisionProvider {
  * First enabled Anthropic OAuth provider whose active stored account is not marked for reauth.
  * Delegates to the shared sidecar auth module (#2188) — same predicate as web-search.
  */
-export function findAnthropicVisionProvider(config: OcxConfig): AnthropicVisionProvider | undefined {
-  const auth = resolveSidecarAuth(config);
+export function findAnthropicVisionProvider(config: OcxConfig, parentProviderName?: string): AnthropicVisionProvider | undefined {
+  const instance = resolveAnthropicHelperInstance(config, { backendFamily: "anthropic", anthropicInstance: config.visionSidecar?.anthropicInstance, parentProviderName });
+  const auth = resolveSidecarAuth(config, instance);
   if (!auth.isAnthropicAuth || !auth.anthropicProviderName || !auth.anthropicProvider) return undefined;
   return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config };
 }
@@ -66,6 +67,16 @@ export function resolveVisionBackend(
   // dispatchable arm degrades exactly like unset rather than crashing. wp3
   // replaces this collapse with the real routed arm in planVisionSidecar.
   return anthropicSidecar ? "anthropic" : "openai";
+}
+
+/** Existing family preference, with a builtin parent contributing its own auth availability. */
+function preferredVisionBackend(config: OcxConfig, parentProviderName?: string): "openai" | "anthropic" {
+  const cfg = config.visionSidecar ?? {};
+  const requested = cfg.anthropicInstance ?? inheritedAnthropicInstance(config, parentProviderName);
+  const exact = requested ? resolveAnthropicSidecarAuth(config, requested) : undefined;
+  const legacy = findAnthropicVisionProvider({ ...config, visionSidecar: { ...cfg, anthropicInstance: undefined } });
+  return resolveVisionBackend(cfg.backend, exact
+    ? { providerName: exact.anthropicProviderName, provider: exact.anthropicProvider, config } : legacy);
 }
 
 /** Native model used by the OpenAI vision helper, including its bounded default. */
@@ -170,7 +181,7 @@ export function shouldResolveOpenAiVisionSidecar(
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return false;
   if (usableRoutedVisionModel(config)) return false;
-  return resolveVisionBackend(cfg.backend, findAnthropicVisionProvider(config)) === "openai";
+  return preferredVisionBackend(config, providerName) === "openai";
 }
 
 export interface VisionPlan {
@@ -241,8 +252,10 @@ export function planVisionSidecar(
   }
   // A non-dispatchable routed configuration keeps the legacy backend fallback below.
 
-  const anthropicSidecar = findAnthropicVisionProvider(config);
-  const backend = resolveVisionBackend(cfg.backend, anthropicSidecar);
+  const backend = preferredVisionBackend(config, options.providerName);
+  // An unavailable selected pool degrades to "no plan" (images stripped); it never fails the request.
+  const anthropicSidecar = backend === "anthropic"
+    ? withAnthropicHelperRefusal("vision", () => findAnthropicVisionProvider(config, options.providerName)) : undefined;
   // A namespaced routed model must never reach the forward/OAuth executors
   // (they POST the string verbatim); the effective-model resolver falls back
   // to each side's default in that case.

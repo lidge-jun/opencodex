@@ -1,10 +1,10 @@
 ---
 title: Интеграции
-description: Подключайте opencodex к OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo и Factory Droid из дашборда — отдельный переключатель для каждого клиента и резервная копия перед каждой записью.
+description: Подключайте opencodex к OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code и Factory Droid из дашборда — отдельный переключатель для каждого клиента и резервная копия перед каждой записью.
 ---
 
 Вкладка **Подключение** записывает блок провайдера opencodex в собственный файл
-конфигурации клиента и при необходимости удаляет его. Так работают семнадцать
+конфигурации клиента и при необходимости удаляет его. Так работают восемнадцать
 клиентов, у каждого свой переключатель:
 
 | Клиент | Файл конфигурации | Формат | Когда изменение начинает действовать | Учётные данные |
@@ -25,6 +25,7 @@ description: Подключайте opencodex к OpenCode, Pi, OMP, Hermes, Open
 | omo | `~/.omo/agent/models.json` | JSON | в новых сессиях | заглушка для loopback |
 | Cline CLI | `~/.cline/data/settings/providers.json` и соседний `models.json` | пара JSON | после остановки и повторного запуска Cline | заглушка для loopback |
 | Kilo | первый существующий файл среди `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` и `config.json` в `~/.config/kilo` (`XDG_CONFIG_HOME` переносит каталог; если файлов нет, создаётся `kilo.jsonc`) | JSONC | в новых сессиях | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (в Windows при использовании домашнего каталога по умолчанию: использовать `HOME ?? USERPROFILE`, только если значение не пустое, не состоит из пробелов и является абсолютным путём Windows, иначе `homedir()`; отдельно переданный домашний каталог сохраняется; добавить `.commandcode\providers.json`) | JSON | при следующем запуске Command Code | нет — loopback без ключа (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` в Windows) | JSON | сразу при изменении файла | loopback без ключа |
 
 Создаваемые каталоги включают только модели, включённые в настройках каждого

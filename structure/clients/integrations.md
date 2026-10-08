@@ -51,8 +51,7 @@ would need an admission header. When a previously managed catalog becomes empty
 or wholly unaddressable, classification still checks recorded fragment paths and
 their fingerprints so disable can remove owned rows without deleting foreign edits.
 The legacy settings guard also checks the recorded model IDs and endpoints when
-those rows leave the current catalog.
-Apply and refresh still refuse an empty managed contribution.
+those rows leave the current catalog. Apply and refresh still refuse an empty managed contribution.
 The builder omits `apiKey` and unsupported metadata. The shared writer snapshots
 prior bytes and refuses changed managed rows or unsafe paths. `src/integrations/droid-settings.ts` refuses
 legacy `config.json` rows that share the exported endpoint, a generated model ID, or an
@@ -91,8 +90,7 @@ ordinary removal preview. Disable and restore remove or restore the rows and the
 defaults as one owned value.
 
 The request preference is interpreted after initial Chat route selection and before
-concrete dispatch under the
-[inbound effort contract](../data-planes/inbound-compat.md#droid-request-defaults).
+concrete dispatch under the [inbound effort contract](../data-planes/inbound-compat.md#droid-request-defaults).
 It never authenticates a client or changes admission policy.
 
 ## Cursor installed capability reads
@@ -108,8 +106,7 @@ size; the returned table always uses the current install version, including on a
 is found, `src/integrations/cursor-local-installer.ts` resolves the Private Inference installer that
 Cursor's `cursor-local` update channel advertises for the host platform and architecture (only
 `x64` and `arm64` on Windows, macOS and Linux map; any other host resolves to `unsupported-platform`
-with no request)
-(`<updateHost>/updates/api/update/<platform>/cursor-local/0.0.0/manual-check/stable`, 4 s timeout).
+with no request) (`<updateHost>/updates/api/update/<platform>/cursor-local/0.0.0/manual-check/stable`, 4 s timeout).
 The decoded manifest is capped at 64 KiB before JSON parsing. Only a bounded
 `https://downloads.cursor.com/local-mode/` URL with a bounded version is accepted (a Linux
 `.AppImage.zsync` delta-metadata URL is mapped to its sibling `.AppImage`); anything else
@@ -170,8 +167,7 @@ the resulting configuration for projection and retention. A superseded gather ap
 to its detached projection and retains no snapshot; a failed discovery commit refuses the export.
 The identity a caller carries between a preview and the
 mutation that confirms it is process-local and opaque, and describes nothing about the
-configuration. The
-Integrations collection read populates one when discovery succeeds and the configuration can be
+configuration. The Integrations collection read populates one when discovery succeeds and the configuration can be
 identified, so the page an operator opens before confirming anything is the usual way back rather
 than a guarantee.
 
@@ -179,8 +175,7 @@ Each operation is decided the way that operation decides it. Apply checks instal
 admission before the classifier and reports a conflict ahead of unsafe; disable asks neither,
 because removing what we wrote from a file that still exists is meaningful regardless of
 installation; restore reads the journal row and the target's bytes and never parses, so a file
-that is readable but unparseable is still restorable. An operation that would write nothing says
-so and names no places.
+that is readable but unparseable is still restorable. An operation that would write nothing says so and names no places.
 
 Published paths are declared, not inferred. Every client states where its managed fragments live,
 a path is emitted only on an exact template match, and the string emitted is the template rather
@@ -219,8 +214,8 @@ their existing visibility rules.
 
 ## Owned catalog convergence
 
-Visibility, selected-model and preset writes refresh already-owned catalog contributions (including OpenCode and Kilo) after
-persisting the selection. Explicit sync also refreshes owned OpenCode and Kilo blocks. The shared catalog-refresh
+Visibility, selected-model and preset writes refresh already-owned catalog contributions (including OpenCode, Kilo and
+Command Code) after persisting the selection. Explicit sync also refreshes owned OpenCode, Kilo and Command Code blocks. The shared catalog-refresh
 fan-out loads the filtered roster lazily once, leaves unowned clients alone, and reports each
 refusal independently. Existing coordinated writers retain all no-clobber and ownership checks.
 Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy
@@ -343,8 +338,7 @@ runtime-derived fields back into an owned fragment may additionally record:
 - `protectedBlockFingerprint`: the contribution fingerprint after only those paths are removed.
 
 The paths are stored with the operation instead of recomputed from the latest catalog. That keeps a
-later catalog expansion from silently widening what an older ownership record allows. Malformed or
-incomplete policy records fail closed.
+later catalog expansion from silently widening what an older ownership record allows. Malformed or incomplete policy records fail closed.
 
 ## ZCode Runtime Metadata
 
@@ -383,9 +377,7 @@ observed. Naming the store without the last three would be naming a file we cann
 file this operation reads, writes, journals and records, and whether a write there reaches the
 client. It decides from three facts, in order:
 
-1. No declared store, or no store on disk — the config file, unchanged, unless the declaration's `missingStore` says the client still reads the absent store; that is an ineffective write carrying its remedy; status rows and refused previews also publish `supersededReason` and the store's `missingStoreDocument`, so the dashboard names what to create in its own language. A client that has never run
-   still imports what we write there, which is why the rule keys on the store's presence rather
-   than on a client version.
+1. No declared store, or no store on disk — the config file, unchanged, unless the declaration's `missingStore` says the client still reads the absent store; that is an ineffective write carrying its remedy; status rows and refused previews also publish `supersededReason` and the store's `missingStoreDocument`, so the dashboard names what to create in its own language. A client that has never run still imports what we write there, which is why the rule keys on the store's presence rather than on a client version.
 2. This project's own block already in one of the two files — that file. Disable removes what we
    wrote from where we wrote it, and no apply leaves a block in one file while writing another.
 3. Otherwise the store, and only when its schema establishes.
@@ -402,14 +394,11 @@ Four properties are load-bearing:
   before the client created its store cannot be committed afterwards — and neither can one taken
   before the store's schema version moved under an unchanged path.
 - Disable is never gated on it. Removing bytes this project wrote from the file it wrote them to is
-  unaffected by where the client reads, and refusing it would leave the block unremovable through
-  the tool.
+  unaffected by where the client reads, and refusing it would leave the block unremovable through the tool.
 
 Writing the store does not relax ownership anywhere. The store keys a model rule by the pair
 `(providerId, modelId)`, so the managed path names both: a selector naming only the model would
-match another provider's rule for the same model and replace it. A rule carrying this project's
-provider id that no record accounts for — including one the client's own migration created — is a
-conflict, and the explicit overwrite remains the only way past it.
+match another provider's rule for the same model and replace it. A rule carrying this project's provider id that no record accounts for — including one the client's own migration created — is a conflict, and the explicit overwrite remains the only way past it.
 
 Persisted selector segments have two disjoint grammars owned by `src/integrations/merge.ts`.
 An unversioned `[field=value]` segment is permanently a one-criterion selector; commas and later
@@ -530,8 +519,7 @@ An explicit `null` in any of those three places counts as not an object. A file 
 cannot be read lists as `unreadable`, so the role table still loads, and a save reports
 `write_failed` for the mirror.
 Without LazyCodex, `GET /api/codex-agent-roles` answers `lazycodex.detected: false` with no roles
-and without opening omo.jsonc, and `PUT` answers 409 `lazycodex_not_detected` before touching a
-role file.
+and without opening omo.jsonc, and `PUT` answers 409 `lazycodex_not_detected` before touching a role file.
 
 ## Kilo global JSONC
 
@@ -570,6 +558,16 @@ refused, by both direct restore and preview, when a different Kilo candidate cur
 holds the single ownership record. Committing the older row's prior record would point
 ownership back at the old file and leave the active block on disk with nothing to
 disable it.
+
+## Command Code
+
+Command Code owns one block in `~/.commandcode/providers.json`. Shipped `command-code@1.66.0`
+resolves `env.HOME ?? env.USERPROFILE` plus that path with no relocation variable, so
+`commandCodeHomeDir` takes no override. On Windows, `commandCodeUserHome` resolves the default home as `HOME ?? USERPROFILE` (non-blank and Windows-absolute) to match the client, preserving an injected home (tests or writer `input.home`). Reader `e.provider ?? e.providers` prefers singular:
+`commandCodeProviderRoot` mirrors that against the target and writes under the existing root
+(singular for fresh files); both roots are in `CLIENT_MANAGED_PATHS` so Disable removes either.
+Uses keyless `apiKey: false`; no service-token is read. Contract: `tests/clients/command-code-client-contract.test.ts`.
+`src/cli/integrations.ts` pins Command Code restore requests to `/api/client-integrations/commandcode/restore` and its `/preview` path, including fingerprint-bound calls through `src/cli/integration-preview.ts`. The path supplies the fixed client; a conflicting body identity is refused. Old servers reject these paths, and scoped CLI calls neither follow redirects nor retry a generic endpoint. The management restore and restore-preview endpoints validate this optional identity against the journal before profile delegation or mutation; invalid identities return 400, absent root operations 404, and different clients 409. Generic calls without the field retain their existing restore semantics. Client-specific restore rejects client/profile selector overrides. `tests/server/management-integration-routes.test.ts` and `tests/cli/cli-integration-preview.test.ts` cover the binding and unchanged state on refusal.
 
 ## Cline paired files
 

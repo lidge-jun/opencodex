@@ -56,6 +56,7 @@ async function mountWorkspace(
   document.body.append(container);
 
   let latest: ApiKeysWorkspaceProps = {
+    apiBase: "",
     keys: sampleKeys,
     keysLoading: false,
     keysLoadFailed: false,

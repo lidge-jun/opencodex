@@ -64,7 +64,7 @@ describe("createInferenceSendBudget", () => {
         if (sends === 0) hop.permit?.use();
         sends++;
         return new Response("", { status: sends === 3 ? 200 : 503 });
-      }, { attempts: allowance.attempts, onSendsConsumed: owner.noteTransientSends });
+      }, { attempts: allowance.attempts, onSendsConsumed: owner.transientSendReporter(allowance.permit) });
       expect(response.status).toBe(200);
       expect(sends).toBe(3);
       expect(budget.used).toBe(12);
@@ -91,6 +91,65 @@ describe("createInferenceSendBudget", () => {
       expect(budget.lastTargetKey).toBe(targetKey);
       expect(budget.targetTransitions).toBe(0);
       expect(budget.used).toBe(3);
+    } finally { dispose(); }
+  });
+  test.each([false, true])("an undispatched adapter hop remains refundable (externally counted=%s)", external => {
+    const budget = createRequestExecutionBudget();
+    const { owner, dispose } = budgetOwner(budget);
+    try {
+      const targetKey = "https://upstream.example/model";
+      const initial = owner.refundableAdapterDispatchBudget!.reserveDispatch({ sendClass: "initial", targetKey });
+      if (!initial.allowed) throw new Error("Expected initial permit");
+      initial.permit.use();
+      const hop = owner.reserveCredentialHop("auth-recovery", targetKey, external);
+      owner.pendingHopPermit = hop.permit;
+      const replay = owner.refundableAdapterDispatchBudget!.reserveDispatch({ sendClass: "transient", targetKey });
+      if (!replay.allowed) throw new Error("Expected replay permit");
+      expect(budget.used).toBe(2);
+      replay.permit.release();
+      replay.permit.release();
+      expect(budget.used).toBe(1);
+      expect(budget.remainingBaseSends(3)).toBe(2);
+      expect(replay.permit.use()).toBe(false);
+      expect(replay.permit.assumeCharge()).toBe(false);
+      owner.noteTransientSends(1);
+      expect(budget.used).toBe(2); // No abandoned external booking can swallow a later send.
+    } finally { dispose(); }
+  });
+
+  test.each(["use", "assumeCharge"] as const)("adapter hop %s settles an external booking once and cannot refund a send", confirm => {
+    const budget = createRequestExecutionBudget();
+    const { owner, dispose } = budgetOwner(budget);
+    try {
+      const targetKey = "https://upstream.example/model";
+      const hop = owner.reserveCredentialHop("auth-recovery", targetKey, true);
+      owner.pendingHopPermit = hop.permit;
+      const replay = owner.refundableAdapterDispatchBudget!.reserveDispatch({ sendClass: "transient", targetKey });
+      if (!replay.allowed) throw new Error("Expected replay permit");
+      expect(replay.permit[confirm]()).toBe(true);
+      expect(replay.permit.use()).toBe(false);
+      expect(replay.permit.assumeCharge()).toBe(false);
+      replay.permit.release();
+      expect(budget.used).toBe(1);
+      owner.noteTransientSends(1);
+      expect(budget.used).toBe(2);
+    } finally { dispose(); }
+  });
+
+  test("a previously settled adapter hop falls back to a fresh reservation", () => {
+    const budget = createRequestExecutionBudget();
+    const { owner, dispose } = budgetOwner(budget);
+    try {
+      const targetKey = "https://upstream.example/model";
+      const hop = owner.reserveCredentialHop("auth-recovery", targetKey, true);
+      expect(hop.permit?.assumeCharge()).toBe(true);
+      owner.pendingHopPermit = hop.permit;
+      const replay = owner.refundableAdapterDispatchBudget!.reserveDispatch({ sendClass: "transient", targetKey });
+      if (!replay.allowed) throw new Error("Expected replay permit");
+      expect(replay.permit.use()).toBe(true);
+      expect(budget.used).toBe(2);
+      replay.permit.release();
+      expect(budget.used).toBe(2);
     } finally { dispose(); }
   });
   test("mints a default-policy holder and parks this request's spend tracker on the log", () => {
@@ -148,4 +207,25 @@ describe("createInferenceSendBudget", () => {
     expandInferenceOAuthSendBudget(started, 4);
     expect(started.policy).toEqual(CODEX_TEXT_GUARDED_BUDGET_POLICY);
   });
+});
+
+test("ingress reuses its tracker only for the same request even when log context is reused", () => {
+  const logCtx: RequestLogContext = { model: "m", provider: "p" };
+  const first = new Request("http://localhost/v1/responses");
+  createInferenceSendBudget(first, logCtx);
+  const initial = logCtx.spendTracker;
+  createInferenceSendBudget(first, logCtx);
+  expect(logCtx.spendTracker).toBe(initial);
+  createInferenceSendBudget(new Request("http://localhost/v1/responses"), logCtx);
+  expect(logCtx.spendTracker).not.toBe(initial);
+});
+
+test("checking an unconfigured ingress budget does not open its journal", async () => {
+  const { existsSync } = await import("node:fs");
+  const { createPhysicalSendReporter } = await import("../../src/lib/request-execution-budget");
+  const budget = createInferenceSendBudget(new Request("http://localhost/v1/responses"), { model: "m", provider: "p" });
+  expect(budget.spendEnforced).toBe(false);
+  expect(createPhysicalSendReporter(budget, () => ({ poolId: "p" })).beforeSend).toBeFunction();
+  expect(existsSync(join(home, "spend-ledger.salt"))).toBe(false);
+  expect(existsSync(join(home, "spend-ledger.jsonl"))).toBe(false);
 });

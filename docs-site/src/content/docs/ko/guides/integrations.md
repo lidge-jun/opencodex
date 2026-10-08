@@ -1,9 +1,9 @@
 ---
 title: 연동
-description: 대시보드에서 OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo와 Factory Droid를 opencodex에 연결합니다. 클라이언트마다 스위치가 하나씩 있으며 기록 전마다 백업합니다.
+description: 대시보드에서 OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code와 Factory Droid를 opencodex에 연결합니다. 클라이언트마다 스위치가 하나씩 있으며 기록 전마다 백업합니다.
 ---
 
-**연결** 페이지는 클라이언트의 설정 파일에 opencodex 프로바이더 블록을 쓰고 다시 제거합니다. 다음 17개 클라이언트는 각각 스위치로 관리합니다.
+**연결** 페이지는 클라이언트의 설정 파일에 opencodex 프로바이더 블록을 쓰고 다시 제거합니다. 다음 18개 클라이언트는 각각 스위치로 관리합니다.
 
 | 클라이언트 | 설정 파일 | 형식 | 변경 적용 시점 | 자격 증명 |
 |---|---|---|---|---|
@@ -23,6 +23,7 @@ description: 대시보드에서 OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, 
 | omo | `~/.omo/agent/models.json` | JSON | 새 세션에서 | 루프백 자리표시자 |
 | Cline CLI | `~/.cline/data/settings/providers.json` 및 같은 위치의 `models.json` | JSON 파일 쌍 | Cline을 중지하고 다시 시작한 뒤 | 루프백 자리표시자 |
 | Kilo | `~/.config/kilo`에서 먼저 존재하는 `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, `config.json` (`XDG_CONFIG_HOME`로 디렉터리 변경 가능, 모두 없으면 `kilo.jsonc` 생성) | JSONC | 새 세션에서 | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (Windows 기본 홈 사용 시: `HOME ?? USERPROFILE` 값이 비어 있거나 공백만으로 구성되지 않은 Windows 절대 경로일 때만 사용하고, 그 외에는 `homedir()` 사용. 별도로 전달된 홈은 유지. 해당 홈 아래의 `.commandcode\providers.json`) | JSON | 다음 Command Code 실행 시 | 없음 — 키 없는 루프백 (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows에서) | JSON | 파일 변경 시 즉시 | 키 없는 루프백 |
 
 생성된 카탈로그에는 각 프로바이더 선택에서 활성화된 모델만 들어갑니다. Pi와 Aside를 포함한 다운로드와 관리형 연동 모두에 적용됩니다. 관리 모델 목록에는 전체 모델이 계속 표시되어 추가 모델을 활성화할 수 있습니다.
@@ -128,6 +129,12 @@ ocx integration client disable --client hermes
 ocx integration client history --client hermes
 ocx integration client restore --op <opId> [--confirm-drift]
 ```
+
+`ocx commandcode restore --op <opId>`는 Command Code 작업만 복원합니다.
+`--preview`와 `--plan-fingerprint`에도 같은 조건이 적용되며, 클라이언트나
+프로필을 바꾸는 옵션은 받지 않습니다. 실행 중인 프록시가 이 전용 복원 경로를
+지원하지 않으면 일반 복원으로 재시도하지 않고 오류를 반환합니다. 일반 작업 기록은 위의
+`ocx integration client restore`를, Aside 작업은 아래의 프로필 전용 명령을 사용하세요.
 
 `--overwrite-conflict`는 **Replace**의 터미널 명령입니다.
 

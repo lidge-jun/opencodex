@@ -60,6 +60,7 @@ export class KiroTokenRefreshError extends Error {
   constructor(
     readonly httpStatus: number,
     readonly oauthError?: string,
+    readonly refreshAttention = false,
   ) {
     super(`Kiro token refresh failed: ${httpStatus}${oauthError ? ` (${oauthError})` : ""}`);
     this.name = "KiroTokenRefreshError";
@@ -530,17 +531,21 @@ export function resolveKiroRequestProfile(
     : { profileArn: undefined, builderIdFallback: false };
 }
 
-async function kiroTokenRefreshError(response: Response): Promise<KiroTokenRefreshError> {
+async function kiroTokenRefreshError(response: Response, awsSsoRefresh = false): Promise<KiroTokenRefreshError> {
   let oauthError: string | undefined;
+  let refreshAttention = false;
   try {
     const payload = await response.json() as { error?: unknown };
+    // This input-error code is attention evidence only for our AWS SSO refresh request,
+    // never a terminal grant verdict. Do not surface arbitrary upstream descriptions.
+    refreshAttention = awsSsoRefresh && response.status === 400 && payload.error === "invalid_request";
     if (typeof payload.error === "string" && KIRO_TERMINAL_REFRESH_ERRORS.has(payload.error)) {
       oauthError = payload.error;
     }
   } catch {
     // Error bodies are untrusted and intentionally excluded from the surfaced message.
   }
-  return new KiroTokenRefreshError(response.status, oauthError);
+  return new KiroTokenRefreshError(response.status, oauthError, refreshAttention);
 }
 
 async function readTokenResponse(res: Response, oldRefresh: string): Promise<OAuthCredentials> {
@@ -608,7 +613,7 @@ async function refreshAwsSsoOidcToken(
     signal: kiroRefreshSignal(signal),
   });
   const res = await run(refresh);
-  if (!res.ok) throw await kiroTokenRefreshError(res);
+  if (!res.ok) throw await kiroTokenRefreshError(res, true);
   return readTokenResponse(res, refresh);
 }
 
@@ -668,11 +673,19 @@ export async function refreshKiroToken(
     const local = matchingRotatedKiroCliCredential(refresh, credential);
     if (!local) throw error;
     const retryMetadata = metadataForRotatedKiroCliCredential(credential, local);
-    const fresh = await refreshAwsSsoOidcToken(local.refresh, signal, {
-      ...credential,
-      refresh: local.refresh,
-      kiro: retryMetadata,
-    });
-    return { ...fresh, kiro: retryMetadata };
+    try {
+      const fresh = await refreshAwsSsoOidcToken(local.refresh, signal, {
+        ...credential,
+        refresh: local.refresh,
+        kiro: retryMetadata,
+      });
+      return { ...fresh, kiro: retryMetadata };
+    } catch (recoveryError) {
+      // A failed CLI fallback may use the desktop endpoint. Retain the original AWS SSO
+      // attention evidence on another input rejection; transient recovery stays retryable.
+      if (error.refreshAttention && recoveryError instanceof KiroTokenRefreshError
+        && recoveryError.httpStatus === 400 && recoveryError.oauthError === undefined) throw error;
+      throw recoveryError;
+    }
   }
 }

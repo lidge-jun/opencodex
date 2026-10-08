@@ -478,9 +478,18 @@ optional pin in a hand-edited file is ignored on load without discarding the res
 
 Codex reads `auto_review_model_override` from the catalog row of the current turn's model to
 choose the model that reviews approval requests. The root `auto_review_model` setting in
-`$CODEX_HOME/config.toml` applies one reviewer to every catalog row; the provider-scoped fields
+`$CODEX_HOME/config.toml` applies one reviewer to task catalog rows; the provider-scoped fields
 below override it per provider. The [provider guide](/guides/providers/#approval-reviewer-per-provider)
 has the operator workflow and a worked example.
+
+When native OpenAI rows are included and the final catalog has an ordinary bare native row
+other than Reserve (hidden rows count), OpenCodex keeps the hidden `codex-auto-review` row so
+Codex can select its preferred approval reviewer when no override is configured. It stays out
+of model pickers, subagent choices, Desktop lists and public `/v1/models` lists. Provider and
+root reviewer overrides retain their precedence and do not stamp this internal row. Catalogs
+without an ordinary bare native row, including Reserve-only catalogs, omit it and preserve
+Codex's fallback to the task model. The reviewer receives the same multi-agent mode projection
+as ordinary native rows.
 
 `autoReviewModel` is the provider-wide reviewer target. A value can be a bare model id of that same
 provider (the catalog row is normalized to the `provider/model` slug) or a full public catalog
@@ -935,6 +944,104 @@ Leave this disabled unless you understand Anthropic account policy risk. Prefer 
 `ocx account use anthropic <id>` switching when unsure.
 :::
 
+### Anthropic · Pool 2 (`anthropic2`)
+
+`anthropic2` ("Anthropic · Pool 2") is a second builtin Anthropic OAuth provider with its own
+account pool. It runs the same Anthropic implementation as `anthropic`: the same login flow, wire
+format, native Messages and Responses bridge, and model metadata. Only the accounts and the pool
+around them are separate. Choose a pool with the model prefix: `anthropic/claude-sonnet-5` uses the
+primary pool and `anthropic2/claude-sonnet-5` uses Pool 2.
+
+Pool 2 stays dormant until you add it. Log in with `ocx login anthropic2` or add **Anthropic · Pool 2**
+on the dashboard Providers page. A successful first login creates `providers.anthropic2` with the
+marker `"anthropicOAuthInstance": "anthropic2"`. Pool 2 never becomes the default provider: bare
+`claude-*` model names, the default model, and Claude Code caller forwarding keep resolving to
+`anthropic`. An unmarked `anthropic2` entry you created yourself earlier keeps its custom meaning;
+login refuses the name collision and rewrites neither the entry nor your credentials.
+
+Pool 2 reads its pool settings from its own provider entry. The keys, defaults and behavior match
+the top-level [`anthropicAccountPool`](#anthropicaccountpool-experimental), and nothing is inherited
+from the primary pool. `providers.anthropic.anthropicAccountPool`, or the field on any other provider,
+is rejected.
+
+```json
+{
+  "anthropicAccountPool": { "enabled": true, "strategy": "quota" },
+  "providers": {
+    "anthropic2": {
+      "adapter": "anthropic",
+      "authMode": "oauth",
+      "baseUrl": "https://api.anthropic.com",
+      "anthropicOAuthInstance": "anthropic2",
+      "anthropicAccountPool": { "enabled": true, "strategy": "round-robin" }
+    }
+  }
+}
+```
+
+The two pools are isolated inside opencodex:
+
+- **Credentials:** Pool 2 accounts are stored under their own `anthropic2` key in the protected
+  credential store. A login whose token or verified Anthropic account is already stored in the other
+  pool is rejected.
+- **Pool settings and runtime state:** selection, session affinity, cooldowns, pauses, model routes
+  and per-account thresholds belong to one pool. Route `fallback: true` widens only within the same
+  pool.
+- **Quota and usage:** usage probes, quota caches and usage attribution are recorded per pool, so an
+  account ID that exists in both pools still has two separate records.
+- **Reset grants:** Pool 2 keeps its own journal (`anthropic2-reset-grant-ledger.json`) next to the
+  primary pool's unchanged journal.
+- **Recovery:** a direct `anthropic2/<model>` request never falls back to the primary pool, and a
+  Pool 2 rate limit or refusal never cools a primary-pool account. An explicit combo that names both
+  pools keeps the targets you declared.
+
+This separation is a routing boundary inside opencodex. It does not change how Anthropic treats your
+accounts or the [account policy risk](#anthropicaccountpool-experimental) described above.
+
+Pool 2 accounts are added only through browser OAuth. Unlike `anthropic`, Pool 2 never imports,
+adopts or writes back a Claude Code CLI token; this difference is intentional. Pool 2 starts empty,
+and a Pool 2 request with no usable Pool 2 account fails with an authentication error instead of
+borrowing a primary-pool or Claude Code credential.
+
+Account commands and management APIs take the pool by name: `ocx account pool anthropic2 …`,
+`ocx account auto-switch anthropic2 …`, `ocx account routes anthropic2 …`, and
+`ocx account anthropic-reset-grants --provider anthropic2`. The pool settings and reset-grant
+endpoints accept `provider: "anthropic2"`; omitting it keeps the primary pool.
+
+#### Helper pool selection (`anthropicInstance`)
+
+The web-search and vision helpers accept an optional `anthropicInstance`, in the global
+`webSearchSidecar` and `visionSidecar` settings and in the Claude Code overrides
+`claudeCode.webSearchSidecar` and `claudeCode.visionSidecar`. The dashboard shows it as a **Pool**
+select when the helper backend is Anthropic.
+
+| Value | Behavior |
+| --- | --- |
+| unset (default) | Follow the pool of the current request: an `anthropic2/<model>` request uses Pool 2 and an `anthropic/<model>` request uses the primary pool. A request from another provider keeps the existing helper discovery, which never selects Pool 2. |
+| `"anthropic"` | Always use the primary pool. |
+| `"anthropic2"` | Always use Pool 2. |
+
+The field only applies when the helper's backend resolves to Anthropic. Setting it with another
+backend is a validation error; because web search defaults to OpenAI, set
+`"backend": "anthropic"` as well. A helper model qualified with the other pool, such as
+`anthropic/claude-sonnet-5` with `"anthropicInstance": "anthropic2"`, is also rejected. If the chosen
+pool has no usable account, the helper fails before sending anything; it does not switch to the other
+pool. The main request then continues without that helper. An unset choice is saved as absent, never
+as `"anthropic"`.
+
+```json
+{
+  "webSearchSidecar": { "backend": "anthropic", "anthropicInstance": "anthropic2" }
+}
+```
+
+:::caution[Downgrading]
+Versions without Pool 2 do not understand the `anthropic2` entry. Before installing an older
+version, stop the proxy, back up `config.json` and `auth.json`, and remove
+`providers.anthropic2` from `config.json`. Primary-pool credentials are never moved or rewritten by
+Pool 2. An in-place downgrade with an active Pool 2 is not supported.
+:::
+
 ### `oauthAccountFailover`
 
 Rotates to another logged-in account of the same provider when one is rate-limited, for OAuth
@@ -1019,7 +1126,15 @@ The same main dispatch may also switch once on a 403 when Google's bounded error
 finds a complete structured `VALIDATION_REQUIRED` reason. The 401 and 403 paths share one sibling
 attempt per request; an unrelated or incomplete 403 keeps its original error. A rejected sibling,
 cancellation or exhausted send budget does not cause another upstream send.
-Continuations, native Responses passthrough, image and web-search sidecars, and output already sent
+The fetch-based web-search loop also rotates once on this structured 403 reason, using the sibling's
+OAuth token and matching Cloud Code Assist project. It accepts only complete, bounded Google error
+envelopes with `error.details[].reason === "VALIDATION_REQUIRED"`; verification wording alone does
+not authorize rotation, and this path does not persist a reauthentication mark. Each physical send,
+including a 429 retry, consumes the same request budget exactly once. A disabled pool, cancellation,
+exhausted budget or unavailable sibling preserves the failure. If sibling request construction or
+dispatch fails, the original bounded 403 remains the error; a replay rejected before physical
+dispatch returns its unused send allowance.
+Continuations, native Responses passthrough, image sidecars, and output already sent
 to the client do not use this rotation.
 
 Current scope is the ordinary Responses request paths. Cursor reports rate limits as adapter

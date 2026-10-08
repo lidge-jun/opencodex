@@ -6,6 +6,12 @@
  * `{var}` are plain interpolations.
  */
 export const en = {
+  "sidecar.pool": "Pool",
+  "sidecar.poolCurrent": "Current request's pool",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · Pool 2",
+  "sidecar.poolMixed": "This explicit selection may use a different pool from the main request.",
+  "provider.name.anthropic2": "Anthropic · Pool 2",
   "nav.claude": "Claude",
   "claude.pageSub": "OpenCodex routing and settings for Claude Code.",
 
@@ -2066,6 +2072,7 @@ export const en = {
   "integrations.tab.dsh": "DSH",
   "integrations.tab.mcode": "MiniMax Code",
   "integrations.tab.zcode": "ZCode",
+  "integrations.tab.commandcode": "Command Code",
   "integrations.tab.prime": "Prime Agent",
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
@@ -2334,6 +2341,7 @@ export const en = {
   "integrations.semantics.dsh": "OpenCodex manages only the opencodex provider of the llm-pi-ai row in $DSH_HOME/profiles/desktop/cordis.patch.yml, the Desktop profile DSH 0.1.7+ reads ($DSH_HOME/settings.yaml until that profile exists). DSH hot reloads this provider; your default model and deepseek-official stay unchanged. Currently loopback-only; no real credential is written.",
   "integrations.semantics.mcode": "Manages only custom_provider.opencodex. Your default model and MiniMax login stay unchanged.",
   "integrations.semantics.zcode": "Manages only provider.opencodex in ~/.zcode/v2/config.json. Your Z.ai login and other providers stay unchanged. Restart ZCode after changes.",
+  "integrations.semantics.commandcode": "Manages only the OpenCodex provider entry in ~/.commandcode/providers.json. Your other providers and settings stay unchanged.",
   "integrations.semantics.prime": "Manages only providers.opencodex in Prime Agent's models.json — ~/.prime/agent unless PRIME_AGENT_CODING_AGENT_DIR redirects it. Your other providers and model overrides stay unchanged. Applies to new sessions.",
   "integrations.semantics.aside": "Manages only providers.opencodex in this profile’s ~/.aside/u/<id>/models.json. Your other providers stay unchanged. Fully quit and reopen Aside after applying.",
   "integrations.semantics.raycast": "Adds an OpenCodex provider entry to Raycast's providers.yaml so every routed model appears in the Raycast AI model picker. Raycast Pro required.",
@@ -2879,6 +2887,8 @@ export const en = {
   "api.key.revealHint": "Click to show the full key",
   "api.key.hideHint": "Click to hide the full key",
   "api.key.revealFailed": "Could not load the full key.",
+  "api.key.revealDenied": "Showing a stored key requires an operator-authorized session. Pair this browser to continue, or sign in through a trusted Tailscale identity.",
+  "api.key.mutationHidden": "The key was created or its rotation started, but the one-time value was hidden because the session or view changed.",
   "api.key.copyFailedShort": "Could not copy. Select the key and copy it manually.",
   "api.key.deleteRowAria": "Delete {name}",
   "api.key.deleteShort": "Delete",
@@ -2931,6 +2941,7 @@ export const en = {
   "api.clientConfig.clientDsh": "DeepSeek Harness (DSH)",
   "api.clientConfig.clientMcode": "MiniMax Code",
   "api.clientConfig.clientZcode": "ZCode",
+  "api.clientConfig.clientCommandCode": "Command Code",
   "api.clientConfig.clientPrime": "Prime Agent",
   "api.clientConfig.clientAside": "Aside",
   "api.clientConfig.clientRaycast": "Raycast",

@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  "sidecar.pool": "계정 풀",
+  "sidecar.poolCurrent": "현재 요청의 풀 사용",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · 풀 2",
+  "sidecar.poolMixed": "이 선택은 메인 요청과 다른 풀을 사용할 수 있습니다.",
+  "provider.name.anthropic2": "Anthropic · 풀 2",
   "nav.claude": "Claude",
   "claude.pageSub": "Claude Code의 OpenCodex 라우팅과 설정을 관리합니다.",
 
@@ -1544,6 +1550,7 @@ export const ko: Record<TKey, string> = {
   "integrations.tab.dsh": "DSH",
   "integrations.tab.mcode": "MiniMax Code",
   "integrations.tab.zcode": "ZCode",
+  "integrations.tab.commandcode": "Command Code",
   "integrations.tab.prime": "Prime Agent",
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
@@ -1767,6 +1774,7 @@ export const ko: Record<TKey, string> = {
   "integrations.semantics.dsh": "OpenCodex는 $DSH_HOME/profiles/desktop/cordis.patch.yml(DSH 0.1.7+가 읽는 Desktop profile, 이 profile이 없으면 $DSH_HOME/settings.yaml)의 llm-pi-ai 행에 있는 opencodex provider만 관리합니다. DSH는 이 provider를 hot reload하며 기본 model과 deepseek-official은 변경하지 않습니다. 현재 loopback 전용이며 실제 credential을 기록하지 않습니다.",
   "integrations.semantics.mcode": "custom_provider.opencodex만 관리하며 기본 모델과 MiniMax 로그인은 변경하지 않습니다.",
   "integrations.semantics.zcode": "~/.zcode/v2/config.json의 provider.opencodex만 관리하며 Z.ai 로그인과 다른 프로바이더는 변경하지 않습니다. 변경 후 ZCode를 재시작하세요.",
+  "integrations.semantics.commandcode": "~/.commandcode/providers.json의 OpenCodex 프로바이더 항목만 관리합니다. 다른 프로바이더와 설정은 변경되지 않습니다.",
   "integrations.semantics.prime": "Prime Agent의 models.json에서 providers.opencodex만 관리합니다. 위치는 ~/.prime/agent이며 PRIME_AGENT_CODING_AGENT_DIR가 설정되면 그쪽이 우선합니다. 다른 프로바이더와 모델 오버라이드는 변경하지 않습니다. 새 세션부터 적용됩니다.",
   "integrations.semantics.aside": "이 프로필의 ~/.aside/u/<id>/models.json에서 providers.opencodex만 관리합니다. 다른 프로바이더는 그대로 유지됩니다. 적용 후 Aside를 완전히 종료하고 다시 여세요.",
   "integrations.semantics.raycast": "Raycast의 providers.yaml에 OpenCodex 프로바이더 항목을 추가해 라우팅된 모든 모델이 Raycast AI 모델 선택기에 표시되도록 합니다. Raycast Pro가 필요합니다.",
@@ -2330,6 +2338,8 @@ export const ko: Record<TKey, string> = {
   "api.key.revealHint": "클릭하면 전체 키가 보입니다",
   "api.key.hideHint": "클릭하면 전체 키를 숨깁니다",
   "api.key.revealFailed": "전체 키를 불러오지 못했습니다.",
+  "api.key.revealDenied": "저장된 키를 표시하려면 운영자가 승인한 세션이 필요합니다. 이 브라우저를 페어링해 계속하거나, 신뢰된 Tailscale 신원으로 로그인하세요.",
+  "api.key.mutationHidden": "키가 생성되었거나 교체가 시작되었지만, 세션이나 화면이 바뀌어 일회성 값을 숨겼습니다.",
   "api.key.copyFailedShort": "복사하지 못했습니다. 키를 선택해 직접 복사하세요.",
   "api.key.deleteRowAria": "{name} 삭제",
   "api.key.deleteShort": "삭제",
@@ -2356,6 +2366,7 @@ export const ko: Record<TKey, string> = {
   "api.clientConfig.clientDsh": "DeepSeek Harness (DSH)",
   "api.clientConfig.clientMcode": "MiniMax Code",
   "api.clientConfig.clientZcode": "ZCode",
+  "api.clientConfig.clientCommandCode": "Command Code",
   "api.clientConfig.clientPrime": "Prime Agent",
   "api.clientConfig.clientAside": "Aside",
   "api.clientConfig.clientRaycast": "Raycast",

@@ -10,6 +10,7 @@ import {
 } from "../providers/api-key-resolve";
 import { providerMatchesRegistryTransport } from "../providers/registry";
 import type { OcxComboDefaultEffort, OcxConfig, OcxProviderConfig } from "../types";
+import { jevDecisionEndpointUrl } from "./jev-decision-contract";
 import {
   isSystemOneEndpoint,
   JEV_DECISION_TIMEOUT_DEFAULT_MS,
@@ -676,7 +677,7 @@ function selfHostedApiKey(name: string, apiKey: string | undefined): string | un
  * only while the row still matches the registry transport, and the environment fallbacks exist
  * only for that URL. A retargeted `jev` row therefore keeps today's behavior instead of becoming a
  * custom destination. Any other id must be an enabled `jev-decision` row whose baseUrl is a
- * `/systemone` endpoint and which names its own model; only its own key may accompany it, so no
+ * full HTTPS decision endpoint (or a local HTTP `/systemone` endpoint) and names its own model; only its own key may accompany it, so no
  * TypeSafe credential can reach a self-hosted service. `undefined` means no usable decision
  * service (reported through the existing `missing_key` gate); `null` means the request's
  * destination scope refused it before any credential access.
@@ -709,7 +710,7 @@ function jevDecisionEndpoint(
     };
   }
   if (configured?.adapter !== "jev-decision" || typeof configured.baseUrl !== "string") return undefined;
-  const url = configured.baseUrl.trim().replace(/\/+$/, "");
+  const url = jevDecisionEndpointUrl(configured.baseUrl);
   if (!url || !isSystemOneEndpoint(url)) return undefined;
   // `jev-latest` is TypeSafe's model name; a self-hosted host must name its own.
   const model = configured.defaultModel?.trim() || configured.models?.[0]?.trim();

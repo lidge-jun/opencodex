@@ -85,6 +85,18 @@ describe("i18n locale contracts", () => {
     expect(mismatches).toEqual([]);
   });
 
+  test("stored-key reveal notice preserves pairing and trusted Tailscale authorization", () => {
+    const key = "api.key.revealDenied";
+    const missingTailscale = LOCALES
+      .filter(({ code }) => !DICTS[code][key].includes("Tailscale"))
+      .map(({ code }) => code);
+
+    expect(missingTailscale).toEqual([]);
+    expect(en[key]).toContain("operator-authorized session");
+    expect(en[key]).toContain("Pair this browser");
+    expect(en[key]).toContain("trusted Tailscale identity");
+  });
+
   test("locale source files contain no duplicate dictionary keys", async () => {
     const duplicates: string[] = [];
 

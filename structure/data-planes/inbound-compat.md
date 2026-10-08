@@ -344,8 +344,10 @@ final native affinity, and shared-system keys do not provide either conversation
 
 `src/claude/inbound.ts` reads only literal `claudeCode.stabilizePromptCache: true` from
 its existing configuration argument. The default is off for every translated Messages caller.
-`src/claude/inbound-cache-stabilize.ts` relocates only exact single-line trailing unfenced harness notices
-into a trailing user input message; unmatched and fenced text is preserved, including an open
+`src/claude/inbound-cache-stabilize.ts` peels only exact single-line trailing unfenced harness notices.
+Recognized `<total_tokens>N tokens left</total_tokens>` footers are dropped, including repeated footers;
+TaskCreate nudges retain their trailing user input message. A footer-only suffix adds no input item,
+so token footers do not introduce a user turn after a function output. Unmatched and fenced text is preserved, including an open
 fence through EOF. Native passthrough never enters this translator. Without opt-in the original
 system-parts cache-key derivation remains unchanged; with opt-in the metadata-less key uses
 stabilized instructions. Metadata-derived keys retain their existing derivation. This configuration

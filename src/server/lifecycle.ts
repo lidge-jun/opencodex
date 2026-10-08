@@ -479,7 +479,7 @@ export async function drainAndShutdown(
   beginBackgroundShellShutdown();
   try {
     while (admittedTurns.size > 0 && Date.now() < deadline) {
-      await Bun.sleep(100);
+      await Bun.sleep(Math.min(100, Math.max(0, deadline - Date.now())));
     }
     if (admittedTurns.size > 0) {
       console.warn(`⚠️  Aborting ${admittedTurns.size} in-flight turn(s) after ${timeoutMs}ms deadline`);

@@ -184,10 +184,10 @@ export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["account","anthropic-reset-grants"],
-    usage: "ocx account anthropic-reset-grants [account-id] [--json]",
+    usage: "ocx account anthropic-reset-grants [account-id] [--provider anthropic|anthropic2] [--json]",
     summary: "Read Anthropic reset-grant eligibility and pending status without consuming a grant.",
     routes: [{"method":"GET","path":"/api/anthropic/reset-grants"}],
-    flags: [{"name":"--json","value":"boolean","summary":"Emit the validated task result as one JSON document."}],
+    flags: [{ name: "--provider", value: "string", summary: "Anthropic OAuth instance: anthropic or anthropic2; omission keeps the legacy Anthropic pool." }, {"name":"--json","value":"boolean","summary":"Emit the validated task result as one JSON document."}],
     mutates: false,
     json: "envelope",
     details: ["Optional identity is the exact Anthropic account ID. Omission delegates active/fallback account choice to the server, not the Codex alias resolver.","This GET can refresh access/status information upstream. Empty grants, unavailable status, pending operation and unavailable journal remain distinct. Consume remains a GUI-session-only human handoff; no session acquisition or retry is performed."],

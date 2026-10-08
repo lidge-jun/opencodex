@@ -1,8 +1,8 @@
 # Providers And Adapters
 
+Configured spend ceilings bind adapter inference executors to the [seed and physical-start contract](transports/responses-spend.md#historical-pool-continuity-and-rollback). Zed completion and auth-recovery replays claim separately; token acquisition stays outside inference accounting. Claude CLI, CodeBuddy and Qoder each count one invocation toward the frozen request limit, seed before spawn and retain a producer through completion. Child-internal retries/tool turns are not separately counted; reported actual usage settles in full, including amounts above the seed estimate.
 Devin combines only [consecutive same-ID tool results](adapters/registry.md#devin-consecutive-tool-results), using linear accumulation while preserving intervening message slots, image parts and error markers without mutating the parsed request.
-
-Anthropic account pause, model routes, and quota labels follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
+Anthropic account pause, model routes, quota labels, and the separate `anthropic2` pool (its helpers, quota, reset grants and management surfaces) follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
 
 Managed native Anthropic serving UUID and observed CLI header continuity follow [native Messages](data-planes/protocol-paths.md#managed-native-messages); generated Responses retain the adapter's compatibility fingerprint.
 
@@ -17,26 +17,28 @@ through initial builds, retries, continuations, and sidecar builds.
 
 The coding-agent stream parser buffers each tool-use block by its content-block index
 and emits a complete start/delta/end sequence on closure. Distinct indices can interleave.
-For the CodeBuddy capture-only bridge, the init handshake is checked before buffering.
+For capture-only bridges, the init handshake is checked before buffering or emitting tool calls.
 The shared parser admits a valid-ID tool start before allocating its block, with a 16-call
 ceiling for CodeBuddy and Qoder and any tighter bridge ceiling applied there. IDs, names,
 and argument fragments charge the request's translator budget while buffered; closing,
-replacement, and turn cleanup release those reservations. A new start on an occupied
+replacement, and turn cleanup release reservations; Qoder shares one budgeted emitted-ID/name/input ledger across complete and partial calls until cleanup, suppressing exact repeats and rejecting conflicting reuse in either order. Its turn limit counts distinct admitted IDs separately from open/closed-block accounting; an open repeat cannot consume a slot for a new identity. Retained partial blocks independently obey the same ceiling regardless of ID, and Qoder refuses invalid/undeclared names before allocation; every retained block charges its nonempty name. A new start on an occupied
 index closes the previous block only when its arguments form a complete JSON object;
 an unindexed delta or stop cannot be attributed to an indexed block, and a nonempty
-argument delta that cannot be attributed fails immediately. Turn completion
-requires every opened block to close, preserving the downstream single-open-call contract.
+argument delta that cannot be attributed fails immediately. Tool-bridge completion requires every opened block to close, preserving the downstream single-open-call contract.
+The authoritative completion signal is adapter-selected: existing shared coding-agent bridges default to `message_stop`, while Qoder selects only the final complete assistant frame's `message.stop_reason === "tool_use"` (its last sibling only). Qoder does not treat `message_stop` as its completion signal. Silence never ends the tool leg. An incomplete call fails closed with `protocol_error`; otherwise the bridge emits one `done(tool_use)` with usage and terminates the parked CLI; the external client owns execution.
 An indexless argument delta belongs to the sole open block; with multiple blocks open,
 the parser fails the turn before releasing their buffered calls.
-The capture-only bridge checks each raw tool-use start against the init handshake before
+The capture-only bridge checks raw starts, complete tool-use frames and synthesized completion against the init handshake before
 buffering; a later init cannot authorize a call that started earlier. The 8 MiB JSONL line
 ceiling is independent of the retained tool-block budget.
+
+Qoder alone opts into restricted `store:false` function/custom-tool continuation through `adapterNeedsToolCallContinuation` in `src/server/responses/core-replay.ts`. RunTurn SSE/JSON and sidecar completion pass `retainForToolContinuation` using the serving adapter; `src/responses/state.ts` admits an unforced `store:false` response only with that opt-in and an actual `function_call` or `custom_tool_call`. Text-only Qoder responses and unforced non-opted-in providers, including CodeBuddy, are not retained. Saved entries keep the existing `unforcedStoreFalse` matching-call/output-type replay gate (any matching pending result admits a partial batch; missing/invalid provider-output boundaries and client-history-only calls never admit replay, including hydrated snapshots/spills) through TTL, snapshot, spill, reload and memory-budget controls; the admission option is not persisted. Kiro/Cursor forced continuation and passthrough `force:true` remain unchanged.
 
 Direct MCP names emitted in a verified custom code-mode catalog follow the
 [Responses restoration boundary](transports/responses-wire-shapes.md#direct-mcp-calls-in-code-mode).
 Ordinary structured functions named `exec` do not opt into this compatibility path.
 
-RunTurn hosted search uses `src/web-search/run-turn-loop.ts`: synthetic calls remain private, progress reaches the bridge during collection, and a validated terminal precedes search execution. Complete search calls remain actionable at a truncated `done`; cancellation prevents subsequent queries and calls. OAuth preflight replay in `src/server/responses/run-turn-execution.ts` retains the synthetic tool while refreshing credential-scoped route state. In `src/server/responses/sidecar-execution.ts`, a search plan takes priority over image/video bridge execution for both transports; only fetch-capable adapters enter the fetch search loop.
+RunTurn hosted search uses `src/web-search/run-turn-loop.ts`: synthetic calls remain private, progress reaches the bridge during collection, and a validated terminal precedes search execution. Complete search calls remain actionable at a truncated `done`; cancellation prevents subsequent queries and calls. OAuth preflight replay in `src/server/responses/run-turn-execution.ts` retains the synthetic tool while refreshing credential-scoped route state. In `src/server/responses/sidecar-execution.ts`, a search plan takes priority over image/video bridge execution for both transports; only fetch-capable adapters enter the fetch search loop. Its Antigravity structured-403 rotation and physical-send accounting follow [Account refusal and rotation boundaries](transports/responses-failover.md#account-refusal-and-rotation-boundaries).
 
 Both search loops keep `web_search` declared after the search budget is exhausted. Further calls receive a paired limit-reached result without another physical search; at most `maxSearches + 3` model iterations run before a terminal error. Ordinary caller tools and cancellation still end the loop. Empty-answer recovery alone removes all tools.
 
@@ -61,10 +63,12 @@ Failure prevents CLI spawn and settles the bridge's private directory; the CodeB
 also settles its prompt-file directory. Catalog and MCP-config write failures cover both owners.
 In a compiled executable, the bridge launches the private `__codebuddy-mcp` CLI entrypoint;
 source execution launches the MCP module with Bun. Both paths advertise only the request's
-isolated catalog and leave tool execution to the external client. Qoder appends the folded
-system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or
-`QODERCN_APPEND_SYSTEM_PROMPT` child environment,
-never through command-line arguments or inherited vendor variables.
+isolated catalog and leave tool execution to the external client. Qoder's selected catalog projection in `src/adapters/coding-agent/tool-catalog.ts` rejects empty, control-bearing, comma-bearing, or unpaired-surrogate
+name/namespace components and wire names over 512 UTF-8 bytes before staging. It admits at most 128 selected tools,
+256 KiB per serialized definition, and 2 MiB for the serialized array (including brackets and separators); the comma-joined `--allowed-tools` argument is separately capped at 8 KiB of UTF-8, counting full
+`mcp__<server>__<tool>` names and commas. Invalid catalogs return a fixed local 400 without spawning Qoder. Valid wire identities, order and schemas are unchanged, apart from the Responses-only encrypted marker stripped during
+projection. Duplicate and ambiguous wire identities remain the Responses parser's responsibility. Qoder appends the
+folded system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or `QODERCN_APPEND_SYSTEM_PROMPT` child environment, never through command-line arguments or inherited vendor variables.
 
 Coding-agent stdout is framed as bounded JSONL directly from decoded stream segments. The framer
 tracks the current line's UTF-8 byte count incrementally, searches each decoded segment once, and
@@ -113,6 +117,19 @@ chat. Other HTTP failures and malformed protobufs, including a wrong
 wire type for a known field or a varint longer than ten bytes, keep last-good; a decoded status
 with nothing measurable is authoritative-empty. Only Devin's credential host extends its quota
 cache identity; generic OAuth pause still suppresses per-account probes.
+
+Kiro AWS SSO token refresh in `src/oauth/kiro.ts` retains HTTP 400 `invalid_request` as
+refresh-attention evidence separate from terminal grant errors. Matching rotated CLI credentials
+are tried before the failure reaches `src/oauth/index.ts`. `src/oauth/store.ts` persists the
+failed credential generation under its mutation lock, respecting replacement, config reconciliation,
+and operator pause. Once that generation's access token expires, account summaries project
+`needsReauth: true` and the active login projects `loggedIn: false`. `src/oauth/health.ts` uses
+the same generation/expiry predicate with its supplied observation time, so account-list health
+and CLI diagnostics project `reauth_required` with `refresh_failed`; `ocx doctor` warns with a
+login action. The internal terminal flag
+stays clear so a later refresh remains eligible; successful refresh or credential replacement
+clears the evidence. Desktop input errors, network failures, and 5xx responses create no evidence.
+No upstream description or credential metadata enters the status response.
 
 Kiro's account quota cache persists quota and an optional exhaustion verdict under one
 opaque account key and a non-secret login identity. Hydration admits only matching live
@@ -184,7 +201,7 @@ rewrite rules and the routed-id settlement.
 | `src/responses/muse-tool-name-alias.ts` | Host-gated Meta Muse 64-char tool-name alias/restore used by the Responses passthrough. |
 | `src/adapters/openai-chat.ts`, `src/adapters/openai-chat/` | OpenAI-compatible Chat Completions bridge, split into leaves (`wire.ts`, `messages.ts`, `response-events.ts`, `passthrough.ts`, `parallel-tool-calls.ts`, `reasoning-wire.ts`, `serialized-tool-call-content.ts`, `tool-call-validation.ts`, `tool-call-id-remint.ts`, `tool-schema.ts`, `errors.ts`). `parallel-tool-calls.ts` owns the `parallel_tool_calls` wire value for both the translated and native builders, so the three provider states — configured opt-out, configured opt-in, and the unset default that forwards only a caller's explicit `false` — cannot drift between them. `reasoning-wire.ts` applies explicit gateway-object and tool-bearing effort-omission declarations to both builders; absent declarations leave native raw forwarding unchanged. Its client delivery shapes in `src/chat/outbound.ts` and `src/server/chat-native-sse.ts` relay the upstream `service_tier` echo on non-stream, folded-stream, and synthesized-SSE bodies, never inventing the key when the upstream omits it. |
 | `src/adapters/anthropic.ts` | Anthropic Messages bridge. A `refusal` or `content_filter` stop reason yields an explicit `incomplete` event with `retryable: false` rather than `done` with that stopReason (#4312); `max_tokens` remains `done`. It is the wire that defines `tools[*].strict` and `tools[*].allowed_callers`, so a rebuilt declaration carries both: an explicit `strict: true` and any `allowed_callers` the caller declared. An absent `strict` stays absent, because the Messages inbound records it as `false` and a `false` on the wire would read as an opt-out nobody asked for. Anthropic Fast uses the native `anthropic-speed` FastWire: a set decision sends `speed: "fast"` with `fast-mode-2026-02-01` in one case-insensitively merged, deduplicated `anthropic-beta` header that preserves OAuth betas. Stream and buffered `usage.speed` echoes confirm fast or downgrade to standard; no echo leaves the request assumed. `tests/adapters/anthropic/anthropic-fast-speed.test.ts` pins the wire and echoes. Anthropic Fast is opt-in: the registry marks both Anthropic entries `fastOptIn`, and `src/providers/fast-opt-in.ts` (`providerFastSwitchOff`) keeps Fast off until `providers.<name>.fastEnabled` is `true`. An off switch is provider capability `false`, applied in the FastPolicy authority (`service-tier.ts`), `resolveModelPolicy`, and router registry enrichment, so no model-level Fast toggle, `--fast` row, or proxy-generated `speed` field is produced. Native Claude Messages passthrough still forwards a `speed` field the caller sends itself, outside the proxy Fast policy. `tests/adapters/anthropic/anthropic-fast-opt-in.test.ts` pins the default, the switch, and the management PATCH/GET. |
-| `src/adapters/anthropic-model-contract.ts` | Per-family Anthropic Messages wire rules, shared by the adapter and the web-search and vision sidecars, measured live on 2026-09-29: adaptive vs budget thinking; explicit `thinking: disabled` (Sonnet 5.0 up to but excluding 5.5); the `between_tools` floor that replaces it on Sonnet 5.5+ (sent without an effort, since xhigh/max reject it); forced `tool_choice` downgraded to `auto` on Opus 5.5, Fable 5.1+ and Sonnet 5.5+; `temperature`/`top_p` dropped on Opus 4.7+, Sonnet 5+ and every Fable, which 400 on any non-default value; `top_p` dropped when sent with `temperature` on the 4.5/4.6 families, which take either alone but not both; and sidecar thinking-off fields, a low effort with no `thinking` for Opus 5.5 and Fable, which reject both off switches. Dotted Bedrock ids do not parse as a family, and the Messages-native passthrough forwards caller fields unchanged. `tests/adapters/anthropic/anthropic-sonnet-5-5-contract.test.ts` pins the family table. |
+| `src/adapters/anthropic-model-contract.ts` | Per-family Anthropic Messages wire rules, shared by the adapter and the web-search and vision sidecars, measured live on 2026-09-29, with Haiku 5.5 documented on 2026-10-08: adaptive vs budget thinking (Haiku 5.5+ is adaptive); explicit `thinking: disabled` (Sonnet 5.0 up to but excluding 5.5, Haiku 5.5+ without effort); the `between_tools` floor that replaces it on Sonnet 5.5+ (sent without an effort, since xhigh/max reject it); forced `tool_choice` downgraded to `auto` on Opus 5.5, Fable 5.1+ and Sonnet 5.5+; `temperature`/`top_p` dropped on Opus 4.7+, Sonnet 5+, Haiku 5.5+ and every Fable, which 400 on any non-default value; `top_p` dropped when sent with `temperature` on the 4.5/4.6 families, which take either alone but not both; and sidecar thinking-off fields, a low effort with no `thinking` for Opus 5.5 and Fable, which reject both off switches. Dotted Bedrock ids do not parse as a family, and the Messages-native passthrough forwards caller fields unchanged. `tests/adapters/anthropic/anthropic-sonnet-5-5-contract.test.ts` and `tests/adapters/anthropic/anthropic-haiku-5-5-contract.test.ts` pin the family table. |
 | `src/adapters/google.ts` | Gemini bridge. The final wire compiler owns [endpoint-scoped tool-schema loss policy](providers/google.md#google-tool-schema-loss-reporting): compatible mode changes no request bytes, strict initial loss creates no physical send, and strict non-direct repair creates no changed repair send. A caller-declared strict tool selects `functionCallingConfig.mode: "VALIDATED"` in place of the absent-choice default; `NONE`, `ANY` and a forced-name choice are stronger constraints the caller asked for and are never overwritten. |
 | `src/adapters/unique-tool-call-ids.ts` | Request-scoped tool-call-id uniqueness for every `openai-chat` provider. An upstream that mints an id from the call's position in its response repeats `call-0-0` on every turn; a Messages client has already paired that id, drops the duplicate, and is left with a call that has no result, so the turn reads as empty and the model re-issues it indefinitely. Only a **repeat** is rewritten — the first occurrence stays byte-identical, leaving prompt-cache keys, reasoning-replay lookups and already-unique upstreams untouched. The ids to avoid come from the caller's history, captured in `buildRequest` (the only point that sees it) and applied at emission, never at ingestion: ingestion matches streamed deltas against the id upstream sent, so rewriting there would strip a pending call of its identity mid-stream. A repeat takes a `-<n>` suffix, never `_<n>`, because `<earlier>_<digits>` reads as a batch sub-call of `<earlier>`; occupied-set search resumes by suffix width and retained base prefix, including when siblings converge as `-9` becomes `-10`. Covered by `tests/adapters/openai/openai-chat-tool-call-id-remint.test.ts`. |
 | `src/adapters/declaration-carrier.ts`, `src/adapters/input-media-guard.ts` | Default-deny allowlists for constraints the normalized request carries but a wire may not be able to express: `tools[*].allowed_callers`, which fences a tool off from callers, and inline document bytes. Both are refused with a 400 at the single guard every registered adapter passes through, rather than left to each adapter, because an adapter that never learned about the carrier rebuilds without it and answers normally. `allowed_callers` reaches the `anthropic` wire; document bytes reach `anthropic`, `openai-chat` and `google`; the `openai-responses` wire is exempt from the whole guard because it forwards the original body. Adding an `AdapterWire` member makes the omission visible in these lists instead of at a customer's upstream. The unrestricted `["direct"]` caller default is not a restriction. |
@@ -214,6 +231,10 @@ Kiro metering uses the [provider credit contract](providers/kiro.md#kiro-reasoni
 Adapter output must stay in internal `AdapterEvent` form until `src/bridge/sse.ts` converts it back
 to Responses SSE or WebSocket frames, or `src/bridge/response-json.ts` buffers it into a JSON
 response. `src/bridge.ts` is the compatibility facade that re-exports both.
+`src/adapters/anthropic.ts` preserves finite nonnegative `output_tokens_details.thinking_tokens`
+within the inclusive output total as `reasoningOutputTokens`, including final cumulative SSE usage.
+Missing or invalid optional detail stays unreported internally; totals and cache accounting do not change.
+The Chat/Responses projections expose that subset as `reasoning_tokens`; no text-based estimate is made.
 `src/adapters/run-turn-queue.ts` preflight callers may supply an optional wait bound; timeout hands
 the outstanding iterator read to replay once, while callers without a bound keep the existing wait.
 
@@ -319,7 +340,7 @@ and the upstream URL through `handleResponses`.
 
 ## TypeSafe JEV decision provider
 
-The JEV Combo decision contract (TypeSafe, self-hosted System One rows, and opencodex-model
+The JEV Combo decision contract (TypeSafe, compatible HTTPS services with any endpoint path, local System One rows, and opencodex-model
 decision backends) lives in [JEV Decision Routing](providers/jev-decision.md).
 
 ## Preset notes

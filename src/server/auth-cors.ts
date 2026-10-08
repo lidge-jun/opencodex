@@ -38,6 +38,7 @@ import { redactSecretString } from "../lib/redact";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../responses/hosted-tool-policy";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
+import { anthropicOAuthInstanceConfigError } from "../config/schema/anthropic-account-pool";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { modelAutoCompactTokenLimitsConfigError } from "../providers/auto-compact-budget";
@@ -785,6 +786,8 @@ export function providerManagementConfigError(
     return `provider ${name} must not include codexAccountMode`;
   }
   const typed = provider as unknown as OcxProviderConfig;
+  const markerError = anthropicOAuthInstanceConfigError({ providers: { [name]: provider } });
+  if (markerError) return markerError;
   // Every write path (POST, PUT, reload, both PATCH passes) funnels through here, so a PATCH
   // that changes authMode/baseUrl/adapter under a retained tlsProfile is refused before it
   // persists a row the config schema would later reject as document-fatal.
@@ -1057,6 +1060,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelVercelGatewayRouting: "editor",
   authMode: "editor",
   oauthAccountFailover: "editor",
+  anthropicAccountPool: "editor",
+  anthropicOAuthInstance: "editor",
   keyOptional: "editor",
   freeTier: "editor",
   note: "editor",

@@ -916,7 +916,7 @@ JSON mode: `envelope`.
 
 ### `ocx account anthropic-reset-grants`
 
-Usage: `ocx account anthropic-reset-grants [account-id] [--json]`
+Usage: `ocx account anthropic-reset-grants [account-id] [--provider anthropic|anthropic2] [--json]`
 
 Read Anthropic reset-grant eligibility and pending status without consuming a grant.
 
@@ -928,6 +928,7 @@ State-changing: no.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--provider` | string | Anthropic OAuth instance: anthropic or anthropic2; omission keeps the legacy Anthropic pool. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 
 JSON mode: `envelope`.

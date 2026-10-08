@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { handleClientIntegrationCommand as command } from "../../src/cli/integrations";
+import { handleClientIntegrationCommand as command, handleCommandcodeCommand } from "../../src/cli/integrations";
 import { handleIntegrationPreviewCommand as leaf } from "../../src/cli/integration-preview";
 import { decodeIntegrationPlan, FILE_INTEGRATION_CLIENTS } from "../../src/cli/integration-plan-dto";
 import { parseIntegrationMutationPlan as guiDecode } from "../../gui/src/pages/integrations/integration-api";
@@ -37,13 +37,13 @@ beforeEach(() => {
   network = spyOn(globalThis, "fetch").mockImplementation(async () => { throw new Error("Network denied"); });
 });
 afterEach(() => { network.mockRestore(); out.mockRestore(); err.mockRestore(); home.remove(); });
-function fixture(response: unknown = plan, status = 200) {
+function fixture(response: unknown = plan, status = 200, expectRedirectGuard = true) {
   const calls: Array<{ path: string; body: unknown; method?: string }> = [];
   let probes = 0;
   const deps: RuntimeApiDeps = {
     findLiveProxy: async () => { probes++; return { port: 10100, hostname: "127.0.0.1", pid: 1, source: "runtime" }; },
     fetchImpl: (async (input, init) => {
-      expect(init?.redirect).toBe("error");
+      if (expectRedirectGuard) expect(init?.redirect).toBe("error");
       calls.push({ path: new URL(String(input)).pathname, method: init?.method, body: JSON.parse(String(init?.body)) });
       return Response.json(response, { status });
     }) as typeof fetch,
@@ -53,6 +53,66 @@ function fixture(response: unknown = plan, status = 200) {
 function result() { expect(out.mock.calls.length).toBe(1); return JSON.parse(out.mock.calls[0]![0]); }
 function clearOutput() { out.mockClear(); err.mockClear(); }
 const previewArgs = ["preview", "--client", "pi", "--operation", "apply"];
+
+describe("commandcode restore owner scope", () => {
+  test.each(["plain", "preview", "bound"])("fixed commandcode identity reaches the restore request: %s", async mode => {
+    const preview = mode === "preview";
+    const f = fixture(preview ? { ...plan, clientId: "commandcode", operation: "restore" }
+      : { ok: true, clientId: "commandcode", state: "absent", changed: true });
+    const flags = preview ? ["--preview"] : mode === "bound" ? ["--plan-fingerprint", token] : [];
+    expect(await handleCommandcodeCommand(["restore", "--op", "op-one", "--confirm-drift", ...flags, "--json"], f.deps)).toBe(0);
+    expect(f.calls).toEqual([{ path: `/api/client-integrations/commandcode/restore${preview ? "/preview" : ""}`, method: "POST",
+      body: { opId: "op-one", confirmDrift: true, expectedClientId: "commandcode",
+        ...(mode === "bound" ? { operation: "restore", planFingerprint: token } : {}) } }]);
+  });
+  test.each(["plain", "preview", "bound"])("generic restore omits the wrapper identity: %s", async mode => {
+    const preview = mode === "preview";
+    const f = fixture(preview ? { ...plan, operation: "restore" } : { ok: true, clientId: "pi", state: "absent", changed: true }, 200, mode !== "plain");
+    const flags = preview ? ["--preview"] : mode === "bound" ? ["--plan-fingerprint", token] : [];
+    expect(await command(["restore", "--op", "op-one", ...flags, "--json"], f.deps)).toBe(0);
+    expect(f.calls).toEqual([{ path: `/api/client-integrations/restore${preview ? "/preview" : ""}`, method: "POST",
+      body: { opId: "op-one", confirmDrift: false, ...(mode === "bound" ? { operation: "restore", planFingerprint: token } : {}) } }]);
+  });
+  test.each(["plain", "preview", "bound"])("old proxy rejects the scoped path without a generic fallback: %s", async mode => {
+    const preview = mode === "preview";
+    const calls: string[] = [];
+    let mutations = 0;
+    // Model the legacy server's closed pathname dispatch and ignored JSON identity field.
+    // A generic restore succeeds and mutates even when expectedClientId is supplied.
+    const legacyFetch = (async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      calls.push(path);
+      if (path === "/api/client-integrations/restore") {
+        mutations++;
+        return Response.json({ ok: true, clientId: "hermes", state: "absent", changed: true });
+      }
+      if (path === "/api/client-integrations/restore/preview") {
+        return Response.json({ ...plan, clientId: "hermes", operation: "restore" });
+      }
+      return Response.json({ error: "Not found" }, { status: 404 });
+    }) as typeof fetch;
+    const probe = await legacyFetch("http://127.0.0.1:10100/api/client-integrations/restore", {
+      method: "POST", body: JSON.stringify({ opId: "foreign-op", expectedClientId: "commandcode" }),
+    });
+    expect(probe.status).toBe(200); expect(mutations).toBe(1);
+    calls.length = 0; mutations = 0;
+    const flags = preview ? ["--preview"] : mode === "bound" ? ["--plan-fingerprint", token] : [];
+    const exit = await handleCommandcodeCommand(["restore", "--op", "foreign-op", ...flags, "--json"], {
+      baseUrl: "http://127.0.0.1:10100", fetchImpl: legacyFetch,
+    });
+    expect({ exit, calls, mutations, stdout: out.mock.calls }).toEqual({
+      exit: 4, calls: [`/api/client-integrations/commandcode/restore${preview ? "/preview" : ""}`], mutations: 0, stdout: [],
+    });
+  });
+  for (const flags of [[], ["--preview"], ["--plan-fingerprint", token]]) {
+    test.each([["--client", "aside", "--profile", "1"], ["--client=aside", "--profile=1"], ["--client", "hermes"], ["--profile", "1"]])
+    (`wrapper scope cannot be overridden ${flags.join(" ")}: %j`, async (...selectors) => {
+      const f = fixture({ ...plan, clientId: "aside", profileId: 1, operation: "restore" });
+      expect(await handleCommandcodeCommand(["restore", "--op", "op-one", ...flags, ...selectors, "--json"], f.deps)).toBe(2);
+      expect(f.probes()).toBe(0); expect(f.calls).toEqual([]);
+    });
+  }
+});
 
 describe("preview wire and failure contracts", () => {
   test("one closed JSON plan, no-op and refused unbound inspection", async () => {

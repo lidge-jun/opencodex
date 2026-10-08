@@ -5,6 +5,12 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  "sidecar.pool": "Hesap havuzu",
+  "sidecar.poolCurrent": "Geçerli isteğin havuzu",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · Havuz 2",
+  "sidecar.poolMixed": "Bu açık seçim, ana istekten farklı bir havuz kullanabilir.",
+  "provider.name.anthropic2": "Anthropic · Havuz 2",
   "nav.claude": "Claude",
   "claude.pageSub": "Claude Code için OpenCodex yönlendirmesi ve ayarları.",
 
@@ -2051,6 +2057,7 @@ export const tr: Record<TKey, string> = {
   "integrations.tab.dsh": "DSH",
   "integrations.tab.mcode": "MiniMax Code",
   "integrations.tab.zcode": "ZCode",
+  "integrations.tab.commandcode": "Command Code",
   "integrations.tab.prime": "Prime Agent",
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
@@ -2273,6 +2280,7 @@ export const tr: Record<TKey, string> = {
   "integrations.semantics.dsh": "OpenCodex yalnızca $DSH_HOME/profiles/desktop/cordis.patch.yml içindeki llm-pi-ai satırının opencodex sağlayıcısını yönetir; bu, DSH 0.1.7+ sürümünün okuduğu Desktop profilidir (profil yokken $DSH_HOME/settings.yaml). DSH bu sağlayıcıyı çalışırken yeniden yükler; varsayılan modeliniz ve deepseek-official değişmez. Şimdilik yalnızca geri döngü desteklenir; gerçek kimlik bilgisi yazılmaz.",
   "integrations.semantics.mcode": "Yalnızca custom_provider.opencodex bölümünü yönetir. Varsayılan model ve MiniMax oturumu değişmez.",
   "integrations.semantics.zcode": "Yalnızca ~/.zcode/v2/config.json içindeki provider.opencodex bölümünü yönetir. Z.ai oturumu ve diğer sağlayıcılar değişmez. Değişikliklerden sonra ZCode'u yeniden başlatın.",
+  "integrations.semantics.commandcode": "Yalnızca ~/.commandcode/providers.json içindeki OpenCodex sağlayıcı girdisini yönetir. Diğer sağlayıcılarınız ve ayarlarınız değişmez.",
   "integrations.semantics.prime": "Yalnızca Prime Agent'ın models.json dosyasındaki providers.opencodex bölümünü yönetir — PRIME_AGENT_CODING_AGENT_DIR ayarlı değilse ~/.prime/agent. Diğer sağlayıcılar ve model geçersiz kılmaları değişmez. Yeni oturumlarda geçerli olur.",
   "integrations.semantics.aside": "Yalnızca bu profilin ~/.aside/u/<id>/models.json dosyasındaki providers.opencodex bölümünü yönetir. Diğer sağlayıcılarınız değişmez. Uyguladıktan sonra Aside’ı tamamen kapatıp yeniden açın.",
   "integrations.semantics.raycast": "Raycast'in providers.yaml dosyasına bir OpenCodex sağlayıcı girdisi ekler; böylece yönlendirilen her model Raycast AI model seçicisinde görünür. Raycast Pro gerekir.",
@@ -2814,6 +2822,8 @@ export const tr: Record<TKey, string> = {
   "api.key.revealHint": "Tam anahtarı göstermek için tıklayın",
   "api.key.hideHint": "Tam anahtarı gizlemek için tıklayın",
   "api.key.revealFailed": "Tam anahtar yüklenemedi.",
+  "api.key.revealDenied": "Kaydedilmiş bir anahtarı göstermek, operatörün yetkilendirdiği bir oturum gerektirir. Devam etmek için bu tarayıcıyı eşleştirin veya güvenilir bir Tailscale kimliğiyle oturum açın.",
+  "api.key.mutationHidden": "Anahtar oluşturuldu veya anahtar rotasyonu başlatıldı, ancak oturum ya da görünüm değiştiği için tek seferlik değer gizlendi.",
   "api.key.copyFailedShort": "Kopyalanamadı. Anahtarı seçip elle kopyalayın.",
   "api.key.deleteRowAria": "{name} sil",
   "api.key.deleteShort": "Sil",
@@ -2865,6 +2875,7 @@ export const tr: Record<TKey, string> = {
   "api.clientConfig.clientDsh": "DeepSeek Harness (DSH)",
   "api.clientConfig.clientMcode": "MiniMax Code",
   "api.clientConfig.clientZcode": "ZCode",
+  "api.clientConfig.clientCommandCode": "Command Code",
   "api.clientConfig.clientPrime": "Prime Agent",
   "api.clientConfig.clientAside": "Aside",
   "api.clientConfig.clientRaycast": "Raycast",

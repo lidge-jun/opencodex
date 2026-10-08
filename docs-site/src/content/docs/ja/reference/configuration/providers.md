@@ -228,6 +228,65 @@ affinity を維持します。これらの戦略は provider enforcement を回�
 Anthropic アカウント ポリシーのリスクを理解していない限り、これは無効のままにしてください。不明な場合は、`ocx account use anthropic <id>` を手動で切り替えることをお勧めします。
 :::
 
+### Anthropic · Pool 2 (`anthropic2`)
+
+`anthropic2`（「Anthropic · Pool 2」）は、独自のアカウントプールを持つ 2 つ目の組み込み Anthropic OAuth プロバイダーです。`anthropic` と同じ Anthropic 実装（同じログインフロー、ワイヤ形式、ネイティブ Messages と Responses ブリッジ、モデルメタデータ）で動作し、分かれているのはアカウントとそれを囲むプールだけです。プールはモデルの接頭辞で選びます。`anthropic/claude-sonnet-5` はプライマリプール、`anthropic2/claude-sonnet-5` は Pool 2 を使います。
+
+Pool 2 は追加するまで休止状態です。`ocx login anthropic2` でログインするか、ダッシュボードのプロバイダーページで **Anthropic · プール2** を追加します。最初のログインが成功すると、マーカー `"anthropicOAuthInstance": "anthropic2"` 付きの `providers.anthropic2` が作成されます。Pool 2 が既定のプロバイダーになることはありません。接頭辞のない `claude-*` モデル名、既定モデル、Claude Code の呼び出し元転送は引き続き `anthropic` に解決されます。以前に自分で作成したマーカーのない `anthropic2` エントリは独自の意味を保ちます。ログインは名前の衝突を拒否し、エントリも資格情報も書き換えません。
+
+Pool 2 はプール設定を自身のプロバイダーエントリから読み取ります。キー、既定値、動作は上記のトップレベル `anthropicAccountPool` と同じで、プライマリプールからは何も継承しません。`providers.anthropic.anthropicAccountPool` や、他のプロバイダー上の同じフィールドは拒否されます。
+
+```json
+{
+  "anthropicAccountPool": { "enabled": true, "strategy": "quota" },
+  "providers": {
+    "anthropic2": {
+      "adapter": "anthropic",
+      "authMode": "oauth",
+      "baseUrl": "https://api.anthropic.com",
+      "anthropicOAuthInstance": "anthropic2",
+      "anthropicAccountPool": { "enabled": true, "strategy": "round-robin" }
+    }
+  }
+}
+```
+
+2 つのプールは opencodex 内で分離されています。
+
+- **資格情報:** Pool 2 のアカウントは、保護された資格情報ストアの独自キー `anthropic2` に保存されます。トークンまたは検証済み Anthropic アカウントがもう一方のプールに既に保存されているログインは拒否されます。
+- **プール設定と実行時状態:** 選択、セッションアフィニティ、クールダウン、一時停止、モデルルート、アカウント別しきい値は 1 つのプールに属します。ルートの `fallback: true` は同じプール内でのみ範囲を広げます。
+- **クォータと使用量:** 使用量プローブ、クォータキャッシュ、使用量の帰属はプールごとに記録されるため、両方のプールに同じアカウント ID があっても記録は別々です。
+- **リセット付与:** Pool 2 は、変更されないプライマリプールのジャーナルの隣に独自のジャーナル（`anthropic2-reset-grant-ledger.json`）を持ちます。
+- **復旧:** `anthropic2/<model>` への直接リクエストがプライマリプールにフォールバックすることはなく、Pool 2 のレート制限や拒否がプライマリプールのアカウントをクールダウンさせることもありません。両方のプールを指定した明示的なコンボは、宣言したターゲットを維持します。
+
+この分離は opencodex 内のルーティング境界です。Anthropic によるアカウントの扱いや、上記のアカウントポリシーのリスクは変わりません。
+
+Pool 2 のアカウントはブラウザー OAuth でのみ追加できます。`anthropic` と異なり、Pool 2 は Claude Code CLI のトークンをインポート、採用、書き戻しすることはありません。この違いは意図的です。Pool 2 は空の状態で始まり、使用可能な Pool 2 アカウントがない Pool 2 リクエストは、プライマリプールや Claude Code の資格情報を借りずに認証エラーで失敗します。
+
+アカウントコマンドと管理 API はプールを名前で指定します: `ocx account pool anthropic2 …`、`ocx account auto-switch anthropic2 …`、`ocx account routes anthropic2 …`、`ocx account anthropic-reset-grants --provider anthropic2`。プール設定とリセット付与のエンドポイントは `provider: "anthropic2"` を受け付け、省略するとプライマリプールのままです。
+
+#### ヘルパーのプール選択 (`anthropicInstance`)
+
+Web 検索とビジョンのヘルパーは、グローバルの `webSearchSidecar` と `visionSidecar`、および Claude Code オーバーライドの `claudeCode.webSearchSidecar` と `claudeCode.visionSidecar` で、任意の `anthropicInstance` を受け付けます。ヘルパーのバックエンドが Anthropic のとき、ダッシュボードに **アカウントプール** の選択肢として表示されます。
+
+| 値 | 動作 |
+| --- | --- |
+| 未設定（既定） | 現在のリクエストのプールに従います。`anthropic2/<model>` リクエストは Pool 2、`anthropic/<model>` リクエストはプライマリプールを使います。他のプロバイダーからのリクエストは既存のヘルパー検出を使い、Pool 2 を選ぶことはありません。 |
+| `"anthropic"` | 常にプライマリプールを使います。 |
+| `"anthropic2"` | 常に Pool 2 を使います。 |
+
+このフィールドは、ヘルパーのバックエンドが Anthropic に解決される場合にのみ適用されます。他のバックエンドと組み合わせると検証エラーになります。Web 検索の既定は OpenAI なので、`"backend": "anthropic"` も設定してください。`anthropic/claude-sonnet-5` と `"anthropicInstance": "anthropic2"` のように、もう一方のプールで修飾されたヘルパーモデルも拒否されます。選んだプールに使用可能なアカウントがない場合、ヘルパーは何も送信せずに失敗し、もう一方のプールには切り替えません。その場合も本来のリクエストは、そのヘルパーなしでそのまま処理されます。未設定の選択は `"anthropic"` ではなく、値なしとして保存されます。
+
+```json
+{
+  "webSearchSidecar": { "backend": "anthropic", "anthropicInstance": "anthropic2" }
+}
+```
+
+:::caution[ダウングレード]
+Pool 2 のないバージョンは `anthropic2` エントリを理解しません。古いバージョンをインストールする前に、プロキシを停止し、`config.json` と `auth.json` をバックアップしてから、`config.json` から `providers.anthropic2` を削除してください。Pool 2 がプライマリプールの資格情報を移動したり書き換えたりすることはありません。Pool 2 が有効なままのインプレースダウングレードはサポートされていません。
+:::
+
 ### 管理されたレコードの形状
 
 `apiKeys[]` エントリには、`id`、`name`、生成された `key`、および ISO `createdAt` 文字列が含まれます。 `codexAccounts[]` エントリには `id`、`email`、および `isMain` が必要で、オプションの `plan`、`chatgptAccountId`、およびプライバシー セーフな `logLabel` が必要です。これらのレコードは通常、ダッシュボードで管理されます。
