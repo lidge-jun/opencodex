@@ -1,5 +1,6 @@
-/* omo (Codex / LazyCodex) role models on the Codex integration tab. Existing tokens only. */
-.lazycodex-role-models { margin: 14px 0; }
+/* omo (Codex / LazyCodex) role models, below the Pi-based omo controls on the omo tab. Existing tokens only. */
+/* The rule keeps the LazyCodex section from reading as part of the Pi-based omo block above it. */
+.lazycodex-role-models { margin: 28px 0 14px; padding-top: 20px; border-top: 1px solid var(--border-soft, var(--border)); }
 .lazycodex-role-models .tbl td { vertical-align: middle; }
 .lazycodex-role-models-edit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lazycodex-role-models-edit > :first-child { flex: 1 1 220px; min-width: 0; }
