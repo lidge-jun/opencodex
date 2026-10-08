@@ -36,6 +36,7 @@ beforeEach(async () => {
     import("../../src/providers/request-pacing"), import("../../src/server/request-log"),
   ]);
   releaseSpend = (await import("../helpers/owned-spend-home")).acquireOwnedSpendHome();
+  (await import("../../src/responses/reasoning-replay-cache")).clearReasoningReplayCacheForTests();
   sent = [];
   f.config.protocols = { rollout: { managedMessagesNative: true, managedMessagesNativeOAuth: true } };
   for (const instance of INSTANCES) {
@@ -104,16 +105,21 @@ function body(model = `anthropic2/${f.model}`, extra: Rec = {}): Rec {
     messages: [{ role: "user", content: "fixture question" }], ...extra };
 }
 
-async function send(model = `anthropic2/${f.model}`, extra: Rec = {}, options: { nativeCaller?: boolean } = {}) {
+async function send(model = `anthropic2/${f.model}`, extra: Rec = {}, options: { nativeCaller?: boolean; sessionKey?: string } = {}) {
   const requestId = crypto.randomUUID();
   const logCtx = { model: "", provider: "" };
+  const requestBody = body(model, extra);
+  if (options.sessionKey) {
+    const metadata = requestBody.metadata as { user_id: string };
+    metadata.user_id = JSON.stringify({ ...JSON.parse(metadata.user_id), session_id: options.sessionKey });
+  }
   const response = await ingress.handleClaudeMessages(new Request("http://localhost/v1/messages", {
     // Managed parity cases use ordinary admission fixtures. Caller-forward exclusion cases
     // explicitly supply a classified Anthropic caller bearer while passthrough stays enabled.
     method: "POST", headers: { "content-type": "application/json",
       authorization: `Bearer ${options.nativeCaller ? CALLER : "fixture-admission-token"}`,
-      "x-api-key": options.nativeCaller ? CALLER : "fixture-caller-key", "x-session-id": f.sessionKey },
-    body: JSON.stringify(body(model, extra)),
+      "x-api-key": options.nativeCaller ? CALLER : "fixture-caller-key", "x-session-id": options.sessionKey ?? f.sessionKey },
+    body: JSON.stringify(requestBody),
   }), f.config, logCtx, { requestId, start: Date.now() });
   const text = await response.text();
   const rows = logs.getRequestLogEntries().filter(row => row.requestId === requestId);
@@ -672,6 +678,30 @@ describe("native physical response incarnation ownership", () => {
 });
 
 describe("A/B native wire features", () => {
+  test("translated opaque replay is retained for one serving identity and omitted after a pool switch", async () => {
+    await seed();
+    f.config.protocols!.rollout!.managedMessagesNativeOAuth = false;
+    f.publishConfig();
+    const replay = { messages: [{ role: "assistant", content: [
+      { type: "thinking", thinking: "fixture reasoning", signature: "synthetic-thinking-signature" },
+      { type: "redacted_thinking", data: "synthetic-redacted-data" },
+      { type: "text", text: "fixture earlier response" },
+    ] }, { role: "user", content: "continue" }] };
+    const sessionKey = "fixture-opaque-pool-switch";
+    for (const instance of ["anthropic", "anthropic", "anthropic2"] as const) {
+      const result = await send(`${instance}/${f.model}`, replay, { sessionKey });
+      expect(result.response.status, result.text).toBe(200);
+      const observed = JSON.stringify(sent.at(-1)!.body.messages);
+      expect(observed).toContain("fixture earlier response");
+      if (instance === "anthropic") {
+        expect(observed).toContain("synthetic-thinking-signature");
+        expect(observed).toContain("synthetic-redacted-data");
+      } else {
+        expect(observed).not.toContain("synthetic-thinking-signature");
+        expect(observed).not.toContain("synthetic-redacted-data");
+      }
+    }
+  });
   const signature = "synthetic-thinking-signature";
   const cases: Array<{ label: string; extra: Rec; inspect: (wire: Rec) => unknown }> = [
     { label: "images", extra: {
@@ -708,7 +738,9 @@ describe("A/B native wire features", () => {
       for (const instance of INSTANCES) {
         f.config.protocols!.rollout!.managedMessagesNativeOAuth = nativeLane;
         f.publishConfig();
-        const { response, text } = await send(`${instance}/${f.model}`, feature.extra);
+        // Independent parity scenarios must not look like a provider switch in one conversation.
+        const { response, text } = await send(`${instance}/${f.model}`, feature.extra,
+          { sessionKey: `${f.sessionKey}-${instance}-${nativeLane}` });
         expect(response.status, text).toBe(200);
         expect(JSON.parse(text).content).toEqual([{ type: "text", text: "fixture reply" }]);
         const wire = sent.at(-1)!.body;
@@ -718,9 +750,10 @@ describe("A/B native wire features", () => {
         if (metadata?.user_id) {
           const user = JSON.parse(metadata.user_id) as Rec;
           if (user.account_uuid) user.account_uuid = "normalized-provider-uuid";
+          if (user.session_id) user.session_id = "normalized-conversation-id";
           metadata.user_id = JSON.stringify(user);
         }
-        // Compare complete A/B upstream bodies in each lane; only provider UUID is normalized.
+        // Normalize the explicit fixture UUID/conversation mapping, preserving the complete wire structure.
         wires.push(normalized);
         const serialized = JSON.stringify(feature.inspect(wire));
         if (feature.label.startsWith("thinking")) {
