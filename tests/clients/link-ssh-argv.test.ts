@@ -162,6 +162,7 @@ test.skipIf(process.platform !== "win32")("PowerShell parses the remote command 
   expect(result.stdout.toString().trim()).toBe("sh");
 });
 
+/** Install a stub `ocx` in `dir` that prints `label`, the PATH it ran with, and each argument in brackets. */
 function fakeOcx(dir: string, label: string): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "ocx"), `#!/bin/sh\nprintf "%s\\n" "${label}" "$PATH"\nfor arg in "$@"; do printf "[%s]\\n" "$arg"; done\n`, { mode: 0o755 });
