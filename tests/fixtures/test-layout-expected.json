@@ -1024,7 +1024,7 @@
   "sync-client-integrations.test.ts": "clients", "synced-state-location.test.ts": "lib",
   "synthetic-tool.test.ts": "images", "system-env.test.ts": "server",
   "system-restart-client-package-tree.test.ts": "cli", "system-restart-client.test.ts": "cli",
-  "system-restart-contract-security.test.ts": "lib", "system-restart.test.ts": "server",
+  "system-restart-contract-security.test.ts": "lib", "system-restart-admission.test.ts": "server", "system-restart.test.ts": "server",
   "system-routes.test.ts": "server", "systemd-install-cleanup-hardening.test.ts": "service",
   "tencent-siliconflow-providers.test.ts": "gui", "terminal-continuation-owner-rotation.test.ts": "adapters",
   "terminal-guard-server.test.ts": "server", "terminal-guard.test.ts": "server",

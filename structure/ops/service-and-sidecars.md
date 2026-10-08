@@ -466,6 +466,18 @@ clients do not retry it at all. `server_restarting` falls through to retryable
 response bypasses the shared provider-overload mapping in `src/lib/errors.ts`.
 `tests/codex-integration/issue-452-empty-503.test.ts` pins its body and both listeners' CORS.
 
+`src/server/management/system-routes.ts` accepts an optional JSON `drainGraceMs` on the authenticated
+restart API: an integer from 1 to 60000, with omission retaining the 60-second default. Invalid
+input starts no drain. `src/server/management/system-restart.ts` fixes the selected grace at first
+acceptance; repeated requests cannot shorten it. The response-flush delay stays 200ms for every
+caller. A grace shorter than 200ms cancels and releases active turns at the accepted deadline via
+a separate timer, cancelled by a pending restart veto. Cleanup, listener stop and process exit
+still wait for the response-flush delay; grace of at least 200ms arms no extra timer. The cleanup
+watchdog stays 60 seconds and replacement readiness stays 70 seconds. Short grace is an explicit
+API opt-in; dashboard, CLI, tray, join and automatic restarts keep their default. An interrupted
+turn may have an unknown upstream outcome and is not automatically replayed.
+`tests/server/system-restart-admission.test.ts` covers this contract and active-turn preservation.
+
 A dashboard drain-and-restart (`src/server/management/system-restart.ts`, which is also the restart
 after a join into a Child) and the client runtime's standalone recycle (`src/client/runtime.ts`)
 replace their process through `src/server/restart-replacement.ts`. Every replacement `ocx start`

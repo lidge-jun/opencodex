@@ -1808,6 +1808,7 @@
     "system-restart-client-package-tree.test.ts": "cli",
     "system-restart-client.test.ts": "cli",
     "system-restart-contract-security.test.ts": "lib",
+    "system-restart-admission.test.ts": "server",
     "system-restart.test.ts": "server",
     "system-routes.test.ts": "server",
     "systemd-install-cleanup-hardening.test.ts": "service",
