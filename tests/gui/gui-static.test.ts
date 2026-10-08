@@ -1,9 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { serveGuiFile } from "../../src/server/gui-static";
+import {
+  DESKTOP_PRODUCT_NAME,
+  findGuiDist,
+  serveGuiFile,
+  standaloneGuiDistCandidates,
+} from "../../src/server/gui-static";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 const temporaryDirectories: string[] = [];
 const previousGuiDist = process.env.OPENCODEX_GUI_DIST;
@@ -110,4 +116,75 @@ test("serves immutable cache header for assets and no-cache for non-hashed stati
   const traversalResponse = serveGuiFile("/assets/../favicon.png", guiDist);
   expect(traversalResponse).not.toBeNull();
   expect(traversalResponse!.headers.get("Cache-Control")).toBe("no-cache");
+});
+
+/** Lay out `<root>/<segments>/index.html` and return the directory holding it. */
+function writeGuiDist(root: string, ...segments: string[]): string {
+  const guiDist = join(root, ...segments);
+  mkdirSync(guiDist, { recursive: true });
+  writeFileSync(join(guiDist, "index.html"), "<!doctype html>");
+  return guiDist;
+}
+
+function temporaryRoot(prefix: string): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  temporaryDirectories.push(root);
+  return root;
+}
+
+test("a standalone ocx in a Linux desktop package finds the dashboard under lib/<productName>", () => {
+  // The .deb installs the sidecar as /usr/bin/ocx and its resources under /usr/lib/OpenCodex.
+  // `ocx ensure` from the Codex shim starts that binary without OPENCODEX_GUI_DIST.
+  delete process.env.OPENCODEX_GUI_DIST;
+  const root = temporaryRoot("ocx-gui-static-linux-");
+  mkdirSync(join(root, "usr", "bin"), { recursive: true });
+  const bundled = writeGuiDist(root, "usr", "lib", DESKTOP_PRODUCT_NAME, "gui", "dist");
+  expect(findGuiDist(join(root, "usr", "bin"), "linux")).toBe(bundled);
+});
+
+test("a standalone ocx in a macOS app bundle finds the dashboard under Contents/Resources", () => {
+  delete process.env.OPENCODEX_GUI_DIST;
+  const root = temporaryRoot("ocx-gui-static-macos-");
+  const macos = join(root, "OpenCodex.app", "Contents", "MacOS");
+  mkdirSync(macos, { recursive: true });
+  const bundled = writeGuiDist(root, "OpenCodex.app", "Contents", "Resources", "gui", "dist");
+  expect(findGuiDist(macos, "darwin")).toBe(bundled);
+});
+
+test("gui/dist beside the binary still wins over a desktop bundle layout", () => {
+  delete process.env.OPENCODEX_GUI_DIST;
+  const root = temporaryRoot("ocx-gui-static-beside-");
+  const executableDir = join(root, "usr", "bin");
+  const beside = writeGuiDist(executableDir, "gui", "dist");
+  writeGuiDist(root, "usr", "lib", DESKTOP_PRODUCT_NAME, "gui", "dist");
+  expect(findGuiDist(executableDir, "linux")).toBe(beside);
+});
+
+test("OPENCODEX_GUI_DIST still overrides a desktop bundle layout", () => {
+  const root = temporaryRoot("ocx-gui-static-env-");
+  writeGuiDist(root, "usr", "lib", DESKTOP_PRODUCT_NAME, "gui", "dist");
+  const override = writeGuiDist(root, "override");
+  process.env.OPENCODEX_GUI_DIST = override;
+  expect(findGuiDist(join(root, "usr", "bin"), "linux")).toBe(override);
+});
+
+test("each platform consults only its own desktop bundle layout", () => {
+  const executableDir = join("opt", "ocx", "bin");
+  const beside = join(executableDir, "gui", "dist");
+  expect(standaloneGuiDistCandidates(executableDir, "win32")).toEqual([beside]);
+  expect(standaloneGuiDistCandidates(executableDir, "darwin"))
+    .toEqual([beside, join(executableDir, "..", "Resources", "gui", "dist")]);
+  expect(standaloneGuiDistCandidates(executableDir, "linux"))
+    .toEqual([beside, join(executableDir, "..", "lib", DESKTOP_PRODUCT_NAME, "gui", "dist")]);
+});
+
+test("the Linux bundle directory and the resource path follow the desktop Tauri config", () => {
+  // Tauri names the Linux resource directory after productName and copies gui/dist under the
+  // mapped name; a rename on either side would silently send the dashboard lookup elsewhere.
+  const config = JSON.parse(readFileSync(repoPath("desktop", "src-tauri", "tauri.conf.json"), "utf8")) as {
+    productName?: string;
+    bundle?: { resources?: Record<string, string> };
+  };
+  expect(config.productName).toBe(DESKTOP_PRODUCT_NAME);
+  expect(Object.values(config.bundle?.resources ?? {})).toContain("gui/dist");
 });

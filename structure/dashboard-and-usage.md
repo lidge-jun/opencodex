@@ -523,9 +523,9 @@ selection because the schema would drop the override. The model checklist is sea
 `PUT /api/settings` accepts a validated object or null to clear it; a failed save restores live settings and deletion provenance while the dashboard keeps the draft for retry.
 
 `src/server/gui-static.ts` serves the dashboard from `gui/dist`, with `OPENCODEX_GUI_DIST` taking
-priority and standalone binaries resolving the copied directory beside `ocx`. Runtime package
-metadata comes from the bundled `src/lib/package-version.ts` manifest import so compiled binaries
-do not read a source-tree `package.json`.
+priority. A standalone binary resolves the copied directory beside `ocx`, then the desktop bundle's resource directory
+(`../Resources` on macOS, `../lib/OpenCodex` on Linux), so a runtime the desktop shell did not start still serves it.
+Runtime package metadata comes from the bundled `src/lib/package-version.ts` manifest import so compiled binaries do not read a source-tree `package.json`.
 
 ## Quota-reset notifications
 

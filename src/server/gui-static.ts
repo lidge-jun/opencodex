@@ -20,10 +20,33 @@ const MIME_TYPES: Record<string, string> = {
  */
 const HASHED_ASSET_PATTERN = /-[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9]+$/;
 
-export function findGuiDist(): string | null {
+/** `productName` in desktop/src-tauri/tauri.conf.json; Linux packages install resources under `lib/<productName>`. */
+export const DESKTOP_PRODUCT_NAME = "OpenCodex";
+
+/**
+ * Where a compiled `ocx` looks for `gui/dist`, given the directory holding the executable.
+ *
+ * Beside the binary covers a release archive and the Windows desktop install. The desktop shell
+ * ships `ocx` as a sidecar and its resources where Tauri's `resource_dir` puts them: `../Resources`
+ * inside a macOS app bundle, `../lib/<productName>` for a Linux package (`/usr/bin`, `/usr/local/bin`,
+ * an AppImage's `usr/bin`). The shell passes that directory as OPENCODEX_GUI_DIST only to the sidecar
+ * it starts itself; `ocx ensure` from the Codex shim and the login service start the same binary
+ * without the variable, so they find the dashboard here.
+ */
+export function standaloneGuiDistCandidates(executableDir: string, platform: NodeJS.Platform = process.platform): string[] {
+  const candidates = [join(executableDir, "gui", "dist")];
+  if (platform === "darwin") candidates.push(join(executableDir, "..", "Resources", "gui", "dist"));
+  if (platform === "linux") candidates.push(join(executableDir, "..", "lib", DESKTOP_PRODUCT_NAME, "gui", "dist"));
+  return candidates;
+}
+
+export function findGuiDist(
+  standaloneDir: string | null = isStandaloneBinary() ? standaloneRoot() : null,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
   const candidates = [
     process.env.OPENCODEX_GUI_DIST,
-    ...(isStandaloneBinary() ? [join(standaloneRoot(), "gui", "dist")] : []),
+    ...(standaloneDir === null ? [] : standaloneGuiDistCandidates(standaloneDir, platform)),
     join(import.meta.dir, "..", "..", "gui", "dist"),
     join(import.meta.dir, "..", "..", "..", "gui", "dist"),
   ].filter((candidate): candidate is string => Boolean(candidate));
