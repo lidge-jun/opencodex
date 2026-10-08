@@ -419,8 +419,15 @@ describe("Anthropic vision planning and management config", () => {
       );
       expect(clear.status).toBe(200);
       const clearBody = await clear.json() as Record<string, any>;
-      expect(clearBody.webSearch).toEqual({ enabled: true, model: "gpt-5.6-luna", streamRoutedModelOutput: false });
-      expect(clearBody.vision).toEqual({
+      expect(clearBody.webSearch).toEqual({
+        enabled: true, model: "gpt-5.6-luna", streamRoutedModelOutput: false,
+        anthropicPool: { mixed: false, available: [] },
+      });
+      // Clearing the backend leaves no selected pool; the derived backend label follows the default model.
+      const { anthropicPool: clearedVisionPool, ...clearedVision } = clearBody.vision;
+      expect(clearedVisionPool).toMatchObject({ mixed: false, available: [] });
+      expect(clearedVisionPool.selected).toBeUndefined();
+      expect(clearedVision).toEqual({
         enabled: true,
         model: "gpt-5.6-luna",
         reasoning: "low",
