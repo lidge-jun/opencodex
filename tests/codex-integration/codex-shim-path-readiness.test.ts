@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, mock, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { findFirstCodexOnPath } from "../../src/codex/shim-path-resolution";
 import { buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim } from "../../src/codex/shim-templates";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const roots: string[] = [];
@@ -28,7 +30,29 @@ function fixture() {
   return { root, first, later, command, fallback, pathValue };
 }
 
+// Absolute filesystem paths, not file:// hrefs: the warm-up's import scan keeps specifiers
+// that are absolute paths, and the spawned --eval children resolve either form identically.
+const shimModule = fileURLToPath(new URL("../../src/codex/shim.ts", import.meta.url));
+const scannerModule = fileURLToPath(new URL("../../src/codex/shim-path-resolution.ts", import.meta.url));
+const readinessModule = fileURLToPath(new URL("../../src/cli/codex-shim-readiness.ts", import.meta.url));
+
+// The union of the repository module graphs this file's --eval children load; the other eval
+// scripts below import a subset of the same three specifiers.
+const READINESS_EVAL_SCRIPT = `
+  const { diagnoseCodexShim } = await import(${JSON.stringify(shimModule)});
+  const { findFirstCodexOnPath } = await import(${JSON.stringify(scannerModule)});
+  const { inspectCodexShimForConnect } = await import(${JSON.stringify(readinessModule)});
+  console.log(JSON.stringify({ diagnosis: diagnoseCodexShim(), command: findFirstCodexOnPath(), readiness: inspectCodexShimForConnect() }));
+`;
+
 describe("connect readiness PATH inspection", () => {
+  // The file's --eval children load the readiness graph under the run's private transpiler
+  // cache, so the first one's cold module load lands inside its own 3000ms bound. Pay it
+  // once in setup instead; see tests/helpers/cold-spawn-warmup.ts.
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "codex-shim-path-readiness/eval", source: READINESS_EVAL_SCRIPT });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test.skipIf(process.platform === "win32").each([
     { kind: "ordinary file", shim: false, symlink: false, executable: false },
     { kind: "shim file", shim: true, symlink: false, executable: false },
@@ -50,11 +74,9 @@ describe("connect readiness PATH inspection", () => {
     const expectedPath = executable ? f.command : f.fallback;
     const expectedShim = executable ? shim : !shim;
     expect(shell.stdout.trim()).toBe(expectedPath);
-    const scanner = new URL("../../src/codex/shim-path-resolution.ts", import.meta.url).href;
-    const readiness = new URL("../../src/cli/codex-shim-readiness.ts", import.meta.url).href;
     const script = `
-      const { findFirstCodexOnPath } = await import(${JSON.stringify(scanner)});
-      const { inspectCodexShimForConnect } = await import(${JSON.stringify(readiness)});
+      const { findFirstCodexOnPath } = await import(${JSON.stringify(scannerModule)});
+      const { inspectCodexShimForConnect } = await import(${JSON.stringify(readinessModule)});
       console.log(JSON.stringify({
         candidate: findFirstCodexOnPath({ wsl: false }),
         result: inspectCodexShimForConnect({
@@ -116,16 +138,7 @@ describe("connect readiness PATH inspection", () => {
       expect(shell.error).toBeUndefined();
       expect(shell.status).not.toBe(0);
     }
-    const shim = new URL("../../src/codex/shim.ts", import.meta.url).href;
-    const scanner = new URL("../../src/codex/shim-path-resolution.ts", import.meta.url).href;
-    const readiness = new URL("../../src/cli/codex-shim-readiness.ts", import.meta.url).href;
-    const script = `
-      const { diagnoseCodexShim } = await import(${JSON.stringify(shim)});
-      const { findFirstCodexOnPath } = await import(${JSON.stringify(scanner)});
-      const { inspectCodexShimForConnect } = await import(${JSON.stringify(readiness)});
-      console.log(JSON.stringify({ diagnosis: diagnoseCodexShim(), command: findFirstCodexOnPath(), readiness: inspectCodexShimForConnect() }));
-    `;
-    const child = spawnSync(process.execPath, ["--eval", script], { env, encoding: "utf8", timeout: 3000, killSignal: "SIGKILL" });
+    const child = spawnSync(process.execPath, ["--eval", READINESS_EVAL_SCRIPT], { env, encoding: "utf8", timeout: 3000, killSignal: "SIGKILL" });
     expect(child.error).toBeUndefined();
     expect(child.status).toBe(0);
     const output = JSON.parse(child.stdout);
@@ -143,13 +156,11 @@ describe("connect readiness PATH inspection", () => {
       if (mode === "fifo") fs.renameSync(fifo, f.command);
       else if (mode === "symlink") fs.symlinkSync(fifo, f.command);
       else fs.writeFileSync(f.command, "ordinary launcher", { mode: 0o755 });
-      const scanner = new URL("../../src/codex/shim-path-resolution.ts", import.meta.url).href;
-      const readiness = new URL("../../src/cli/codex-shim-readiness.ts", import.meta.url).href;
       const script = `
         import * as fs from "node:fs";
         import { spyOn } from "bun:test";
-        const { findFirstCodexOnPath } = await import(${JSON.stringify(scanner)});
-        const { inspectCodexShimForConnect } = await import(${JSON.stringify(readiness)});
+        const { findFirstCodexOnPath } = await import(${JSON.stringify(scannerModule)});
+        const { inspectCodexShimForConnect } = await import(${JSON.stringify(readinessModule)});
         const command = ${JSON.stringify(f.command)};
         let replaced = false, rejectedDescriptor = false, closedRejectedDescriptor = false;
         if (${JSON.stringify(mode)} === "replacement") {
