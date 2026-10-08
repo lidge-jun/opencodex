@@ -12,6 +12,7 @@ import { captureModelsOAuthTarget, guardModelsOAuthRequest } from "../../src/oau
 import { getAccountSet, getAuthStorePath, saveCredential } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { handleManagementAPI } from "../../src/server/management-api";
+import { buildLabProviderAuthHeaders } from "../../src/lib/lab-live-route-production";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { ManagementRequest } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -38,6 +39,19 @@ function config(row?: OcxProviderConfig): OcxConfig {
 function builtin(): OcxProviderConfig {
   return { ...structuredClone(oauth.OAUTH_PROVIDERS.anthropic2!.providerConfig), liveModels: true };
 }
+
+test("Lab live probes never fetch a Pool 2 bearer for an unmarked anthropic2 row", async () => {
+  const snapshot = spyOn(oauth, "getValidAccessTokenSnapshot");
+  try {
+    const unmarked = { ...builtin(), anthropicOAuthInstance: undefined };
+    const context = { providerId: "anthropic2", baseUrl: "https://api.anthropic.com/v1" } as never;
+    await expect(buildLabProviderAuthHeaders(context, config(unmarked)))
+      .rejects.toMatchObject({ message: expect.stringContaining("anthropic instance unavailable") });
+    expect(snapshot).not.toHaveBeenCalled();
+  } finally {
+    snapshot.mockRestore();
+  }
+});
 function gateway(): OcxProviderConfig {
   return { adapter: "anthropic", authMode: "oauth", baseUrl: "https://gateway.example.test",
     models: ["gateway-fallback"], liveModels: true };

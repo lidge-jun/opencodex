@@ -120,6 +120,9 @@ cache intact. Custom helper providers keep
 their own credential path. `src/vision/plan.ts`, `src/vision/anthropic-describe.ts`
 and `src/web-search/` consume this binding; account-refusal recovery in
 `src/web-search/loop.ts` and `src/images/loop.ts` stays within the sending instance.
+Compatibility Lab live probes (`src/lib/lab-live-route-production.ts`) fetch an `anthropic2`
+bearer only for the marked builtin row; an unmarked or orphaned row refuses before any credential
+lookup.
 
 `src/config/schema/anthropic-account-pool.ts` accepts `anthropicInstance` only as
 `anthropic` or `anthropic2`, only with an Anthropic backend, and rejects a
