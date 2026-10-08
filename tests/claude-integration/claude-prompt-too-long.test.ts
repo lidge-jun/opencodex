@@ -65,6 +65,16 @@ describe("claudePromptTooLongMessage", () => {
     }
   });
 
+  test("a throughput limit filed under context_length_exceeded keeps its text", () => {
+    // The shared classifier's "too many tokens" match also catches token-per-minute limits; worded
+    // as an overflow, Claude Code would compact a conversation that only has to wait.
+    for (const text of ["too many tokens per minute", "Rate limit reached: too many tokens", "TPM quota exhausted"]) {
+      expect(errorMessage(anthropicErrorBody(400, text, undefined, "context_length_exceeded"))).toBe(text);
+      const payload = JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: text } });
+      expect(claudeOverflowSsePayload(payload)).toBe(payload);
+    }
+  });
+
   test("other error codes keep their message", () => {
     expect(errorMessage(anthropicErrorBody(429, "context window rate limit", undefined, "rate_limit"))).toBe("context window rate limit");
     expect(errorMessage(anthropicErrorBody(413, "budget", "request_too_large", "translation_buffer_limit"))).toBe("budget");
@@ -101,6 +111,18 @@ describe("translated Responses stream", () => {
     const data = JSON.parse(errorFrame.split("\n").find(line => line.startsWith("data:"))!.slice(5));
     expect(data.error).toMatchObject({ type: "invalid_request_error", code: "context_length_exceeded" });
     expect(claudeCodeSeesPromptTooLong(data.error.message)).toBe(true);
+  });
+});
+
+describe("translated Responses stream throughput limit", () => {
+  test("a response.failed token-per-minute limit is not reworded as an overflow", async () => {
+    const failed = { type: "response.failed", response: { status: "failed", error: {
+      type: "invalid_request_error", code: "context_length_exceeded", message: "too many tokens per minute",
+    } } };
+    const body = new Response(`event: response.failed\ndata: ${JSON.stringify(failed)}\n\n`).body!;
+    const text = await new Response(responsesSseToAnthropicSse(body, "m", { translatorBudget: createTestTranslatorBudget() })).text();
+    expect(text).toContain("too many tokens per minute");
+    expect(text).not.toContain("prompt is too long");
   });
 });
 
@@ -199,6 +221,37 @@ describe("native Messages lane", () => {
     expect(response.status).toBe(200);
     const data = JSON.parse(text.split("\n").find(line => line.startsWith("data:"))!.slice(5));
     expect(data.error.message).toBe("prompt is too long: Your request exceeded model token limit: 262144");
+  });
+
+  test("stall detection still times raw upstream bytes, not whole rewritten frames", async () => {
+    // One large delta frame arrives in fragments over ~1.6s with a 1s stall limit. Each fragment
+    // must reset the deadline; a frame-buffering rewrite placed before the tap would not.
+    const encoder = new TextEncoder();
+    const start = `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: {
+      id: "msg_f", type: "message", role: "assistant", model: "long-model", content: [], stop_reason: null,
+      usage: { input_tokens: 1, output_tokens: 0 } } })}\n\n`;
+    const delta = `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0,
+      delta: { type: "text_delta", text: "x".repeat(64) } })}\n\n`;
+    const stop = `event: message_stop\ndata: {"type":"message_stop"}\n\n`;
+    const config = nativeConfig(() => new Response(new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(encoder.encode(start));
+        const pieces = delta.match(/[\s\S]{1,40}/g)!;
+        for (const piece of pieces) {
+          await Bun.sleep(1_600 / pieces.length);
+          controller.enqueue(encoder.encode(piece));
+        }
+        controller.enqueue(encoder.encode(stop));
+        controller.close();
+      },
+    }), { headers: { "content-type": "text/event-stream" } }));
+    config.claudeCode = { bodyStallSec: 1 } as OcxConfig["claudeCode"];
+    saveConfig(config);
+    const { response, text } = await send(config, true);
+    expect(response.status).toBe(200);
+    expect(text).toContain("x".repeat(64));
+    expect(text).toContain("message_stop");
+    expect(text).not.toContain("event: error");
   });
 
   test("a streamed overflow folded for a non-streaming caller answers 400", async () => {

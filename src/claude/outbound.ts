@@ -110,13 +110,26 @@ export function claudeOverflowSsePayload(payload: string): string {
   const error = parsed.error;
   const message = typeof error.message === "string" ? error.message : "";
   const sized = error.type === "invalid_request_error" || error.type === "request_too_large";
-  if (!sized || !(error.code === "context_length_exceeded" || isContextOverflowText(message))) return payload;
+  if (!sized || isThroughputLimitText(message)) return payload;
+  if (!(error.code === "context_length_exceeded" || isContextOverflowText(message))) return payload;
   const next = claudePromptTooLongMessage(message);
   return next === message ? payload : JSON.stringify({ ...parsed, error: { ...error, message: next } });
 }
 
+/**
+ * A throughput limit that the shared classifier files under context_length_exceeded (its "too many
+ * tokens" match also catches "too many tokens per minute"). Worded as an overflow it would make
+ * Claude Code compact a conversation that only needs to wait, so it keeps its own text.
+ */
+const THROUGHPUT_LIMIT_TEXT_RE = /\bper (?:second|minute|hour|day)\b|\brate limit|\bquota\b|\btpm\b/i;
+
+export function isThroughputLimitText(message: string): boolean {
+  return THROUGHPUT_LIMIT_TEXT_RE.test(message);
+}
+
 export function anthropicErrorBody(status: number, message: string, type?: string, code?: string): Rec {
-  const text = code === "context_length_exceeded" ? claudePromptTooLongMessage(message) : message;
+  const overflow = code === "context_length_exceeded" && !isThroughputLimitText(message);
+  const text = overflow ? claudePromptTooLongMessage(message) : message;
   return { type: "error", error: { type: type ?? anthropicErrorType(status), message: text, ...(code ? { code } : {}) } };
 }
 
