@@ -78,7 +78,7 @@ export default function ApiKeysListPanel({
     setRevealed({});
     setRevealPendingId(null);
     setRevealFailedId(null);
-    setRevealDeniedId(current => reason === "session" ? interrupted : reason === "pairing" ? current : null);
+    setRevealDeniedId(current => reason === "session" ? interrupted ?? current : reason === "pairing" ? current : null);
     setCopiedId(null);
     setCopyFailedId(null);
     if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
@@ -108,13 +108,16 @@ export default function ApiKeysListPanel({
 
   // The same gate RemoteLink applies to its local-pairing offer: only the
   // literal same-origin loopback transport the standalone grant mint accepts.
-  // Anywhere else the refusal gets the explanation alone — a form here would
-  // mint a session for an origin the server did not bind.
+  // Loopback aliases instead point to the literal address the grant mint accepts.
   const localPairingTarget = standaloneApiTargets(apiBase).shared;
   const canPairLocally = isStandaloneRuntime()
     && window.location.protocol === "http:"
     && ["127.0.0.1", "[::1]"].includes(window.location.hostname)
     && localPairingTarget.serverOrigin === window.location.origin;
+  const loopbackAlias = isStandaloneRuntime() && window.location.protocol === "http:"
+    && (window.location.hostname === "localhost" || window.location.hostname.endsWith(".localhost"))
+    && localPairingTarget.serverOrigin === window.location.origin;
+  const literalLoopbackUrl = `http://127.0.0.1${window.location.port ? `:${window.location.port}` : ""}`;
 
   const toggleReveal = async (k: ApiKeyEntry) => {
     const generation = disclosure.generation.current;
@@ -213,6 +216,9 @@ export default function ApiKeysListPanel({
       {revealDeniedId !== null && (
         <>
           <Notice tone="warn">{t("api.key.revealDenied")}</Notice>
+          {loopbackAlias && <Notice tone="warn">
+            {t("api.key.pairAtLiteralLoopback")} <a href={literalLoopbackUrl}>{literalLoopbackUrl}</a>
+          </Notice>}
           {/* Pairing authorizes the browser, but never discloses a value itself. */}
           {canPairLocally && (
             <ConnectPairingForm

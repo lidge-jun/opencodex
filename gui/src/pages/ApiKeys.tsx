@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Notice } from "../ui";
 import { readUsageMetadata, type UsageReadMetadata } from "../usage-summary-resource";
 import { useI18n, LOCALES } from "../i18n/shared";
@@ -13,6 +13,7 @@ import {
 } from "../api-access-models";
 import { readSessionListCacheEntry, writeSessionListCacheEntry } from "../session-list-cache";
 import { createBoundedFetch } from "../bounded-fetch";
+import { setClientResourceData } from "../client-resource";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { useKeyDisclosure } from "../use-key-disclosure";
@@ -142,6 +143,9 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   const cachedModelsEntry = readSessionListCacheEntry<ExternalModelRow[]>(modelsCacheKey);
   const cachedKeys = validCachedKeys(cachedKeysEntry?.data ?? null);
   const cachedModels = cachedModelsEntry?.data ?? null;
+  const currentApiBase = useRef(apiBase);
+  useLayoutEffect(() => { currentApiBase.current = apiBase; }, [apiBase]);
+  const [hiddenMutationBase, setHiddenMutationBase] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [modelQuery, setModelQuery] = useState("");
   const [copiedModelId, setCopiedModelId] = useState<string | null>(null);
@@ -263,6 +267,19 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   const refreshKeys = keysResource.refresh;
   const refreshModels = modelsResource.refresh;
 
+  // Bind reconciliation to the mutation's server. The resource refresh callback
+  // uses the latest fetcher, which may already belong to a different apiBase.
+  const refreshMutationKeys = async () => {
+    const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
+    try {
+      setClientResourceData(keysResourceKey, await fetchKeys(bounded.signal));
+    } catch {
+      if (currentApiBase.current === apiBase) setActionError(t("api.keysLoadFailed"));
+    } finally {
+      bounded.clear();
+    }
+  };
+
   const filteredModels = useMemo(() => {
     const query = modelQuery.trim().toLowerCase();
     if (!query) return models;
@@ -280,6 +297,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
     creatingRef.current = true;
     setCreating(true);
     setActionError(null);
+    setHiddenMutationBase(null);
     try {
       const effectiveName = name ?? newName;
       const res = await fetch(`${apiBase}/api/keys`, {
@@ -287,15 +305,18 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: effectiveName || "default" }),
       });
+      if (res.ok) void refreshMutationKeys();
       const data = await readJsonOrThrow<CreateKeyResponse>(res, t("api.createFailed"));
-      if (!disclosure.current(generation)) return false;
+      if (!disclosure.current(generation)) {
+        setHiddenMutationBase(apiBase);
+        return true;
+      }
       if (typeof data?.key !== "string" || data.key.length === 0) {
         setActionError(t("api.createFailed"));
         return false;
       }
       setNewKey(data.key);
       setNewName("");
-      refreshKeys();
       return true;
     } catch {
       setActionError(t("api.createFailed"));
@@ -387,6 +408,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   const handleRotationStart = async (id: string): Promise<boolean> => {
     const generation = disclosure.generation.current;
     setActionError(null);
+    setHiddenMutationBase(null);
     const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
     try {
       const res = await fetch(`${apiBase}/api/keys/rotate`, {
@@ -395,11 +417,14 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         body: JSON.stringify({ id }),
         signal: bounded.signal,
       });
+      if (res.ok) void refreshMutationKeys();
       const data = await readJsonOrThrow<StartRotationResponse>(res, t("api.rotation.startFailed"));
-      if (!disclosure.current(generation)) return false;
+      if (!disclosure.current(generation)) {
+        setHiddenMutationBase(apiBase);
+        return true;
+      }
       if (!data || typeof data.key !== "string" || !data.key || typeof data.rotationId !== "string" || !data.rotationId) return false;
       setRotationSecret({ id, key: data.key, rotationId: data.rotationId });
-      refreshKeys();
       return true;
     } catch {
       return false;
@@ -438,7 +463,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       setRotationCopied(true);
       window.setTimeout(() => { if (disclosure.current(generation)) setRotationCopied(false); }, 2000);
     } catch {
-      setActionError(t("api.key.copyFailed"));
+      if (disclosure.current(generation)) setActionError(t("api.key.copyFailed"));
     }
   };
 
@@ -452,6 +477,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       setCopied(true);
       window.setTimeout(() => { if (disclosure.current(generation)) setCopied(false); }, 2000);
     } catch {
+      if (!disclosure.current(generation)) return;
       // The one-time key is the only string in the product with no second
       // chance, so a silent failure here is the worst kind. Keep it on screen.
       setCopied(false);
@@ -548,6 +574,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         {subtitleParts[1]}
       </p>
 
+      {hiddenMutationBase === apiBase && <Notice tone="warn">{t("api.key.mutationHidden")}</Notice>}
       {actionError && <Notice tone="err">{actionError}</Notice>}
       {keysState.showError && keysData && <Notice tone="err">{t("api.keysLoadFailed")}</Notice>}
       {/* The model failure is reported inside the models panel, beside the

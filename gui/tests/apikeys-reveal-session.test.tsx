@@ -6,7 +6,8 @@ import type { Root } from "react-dom/client";
 import ApiKeysListPanel from "../src/components/apikeys-workspace/ApiKeysListPanel";
 import ApiKeys from "../src/pages/ApiKeys";
 import { LanguageProvider } from "../src/i18n/provider";
-import { configureApiTargets, resetApiAuthFetchForTests, SESSION_UNAVAILABLE_EVENT } from "../src/api";
+import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, resetApiAuthFetchForTests, SESSION_UNAVAILABLE_EVENT } from "../src/api";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { standaloneApiTargets } from "../src/api-targets";
 import type { RevealKeyResult } from "../src/pages/api-keys-utils";
 
@@ -21,6 +22,8 @@ let root: Root | null;
 let container: HTMLDivElement;
 
 beforeEach(async () => {
+  clearClientResourceStoresForTests();
+  resetApiAuthFetchForTests();
   previous = Object.fromEntries(globals.map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]));
   win = new Window({ url: origin });
   for (const k of ["document", "navigator", "localStorage", "sessionStorage"] as const)
@@ -39,6 +42,7 @@ afterEach(async () => {
   await act(async () => root?.unmount());
   root = null;
   resetApiAuthFetchForTests();
+  clearClientResourceStoresForTests();
   win.close();
   for (const k of globals) {
     if (previous[k]) Object.defineProperty(globalThis, k, previous[k]!);
@@ -76,7 +80,7 @@ async function pair(response?: () => Promise<Response>) {
   await act(async () => container.querySelector("form")!.dispatchEvent(new win.Event("submit", { bubbles: true, cancelable: true })));
 }
 
-for (const mode of ["hidden", "inactive", "session", "apiBase"] as const) {
+for (const mode of ["hidden", "host-hidden", "inactive", "session", "apiBase"] as const) {
   test("existing plaintext and copy feedback are cleared on " + mode, async () => {
     const props: Partial<Props> = { onReveal: async () => ({ ok: true, key: full }) };
     Object.defineProperty(win.navigator, "clipboard", { configurable: true, value: { writeText: async () => {} } });
@@ -88,6 +92,9 @@ for (const mode of ["hidden", "inactive", "session", "apiBase"] as const) {
       if (mode === "hidden") {
         Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
         document.dispatchEvent(new win.Event("visibilitychange"));
+      } else if (mode === "host-hidden") {
+        expect(document.visibilityState).toBe("visible");
+        win.dispatchEvent(new win.CustomEvent("opencodex:host-visibility", { detail: false }));
       } else if (mode === "session") loseSession();
     });
     if (mode === "inactive") await render({ ...props, active: false });
@@ -107,6 +114,10 @@ for (const mode of ["hidden", "inactive", "session", "apiBase"] as const) {
         Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
         document.dispatchEvent(new win.Event("visibilitychange"));
         Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      } else if (mode === "host-hidden") {
+        expect(document.visibilityState).toBe("visible");
+        win.dispatchEvent(new win.CustomEvent("opencodex:host-visibility", { detail: false }));
+        win.dispatchEvent(new win.CustomEvent("opencodex:host-visibility", { detail: true }));
       } else if (mode === "session") loseSession();
     });
     if (mode === "inactive") { await render({ ...props, active: false }); await render(props); }
@@ -237,4 +248,226 @@ test("pairing submission clears a one-time value created after its form was offe
   expect(container.querySelector("#connect-pairing-code")).not.toBeNull();
   await act(async () => pending.resolve(new Response(null, { status: 403 })));
   expect(container.textContent).not.toContain(full);
+});
+
+function sessionHtml(token: string) {
+  return `<meta name="opencodex-session-token" content="${token}">`
+    + `<meta name="opencodex-session-csrf" content="fixture-csrf">`
+    + `<meta name="opencodex-session-origin" content="${origin}">`
+    + `<meta name="opencodex-session-server-origin" content="${origin}">`;
+}
+
+test("401 recovery and authenticated retry expire an already revealed value", async () => {
+  const bootstrap = defer<Response>();
+  const credentials: (string | null)[] = [];
+  let attempts = 0;
+  let unavailable = 0;
+  win.addEventListener(SESSION_UNAVAILABLE_EVENT, () => { unavailable++; });
+  Object.defineProperty(win, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/opencodex-session") return bootstrap.promise;
+    credentials.push(new Headers(init?.headers).get("X-OpenCodex-API-Key"));
+    return ++attempts === 1 ? new Response(null, { status: 401 }) : Response.json({ ok: true });
+  } });
+  installApiAuthFetch();
+  expect(installApiSessionFromHtml("shared", sessionHtml("ocx_session_paired"))).toBe(true);
+  await render({ onReveal: async () => ({ ok: true, key: full }) });
+  await click();
+  expect(row().textContent).toBe(full);
+  let recovery!: Promise<Response>;
+  await act(async () => { recovery = window.fetch("/api/combos"); });
+  expect(row().textContent).toBe(key.prefix);
+  await act(async () => {
+    bootstrap.resolve(new Response(sessionHtml("ocx_session_automatic")));
+    expect((await recovery).status).toBe(200);
+  });
+  expect(credentials).toEqual(["ocx_session_paired", "ocx_session_automatic"]);
+  expect(hasApiSession("shared")).toBe(true);
+  expect(unavailable).toBe(0);
+  expect(row().textContent).toBe(key.prefix);
+});
+
+for (const mode of ["replace", "clear", "logout", "target"] as const) {
+  test("session store " + mode + " expires revealed values without an unavailable notice", async () => {
+    installApiSessionFromHtml("shared", sessionHtml("ocx_session_paired"));
+    await render({ onReveal: async () => ({ ok: true, key: full }) });
+    await click();
+    await act(async () => {
+      if (mode === "replace") installApiSessionFromHtml("shared", sessionHtml("ocx_session_other"));
+      else if (mode === "clear") installApiSessionFromHtml("shared", "");
+      else if (mode === "target") configureApiTargets(standaloneApiTargets("http://127.0.0.1:20200"));
+      else {
+        Object.defineProperty(win, "fetch", { configurable: true, value: async () => new Response(null, { status: 204 }) });
+        expect(await logoutApiSession("shared")).toBe(true);
+      }
+    });
+    expect(row().textContent).toBe(key.prefix);
+  });
+}
+
+test("host hide prevents a late clipboard completion from restoring feedback", async () => {
+  const pending = defer<void>();
+  Object.defineProperty(win.navigator, "clipboard", { configurable: true, value: { writeText: () => pending.promise } });
+  await render({ onReveal: async () => ({ ok: true, key: full }) });
+  await click();
+  await act(async () => container.querySelector<HTMLButtonElement>(".awi-keylist-copy")!.click());
+  await act(async () => {
+    win.dispatchEvent(new win.CustomEvent("opencodex:host-visibility", { detail: false }));
+    win.dispatchEvent(new win.CustomEvent("opencodex:host-visibility", { detail: true }));
+  });
+  expect(document.visibilityState).toBe("visible");
+  await click();
+  await act(async () => pending.resolve());
+  expect(container.querySelector(".awi-keylist-copy")?.textContent).toBe("Copy");
+});
+
+for (const hostname of ["localhost", "dashboard.localhost"]) {
+  test(hostname + " denial points to literal loopback pairing while withholding the form", async () => {
+    win.location.href = `http://${hostname}:10100/`;
+    configureApiTargets(standaloneApiTargets(""));
+    await render({ onReveal: async () => ({ ok: false, kind: "denied" }) });
+    await click();
+    expect(container.querySelector("#connect-pairing-code")).toBeNull();
+    expect(container.textContent).toContain("Reopen the dashboard");
+    expect(container.querySelector<HTMLAnchorElement>('a[href="http://127.0.0.1:10100"]')?.href)
+      .toBe("http://127.0.0.1:10100/");
+  });
+}
+
+const hiddenMessage = "The key was created or its rotation started, but the one-time value was hidden because the session or view changed.";
+const authMatrix = [{ endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" }];
+const button = (label: string) => [...container.querySelectorAll<HTMLButtonElement>("button")]
+  .find(b => b.textContent?.trim() === label)!;
+
+for (const operation of ["create", "rotate"] as const) for (const change of ["session", "host-hidden", "inactive"] as const) {
+  test(operation + " reconciles successful inventory after " + change + " and explains the hidden value", async () => {
+    const pending = defer<Response>();
+    let completed = false;
+    let pendingRotation = false;
+    let reads = 0;
+    let finishBody: unknown;
+    if (operation === "rotate") document.head.innerHTML = '<meta name="opencodex-runtime-role" content="client">';
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if ((operation === "create" && path === "/api/keys" && init?.method === "POST")
+        || (path === "/api/keys/rotate" && init?.method === "POST")) return pending.promise;
+      if (path === "/api/keys/rotate/commit") {
+        finishBody = JSON.parse(String(init?.body));
+        pendingRotation = false;
+        return Response.json({ ok: true });
+      }
+      if (path === "/api/keys") {
+        reads++;
+        return Response.json({ authMatrix, keys: operation === "create" && completed ? [key, { ...key, id: "k2", name: "new key" }]
+          : [{ ...key, ...(pendingRotation ? { pendingRotation: { id: "r1", createdAt: key.createdAt, expiresAt: "2026-12-01T00:00:00.000Z" } } : {}) }] });
+      }
+      return Response.json([]);
+    } });
+    await act(async () => root!.render(<LanguageProvider><ApiKeys apiBase="" /></LanguageProvider>));
+    if (operation === "rotate") await act(async () => container.querySelector<HTMLButtonElement>(".awi-keylist-name")!.click());
+    await act(async () => button(operation === "create" ? "Generate" : "Start rotation").click());
+    const readsBefore = reads;
+    await act(async () => {
+      if (change === "session") loseSession();
+      else if (change === "host-hidden") win.dispatchEvent(new win.CustomEvent("opencodex:host-visibility", { detail: false }));
+      else root!.render(<LanguageProvider><ApiKeys apiBase="" active={false} /></LanguageProvider>);
+    });
+    await act(async () => {
+      completed = true;
+      pendingRotation = operation === "rotate";
+      pending.resolve(Response.json({ key: full, rotationId: "r1" }));
+    });
+    expect(reads).toBe(readsBefore + 1);
+    expect(container.textContent).not.toContain(full);
+    expect(container.textContent).toContain(hiddenMessage);
+    if (operation === "create") expect(container.textContent).toContain("new key");
+    else {
+      // Complete rotation only after returning to the active, visible view.
+      if (change === "inactive") await act(async () => root!.render(<LanguageProvider><ApiKeys apiBase="" /></LanguageProvider>));
+      if (change === "host-hidden") await act(async () => win.dispatchEvent(new win.CustomEvent("opencodex:host-visibility", { detail: true })));
+      expect(button("Abort rotation")).toBeDefined();
+      expect(container.textContent).not.toContain("The rotation action did not complete");
+      await act(async () => button("Commit rotation").click());
+      expect(finishBody).toEqual({ id: "k1", rotationId: "r1" });
+      expect(button("Start rotation")).toBeDefined();
+    }
+  });
+}
+
+test("a create completed after switching servers refreshes only its original inventory", async () => {
+  const pending = defer<Response>();
+  const reads: string[] = [];
+  let completed = false;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/api/keys" && init?.method === "POST") return pending.promise;
+    if (path.endsWith("/api/keys")) {
+      reads.push(path);
+      return Response.json({ authMatrix, keys: [{ ...key, name: path === "/api/keys" && completed ? "original created" : "current server" }] });
+    }
+    return Response.json([]);
+  } });
+  await act(async () => root!.render(<LanguageProvider><ApiKeys apiBase="" /></LanguageProvider>));
+  await act(async () => button("Generate").click());
+  await act(async () => root!.render(<LanguageProvider><ApiKeys apiBase="http://127.0.0.1:20200" /></LanguageProvider>));
+  const before = reads.length;
+  await act(async () => { completed = true; pending.resolve(Response.json({ key: full })); });
+  expect(reads.slice(before)).toEqual(["/api/keys"]);
+  expect(container.textContent).toContain("current server");
+  expect(container.textContent).not.toContain("original created");
+  expect(container.textContent).not.toContain(full);
+});
+
+test("a denied reveal after automatic session recovery keeps the pairing remedy", async () => {
+  let attempts = 0;
+  Object.defineProperty(win, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+    if (String(input) === "/opencodex-session") return new Response(sessionHtml("ocx_session_automatic"));
+    return new Response(null, { status: ++attempts === 1 ? 401 : 403 });
+  } });
+  installApiAuthFetch();
+  installApiSessionFromHtml("shared", sessionHtml("ocx_session_paired"));
+  await render({ onReveal: async () => {
+    const response = await window.fetch("/api/keys/reveal", { method: "POST" });
+    return { ok: false, kind: response.status === 403 ? "denied" : "failed" };
+  } });
+  await click();
+  expect(attempts).toBe(2);
+  expect(row().textContent).toBe(key.prefix);
+  expect(container.querySelector("#connect-pairing-code")).not.toBeNull();
+});
+
+test("the same shared token and an unrelated machine replacement preserve the revealed value", async () => {
+  installApiSessionFromHtml("shared", sessionHtml("ocx_session_paired"));
+  await render({ onReveal: async () => ({ ok: true, key: full }) });
+  await click();
+  await act(async () => {
+    installApiSessionFromHtml("shared", sessionHtml("ocx_session_paired"));
+    installApiSessionFromHtml("machine", sessionHtml("ocx_session_machine"));
+  });
+  expect(row().textContent).toBe(full);
+});
+
+test("host hide rejects a reveal completion even before the host event arrives", async () => {
+  const pending = defer<RevealKeyResult>();
+  await render({ onReveal: () => pending.promise });
+  await click();
+  await act(async () => {
+    Object.assign(win, { __OPENCODEX_HOST_VISIBLE__: false });
+    pending.resolve({ ok: true, key: full });
+  });
+  expect(document.visibilityState).toBe("visible");
+  expect(row().textContent).toBe(key.prefix);
+});
+
+test("a rejected one-time clipboard completion after host hide does not restore an error", async () => {
+  let reject!: (reason: Error) => void;
+  const pending = new Promise<void>((_resolve, fail) => { reject = fail; });
+  Object.defineProperty(win.navigator, "clipboard", { configurable: true, value: { writeText: () => pending } });
+  await pageWithCreate(async () => Response.json({ key: full }));
+  const copy = container.querySelector<HTMLButtonElement>(".api-newkey-panel button")!;
+  expect(copy.textContent).toBe("Copy");
+  await act(async () => copy.click());
+  await act(async () => win.dispatchEvent(new win.CustomEvent("opencodex:host-visibility", { detail: false })));
+  await act(async () => reject(new Error("clipboard refused")));
+  expect(container.textContent).not.toContain(full);
+  expect(container.textContent).not.toContain("Could not copy");
 });

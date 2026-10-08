@@ -277,15 +277,19 @@ trusted Tailscale identity. An automatic local dashboard session can still show 
 but cannot reveal existing values; a raw admin token cannot call this session-only action either.
 Use the existing [dashboard pairing flow](/guides/remote-hub/#pairing-this-browser-with-a-hub) to establish an
 operator-authorized session before requesting a stored value; a refused reveal states the requirement
-on the page and, on the same-origin standalone transport, offers the local pairing form in place. Pair
-again if that session expires or is revoked. Ordinary dashboard sign-in, key creation, rotation, and
+on the page. The local pairing form is offered only by a same-origin standalone dashboard opened
+over HTTP at the literal `127.0.0.1` or `[::1]` address. On `http://localhost:<port>` (or another
+localhost alias), reopen `http://127.0.0.1:<port>` and pair there. Pair again if that session expires
+or is revoked. Ordinary dashboard sign-in, key creation, rotation, and
 deletion are unchanged.
 
-On a standalone dashboard opened at its same-origin loopback address, a refused reveal offers the
-local pairing form. After pairing, click the key again to request its value. Pairing itself never
-reveals a key. Displayed key values and copy feedback are cleared when the shared session is lost,
-pairing starts, you leave this panel, hide the browser tab, or switch servers. This also clears
-newly created and replacement values, so copy a one-time value before leaving the panel.
+After pairing, click the key again to request its value. Pairing itself never reveals a key.
+Displayed key values and copy feedback are cleared when the shared session is cleared or replaced,
+pairing starts, you leave this panel, hide the browser tab or desktop window, or switch servers.
+This also clears newly created and replacement values, so copy a one-time value before leaving
+the panel. If the session or view changes while creation or rotation is in flight, the successful
+mutation still refreshes that server's key list, but its one-time value stays hidden. Pending
+rotations remain available for explicit commit or abort.
 
 The dashboard's management plane is separate from direct client→hub model traffic. **Connect → API Keys** shows pending rotations, displays a replacement secret only once, and requires explicit commit or abort. Browser logout invalidates only the current remote session. Connected usage is the hub store filtered by the client's `apiKeyId`; disconnected usage is local, with no mirroring.
 

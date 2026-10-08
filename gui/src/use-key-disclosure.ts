@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
-import { SESSION_UNAVAILABLE_EVENT } from "./api";
+import { SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT } from "./api";
+import { hostDocumentHidden, onHostVisibilityChange } from "./host-visibility";
 
 export type DisclosureResetReason = "lifecycle" | "session" | "pairing";
 
@@ -31,16 +32,18 @@ export function useKeyDisclosure(
     const unavailable = (event: Event) => {
       if ((event as CustomEvent<{ plane?: string }>).detail?.plane === "shared") invalidate("session");
     };
-    const hidden = () => { if (document.visibilityState === "hidden") invalidate("lifecycle"); };
+    const hidden = () => { if (hostDocumentHidden()) invalidate("lifecycle"); };
     window.addEventListener(SESSION_UNAVAILABLE_EVENT, unavailable);
-    document.addEventListener("visibilitychange", hidden);
+    window.addEventListener(SESSION_CHANGED_EVENT, unavailable);
+    const stopVisibility = onHostVisibilityChange(hidden);
     return () => {
       window.removeEventListener(SESSION_UNAVAILABLE_EVENT, unavailable);
-      document.removeEventListener("visibilitychange", hidden);
+      window.removeEventListener(SESSION_CHANGED_EVENT, unavailable);
+      stopVisibility();
     };
   }, [invalidate]);
 
   const current = useCallback((expected: number) =>
-    mounted.current && active && document.visibilityState !== "hidden" && generation.current === expected, [active]);
+    mounted.current && active && !hostDocumentHidden() && generation.current === expected, [active]);
   return { generation, invalidate, current };
 }
