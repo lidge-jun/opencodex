@@ -217,7 +217,9 @@ function descriptionIdentity(job: ImageJob, plan: VisionPlan): { key: string; pe
     key: JSON.stringify([
       plan.backend,
       plan.settings.model,
-      ...(plan.backend === "anthropic" ? [plan.anthropicSidecar?.providerName, plan.settings.reasoning, plan.anthropicSidecar?.config.visionSidecar] : []),
+      // Explicit identity: the resolved pool and reasoning. Settings that only gate or bound the call
+      // (enabled, timeoutMs, maxDescriptionsPerTurn) never split the cache.
+      ...(plan.backend === "anthropic" ? [plan.anthropicSidecar?.providerName ?? null, plan.settings.reasoning] : []),
       ...(plan.backend === "openai" ? [plan.settings.reasoning] : []),
       job.detail ?? "high",
       imageHash,

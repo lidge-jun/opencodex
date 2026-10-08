@@ -200,3 +200,4 @@ Source review remains defined by the source-to-doc map above. This registry name
 
 Superseded reasoning lives in `decisions/` as numbered records. A doc states the contract that holds now and
 links the record that explains why; it never carries the reasoning inline.
+

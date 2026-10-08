@@ -52,3 +52,32 @@ test("search executor sends the selected B snapshot and rejects a stale marked t
   expect(refused.error).toBeDefined();
   expect(calls).toHaveLength(1);
 });
+
+test("unavailable selected pool yields no search plan and a disarmed bridge, never a thrown main request", async () => {
+  const { planWebSearch } = await import("../../src/web-search");
+  const { resolvePassthroughWebSearchBridgeAuth } = await import("../../src/web-search/passthrough-bridge");
+  const { parseRequest } = await import("../../src/responses/parser");
+  const parsed = parseRequest({ model: f.model, input: "Find documentation", tools: [{ type: "web_search" }] });
+  await f.store.mutateStore(store => { delete store.anthropic2; });
+  f.config.webSearchSidecar = { backend: "anthropic" };
+  expect(planWebSearch(f.config, parsed, false, f.config.providers.anthropic2!, f.model, undefined, { providerName: "anthropic2" })).toBeUndefined();
+  expect(resolvePassthroughWebSearchBridgeAuth("anthropic", f.config, undefined, "anthropic2")).toEqual({});
+  f.config.webSearchSidecar.anthropicInstance = "anthropic2";
+  expect(planWebSearch(f.config, parsed, false, f.config.providers.anthropic!, f.model, undefined, { providerName: "anthropic" })).toBeUndefined();
+  expect(resolvePassthroughWebSearchBridgeAuth("anthropic", f.config)).toEqual({});
+  expect(f.ledger.sends).toHaveLength(0);
+});
+
+test("a trailing-slash baseUrl reaches the same Messages URL the send fence admits", async () => {
+  const { runAnthropicWebSearch } = await import("../../src/web-search/anthropic-executor");
+  f.config.providers.anthropic2!.baseUrl = "https://api.anthropic.com/";
+  const urls: string[] = [];
+  globalThis.fetch = (async url => {
+    urls.push(String(url));
+    return new Response('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"fixture result"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+  }) as typeof fetch;
+  const outcome = await runAnthropicWebSearch("fixture query", "anthropic2", f.config.providers.anthropic2!,
+    { model: f.model, reasoning: "low", timeoutMs: 1000 }, undefined, f.config);
+  expect(outcome.error).toBeUndefined();
+  expect(urls).toEqual(["https://api.anthropic.com/v1/messages"]);
+});

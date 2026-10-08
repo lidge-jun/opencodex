@@ -6,6 +6,77 @@ on:
 permissions:
   contents: read
 jobs:
+  gui-screenshots:
+    if: github.event.pull_request.head.ref == 'codex/anthropic2-account-pool'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      CAPTURE_DIR: scripts/ci/anthropic2-gui-capture
+      PLAYWRIGHT_VERSION: 1.63.0
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: ./.github/actions/setup-project-bun
+        with:
+          role: runtime
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+      - name: Install dependencies and build the dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bun run build:gui
+          test -f gui/dist/index.html
+          test -f gui/dist/provider-icons/claude-green.svg
+      - name: Install pinned Playwright Chromium
+        shell: bash
+        env:
+          PW_DIR: ${{ runner.temp }}/pw-runner
+        run: |
+          set -euo pipefail
+          mkdir -p "$PW_DIR"
+          cd "$PW_DIR"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --save-exact "playwright@$PLAYWRIGHT_VERSION"
+          ./node_modules/.bin/playwright install --with-deps chromium
+          node -e 'console.log("playwright", require("playwright/package.json").version)'
+      # Synthetic tokens must never reach Anthropic: a refused connection is a transient
+      # failure, while an upstream invalid_grant would flip the seeded accounts to reauth.
+      - name: Sinkhole Anthropic hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for host in api.anthropic.com console.anthropic.com claude.ai platform.claude.com; do
+            printf '127.0.0.1 %s\n::1 %s\n' "$host" "$host" | sudo tee -a /etc/hosts >/dev/null
+            resolved="$(getent ahosts "$host" | awk 'NR == 1 { print $1 }')"
+            case "$resolved" in
+              127.0.0.1|::1) echo "$host -> $resolved" ;;
+              *) echo "::error::$host still resolves to '$resolved'"; exit 1 ;;
+            esac
+          done
+      - name: Capture dashboard screenshots
+        shell: bash
+        env:
+          PW_DIR: ${{ runner.temp }}/pw-runner
+          OUT_DIR: ${{ runner.temp }}/anthropic2-gui
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          REPO_ROOT="$GITHUB_WORKSPACE" REAL_HOME="$HOME" BUN_BIN="$(command -v bun)" \
+            node "$CAPTURE_DIR/capture.mjs"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: anthropic2-gui-screenshots-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/anthropic2-gui
+          if-no-files-found: error
+          retention-days: 14
   react-doctor-report:
     if: github.event.pull_request.head.ref == 'codex/anthropic2-account-pool'
     runs-on: ubuntu-latest

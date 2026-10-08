@@ -3,7 +3,6 @@ import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { anthropicRoutingFor } from "../oauth/anthropic-routing";
 import { resolveAnthropicModelRouteForInstance, routeCandidates } from "../oauth/anthropic-model-routes";
-import { captureOAuthAccountSelection } from "../oauth/store";
 import type { OAuthAccessSnapshot } from "../oauth";
 import { AnthropicHelperUnavailableError } from "./auth";
 import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent } from "../oauth/anthropic-send-ownership";
@@ -12,6 +11,17 @@ import { captureConfigGeneration } from "../lib/state-store-sweeper";
 import { getAccountCredentialWithStatus } from "../oauth/store";
 import { bindAnthropicRefusalCredentialForSend } from "../oauth/anthropic-account-refusal";
 
+/** The one Messages URL builder shared by helper executors and the physical-send fence. */
+export function anthropicHelperMessagesUrl(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "")}/v1/messages`;
+}
+
+/**
+ * Select the helper's account the way the legacy sidecar token path does: a read of the pool's
+ * selection for this model route, with no promotion. A helper never moves the active pointer and
+ * never consumes an operator's one-dispatch manual choice; the physical send is still fenced by
+ * the captured target/config, the account's credential generation and its send ownership.
+ */
 export async function resolveAnthropicHelperSnapshot(config: OcxConfig, instance: AnthropicInstanceId, model: string): Promise<OAuthAccessSnapshot> {
   const target = config.providers[instance]?.baseUrl;
   const assertConfigured = () => {
@@ -24,21 +34,15 @@ export async function resolveAnthropicHelperSnapshot(config: OcxConfig, instance
   assertConfigured();
   const routing = anthropicRoutingFor(instance);
   for (let attempt = 0; attempt < 3; attempt++) {
-    const expected = captureOAuthAccountSelection(instance);
     const route = resolveAnthropicModelRouteForInstance(instance, config, model);
-    if (route.error) throw new Error("Invalid Anthropic helper model route");
+    if (route.error) throw new AnthropicHelperUnavailableError(instance);
     const selection = routing.resolveAnthropicAccountForSession(null, config, Date.now(), route.decision, model);
     if (!selection.accountId) throw new AnthropicHelperUnavailableError(instance);
     const snapshot = await routing.getAnthropicPoolAccessSnapshot(selection.accountId);
     assertConfigured();
     const current = resolveAnthropicModelRouteForInstance(instance, config, model);
     if (current.error || JSON.stringify(current.decision) !== JSON.stringify(route.decision)) continue;
-    const committed = await routing.promoteAnthropicActiveAccount(selection.accountId, expected, {
-      config, model, sessionKey: null, routeDecision: route.decision, reason: selection.reason,
-      expectedCredentialGeneration: snapshot.generation,
-    });
-    assertConfigured();
-    if (committed) return snapshot;
+    if (snapshot.provider === instance && snapshot.accountId === selection.accountId) return snapshot;
   }
   throw new AnthropicHelperUnavailableError(instance);
 }
@@ -52,10 +56,9 @@ export async function fetchAnthropicHelper(
   if (instance !== "anthropic" && instance !== "anthropic2") throw new Error("Invalid Anthropic helper instance");
   const row = config.providers[instance];
   const live = getAccountCredentialWithStatus(instance, snapshot.accountId);
-  const target = `${capturedTarget.replace(/\/v1\/?$/, "").replace(/\/+$/, "")}/v1/messages`;
   if (!row || row.disabled || row.authMode !== "oauth" || row.adapter !== "anthropic"
     || configuredAnthropicInstance(config, instance) !== instance || row.baseUrl !== capturedTarget
-    || url !== target || !live || live.paused || live.needsReauth
+    || url !== anthropicHelperMessagesUrl(capturedTarget) || !live || live.paused || live.needsReauth
     || new Headers(init.headers).get("authorization") !== `Bearer ${snapshot.accessToken}`) {
     throw new AnthropicHelperUnavailableError(instance);
   }

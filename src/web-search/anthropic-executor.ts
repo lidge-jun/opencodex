@@ -1,4 +1,4 @@
-import { resolveAnthropicHelperSnapshot, fetchAnthropicHelper } from "../sidecar/anthropic-binding";
+import { resolveAnthropicHelperSnapshot, fetchAnthropicHelper, anthropicHelperMessagesUrl } from "../sidecar/anthropic-binding";
 import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OAuthAccessSnapshot } from "../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -170,8 +170,7 @@ export async function runAnthropicWebSearch(
   abortSignal?: AbortSignal,
   config?: OcxConfig,
 ): Promise<SidecarOutcome> {
-  const base = provider.baseUrl.replace(/\/v1\/?$/, "");
-  const url = `${base}/v1/messages`;
+  const url = anthropicHelperMessagesUrl(provider.baseUrl);
   let token: string;
   let snapshot: OAuthAccessSnapshot | undefined;
   const capturedTarget = provider.baseUrl;

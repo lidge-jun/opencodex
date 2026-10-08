@@ -17,7 +17,7 @@ import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { isCodexAccountUsable } from "../codex/account-usability";
 import { MAIN_CODEX_ACCOUNT_ID, isSelectableCodexPoolAccount } from "../codex/account-id";
 import { getAccountSet } from "../oauth/store";
-import { configuredAnthropicInstance, isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance";
+import { configuredAnthropicInstance, type AnthropicInstanceId } from "../providers/anthropic-instance";
 
 export class AnthropicHelperUnavailableError extends Error {
   readonly code = "anthropic_helper_unavailable";
@@ -32,23 +32,44 @@ export type AnthropicHelperContext = {
   parentProviderName?: string;
 };
 
+/**
+ * Availability of one selected pool: the configured builtin row plus at least one stored account the
+ * pool could select. Which account actually sends (model route, cooldown, manual choice) is decided
+ * by snapshot resolution at send time, exactly as the main request path does, so a paused or
+ * reauth-pending ACTIVE account does not make a pool with another usable account unavailable.
+ */
 export function resolveAnthropicSidecarAuth(config: OcxConfig, instance: AnthropicInstanceId):
   { anthropicProviderName: AnthropicInstanceId; anthropicProvider: OcxProviderConfig } | undefined {
   const provider = config.providers[instance];
   if (!provider || provider.disabled || provider.authMode !== "oauth" || provider.adapter !== "anthropic"
     || configuredAnthropicInstance(config, instance) !== instance) return undefined;
-  const set = getAccountSet(instance);
-  const active = set?.accounts.find(row => row.id === set.activeAccountId);
-  if (!active || active.needsReauth || active.paused) return undefined;
+  if (!getAccountSet(instance)?.accounts.some(row => row.paused !== true && row.needsReauth !== true)) return undefined;
   return { anthropicProviderName: instance, anthropicProvider: provider };
 }
 
+/**
+ * Explicit target, then the parent's CONFIGURED builtin instance. The parent name alone is not
+ * enough: a custom provider that happens to be named `anthropic2` is not Pool 2 and is never inherited.
+ */
 export function resolveAnthropicHelperInstance(config: OcxConfig, context: AnthropicHelperContext): AnthropicInstanceId | undefined {
   if (context.backendFamily !== "anthropic") return undefined;
-  const instance = context.anthropicInstance ?? (isAnthropicInstanceId(context.parentProviderName)
-    ? context.parentProviderName : undefined);
+  const instance = context.anthropicInstance ?? configuredAnthropicInstance(config, context.parentProviderName);
   if (instance && !resolveAnthropicSidecarAuth(config, instance)) throw new AnthropicHelperUnavailableError(instance);
   return instance;
+}
+
+/**
+ * Planner boundary for the typed refusal: an unavailable selected pool means "this helper does not
+ * run", never "fail the main request" and never "discover another pool". Other errors propagate.
+ */
+export function withAnthropicHelperRefusal<T>(surface: string, resolve: () => T): T | undefined {
+  try {
+    return resolve();
+  } catch (error) {
+    if (!(error instanceof AnthropicHelperUnavailableError)) throw error;
+    console.warn(`[${surface}] ${error.message}; the request continues without this helper`);
+    return undefined;
+  }
 }
 
 export interface SidecarAuthState {
@@ -96,6 +117,9 @@ function findAnthropicAuthProvider(
   config: OcxConfig,
 ): { providerName: string; provider: OcxProviderConfig } | undefined {
   for (const [providerName, provider] of Object.entries(config.providers)) {
+    // Never adds Pool 2 automatically. The OAuth store key `anthropic2` belongs to the builtin pool:
+    // its token path and the token guardian refuse an unmarked row of that name, so offering such a
+    // custom row here would advertise credentials no helper executor will spend.
     if (providerName === "anthropic2") continue;
     if (provider.disabled === true) continue;
     if (provider.adapter !== "anthropic" || provider.authMode !== "oauth") continue;

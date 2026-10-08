@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createAnthropicInstanceFixture, type AnthropicInstanceFixture } from "../helpers/anthropic-instance-fixture";
+import type { OcxProviderConfig } from "../../src/types";
 let fixture: AnthropicInstanceFixture;
 let auth: typeof import("../../src/sidecar/auth");
 let binding: typeof import("../../src/sidecar/anthropic-binding");
@@ -70,6 +71,8 @@ for (const instance of ["anthropic", "anthropic2"] as const) {
     const snapshot = await binding.resolveAnthropicHelperSnapshot(config, instance, fixture.model);
     expect(snapshot.provider).toBe(instance);
     expect(snapshot.accountId).toBe(fixture.ids[1]);
+    // A helper reads the pool's selection; it never promotes the active pointer.
+    expect(fixture.store.getAccountSet(instance)?.activeAccountId).toBe(fixture.ids[0]);
     let sends = 0;
     globalThis.fetch = (async (_url, init) => {
       sends++;
@@ -88,3 +91,33 @@ for (const instance of ["anthropic", "anthropic2"] as const) {
     expect(sends).toBe(1);
   });
 }
+
+test("a custom unmarked anthropic2 parent is not Pool 2 and is never inherited", () => {
+  delete fixture.config.providers.anthropic2!.anthropicOAuthInstance;
+  expect(auth.resolveAnthropicHelperInstance(fixture.config, { backendFamily: "anthropic", parentProviderName: "anthropic2" })).toBeUndefined();
+  expect(auth.resolveSidecarAuth(fixture.config).anthropicProviderName).toBe("anthropic");
+});
+
+test("a paused active account does not make a pool with another usable account unavailable", async () => {
+  await fixture.store.mutateStore(store => { store.anthropic2!.accounts.find(row => row.id === fixture.ids[0])!.paused = true; });
+  expect(auth.resolveAnthropicHelperInstance(fixture.config, { backendFamily: "anthropic", parentProviderName: "anthropic2" })).toBe("anthropic2");
+  const snapshot = await binding.resolveAnthropicHelperSnapshot(fixture.config, "anthropic2", fixture.model);
+  expect(snapshot.accountId).toBe(fixture.ids[1]);
+  await fixture.store.mutateStore(store => { store.anthropic2!.accounts.forEach(row => { row.paused = true; }); });
+  expect(() => auth.resolveSidecarAuth(fixture.config, "anthropic2")).toThrow(auth.AnthropicHelperUnavailableError);
+});
+
+test("vision planner turns an unavailable selected pool into no plan instead of failing the request", async () => {
+  const vision = await import("../../src/vision");
+  const { parseRequest } = await import("../../src/responses/parser");
+  await fixture.store.mutateStore(store => { delete store.anthropic2; });
+  fixture.config.visionSidecar = { backend: "anthropic", anthropicInstance: "anthropic2" };
+  const target: OcxProviderConfig = { ...fixture.config.providers.anthropic!, modelCapabilities: { [fixture.model]: { inputModalities: ["text"] } } };
+  const parsed = parseRequest({ model: fixture.model, input: [{ role: "user", content: [
+    { type: "input_text", text: "Describe this" },
+    { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
+  ] }] });
+  expect(vision.planVisionSidecar(fixture.config, target, fixture.model, parsed, undefined, { providerName: "anthropic" })).toBeUndefined();
+  delete fixture.config.visionSidecar.anthropicInstance;
+  expect(vision.planVisionSidecar(fixture.config, target, fixture.model, parsed, undefined, { providerName: "anthropic" })?.anthropicSidecar?.providerName).toBe("anthropic");
+});

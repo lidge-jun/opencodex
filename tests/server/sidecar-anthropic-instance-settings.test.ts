@@ -92,7 +92,8 @@ test("Claude overrides round-trip independently of global pool; clearing never w
   expect(persisted().webSearchSidecar?.anthropicInstance).toBe("anthropic");
 });
 
-test.each(["bogus", 1, false, {}, []])("invalid explicit pool %j is refused without mutation", async value => {
+// Each value is wrapped: test.each spreads an array row into arguments, so a bare [] would run as undefined.
+test.each([["bogus"], [1], [false], [{}], [[]]] as const)("invalid explicit pool %j is refused without mutation", async (value: unknown) => {
   const config = anthropicInstanceConfig();
   saveConfig(config);
   const before = readFileSync(home.path("config.json"), "utf8");
@@ -111,8 +112,6 @@ test("effective preserved backend and model are validated before any field is mu
   const before = structuredClone(config);
   expect((await request(config, "/api/sidecar-settings", { webSearch: { backend: "openai" }, vision: { enabled: false } })).status).toBe(400);
   expect(config).toEqual(before);
-  expect((await request(config, "/api/claude-code", { webSearchSidecar: { backend: "openai" } })).status).toBe(400);
-  expect(config).toEqual(before);
   expect(anthropicSidecarPatchError(config, { visionSidecar: { model: "anthropic/claude-sonnet-4-6" } })).toContain("conflicts");
   expect(anthropicSidecarPatchError(config, { webSearchSidecar: { backend: "openai", model: "gpt-5.6-luna", anthropicInstance: null } })).toBeUndefined();
   expect((await request(config, "/api/sidecar-settings", {
@@ -121,6 +120,23 @@ test("effective preserved backend and model are validated before any field is mu
   })).status).toBe(200);
   expect(Object.hasOwn(persisted().webSearchSidecar!, "anthropicInstance")).toBe(false);
   expect(Object.hasOwn(persisted().visionSidecar!, "anthropicInstance")).toBe(false);
+});
+
+test("Claude overrides check an inherited global pool only while the merged backend stays Anthropic", () => {
+  const config = anthropicInstanceConfig();
+  config.webSearchSidecar = { backend: "anthropic", model: "claude-haiku-4-5", anthropicInstance: "anthropic2" };
+  config.visionSidecar = { backend: "anthropic", model: "claude-haiku-4-5", anthropicInstance: "anthropic2" };
+  // The inherited pool is inert once the override leaves Anthropic, exactly as in buildClaudeReplayConfig.
+  expect(anthropicSidecarPatchError(config, { webSearchSidecar: { backend: "openai" }, visionSidecar: { backend: "openai" } }, true)).toBeUndefined();
+  expect(anthropicSidecarPatchError(config, { visionSidecar: { backend: "routed", model: "anthropic/claude-sonnet-4-6" } }, true)).toBeUndefined();
+  // A pool the override sets itself is still validated against its effective backend.
+  expect(anthropicSidecarPatchError(config, { webSearchSidecar: { backend: "openai", anthropicInstance: "anthropic" } }, true)).toContain("requires an anthropic backend");
+  // While the merged backend stays Anthropic, the inherited pool still conflicts with a model naming the other pool.
+  expect(anthropicSidecarPatchError(config, { visionSidecar: { model: "anthropic/claude-sonnet-4-6" } }, true)).toContain("conflicts");
+  // Vice versa: a global OpenAI block accepts an override that selects Anthropic and a pool.
+  const openai = anthropicInstanceConfig();
+  openai.webSearchSidecar = { backend: "openai", model: "gpt-5.6-luna" };
+  expect(anthropicSidecarPatchError(openai, { webSearchSidecar: { backend: "anthropic", model: "claude-haiku-4-5", anthropicInstance: "anthropic2" } }, true)).toBeUndefined();
 });
 
 test("untouched settings reads and unrelated saves retain instance absence and non-Anthropic defaults", async () => {

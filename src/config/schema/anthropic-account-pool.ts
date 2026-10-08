@@ -94,6 +94,10 @@ export function anthropicSidecarConfigError(value: unknown): string | undefined 
       // Web search defaults to OpenAI; vision's absent backend keeps its credential-based auto mode.
       const backend = sidecar.backend === undefined
         ? (field === "webSearchSidecar" ? "openai" : undefined) : sidecar.backend;
+      // An instance inherited from the global block is inert once the override's effective backend
+      // leaves Anthropic (the helper resolver only reads it for the Anthropic family), so it is not
+      // a conflict. An instance the override sets itself is still validated in full.
+      if (prefix && !Object.hasOwn(rawSidecar, "anthropicInstance") && backend !== undefined && backend !== "anthropic") continue;
       const modelProvider = typeof sidecar.model === "string" && sidecar.model.includes("/")
         ? sidecar.model.slice(0, sidecar.model.indexOf("/")) : undefined;
       if (modelProvider && isAnthropicInstanceId(modelProvider) && modelProvider !== sidecar.anthropicInstance) {

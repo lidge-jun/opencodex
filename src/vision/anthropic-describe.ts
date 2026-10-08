@@ -1,4 +1,4 @@
-import { resolveAnthropicHelperSnapshot, fetchAnthropicHelper } from "../sidecar/anthropic-binding";
+import { resolveAnthropicHelperSnapshot, fetchAnthropicHelper, anthropicHelperMessagesUrl } from "../sidecar/anthropic-binding";
 import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OAuthAccessSnapshot } from "../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -205,7 +205,7 @@ export async function describeImageAnthropic(
 
   // Anthropic image blocks have no detail field, but detail remains part of the cache identity.
   void detail;
-  const base = provider.baseUrl.replace(/\/v1\/?$/, "");
+  const url = anthropicHelperMessagesUrl(provider.baseUrl);
   const dispatch = (target: string, init: RequestInit) => snapshot && config
     ? fetchAnthropicHelper(config, snapshot, settings.model, capturedTarget, target, init)
     : fetch(target, init);
@@ -214,7 +214,7 @@ export async function describeImageAnthropic(
   const startedAt = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      recovery => dispatch(`${base}/v1/messages`, applyUpstreamRecoveryInit({
+      recovery => dispatch(url, applyUpstreamRecoveryInit({
         method: "POST",
         redirect: "manual",
         headers,

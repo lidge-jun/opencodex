@@ -11,8 +11,8 @@ import {
   modelAcceptsImageInput,
 } from "./eligibility";
 import { normalizeVisionReasoningForModel } from "./reasoning";
-import { resolveSidecarAuth, resolveAnthropicHelperInstance, resolveAnthropicSidecarAuth } from "../sidecar/auth";
-import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
+import { resolveSidecarAuth, resolveAnthropicHelperInstance, resolveAnthropicSidecarAuth, withAnthropicHelperRefusal } from "../sidecar/auth";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { DEFAULT_VISION_TIMEOUT_MS, MAX_VISION_TIMEOUT_MS, MIN_VISION_TIMEOUT_MS } from "./timeout-bounds";
 import { carriesImages } from "./image-rewrite";
 
@@ -73,7 +73,7 @@ export function resolveVisionBackend(
 /** Existing family preference, with a builtin parent contributing its own auth availability. */
 function preferredVisionBackend(config: OcxConfig, parentProviderName?: string): "openai" | "anthropic" {
   const cfg = config.visionSidecar ?? {};
-  const requested = cfg.anthropicInstance ?? (isAnthropicInstanceId(parentProviderName) ? parentProviderName : undefined);
+  const requested = cfg.anthropicInstance ?? configuredAnthropicInstance(config, parentProviderName);
   const exact = requested ? resolveAnthropicSidecarAuth(config, requested) : undefined;
   const legacy = findAnthropicVisionProvider({ ...config, visionSidecar: { ...cfg, anthropicInstance: undefined } });
   return resolveVisionBackend(cfg.backend, exact
@@ -254,7 +254,9 @@ export function planVisionSidecar(
   // A non-dispatchable routed configuration keeps the legacy backend fallback below.
 
   const backend = preferredVisionBackend(config, options.providerName);
-  const anthropicSidecar = backend === "anthropic" ? findAnthropicVisionProvider(config, options.providerName) : undefined;
+  // An unavailable selected pool degrades to "no plan" (images stripped); it never fails the request.
+  const anthropicSidecar = backend === "anthropic"
+    ? withAnthropicHelperRefusal("vision", () => findAnthropicVisionProvider(config, options.providerName)) : undefined;
   // A namespaced routed model must never reach the forward/OAuth executors
   // (they POST the string verbatim); the effective-model resolver falls back
   // to each side's default in that case.
