@@ -4,7 +4,7 @@ The minute sweep checks persisted activation deadlines locally; only missing dea
 
 ## Bun runtime and test runner
 
-`package.json` pins the shipped npm runtime (`dependencies.bun`) to 1.4.2 and the CI test runner (`testRunnerBun`) to 1.4.0; `@types/bun` remains unchanged. Runtime 1.4.2 fixes #6684's Windows Bun.fetch truncation after the first cleartext upstream body chunk.
+`package.json` pins the shipped npm runtime (`dependencies.bun`) to 1.4.2 and the test runner (`testRunnerBun`) to 1.4.0; `@types/bun` remains unchanged. Runtime 1.4.2 fixes #6684's Windows Bun.fetch truncation after the first cleartext upstream body chunk.
 The runner pin avoids 1.4.2's multi-file `bun test --isolate` preload reload segfault (`load_preloads -> JSModuleLoader::loadModule -> JSPromise::status`, address 0x10): #4064 introduced 1.4.2 on 2026-09-09 and #4821 reverted it on 2026-09-17.
 #6713 run 37631558263 reproduces it on Linux 1/4, macOS 2/2 and Windows 9/9; single-file success does not prove the multi-file runner works.
 
@@ -12,7 +12,7 @@ The runner pin avoids 1.4.2's multi-file `bun test --isolate` preload reload seg
 Test jobs, including single-file development-version validation, select `test-runner`. They also build dashboard fixtures; `gates` uploads a dashboard preview and checks release-helper syntax on that pin.
 Release packaging, Docker, installed-artifact and service smoke jobs, desktop shell and widget preparation use `runtime`. Shipped binaries compile through `process.execPath` in `scripts/build-standalone.ts` and `desktop/scripts/prepare-sidecar.ts` on the runtime pin.
 
-Rejoin only after the upstream runner crash is fixed and a green `lane=all` dispatch proves the unified version; then delete `testRunnerBun`, the action's role input and test-role selections.
+`scripts/lib/test-runner-bun.ts` selects the test pin for `scripts/test.ts`, `scripts/release.ts` preflight and provider-option gates: matching current Bun first, then a version-checked `OCX_TEST_RUNNER_BUN`, then PATH outside node_modules and `~/.bun/bin`. Missing or mismatched binaries fail with install guidance, without downloading; package-script PATH shadowing cannot select the shipped runtime for tests. Rejoin only after an upstream fix and green unified `lane=all` proof; then remove the runner pin, resolver and CI role split.
 
 ## Resolved static model policy
 

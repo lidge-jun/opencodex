@@ -33,8 +33,8 @@ For local development commands, architecture notes, and release workflow details
 contributing guide above instead of duplicating instructions here.
 
 Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own
-Bun runtime for end users, but contributor commands such as `bun install`, `bun run test`, and
-`bun run prepush` run from your local Bun installation.
+Bun runtime for end users. Package scripts such as `bun run test` and `bun run prepush` may resolve
+Bun through that bundled dependency.
 
 ## Pull request contract
 
@@ -60,6 +60,10 @@ A ready-for-review PR is the author's claim that the change is complete, underst
   replaced with a clean one.
 
 ## Local validation and hooks
+
+The suite uses Bun 1.4.0 (`testRunnerBun`) while the shipped runtime is 1.4.2.
+`scripts/test.ts` finds a 1.4.0 binary on PATH or in `~/.bun/bin`, or uses
+`OCX_TEST_RUNNER_BUN`; install that version locally if it is missing.
 
 Run `bun run test` before review readiness. If the full local suite is too costly
 for the task or available resources, run at least focused regression tests for

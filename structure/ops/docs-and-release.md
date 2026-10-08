@@ -401,7 +401,7 @@ respawn runs the replaced files at the same path, and refuses while that version
 Package release is npm-focused. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
 typecheck and GUI build. `scripts/release.ts` accepts either an explicit version or
 `--bump patch|minor|major`; the stable and preview channels use separate resolvers in
-`scripts/version-line.ts`. It runs local typecheck, `bun test --isolate tests`, and
+`scripts/version-line.ts`. It runs local typecheck, tests on the pin selected by `scripts/lib/test-runner-bun.ts`, and
 `bun run privacy:scan` before the version bump, commit/push, Cross-platform CI wait, and GitHub
 Release workflow dispatch. Docs publishing is separate from npm release publishing.
 
