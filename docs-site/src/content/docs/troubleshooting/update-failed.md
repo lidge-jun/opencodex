@@ -97,6 +97,27 @@ a link whose target no longer exists. One confirmed cause
 junction that pointed to another drive after the target folder had been deleted or the drive had
 been removed.
 
+## Desktop app update stalls or fails on "Installing update…"
+
+When updating from the OpenCodex desktop application, clicking **Install update** downloads the full installer package (such as the Windows `.msi` bundle) via GitHub Releases before replacing files and restarting.
+
+If the update appears stalled on `Installing update…` or times out:
+
+1. **Network connectivity to GitHub Releases**:
+   In restricted or proxy-dependent network environments, direct downloads from GitHub CDN endpoints (`objects.githubusercontent.com`) may stall or drop packets. If the automated download does not complete:
+   - Quit the OpenCodex desktop app from the system tray.
+   - Download the latest installer directly from the [OpenCodex GitHub Releases](https://github.com/lidge-jun/opencodex/releases/latest) page (e.g., `OpenCodex-<version>-windows-x64.msi` on Windows).
+   - Run the installer manually to perform an in-place upgrade.
+
+2. **Windows file locking (`EPERM` / file in use)**:
+   If an existing background service or CLI process (`ocx.exe`, `bun.exe`) is actively running, Windows may hold a kernel file lock on executable files in `C:\Program Files\OpenCodex\`:
+   - Stop the running proxy and background service before launching the installer:
+     ```powershell
+     ocx stop
+     ```
+   - Verify with `ocx status` that no lingering runtime holds the port, then proceed with the installation.
+
+
 The updater checks npm's cache folder before it stops the proxy, and the npm staging install uses
 the same folder that `npm config get cache` reports. If the cache folder cannot be used, the update
 stops with `cache_root_dangling_link` or `cache_root_not_directory` and leaves the proxy running:
