@@ -42,11 +42,13 @@ and a refused forward request releases its probe lease. `LiveCallBinding` record
 exactly this reason, so a reconnect is judged on the call it rejoins rather than on a default.
 
 The native voice path in `src/server/live.ts` applies the same predicate but can name less. It
-records nothing about the calls it relays, so a join, and a call-create that sends no session
+records only which call ids it created (`src/server/live-native-calls.ts`), never their model or
+account, so a join, and a call-create that sends no session
 model, name no destination at all; a key carrying a model list is refused there rather than
 admitted against an assumed default, while a provider-only scope and an unscoped key are
-unchanged. Coverage lives in `tests/server/api-key-scope-audio.test.ts` and
-`tests/server/api-key-scope-live.test.ts`.
+unchanged, on both join credentials described under streaming audio. Coverage lives in
+`tests/server/api-key-scope-audio.test.ts`, `tests/server/api-key-scope-live.test.ts` and
+`tests/server/server-live-existing-call.test.ts`.
 
 ## Streaming audio
 
@@ -69,6 +71,19 @@ It does not proxy WebRTC media or execute delegation requests. Standalone Framel
 to gpt-live-1-codex; gpt-live-1 is an explicit alias. Dictation and Frameless event formats remain
 separate. Coverage lives in `tests/server/audio-client.test.ts`,
 `tests/server/audio-dictation.test.ts` and `tests/server/live-call-bindings.test.ts`.
+
+A native sideband join (`/v1/live/<id>`, `/v1/realtime/calls/<id>`, `/v1/realtime?call_id=<id>`)
+is authenticated as whoever owns the call. A call `handleLive` created was negotiated under the
+account the Pool selected, so its id is recorded from the create's Location — extracted exactly as
+openai/codex reads it — and its join keeps Pool selection and thread affinity (openai/codex #35830).
+Any other call was created by the client with its own ChatGPT login: ChatGPT voice handing a call to
+a Codex thread, or Codex Desktop when its renderer owns the call, both arriving as a V3
+`existingCall` join. That join forwards the caller's own explicit ChatGPT credential through the
+Direct passthrough, never the proxy admission secret, and falls back to Pool selection only when the
+caller presents none. The id registry is process-local, holds ids only, keeps at most 1024 for six
+hours, and evicts oldest first; a restart, expiry or eviction makes a created call look
+caller-owned to a later rejoin. Coverage lives in `tests/server/live-native-calls.test.ts` and
+`tests/server/server-live-existing-call.test.ts`.
 
 Translated Claude timeline reminders use the Chat adapter's
 [chronological instruction ordering](../providers/chat-compat.md#chronological-in-conversation-instructions)
@@ -192,14 +207,28 @@ timer, turn, and translator ownership are released through the existing lifecycl
 
 ## HTTP caller conversation identity
 
+Canonical ChatGPT Responses egress additionally normalizes caller aliases in the selected auth
+headers. A non-empty explicit `session_id` wins; otherwise, the first non-empty alias among
+`session-id`, then `thread-id`, supplies `session_id` if its value is safe, and an invalid
+winning alias suppresses weaker identity. Empty values are dropped before this step on every path
+(`materializeCodexUpstreamAuth` in `src/codex/auth-context.ts` and the Claude Messages and Chat
+Completions bridges), so an empty header counts as absent and an empty `session-id` lets a valid
+`thread-id` win. The Claude metadata-derived session applies only when no non-empty canonical
+header or alias remains. Aliases keep their original names on the wire; their validated raw
+caller values are forwarded like an explicit `session_id`, without principal scoping as used for
+promoted `x-session-id`. Original ingress headers and affinity computation are unchanged, as are
+custom and API-key destinations. No identity or originator is invented for marker-free requests.
+
 `src/server/caller-session-identity.ts` promotes validated `x-session-id` on HTTP Responses and Messages before turn admission in `src/server/index/serve-options.ts`. Explicit `session_id`, `session-id`, or `thread-id` presence wins, including empty values; managed Grok promotion runs first on Responses. The trimmed marker must start with an ASCII letter/digit, contain only letters, digits, dots, underscores, colons or hyphens, and stay within 128 characters. Loopback admission keeps it; authenticated admission scopes it with the trusted credential principal into an opaque SHA-256 identifier and skips promotion without that principal. Bodies and abort signals are preserved, and the original Request owns Bun timeout lookup. This provides continuity, not authorization or guaranteed cache hits. Existing explicit/Grok identities, Chat Completions, WebSocket frames, compact and count_tokens retain their behavior.
 
 ## Chat conversation identity forwarding
 
 `src/server/chat-completions.ts` preserves caller `prompt_cache_key` on the Chat-to-Responses
 bridge. Canonical ChatGPT Responses forwarding preserves `session_id`, `session-id`, `thread-id`
-and per-request `x-client-request-id` under their original names. Missing conversation identity
-stays missing; a shared prefix/cache key is not converted into a session. The direct-mode
+and per-request `x-client-request-id` under their original names, and additionally fills an absent
+`session_id` from the first present alias, `session-id` then `thread-id`, when safe, using the
+[precedence and validation rules above](#http-caller-conversation-identity). Missing conversation
+identity stays missing; a shared prefix/cache key is not converted into a session. The direct-mode
 outbound contract is covered by `tests/responses/chat-conversation-affinity.test.ts`.
 This transport contract does not prove a client's emission, Pool selection stability or cache hits.
 
@@ -315,8 +344,10 @@ final native affinity, and shared-system keys do not provide either conversation
 
 `src/claude/inbound.ts` reads only literal `claudeCode.stabilizePromptCache: true` from
 its existing configuration argument. The default is off for every translated Messages caller.
-`src/claude/inbound-cache-stabilize.ts` relocates only exact single-line trailing unfenced harness notices
-into a trailing user input message; unmatched and fenced text is preserved, including an open
+`src/claude/inbound-cache-stabilize.ts` peels only exact single-line trailing unfenced harness notices.
+Recognized `<total_tokens>N tokens left</total_tokens>` footers are dropped, including repeated footers;
+TaskCreate nudges retain their trailing user input message. A footer-only suffix adds no input item,
+so token footers do not introduce a user turn after a function output. Unmatched and fenced text is preserved, including an open
 fence through EOF. Native passthrough never enters this translator. Without opt-in the original
 system-parts cache-key derivation remains unchanged; with opt-in the metadata-less key uses
 stabilized instructions. Metadata-derived keys retain their existing derivation. This configuration

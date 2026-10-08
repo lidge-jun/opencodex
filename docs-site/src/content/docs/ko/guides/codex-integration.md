@@ -35,7 +35,10 @@ codex 0.146(openai/codex#35830)부터는 `experimental_realtime_ws_base_url`이 
 WebSocket을 `api.openai.com`에 직접 붙입니다. Pool 모드에서는 통화가 opencodex가 고른 계정으로
 만들어지므로, 앱 자체 로그인으로 직접 붙는 join은 `realtime websocket handshake failed`(404)로
 실패합니다. 주입된 키는 join을 다시 opencodex(`GET /v1/live/{callId}`)로 보내고, Pool은 그
-session/thread 쌍에 묶어 둔 계정(프로세스 로컬 바인딩)을 그대로 씁니다. Direct 모드는 두 요청 모두
+session/thread 쌍에 묶어 둔 계정(프로세스 로컬 바인딩)을 그대로 씁니다. 클라이언트가 직접 만든
+통화는 예외입니다. ChatGPT 음성이 통화를 Codex 스레드로 넘기거나 Codex Desktop이 통화를 직접
+만들면 그 통화는 내 ChatGPT 로그인 소유이고 sideband join만 opencodex에 도착하므로, opencodex는
+그 join을 Pool 계정이 아니라 호출자 자신의 ChatGPT 자격 증명으로 보냅니다. Direct 모드는 두 요청 모두
 호출자의 현재 bearer를 쓰므로, 이 키는 join을 프록시 경로에 붙잡아 두는 역할만 합니다. 이 키는
 loopback `openai_base_url` 형태에서만 쓰이고, 그 키와 함께 제거되며, 사용자가 직접 적은
 `experimental_realtime_ws_base_url`은 덮어쓰지 않습니다.
@@ -408,3 +411,10 @@ opencodex가 managed [background service](/ko/reference/cli/lifecycle/#백그라
 ## 스트리밍 줄바꿈
 
 공유 SSE 디코더는 LF, CRLF 및 단독 CR 줄바꿈을 처리하며 네트워크 청크 사이에서 구분자가 나뉘어도 동작합니다. 호환 제공자는 LF 형식으로만 스트림을 만들 필요가 없습니다.
+
+
+### 계정 직접 지정과 크레딧 사용
+
+계정이 지정된 모델을 선택해도 크레딧 사용이 자동으로 허용되지는 않습니다. 저장된 계정은 인증 및 전송용 인증정보 준비 시에도 **한도 이후 크레딧 사용** 설정을 따릅니다. 페이싱이나 재시도 대기 후 Responses HTTP 또는 WebSocket 요청을 보내기 직전에도 현재 정책을 확인합니다. 제한된 요청은 인증 오류가 아니라 크레딧 정책을 안내합니다. 한도 초기화를 기다리거나 다른 계정을 선택하고, 크레딧 사용이 필요한 경우 해당 계정에서 명시적으로 허용하세요.
+
+저장된 계정을 사용하는 이미지 설명과 웹 검색 도우미도 재시도를 포함한 매 전송 직전에 이 정책을 확인합니다. 도우미 선택 이후 허용 설정이 바뀌거나 한도에 도달하면 해당 요청을 보내지 않고 정책 제한을 안내합니다. 독립 검색 릴레이는 초기화 시점에 맞춘 429를 반환하며, 호출자가 직접 제공한 Direct 인증정보의 기존 동작은 유지합니다.

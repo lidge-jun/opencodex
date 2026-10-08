@@ -1,18 +1,14 @@
 /* ============================================================================
-   Claude page — one page head and tab strip; panels reuse card/setting-row
+   Claude page — Code content under one subtitle; reuses card/setting-row
    vocabulary from styles.css. Uses only design tokens; adds no gradients of its
    own (pending values reuse the shared .data-surface-skeleton__block).
    ============================================================================ */
 
 /* The Code workspace asks .main-inner for 1200px, and it stays mounted (hidden) after a
-   visit. Inside the Claude page every tab keeps the default .main-inner column from
+   visit. Inside the Claude page it keeps the default .main-inner column from
    styles.css (980px) — the same column Codex Set uses — so the page never changes width. */
 .main-inner:has(.claude-page .claudecode-workspace-shell) {
   max-width: 980px;
-}
-
-.claude-page .page-tabs {
-  margin-bottom: var(--space-5);
 }
 
 .claude-panel-lead {
@@ -23,55 +19,7 @@
   max-width: var(--prose-measure);
 }
 
-/* ── Account tab: Anthropic's Accounts content (ProviderAuthPanel) ── */
-
-/* Signed out, the login row is the next step, so it comes before the pool card. */
-.claude-page .pwi-auth-body:has(> .pwi-auth-status-row .pwi-auth-dot--off) > .anthropic-pool-card {
-  order: 1;
-}
-
-/* Status text and its Login button share one line. */
-.claude-page .pwi-auth-status-row > .pwi-auth-actions {
-  margin-top: 0;
-}
-
-.claude-account-empty {
-  padding: var(--space-12) var(--space-5);
-}
-
-.claude-account-empty p {
-  max-width: 48ch;
-  margin: 0 auto var(--space-4);
-  text-wrap: balance;
-}
-
-.claude-account-empty-actions {
-  display: flex;
-  justify-content: center;
-  gap: var(--space-2);
-}
-
-.claude-account-empty .btn svg {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  color: currentColor;
-}
-
-/* The pending login's URL and paste field read left-aligned, like everywhere else. */
-.claude-account-empty-hint {
-  max-width: 560px;
-  margin: var(--space-4) auto 0;
-  text-align: left;
-}
-
-.claude-account-empty-hint svg {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-}
-
-/* ── Code tab ── */
+/* ── Claude Code ── */
 .claudecode-connection-card {
   margin-bottom: var(--space-4);
 }
@@ -103,43 +51,210 @@
   margin-left: auto;
 }
 
-/* ── Settings tab ── */
-.claude-settings {
+/* ── Desktop tab: Models card, compact list, Advanced tier lanes (design D1) ── */
+.claude-desktop-roles {
+  overflow: hidden;
+  margin-bottom: var(--space-4);
+}
+.claude-desktop-section-title {
+  margin: 0;
   display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.claude-settings > .notice {
-  margin-bottom: 0;
-}
-
-.claude-settings-port {
-  font-family: var(--font-code);
+  align-items: baseline;
+  gap: 8px;
   font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-ui);
+  color: var(--text);
 }
-
-/* ClaudeInterceptStart renders "reason [Start]" as one status span; lay it out as a row. */
-.claude-intercept-start > [role="status"] {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
+.claude-desktop-section-title .count {
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+  font-family: var(--font-code);
+  font-size: var(--text-label);
+}
+.claude-desktop-roles > .claude-desktop-section-title {
+  padding: 12px 16px 4px;
+}
+.claude-desktop-roles-scope {
+  margin: 0;
+  padding: 0 16px 8px;
   color: var(--muted);
   font-size: var(--text-label);
-  line-height: var(--leading-body);
 }
-
-.claude-intercept-start .btn {
-  flex-shrink: 0;
+.claude-desktop-roles .setting-controls > .custom-select {
+  text-align: right;
 }
-
-/* Badge-sized skeleton; the block itself brings the shared shimmer. */
-.claude-status-pending.data-surface-skeleton__block {
-  display: inline-block;
-  width: 64px;
-  min-height: 0;
-  height: 20px;
+/* Role selects: the label keeps a readable share of the row and a long route truncates inside
+   the trigger, so the chevron and an unavailable status never leave the card (390-768px audit). */
+.claude-desktop-roles .setting-label {
+  flex: 1 1 12rem;
+}
+.claude-desktop-roles .setting-controls {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(60%, 28rem);
+}
+.claude-desktop-roles .setting-controls > .custom-select,
+.claude-desktop-roles .select-trigger {
+  max-width: 100%;
+}
+.claude-desktop-roles .select-trigger > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.claude-desktop-roles .select-trigger > svg {
+  flex: none;
+}
+.claude-role-option {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: bottom;
+}
+.claude-role-option__route {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.claude-role-option__status {
+  flex: none;
+  white-space: pre;
+  color: var(--muted);
+}
+@media (max-width: 760px) {
+  .claude-desktop-roles .setting-controls {
+    max-width: 100%;
+  }
+  .claude-desktop-roles .setting-controls > .custom-select,
+  .claude-desktop-roles .select-trigger {
+    width: 100%;
+  }
+  .claude-desktop-roles .select-trigger {
+    justify-content: space-between;
+  }
+}
+.claude-desktop-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.claude-desktop-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.claude-desktop-list-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+.claude-desktop-list-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.claude-desktop-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-soft, var(--border));
+}
+.claude-desktop-list-row:first-child {
+  border-top: none;
+}
+.claude-desktop-list-names {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.claude-desktop-list-names strong,
+.claude-desktop-list-names code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.claude-desktop-list-names strong {
+  font-weight: var(--weight-medium);
+}
+.claude-desktop-list-names code {
+  color: var(--muted);
+  font-size: 11px;
+}
+.claude-row-quick {
+  color: var(--accent);
+}
+.claude-desktop-advanced {
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.claude-desktop-advanced > summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+.claude-desktop-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+.claude-desktop-advanced-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+.claude-desktop-advanced-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.claude-desktop-advanced-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 10px;
   border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+.claude-desktop-advanced-chip b {
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+.claude-desktop-advanced-chip code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+  font-size: 11px;
+}
+.claude-desktop-advanced-count {
+  font-family: var(--font-code);
+  font-size: 11px;
+  color: var(--faint);
+}
+.claude-desktop-advanced-desc {
+  margin: 0;
+  padding: 0 14px 10px;
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+.claude-desktop-advanced > .ocx-group-stack {
+  padding: 0 10px 10px;
 }

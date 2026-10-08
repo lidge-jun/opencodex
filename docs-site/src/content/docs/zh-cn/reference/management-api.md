@@ -292,6 +292,8 @@ OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上�
 
 ### 系统生命周期
 
+`POST /api/system/restart` 在没有请求体或请求体为 `{}` 时保留默认的 60 秒排空等待。使用管理会话或管理员令牌的调用方可通过 `{"drainGraceMs":2000}` 显式选择短等待，取值须为 1–60000 毫秒的整数。无效 JSON 或参数返回 400，且不会开始重启；绑定目标进程的本机 restart capability 不允许设置该参数（403）。响应中的 `drainTimeoutMs` 表示首次接受的等待时间，重复调用不会改变已接受的时间或截止点。等待时间包含发送接受响应前的延迟，清理和替代进程就绪仍分别保留独立的 60 秒、70 秒预算。被中断的请求可能已经执行，重发前应核对结果；此选项不会增加自动重发。
+
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
 | `GET /api/system/memory` | 返回标量级的进程、堆、流、响应状态、看门狗和活跃回合指标 | — |
@@ -313,7 +315,7 @@ OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上�
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | 列出/刷新或删除 Codex 账户。POST 仅作为已禁用的兼容端点保留；成功的 DELETE 响应包含 `catalogRefreshPending`。 | POST 始终返回 403 `manual_import_disabled`；DELETE 输入无效时返回 400 |
 | `PUT /api/codex-auth/accounts/alias` | 设置或清除账户别名 | 400 账户/别名无效 |
-| `PUT /api/codex-auth/accounts/pause` | 暂停或恢复一个账户 | 400 账户/状态无效；404 缺少账户 |
+| `PUT /api/codex-auth/accounts/pause` | 手动暂停或恢复账户及同身份的已有主登录／池内入口；返回 `affectedAccountIds` | 400 账户/状态无效；404 缺少账户；503 主登录身份忙碌或无法读取 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暂停配额已耗尽的账户 | 变更锁失败会变成 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 清除一个账户或所有账户的运行时冷却 | 400 id 无效 |
 | `GET, PUT /api/codex-auth/active` | 读取或选择当前活跃账户 | 400 账户无效或缺失；409 暂停/旧行冲突 |

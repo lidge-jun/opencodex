@@ -14,6 +14,7 @@
  * preview route.
  */
 import { createHash } from "node:crypto";
+import { dirname } from "node:path";
 import { canonicalContribution, fingerprint, type OwnershipRecord } from "./ownership";
 import { ClientPathError, EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import { OPENCODE_PROVIDER_ID } from "../clients/config-export/constants";
@@ -34,7 +35,7 @@ import {
   restoreOwnershipCollision,
   type IntegrationClientId,
 } from "./registry";
-import { declaredIntegrationTarget, resolveIntegrationTarget, type IntegrationTarget } from "./target";
+import { declaredIntegrationTarget, resolveIntegrationTarget, type IneffectiveWrite, type IneffectiveWriteReason, type IntegrationTarget } from "./target";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { buildIntegrationContribution, classifyIntegration, exportContextOf, readPath, type IntegrationState, type StateReason } from "./state";
 import { inspectKiloCandidates } from "./kilo-candidates";
@@ -99,6 +100,13 @@ export interface IntegrationMutationPlan {
    */
   readonly willChange: boolean;
   readonly refusalReason?: RefusalReason;
+  /**
+   * `superseded_store` only: why the store the client reads is not written. The store's location
+   * stays on the status row (`supersededBy`); the plan names no file.
+   */
+  readonly supersededReason?: IneffectiveWriteReason;
+  /** `missing-store` only: the document that recreates the store, so the remedy can name it. */
+  readonly missingStoreDocument?: string;
   readonly profileId?: number;
 }
 
@@ -129,7 +137,7 @@ const CLIENT_MANAGED_PATHS = {
   openclaw: [["models", "providers", OPENCODE_PROVIDER_ID]],
   kimi: [["providers", OPENCODE_PROVIDER_ID], ["models", DYNAMIC_SEGMENT]],
   gajae: [["providers", OPENCODE_PROVIDER_ID]],
-  dsh: [["llm-pi-ai", "providers", OPENCODE_PROVIDER_ID]],
+  dsh: [["llm-pi-ai", "providers", OPENCODE_PROVIDER_ID], ["[id=llm-pi-ai]", "config", "providers", OPENCODE_PROVIDER_ID]],
   mcode: [["custom_provider", OPENCODE_PROVIDER_ID]],
   zcode: [
     ["provider", OPENCODE_PROVIDER_ID],
@@ -141,6 +149,13 @@ const CLIENT_MANAGED_PATHS = {
     [...ZCODE_STORE_PROVIDER_RULES_PATH, `[providerId=${OPENCODE_PROVIDER_ID}]`],
     [...ZCODE_STORE_MODEL_RULES_PATH, DYNAMIC_SEGMENT],
   ],
+  /*
+   * Both roots, because the client picks between them rather than reading both:
+   * `document.provider ?? document.providers` in `command-code@1.66.0`. The
+   * builder chooses the one the target already uses, and a block we wrote under
+   * either root has to be removable from either root afterwards.
+   */
+  commandcode: [["provider", OPENCODE_PROVIDER_ID], ["providers", OPENCODE_PROVIDER_ID]],
   prime: [["providers", OPENCODE_PROVIDER_ID]],
   aside: [["providers", OPENCODE_PROVIDER_ID]],
   raycast: [["providers", `[id=${OPENCODE_PROVIDER_ID}]`]],
@@ -245,6 +260,11 @@ export interface PlanFingerprintInput {
    * flip as a store appearing.
    */
   readonly ineffectiveWrite: string | null;
+  /**
+   * The same finding as `ineffectiveWrite`, unflattened, for the refusal's description. It is
+   * descriptive only: the bound token above is what decides and what the fingerprint covers.
+   */
+  readonly ineffective?: IneffectiveWrite | null;
   /** Exact current bytes, or null when the target is missing. Missing and empty are not equal. */
   readonly before: string | null;
   readonly contribution: ManagedContribution | null;
@@ -497,6 +517,12 @@ export function buildMutationPlan(input: PlanInput): IntegrationMutationPlan {
     canApply: outcome.kind !== "refuse",
     willChange: outcome.kind === "change",
     ...(outcome.kind === "refuse" ? { refusalReason: outcome.reason } : {}),
+    ...(outcome.kind === "refuse" && outcome.reason === "superseded_store" && input.ineffective
+      ? {
+          supersededReason: input.ineffective.why,
+          ...(input.ineffective.emptyDocument === undefined ? {} : { missingStoreDocument: input.ineffective.emptyDocument }),
+        }
+      : {}),
     ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
   });
 }
@@ -529,6 +555,25 @@ function unboundPlan(
     refusalReason: failure.reason,
     ...(profileId === undefined ? {} : { profileId }),
   });
+}
+
+/** A restore must not recreate a declared store without its client's lock. */
+export function restoreStoreDirectoryRefusal(
+  input: IntegrationWriteInput,
+  configPath: string,
+  io: IntegrationIO,
+): string | null {
+  const declared = INTEGRATION_CLIENTS[input.clientId].currentStore;
+  if (!declared?.lockFile) return null;
+  let storePath: string;
+  try {
+    storePath = declared.path(input.env, input.home);
+  } catch (error) {
+    if (error instanceof ClientPathError) return null;
+    throw error;
+  }
+  return configPath === storePath && io.statKind(dirname(storePath)) !== "dir"
+    ? "the client store directory is missing; restore will not create it" : null;
 }
 
 /**
@@ -591,6 +636,10 @@ export function observeRestore(
     return {
       failed: observationFailure("conflict", "conflict", "that operation was recorded for a different location"),
     } as const;
+  }
+  const directoryRefusal = restoreStoreDirectoryRefusal(input, configPath, io);
+  if (directoryRefusal !== null) {
+    return { failed: observationFailure("unsafe", "unsafe", directoryRefusal) } as const;
   }
   /*
    * A legal historical path is not enough. Another candidate can already own
@@ -678,6 +727,7 @@ export function previewIntegration(input: IntegrationWriteInput, request: Previe
     // Loopback-only clients cannot carry the admission header a non-loopback bind requires.
     admissionBlocked: isLoopbackOnly(observed.clientId) && shouldInjectApiAuthHeader(input.config),
     ineffectiveWrite: observed.ineffectiveWrite,
+    ineffective: observed.target.ineffective,
     before: observed.before,
     contribution: observed.contribution,
     record: observed.record,
@@ -954,7 +1004,7 @@ export function observeIntegration(
   // ownership here and disable would delete fragments it never wrote.
   const classified = classifyIntegration({
     fileText: before, fileIsRegular: true, parsed, record, contribution, configPath, clientId,
-    format: effective.format,
+    format: effective.format, sourcePreservingYaml: effective.sourcePreservingYaml !== null,
   });
   if (clientId === "droid" && record && (classified.state === "current" || classified.state === "stale")) {
     try { assertDroidRecordedSettingsUnambiguous(detectDir, parsed, record); }

@@ -30,8 +30,8 @@ repository where no test can reach it. The role was previously decided by testin
 against `api.openai.com`, so every OpenAI-compatible gateway was assumed not to support a standard
 role until proven otherwise, and the instruction silently lost `developer` precedence.
 
-The translated `Qwen3.8-27B` Chat route follows its [pinned template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja): a late `system` raises, `developer` is unsupported, and a late `user` renders in place.
-Text-only developer items therefore keep their content and slot but use the `user` wire role,
+The translated `Qwen3.8-27B` Chat route follows its [pinned template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja): a late `system` raises, `developer` is unsupported, and a late `user` renders in place; the `OrcaSAQ-2-Cyber-27B` GGUF family pins the same contract and takes the same mapping.
+Gateway-namespaced ids such as LiteLLM's `openai/Qwen3.8-27B` match too. The Orca exception requires `GGUF` in the final model segment before any optional colon quant tag; non-GGUF Orca variants keep their configured mapping. Text-only developer items therefore keep their content and slot but use the `user` wire role,
 losing developer precedence. Other models retain the mapping above; native Chat passthrough
 is unchanged. The rule is recorded in `tests/fixtures/qwen38-27b-chat-template-contract.json`
 and exercised by `tests/adapters/openai/openai-chat-qwen38-leading-system.test.ts`.
@@ -123,12 +123,11 @@ and synthesizing explicit "no tool result was recorded" answers only when no rea
 
 The native Ollama wire carries the same contract. `src/adapters/ollama-native.ts`
 `buildNativeMessages` defers `user`/`developer` messages while a batch is open; assistant text/thinking
-with no new tool calls is also deferred while results remain outstanding. Deferred messages retain
-arrival order after recorded results. An unresolved counter avoids rescanning calls per message.
-A new tool-call batch settles its predecessor; completed batches keep subsequent messages in place.
-Codex can record hook notices or commentary between calls and results. Missing results keep the
-`[ocx] no tool result was recorded for "<name>"` marker; orphan IDs, duplicates, and mismatched names
-still throw (#4842). `tests/providers/ollama/ollama-native.test.ts` covers replay and compaction.
+with no new tool calls is also deferred while results remain outstanding. Deferred messages retain arrival order after recorded results; an unresolved counter avoids rescanning calls per message.
+A new tool-call batch settles its predecessor. Additional results in an open batch join in arrival
+order, preserving images and error markers; known late output uses an attributed user-text carrier
+after any pending batch. Unknown IDs and mismatched names/namespaces still throw; missing results
+retain the unknown-status marker; the replay and tool-continuation tests under `tests/providers/ollama/` cover both paths. See the decision record below.
 
 Forward-mode OpenAI passthrough also repairs replayed `call_id` values longer than the Responses
 API's 64-character limit. Sidechat/fork replay can namespace routed-provider ids beyond that limit,
@@ -224,6 +223,7 @@ serving-identity record. That omission is intentional: binding those routes woul
 conversation's last-serving identity and cause a later main-model turn to strip valid blobs.
 
 > Decision record: [ADR-0051](../decisions/ADR-0051-reasoning-and-tool-result-compatibility.md)
+> Decision record: [ADR-6574](../decisions/ADR-6574-ollama-tool-continuations.md)
 
 DeepSeek's stateless Responses compatibility pass normalizes only unambiguous tool-call batches.
 Calls emitted before the first matched output stay together as one assistant batch, followed by
@@ -554,7 +554,7 @@ Claude Opus 5.5, Fable 5.1 and Sonnet 5.5 are upstream exceptions to the forced-
 adaptive thinking, for all three. The adapter sends `{type:"auto"}` for those choices so the
 request succeeds, but the caller's forced-tool guarantee cannot be preserved; the prompt
 must provide any required tool-use instruction. Other Claude model families retain the
-normal forced-choice mapping unless their own upstream contract says otherwise.
+normal forced-choice mapping: Haiku 5.5 retains `any`/named tools, uses adaptive thinking for low..max, and reasoning none sends `disabled` without effort. Its non-default sampling fields are dropped on every path.
 ## Unmapped modalities are recorded, not dropped
 
 The translated Chat route has no video mapping — this adapter does not implement one.

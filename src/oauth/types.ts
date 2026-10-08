@@ -90,6 +90,8 @@ export interface ProviderAccount {
   credential: OAuthCredentials;
   /** Terminal refresh failure (invalid_grant / reused / revoked) — re-login required. */
   needsReauth?: boolean;
+  /** Kiro SSO refresh input-error evidence; status-only attention after this generation expires. */
+  refreshAttentionGeneration?: string;
   /** Operator exclusion from generic OAuth account selection until explicitly resumed. */
   paused?: boolean;
   /** Anthropic-only usage-switch override; absent inherits its pool default, zero disables it. */

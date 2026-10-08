@@ -10,8 +10,7 @@ import type { ProxyRestartStartOutcome } from "./tray-proxy";
  * never needs to import the entry module back (no cycle).
  */
 import { CLI_COMMANDS } from "./registry";
-import { isValidProviderName } from "../config/provider-name";
-import type { CliHead } from "./root";
+import { uninstallArgsError, type CliHead } from "./root";
 import type { ReadyArgs } from "./ready";
 import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
@@ -146,6 +145,7 @@ const commandRunners: Record<string, CommandRunner> = {
     if (!deps.head.resolveArgs) return 64;
     return await deps.handleResolve(deps.head.resolveArgs);
   },
+  message: async deps => (await import("./message-command")).runMessageCommand(deps.args.slice(1)),
   restore: async deps => {
     const restoreArgs = deps.args.slice(1);
     const restoreJson = takeFlag(restoreArgs, "--json");
@@ -300,6 +300,11 @@ const commandRunners: Record<string, CommandRunner> = {
     return Number(process.exitCode ?? 0);
   },
   uninstall: async deps => {
+    const error = uninstallArgsError("uninstall", deps.args);
+    if (error) {
+      console.error(error);
+      return 2;
+    }
     await deps.handleUninstall();
     return Number(process.exitCode ?? 0);
   },
@@ -376,62 +381,8 @@ const commandRunners: Record<string, CommandRunner> = {
     return 0;
   },
   logout: async deps => {
-    // Argv is parsed BEFORE any store access, which is the whole point of this shape.
-    // Previously `args[1]` was taken as the provider name with no parsing, so
-    // `ocx logout --json` called removeCredential("--json"), printed "Logged out of
-    // --json." and exited 0 -- a silent false success, the worst outcome for a caller
-    // that can only see the exit code.
-    //
-    // That is not merely a wasted call. `normalizeAuthStore` copies every top-level key
-    // it finds, so a hand-edited, legacy, or corrupted auth.json containing a `--json`
-    // key would have its active account deleted -- and the key dropped entirely if that
-    // was its last account. A flag must never reach the store as a provider name.
-    const logoutArgs = deps.args.slice(1);
-    const wantsJson = logoutArgs.includes("--json");
-    // Any leading dash is an option, not a provider. Matching only `--` left the same defect
-    // one dash shorter: `ocx logout -j` treated `-j` as the provider name and, with a `-j` key
-    // present in the store, deleted it and exited 0.
-    const isOption = (arg: string): boolean => arg.startsWith("-");
-    const positionals = logoutArgs.filter(arg => !isOption(arg));
-    const unknownFlags = logoutArgs.filter(arg => isOption(arg) && arg !== "--json");
-    const name = (positionals[0] ?? "").trim().toLowerCase();
-
-    // Usage failures exit 2 and touch nothing. A missing provider is a usage error; a
-    // provider that simply has no credential is a not-found (4) further down, because the
-    // vocabulary distinguishes "you called this wrong" from "the thing is not there".
-    //
-    // The shape check is `isValidProviderName`, not another dash test. Rejecting a leading
-    // ASCII `-` fixed `-j` and still let `logout —json` through with a Unicode dash, which is
-    // the same defect a third time: each patch named one spelling instead of the class. The
-    // canonical validator states the rule positively -- start and end alphanumeric, internal
-    // `._-` allowed -- so `github-copilot` and `google-antigravity` pass while every dash
-    // variant, empty string, and reserved name fails. Anything that is not a possible
-    // provider id cannot reach the store at all.
-    const malformedName = Boolean(name) && !isValidProviderName(name);
-    if (unknownFlags.length > 0 || positionals.length > 1 || !name || malformedName) {
-      const problem = unknownFlags.length > 0
-        ? `unknown option ${unknownFlags[0]}`
-        : positionals.length > 1 ? "too many arguments"
-        : malformedName ? `not a valid provider name: ${name}`
-        : "missing provider";
-      console.error(`Usage: ocx logout <provider> [--json]  (${problem})`);
-      return 2;
-    }
-
-    // The disposition comes from inside the store mutation, not from a read-then-remove
-    // preflight. `mutateStore` serializes writes, so a preflight leaves a window where a
-    // concurrent logout removes the same account and BOTH callers exit 0 claiming a removal --
-    // a false success again, just a narrower one than the flag bug above.
-    const { removeCredential } = await import("../oauth/store");
-    const outcome = await removeCredential(name);
-    if (outcome === "not-found") {
-      if (wantsJson) console.log(JSON.stringify({ schemaVersion: 1, ok: false, provider: name, removed: false, reason: "not_found" }, null, 2));
-      else console.error(`No stored credential for '${name}'.`);
-      return 4;
-    }
-    if (wantsJson) console.log(JSON.stringify({ schemaVersion: 1, ok: true, provider: name, removed: true }, null, 2));
-    else console.log(`Logged out of ${name}.`);
-    return 0;
+    const { handleLogoutCommand } = await import("./logout-command");
+    return handleLogoutCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   sync: async deps => {
     const syncArgs = deps.args.slice(1);
@@ -515,7 +466,7 @@ const commandRunners: Record<string, CommandRunner> = {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline", "droid", "opencode", "kilo"]));
+          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -538,7 +489,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   v2: async deps => {
     const { cmdV2 } = await import("./v2");
-    return await cmdV2(deps.args.slice(1), {}, async () => (await deps.findLiveProxy())?.port);
+    return await cmdV2(deps.args.slice(1), { runtimeApi: { findLiveProxy: deps.findLiveProxy } }, async () => (await deps.findLiveProxy())?.port);
   },
   connect: async deps => {
     const { handleConnectCommand } = await import("./connect");
@@ -550,7 +501,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   "remote-workspace": async deps => {
     const { runRemoteWorkspaceCommand } = await import("./remote-workspace");
-    return await runRemoteWorkspaceCommand(deps.args.slice(1));
+    return await runRemoteWorkspaceCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   disconnect: async deps => {
     const { handleDisconnectCommand } = await import("./connect");
@@ -702,19 +653,33 @@ const commandRunners: Record<string, CommandRunner> = {
     switch (deps.args[1]) {
       case "install": {
         const r = installCodexShim();
-        const { healthy, summary } = diagnoseCodexShim();
+        const { healthy, runnable, active, summary } = diagnoseCodexShim();
+        const success = !r.refused && (runnable ?? healthy);
         const { collectCodexShimReadinessWarnings } = await import("./codex-shim-readiness");
-        const warnings = healthy
+        const warnings = success
           ? collectCodexShimReadinessWarnings()
           : [];
-        console.log(`${r.installed && warnings.length === 0 ? "✅ " : "⚠️  "}${r.message}`);
+        console.log(`${success && healthy && warnings.length === 0 ? "✅ " : "⚠️  "}${r.message}`);
         for (const warning of warnings) console.warn(`   ${warning}`);
-        if (!healthy) console.error(`Codex shim installation is unhealthy: ${summary}`);
-        return healthy ? 0 : 1;
+        if (success && active !== undefined && active !== true) {
+          const { overlayActivationHint } = await import("../codex/shim-overlay");
+          console.warn(`   ${overlayActivationHint()}`);
+        }
+        if (!success) console.error(`${r.refused ? "Codex shim installation was refused" : "Codex shim installation is unhealthy"}: ${summary}`);
+        return success ? 0 : 1;
       }
-      case "status":
+      case "status": {
+        const extra = deps.args.slice(2);
+        if (extra.length > 0) {
+          console.error(extra.some(isJsonOption)
+            ? "ocx codex-shim status does not support --json; use ocx status --json (codexShim)."
+            : "ocx codex-shim status does not accept arguments or options.");
+          console.error("Usage: ocx codex-shim status");
+          return 2;
+        }
         console.log(codexShimStatus());
         break;
+      }
       case "uninstall":
       case "remove": {
         const r = uninstallCodexShim();
@@ -736,7 +701,7 @@ const commandRunners: Record<string, CommandRunner> = {
     }
     const { runUpdate } = await import("../update");
     await runUpdate();
-    return 0;
+    return Number(process.exitCode ?? 0);
   },
   "__refresh-version": async deps => {
     // Hidden, detached helper spawned by the update prompt to refresh the
@@ -791,6 +756,10 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   health: async deps => {
     const healthArgs = deps.args.slice(1);
+    if (healthArgs.length > 1 || (healthArgs.length === 1 && healthArgs[0] !== "--json")) {
+      console.error("Usage: ocx health [--json]\nSee: ocx help health");
+      return 2;
+    }
     const wantsHealthJson = healthArgs.includes("--json");
     // A proxy that has only just bound can miss a single probe while its event loop
     // is still settling startup work — the same just-started race the stop paths
@@ -849,7 +818,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   companion: async deps => {
     const { handleCompanionCommand } = await import("./companion");
-    return await handleCompanionCommand(deps.args.slice(1));
+    return await handleCompanionCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   route: async deps => {
     if (deps.args[1] !== "combo" && deps.args[1] !== "policy") {
@@ -874,7 +843,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   observe: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    return await handleObserveCommand(deps.args.slice(1));
+    return await handleObserveCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   inspect: async deps => {
     const { handleInspectCommand } = await import("./inspect");
@@ -882,11 +851,11 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   logs: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
+    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)], { findLiveProxy: deps.findLiveProxy });
   },
   usage: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
+    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)], { findLiveProxy: deps.findLiveProxy });
   },
   storage: async deps => {
     // `ocx storage` used to be a pure alias of `observe storage`, which reached only the report
@@ -902,11 +871,11 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   access: async deps => {
     const { handleAccessCommand } = await import("./access");
-    return await handleAccessCommand(deps.args.slice(1));
+    return await handleAccessCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   "api-key": async deps => {
     const { handleAccessCommand } = await import("./access");
-    return await handleAccessCommand(["key", ...deps.args.slice(1)]);
+    return await handleAccessCommand(["key", ...deps.args.slice(1)], { findLiveProxy: deps.findLiveProxy });
   },
   api: async deps => {
     const { handleApiCommand } = await import("./api-protocols");
@@ -930,21 +899,21 @@ const commandRunners: Record<string, CommandRunner> = {
       // integrations `client` manages, so they get their own subcommand rather than being
       // folded into one that means something else.
       const { handleIntegrationCommand } = await import("./inspect");
-      return await handleIntegrationCommand(deps.args.slice(1));
+      return await handleIntegrationCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
     } else if (integration === "claude") {
       const { handleClaudeConfigCommand } = await import("./integrations");
       return await handleClaudeConfigCommand(deps.args.slice(2));
     } else if (integration === "client") {
       const { handleClientIntegrationCommand } = await import("./integrations");
-      return await handleClientIntegrationCommand(deps.args.slice(2));
+      return await handleClientIntegrationCommand(deps.args.slice(2), { findLiveProxy: deps.findLiveProxy });
     } else {
-      console.error("Usage: ocx integration <claude|grok|client> <subcommand>");
+      console.error("Usage: ocx integration <claude|grok|client|native> <subcommand>\nSee: ocx help integration");
       return 2;
     }
   },
   system: async deps => {
     const { handleSystemCommand } = await import("./system-command");
-    return await handleSystemCommand(deps.args.slice(1));
+    return await handleSystemCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   config: async deps => {
     const { handleConfigCommand } = await import("./config-command");
@@ -963,7 +932,7 @@ const commandRunners: Record<string, CommandRunner> = {
     // "ocx claude desktop" → write Desktop 3P config
     if (deps.args[1] === "desktop") {
       const { handleClaudeDesktopCommand } = await import("./claude-desktop");
-      const exitCode = await handleClaudeDesktopCommand(deps.args.slice(2));
+      const exitCode = await handleClaudeDesktopCommand(deps.args.slice(2), { findLiveProxyImpl: deps.findLiveProxy });
       if (exitCode !== 0) return exitCode;
       return 0;
     }
@@ -992,6 +961,14 @@ const commandRunners: Record<string, CommandRunner> = {
   zcode: async deps => {
     const { handleZcodeCommand } = await import("./integrations");
     return await handleZcodeCommand(deps.args.slice(1));
+  },
+  commandcode: async deps => {
+    const { handleCommandcodeCommand } = await import("./integrations");
+    return await handleCommandcodeCommand(deps.args.slice(1));
+  },
+  cmd: async deps => {
+    const { handleCommandcodeCommand } = await import("./integrations");
+    return await handleCommandcodeCommand(deps.args.slice(1));
   },
   help: async () => {
     printUsage();

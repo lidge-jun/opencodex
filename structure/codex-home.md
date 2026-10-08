@@ -80,6 +80,17 @@ injected hash. Native content can establish a fresh snapshot; routed content can
 unverified older original. Existing hash-backed edit preservation and external-provider opt-out
 remain separate paths.
 
+`src/codex/journal.ts` distinguishes restored state from actual writes with `configRewritten`
+and `profileRewritten`; removing a generated profile counts as a write, while already-original
+state and an ENOENT removal outcome do not. `reconcileJournal` checks unverified recovery first,
+then incomplete recovery, before its silent no-write return. Both dead-process and mismatched-client
+recovery warn without file contents or client identity when either artifact remains unrestored,
+return false and retain the journal, including when config was rewritten but profile removal failed.
+Only complete recovery with an actual write reports a restore; complete already-original recovery
+removes the stale journal silently, and warns instead when the journal file is still present
+afterwards (`removeJournal` ignores unlink errors such as a Windows lock). Ownership/hash checks and `profileRestoreFailed` remain intact.
+`tests/codex-integration/codex-journal-recovery.test.ts` covers these diagnostics and write flags.
+
 The source-built Docker image explicitly keeps `CODEX_HOME=/home/bun/.codex` separate
 from `OPENCODEX_HOME=/home/bun/.opencodex`. Compose persists them in `codex-state` and
 `ocx-state` respectively, retaining a read-only root. The image creates owner-only

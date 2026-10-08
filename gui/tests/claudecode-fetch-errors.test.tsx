@@ -192,14 +192,7 @@ test("ClaudeCode helper model options render icon-backed model names", async () 
 
   const { container, root, testWindow } = await mountClaudeCode();
   try {
-    const helperSection = [...container.querySelectorAll<HTMLButtonElement>(".claudecode-workspace-rail-row")]
-      .find(button => button.textContent?.includes("Background helper model"));
-    expect(helperSection).toBeTruthy();
-    await act(async () => {
-      helperSection!.click();
-      await Promise.resolve();
-    });
-
+    // One page: the helper model is on screen without picking a section first.
     const helperModel = container.querySelector<HTMLButtonElement>(
       '[role="combobox"][aria-label="Background helper model"]',
     );

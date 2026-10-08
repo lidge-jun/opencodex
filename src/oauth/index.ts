@@ -16,7 +16,7 @@ import {
   getAccountCredentialWithStatus,
   getAccountSet,
   getCredential,
-  markAccountNeedsReauthIfGeneration,
+  markAccountNeedsReauthIfGeneration, accountNeedsReauthForStatus, markAccountRefreshAttentionIfGeneration,
   markOAuthRefreshIntentCleanupPending,
   markOAuthRefreshIntentStaleOwner,
   mergeAccountCredential,
@@ -1032,18 +1032,16 @@ export async function refreshAnthropicAccountWithLock(
         // OAuthLoginRequiredError. One 503 locked the account out of refresh until manual
         // re-auth even after upstream recovered.
         //
-        // Only clear the intent when the server DEFINITIVELY answered and rejected the
-        // request. The adapter attaches an HTTP status only to that explicit non-success
-        // response. A timeout, a dropped connection, or an unreadable/unparseable body
-        // carries no status: the server may already have
-        // rotated the token, and replaying it could trip refresh-token-reuse revocation.
-        // Those outcomes keep the intent so the guard still refuses a blind replay.
-        if ((!refreshMayHaveReachedProvider || definitivelyAnswered(error)) && attemptIntent) {
+        // Clear only for proven pre-dispatch failure or an explicit HTTP rejection.
+        // Other transport/body failures may follow rotation and keep the replay guard.
+        const requestNotSent = !refreshMayHaveReachedProvider
+          || (error instanceof AnthropicTokenError && error.requestNotSent);
+        if ((requestNotSent || definitivelyAnswered(error)) && attemptIntent) {
           await clearAnthropicRefreshIntentForKnownFailure(
             provider,
             accountId,
             attemptIntent,
-            refreshMayHaveReachedProvider ? "definitive-rejection" : "pre-dispatch",
+            requestNotSent ? "pre-dispatch" : "definitive-rejection",
             error,
           );
         }
@@ -1118,6 +1116,10 @@ export async function refreshGenericAccountWithLock(
       return fresh.access;
     } catch (error) {
       if (error instanceof OAuthMutationBusyError) throw error;
+      if (provider === "kiro" && error instanceof KiroTokenRefreshError && error.refreshAttention) {
+        await markAccountRefreshAttentionIfGeneration(provider, accountId, generation, writerGeneration);
+        throw error;
+      }
       if (!terminal(error)) throw error;
       // Nous-specific failure-atomicity: a terminal refresh error that carries
       // an already-issued rotated refresh token (e.g. the access JWT lacked the
@@ -1842,7 +1844,7 @@ export function getLoginStatus(provider: string, maskEmails = true): { loggedIn:
     ...(a.alias ? { alias: a.alias } : {}),
     email: projectEmail(a.credential.email, maskEmails) ?? undefined,
     active: a.id === set.activeAccountId,
-    ...(a.needsReauth ? { needsReauth: true } : {}),
+    ...(accountNeedsReauthForStatus(provider, a) ? { needsReauth: true } : {}),
     ...(a.needsReauth && a.needsReauthReason === "verify_account" ? { needsReauthReason: a.needsReauthReason } : {}),
     expiresAt: a.credential.expires,
     // Explicitly null rather than omitted — see OAuthAccountSummary.plan. No OAuth provider
@@ -1854,11 +1856,11 @@ export function getLoginStatus(provider: string, maskEmails = true): { loggedIn:
 
   // A stored credential counts as "logged in" when it exists and is not marked for
   // re-authentication. An expired access token with a valid refresh token is still
-  // logged in: request resolution refreshes expired/near-expiry credentials lazily.
+  // logged in unless refresh-attention evidence applies; refresh eligibility stays internal.
   // Invalid/unknown local-import expiries are handled at parse/adoption time
   // (local-token-detect.ts), never by over-reporting login state here.
-  const activeNeedsReauth = set?.accounts
-    .find(a => a.id === set.activeAccountId)?.needsReauth === true;
+  const activeAccount = set?.accounts.find(a => a.id === set.activeAccountId);
+  const activeNeedsReauth = activeAccount && accountNeedsReauthForStatus(provider, activeAccount);
   return {
     loggedIn: !!cred && !activeNeedsReauth,
     email: projectEmail(cred?.email, maskEmails) ?? undefined,

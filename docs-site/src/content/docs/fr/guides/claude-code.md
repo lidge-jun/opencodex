@@ -107,7 +107,7 @@ Claude Code a besoin d'un jeton dans `ANTHROPIC_AUTH_TOKEN` pour communiquer ave
 variable désactive aussi votre connexion claude.ai et ses connecteurs. Le choix approprié dépend d'éléments que
 opencodex peut détecter ; la détection automatique constitue donc le comportement par défaut.
 
-Laissez le **Mode Auth** activé **Auto** (valeur par défaut) dans **Claude → Claude Code** et opencodex
+Laissez le **Mode Auth** activé **Auto** (valeur par défaut) dans **Connexion → Claude** et opencodex
 prend la décision à chaque lancement :
 
 | Ce qu'il trouve | Ce qu'il fait |
@@ -130,7 +130,7 @@ démarrage du proxy ou lors de l'enregistrement des paramètres, tandis que `ocx
 
 ## Modes Claude Desktop : passerelle (par défaut) et first-party
 
-Choisissez le mode dans **Claude → Bureau → Mode de connexion** ou avec
+Choisissez le mode dans **Connexion → Claude Desktop → Mode de connexion** ou avec
 `ocx claude desktop apply --first-party|--gateway`. Les deux modes sont exclusifs.
 
 ### Passerelle (par défaut)
@@ -161,7 +161,7 @@ modèles n'écrivent jamais un profil passerelle sur une installation first-part
 
 ### First-party de la CLI Claude Code
 
-Activez l’interrupteur dans Claude → Code ou lancez `ocx claude config set --first-party on` ; utilisez `off` pour désactiver. L’activation est refusée si le proxy local est indisponible, si l’autorité ne peut être préparée, si les réglages sont illisibles ou si des clés appartiennent à un autre programme. La désactivation reste enregistrable. Avec le seul first-party Desktop actif, définissez `NO_PROXY='*'` dans le shell pour un terminal entièrement natif. Le risque pour le compte décrit ci-dessus s’applique aussi à la CLI.
+Activez l’interrupteur dans Connexion → Claude ou lancez `ocx claude config set --first-party on` ; utilisez `off` pour désactiver. L’activation est refusée si le proxy local est indisponible, si l’autorité ne peut être préparée, si les réglages sont illisibles ou si des clés appartiennent à un autre programme. La désactivation reste enregistrable. Avec le seul first-party Desktop actif, définissez `NO_PROXY='*'` dans le shell pour un terminal entièrement natif. Le risque pour le compte décrit ci-dessus s’applique aussi à la CLI.
 Désactiver le routage Claude conserve les variables de proxy gérées. Tant que le listener fonctionne, toutes les requêtes Messages sont relayées sans modification ; après son arrêt, `claude` ne peut plus se connecter avant le lancement d’OpenCodex ou la désactivation du first-party Desktop/CLI. Le lancement natif via `ocx claude` ne définit `NO_PROXY=*` que pour un environnement géré sans proxy HTTPS hérité d’un autre programme. Sinon il conserve ce proxy et avertit que l’interception définie dans les réglages reste active ; désactivez le first-party ou retirez ce réglage.
 L’interface distingue les réglages illisibles (unknown), une URL opencodex avec jeton mais une AC étrangère (foreign : corrigez HTTPS_PROXY / NODE_EXTRA_CA_CERTS à la main) et le routage Claude désactivé avec un listener encore actif qui relaie sans modification (disabled : désactivez first-party avant le redémarrage). Sans listener, l’état est stopped ; avec une AC gérée mais un port ou jeton incorrect, il est broken. Avec le first-party actif et une interception indisponible, stopped et broken affichent routingOff : le routage Claude ou l’interception est désactivé, ou cette machine est cliente d’un autre hub opencodex ; réactivez l’interception ici ou désactivez first-party pour supprimer les réglages. Si l’interception est disponible, stopped demande de lancer opencodex et broken conseille `ocx ensure` ou un redémarrage. La CLI activée sans proxy est non appliquée ; un seul client activé avec un proxy opérationnel partage le relais ; aucun client activé avec un proxy restant produit un avertissement de réglage résiduel.
 unknown signifie qu’opencodex ne peut pas déterminer si les réglages pointent encore vers son proxy. Un proxy sans jeton sur 127.0.0.1 avec une AC étrangère est local : sa propriété est incertaine ; supprimez HTTPS_PROXY de ~/.claude/settings.json si vous ne l’utilisez plus. disabled exige des réglages appliqués correspondant au listener ; un port ou jeton différent donne broken même si le routage est désactivé.
@@ -173,15 +173,27 @@ est sélectionné, sauf si `claudeCode.intercept.picker: false` est défini. Il 
 modèles de l'onglet Code de Desktop first-party pour y afficher les modèles opencodex disponibles par
 leur nom. Lors de la première activation, macOS peut demander l'autorisation d'une autorité de certification
 locale dans le trousseau de connexion. Cette autorité est limitée à `claude.ai` et à ses sous-domaines.
-Sa clé de signature n'existe que dans le processus OpenCodex en cours : chaque redémarrage d'OpenCodex
-publie une nouvelle autorité et macOS demande donc de nouveau votre confiance — approuvez la demande,
-ou lancez ensuite `ocx claude desktop picker trust`, après chaque redémarrage.
+Son identité de signature exportable est protégée par le magasin d'identifiants du système et réutilisée
+lors des redémarrages ordinaires. Aucune clé de signature picker en clair n'est enregistrée dans le
+répertoire de configuration OpenCodex. La validation complète de l'autorité contrainte et la vérification
+de la confiance du système restent obligatoires. Avec la même identité approuvée et un magasin accessible,
+un redémarrage n'ajoute ni ne supprime de réglages de confiance des certificats. La restauration au démarrage
+n'installe jamais la confiance : si elle manque, est révoquée ou inconnue, le picker reste en attente.
+Exécutez explicitement `ocx claude desktop picker on` ou `ocx claude desktop picker trust` pour l'accorder.
+
+Une migration unique depuis une ancienne identité peut demander votre consentement pour supprimer sa
+confiance. Si ce nettoyage échoue, le picker reste indisponible et le profil appliqué utilise un relais
+sans déchiffrement jusqu'à sa réussite. macOS peut aussi demander de déverrouiller le trousseau ou
+d'autoriser l'accès d'une application aux identifiants, y compris après un redémarrage ou une mise à jour.
+Le picker reste non pris en charge sous Windows et Linux : aucun travail de CA, de magasin d'identifiants
+ou de proxy picker n'y démarre. L'interception Claude principale reste disponible ; ses fichiers CA locaux
+sont protégés par des vérifications du propriétaire, des liens symboliques, des permissions et des ACL Windows.
 
 Lorsque le mode picker est actif, Claude Desktop accède au réseau par OpenCodex. Si OpenCodex s'arrête,
 Desktop reste hors ligne jusqu'à son redémarrage complet ou jusqu'à la désactivation du mode picker.
 Consultez l'état avec `ocx claude desktop picker status`, relancez l'étape de confiance avec
 `ocx claude desktop picker trust`, ou désactivez-le avec `ocx claude desktop picker off`. Le tableau
-de bord propose le même interrupteur dans **Claude → Bureau**. Après la sélection du profil picker,
+de bord propose le même interrupteur dans **Connexion → Claude Desktop**. Après la sélection du profil picker,
 quittez complètement puis rouvrez Claude Desktop.
 
 Le mode picker fait partie de first-party : le [risque pour le compte du mode first-party](#first-party-sur-demande)
@@ -201,7 +213,7 @@ ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 
-ou utilisez **Claude → Bureau → Associations de modèles de l'onglet Code** dans le tableau de bord.
+ou utilisez **Connexion → Claude Desktop → Associations de modèles de l'onglet Code** dans le tableau de bord.
 Choisir **Sonnet 4.6** dans l'onglet Code est alors servi par `xai/grok-4.7`. Le sélecteur garde le
 nom Anthropic, et le modèle continue d'être présenté comme ce modèle Claude par le prompt système de
 Claude Code ; préférez donc des lignes que vous n'utilisez pas par ailleurs (les entrées
@@ -224,7 +236,7 @@ Desktop n'a pas besoin d'être relancé.
 
 Le profil ci-dessous n'est écrit que lorsque le mode passerelle est sélectionné.
 
-Claude Desktop utilise un profil distinct de Claude Code. Ouvrez **Claude → Bureau** dans le
+Claude Desktop utilise un profil distinct de Claude Code. Ouvrez **Connexion → Claude Desktop** dans le
 tableau de bord afin de placer chaque route disponible dans l'une des quatre familles : Opus, Fable, Sonnet ou Haiku.
 Dans un nouveau profil, toutes les routes appartiennent initialement à Opus. La première route Opus devient la route globale
 par défaut, et chaque famille non vide conserve toujours sa propre route par défaut.
@@ -467,7 +479,7 @@ Trois états de configuration :
 - **`false` :** désactivé — pas de marqueurs, pas d'injection de fenêtre de compactage
 - **ancien réglage `maxContextTokens` défini :** le contexte automatique est implicitement désactivé
 
-La valeur de compactage est réglable sur la page Claude. **Avertissement :** une valeur supérieure à la fenêtre réelle d'un modèle
+La valeur de compactage est réglable dans **Connexion → Claude**. **Avertissement :** une valeur supérieure à la fenêtre réelle d'un modèle
 rend ce modèle inutilisable : les tours échouent avant que le résumé puisse se déclencher.
 
 Les modèles Anthropic natifs dont le contexte est inférieur à 1M ne sont jamais marqués automatiquement. Les valeurs que vous exportez vous-même
@@ -689,16 +701,17 @@ du débogage Claude efface immédiatement l'anneau.
 
 ## Interface graphique (page Claude)
 
-La barre latérale du tableau de bord comporte une page **Claude** dédiée (sous API) et une bascule **Claude ON**
-(étiquette volontairement identique dans toutes les langues). La page affiche :
+Le tableau de bord propose **Connexion → Claude** pour Claude Code. Tous les réglages sont réunis sur une seule page ; **Claude Desktop** est un onglet distinct de **Connexion**. La page présente les éléments dans cet ordre :
 
-- Interrupteur général des requêtes entrantes
-- Démarrage rapide (`ocx claude`) et bloc d'environnement manuel
-- Sélecteur de mode rapide (Auto / ON / OFF)
-- Basculement automatique du contexte et liste déroulante du seuil de compactage
-- Bascule d'enregistrement automatique des sous-agents
-- Éditeur d'interception des modèles (modelMap)
-- Aperçu en direct des alias du sélecteur
+1. **First-party de la CLI Claude Code**, l’interrupteur du mode first-party de la CLI.
+2. **Commencer**, avec `ocx claude` et le bloc d’environnement manuel.
+3. **Général**, avec le mode rapide, le contexte automatique, le seuil de compactage et l’enregistrement automatique des sous-agents.
+4. **Modèle auxiliaire en arrière-plan**, pour choisir le modèle des tâches en arrière-plan.
+5. **Interception de modèles**, l’éditeur des règles `modelMap`.
+6. **Modèles disponibles**, l’aperçu des alias du sélecteur `/model`.
+7. **Connexion Claude**, l’interrupteur général du routage, également présent sur la carte Claude de la vue d’ensemble de **Connexion**.
+
+La barre d’enregistrement reste visible en bas pendant le défilement. Elle indique **Aucune modification** ou **Modifications non enregistrées**. **Annuler les modifications** abandonne les réglages non enregistrés ; **Enregistrer** les applique. Les interrupteurs **Connexion Claude** et **First-party de la CLI Claude Code** s’appliquent immédiatement : **Enregistrer** ne les modifie jamais.
 
 `GET /api/claude-code` renvoie les valeurs par défaut effectives, la configuration, le registre des fenêtres de contexte, l'environnement effectif,
 les identifiants de route, les alias et le port disponibles. `PUT /api/claude-code` applique une mise à jour partielle et conserve les
@@ -739,7 +752,7 @@ par défaut par un contenu minimal (`blockedSkills: ["claude-api"]`).
 `<!-- ocx-route: ... -->`, et non l'argument `model` de l'outil Agent. Vérifiez que la directive désigne la route voulue.
 Utilisez `"haiku"` comme valeur de remplacement pour le modèle.
 
-Dans `config.json`, `claudeCode.stabilizePromptCache: true` déplace les notices Claude reconnues en fin des instructions système vers un dernier message utilisateur sur les routes traduites. La valeur par défaut est `false`. Activez cette option seulement si ce changement de rôle convient à vos clients. Les exemples dans des blocs de code et le texte non reconnu sont conservés ; le transfert Anthropic natif reste inchangé. Sans métadonnées, la clé de cache suit les instructions stabilisées. Cette option ne crée pas une identité de conversation et ne garantit aucun succès du cache amont.
+Dans `config.json`, `claudeCode.stabilizePromptCache: true` retire les notices Claude reconnues à la fin des instructions système sur les routes traduites. Les pieds de page reconnus de la forme `<total_tokens>N tokens left</total_tokens>` sont supprimés, même lorsqu’ils sont répétés. Les rappels TaskCreate sont toujours déplacés vers un dernier message utilisateur ; si seuls des pieds de page de tokens ont été retirés, aucun message d’entrée n’est ajouté. La valeur par défaut est `false`. Activez cette option seulement si ce changement de rôle convient à vos clients. Les exemples dans des blocs de code et le texte non reconnu sont conservés ; le transfert Anthropic natif reste inchangé. Sans métadonnées, la clé de cache suit les instructions stabilisées. Cette option ne crée pas une identité de conversation et ne garantit aucun succès du cache amont.
 
 Sur toutes les routes Chat traduites, les rappels de l’historique conservent leur position dans la conversation, après les résultats d’outils encore attendus. L’ajout d’un rappel ne réécrit donc pas le prompt système initial, et une instruction placée au milieu de la conversation n’arrive plus avant les tours qu’elle était censée suivre. Le rôle porté par cet emplacement se décide séparément : un rappel part en `system`, sauf si le fournisseur enregistre `foldDeveloperRoleToSystem: false`, ce qui indique que le service en amont accepte le rôle `developer` et le transmet à la même position. Un service qui ne l’accepte pas répond `400 role 'developer' is not allowed` et le tour ne démarre pas, d’où le repli d’une destination non enregistrée. Ce comportement s’applique avec ou sans `stabilizePromptCache` ; le transfert Anthropic natif reste inchangé. La réutilisation du cache exige toujours une identité de session stable et un cache disponible en amont. Les changements des instructions ou outils antérieurs et la compaction de la conversation peuvent aussi affecter les succès du cache ; préserver l’ordre des rappels ne suffit pas à garantir sa réutilisation.
 

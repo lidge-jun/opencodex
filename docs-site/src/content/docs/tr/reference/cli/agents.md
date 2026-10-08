@@ -144,13 +144,15 @@ varsayılan olarak `OCX_DEBUG=1`'den gelir (eski `OCX_DEBUG_FRAMES=1` de
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-OpenCodex kabul API anahtarlarını yönetin ve harici uç noktaları ile modelleri
-inceleyin. `ocx api-key <list|create|remove> ...`, `ocx access key`'in bir takma
-adıdır.
+OpenCodex erişim API anahtarlarının listesini, harici uç noktaları ve modelleri inceleyin. `ocx api-key`, `ocx access key` komut ailesinin takma adıdır.
+
+Anahtar oluşturma ve anahtar yenilemeyi başlatma işlemleri, hem metin hem de JSON çıktısında yalnızca bir kez gösterilen açık metin kimlik bilgisi döndürür. Ajanlar bu adımları, ajan oturumu dışında bir insanın doğrudan kullandığı terminale bırakmalıdır. Anahtarın kendisini sohbette istemeyin; yalnızca yapılandırmanın ve bağlantı testinin tamamlandığına dair onayı ve gizli olmayan anahtar ile yenileme kimliklerini alın.
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+Yeni anahtarın yapılandırılıp doğrulanması, eski anahtarı iptal etme izni değildir. Yenilemeyi kesinleştirmek veya eski anahtarı silmek için o anahtarın iptaline yönelik ayrıca açık izin gerekir. İzin verilen işlemden sonra listeyi yeniden kontrol edin. Doğrudan API çağrılarıyla bu süreci aşmaya çalışmayın.
 
 ## İstemci entegrasyonları
 
@@ -202,7 +204,7 @@ Grok Build model çitini yönetin ve uygulayın.
 
 ## İstemci yapılandırma dışa aktarma
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|droid>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|commandcode|droid>`
 
 Çalışan proxy'ye bağlı bir istemci yapılandırmasını yazdırın. Komut, `opencodex`
 sağlayıcı bloğunu — temel URL, model listesi ve istemcinin kimlik bilgisi
@@ -214,7 +216,7 @@ yalnızca Codex'in şu anda görebildiği modelleri yayınlar.
 
 | Bayrak | Eylem |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|droid>` | Gerekli. İstemci yapılandırma lehçesini seçer. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|commandcode\|droid>` | Gerekli. İstemci yapılandırma lehçesini seçer. |
 | `--json` | Betikler için stdout üzerinde oluşturulan belgeyi JSON olarak yazdırın. Bu, seçilen istemcinin yerel formatı YAML, TOML veya JSON5 olsa bile JSON'dur. |
 | `--out <path>` | İstemcinin yerel yapılandırma formatını `<path>` konumuna yazın. Mevcut bir dosyanın üzerine yazmayı reddeder. |
 | `--force` | `--out`'un mevcut bir dosyanın üzerine yazmasına izin verin. |
@@ -248,6 +250,7 @@ için kendi varsayılanlarını uygular) gelir.
 | `raycast` | `~/.config/raycast/ai/providers.yaml`, macOS ve Windows'ta aynı (Raycast `XDG_CONFIG_HOME` değerini dikkate almaz) | `raycast-providers.yaml` | yok — yalnızca geri döngü, `api_keys` girdisi yazılmaz |
 | `omo` | `~/.omo/agent/models.json` (ayarlandığında sırasıyla `OMO_CODING_AGENT_DIR`, `SENPI_CODING_AGENT_DIR`, `PI_CODING_AGENT_DIR` öncelikli; göreli değer reddedilir) | `omo-models.json` | yok — geri döngü yer tutucusu |
 | `kilo` | `~/.config/kilo` altında ilk bulunan `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` veya `config.json` (`XDG_CONFIG_HOME` bu dizini taşır); hiçbiri yoksa `kilo.jsonc` kullanılır | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
+| `commandcode` | `~/.commandcode/providers.json` (Windows'ta: ayarlanmışsa `HOME`, aksi halde `%USERPROFILE%`) | `providers.json` | yalnızca geri döngü; `apiKey: false`; ortam değişkeni gerekmez |
 | `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | yalnızca loopback; ortam değişkeni gerekmez |
 
 Raycast dışa aktarımı, `providers` dizisinde tek bir `id: opencodex` öğesi içeren bağımsız
@@ -278,8 +281,7 @@ diğer sağlayıcıları, ajanları ve MCP girdilerini yok eder.
 :::
 
 Hiçbir anahtar asla serileştirilmez. Yapılandırmalar belgelenmiş bir ortam
-referansı veya gizli olmayan bir geri döngü yer tutucusu taşır. Bir geri döngü
-proxy'si (`127.0.0.1`, varsayılan) hiçbir kabul anahtarı gerektirmez. Referans
+referansı veya gizli olmayan bir geri döngü yer tutucusu taşır. Geri döngü adresi (`127.0.0.1`) tek başına anahtarsız erişimi kanıtlamaz; hedefin politikasını ve uç noktasını kontrol edin. Seçili anahtarla model/ses CLI komutları geri döngüde de açık anahtar girişi gerektirir. Referans
 verilen bir değişkeni yalnızca istemci şeması desteklediğinde ve proxy geri
 döngünün ötesine bağlandığında ayarlayın; kabul anahtarlarının nasıl verildiğini
 görmek için [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim)
@@ -330,7 +332,9 @@ Sınırlı okuma boyunca yerel tanıtıcılar üst dizinleri ve dosyaları açı
 
 Kimlik veya özet yalnızca gözlem anındaki dosyaları tanımlar; kalıcı güncelleme izni değildir. Seçilen çalışma zamanını, geçmiş yükleyiciyi, etkin npm yapılandırmasını veya araçların gerçekliğini kanıtlamaz. Verilen Node yalnızca gözlemlenir; başlatıcının onu seçeceği kanıtlanmaz. Hiçbir hedef çalıştırılmaz; kayıt deposu isteği, kurulum, yapılandırma yazımı veya süreç denetimi yapılmaz. Mevcut Windows `check`, aday veya yapılandırma dosya sistemi G/Ç işlemlerini hâlâ yapmaz.
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]`, çalışan bir proxy olmadan yerel yapılandırmayı gösterir. `show` atlandığında bayraklardan biri veya ikisi herhangi bir sırayla kullanılabilir. `--source`, tanılama kaynağını, hataları ve uyarıları içerir ve yalnızca görüntüleme için kabul edilir. `--json`, açıkça belirtilen bir eylemden önce gelebilir; çalıştırılan eylemi değiştirmez. Yinelenen `--json` veya `--source` bayrakları ve bilinmeyen bağımsız değişkenler reddedilir.
 
 Doğrulanmış OpenCodex yapılandırmasını inceleyin ve güvenle değiştirin. `show`
 ve `get` sırları maskeler. İçe aktarma yazmadan önce doğrular ve `--yes`

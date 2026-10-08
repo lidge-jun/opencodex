@@ -21,7 +21,7 @@ const originalFetch = globalThis.fetch;
 
 test("all registered export clients include Cline in file integrations", () => {
   expect(FILE_INTEGRATION_CLIENTS).toEqual([
-    "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid",
+    "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid",
   ]);
 });
 
@@ -142,6 +142,44 @@ test("preview and mutation adapters send exact bound methods and bodies", async 
     body: JSON.stringify({ opId: "op-2", confirmDrift: true, operation: "restore", planFingerprint: plan.fingerprint }),
     signal: controller.signal,
   });
+});
+
+const missingStorePlan = {
+  ...plan,
+  clientId: "dsh" as const,
+  changes: [],
+  canApply: false,
+  willChange: false,
+  refusalReason: "superseded_store" as const,
+  supersededReason: "missing-store" as const,
+  missingStoreDocument: "[]",
+};
+
+test("a superseded-store refusal keeps its structured reason and the document to create", () => {
+  expect(parseIntegrationMutationPlan(missingStorePlan)).toMatchObject({
+    refusalReason: "superseded_store",
+    supersededReason: "missing-store",
+    missingStoreDocument: "[]",
+  });
+  const { missingStoreDocument: _document, ...schemaOnly } = missingStorePlan;
+  expect(parseIntegrationMutationPlan({ ...schemaOnly, supersededReason: "unestablished-schema" }))
+    .toMatchObject({ supersededReason: "unestablished-schema" });
+});
+
+test.each([
+  // A superseded reason belongs to a superseded-store refusal only.
+  { ...missingStorePlan, refusalReason: "conflict" },
+  { ...missingStorePlan, supersededReason: "moved" },
+  // The document belongs to a missing store only, and is one short line.
+  { ...missingStorePlan, supersededReason: "owned-config-file" },
+  { ...missingStorePlan, missingStoreDocument: "" },
+  { ...missingStorePlan, missingStoreDocument: "[]\n- id: injected" },
+  { ...missingStorePlan, missingStoreDocument: "x".repeat(65) },
+  { ...missingStorePlan, missingStoreDocument: 0 },
+  { ...missingStorePlan, missingStoreDocument: "\u001b[31m[]" },
+  { ...missingStorePlan, supersededReason: ["missing-store"] },
+])("superseded-store details are rejected outside their refusal", body => {
+  expect(() => parseIntegrationMutationPlan(body)).toThrow(IntegrationApiError);
 });
 
 test.each([

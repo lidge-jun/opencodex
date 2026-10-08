@@ -19,8 +19,8 @@ opencodex state.
 ## Nested help
 
 Family help such as `ocx help models` preserves the family's usage and details, then
-lists known declared child paths with summaries. These lists are marked as partial;
-they do not enumerate every runtime operation. Alias help retains the alias's own usage
+lists known declared child paths with summaries. These lists describe declared children;
+they do not guarantee exhaustive runtime coverage. Alias help retains the alias's own usage
 and details and points to its canonical family: `ocx help model` leads to `ocx help models`.
 Models help also links the curated `models context` topic separately from declared capabilities.
 
@@ -72,7 +72,7 @@ children. Suggestions are guidance only: the CLI never executes them or retries 
 | `ocx modles` or `ocx help modles` | Suggests `ocx help models`. |
 | `ocx help account lisst` | Suggests `ocx help account list` within the account family. |
 | `ocx help qzxv` | Offers `ocx help --all` without guessing a command. |
-| `ocx help service install` | Reports unavailable detailed help and points to `ocx help service`; the runtime install operation remains valid. |
+| `ocx help models qzxv` | Reports unavailable detailed help and points to the known models family. |
 
 The Bun CLI rejects an unknown root before shim auto-restore or other command preflight.
 Recognized commands retain their existing preflight; hidden commands and the internal runner
@@ -80,6 +80,14 @@ remain valid dispatch targets but are excluded from discovery and suggestions. A
 fallback, capability JSON, and provider-specific error handling retain their existing behavior.
 
 ## Command families
+
+### `ocx message`
+
+`ocx message sessions [--json]` discovers loaded local Codex sessions.
+`ocx message send (--thread <uuid> | --name <exact-name>) --stdin [--json]`
+submits one correlated peer message, without starting a daemon or resuming a thread.
+See [Local Codex Messaging](/reference/cli/messaging/) for sender context, kinds,
+the tested runtime and `not_sent`/`queued`/`unknown` receipts. No remote transport is included.
 
 ### `ocx provider`
 
@@ -106,6 +114,17 @@ explicitly reviewed build and pins its digest in local Executor state.
 `ocx remote-workspace agent` maintains the outbound encrypted connection;
 `ocx remote-workspace status [--json]` reports the Hub, device, roots, and advertised capabilities
 without printing its bearer or private key. See [Remote Workspace](/guides/remote-workspace/).
+
+Additional command families:
+
+| Family | Syntax and reference |
+| --- | --- |
+| `ocx chatgpt` | `ocx chatgpt <launch\|restore\|status>` — experimental macOS app-server shim, default off. See [ChatGPT Desktop](/guides/chatgpt-desktop/). |
+| `ocx hub` | `ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]` — mint a secret single-use pairing code on a running hub. See [Remote Hub](/guides/remote-hub/); invite requires explicit authorization and its code must not enter an agent transcript. |
+| `ocx inspect` | `ocx inspect <subcommand>` — read effective config, catalog, routing analytics, pacing, key-provider inventory, Codex prompt, client config, star status or Windows tray state. Run `ocx help inspect` for topic links. |
+| `ocx mcode` | `ocx mcode [mcode args...]` — launch MiniMax Code after its managed file integration is enabled. See [MiniMax clients](/guides/minimax/). |
+| `ocx mmx` | `ocx mmx text <chat\|repl> [mmx args...]` — launch MiniMax CLI text through the proxy; use plain `mmx` for other surfaces. See [MiniMax clients](/guides/minimax/). |
+| `ocx zcode` | `ocx zcode [status\|enable\|disable\|history\|restore] [--json]` — managed ZCode integration commands. See [ZCode stores](/guides/integrations/#zcode-314-and-later). |
 
 - [Lifecycle](/reference/cli/lifecycle/) — setup, proxy and service lifecycle, health, diagnostics,
   catalog sync, the dashboard, and updates.
@@ -139,10 +158,23 @@ Codex or npm, control a running process, or write configuration/cache state.
 
 For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 
-List or status is the default where unambiguous. Use `--json` for structured snapshots and
-`ocx observe logs --follow --jsonl` for a streaming request-log feed. Theme, language, navigation,
+List or status is the default where unambiguous. Use `--json` only on leaves that support it, and
+`ocx observe logs --follow --jsonl` for amended row output, or
+`ocx logs --follow --events` for versioned observed-window snapshots/appends.
+Neither is lossless history; [follow, timeline and key-scoped usage](/reference/cli/agents/#follow-request-windows-or-injection-sequences)
+document cursor/reset/incomplete-data limits. [Selected-key model/audio checks](/reference/cli/agents/#explicit-key-model-and-audio-checks)
+require operator-authorized upstream work and private stdin handoff; their reports
+are observations, not key-scope certificates. Theme, language, navigation,
 and other purely visual browser state have no CLI equivalent; Cloudflare Tunnel setup is outside
 this command set.
+
+For dashboard-style read tasks, use [bounded log selection, usage model search
+and saved companion totals](/reference/cli/agents/#filter-a-bounded-log-snapshot).
+`logs filter` distinguishes the scanned window from returned matches;
+`usage --search` changes model rows without recalculating report totals;
+`companion usage` preserves per-range availability and settings fallback.
+[API-key pool quota](/reference/cli/providers-accounts/#accounts-and-key-pools)
+is an explicit `account list --quota` read and may contact providers.
 
 ## Liveness probe ceiling override
 
@@ -170,20 +202,21 @@ CPU-heavy proxy can itself delay NORMAL-priority applications. The change is bes
 
 Successful commands exit 0. Invalid usage, unknown commands or resources, failed API operations,
 and unavailable required services exit nonzero. `ocx health` specifically exits 0 only when the
-proxy is healthy and 1 otherwise, so it can be used as a service probe. Scripts should test the exit
+proxy is healthy and 1 when no healthy proxy is found; invalid arguments exit 2, so it can be used as a service probe. Scripts should test the exit
 code instead of scraping human-readable output.
 
-The specific codes are set in one place, so every management command agrees:
+Many management commands share these mappings; other CLI families retain their own exit contracts:
 
 | Code | Cause |
 |---|---|
 | 0 | success |
-| 2 | usage error — bad, missing, or unknown arguments; nothing was sent |
+| 2 | local usage refusal in management handlers; also unsupported `doctor --json` |
+| 64 | invalid arguments to `capabilities`, `ready`, or `resolve`, before their discovery/request work |
 | 4 | HTTP 404 — the named account, provider, key, or route does not exist |
 | 5 | HTTP 409 — conflict; a lock is held or state changed underneath |
 | 1 | everything else, including transport failure and other HTTP errors |
 
-Exit 0 means no error was reported. Preview verbs (for example `ocx storage cleanup` without `--yes`) also exit 0 without mutating. A command never prints an error and exits 0.
+Exit 0 means no error was reported. Preview verbs (for example `ocx storage cleanup` without `--yes`) also exit 0 without mutating. A saved setting can still carry a skipped or incomplete apply result; read the receipt and stderr warnings.
 
 Destructive removal, import, credit-consumption, and update operations that advertise confirmation
 require `--yes` in non-interactive use. The flag is an explicit opt-in; omitting it must not silently
@@ -195,18 +228,46 @@ a prompt an automated caller can answer is not a safety boundary, so the flag is
 
 ## Driving the CLI from an agent
 
-`ocx capabilities --json` is the machine-readable index of declared capabilities, their management
-routes, known flags, and mutation metadata. It is not an exhaustive command grammar or a list of
-every runtime subcommand. Start there rather than parsing help text:
+Discover progressively, without starting a proxy:
+
+```bash
+ocx help
+ocx help models
+ocx help models preset show
+```
+
+Read the corresponding chapter in the repository's `skills/ocx/references/01_management_surface.md`
+or one of the public command-family pages above. Full `ocx help --all` is an
+escape to the top-level reference. A broad machine inventory is optional:
 
 ```bash
 ocx capabilities --json
 ocx capabilities --mutating-only --json
-ocx capabilities --route /api/logs
+ocx capabilities --route '/api/providers/{provider}/model-costs' --json
 ```
 
-An unmatched `--route` exits 4 rather than reporting empty success. The repository ships a fuller
-operating guide at `skills/ocx/`, whose surface map is generated from the same table.
+Route lookup matches the literal declared template, not concrete provider IDs or
+an HTTP method. A miss exits 4 and does not prove that a runtime command is absent.
+Declarations include local commands as well as management commands; only the
+latter need a live target. Before live operations, run `ocx ready --json` and
+`ocx status --json`, inspect the target and `versionSkew.relation`, and resolve
+version mismatch. `unknown` does not confirm matching builds. Offline help,
+local configuration and local Lab inspection do not require startup.
+
+Output flags are per command. `doctor` rejects `--json` with exit 2;
+[`v2` (family reference)](/reference/cli/agents/)
+supports `--json` for local and `--live` targets. Even for JSON-capable management commands, API failures
+normally use stderr prose with optional `reason:` and `hint:` lines, not a JSON
+error envelope. Keep stdout, stderr and exit status separate.
+
+Coverage is measured by named workflows, not by shared route prefixes. Existing
+model presets, visibility, account controls and routing-profile reads do not imply
+support for discovered-model display-name edits or routing-profile writes.
+Session-only consent actions and browser presentation remain separate boundaries.
+Access-key creation and rotation-start return plaintext credentials: agents must
+hand those steps to a human-operated terminal outside the session and accept only
+non-secret IDs and confirmation. Never ask for credentials in chat or bypass a
+session-only action with another API client.
 
 ## Recent behavior changes
 
@@ -216,8 +277,8 @@ These are corrections to commands that previously misreported their own results:
   exited 0, so a script could not tell success from failure.
 - Client errors from `account` map HTTP 404 to exit 4 and HTTP 409 to exit 5, instead of collapsing
   everything into 1.
-- `--json` is honored in any argument position, including `ocx restore back --json`, which
-  previously accepted the flag and ignored it.
+- `ocx restore back --json` now honors its output flag, which it previously accepted and ignored.
+  This does not make `--json` a global option for every command.
 - `ocx logs --model` now actually filters. It was accepted and silently ignored, so the output
   looked filtered while showing every row.
 - `ocx storage` gained `cleanup`, `trash`, and `policy` subcommands. A bare `ocx storage` still
@@ -249,3 +310,15 @@ Integer options such as `--limit` require decimal whole numbers within JavaScrip
 ## Default alias listing
 
 `ocx alias --json` is equivalent to `ocx alias list --json`. The output flag can precede or follow an explicit alias action.
+
+## Local config output and validation
+
+`ocx config validate [path|-] [--json]` exits 1 when validation fails. JSON mode emits one `{ok:false,error}` payload; human mode names the validation failure.
+
+When saved config is invalid or unreadable, `ocx config`, `ocx config show`, and `ocx config get` warn on stderr that defaults are being shown for invalid settings and exit nonzero. Stdout retains its existing format. Run `ocx config validate` to inspect the error, or `ocx config show --source` for the config and source diagnostics. The explicit `--source` inspection exits 0 when it successfully reports a fallback and still emits the warning.
+
+`ocx config export <file> --json` writes the raw config to the file and emits only `{ok:true,path}` on stdout. Export to `-` always emits the raw config document, including credentials; keep it out of agent transcripts.
+
+Local `ocx provider add` validates the full candidate config before saving. A validation failure leaves the saved file unchanged. Intentionally local providers require `--allow-private-network` unless their registry entry already permits private destinations. The flag does not permit blocked metadata endpoints.
+
+`ocx health` accepts only one optional `--json` flag. Unknown arguments or repeated flags return exit 2 before probing. Alias usage errors also return exit 2 with a readable error; unknown actions name `ocx help alias`.

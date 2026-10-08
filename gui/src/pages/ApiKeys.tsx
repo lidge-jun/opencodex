@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Notice } from "../ui";
 import { readUsageMetadata, type UsageReadMetadata } from "../usage-summary-resource";
 import { useI18n, LOCALES } from "../i18n/shared";
@@ -13,8 +13,10 @@ import {
 } from "../api-access-models";
 import { readSessionListCacheEntry, writeSessionListCacheEntry } from "../session-list-cache";
 import { createBoundedFetch } from "../bounded-fetch";
+import { invalidateClientResource } from "../client-resource";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
+import { useKeyDisclosure } from "../use-key-disclosure";
 import ApiKeysWorkspace from "../components/apikeys-workspace/ApiKeysWorkspace";
 import {
   DEFAULT_ENDPOINTS,
@@ -29,6 +31,7 @@ import {
   type ApiKeyEntry,
   type ModelTestResult,
   type ModelTests,
+  type RevealKeyResult,
 } from "./api-keys-utils";
 
 interface KeysResponse extends UsageReadMetadata {
@@ -140,6 +143,9 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   const cachedModelsEntry = readSessionListCacheEntry<ExternalModelRow[]>(modelsCacheKey);
   const cachedKeys = validCachedKeys(cachedKeysEntry?.data ?? null);
   const cachedModels = cachedModelsEntry?.data ?? null;
+  const currentApiBase = useRef(apiBase);
+  useLayoutEffect(() => { currentApiBase.current = apiBase; }, [apiBase]);
+  const [hiddenMutationBase, setHiddenMutationBase] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [modelQuery, setModelQuery] = useState("");
   const [copiedModelId, setCopiedModelId] = useState<string | null>(null);
@@ -151,6 +157,13 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   const [rotationSecret, setRotationSecret] = useState<{ id: string; key: string; rotationId: string } | null>(null);
   const [rotationCopied, setRotationCopied] = useState(false);
   const creatingRef = useRef(false);
+  const clearDisclosure = useCallback(() => {
+    setNewKey(null);
+    setCopied(false);
+    setRotationSecret(null);
+    setRotationCopied(false);
+  }, []);
+  const disclosure = useKeyDisclosure(apiBase, active, clearDisclosure);
 
   const fetchKeys = useCallback(async (signal: AbortSignal): Promise<CachedKeysShape> => {
     const res = await fetch(`${apiBase}/api/keys`, { signal });
@@ -185,7 +198,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       authMatrix: data.authMatrix,
     };
     // Prefixes only — never the secret key material.
-    writeSessionListCacheEntry(keysCacheKey, next);
+    if (!signal.aborted) writeSessionListCacheEntry(keysCacheKey, next);
     return next;
   }, [apiBase, keysCacheKey, t]);
 
@@ -266,10 +279,12 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   }, [modelQuery, models]);
 
   const handleCreate = async (name?: string): Promise<boolean> => {
+    const generation = disclosure.generation.current;
     if (creatingRef.current) return false;
     creatingRef.current = true;
     setCreating(true);
     setActionError(null);
+    setHiddenMutationBase(null);
     try {
       const effectiveName = name ?? newName;
       const res = await fetch(`${apiBase}/api/keys`, {
@@ -277,14 +292,21 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: effectiveName || "default" }),
       });
+      if (res.ok) {
+        if (currentApiBase.current === apiBase) refreshKeys();
+        else invalidateClientResource(keysResourceKey);
+      }
       const data = await readJsonOrThrow<CreateKeyResponse>(res, t("api.createFailed"));
+      if (!disclosure.current(generation)) {
+        setHiddenMutationBase(apiBase);
+        return true;
+      }
       if (typeof data?.key !== "string" || data.key.length === 0) {
         setActionError(t("api.createFailed"));
         return false;
       }
       setNewKey(data.key);
       setNewName("");
-      refreshKeys();
       return true;
     } catch {
       setActionError(t("api.createFailed"));
@@ -321,6 +343,33 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
     }
   };
 
+  /** The full key for one row. Read-only, but bounded like the mutations so a
+   *  stalled connection releases the cell's pending state. The 401/403 standing
+   *  refusal is reported apart from transient failures so the list can offer
+   *  the remedy — pairing — instead of a bare "try again". */
+  const handleReveal = async (id: string): Promise<RevealKeyResult> => {
+    const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${apiBase}/api/keys/reveal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+        signal: bounded.signal,
+        cache: "no-store",
+      });
+      if (res.status === 401 || res.status === 403) return { ok: false, kind: "denied" };
+      if (!res.ok) return { ok: false, kind: "failed" };
+      const body = await res.json() as { key?: unknown };
+      return typeof body.key === "string" && body.key
+        ? { ok: true, key: body.key }
+        : { ok: false, kind: "failed" };
+    } catch {
+      return { ok: false, kind: "failed" };
+    } finally {
+      bounded.clear();
+    }
+  };
+
   /** Pessimistic: the name changes on screen only after the server accepts it,
    *  and a failure keeps the draft rather than discarding what was typed.
    *  Bounded for the same reason as delete — it holds the same lock. */
@@ -347,7 +396,9 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   };
 
   const handleRotationStart = async (id: string): Promise<boolean> => {
+    const generation = disclosure.generation.current;
     setActionError(null);
+    setHiddenMutationBase(null);
     const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
     try {
       const res = await fetch(`${apiBase}/api/keys/rotate`, {
@@ -356,10 +407,17 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         body: JSON.stringify({ id }),
         signal: bounded.signal,
       });
+      if (res.ok) {
+        if (currentApiBase.current === apiBase) refreshKeys();
+        else invalidateClientResource(keysResourceKey);
+      }
       const data = await readJsonOrThrow<StartRotationResponse>(res, t("api.rotation.startFailed"));
+      if (!disclosure.current(generation)) {
+        setHiddenMutationBase(apiBase);
+        return true;
+      }
       if (!data || typeof data.key !== "string" || !data.key || typeof data.rotationId !== "string" || !data.rotationId) return false;
       setRotationSecret({ id, key: data.key, rotationId: data.rotationId });
-      refreshKeys();
       return true;
     } catch {
       return false;
@@ -391,23 +449,28 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
 
   const copyRotationSecret = async () => {
     if (!rotationSecret) return;
+    const generation = disclosure.generation.current;
     try {
       await navigator.clipboard.writeText(rotationSecret.key);
+      if (!disclosure.current(generation)) return;
       setRotationCopied(true);
-      window.setTimeout(() => setRotationCopied(false), 2000);
+      window.setTimeout(() => { if (disclosure.current(generation)) setRotationCopied(false); }, 2000);
     } catch {
-      setActionError(t("api.key.copyFailed"));
+      if (disclosure.current(generation)) setActionError(t("api.key.copyFailed"));
     }
   };
 
   const copyKey = async () => {
     if (!newKey) return;
+    const generation = disclosure.generation.current;
     setActionError(null);
     try {
       await navigator.clipboard.writeText(newKey);
+      if (!disclosure.current(generation)) return;
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      window.setTimeout(() => { if (disclosure.current(generation)) setCopied(false); }, 2000);
     } catch {
+      if (!disclosure.current(generation)) return;
       // The one-time key is the only string in the product with no second
       // chance, so a silent failure here is the worst kind. Keep it on screen.
       setCopied(false);
@@ -504,6 +567,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         {subtitleParts[1]}
       </p>
 
+      {hiddenMutationBase === apiBase && <Notice tone="warn">{t("api.key.mutationHidden")}</Notice>}
       {actionError && <Notice tone="err">{actionError}</Notice>}
       {keysState.showError && keysData && <Notice tone="err">{t("api.keysLoadFailed")}</Notice>}
       {/* The model failure is reported inside the models panel, beside the
@@ -520,7 +584,9 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       ) : (
         <>
           <ApiKeysWorkspace
+        key={apiBase}
         active={active}
+        onPairingStart={() => disclosure.invalidate()}
         keys={keys}
         apiBase={apiBase}
         attributionSince={attributionSince}
@@ -559,6 +625,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         onDismissNewKey={() => setNewKey(null)}
         onCopyKey={() => { void copyKey(); }}
         onDelete={handleDelete}
+        onRevealKey={handleReveal}
         onRename={handleRename}
         {...(isConnectedRuntime() ? {
           // Key rotation is a connected-client operation: it swaps the data key this

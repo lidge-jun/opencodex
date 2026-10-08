@@ -290,6 +290,17 @@ the client window after edits, eviction, query changes or restart. Invalid curso
 for older servers. This reduces response bytes for stable windows; server projection remains bounded
 by the current window size.
 
+Successful `/api/logs` `displayMetrics.decodeTokPerSecond` values carry
+`timingBasis: "generation-window" | "legacy-post-visible-output"` alongside `kind`, `value`
+and `estimated: true`; attempt values identify their own window. Unavailable results keep their
+existing `reason` and no timing basis. The field is derived only at read time: stored JSONL,
+end-to-end `tokPerSecond`, request-history DTOs and aggregate throughput are unchanged.
+Older DTOs can omit the field; clients must treat the timing basis as unknown in that case.
+The dashboard names these methods **Generation window** and **After visible output**, with
+**Timing unknown** for a missing or unfamiliar basis. Request details show **Output rate during
+generation (est.)**, **Output rate after first visible output (est.)**, or **Output rate (est.;
+timing method unknown)** and a visible explanation of the timing method when a rate is available.
+
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/logs` | Query filtered in-memory request logs | — |
@@ -651,10 +662,33 @@ whether to star the repository.
 
 ### System lifecycle
 
+`POST /api/system/restart` keeps the 60-second drain by default, including requests
+with no body or `{}`. An authenticated caller can explicitly send a JSON body such
+as `{"drainGraceMs":2000}` to choose a shorter active-request/scoped-drain grace.
+The value must be an integer from 1 to 60000 milliseconds. Invalid bodies or values
+return 400 before starting a drain; the standard management-body limit still applies.
+The target-bound local restart capability retains the default grace; setting this
+body option requires a management session or admin token (otherwise 403).
+The response's `drainTimeoutMs` reports the accepted grace. Repeated calls retain
+the first accepted restart's grace and do not change its deadline.
+
+Grace is measured from acceptance, including the response-flush delay. The cleanup
+watchdog remains 60 seconds and replacement readiness retains its separate 70-second
+budget. A short grace can interrupt a turn that already executed upstream. Check its
+outcome before resubmitting; OpenCodex adds no automatic replay of ambiguous work,
+and a healthy replacement does not prove resending is safe. The dashboard, CLI, tray
+and automatic restarts continue using the 60-second default.
+
+During a restart drain, new data-plane requests receive HTTP 503 with JSON
+`error.type: "server_error"`, `error.code: "server_restarting"`, and the message
+"OpenCodex is restarting; retry this request." Responses retain `Retry-After: 5`
+and the receiving listener's CORS policy. This code lets every Codex version retry
+the 503 without reporting model capacity; provider overload errors retain their separate mapping.
+
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/system/memory` | Return scalar process, heap, stream, response-state, watchdog, and active-turn metrics. Response-state diagnostics include spill-write status, consecutive failures, fixed privacy-safe failure class, and last failure/success timestamps. `spillLastWriteFailureOrigin` is `retry_returned_timeout`, `timeout_memo_refusal`, or null; cumulative `spillAclRetryReturnedTimeouts` and `spillAclTimeoutMemoRefusals` count terminal failed publications. See [Windows spill diagnostics](/troubleshooting/windows-memory/) for process-local semantics. Raw errors and paths are never returned. | — |
-| `POST /api/system/restart` | Begin a drain-aware process restart without removing client injection | Returns 202; repeated calls report the existing drain |
+| `POST /api/system/restart` | Begin a drain-aware process restart without removing client injection; optional JSON `drainGraceMs` explicitly shortens the default 60s grace | Returns 202; repeated calls report the existing grace; 400 invalid body or grace |
 | `POST /api/stop` | Stop the service, restore native Codex, remove managed Grok injection, and drain the proxy | 409 service ownership conflict; 409 `respawnable_service` when a Windows Task Scheduler wrapper could respawn the proxy and the caller is not `ocx stop` (nothing is changed); 409 `self_unload_service` when this proxy is running as the installed launchd/systemd service, because stopping the manager from inside it would end the process before native Codex is restored — run `ocx stop` instead (nothing is changed); 409 when the installed manager refuses to stop; 409 `service_state_unknown` when the Task Scheduler state cannot be read (nothing is changed; repair the query and retry) |
 | `GET /api/system/codex-app-server` | Report whether running Codex app-servers predate the current model catalog | — |
 | `POST /api/system/codex-restart` | Refresh the catalog, then restart stale Codex app-servers and fully quit and relaunch the Codex desktop app so the model picker reloads. When the proxy itself is running inside the Codex app, the desktop restart is refused rather than handed off. | Returns 200 with `code: partially_stopped` when a target survives |
@@ -677,7 +711,7 @@ manager. Its routes are:
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | List/refresh or delete Codex accounts. POST is retained as a disabled compatibility endpoint; successful DELETE responses include `catalogRefreshPending`. | POST always returns 403 `manual_import_disabled`; 400 invalid DELETE input |
 | `PUT /api/codex-auth/accounts/alias` | Set or clear an account alias | 400 invalid account/alias |
-| `PUT /api/codex-auth/accounts/pause` | Pause or resume one account | 400 invalid account/state; 404 missing account |
+| `PUT /api/codex-auth/accounts/pause` | Manually pause or resume an account and its existing matching main/pool entries; returns `affectedAccountIds` | 400 invalid account/state; 404 missing account; 503 main identity busy or unreadable |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Pause accounts whose quota is exhausted | Mutation-lock failures become 503 |
 | `PUT /api/codex-auth/accounts/credits` | Allow or stop spending ChatGPT credits after the usage limit. Body `{ id, creditsAfterLimit }` for one account, including `__main__`: true adds the id to `creditCodexAccountIds`, false removes it. Body `{ all }` for the global switch: true lists `__main__` and every pool account, false clears the list. Applies to the next selection. | 400 invalid id or non-boolean value; 404 missing account |
 | `PUT /api/settings` with `codexQuotaAutoRefresh: { id, window, enabled }` | Enable or disable 5-hour or weekly automatic window activation for one account | 400 invalid id/window/state; 404 missing account; 409 unavailable window |

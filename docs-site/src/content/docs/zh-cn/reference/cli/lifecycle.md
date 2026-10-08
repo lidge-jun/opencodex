@@ -126,6 +126,8 @@ ocx status --json
 
 真实对象还会包含 `listen`（端口、主机名、运行时/配置来源）、配置加载诊断，以及 bundled Codex 插件诊断。JSON schema 仅允许追加字段：未来版本可能新增字段，但现有字段应保持稳定。它刻意不包含 API keys、OAuth tokens、授权头、请求内容、邮箱和账户身份。
 
+实时读取会等待有上限的服务探测完成：诊断缓存为空或过期时，macOS/Linux 最多等待 6.5 秒，Windows 最多等待 16.5 秒。已有缓存的读取会及时返回。超时仍会回退到本地诊断；仅凭 `/healthz` 健康不能证明重启保护有效。
+
 ### `ocx health [--json]`
 
 对正在运行的代理做身份校验。人类可读输出报告 PID/端口；`--json` 输出 `{ok, pid, port}`。只有在健康时该命令才以 0 退出，否则以 1 退出，因此适合用作服务探针。
@@ -215,30 +217,42 @@ ocx service uninstall
 
 在 Windows 上，创建 Task Scheduler 条目需要提升权限。识别到本地化的访问被拒绝文本时，会沿用现有的指导路径。如果该文本不可读，则回退要求命令形态为 `/create /tn opencodex-proxy /xml <non-empty-path> /f`，状态为 1，并且令牌明确为非提升权限；这时仪表盘的 Startup Safety 操作可以自动请求 UAC。如果该回退无法判断令牌状态，它会保留原始调度器错误。外部任务和操作绝不会发出自动提升标记。请批准仪表盘的 UAC 提示，或在提升权限的 PowerShell 窗口中重新运行 `ocx service install`。
 
+如果启动时报告 `another process owns the runtime mutation lease`，或者 `ocx service status` 显示 `Runtime mutation lease busy`，说明即使代理没有在运行，这个租约也在阻止启动或服务变更。消息中包含锁路径、记录的 PID、该 PID 当前是否存活、能获取时的可执行文件名，以及租约已持有的时长。进程身份未经验证：PID 可能已被复用，因此存活状态和可执行文件名描述的是当前占用该 PID 的进程。请等待操作结束后重试；不要仅凭这个 PID 删除锁或终止进程。当租约时长超过 30 秒且记录的 PID 已不再存活时，之后的变更操作可以回收这个过期租约；`ocx service status` 只查看它，不会回收。
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-在 PATH 上把基于脚本的 `codex` 启动器包装为一个轻量自启动脚本。真实的 `codex.exe` 目标会保持不变，以避免破坏精确的可执行文件调用。
+在 macOS 和 Linux 上，`ocx codex-shim install` 会在解析后的 OpenCodex 主目录中安装私有 wrapper `<OPENCODEX_HOME>/bin/codex` 和可由 shell 加载的 `<OPENCODEX_HOME>/codex-shell-env.sh`。原生启动器保留在 brew、npm 或 fnm 安装的位置，包管理器升级和版本回滚无需重新包装。Windows 仍按原方式就地包装脚本启动器，真实的 `codex.exe` 保持不变。如果 Windows 安装只提供 `codex.exe`，请使用 `ocx service install`。
+
+完成 brew/fnm 等 PATH 设置后，运行安装时输出的激活命令。默认主目录对应：
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+自定义主目录请使用输出的带引号路径。重复加载会去掉私有 bin 的重复项，并将其放到 PATH 最前面。要在之后的 shell 中激活，请自行把这一行加到 shell 启动文件的 PATH 设置之后；OpenCodex 从不编辑启动文件，安装命令也无法改变父 shell 的 PATH。只要 wrapper 可运行，即使当前 shell 尚未激活，安装仍算成功；安装被拒绝或 wrapper 无法运行则失败。`ocx status`、`ocx codex-shim status`、`ocx doctor` 和 `ocx connect` 会将未被 PATH 选中的 wrapper 报告为 **not active**，并给出激活命令。connect 的警告不改变退出状态。别名、函数以及桌面或服务启动环境需要单独设置。
 
 提交安装或修复前，OpenCodex 会在跳过服务启动的情况下，用 `--version` 运行已保存的启动器。如果启动器把 `codex` 再次解析到 shim、以非零状态退出、运行超过五秒、留下仍在运行的子进程，或无法被安全验证和清理，OpenCodex 会拒绝并回滚更改。因此 `codex-shim install` 并不是无条件安装。若被拒绝，请重新安装 Codex，使 PATH 条目指向具体的可执行文件或启动器，然后重试；如果动态命令管理器的启动器无法满足这些检查，请改用 `ocx service install`。
 
-升级时，缺少当前验证保护的已安装 Unix shim 会被重新生成并接受探测。如果保存的启动器不安全，OpenCodex 会移除旧 shim 并恢复原始启动器，而不是保留不安全的 wrapper。
+旧的 Unix 就地 shim 仅通过显式运行 `ocx codex-shim install` 迁移。迁移会恢复记录的原生启动器，但不会覆盖已经存在的较新启动器，然后安装私有 wrapper。如果原生恢复后私有安装失败，原生启动器会保持已恢复状态，操作可重试。记录的启动器缺失或无法运行时，请用包管理器修复；OpenCodex 不会猜测其他安装位置，也不会重新包装包管理器路径。
 
-仅安装启动器并不能证明 Codex 请求会经过 OpenCodex。完成健康安装后，命令会检查当前 Codex 路由；当路由由外部配置、用户自有网关管理或无法验证时，会显示警告而不是绿色成功。若出站代理变量只存在于当前进程，而 `config.proxy` 未设置或无法解析，也会给出警告，因为 Codex 启动器和后台服务未必继承该环境。这些检查只读且绝不会打印代理值；在依赖自动启动前，请先处理提示的交接配置并运行 `ocx doctor`。
+仅安装启动器并不能证明 Codex 请求会经过 OpenCodex。安装可运行的 wrapper 后，命令会检查当前 Codex 路由；当路由由外部配置、用户自有网关管理或无法验证时，会显示警告而不是绿色成功。若出站代理变量只存在于当前进程，而 `config.proxy` 未设置或无法解析，也会给出警告，因为 Codex 启动器和后台服务未必继承该环境。这些检查只读且绝不会打印代理值；在依赖自动启动前，请先处理提示的交接配置并运行 `ocx doctor`。
 
-如果已完成的外部 Codex 更新覆盖了已安装的 shim，下一次普通的 `ocx` 命令会先备份稳定的新启动器，再在分发前恢复 shim。零副作用的检查命令 `ocx system codex-cli-update check` 和保留的 `ocx system codex-cli-update` 命名空间中的无效调用都不会执行这项修复。仍在变动中的启动器会保持不动，并在稍后重试。修复失败只会警告，不会让所请求的命令失败；手动回退：`ocx codex-shim install`。将 `codexShimAutoRestore` 设为 `false`，或设置 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`，即可在进程级别关闭自动恢复。
+Unix 自动修复只刷新私有 wrapper，绝不重写包管理器启动器，也不迁移旧的就地 shim。Windows 上，完成的外部更新覆盖 shim 后，下一个普通 `ocx` 命令会备份稳定的新启动器并恢复 shim。仍在变化的启动器保持不动，稍后重试。`ocx status`、`ocx doctor`、`ocx codex-shim status`、`ocx system codex-cli-update check` 及其保留命名空间中的无效调用都不触发这项修复。修复失败只发出警告，不改变请求命令的退出状态；手动修复：`ocx codex-shim install`。将 `codexShimAutoRestore` 设为 `false`，或为进程设置 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`，即可关闭自动修复。
 
 | 子命令 | 操作 |
 | --- | --- |
 | `install` | 安装 shim（或在过期时修复）。 |
-| `uninstall` | 移除 shim 并恢复原始 Codex 二进制。 |
+| `uninstall` | 删除 Unix 私有文件，保留原生 Codex；Windows 上恢复原始启动器。 |
 | `remove` | `uninstall` 的别名。 |
-| `status` | 报告 shim 状态（已安装、过期或缺失）。 |
+| `status` | 报告 shim 状态及私有 wrapper 是否在 PATH 中激活。 |
 
 ```bash
 ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+Unix 卸载后，请从 shell 启动文件中删除加载行，并重启 shell 或从 PATH 中移除私有 bin。卸载仅删除归 OpenCodex 所有的 wrapper、shell 环境文件和状态，包管理器启动器保持不变。旧的 Unix 就地 shim 会利用已记录的恢复信息解除包装。
 
 :::note[Windows 令牌环境]
 新生成的 Windows CMD 和 PowerShell shim 会在执行后恢复调用方原有的 `OPENCODEX_API_AUTH_TOKEN` 状态。Codex 及其子进程仍可能继承令牌。
@@ -260,7 +274,7 @@ ocx codex-shim uninstall
 
 `opencodex-proxy.service` 中的 `EnvironmentFile=` 或 `OCX_API_TOKEN_FILE` 仅配置代理进程，绝不会传入独立启动的 `codex exec`。
 
-替换启动器的 Codex 升级会移除 shim；下一次执行普通的 `ocx` 命令时会将其恢复（见上文），但在此之前运行的 `codex exec` 会失败。`ocx doctor` 会在 "Codex env_key launch readiness" 项下报告这一确切状态（env_key 已配置、变量未设置、shim 缺失或不正常、令牌文件存在），并给出修复命令，且绝不会输出令牌。读取令牌文件不属于注入的 `env_key` 的约定；启动进程必须提供该变量。
+Unix 包管理器升级保留私有 wrapper；未激活时，请加载输出的激活文件。Windows 或旧的就地 shim 在启动器被更新替换后会丢失 shim；Windows 上下一次执行普通的 `ocx` 命令时会将其恢复（见上文），但在此之前运行的 `codex exec` 会失败。`ocx doctor` 会在 "Codex env_key launch readiness" 项下报告这一状态及未激活的 wrapper（env_key 已配置、变量未设置、shim 缺失或不正常、令牌文件存在），并给出修复或激活指引，且绝不会输出令牌。读取令牌文件不属于注入的 `env_key` 的约定；启动进程必须提供该变量。
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
@@ -295,4 +309,4 @@ ocx update --tag preview
 
 ## Remote Hub 客户端生命周期
 
-使用 `ocx connect <url> --pairing-code-stdin`、`ocx connect status`、`ocx sync` 和 `ocx connect rotate --pairing-code-stdin`。`ocx disconnect` 可离线恢复本地状态，但不会吊销 hub 密钥。仍连接时，`ocx connect revoke --admin-token-stdin` 会吊销已保存的 `apiKeyId`；断开后请使用 hub 的 **Integrations → API Keys**。密钥只能通过 stdin 传递，不能放入 argv。
+使用 `ocx connect <url> --pairing-code-stdin`、`ocx connect status`、`ocx sync` 和 `ocx connect rotate --pairing-code-stdin`。`ocx disconnect` 可离线恢复本地状态，但不会吊销 hub 密钥。仍连接时，`ocx connect revoke --admin-token-stdin` 会吊销已保存的 `apiKeyId`；断开后请使用 hub 的 **连接 → API 密钥**。密钥只能通过 stdin 传递，不能放入 argv。

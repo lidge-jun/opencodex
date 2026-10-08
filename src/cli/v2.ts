@@ -10,6 +10,10 @@
  *    config keys, with byte-for-byte rollback when the feature command fails.
  *  - nothing in the catalog build path calls this module; no auto-flip exists.
  */
+import { CliUsageError, terminalSafeText, type RuntimeApiDeps } from "./runtime-api";
+import { parseV2Command, V2_USAGE, type V2ParsedCommand } from "./v2-input";
+import { handleV2RuntimeCommand } from "./v2-runtime";
+import { localV2State, v2LocalSyncResult, type V2LocalSync } from "./v2-local-output";
 import { execFileSync } from "node:child_process";
 import { dirname } from "node:path";
 import { activeCodexConfigPath, getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getMultiAgentModeHintText, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, setMultiAgentModeHintText, transitionMultiAgentV2 } from "../codex/features";
@@ -23,6 +27,9 @@ export interface V2CliDeps {
   isEnabled?: typeof isMultiAgentV2Enabled;
   hasMaxThreads?: typeof hasAgentsMaxThreads;
   sync?: (port?: number) => Promise<unknown>;
+  runtimeApi?: RuntimeApiDeps;
+  /** Internal seam: bypass executable discovery only when an exec implementation is injected. */
+  featuresInvocation?: (action: "enable" | "disable") => SpawnInvocation;
   log?: Pick<Console, "log" | "error">;
 }
 
@@ -79,7 +86,7 @@ export function runCodexFeaturesCommand(
 
 function runCodexFeatures(action: "enable" | "disable", deps: V2CliDeps): void {
   if (deps.execFile) {
-    const inv = codexFeaturesInvocation(action);
+    const inv = (deps.featuresInvocation ?? codexFeaturesInvocation)(action);
     deps.execFile(inv.file, inv.args, inv.options);
     return;
   }
@@ -106,13 +113,10 @@ function requiresGlobalV2Disabled(multiAgentMode: string | undefined, keepNative
   return multiAgentMode === "v2" && keepNativeChatGptOnV1;
 }
 
-export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () => Promise<number | undefined>): Promise<number> {
+function printLocalStatus(deps: V2CliDeps): number {
   const log = deps.log ?? console;
   const isEnabled = deps.isEnabled ?? isMultiAgentV2Enabled;
   const hasMaxThreads = deps.hasMaxThreads ?? hasAgentsMaxThreads;
-  const verb = (args[0] ?? "status").trim().toLowerCase();
-
-  if (verb === "status") {
     log.log(v2StatusLine(isEnabled()));
     const cfg = loadConfig();
     const mode = cfg.multiAgentMode ?? "default";
@@ -140,153 +144,107 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
       log.log("WARNING: [agents] max_threads is set — codex refuses to start while multi_agent_v2 is enabled. Remove it from config.toml (concurrency lives in features.multi_agent_v2.max_concurrent_threads_per_session).");
     }
     return 0;
-  }
-  if (verb === "mode-hint") {
-    const value = args[1];
-    if (value === undefined) {
-      log.error("v2 mode-hint: pass the hint text, or --clear to unset it.");
-      return 1;
-    }
-    if (value === "--clear") {
-      const result = setMultiAgentModeHintText(null);
-      if (!result.ok) {
-        log.error(`v2 mode-hint: ${result.error}`);
-        return 1;
-      }
-      log.log(result.changed
-        ? "multi_agent_mode_hint_text cleared — effort-derived policy resumes (new sessions)."
-        : "multi_agent_mode_hint_text already unset — nothing to do.");
-      return 0;
-    }
-    // `--clear` is the only reserved token; hints are otherwise arbitrary
-    // nonblank text and may legitimately begin with a hyphen.
-    if (value.trim().length === 0) {
-      log.error("v2 mode-hint: pass the hint text, or --clear to unset it.");
-      return 1;
-    }
-    const result = setMultiAgentModeHintText(value);
-    if (!result.ok) {
-      log.error(`v2 mode-hint: ${result.error}`);
-      return 1;
-    }
-    log.log(result.changed
-      ? `multi_agent_mode_hint_text set (new sessions).`
-      : "multi_agent_mode_hint_text already set — nothing to do.");
-    return 0;
-  }
-  if (verb === "threads") {
-    const value = Number((args[1] ?? "").trim());
-    if (!Number.isInteger(value) || value < 1) {
-      log.error("v2 threads: pass an integer >= 1 (features.multi_agent_v2.max_concurrent_threads_per_session)");
-      return 1;
-    }
-    const enabled = isEnabled();
-    const result = transitionMultiAgentV2(enabled, next => runCodexFeatures(next ? "enable" : "disable", deps), { threadLimit: value });
-    if (!result.ok) { log.error(`v2 threads: ${result.error}`); return 1; }
-    log.log(result.changed
-      ? `max_threads = ${value} (${enabled ? "v2" : "v1"}) — applies to new sessions.`
-      : `max_threads already ${value} — nothing to do.`);
-    return 0;
-  }
-  if (verb === "mode") {
-    const modeArg = (args[1] ?? "").trim().toLowerCase();
-    if (modeArg !== "v1" && modeArg !== "default" && modeArg !== "v2") {
-      log.error("v2 mode: expected v1|default|v2");
-      return 1;
-    }
-    const cfg = loadConfig();
-    if (modeArg !== "default") {
-      const target = modeArg === "v2" && cfg.keepNativeChatGptOnV1 !== true;
-      const transition = transitionMultiAgentV2(target, enabled => runCodexFeatures(enabled ? "enable" : "disable", deps));
-      if (!transition.ok) {
-        log.error(`multi-agent mode transition failed: ${transition.error}`);
-        return 1;
-      }
-    }
-    if (modeArg === "default") deleteConfigTopLevelKey(cfg, "multiAgentMode");
-    else cfg.multiAgentMode = modeArg as "v1" | "v2";
-    saveConfig(cfg);
-    try {
-      const sync = deps.sync ?? (await import("../codex/sync")).syncModelsToCodex;
-      await sync(findPort ? await findPort() : undefined);
-    } catch (err) {
-      log.error(`catalog resync failed: ${err instanceof Error ? err.message : String(err)} — run 'ocx sync' manually.`);
-      return 1;
-    }
-    log.log(multiAgentModeLine(modeArg));
-    log.log("Applies to NEW sessions; running sessions keep their pinned multi-agent version.");
-    return 0;
-  }
-  if (verb === "keep-native-v1") {
-    const flag = (args[1] ?? "").trim().toLowerCase();
-    if (flag !== "on" && flag !== "off") {
-      log.error("v2 keep-native-v1: expected on|off");
-      return 1;
-    }
-    const cfg = loadConfig();
-    const next = flag === "on";
-    const already = cfg.keepNativeChatGptOnV1 === true === next;
-    if (next && requiresGlobalV2Disabled(cfg.multiAgentMode, true)) {
-      const transition = transitionMultiAgentV2(false, enabled => runCodexFeatures(enabled ? "enable" : "disable", deps));
-      if (!transition.ok) {
-        log.error(`keep-native-v1 transition failed: ${transition.error}`);
-        return 1;
-      }
-    }
-    if (next) cfg.keepNativeChatGptOnV1 = true;
-    else deleteConfigTopLevelKey(cfg, "keepNativeChatGptOnV1");
-    saveConfig(cfg);
-    try {
-      const sync = deps.sync ?? (await import("../codex/sync")).syncModelsToCodex;
-      await sync(findPort ? await findPort() : undefined);
-    } catch (err) {
-      log.error(`catalog resync failed: ${err instanceof Error ? err.message : String(err)} — run 'ocx sync' manually.`);
-      return 1;
-    }
-    if (already) {
-      log.log(next
-        ? "keep_native_chatgpt_on_v1 already ON — catalog re-synced."
-        : "keep_native_chatgpt_on_v1 already OFF — catalog re-synced.");
-      return 0;
-    }
-    log.log(next
-      ? "keep_native_chatgpt_on_v1: ON — ChatGPT-native rows stay v1 when mode is v2 (new sessions)."
-      : "keep_native_chatgpt_on_v1: OFF — ChatGPT-native rows follow v1/base/v2 (new sessions).");
-    return 0;
-  }
-  if (verb !== "on" && verb !== "off") {
-    log.error(`v2: unknown verb '${verb}' (expected status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>)`);
-    return 1;
-  }
+}
 
-  const want = verb === "on";
-  if (want) {
-    const cfg = loadConfig();
-    if (requiresGlobalV2Disabled(cfg.multiAgentMode, cfg.keepNativeChatGptOnV1 === true)) {
-      log.error("v2 on: incompatible with keep-native-v1 while mode is v2 — Codex's global multi_agent_v2 overrides the native v1 catalog pin. Run 'ocx v2 keep-native-v1 off' first.");
-      return 1;
-    }
+/** Parse before selecting either the native writer or the runtime management target. */
+export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () => Promise<number | undefined>): Promise<number> {
+  const log = deps.log ?? console;
+  let parsed: V2ParsedCommand;
+  try { parsed = parseV2Command(args); }
+  catch (error) {
+    log.error(error instanceof CliUsageError ? error.message : "v2: invalid command");
+    for (const line of V2_USAGE.split("\n")) log.error(line);
+    const boundary = args.indexOf("--");
+    return (boundary < 0 ? args : args.slice(0, boundary)).includes("--live") ? 2 : 1;
   }
-  const transition = transitionMultiAgentV2(want, enabled => runCodexFeatures(enabled ? "enable" : "disable", deps));
-  if (!transition.ok) {
-    log.error(`codex features ${want ? "enable" : "disable"} multi_agent_v2 failed: ${transition.error}`);
-    return 1;
-  }
-  if (!transition.changed) {
-    log.log(`multi_agent_v2 already ${want ? "ON" : "OFF"} — nothing to do.`);
-    return 0;
-  }
-
-  // Resync catalog so multi-agent surface metadata stays fresh in both the
-  // on-disk catalog and models_cache.json after the toggle flip.
+  if (parsed.live) return handleV2RuntimeCommand(parsed, deps.runtimeApi);
+  let changed: boolean | null = false;
+  let sync: V2LocalSync = { status: "not-attempted", ok: false };
+  const emit = (ok: boolean, lines: string[]): number => {
+    // A read-back failure cannot claim rollback or overwrite already observed mutation evidence.
+    let state: ReturnType<typeof localV2State> | null = null;
+    try { state = localV2State(deps.isEnabled, deps.hasMaxThreads); }
+    catch { ok = false; lines = ["Local V2 outcome is unverified. Read ocx v2 status before retrying; no rollback is implied."]; }
+    if (parsed.json) log.log(JSON.stringify({ ok, target: "local", action: parsed.verb, changed, state, sync }));
+    else for (const line of lines) (ok ? log.log : log.error).call(log, terminalSafeText(line));
+    return ok ? 0 : 1;
+  };
   try {
-    const sync = deps.sync ?? (await import("../codex/sync")).syncModelsToCodex;
-    await sync(findPort ? await findPort() : undefined);
-  } catch (err) {
-    log.error(`catalog resync failed (flag IS flipped): ${err instanceof Error ? err.message : String(err)} — run 'ocx sync' manually.`);
-    return 1;
+    if (parsed.verb === "status") {
+      if (!parsed.json) return printLocalStatus(deps);
+      return emit(true, []);
+    }
+    if (parsed.verb === "mode-hint") {
+      const result = setMultiAgentModeHintText(parsed.value);
+      if (!result.ok) return emit(false, ["Unable to write the native mode hint. Check Codex support and ownership, then read ocx v2 status."]);
+      changed = result.changed;
+      return emit(true, [result.changed ? "multi_agent_mode_hint_text saved — applies to new sessions." : "multi_agent_mode_hint_text already set — nothing to do."]);
+    }
+    if (parsed.verb === "threads") {
+      const enabled = (deps.isEnabled ?? isMultiAgentV2Enabled)();
+      const result = transitionMultiAgentV2(enabled, next => runCodexFeatures(next ? "enable" : "disable", deps), { threadLimit: parsed.value });
+      if (!result.ok) return emit(false, ["Unable to update the native thread limit. Read ocx v2 status before retrying."]);
+      changed = result.changed;
+      return emit(true, [changed ? `max_threads = ${parsed.value} (${enabled ? "v2" : "v1"}) — applies to new sessions.` : `max_threads already ${parsed.value} — nothing to do.`]);
+    }
+    const config = loadConfig();
+    let successLines: string[];
+    let unchangedKeep: boolean | undefined;
+    if (parsed.verb === "mode") {
+      changed = (config.multiAgentMode ?? "default") !== parsed.value;
+      if (parsed.value !== "default") {
+        const target = parsed.value === "v2" && config.keepNativeChatGptOnV1 !== true;
+        const transition = transitionMultiAgentV2(target, next => runCodexFeatures(next ? "enable" : "disable", deps));
+        if (!transition.ok) { changed = false; return emit(false, ["Native mode transition failed. Read ocx v2 status before retrying."]); }
+        changed ||= transition.changed;
+      }
+      if (parsed.value === "default") deleteConfigTopLevelKey(config, "multiAgentMode");
+      else config.multiAgentMode = parsed.value;
+      saveConfig(config);
+      successLines = [multiAgentModeLine(parsed.value, config.keepNativeChatGptOnV1 === true),
+        "Applies to NEW sessions; running sessions keep their pinned multi-agent version."];
+    } else if (parsed.verb === "keep-native-v1") {
+      unchangedKeep = (config.keepNativeChatGptOnV1 === true) === parsed.value;
+      changed = !unchangedKeep;
+      if (parsed.value && requiresGlobalV2Disabled(config.multiAgentMode, true)) {
+        const transition = transitionMultiAgentV2(false, next => runCodexFeatures(next ? "enable" : "disable", deps));
+        if (!transition.ok) { changed = false; return emit(false, ["Native hybrid-mode transition failed. Read ocx v2 status before retrying."]); }
+        changed ||= transition.changed;
+      }
+      if (parsed.value) config.keepNativeChatGptOnV1 = true;
+      else deleteConfigTopLevelKey(config, "keepNativeChatGptOnV1");
+      saveConfig(config);
+      successLines = [parsed.value
+        ? "keep_native_chatgpt_on_v1: ON — ChatGPT-native rows stay v1 when mode is v2 (new sessions)."
+        : "keep_native_chatgpt_on_v1: OFF — ChatGPT-native rows follow v1/base/v2 (new sessions)."];
+    } else {
+      const want = parsed.verb === "on";
+      if (want && requiresGlobalV2Disabled(config.multiAgentMode, config.keepNativeChatGptOnV1 === true)) {
+        return emit(false, ["v2 on: incompatible with keep-native-v1 while mode is v2 — Codex's global multi_agent_v2 overrides the native v1 catalog pin. Run 'ocx v2 keep-native-v1 off' first."]);
+      }
+      const transition = transitionMultiAgentV2(want, next => runCodexFeatures(next ? "enable" : "disable", deps));
+      if (!transition.ok) return emit(false, ["Native feature transition failed. Read ocx v2 status before retrying."]);
+      changed = transition.changed;
+      if (!changed) return emit(true, [`multi_agent_v2 already ${want ? "ON" : "OFF"} — nothing to do.`]);
+      successLines = [v2StatusLine(want),
+        "Applies to NEW sessions; running sessions keep their pinned multi-agent version. Restart the Codex app (or wait out its picker cache) to see the ladder change."];
+    }
+    // Preserve the legacy graph: mode/keep and changed toggles sync even with no port.
+    try {
+      const port = findPort ? await findPort() : undefined;
+      const result = deps.sync ? await deps.sync(port)
+        : await (await import("../codex/sync")).syncModelsToCodex(port, undefined, parsed.json ? null : log);
+      sync = v2LocalSyncResult(result);
+    } catch { sync = { status: "failed", ok: false }; }
+    if (sync.ok && parsed.verb === "keep-native-v1" && unchangedKeep) {
+      const outcome = sync.status !== "skipped" && "catalog" in sync && sync.catalog?.converged
+        ? "catalog re-synced." : "catalog sync skipped by policy.";
+      successLines = [`keep_native_chatgpt_on_v1 already ${parsed.value ? "ON" : "OFF"} — ${outcome}`];
+    }
+    return emit(sync.ok, sync.ok ? successLines
+      : ["catalog resync failed or is unverified; local V2 settings landed. Read ocx v2 status, then run ocx sync."]);
+  } catch {
+    changed = null;
+    return emit(false, ["Local V2 operation failed; native or saved settings may have changed. Read ocx v2 status before retrying; no rollback is implied."]);
   }
-  log.log(v2StatusLine(want));
-  log.log("Applies to NEW sessions; running sessions keep their pinned multi-agent version. Restart the Codex app (or wait out its picker cache) to see the ladder change.");
-  return 0;
 }

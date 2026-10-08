@@ -7,6 +7,8 @@ import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiT
  * its existing readiness state; cancelled callers and newer valid sessions emit no notice.
  */
 export const SESSION_UNAVAILABLE_EVENT = "opencodex:session-unavailable";
+/** Token identity changed; contains only the plane, never credential material. */
+export const SESSION_CHANGED_EVENT = "opencodex:session-changed";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
 // Any guarded route answers 401 for a bad token; this one is a cheap config read. /api/settings
@@ -43,7 +45,7 @@ let rebootstrapTimeoutMs = SESSION_REBOOTSTRAP_TIMEOUT_MS;
 let resolutionWatchdogMs = RESOLUTION_WATCHDOG_MS;
 const runtimes = new Map<ApiPlane, TargetRuntime>();
 
-function reportSessionUnavailable(plane: ApiPlane): void {
+function reportSessionEvent(plane: ApiPlane, event: string): void {
   if (typeof window === "undefined") return;
   // Take the constructor off the same window we dispatch on: a test harness (and a
   // sandboxed embed) can supply a document without installing CustomEvent globally.
@@ -51,8 +53,14 @@ function reportSessionUnavailable(plane: ApiPlane): void {
     ?? (typeof CustomEvent === "function" ? CustomEvent : null);
   if (!Ctor) return;
   try {
-    window.dispatchEvent(new Ctor(SESSION_UNAVAILABLE_EVENT, { detail: { plane } }));
+    window.dispatchEvent(new Ctor(event, { detail: { plane } }));
   } catch { /* a shell that cannot receive the notice must not break the fetch path */ }
+}
+
+function updateSession(state: TargetRuntime, session: ApiSessionState): void {
+  const changed = state.session.token !== session.token;
+  state.session = session;
+  if (changed) reportSessionEvent(state.target.id, SESSION_CHANGED_EVENT);
 }
 
 function blankSession(): ApiSessionState {
@@ -72,6 +80,7 @@ export function configureApiTargets(targets: ApiTargets): void {
   configuredTargets = targets;
   for (const plane of ["machine", "shared"] as const) {
     const current = runtimes.get(plane);
+    if (current && !sameTarget(current.target, targets[plane])) updateSession(current, blankSession());
     runtimes.set(plane, current && sameTarget(current.target, targets[plane])
       ? { ...current, target: targets[plane] }
       : { target: targets[plane], session: blankSession(), resolutionInFlight: null, promptCancelled: false });
@@ -85,7 +94,7 @@ function runtime(plane: ApiPlane): TargetRuntime {
 
 function clearSessionIfCurrent(plane: ApiPlane, expected: string | null): void {
   const state = runtime(plane);
-  if (expected !== null && state.session.token === expected) state.session = blankSession();
+  if (expected !== null && state.session.token === expected) updateSession(state, blankSession());
 }
 
 function storeSession(
@@ -98,10 +107,10 @@ function storeSession(
   const state = runtime(plane);
   if (!token?.startsWith("ocx_session_") || !csrfToken
     || browserOrigin !== window.location.origin || serverOrigin !== state.target.serverOrigin) {
-    state.session = blankSession();
+    updateSession(state, blankSession());
     return false;
   }
-  state.session = { token, csrfToken, browserOrigin, serverOrigin };
+  updateSession(state, { token, csrfToken, browserOrigin, serverOrigin });
   state.promptCancelled = false;
   return true;
 }
@@ -120,7 +129,7 @@ export async function logoutApiSession(plane: ApiPlane): Promise<boolean> {
       signal: bounded.signal,
     });
     if (!response.ok) return false;
-    state.session = blankSession();
+    updateSession(state, blankSession());
     state.promptCancelled = false;
     return true;
   } catch {
@@ -287,7 +296,7 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
       }
       const prompted = await requestAdminToken(token => verifyAdminToken(plane, token));
       if (prompted) {
-        state.session = { token: prompted, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin };
+        updateSession(state, { token: prompted, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin });
         return prompted;
       }
       state.promptCancelled = true;
@@ -337,14 +346,14 @@ export function installApiAuthFetch(): void {
     const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const nextToken = await resolveTokenAfter401(classified.plane, token, callerSignal ?? undefined);
     if (!nextToken) {
-      if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionUnavailable(classified.plane);
+      if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
       return response;
     }
     const [retryInput, retryInit] = withAuth(classified.plane, input, init, nextToken);
     const retry = await originalFetch(retryInput, retryInit);
     if (retry.status === 401) {
       clearSessionIfCurrent(classified.plane, nextToken);
-      if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionUnavailable(classified.plane);
+      if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
     }
     return retry;
   };

@@ -1,7 +1,6 @@
 import { createHash, generateKeyPairSync, createPrivateKey, createPublicKey, sign, X509Certificate, type KeyObject } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { withClientLifecycleSync } from "../../client/lifecycle-lock";
+import { withLocalCaPublication, type LocalCaFiles } from "./local-ca-files";
 
 /**
  * Local certificate authority for the Claude intercept listener.
@@ -307,7 +306,6 @@ export function issueLocalInterceptLeaf(ca: LocalInterceptCa, hosts: readonly st
 
 export const CLAUDE_INTERCEPT_STATE_DIR = "claude-intercept";
 export const CLAUDE_INTERCEPT_CA_CERT_FILE = "ca.pem";
-const CA_KEY_FILE = "ca.key";
 
 export function claudeInterceptStateDir(configDir: string): string {
   return join(configDir, CLAUDE_INTERCEPT_STATE_DIR);
@@ -318,50 +316,40 @@ export function claudeInterceptCaCertPath(configDir: string): string {
   return join(claudeInterceptStateDir(configDir), CLAUDE_INTERCEPT_CA_CERT_FILE);
 }
 
-function writeFileAtomic(path: string, contents: string, mode: number): void {
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, contents, { mode });
-  try { chmodSync(tmp, mode); } catch { /* best-effort on platforms without POSIX modes */ }
-  renameSync(tmp, path);
-}
-
-function loadPersistedCa(dir: string, accept?: (cert: X509Certificate) => boolean): LocalInterceptCa | null {
-  const certPath = join(dir, CLAUDE_INTERCEPT_CA_CERT_FILE);
-  const keyPath = join(dir, CA_KEY_FILE);
-  if (!existsSync(certPath) || !existsSync(keyPath)) return null;
+function loadPersistedCa(files: LocalCaFiles, accept?: (cert: X509Certificate) => boolean): LocalInterceptCa | null {
+  // Filesystem safety and access errors must escape; only benign PEM corruption regenerates.
+  const pair = files.readPair();
+  if (!pair) return null;
+  const { certPem, keyPem } = pair;
   try {
-    const certPem = readFileSync(certPath, "utf8");
-    const keyPem = readFileSync(keyPath, "utf8");
     const privateKey = createPrivateKey(keyPem);
     const publicKey = createPublicKey(keyPem);
     const certificate = new X509Certificate(certPem);
     if (!certificate.ca || !certificate.checkPrivateKey(privateKey) || !certificate.verify(publicKey)
       || (accept && !accept(certificate))) return null;
     return { certPem, keyPem, publicKey, privateKey };
-  } catch { // no-excuse-ok: catch -- an unreadable or corrupt authority is regenerated below.
+  } catch { // no-excuse-ok: catch -- malformed PEM in validated owner-controlled files is regenerated below.
     return null;
   }
 }
 
-/** Persist an authority under its own lease, replacing unreadable or rejected pairs. */
+/** Persist an authority under its own lease, replacing corrupt or rejected safe pairs. */
 export function ensurePersistedAuthority(
   dir: string,
   options: AuthorityOptions,
   lockName = "ca-publication.sqlite",
   accept?: (cert: X509Certificate) => boolean,
 ): LocalInterceptCa {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
   // A separate SQLite namespace binds exclusion to the explicit CA directory.
   // The OS releases it on crash; a contending caller fails before touching either
   // PEM. Readers also take the lease so they cannot observe half a publication.
-  return withClientLifecycleSync(() => {
-    const existing = loadPersistedCa(dir, accept);
+  return withLocalCaPublication(dir, lockName, files => {
+    const existing = loadPersistedCa(files, accept);
     if (existing) return existing;
     const ca = createCertificateAuthority(options);
-    writeFileAtomic(join(dir, CA_KEY_FILE), ca.keyPem, 0o600);
-    writeFileAtomic(join(dir, CLAUDE_INTERCEPT_CA_CERT_FILE), ca.certPem, 0o644);
+    files.writePair(ca);
     return ca;
-  }, { lockPath: join(dir, lockName) });
+  });
 }
 
 /** Preserve the original intercept CA path, name, permissions and extension set. */

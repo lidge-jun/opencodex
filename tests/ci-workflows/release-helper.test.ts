@@ -275,6 +275,14 @@ async function runRelease(releaseArgs: string | string[], scenario: ReleaseScena
   for (const name of ["bun", "gh", "git", "npm"] as const) {
     installCommandShim(shimDir, name);
   }
+  // The pinned runner is an absolute binary, so PATH shims alone no longer contain tests.
+  // Mock only the resolver in this child; keep the release gates and launcher real.
+  const preloadPath = join(shimDir, "test-runner-preload.ts");
+  writeFileSync(preloadPath, `import { mock } from "bun:test";
+mock.module(${JSON.stringify(join(repoRoot, "scripts", "lib", "test-runner-bun.ts"))}, () => ({
+  getTestRunnerBun: () => ${JSON.stringify(join(shimDir, process.platform === "win32" ? "bun.cmd" : "bun"))},
+}));
+`, "utf8");
 
   // Windows names the variable `Path`, and `...process.env` copies it in under
   // that spelling. Adding a separate `PATH` key leaves BOTH present, and which
@@ -316,7 +324,7 @@ async function runRelease(releaseArgs: string | string[], scenario: ReleaseScena
   try {
     const result = await runCaptured(
       process.execPath,
-      [releaseScriptPath, ...(typeof releaseArgs === "string" ? [releaseArgs] : releaseArgs)],
+      ["--preload", preloadPath, releaseScriptPath, ...(typeof releaseArgs === "string" ? [releaseArgs] : releaseArgs)],
       {
       cwd: repoRoot,
       env,

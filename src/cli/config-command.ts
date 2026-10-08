@@ -14,7 +14,7 @@ const USAGE = `Usage:
   ocx config set <dot.path> <json-or-string> [--json]
   ocx config unset <dot.path> [--json]
   ocx config validate [path|-] [--json]
-  ocx config export <path|->
+  ocx config export <path|-> [--json]
   ocx config import <path|-> --yes [--json]`;
 
 /**
@@ -205,14 +205,21 @@ function validate(value: unknown): OcxConfig {
 }
 
 export async function handleConfigCommand(argv: string[]): Promise<number> {
-  return runCliAction(async () => {
+  let outcome = 0;
+  const status = await runCliAction(async () => {
     const args = [...argv];
-    const action = (args.shift() ?? "show").toLowerCase();
     const wantsJson = takeFlag(args, "--json");
+    const source = takeFlag(args, "--source");
+    if (args.includes("--json") || args.includes("--source")) throw new CliUsageError("config flags may only be specified once", USAGE);
+    const action = (args.shift() ?? "show").toLowerCase();
+    if (source && action !== "show") throw new CliUsageError("--source is only supported for config show", USAGE);
     if (action === "show") {
-      const source = takeFlag(args, "--source");
       rejectArgs(args, USAGE);
       const diagnostics = readConfigDiagnostics();
+      if (diagnostics.source === "fallback" || diagnostics.error) {
+        console.error(`Warning: Config at ${getConfigPath()} is invalid or unreadable; defaults are being shown for invalid settings. Run: ocx config validate. Inspect: ocx config show --source.`);
+        if (!source) outcome = 1;
+      }
       const redacted = redact(diagnostics.config);
       const note = await readRemoteHubConfigNote(diagnostics.config);
       // First key, not last: it has to be read before the empty `providers` map that misled a
@@ -228,7 +235,12 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const path = args.shift();
       if (!path) throw new CliUsageError("config path is required", USAGE);
       rejectArgs(args, USAGE);
-      const value = redact(getPath(readConfigDiagnostics().config, path), pathSegments(path).at(-1));
+      const diagnostics = readConfigDiagnostics();
+      if (diagnostics.source === "fallback" || diagnostics.error) {
+        console.error(`Warning: Config at ${getConfigPath()} is invalid or unreadable; defaults are being shown for invalid settings. Run: ocx config validate. Inspect: ocx config show --source.`);
+        outcome = 1;
+      }
+      const value = redact(getPath(diagnostics.config, path), pathSegments(path).at(-1));
       if (wantsJson || typeof value === "object") console.log(JSON.stringify(value, null, 2));
       else console.log(String(value));
       return;
@@ -236,7 +248,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
     if (action === "set" || action === "unset") {
       const path = args.shift();
       const raw = action === "set" ? args.shift() : undefined;
-      if (!path || (action === "set" && raw === undefined)) throw new CliUsageError("config path and value are required", USAGE);
+      if (!path || (action === "set" && raw === undefined)) throw new CliUsageError(action === "unset" ? "config path is required" : "config path and value are required", USAGE);
       rejectArgs(args, USAGE);
       // #1835/#1838: the read used to happen OUTSIDE the mutation lock, so a concurrent
       // edit landing between it and the save was reverted by this whole-snapshot write.
@@ -288,7 +300,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       })();
       printData(result.ok ? { ok: true, source: path ?? getConfigPath() } : result, wantsJson,
         [result.ok ? "Config is valid." : `Config is invalid: ${result.error}`]);
-      if (!result.ok) process.exitCode = 1;
+      if (!result.ok) outcome = 1;
       return;
     }
     if (action === "export") {
@@ -297,7 +309,10 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       rejectArgs(args, USAGE);
       const content = `${JSON.stringify(readConfigDiagnostics().config, null, 2)}\n`;
       if (path === "-") process.stdout.write(content);
-      else { writeFileSync(path, content, { encoding: "utf8", mode: 0o600 }); console.log(`Exported config to ${path}.`); }
+      else {
+        writeFileSync(path, content, { encoding: "utf8", mode: 0o600 });
+        printData({ ok: true, path }, wantsJson, [`Exported config to ${path}.`]);
+      }
       return;
     }
     if (action === "import") {
@@ -312,6 +327,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
     }
     throw new CliUsageError(`unknown config command ${action}`, USAGE);
   });
+  return status || outcome;
 }
 
 export const CONFIG_USAGE = USAGE;

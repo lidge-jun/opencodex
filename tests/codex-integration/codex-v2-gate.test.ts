@@ -1754,7 +1754,7 @@ describe("cli surface", () => {
         const content = readFileSync(path, "utf8");
         writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
       },
-      sync: async () => {},
+      sync: async () => ({ status: "applied", ok: true, added: 0, catalogPath: null, catalogExists: true, catalogWritten: false, cacheSynced: false, message: "fixture" }),
       log: { log: (message?: unknown) => { logs.push(String(message)); }, error: (message?: unknown) => { logs.push(String(message)); } },
     };
     try {

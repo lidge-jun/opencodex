@@ -313,6 +313,8 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 
 ### 시스템 수명 주기
 
+`POST /api/system/restart`는 본문이 없거나 `{}`이면 기본 60초 drain 유예 시간을 유지합니다. 관리 세션 또는 관리자 토큰을 사용하는 호출자는 `{"drainGraceMs":2000}`으로 짧은 유예 시간을 명시적으로 선택할 수 있습니다. 값은 1~60000밀리초의 정수여야 합니다. 잘못된 본문이나 값은 재시작을 시작하지 않고 400을 반환하며, 대상 프로세스에 한정된 로컬 재시작 capability는 이 옵션을 설정할 수 없습니다(403). 응답의 `drainTimeoutMs`는 처음 수락한 유예 시간을 나타내며 반복 호출은 기존 기한을 바꾸지 않습니다. 유예 시간에는 응답 전송 지연이 포함됩니다. 정리와 대체 프로세스 준비에는 각각 별도의 60초와 70초 예산이 유지됩니다. 중단된 요청이 이미 실행되었을 수 있으므로 재전송 전에 결과를 확인하세요. 자동 재전송은 추가되지 않습니다.
+
 | HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/system/memory` | 프로세스, heap, stream, response-state, watchdog, active-turn의 스칼라 메트릭을 반환합니다 | — |
@@ -332,7 +334,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신하거나 삭제합니다. POST는 비활성화된 호환성 endpoint로만 유지되며, 성공한 DELETE는 `catalogRefreshPending`를 포함합니다. | POST는 항상 403 `manual_import_disabled`; DELETE 입력이 잘못되면 400 |
 | `PUT /api/codex-auth/accounts/alias` | 계정 alias를 설정하거나 지웁니다 | 400 잘못된 account/alias |
-| `PUT /api/codex-auth/accounts/pause` | 계정 하나를 일시 중지하거나 재개합니다 | 400 잘못된 account/state; 404 누락된 account |
+| `PUT /api/codex-auth/accounts/pause` | 계정과 동일한 로그인 정보를 가진 기존 메인/풀 항목을 수동으로 일시 중지하거나 재개합니다. `affectedAccountIds`를 반환합니다 | 400 잘못된 계정/상태; 404 계정 없음; 503 메인 계정의 로그인 정보가 사용 중이거나 읽을 수 없음 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | account 하나 또는 모든 account의 runtime cooldown을 지웁니다 | 400 잘못된 id |
 | `GET, PUT /api/codex-auth/active` | 활성 account를 읽거나 선택합니다 | 400 잘못되었거나 누락된 account; 409 paused/legacy-row 충돌 |

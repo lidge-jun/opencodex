@@ -47,7 +47,7 @@ provider-wide fallback. Exact model output limits precede the provider default o
 
 - preserves native OpenAI entries from the live catalog or static fallback, and emits
   gpt-5.6 natives from the pinned upstream models.json snapshot
-  (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra);
+  (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra); When native OpenAI rows are included and the final catalog has an ordinary bare native row other than Reserve (hidden rows count), `src/codex/catalog/control-plane.ts` separately preserves exactly one hidden `codex-auto-review` row or backfills its pinned metadata, including Low and the exact upstream ladder. It receives the ordinary native multi-agent projection but bypasses native synthesis, account cloning, picker/featured ordering, reasoning-ladder clamps and reviewer override stamps; Reserve-only/native-less catalogs omit it, and the final effort clamp removes persisted orphan reviewers; public lists and subagent rosters exclude it. The dependency-free `src/codex/control-plane-models.ts` shares the exact id set with the router without expanding visible native replacement authority;
 - reads pinned native rows only through `pinnedNativeModelRows()`
   (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
   `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds
@@ -104,7 +104,7 @@ explicit observed-state merge policy and restore native priorities from the once
 backup rather than from a catalog whose priorities may already have been rewritten. A configured
 custom catalog remains the native metadata/template authority even when a bundled-catalog memo is
 warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability
-evidence to remove unsupported reasoning efforts; convergence never probes Codex itself. The default-on scheduler in `src/codex/catalog-auto-refresh.ts` settles bundled runtime and authenticated Codex roster observations before admission, using dynamic imports, a 15-second source wait and the loader's bounded synchronous probes. Source failure uses existing evidence, while a stopped generation cannot start the next source or converge. A changed set records `reloadRequired` through `src/codex/catalog-refresh-status.ts` for observed running app-servers and logs one content-free restart hint; a no-op keeps it while processes remain stale or the restart observation is unknown and clears it when they are fresh or gone. Automatic refresh never restarts processes. `tests/codex-integration/catalog-auto-refresh-scheduler.test.ts` covers these boundaries.
+evidence to remove unsupported reasoning efforts; convergence never probes Codex itself. The default-on scheduler in `src/codex/catalog-auto-refresh.ts` settles bundled runtime and authenticated Codex roster observations before admission, using dynamic imports, a 15-second source wait and the loader's bounded synchronous probes. Source failure uses existing evidence, while a stopped generation cannot start the next source or converge. A changed set records `reloadRequired` through `src/codex/catalog-refresh-status.ts` for observed running app-servers and logs one content-free restart hint; a no-op keeps it while processes remain stale or the restart observation is unknown and clears it when they are fresh or gone. Automatic refresh never restarts processes. `tests/codex-integration/catalog-auto-refresh-scheduler.test.ts` covers these boundaries. `src/codex/catalog/bundled.ts` and `src/codex/runtime.ts` prefer the recorded native `launcherPath` from validated schema-2 PATH-overlay state within their shim candidates, retaining legacy candidates and other priorities. `src/codex/features.ts` follows that backing only when the selected wrapper matches validated state; it never probes unrelated installations. Overlay state and activation follow [the runtime lifecycle contract](runtime.md#lifecycle).
 
 Custom Astra and Daybreak rows acquire native identity -- Responses Lite, multi-agent, context
 windows, display names -- only through the canonical `openai` forward destination and explicit
@@ -593,7 +593,7 @@ Subagent account previews and live routing share the [priority failback](provide
 
 ## Reasoning metadata refresh
 
-Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the optional
+The sync result in `src/codex/sync.ts` preserves the catalog owner's optional refreshOutcome even when config injection reports applied; injection success alone does not prove catalog convergence. [Provider CLI receipts](cli-management.md#provider-live-operations-and-bounded-editor-input) keep that distinction. Startup and explicit catalog synchronization refresh the optional
 `src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
 gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
 `src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh

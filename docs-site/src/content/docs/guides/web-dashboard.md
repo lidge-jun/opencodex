@@ -71,6 +71,8 @@ host and port over a LAN IP or an alias.
 
 ## Dashboard layout
 
+The sidebar has eight rows, in order: **Dashboard**, **Connect**, **Codex**, **Providers**, **Models**, **Subagents**, **Usage & Logs**, and **Remote Link**. **Connect** opens the page headed **Connect**, with its tab strip ordered **Codex**, **Claude**, **Claude Desktop**, **Grok Build**, then the remaining integrations. Claude has no sub-tabs; it shows the Claude Code settings directly. Claude Desktop is a separate Connect tab at `#claude/desktop`. Connect has no section switcher. **Usage & Logs** opens Usage and groups Usage, Logs & Debug, and Storage with a pill-shaped section switcher. The last row, **Remote Link**, groups Remote Link (`#remote`) and Remote Workspace (`#remote-workspace`, when available) with the same switcher. **Codex** is the renamed **Codex Set** row; the preserved URLs include `#codex-set`, `#claude`, `#claude/code`, and `#claude/desktop`; the former `#claude/settings` bookmark opens Code. The former `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Startup (`#startup`) stays outside the sidebar.
+
 Responses first-output timing includes streamed function arguments and custom-tool input, as well
 as text and reasoning. A tool-only turn can therefore have a first-output time even without prose.
 Empty deltas and tool-start notifications do not start this timer. It measures the proxy's first
@@ -154,11 +156,18 @@ fallback until a valid sample is available. Speed uses output tokens per second 
 full request duration: below 15, 15 to below 50, or at least 50. Unavailable speed values are
 excluded when a speed filter is active. Success means 2xx; errors mean 4xx or 5xx.
 
-The request detail also shows **Decode rate (est.)**. When the proxy observed both ends, it is
+Logs labels each decode estimate **Generation window** or **After visible output** in the list
+and attempt table, and uses **Output rate during generation (est.)** or
+**Output rate after first visible output (est.)** in request details. Older cached responses
+without a timing method show **Timing unknown** and **Output rate (est.; timing method unknown)**
+in details. A visible caption below the detail rate explains the timing method; an unavailable
+rate has no caption. When the proxy observed both ends, it is
 output tokens over the generation window: from the first output item or block, reasoning included,
 to the last output delta. Older rows without that window use the time after the first visible
-token instead. Both are proxy-side observations, not the provider's internal token timing, so the
-value is always an estimate, and a window under one second shows as unavailable. The end-to-end
+token until the end of the request instead. Both are proxy-side observations, not the provider's internal token timing, so the
+value is always an estimate, and a window under one second shows as unavailable. Both numerators
+include reported reasoning output tokens, so the two timing bases are not directly comparable.
+Historical logs are not rewritten and missing generation timestamps are not invented. The end-to-end
 tok/s column and speed filter above are not affected.
 
 Active filters show the matching count out of the loaded total. Reset filters restores all
@@ -259,7 +268,35 @@ they have been synchronized. See
 
 ## Remote Hub sessions, keys, and usage
 
-The dashboard's management plane is separate from direct client→hub model traffic. **Integrations → API Keys** shows pending rotations, displays a replacement secret only once, and requires explicit commit or abort. Browser logout invalidates only the current remote session. Connected usage is the hub store filtered by the client's `apiKeyId`; disconnected usage is local, with no mirroring.
+In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place. Clicking a key can show its full value with a **Copy** button only from an independently authorized session.
+
+### Reading an existing API key
+
+Showing a stored key's full value requires a dashboard session established by explicit pairing or
+trusted Tailscale identity. An automatic local dashboard session can still show the masked key list,
+but cannot reveal existing values; a raw admin token cannot call this session-only action either.
+Use the existing [dashboard pairing flow](/guides/remote-hub/#pairing-this-browser-with-a-hub) to establish an
+operator-authorized session before requesting a stored value; a refused reveal states the requirement
+on the page. The local pairing form is offered only by a same-origin standalone dashboard opened
+over HTTP at the literal `127.0.0.1` or `[::1]` address. The origin must match the server's
+configured literal loopback bind. On `http://localhost:<port>` (or another localhost alias),
+check the server's bind: reopen `http://127.0.0.1:<port>` for a `127.0.0.1` bind or
+`http://[::1]:<port>` for a `::1` bind, then pair there. A server configured with hostname
+`localhost` has no eligible local pairing origin. The dashboard cannot infer the configured
+bind from an alias URL, so it shows the generic denial without suggesting a replacement URL.
+Use the existing remote-hub pairing flow or trusted Tailscale sign-in where available.
+Pair again if the authorized session expires or is revoked. Ordinary dashboard sign-in,
+key creation, rotation, and deletion are unchanged.
+
+After pairing, click the key again to request its value. Pairing itself never reveals a key.
+Displayed key values and copy feedback are cleared when the shared session is cleared or replaced,
+pairing starts, you leave this panel, hide the browser tab or desktop window, or switch servers.
+This also clears newly created and replacement values, so copy a one-time value before leaving
+the panel. If creation or rotation succeeds after the session or view changes, its one-time
+value stays hidden. After switching servers, returning to the
+original server revalidates its key list. Pending rotations remain available for explicit commit or abort.
+
+The dashboard's management plane is separate from direct client→hub model traffic. **Connect → API Keys** shows pending rotations, displays a replacement secret only once, and requires explicit commit or abort. Browser logout invalidates only the current remote session. Connected usage is the hub store filtered by the client's `apiKeyId`; disconnected usage is local, with no mirroring.
 
 The spawn override guarantee applies to the **built-in** v2 guidance text. A custom
 `injectionPrompt` replaces that text entirely and must include `{{model}}` and `{{effort}}`
@@ -409,6 +446,14 @@ Usage heatmap days have one Tab entry point. Use Up/Down for adjacent days and L
 
 ### Claude
 
-The **Claude** sidebar page sits directly below **Codex**. One header and tab strip stay in place while you switch tabs, ordered Account, Code, Desktop, Settings. The Account tab shows what the Anthropic provider's **Accounts** tab shows on **Providers**: login, the browser option, the Claude account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Provider-level controls such as the default provider, removal, and the enabled switch stay on **Providers**. When Anthropic is not configured, **Add Anthropic** starts Claude sign-in directly, after the same risk notice the Add provider dialog shows. Opening Claude without a tab selects Account when Anthropic is configured, otherwise Code. Code holds the Claude connection switch; Settings shows that connection as On or Off, interception as Running or Stopped, and the intercept port. When interception is stopped, Settings shows why and offers **Start interception**, which starts it in place without restarting OpenCodex. On Desktop, one status row shows whether Claude Desktop runs the profile and whether it is saved, with Save and Save & apply beside it. Compatibility, agent instructions, and context controls remain on Code.
+**Claude** is a tab inside **Connect**, whose tab strip places Codex, Claude, Claude Desktop, and Grok Build in that order. Claude has no sub-tabs: it shows the Claude Code settings directly. The page starts with **Claude Code CLI first-party**, followed by **Get started**, **General**
+(compatibility, agent instructions, and context controls), **Background helper model**,
+**Model interception**, **Available models**, and finally **Claude connection**. A sticky Save bar
+shows **No changes** or **Unsaved changes**, with **Revert** to discard edits and **Save** to commit
+them. Both switches apply immediately; **Save** never changes them. When interception is stopped, the page shows why and offers **Start interception**, which starts it in place without restarting OpenCodex. The former Code, Settings, and Account sub-tabs are gone; everything the read-only Settings view showed except the intercept port number is on this page.
 
-Bookmarks select a tab directly: `#claude/account`, `#claude/code`, `#claude/desktop`, and `#claude/settings`. The former `#integrations/claude` and `#integrations/claude/desktop` bookmarks redirect to Code and Desktop. Arrow keys move between tabs; Home and End select the first and last tab.
+**Claude Desktop** is its own Connect tab at `#claude/desktop`. It contains the Desktop mode picker and model families. One status row shows whether Claude Desktop runs the profile and whether it is saved, with **Save** and **Save & apply** beside it.
+
+Claude/Anthropic accounts are managed only on **Providers > Anthropic > Accounts**: login and the browser option, the account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Claude no longer has an Account sub-tab. Provider-level controls such as the default provider, removal, and the enabled switch stay on Providers.
+
+The bookmarks `#claude` and `#claude/code` open this page, and the former `#claude/settings` redirects to `#claude/code`; `#claude/desktop` selects the separate Claude Desktop tab. The old `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Legacy `#integrations/claude` and `#integrations/claude/desktop` bookmarks still redirect to `#claude/code` and `#claude/desktop`, respectively. Arrow keys move between tabs; Home and End select the first and last tab.

@@ -77,9 +77,12 @@ export async function runGuiCommand(args: string[], deps: GuiCommandDeps): Promi
   }
   const result = await (deps.requestPairingGrant ?? requestBoundGuiPairingGrant)(target, canonicalOrigin, {
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+    requireLocalIntent: config.runtimeRole !== "hub",
   });
   if (result.kind !== "created") {
-    console.error(`GUI pairing failed (${result.reason}).`);
+    console.error(result.reason === "local-intent"
+      ? "GUI pairing requires write access to the private OpenCodex home; no code was issued."
+      : `GUI pairing failed (${result.reason}).`);
     return 1;
   }
   if (parsed.json) {

@@ -14,7 +14,7 @@ description: 제공자 설정, 자격 증명, 할당량, 모델 카탈로그 명
 | 하위 명령 | 지원 플래그 | 동작 |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | 설정된 제공자와 남아 있는 레지스트리 항목을 나열합니다. `--jsonl`은 설정된 제공자마다 JSON 객체를 한 줄씩 출력합니다. |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 레지스트리/사용자 지정 제공자를 추가합니다. `--force`는 덮어쓰고, `--sync`는 사람이 읽는 출력 모드에서 실행 중인 프록시를 새로 고칩니다. |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 로컬에 제공자를 저장합니다. `--force`는 덮어쓰기를 허용하며, `--sync`는 JSON·일반 출력 모두에서 동기화를 시도합니다. |
 | `edit <name>` | 제공자 필드 플래그, `--headers <json>`, `--json` | 키 풀을 바꾸지 않고 검증된 실시간 제공자 필드를 수정합니다. `--headers`는 사용자 지정 요청 헤더를 병합하며, `{}` 또는 `-`로 지울 수 있습니다. |
 | `test <name>` | `--json` | 실제 상위 모델 엔드포인트를 확인합니다. |
 | `show <name>` | `--json` | API 키를 마스킹한 설정을 보여줍니다. |
@@ -24,6 +24,8 @@ description: 제공자 설정, 자격 증명, 할당량, 모델 카탈로그 명
 | `quota` | `--refresh`, `--json` | 제공자 할당량 보고서를 읽습니다. |
 | `presets` | `--json` | 대시보드 제공자 프리셋을 나열합니다. |
 | `account-mode` | `pool`, `direct`, `--json` | Codex 계정 라우팅을 풀 기반으로 할지 직접 연결로 할지 선택합니다. |
+
+기본 `add`, `remove`, `set-default`는 로컬 설정을 바꿉니다. 실행 중인 프록시를 바꾸려면 `--live`를 지정하세요. 실시간 삭제에는 `--yes`도 필요합니다. `--sync --json`도 저장 후 동기화를 실제로 시도하며, 실패하면 저장은 유지한 채 0이 아닌 코드와 `needsSync: true`를 반환합니다. `--live`와 `--sync`는 함께 쓸 수 없습니다. pacing·snapshot/apply 절차는 [영문 명령 안내](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)를 참고하세요.
 
 ```bash
 ocx provider list --json
@@ -299,6 +301,8 @@ ocx account clear-cooldown anthropic <id-or-alias>
 cooldown을 해제하면 계정 generation도 전진하므로 이전 quota probe가 해제된 상태를 되살리거나
 오래된 quota 기반 eligibility를 게시할 수 없습니다.
 
+API 키 풀의 키별 할당량은 `ocx account list <provider> --quota [--refresh] --json`으로 조회합니다. `--quota`를 생략하면 할당량 확인을 요청하지 않습니다. 명시한 경우 공급자에 요청을 보낼 수 있으므로 반복 조회에 주의하세요. `quotaMode`, `quotaUnavailable`, 실제 `quota`를 함께 확인해야 하며, 측정하지 못한 값을 0으로 해석하면 안 됩니다. 공급자 전체 보고서를 읽는 아래 `account refresh`와는 별도 조회입니다.
+
 ### `ocx account refresh <provider> [--json]`
 
 Codex 풀에는 `ocx account refresh openai [--json]`를 사용합니다. 계정 할당량을 강제로 새로 고치고 사용 가능 주간/월간 비율과 재설정 시간을 출력합니다. 할당량 데이터가 없으면 0%가 아니라 알 수 없음으로 보고합니다. JSON 봉투는 `{ accounts: AccountRow[] }`이며, Codex 행마다 `quota`가 붙습니다.
@@ -342,7 +346,7 @@ Codex pool 계정 하나의 선택 순서를 읽거나 설정합니다. **값이
 
 ### `ocx account login|reauth|code|cancel ...`
 
-헤드리스 셸에서 브라우저 기반 또는 수동 코드 계정 인증을 실행합니다. 제공자별 명령 형태는 `ocx account --help`를 보십시오. Codex account login이 저장되었지만 catalog refresh가 보류 중이면 성공으로 종료하고 human output의 stderr에 고정된 `ocx sync` 안내를 표시합니다. `--json`은 안내를 섞지 않고 완료 state의 `catalogRefreshPending: true`를 유지합니다.
+헤드리스 셸에서 브라우저나 수동 코드로 계정을 인증합니다. 제공자별 문법은 `ocx account --help`에서 확인하세요. Codex 로그인이 저장돼도 검증이나 모델 카탈로그 갱신이 남아 있으면 일반 출력과 `--json` 모두 종료 코드 1을 반환합니다. 저장된 로그인은 유지되므로 보류 상태만 보고 인증을 다시 시작하지 마세요. 일반 출력은 카탈로그 갱신이 보류됐을 때 stderr에 `ocx sync` 안내를 표시합니다. `--json`은 안내 문구 없이 상태와 보류 플래그를 stdout에 출력합니다.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
@@ -429,15 +433,15 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 
 `ocx model`은 `ocx models`의 별칭입니다. 하위 명령이 없으면 설정된 제공자에 사전 등록된 모델을 나열합니다. `--provider`는 설정된 제공자 하나를 필터링하고 `--json`은 모델 메타데이터를 반환합니다. `live`는 실행 중인 카탈로그를 읽습니다. `add`, `edit`, `remove`, `list-custom`은 수동 카탈로그 항목을 관리합니다. `enable`, `disable`, `provider`는 가시성을 제어합니다. `selected`는 제공자 허용 목록을 제어합니다. `context`는 제공자 컨텍스트 한도를 제어합니다. `shadow`는 백그라운드 shadow-call 가로채기를 관리합니다.
 
-대시보드가 제공하는 모델별 작업은 모두 여기에서도 사용할 수 있으므로, 헤드리스 설치에서는 카탈로그를 관리할 때 GUI가 필요하지 않습니다. `add`, `remove`, `list-custom`은 구성 파일을 대상으로 하며 카탈로그 동기화를 통해 실행 중인 프록시에 적용됩니다. 나머지는 실시간 관리 API와 통신하며 프록시가 실행 중이어야 합니다(`ocx start` 또는 설치된 서비스).
+`add`·`remove`는 기본적으로 로컬 저장이며 `--live`를 주면 실행 중인 프록시를 바꿉니다. 로컬 `--json` 저장은 프록시가 없으면 `sync.status: "not-attempted"`, `needsSync: true`, 종료 코드 0을 반환합니다. 실제 동기화 시도가 실패하면 저장은 유지하고 0이 아닌 코드로 끝납니다. `list-custom`은 로컬 목록입니다. 발견된 모델의 표시 이름은 raw upstream ID를 받는 `display-name`으로 바꾸고, picker 순서는 public ID를 받는 `order`로 바꿉니다. [영문 절차](/reference/cli/providers-accounts/#display-names-and-picker-identities)에서 전체 목록·featured 접두부·native 순서 초기화 제약을 확인하세요.
 
 | 하위 명령 | 지원 플래그 | 동작 |
 | --- | --- | --- |
 | `list` (기본값) | `--provider <name>`, `--json` | 설정된 제공자에 사전 등록된 모델을 나열합니다. |
 | `live` | `--provider <name>`, `--json` | 런타임에 발견된 모델을 포함해 실행 중인 카탈로그를 읽습니다. 행에는 `native`/`routed`, `custom`, `enabled`/`disabled` 표시가 붙습니다. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 제공자 카탈로그가 광고하지 않는 모델을 등록합니다. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 사용자 정의 모델을 로컬에 등록하거나 `--live`로 실행 중인 프록시에 등록합니다. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 사용자 지정 모델을 수정합니다. `-`는 필드를 지우고, `0`은 컨텍스트 창을 지웁니다. |
-| `remove <custom-id\|provider/modelId>` | `--yes` | 사용자 지정 모델을 삭제합니다. stdin이 대화형 터미널이 아닐 때는 `--yes`가 필요합니다. |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | 사용자 정의 모델을 삭제합니다. `--live` 또는 `--json`이면 `--yes`가 필요합니다. |
 | `list-custom` | `--json` | 다른 하위 명령이 사용하는 `custom-id`와 함께 모든 사용자 지정 모델을 보여줍니다. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Codex에 하나의 모델을 보이게 합니다. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Codex에서 하나의 모델을 숨깁니다. |

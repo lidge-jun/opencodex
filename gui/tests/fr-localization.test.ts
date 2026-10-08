@@ -26,6 +26,7 @@ function carriesTranslatableWords(value: string): boolean {
 
 const INTENTIONAL_ENGLISH = new Set<TKey>([
   "nav.claude", // Product name.
+  "nav.codexSet", // Product name: the sidebar row reads "Codex" in every locale.
   // Units, symbols, protocol values, machine labels, and product names.
   "integrations.cursor.noControl",
   "uptime.hour",
@@ -35,6 +36,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "models.aliasAuto",
   // "Zoom" is the ordinary French word for page zoom too.
   "zoom.label",
+  // "Actions" is the ordinary French word for a row's action column, read only by screen readers.
+  "api.colActions",
   "common.github",
   // Product names and ordinary French words whose correct spelling is identical to English.
   "remote.pairingCommandWindows",
@@ -59,8 +62,6 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "nav.grok",
   "grok.title",
   "claude.pageTitle",
-  "claude.tabCode",
-  "claude.tabDesktop",
   // A literal Claude Desktop picker model id shown as the input placeholder; model ids are
   // identical in every locale.
   "claudeDesktop.firstParty.bindings.pickerPlaceholder",
@@ -151,6 +152,9 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "api.clientConfig.clientCline",
   "integrations.tab.kilo",
   "api.clientConfig.clientKilo",
+  // Command Code is a product name, identical in every locale.
+  "integrations.tab.commandcode",
+  "api.clientConfig.clientCommandCode",
   // Factory Droid is a product name, identical in every locale.
   "integrations.tab.droid",
   "api.clientConfig.clientDroid",

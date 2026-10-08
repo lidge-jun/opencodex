@@ -1314,6 +1314,7 @@ select.input { appearance: none; }
  decided it. Scoping the display to `:not([hidden])` lets the UA rule win again.
 */
 .notice:not([hidden]) { display: flex; }
+.notice.native-main-notice:not([hidden]) { display: block; }
 .notice { font-size: var(--text-control); line-height: var(--leading-body); padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 14px; align-items: center; gap: 8px; max-width: var(--prose-measure); }
 .notice svg { width: 15px; height: 15px; flex-shrink: 0; }
 

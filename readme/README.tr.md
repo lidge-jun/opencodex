@@ -468,8 +468,8 @@ için bir süre taahhüt edilmez.
 
 ## Geliştirme
 
-Kaynak geliştirmesi `PATH` üzerinde `bun` CLI gerektirir. Bu, yalnızca kurulu `ocx` komutlarının
-kullandığı, yayımlanmış npm paketiyle gelen Bun çalışma zamanından ayrıdır.
+Kaynak geliştirmesi `PATH` üzerinde `bun` CLI gerektirir. Yayımlanmış npm paketi kurulu `ocx` komutları
+için kendi Bun çalışma zamanını içerir; paket betikleri de Bun'u bu paketlenmiş bağımlılıktan bulabilir.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

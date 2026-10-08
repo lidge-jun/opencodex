@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, readConfigDiagnostics, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
+import { findAvailablePort } from "../../src/server/ports";
+import { createManagementSessionControl, initializeManagementAuthState, issueGuiSession } from "../../src/server/management-auth";
+import { createGuiPairingGrant } from "../../src/server/gui-session";
+import { handleOauthAccountRoutes } from "../../src/server/management/oauth-account-routes";
+import type { ManagementContext } from "../../src/server/management/context";
 import { isDataPlaneAdmissionSecret } from "../../src/server/auth-cors";
 import { ownAdmissionTokens } from "../../src/claude/auth-detect";
 import { commitClientKeyRotation, startClientKeyRotation } from "../../src/client/hub-client";
@@ -320,6 +325,233 @@ describe("GET /api/keys", () => {
       }
       expect(rows[0]!.prefix).not.toBe(rows[1]!.prefix);
       expect(JSON.stringify(listed.json)).not.toContain(first.json.key as string);
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("POST /api/keys/reveal", () => {
+  async function operatorServer() {
+    const config = { ...baseConfig(), hostname: "127.0.0.1", port: await findAvailablePort(0, "127.0.0.1") };
+    saveConfig(config);
+    const state = initializeManagementAuthState(config);
+    if (!state.available) throw new Error("expected fixture management state");
+    return { config, state, server: startServer(config.port, { managementAuthState: state }) };
+  }
+  async function dashboardHeaders(server: { url: URL }, operator?: Awaited<ReturnType<typeof operatorServer>>): Promise<Record<string, string>> {
+    // Only positive fixtures receive an independently issued grant. Anonymous controls use GET.
+    const grant = operator && createGuiPairingGrant(server.url.origin, operator.config, operator.state);
+    const bootstrap = await fetch(new URL("/opencodex-session", server.url), grant ? {
+      method: "POST", headers: { Origin: server.url.origin, "Content-Type": "application/json" },
+      body: JSON.stringify({ grant: grant.grant }),
+    } : {});
+    expect(bootstrap.status).toBe(200);
+    const html = await bootstrap.text();
+    const token = html.match(/name="opencodex-session-token" content="([^"]+)"/)?.[1];
+    const csrf = html.match(/name="opencodex-session-csrf" content="([^"]+)"/)?.[1];
+    expect(token).toBeDefined();
+    expect(csrf).toBeDefined();
+    return {
+      "Content-Type": "application/json",
+      Origin: server.url.origin,
+      "x-opencodex-api-key": token!,
+      "x-opencodex-gui-origin": server.url.origin,
+      "x-opencodex-csrf-token": csrf!,
+    };
+  }
+
+  test("an operator-paired dashboard session receives the full current key with no-store", async () => {
+    const operator = await operatorServer();
+    const { server } = operator;
+    try {
+      const created = await keysRequest(server, "POST", { name: "reveal" });
+      const id = created.json.id as string;
+      await managementRequest(server, "/api/keys/rotate", "POST", { id });
+      const response = await fetch(new URL("/api/keys/reveal", server.url), {
+        method: "POST", headers: await dashboardHeaders(server, operator), body: JSON.stringify({ id }),
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({ key: created.json.key });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("anonymous loopback sessions cannot export existing keys with valid origin and CSRF", async () => {
+    saveConfig(baseConfig());
+    const server = startServer(0);
+    try {
+      const created = await keysRequest(server, "POST", { name: "retained" });
+      const headers = await dashboardHeaders(server);
+      const listed = await fetch(new URL("/api/keys", server.url), { headers });
+      expect(listed.status).toBe(200);
+      const listing = await listed.text();
+      expect(listing).toContain(created.json.id as string);
+      expect(listing).not.toContain(created.json.key as string);
+      for (const body of [JSON.stringify({ id: created.json.id }), JSON.stringify({ id: "missing" }), "{bad"]) {
+        const response = await fetch(new URL("/api/keys/reveal", server.url), { method: "POST", headers, body });
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual({ error: "operator-authorized dashboard session required" });
+      }
+      expect(loadConfig().apiKeys?.[0]?.key).toBe(created.json.key as string);
+    } finally { await server.stop(true); }
+  });
+
+  test("paired key reads still reject wrong CSRF and revoked sessions", async () => {
+    const operator = await operatorServer();
+    const { server, state } = operator;
+    try {
+      const created = await keysRequest(server, "POST", { name: "retained" });
+      const headers = await dashboardHeaders(server, operator);
+      const request = (overrides: Record<string, string> = {}) => fetch(new URL("/api/keys/reveal", server.url), {
+        method: "POST", headers: { ...headers, ...overrides }, body: JSON.stringify({ id: created.json.id }),
+      });
+      const wrongCsrf = await request({ "x-opencodex-csrf-token": "wrong" });
+      expect(wrongCsrf.status).toBe(401); await wrongCsrf.body?.cancel();
+      state.sessions.delete(headers["x-opencodex-api-key"]!);
+      const revoked = await request();
+      expect(revoked.status).toBe(401); await revoked.body?.cancel();
+      expect(loadConfig().apiKeys?.[0]?.key).toBe(created.json.key as string);
+    } finally { await server.stop(true); }
+  });
+
+  test.each(["revoked", "expired"] as const)("stored-key authority is rechecked after body reception: %s", async reason => {
+    const operator = await operatorServer();
+    const { config, state, server } = operator;
+    try {
+      config.apiKeys = [{ id: "held", name: "Fixture", key: "ocx_data_body_read_fixture", createdAt: "2026-10-06T00:00:00.000Z" }];
+      const headers = await dashboardHeaders(server, operator);
+      const control = createManagementSessionControl(state);
+      let checks = 0;
+      let input!: ReadableStreamDefaultController<Uint8Array>;
+      const url = new URL("/api/keys/reveal", server.url);
+      const req = new Request(url, { method: "POST", headers: { ...headers, Host: server.url.host },
+        body: new ReadableStream<Uint8Array>({ start(controller) { input = controller; } }),
+      });
+      const ctx: ManagementContext = { req, url, config, deps: {}, version: "fixture",
+        principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "pairing",
+        sessionControl: { ...control, canRevealDataKeys: (request, current) => {
+          checks += 1; return control.canRevealDataKeys!(request, current);
+        } },
+        convergeCodexCatalog: async () => { throw new Error("must not converge for a read"); },
+        syncClaudeAgentDefsBestEffort: async () => { throw new Error("must not sync for a read"); },
+      };
+      const pending = handleOauthAccountRoutes(ctx);
+      expect(checks).toBe(1); // The real authority check ran before waiting for the body.
+      const token = headers["x-opencodex-api-key"]!;
+      if (reason === "revoked") state.sessions.delete(token);
+      else state.sessions.get(token)!.expiresAt = Date.now() - 1;
+      input.enqueue(new TextEncoder().encode(JSON.stringify({ id: "held" }))); input.close();
+      const response = await pending;
+      expect(response?.status).toBe(403);
+      expect(await response!.json()).toEqual({ error: "operator-authorized dashboard session required" });
+      expect(checks).toBe(2);
+      expect(config.apiKeys[0]!.key).toBe("ocx_data_body_read_fixture");
+    } finally { await server.stop(true); }
+  });
+
+  test("a dispatcher without the independent authority predicate fails closed", async () => {
+    const operator = await operatorServer();
+    const { config, state, server } = operator;
+    try {
+      const headers = await dashboardHeaders(server, operator);
+      const url = new URL("/api/keys/reveal", server.url);
+      const ctx: ManagementContext = {
+        req: new Request(url, { method: "POST", headers: { ...headers, Host: server.url.host }, body: "{bad" }),
+        url, config, deps: {}, version: "fixture", principal: "gui-session",
+        trustedLoopbackIngress: true, guiSessionIssuance: "pairing",
+        sessionControl: { ...createManagementSessionControl(state), canRevealDataKeys: undefined },
+        convergeCodexCatalog: async () => { throw new Error("must not converge for a read"); },
+        syncClaudeAgentDefsBestEffort: async () => { throw new Error("must not sync for a read"); },
+      };
+      const response = await handleOauthAccountRoutes(ctx);
+      expect(response?.status).toBe(403);
+      expect(await response!.json()).toEqual({ error: "operator-authorized dashboard session required" });
+    } finally { await server.stop(true); }
+  });
+
+  test("data-key read authority requires independently issued current sessions", () => {
+    const config: OcxConfig = { ...baseConfig(), hostname: "0.0.0.0", runtimeRole: "hub",
+      hub: { managementPublicOrigin: "https://hub.example.test" },
+      remoteGui: { allowedTailscaleUsers: ["alice@example.test"] },
+      corsAllowOrigins: ["https://dashboard.example.test"],
+    };
+    const state = initializeManagementAuthState(config);
+    if (!state.available) throw new Error("expected management state");
+    const control = createManagementSessionControl(state);
+    const tailscaleRequest = new Request("https://hub.example.test/opencodex-session", {
+      headers: { Host: "hub.example.test", Origin: "https://dashboard.example.test",
+        "Tailscale-User-Login": "alice@example.test" },
+    });
+    expect(issueGuiSession(tailscaleRequest, config, state, { trustedTailscaleIngress: false })).toBeNull();
+    const session = issueGuiSession(tailscaleRequest, config, state, { trustedTailscaleIngress: true })!;
+    expect(session).not.toBeNull();
+    const request = (overrides: Record<string, string> = {}) => new Request("https://hub.example.test/api/keys/reveal", {
+      method: "POST", headers: { Host: "hub.example.test", Origin: session.browserOrigin,
+        "x-opencodex-gui-origin": session.browserOrigin, "x-opencodex-api-key": session.token,
+        "x-opencodex-csrf-token": session.csrfToken, ...overrides },
+    });
+    const before = session.expiresAt;
+    expect(control.canRevealDataKeys?.(request(), config)).toBe(true);
+    expect(session.expiresAt).toBe(before); // This check cannot extend authority.
+    expect(control.canRevealDataKeys?.(request({ "x-opencodex-csrf-token": "wrong" }), config)).toBe(false);
+    expect(control.canRevealDataKeys?.(request({ Origin: "https://foreign.example.test" }), config)).toBe(false);
+    expect(control.canRevealDataKeys?.(request({ "x-opencodex-api-key": state.token }), config)).toBe(false);
+    session.expiresAt = Date.now() - 1;
+    expect(control.canRevealDataKeys?.(request(), config)).toBe(false);
+    state.sessions.delete(session.token);
+    expect(control.canRevealDataKeys?.(request(), config)).toBe(false);
+    const unavailable = createManagementSessionControl({ available: false, reason: "fixture" });
+    expect(unavailable.canRevealDataKeys?.(request(), config)).toBe(false);
+  });
+
+  test("an admin token cannot reveal a key even with forged dashboard headers", async () => {
+    saveConfig(baseConfig());
+    const server = startServer(0);
+    try {
+      const created = await keysRequest(server, "POST", { name: "private" });
+      const response = await fetch(new URL("/api/keys/reveal", server.url), {
+        method: "POST",
+        headers: { ...await dashboardHeaders(server), "x-opencodex-api-key": ADMIN_TOKEN },
+        body: JSON.stringify({ id: created.json.id }),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: "dashboard session required" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("an unknown id returns 404 when apiKeys is absent", async () => {
+    const operator = await operatorServer();
+    const { server } = operator;
+    try {
+      const response = await fetch(new URL("/api/keys/reveal", server.url), {
+        method: "POST", headers: await dashboardHeaders(server, operator), body: JSON.stringify({ id: "missing" }),
+      });
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "key not found" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects invalid bodies with 400", async () => {
+    const operator = await operatorServer();
+    const { server } = operator;
+    try {
+      const created = await keysRequest(server, "POST", { name: "keep" });
+      const headers = await dashboardHeaders(server, operator);
+      const bodies: unknown[] = [{ id: created.json.id, extra: true }, { id: 42 }, { id: "" },
+        {}, null, [], "plain string", true];
+      for (const body of [...bodies.map(value => JSON.stringify(value)), "{not json", ""]) {
+        const response = await fetch(new URL("/api/keys/reveal", server.url), { method: "POST", headers, body });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: "invalid body" });
+      }
+      expect(loadConfig().apiKeys?.[0]?.key).toBe(created.json.key as string);
     } finally {
       await server.stop(true);
     }

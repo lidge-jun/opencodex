@@ -33,6 +33,7 @@ import {
 } from "../codex/subagent-model-fallback";
 import { readCatalog, readCodexCatalogPath, readConfiguredDefaultModel } from "../codex/catalog/parsing";
 import { diagnoseCodexShim, findCodexOnPath, isWindowsInteropDir, type CodexShimDiagnostic } from "../codex/shim";
+import { overlayActivationHint } from "../codex/shim-overlay";
 import { providerTableString, rootTomlString } from "../codex/injected-marker";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
 import {
@@ -481,10 +482,18 @@ export function collectProviderApiKeyDiagnostics(
 
 export type CodexEnvKeyReadinessDiagnostic = {
   envName: string;
-  shimState: "missing" | "unhealthy";
+  shimState: "missing" | "unhealthy" | "inactive";
   detail: string;
   action: string;
 };
+
+/** Shell activation and legacy migration are independent of admission-token readiness. */
+export function formatCodexShimDoctorLines(shim: CodexShimDiagnostic, platform = process.platform): string[] {
+  if (platform === "win32" || !shim.installed) return [];
+  const inactiveOverlay = shim.runnable === true && shim.active === false;
+  const healthyLegacy = shim.healthy && shim.runnable === undefined;
+  return inactiveOverlay || healthyLegacy ? shim.summary.split("\n").map(line => `       ${line}`) : [];
+}
 
 /** Warn when routed Codex cannot obtain its configured admission token at launch. */
 export function collectCodexEnvKeyReadiness(
@@ -492,17 +501,22 @@ export function collectCodexEnvKeyReadiness(
   env: EnvMap,
   shim: CodexShimDiagnostic,
   serviceTokenPresent: boolean,
+  shimActivationShown = false,
 ): CodexEnvKeyReadinessDiagnostic | null {
   if (!configText || rootTomlString(configText, "model_provider") !== "opencodex") return null;
   const envName = providerTableString(configText, "opencodex", "env_key")?.trim();
   const envValue = envName ? ownEnvValue(env, envName) : undefined;
   if (!envName || envValue?.trim() || shim.healthy || !serviceTokenPresent) return null;
-  const shimState = shim.installed ? "unhealthy" : "missing";
+  const shimState = shim.runnable && shim.active === false ? "inactive" : shim.installed ? "unhealthy" : "missing";
   return {
     envName,
     shimState,
     detail: `Codex uses env_key ${envName}, but that variable is unset and the OpenCodex shim is ${shimState}; the service token file exists but plain Codex does not load it`,
-    action: `Run 'ocx codex-shim install' to repair launch-time token injection, or export ${envName} in the process that starts Codex`,
+    action: shimState === "inactive"
+      ? shimActivationShown
+        ? `Activate the PATH shim as shown under Codex restart safety, or export ${envName} in the process that starts Codex`
+        : `${overlayActivationHint()} Or export ${envName} in the process that starts Codex`
+      : `Run 'ocx codex-shim install' to repair launch-time token injection, or export ${envName} in the process that starts Codex`,
   };
 }
 
@@ -1349,11 +1363,14 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     try { return readFileSync(codexConfigPath, "utf8"); } catch { return null; }
   })();
   const serviceTokenPresent = Boolean(readInstalledServiceToken()?.trim());
+  const codexShim = diagnoseCodexShim();
+  const codexShimLines = formatCodexShimDoctorLines(codexShim);
   const codexEnvKeyReadiness = collectCodexEnvKeyReadiness(
     codexConfigText,
     process.env,
-    diagnoseCodexShim(),
+    codexShim,
     serviceTokenPresent,
+    codexShimLines.length > 0,
   );
   // Use the same attested live startup verdict as `ocx status` when the proxy is already
   // identity-verified. A shell-local systemd probe can be a false negative for a system-wide
@@ -1366,6 +1383,7 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   console.log("\nCodex restart safety");
   console.log(`  ${startup.rebootSafe ? "ok " : "!! "} ${startupHealthSummary(startup)}`);
   console.log(`       ${formatStartupRoutingDetail(startup)}`);
+  for (const line of codexShimLines) console.log(line);
 
   console.log("\nCodex runtime selection");
   {

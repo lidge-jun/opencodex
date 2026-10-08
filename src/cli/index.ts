@@ -8,6 +8,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { currentServingCommand, deferServiceChildToNewerRuntime, markDelegatedServiceReady, recordServingRuntime } from "../config/serving-runtimes";
 import { packageVersion } from "../lib/package-version";
+import { admitUpdateRestartChild } from "./update-restart-child";
+import { UpdateRestartRequired } from "./update-restart-candidate";
+import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 
@@ -85,9 +88,9 @@ import {
   runProxyRestart,
   runTrayProxyStart,
   type ProxyRestartLive,
-  type ProxyRestartResult,
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
+import { reportRestartFailure } from "./restart-failure";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
@@ -149,6 +152,7 @@ import {
   grokSyncFailureMessage,
   reconcileEnsureDesiredIntegrations,
 } from "./ensure-desired-integrations";
+import { ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting, waitForLiveProxy } from "./ensure-readiness";
 import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
 import { loadExportModels } from "../server/management/model-rows";
 
@@ -201,15 +205,22 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
 if (process.argv[2] === "__keyring-load-check") { console.log(JSON.stringify((await import("../lib/keyring-native")).inspectKeyringBinding())); process.exit(0); }
-if (process.argv[2] === "__codebuddy-mcp") {
-  const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
-  await runCodeBuddyMcpServer(process.argv[3] ?? "");
-  // The MCP stdio loop owns this process until stdin closes; do not fall through
-  // to ordinary CLI dispatch or exit after the handshake completes.
+
+// The compiled executable also launches the isolated MCP servers.
+// Handle these private entrypoints before CLI preflight or command dispatch.
+if (process.argv[2] === "__codebuddy-mcp" || process.argv[2] === "__qoder-mcp") {
+  if (process.argv[2] === "__codebuddy-mcp") {
+    const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
+    await runCodeBuddyMcpServer(process.argv[3] ?? "");
+  } else {
+    const { runCodingAgentMcpServer } = await import("../adapters/coding-agent/mcp-server");
+    await runCodingAgentMcpServer(process.argv[3] ?? "");
+  }
   await new Promise<never>(() => {});
 }
 
@@ -231,16 +242,10 @@ function parseStartCliOptions(): ReturnType<typeof parseStartOptions> {
   }
 }
 
-async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    // Runtime-state-first with identity: finds the proxy even when it started on a
-    // fallback port, and never mistakes a foreign 200 for our proxy.
-    const live = await findLiveProxy();
-    if (live) return live;
-    await new Promise(resolve => setTimeout(resolve, 150));
-  }
-  return null;
+async function waitForProxy(timeoutMs = 8_000, keepWaiting?: () => boolean): Promise<LiveProxy | null> {
+  // Runtime-state-first with identity: finds the proxy even when it started on a
+  // fallback port, and never mistakes a foreign 200 for our proxy.
+  return waitForLiveProxy({ find: findLiveProxy, timeoutMs, keepWaiting });
 }
 
 class StartCommandExit extends Error {
@@ -372,6 +377,7 @@ async function findProxyOwnerBeforeJournalRecovery(
 }
 
 async function handleStart(options: { block?: boolean } = {}) {
+  updateRestartChild?.check();
   // A supervised service child defers to a foreign recorded owner before doing
   // anything else. 'ocx service start' refuses this activation path already, but
   // the process managers below it — the Windows boot wrapper's restart loop and
@@ -467,6 +473,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     },
   });
 
+  updateRestartChild?.check();
   const clientState = readClientConnectionState();
   if (clientState.kind === "invalid" || clientState.kind === "mismatched") {
     throw new Error(`client startup refused: ${clientState.reason}`);
@@ -551,7 +558,17 @@ async function handleStart(options: { block?: boolean } = {}) {
         let server: ReturnType<typeof serverModule.startServer>;
         for (let attempt = 0; ; attempt++) {
           try {
+            if (updateRestartChild && siblingStart) throw new Error("update_restart_sibling_refused");
+            updateRestartChild?.check(port, loadConfig().hostname ?? "");
             server = serverModule.startServer(port, { localAttestationSecret, readinessGate });
+            if (updateRestartChild) {
+              try { updateRestartChild.check(port, server.hostname); }
+              catch (error) {
+                try { await server.stop(true); }
+                catch (rollback) { throw new StartOwnershipRollbackUncertainError([error, rollback]); }
+                throw error;
+              }
+            }
             break;
           } catch (err) {
             try { await serverModule.waitForFailedStartRollback(err); }
@@ -579,14 +596,14 @@ async function handleStart(options: { block?: boolean } = {}) {
         }
         return { server, serverModule, port, readinessGate, localAttestationSecret, config };
       },
-      writePid: () => writePid(process.pid),
-      writeRuntime: bound => writeRuntimePort({
+      writePid: () => { updateRestartChild?.check(); writePid(process.pid); },
+      writeRuntime: bound => { updateRestartChild?.check(bound.port, bound.config.hostname ?? ""); writeRuntimePort({
         pid: process.pid,
         port: bound.port,
         hostname: bound.config.hostname,
         attestationSecret: bound.localAttestationSecret,
         ...siblingRuntimeField(),
-      }),
+      }); updateRestartChild?.complete(); },
       stopBound: bound => bound.server.stop(true),
       removeRuntime: () => removeRuntimePortIfPidIs(process.pid),
       removePid: () => removePidIfValueIs(process.pid),
@@ -830,9 +847,13 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
     env: detachedStartEnvironment(),
   });
   options.onSpawn?.(child);
+  const spawnedAt = Date.now();
+  let childExited = false;
+  child.once("exit", () => { childExited = true; });
   child.unref();
 
-  const port = (await waitForProxy())?.port;
+  // A cold start can outlast 8 s on a busy Windows host; see ensure-readiness.ts.
+  const port = (await waitForProxy(ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting(spawnedAt, () => childExited)))?.port;
   if (!port) {
     console.error("❌ Proxy did not become healthy after starting.");
     process.exitCode = 1;
@@ -903,28 +924,6 @@ const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIM
 
 /** Reserve confirmation time within the shared restart deadline. */
 const RESTART_REOBSERVE_RESERVE_MS = 10_000;
-function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>): void {
-  if (result.phase === "identity") {
-    console.error("❌ Refusing to restart because the running proxy identity could not be attested.");
-  } else if (result.phase === "request") {
-    const code = result.error instanceof Error ? result.error.message : "";
-    if (code === "restart_capability_unsupported") {
-      console.error("❌ The running proxy predates process-bound restart support; no unsafe fallback was attempted.");
-      console.error("   After confirming this home owns the proxy, run `ocx stop` and then `ocx start` once.");
-    } else if (code === "restart_version_skew") {
-      console.error("❌ The running proxy reports a different OpenCodex version than this CLI; restarting in place would respawn the old installation.");
-      console.error("   Run `ocx stop` and then `ocx start` from this installation instead.");
-    } else if (code === "restart_package_tree_unsettled") {
-      console.error("❌ The proxy's package files are still being replaced; wait for the install to finish, then run `ocx restart` again.");
-    } else {
-      console.error("❌ Proxy restart request could not be confirmed; no fallback stop/start was attempted.");
-    }
-  } else if (result.phase === "replacement") {
-    console.error("❌ Proxy restart was accepted, but no identity-verified replacement became healthy in time.");
-  } else {
-    console.error("❌ Proxy was not running and the fallback start did not become healthy.");
-  }
-}
 async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
 ): Promise<boolean> {
@@ -947,6 +946,15 @@ async function handleProxyRestart(
       findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }), expired: () => Date.now() >= end,
     })),
   });
+  if (!result.ok && result.phase === "request" && result.error instanceof UpdateRestartRequired) {
+    const candidate = result.error.candidate();
+    console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
+    const update = await restartFromCurrentInstallation(candidate, deadlineAt, detachedStartEnvironment());
+    if (update.ok) console.log(`✅ Proxy updated to ${update.live.version} (PID ${update.live.pid}).`);
+    else console.error(`❌ ${describeUpdateRestartFailure(update.code, update.reason)} (${update.code})`);
+    process.exitCode = update.ok ? 0 : 1;
+    return update.ok;
+  }
   if (!result.ok) reportRestartFailure(result);
   process.exitCode = result.ok ? 0 : 1;
   return result.ok;

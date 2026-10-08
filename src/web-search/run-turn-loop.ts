@@ -277,7 +277,7 @@ export async function* runTurnWebSearchLoop(
             : { text: "", sources: [], error: "exa backend selected without an exaApiKey" };
         default:
           return deps.forwardProvider
-            ? await runWebSearch(query, plan.hostedTool, deps.forwardProvider, deps.forwardHeaders ?? new Headers(), plan.settings, signal, deps.recordSidecarOutcome)
+            ? await runWebSearch(query, plan.hostedTool, deps.forwardProvider, deps.forwardHeaders ?? new Headers(), plan.settings, signal, deps.recordSidecarOutcome, plan.forwardSidecar?.beforeDispatch)
             : { text: "", sources: [], error: "openai backend selected without a resolved forward sidecar" };
       }
     } catch (e) {

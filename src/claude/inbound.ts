@@ -72,6 +72,15 @@ function toolResultOutput(block: Rec): string | Rec[] {
       if (!isRec(item)) continue;
       if (item.type === "text" && typeof item.text === "string") {
         out.push({ type: "input_text", text: item.text });
+      } else if (item.type === "tool_reference" && typeof item.tool_name === "string" && item.tool_name.length > 0) {
+        // Responses has no tool_reference result carrier. Preserve ToolSearch's loaded-name
+        // evidence as result text so a reference-only reply does not become empty (#6647).
+        // This describes client output; it must not create tools or widen authorization.
+        // Text-only tool output is later joined without separators, so the marker carries its
+        // own line breaks to keep each loaded name distinct from its neighbours.
+        const prev = out[out.length - 1];
+        const lead = prev?.type === "input_text" && typeof prev.text === "string" && !prev.text.endsWith("\n") ? "\n" : "";
+        out.push({ type: "input_text", text: `${lead}Tool loaded: ${item.tool_name}\n` });
       } else if (item.type === "image") {
         const img = imageBlockToInputImage(item);
         if (img) out.push(img);
@@ -436,6 +445,7 @@ function translateAnthropicRequest(
       // a matching suffix or metadata.user_id.
       const stabilized = stabilizeClaudeInstructionsForPromptCache(joinedSystem);
       if (stabilized.instructions) body.instructions = stabilized.instructions;
+      // Token footers are dropped; append nothing if no other notice remains.
       if (stabilized.dynamicNotice) {
         input.push({
           type: "message",

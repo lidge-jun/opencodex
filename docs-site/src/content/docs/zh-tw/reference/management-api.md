@@ -289,6 +289,8 @@ OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中�
 
 ### 系統生命週期
 
+`POST /api/system/restart` 在沒有請求本文或本文為 `{}` 時，保留預設的 60 秒排空等待。使用管理工作階段或管理員權杖的呼叫端可透過 `{"drainGraceMs":2000}` 明確選擇短等待；值必須是 1–60000 毫秒的整數。無效 JSON 或參數回傳 400，且不會開始重新啟動；綁定目標行程的本機 restart capability 不允許設定此參數（403）。回應中的 `drainTimeoutMs` 表示第一次接受的等待時間，重複呼叫不會變更已接受的時間或截止點。等待時間包含傳送接受回應前的延遲；清理與替代行程就緒仍分別保留獨立的 60 秒及 70 秒預算。被中斷的請求可能已經執行，重新傳送前應核對結果；此選項不會增加自動重新傳送。
+
 | 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET /api/system/memory` | 回傳純量行程、heap、串流、回應狀態、看門狗與活躍回合指標 | — |
@@ -303,7 +305,7 @@ OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中�
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | 列出／重新整理或刪除 Codex 帳號。POST 僅保留為已停用的相容 endpoint；成功的 DELETE 回應包含 `catalogRefreshPending`。 | POST 一律回傳 403 `manual_import_disabled`；DELETE 輸入無效時回傳 400 |
 | `PUT /api/codex-auth/accounts/alias` | 設定或清除帳號別名 | 400 無效帳號／別名 |
-| `PUT /api/codex-auth/accounts/pause` | 暫停或恢復一個帳號 | 400 無效帳號／狀態；404 缺失帳號 |
+| `PUT /api/codex-auth/accounts/pause` | 手動暫停或恢復帳號及身分相符的既有主帳號／帳號池項目；回傳 `affectedAccountIds` | 400 無效帳號／狀態；404 找不到帳號；503 主帳號身分資料使用中或無法讀取 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暫停配額耗盡的帳號 | 變更鎖失敗變為 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 清除一個或所有帳號的 runtime 冷卻 | 400 無效 id |
 | `GET, PUT /api/codex-auth/active` | 讀取或選擇現用帳號 | 400 無效或缺失帳號；409 暫停／舊列衝突 |

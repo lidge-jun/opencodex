@@ -28,6 +28,7 @@ import {
   concreteComboRequestBody,
   comboDefaultEffort,
   isComboTargetInCooldown,
+  snapshotComboQuotaCooldowns,
   noteComboSuccess,
   comboFailureDecision,
   advanceComboAfterFailure,
@@ -72,6 +73,7 @@ import { isPlainObject } from "../../lib/plain-data";
 import {
   clientCancelledResponse,
   comboUnavailable,
+  comboUnavailableResponse,
   targetIncompatibleResponse,
   unreadableEncryptedAgentTaskResponse,
 } from "./core-errors";
@@ -104,6 +106,7 @@ import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
 import { settleOperatorReplacement } from "../../lib/upstream-retry";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
 import { createJevModelInvoker } from "./jev-model-invoke";
+import { comboRequestedEffortLabel } from "./combo-requested-effort";
 import { clientWireOf } from "../inference/client-wire";
 
 /**
@@ -412,8 +415,8 @@ export async function executeComboResponses(
     }
   };
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
-    // Attempts remain the complete physical history; the logical row mirrors the most recent
-    // failed target so an exhausted combo still has useful top-level reasoning diagnostics.
+    // Attempts remain the complete physical history; the logical row mirrors the failed
+    // target whose response is returned, including an earlier quota refusal on exhaustion.
     Object.assign(logCtx, childLog, {
       requestedModel,
       model: requestedModel,
@@ -654,13 +657,9 @@ export async function executeComboResponses(
     && isDeclaredReasoningEffort(originalRequestedEffortValue)
     ? originalRequestedEffortValue
     : undefined;
-  const restoreOriginalRequestedEffort = (childLog: RequestLogContext): void => {
+  const restoreOriginalRequestedEffort = (childLog: RequestLogContext, forcedEffort?: string | null): void => {
     if (originalRequestedEffort === undefined) return;
-    const normalizedRequestedEffort = childLog.requestedEffort;
-    const transitionIndex = normalizedRequestedEffort?.indexOf("->") ?? -1;
-    childLog.requestedEffort = transitionIndex >= 0
-      ? `${originalRequestedEffort}${normalizedRequestedEffort!.slice(transitionIndex)}`
-      : originalRequestedEffort;
+    childLog.requestedEffort = comboRequestedEffortLabel(originalRequestedEffort, childLog.requestedEffort, forcedEffort);
     recordAttemptRequestedEffort(childLog);
   };
 
@@ -676,6 +675,41 @@ export async function executeComboResponses(
   // is gone, so carry the loop's own classification decision instead of re-deriving a
   // weaker one from the status alone (#4149).
   let lastFailureClassifiesOverflow = false;
+  // The first quota/rate-limit refusal of the ladder. A fallback that then refuses its own
+  // credential or plan (401/403, or a 400 the ladder hopped past) says nothing about why the
+  // request failed: the primary target ran out. Returning that fallback refusal told clients
+  // "OpenAI account pool has no usable account credential" while every Claude account was spent.
+  let quotaFailure: Response | undefined;
+  let quotaFailedChildLog: RequestLogContext | undefined;
+  // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
+  // fresh cooldown is not a reason the request found no target.
+  const quotaCooldownSnapshot = snapshotComboQuotaCooldowns(config, comboId);
+  const exhaustedFailure = (): Response => {
+    const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
+    const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
+    if (failedChildLog) adoptFailedChildLog(failedChildLog);
+    if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return lastFailure!;
+    if (quotaFailure) return quotaFailure;
+    // The quota-refused target was cooled before this request picked, so the ladder never saw
+    // its refusal. The cooldown, with its Retry-After, is still the honest answer.
+    let quotaCooldownUntil: number | undefined;
+    const now = Date.now();
+    for (const { target, cooldownUntil } of quotaCooldownSnapshot) {
+      if (cooldownUntil <= now) continue;
+      try {
+        if (!targetEligible(target)) continue;
+      } catch {
+        // An eligibility check can exhaust the translator budget; it is not quota evidence.
+        continue;
+      }
+      quotaCooldownUntil = Math.min(quotaCooldownUntil ?? cooldownUntil, cooldownUntil);
+    }
+    const remainingQuotaCooldownMs = quotaCooldownUntil === undefined ? 0 : quotaCooldownUntil - Date.now();
+    return remainingQuotaCooldownMs > 0
+      ? comboUnavailableResponse(`No available targets for combo: ${comboId}`, {
+        retryAfter: String(Math.max(1, Math.ceil(remainingQuotaCooldownMs / 1000))),
+      }) : lastFailure;
+  };
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
@@ -701,8 +735,7 @@ export async function executeComboResponses(
       // return the last real upstream answer with its status, headers and any quota body
       // intact rather than to mint a synthetic error, and a later target only exists because
       // an earlier one already recorded one.
-      if (lastFailedChildLog) adoptFailedChildLog(lastFailedChildLog);
-      return lastFailure!;
+      return exhaustedFailure();
     }
     const targetSendBudget = comboSendScope
       ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
@@ -875,7 +908,8 @@ export async function executeComboResponses(
         onNativePassthroughCancel: callbackGate.onCancel,
         onResponseComplete: callbackGate.onResponseComplete,
       });
-      restoreOriginalRequestedEffort(childLog);
+      // Native Chat rebuilds its own body and does not apply the initial JEV effort.
+      restoreOriginalRequestedEffort(childLog, nativeChild ? undefined : initialJevDecision?.effort);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {
@@ -983,6 +1017,10 @@ export async function executeComboResponses(
     );
     attemptRetained = true;
     lastFailure = failure.response;
+    if (!quotaFailure && (lastFailure.status === 429 || lastFailure.status === 402)) {
+      quotaFailure = lastFailure;
+      quotaFailedChildLog = childLog;
+    }
     lastFailedChildLog = childLog;
     // A replacement that answers 200 is unmarked, and its zero-output failure only exists once
     // preflight has rebuilt the stream as a fresh Response. A spent grant never hops: a status the
@@ -1145,9 +1183,9 @@ export async function executeComboResponses(
       }
       // Waiting or recovery may have observed cancellation after the check above.
       if (options.abortSignal?.aborted) return clientCancelledResponse();
-      adoptFailedChildLog(childLog);
     }
   }
+  const failure = exhaustedFailure();
   if (
     lastFailure?.status === 413
     && lastFailureClassifiesOverflow
@@ -1156,5 +1194,5 @@ export async function executeComboResponses(
       ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
       : jsonContextOverflowResponse();
   }
-  return lastFailure!;
+  return failure;
 }

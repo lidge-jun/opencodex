@@ -177,7 +177,7 @@ Claude Code needs a token in `ANTHROPIC_AUTH_TOKEN` to talk to a gateway, but se
 variable also disables your claude.ai login and its connectors. Which of the two you want
 depends on something opencodex can look up, so by default it does.
 
-Leave **Auth mode** on **Auto** (the default) in **Claude → Claude Code** and opencodex
+Leave **Auth mode** on **Auto** (the default) in **Connect → Claude** and opencodex
 decides at each launch:
 
 | What it finds | What it does |
@@ -202,7 +202,7 @@ the proxy starts or you save settings, while `ocx claude` always resolves live.
 ## Claude Desktop modes: gateway (default) and first-party
 
 Claude Desktop can use OpenCodex in one of two mutually exclusive modes. Pick it in
-**Claude → Desktop → Connection mode** in the dashboard or with `ocx claude desktop apply
+**Connect → Claude Desktop → Connection mode** in the dashboard or with `ocx claude desktop apply
 --first-party|--gateway`.
 
 ### Gateway (default)
@@ -275,30 +275,41 @@ Picker mode is part of first-party mode. On macOS it is on by default when first
 unless `claudeCode.intercept.picker: false` is set. It changes the first-party Desktop Code-tab picker
 so it lists available opencodex models by name. The first time it is enabled, macOS may ask you to
 trust a local certificate authority in the login keychain. That authority is constrained to `claude.ai`
-and its subdomains. Its signing key exists only inside the running OpenCodex process, so every
-OpenCodex restart publishes a fresh authority and macOS asks you to trust it again — approve the
-prompt, or later run `ocx claude desktop picker trust`, after each restart.
+and its subdomains. OpenCodex protects its exportable signing identity in the OS credential store
+and reuses the same validated certificate and key across normal restarts. No plaintext picker signing
+key is stored in the OpenCodex config directory. The full constrained CA validation and OS trust
+verification still apply. With the same approved identity and an available credential store, restarting
+OpenCodex does not add or remove Certificate Trust Settings. Startup restore never installs trust:
+if trust is missing, revoked or unknown, the picker stays pending. Run `ocx claude desktop picker on`
+or `ocx claude desktop picker trust` explicitly to grant trust.
 Startup also attempts to remove a legacy on-disk picker signing key before checking whether
 interception is enabled. Cleanup is best-effort and does not enable interception or block startup.
 
-On restart OpenCodex first removes the previous authority from the keychain. If that removal fails
-(for example because you decline the keychain prompt), the picker stays off for this run so two
-authorities are never trusted side by side. Desktop keeps its network connection: the proxy address
-in its profile still answers, but only as a plain relay that does not read claude.ai traffic, and the
-picker lists Anthropic's own models until the removal succeeds. OpenCodex remembers which certificate
-still needs removal and retries on the next restart; `ocx claude desktop picker status` shows the
-picker as unavailable meanwhile.
+One-time migration from an older picker identity may require consent to remove its previous trust.
+If cleanup cannot finish, the picker stays unavailable and the applied profile uses a blind relay
+until cleanup succeeds; `ocx claude desktop picker status` reports that state. macOS may separately
+ask you to unlock the keychain or approve an application's access to stored credentials. These native
+access prompts can still occur on restart or upgrade.
+
+Picker mode remains unsupported on Windows and Linux: OpenCodex starts no picker CA, credential-store
+or proxy work there. The main Claude intercept remains available with ownership, symlink, file-permission
+and Windows ACL checks protecting its local CA files.
 
 Picker mode allows up to 64 KiB of headers on incoming requests and ordinary HTTP
 responses, preserving browser session cookies. Larger upstream response headers return
 502 and log `upstream:headers-too-large`, without cookie values or request paths.
 Upgraded connections continue to relay bytes directly after the request handshake.
 
+Picker mode uses HTTP/2 with Claude Desktop so long-lived chat streams no longer use up
+Desktop's connections to claude.ai. Earlier versions could leave chat stuck on
+"Timed out loading session" while picker mode was on. If chat stops loading with picker mode
+on, turn it off with `ocx claude desktop picker off` and report the problem.
+
 While picker mode is on, Claude Desktop reaches the network through OpenCodex. If OpenCodex stops,
 Desktop is offline until you fully restart it or turn picker mode off. Check the state with
 `ocx claude desktop picker status`; use `ocx claude desktop picker trust` to repeat the trust step,
 or turn it off with `ocx claude desktop picker off`. The dashboard has the same picker toggle under
-**Claude → Desktop**. After the picker profile is selected, fully quit and reopen Claude Desktop.
+**Connect → Claude Desktop**. After the picker profile is selected, fully quit and reopen Claude Desktop.
 
 Picker mode is part of first-party mode, so the [first-party account risk](#first-party-opt-in)
 applies to it as well. Desktop and CLI catalog rewrites share bounded row and metadata limits:
@@ -318,7 +329,7 @@ ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 
-or use **Claude → Desktop → Code tab model bindings** in the dashboard. Picking **Sonnet 4.6** in
+or use **Connect → Claude Desktop → Code tab model bindings** in the dashboard. Picking **Sonnet 4.6** in
 the Code tab is then served by `xai/grok-4.7`. The picker keeps Anthropic's label, and the model is
 still introduced to itself as that Claude model by Claude Code's system prompt, so prefer rows you
 do not otherwise use (the **More models** entries are good candidates). Bindings take effect on the
@@ -336,7 +347,7 @@ next request; Desktop does not need a restart.
 
 ### Claude Code CLI first-party
 
-Turn on the CLI switch in Claude → Code, or run `ocx claude config set --first-party on`; use `off` to disable it. The switch is immediate and refuses `{enabled:false, cliFirstParty:true}` before any field is saved; it may also refuse to turn on if the local intercept is unavailable, the CA cannot be prepared, settings cannot be read, or a foreign proxy setting owns the keys. Off persists even when the intercept is unavailable; disabling Claude routing alone leaves an owned settings env untouched. For fully native terminal traffic with only Desktop first-party on, set `NO_PROXY='*'` in the shell. This still carries the first-party account risk stated above.
+Turn on the CLI switch in Connect → Claude, or run `ocx claude config set --first-party on`; use `off` to disable it. The switch is immediate and refuses `{enabled:false, cliFirstParty:true}` before any field is saved; it may also refuse to turn on if the local intercept is unavailable, the CA cannot be prepared, settings cannot be read, or a foreign proxy setting owns the keys. Off persists even when the intercept is unavailable; disabling Claude routing alone leaves an owned settings env untouched. For fully native terminal traffic with only Desktop first-party on, set `NO_PROXY='*'` in the shell. This still carries the first-party account risk stated above.
 Disabling Claude routing leaves the owned settings env untouched. While the bound listener still runs, every Messages request relays unchanged; after it stops, plain `claude` cannot connect until OpenCodex runs or Desktop/CLI first-party is turned off. Native `ocx claude` sets `NO_PROXY=*` only for an owned env without a foreign inherited `HTTPS_PROXY`/`https_proxy`. With a foreign proxy it preserves that value and warns that the settings-owned intercept still applies; turn Desktop/CLI first-party off or unset the setting.
 The UI distinguishes uncertainty about whether settings still point at its proxy (unknown), a token-bearing opencodex proxy with a foreign CA (foreign: fix HTTPS_PROXY / NODE_EXTRA_CA_CERTS manually), and a tokenless loopback proxy beside a foreign CA (local: ownership is unconfirmed; remove HTTPS_PROXY if unused). With matching applied settings and a bound listener but Claude routing off, disabled means requests relay unchanged while it is bound; turn first-party off to remove settings. An owned URL with no listener is stopped; a bound listener with an owned CA but mismatched port or token is broken even when routing is off. With an intent on, stopped or broken plus ineligible interception displays routingOff: Claude routing or the intercept is off, or this machine is a client of another opencodex hub; enable interception on this machine or turn first-party off to remove the settings. When interception is stopped, use **Start interception** or `ocx claude intercept start` to retry within the running OpenCodex service. Saving first-party settings also starts it automatically. A refusal reports disabled routing, client role, an ephemeral public port, an occupied port, or a startup failure. For an occupied port, free it or set `claudeCode.intercept.port`. If a pair is already bound on a different port, the response names both ports; use the bound port or restore the configured value. CLI intent with no proxy is not applied; one intent with a live proxy gets the shared-relay notice; any remaining proxy with neither intent is residual, unless unknown, foreign, or local takes precedence.
 
@@ -373,8 +384,12 @@ routes that session to the model, just like a binding.
 
 ## Claude Desktop profile (gateway mode)
 
-The profile below is written only in gateway mode. Claude Desktop uses a separate profile from Claude Code. Open **Claude → Desktop** in the
-dashboard to place each available route in one of four families: Opus, Fable, Sonnet, or Haiku.
+The profile below is written only in gateway mode. Claude Desktop uses a separate profile from Claude Code. Open **Connect → Claude Desktop** in the
+dashboard. The **Models** card has the two choices most people need: **Default model** is listed
+first in Claude Desktop and sent as the Opus tier, and **Quick task model** answers Desktop's
+Haiku-tier requests. Picking a model there moves it into that family and makes it the family
+default. To place every route yourself, open **Advanced: Claude tier assignment**, where each
+available route sits in one of four families: Opus, Fable, Sonnet, or Haiku.
 All routes start in Opus on a new profile. The first Opus route becomes the initial overall
 default, and every non-empty family always has one family default.
 
@@ -779,6 +794,19 @@ depend on them for long unattended runs.
 
 <!-- TODO(WP5 GUI): Add the sidecar settings-screen walkthrough after the GUI controls ship. -->
 
+## Client tools on Cursor routes
+
+When Claude Code uses a Cursor-backed model, OpenCodex preserves recognized client tool names
+such as `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, and `Task` in the Cursor catalog, tool
+guidance, and replayed calls. This keeps the names consistent with Claude Code's instructions.
+Denied Cursor-native execution frames direct the model to the client tools available that turn.
+
+A mixed catalog containing a bare Codex `exec_command` or `shell_command` bridge uses wire
+aliases such as `ocx_client_Read` to avoid Cursor tool collisions; calls returned to Claude Code
+still use its original tool names. Namespaced MCP tools keep their namespaced identities.
+OpenCodex includes these aliases in Cursor's transport byte budget, so a tool whose definition
+would exceed the limit is omitted for that turn.
+
 ## Reasoning effort
 
 Claude Code's `/effort` setting is preserved across the adapter:
@@ -803,6 +831,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | Assistant text | `output_text` |
 | Assistant `tool_use` | `function_call` (`input` → JSON-stringified `arguments`) |
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
+| `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result; preserves loaded-tool names without adding declarations or enabling translated server-side deferral |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
 | Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
@@ -905,19 +934,26 @@ Claude debug immediately clears the ring.
 
 ## GUI (Claude page)
 
-The dashboard sidebar has a dedicated **Claude** page (below API) and a **Claude ON** toggle
-(label intentionally identical in every language). The page shows:
+Open **Connect → Claude** for the one-page Claude Code settings. The page shows these controls
+and sections in order:
 
-- Desktop tab: **Connection mode** selector — gateway (default) or first-party — with the
-  running proxy port in first-party mode. Only **Save & apply** switches modes; **Save** alone
-  stores the gateway profile lanes for a later gateway apply and leaves the current mode as is
-- Inbound kill switch (enabled toggle)
-- Quickstart (`ocx claude`) and manual env block
-- Fast Mode selector (Auto / ON / OFF)
-- Auto-context toggle and compaction threshold dropdown
-- Subagent auto-registration toggle
-- Model interception (modelMap) editor
-- Live preview of picker aliases
+1. **Claude Code CLI first-party** switch
+2. **Get started** with `ocx claude` and the manual environment block
+3. **General** with compatibility, agent instructions, Fast Mode, and context controls
+4. **Background helper model** selector
+5. **Model interception** editor
+6. **Available models**, the live preview of Claude Code's `/model` picker aliases
+7. **Claude connection** switch, also available on the Claude card in the Connect overview
+
+The sticky Save bar shows **No changes** when the saved settings match the page, or
+**Unsaved changes** after you edit them. **Revert** discards unsaved edits; **Save** commits the
+editable settings. The **Claude connection** and **Claude Code CLI first-party** switches apply
+immediately. **Save** never changes either switch.
+
+**Claude Desktop** is a separate tab under **Connect**. Its **Connection mode** selector offers
+gateway (default) or first-party, with the running proxy port in first-party mode. Only
+**Save & apply** switches modes; **Save** alone stores the gateway profile lanes for a later
+gateway apply and leaves the current mode as is.
 
 `GET /api/claude-code` returns effective defaults, config, context-window registry, effective env,
 available route ids, aliases, and port. `PUT /api/claude-code` is partial and preserves omitted
@@ -980,7 +1016,7 @@ and `"force"`. A value you export yourself always wins over the injected one.
 directives, not the Agent tool's `model` argument. Make sure the directive matches the intended
 route. Pass `"haiku"` as the model placeholder.
 
-Set `claudeCode.stabilizePromptCache` to `true` in `config.json` to relocate supported trailing Claude harness notices from system instructions to a trailing user message on translated routes. The default is `false`. Enable it only when this role change is appropriate for your clients. It preserves fenced examples and unmatched text; native Anthropic passthrough is unchanged. The metadata-less prompt-cache key then follows stabilized instructions. This does not create conversation identity or guarantee upstream cache hits.
+Set `claudeCode.stabilizePromptCache` to `true` in `config.json` to peel supported trailing Claude harness notices from system instructions on translated routes. Recognized `<total_tokens>N tokens left</total_tokens>` footers are dropped, including repeated footers. TaskCreate reminders still move to a trailing user message; if only token footers were peeled, no input message is added. The default is `false`. Enable it only when this role change is appropriate for your clients. It preserves fenced examples and unmatched text; native Anthropic passthrough is unchanged. The metadata-less prompt-cache key then follows stabilized instructions. This does not create conversation identity or guarantee upstream cache hits.
 
 On every translated Chat route, timeline reminders keep their position in the
 conversation, after any pending tool results. This prevents a newly appended

@@ -1,5 +1,6 @@
 import type { RefObject } from "react";
 import type { NativeMainTFn } from "../i18n/native-main-copy";
+import { NATIVE_MAIN_ERROR_COPY } from "../i18n/native-main-error-copy";
 import { canApplyNativeMain, canRegisterNativeMain, nativeMainUnavailableCode, type NativeMainAction, type NativeMainErrorCode, type NativeMainSnapshot } from "../native-main-profiles";
 
 export interface NativeMainProfilesViewProps {
@@ -66,12 +67,16 @@ export function NativeMainProfilesView({
       <p className="card-sub">{t("nativeMain.physicalHint")}</p>
       {blocked && <p role="status" className="notice notice-warn">{t("nativeMain.busyOther")}</p>}
       {busy && <p role="status">{t("nativeMain.working")}</p>}
-      {error && <div role="alert" className="notice notice-err">
-        <p>{t(error === "STATE_CHANGED" ? "nativeMain.changed" : "nativeMain.error")}</p>
-        <code>{error}</code> <DoctorHint t={t} />
+      {error && <div role="alert" className="notice notice-err native-main-notice">
+        <p>{t(NATIVE_MAIN_ERROR_COPY[error])}</p>
+        <p>{t("nativeMain.retryHint")}</p>
+        <p><code>{error}</code> <DoctorHint t={t} /></p>
       </div>}
-      {result && <p role="status" className="notice">{t(result === "saved" ? "nativeMain.saved"
-        : result === "restart" ? "nativeMain.restart" : "nativeMain.done")}</p>}
+      {result && !busy && !error && !action && <div role="status" className="notice native-main-notice">
+        <strong>{t("nativeMain.lastResult")}</strong>
+        <p>{t(result === "saved" ? "nativeMain.saved" : result === "restart" ? "nativeMain.restart" : "nativeMain.done")}</p>
+        {result !== "saved" && s && !refreshFailed && <p>{t("nativeMain.reopenHint")}</p>}
+      </div>}
       {refreshFailed && <p role="alert" className="notice notice-warn">{t("nativeMain.refreshFailed")}</p>}
       <button type="button" className="btn btn-sm btn-ghost" onClick={onRefresh} disabled={disabled || !!action}>{t("nativeMain.refresh")}</button>
       {s && !s.doctor.supported && <p role="alert">{t("nativeMain.unsupported")}</p>}
@@ -127,6 +132,11 @@ export function NativeMainProfilesView({
           : action.rollback ? "nativeMain.rollback" : "nativeMain.recover", { label: action.kind === "switch" ? action.label : "" })}</h3>
         <p>{t("nativeMain.confirmHint")}</p>
         <code style={{ overflowWrap: "anywhere" }}>{s.doctor.effectiveCodexHome}</code>
+        <ol>
+          <li>{t("nativeMain.stepClose")}</li>
+          <li>{t("nativeMain.stepConfirm")}</li>
+          <li>{t("nativeMain.stepResult")}</li>
+        </ol>
         <p><label htmlFor={`${id}-stopped`}>
           <input id={`${id}-stopped`} type="checkbox" checked={confirmedStopped}
             disabled={mutationDisabled} onChange={event => onStopped(event.target.checked)} /> {t("nativeMain.stopped")}

@@ -279,6 +279,8 @@ export interface ManagementSessionControl {
   isCurrent(req: Request, config: OcxConfig): boolean;
   /** Prove that the current browser session came from the operator-mediated pairing flow. */
   isPaired(req: Request, config: OcxConfig): boolean;
+  /** Revalidate independent session authority before disclosing stored data keys. */
+  canRevealDataKeys?(req: Request, config: OcxConfig): boolean;
 }
 
 export function createManagementSessionControl(state: ManagementAuthState): ManagementSessionControl {
@@ -306,6 +308,10 @@ export function createManagementSessionControl(state: ManagementAuthState): Mana
     },
     isPaired(req: Request, config: OcxConfig): boolean {
       return currentSession(req, config)?.issuance === "pairing";
+    },
+    canRevealDataKeys(req: Request, config: OcxConfig): boolean {
+      const issuance = currentSession(req, config)?.issuance;
+      return issuance === "pairing" || issuance === "tailscale-identity";
     },
     revokeCurrent(req: Request): boolean {
       if (!state.available) return false;

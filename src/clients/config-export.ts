@@ -21,7 +21,7 @@
  */
 import { homedir } from "node:os";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
@@ -48,6 +48,7 @@ export {
   zcodeStoreSchemaEstablished,
 } from "./config-export/zcode-store";
 export type { DshReasoningEffort, DshWireReasoningEffort, DshModelEntry, DshProviderBlock, DshGeneratedConfig } from "./config-export/dsh";
+export { DSH_PROFILE_PROVIDER_PATH, dshProfilePatchEstablished, buildDshProfilePatchContribution } from "./config-export/dsh";
 export type { McodeProviderBlock, McodeModelEntry, McodeGeneratedConfig } from "./config-export/mcode";
 export type { RaycastAbility, RaycastAbilityName, RaycastModelEntry, RaycastProviderEntry, RaycastGeneratedConfig } from "./config-export/raycast";
 export { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } from "./config-export/raycast";
@@ -59,7 +60,7 @@ import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENC
 import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, inputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
 import { exportReasoningEfforts, exportDefaultReasoningEffort, legacyReasoningMetadata, type LegacyEffortVariant } from "./config-export/reasoning-metadata";
 import { buildOmpClientConfig, summarizeOmp, buildOmpContribution } from "./config-export/omp";
-import { buildDshClientConfig, summarizeDsh, buildDshContribution } from "./config-export/dsh";
+import { buildDshClientConfig, summarizeDsh, buildDshContribution, DSH_DESKTOP_PROFILE } from "./config-export/dsh";
 import { buildMcodeClientConfig, summarizeMcode, buildMcodeContribution } from "./config-export/mcode";
 import { buildZcodeClientConfig, summarizeZcode, buildZcodeContribution } from "./config-export/zcode";
 import { buildClineClientConfig, summarizeCline, buildClineContribution } from "./config-export/cline";
@@ -68,6 +69,18 @@ import { buildKiloClientConfig, summarizeKilo, buildKiloContribution, kiloConfig
 export { kiloConfigPath, kiloHomeDir, kiloCandidatePath, KILO_CONFIG_CANDIDATES } from "./config-export/kilo";
 export type { KiloGeneratedConfig, KiloProviderBlock, KiloModelEntry } from "./config-export/kilo";
 import { droidConfigPath, buildDroidClientConfig, summarizeDroid, buildDroidContribution } from "./config-export/droid";
+import {
+  buildCommandCodeClientConfig,
+  summarizeCommandCode,
+  buildCommandCodeContribution,
+  commandCodeProviderRoot,
+  type CommandCodeGeneratedConfig,
+  type CommandCodeModelEntry,
+  type CommandCodeProviderBlock,
+} from "./config-export/commandcode";
+
+export type { CommandCodeGeneratedConfig, CommandCodeModelEntry, CommandCodeProviderBlock };
+export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution, commandCodeProviderRoot };
 
 
 
@@ -435,6 +448,11 @@ export function dshConfigPath(env: OpencodeLaunchEnv = process.env, home: string
   return join(dshHomeDir(env, home), "settings.yaml");
 }
 
+/** The Desktop profile's patch, where DSH 0.1.7+ reads provider routes (see `DSH_PROFILE_PROVIDER_PATH`). */
+export function dshProfilePatchPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(dshHomeDir(env, home), "profiles", DSH_DESKTOP_PROFILE, "cordis.patch.yml");
+}
+
 /**
  * MiniMax Code stores runtime state under `MINIMAX_DATA_DIR`, then the legacy
  * `MAVIS_DATA_DIR`, and finally `~/.minimax`. Relative overrides are refused
@@ -466,6 +484,43 @@ export function zcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string 
 
 export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   return join(zcodeHomeDir(env, home), "v2", "config.json");
+}
+
+/**
+ * The home directory Command Code itself resolves: `env.HOME ?? env.USERPROFILE`
+ * (`homeDir15` in the published `command-code@1.66.0` bundle).
+ *
+ * On POSIX `os.homedir()` already reads `$HOME`, so the two agree and `home` is
+ * returned as is. On Windows `os.homedir()` reads `%USERPROFILE%` and ignores
+ * `HOME`, which Git for Windows, MSYS2 and Cygwin set, so a user whose `HOME` differs
+ * would get a provider block in a store Command Code never opens. Only the OS-default
+ * home is replaced: a caller that injects a different root (a test, the writer's
+ * `input.home`) keeps it, and a blank or relative value falls back to `home`.
+ */
+export function commandCodeUserHome(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32" || home !== homedir()) return home;
+  const value = env.HOME ?? env.USERPROFILE;
+  return typeof value === "string" && value.trim() && win32.isAbsolute(value) ? value : home;
+}
+
+/**
+ * Command Code's provider store directory — `.commandcode` under the home the client
+ * resolves (see {@link commandCodeUserHome}), with no override.
+ *
+ * There is deliberately no `COMMANDCODE_HOME` here, unlike the other clients in this
+ * file: `grep -c COMMANDCODE_HOME` over the shipped `dist/cli.mjs` and
+ * `dist/index.mjs` returns 0. An override we honour but the client ignores is worse
+ * than none: `enable` would report success and write a provider block at a path no
+ * Command Code process ever opens, and the user would see an empty model list with no
+ * error anywhere. An apply against a relocated home is instead refused by `detectDir`
+ * not existing.
+ */
+export function commandCodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  return join(commandCodeUserHome(env, home, platform), ".commandcode");
+}
+
+export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  return join(commandCodeHomeDir(env, home, platform), "providers.json");
 }
 
 /**
@@ -1479,6 +1534,20 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // ZCode persists the credential in its own file and has no dedicated
     // proxy-admission header field, so real keys are never serialized and
     // remote binds refuse — same reasoning as MCode.
+    loopbackOnly: true,
+  },
+  commandcode: {
+    id: "commandcode",
+    filename: "providers.json",
+    destination: env => commandCodeConfigPath(env),
+    // No env var exists behind this integration: buildCommandCodeClientConfig
+    // writes `apiKey: false`, the documented keyless form for a loopback endpoint.
+    apiKeyEnv: "",
+    exportHint: "The provider is written with `apiKey: false` — Command Code treats a keyless loopback endpoint as already authenticated. No key is stored or referenced.",
+    build: buildCommandCodeClientConfig,
+    format: "json",
+    summarize: summarizeCommandCode,
+    buildContribution: buildCommandCodeContribution,
     loopbackOnly: true,
   },
   prime: {

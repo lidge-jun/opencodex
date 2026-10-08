@@ -5,6 +5,34 @@ description: Setup, start, stop, service, diagnostics, sync, and update commands
 
 These commands install, run, inspect, repair, and update the local opencodex proxy and its Codex integration.
 
+## Discover before starting services
+
+`ocx help`, `ocx help <family>` and `ocx help <family> <leaf>` are offline.
+Use `ocx help --all` when the compact root is insufficient. Help, local config
+validation and local Lab inspection do not require starting a proxy.
+
+Before a live management workflow, run `ocx ready --json` and `ocx status --json`.
+Readiness distinguishes `pending`, `failed` and `unreachable`; only `ready: true`
+confirms readiness. Check the target and `versionSkew.relation`: `unknown` is not
+proof of matching versions. A version mismatch calls for resolving the intended
+installation, not repeatedly trying a newer flag against an older server.
+
+Output and exit conventions are command-specific. `ready` and `resolve` reject
+invalid arguments with 64, while `doctor --json` is unsupported and exits 2.
+A successful local save or accepted restart request does not prove convergence;
+read the command receipt and re-check status after the requested operation.
+
+When live target discovery finds no proxy, policy/catalog commands, key-scoped usage and
+Aside profile sync report: “Proxy is not running. Start the intended proxy with: ocx start.
+No request was sent.” A management request that was sent can still have an uncertain write
+outcome; read back from the intended target before retrying. Legacy client-integration
+refusals add fixed recovery guidance keyed on the refusal reason (never the writer's own text);
+backup and residual-recovery notices remain available.
+
+`ocx system update run --yes` prints the accepted job ID and observed job state. Follow it
+with `ocx system update status <job-id>`; acceptance does not establish successful installation
+or restart. `--json` retains the complete server response.
+
 ## Setup
 
 ### `ocx init` · `ocx setup`
@@ -101,6 +129,29 @@ Missing or unreadable evidence blocks the guarded stop.
 
 ### `ocx restart`
 
+When this CLI is newer than an attested standalone POSIX proxy, restart can stop the old
+installation and launch this one. This guarded update requires an unclaimed physical home,
+a detached proxy whose parent is PID 1, no installed or active service, and a known CLI version.
+The stop uses the same connection that proved the old proxy's identity. The command launches
+once only after confirmed shutdown, then requires the exact child PID, endpoint, fresh identity
+proof and matching version. Missing version, uncertain stop, timeout or an unexpected replacement
+reports failure without another stop or start. If the runtime this CLI would launch is still the
+small placeholder an in-place npm install leaves before its postinstall, restart refuses before
+stopping anything; after a confirmed stop it waits for the runtime within the same deadline and
+launches nothing if it does not arrive. Windows, foreground, desktop-supervised, service,
+connected-client and sibling runtimes do not use this update path; use their owning lifecycle
+controls. A newer proxy or incomparable version still refuses an in-place downgrade. Use the newer
+installation's `ocx` to restart; inspect `which -a ocx` and `ocx status` to identify it.
+Eligibility refusals name the reason and next action: use the owning installation's
+`ocx service restart` for a service, the owning terminal for a foreground proxy, or the
+owning service/desktop app on Windows. Unknown ancestry or a changed target calls for
+`ocx status` before any restart.
+
+If package files or the Bun runtime remain incomplete after the installer exited or failed,
+run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or
+desktop app), then reinstall with the same package manager and start it again. See
+[Update failed](/troubleshooting/update-failed).
+
 When a proxy is running, ask that exact attested PID and port to restart in place, wait for its
 normal drain, and verify a different runtime PID on the same port. Managed routing and service
 supervision stay installed throughout; an uncertain request is observed rather than replayed as a
@@ -122,7 +173,7 @@ the previous attempt never launched a child or the launched child is known to ha
 If a launch may still be running, restart reports the original failure without starting
 a second proxy, even when a health probe finds nothing. When an accepted restart never publishes a replacement, the command re-observes
 once before giving up — a proxy that crashed mid-restart reads absent and is started fresh,
-while a replacement that landed just past the shortened replacement wait still proves success within the overall observation deadline. A live target is
+while a replacement that landed just past the shortened replacement wait still proves success within the overall observation deadline. Outside the guarded newer-CLI update path, a live target is
 never stopped to make room, so a stale-but-listening process can not be replaced by a second
 proxy racing it for the port.
 Every failed start attempt is followed by a beat and a strong re-observation before the
@@ -200,6 +251,10 @@ opencodex local config only if all restore steps succeeded. `remove` is an alias
 Config cleanup requires ownership metadata created by a fresh install; legacy or shared directories
 are left in place.
 
+Both commands accept no arguments. Unsupported flags (including `--dry-run` and `--yes`)
+exit with usage status 2 before preflight or teardown; no changes are made.
+For help, run `ocx help uninstall` or `ocx help remove`.
+
 ## Status and health
 
 ### `ocx status [--json]`
@@ -234,6 +289,11 @@ service and shim diagnostics. `ocx doctor` uses the same live-first rule for its
 section, so the two commands should agree on restart protection. If you are diagnosing a discrepancy,
 compare the reported live startup verdict with the local service details rather than treating the shell
 probe as more authoritative.
+
+The live read allows the bounded service probe to finish: up to 6.5 seconds on macOS/Linux
+and 16.5 seconds on Windows when the diagnostic cache is cold or expired. Cached reads return
+promptly. A timeout still falls back to local diagnostics; a healthy `/healthz` alone does not
+establish restart protection.
 
 The `clients=pending-restart(...)` diagnostic lists Codex CLI clients that predate the routing
 injection. On macOS, Electron renderer, utility, and crashpad helpers under Codex.app's framework
@@ -302,6 +362,26 @@ tokens, authorization headers, request content, emails, and account identities.
 
 Identity-check the live proxy. Human output reports PID/port; `--json` emits `{ok, pid, port}`. The
 command exits 0 only when healthy and 1 otherwise, making it suitable for service probes.
+
+### `ocx system health [--json]`
+
+```bash
+ocx health --json
+ocx system health --json
+```
+
+Root health is the liveness probe. System health is a separate management
+observation: `{status:"ok",service:"opencodex",version,uptime,pid,spendLedger}`,
+with uptime in seconds. `system status` remains its settings/startup/memory aggregate.
+A valid system-health observation exits 0 even if the spend ledger is degraded.
+Read ownership held/unheld, initialized, configured, degraded, persistFailures and
+corruptRecords; status ok does not certify every subsystem healthy. Failed/malformed
+reads remain nonzero with safe stderr, not fabricated healthy data.
+
+For bounded diagnostics, [request/injection follow](/reference/cli/agents/#follow-request-windows-or-injection-sequences)
+stops on error or detected target change instead of reconnecting automatically.
+SIGINT exits 130 and SIGTERM 143. Versioned log events reconstruct observed windows,
+not traffic missed between polls; injection seq cannot exclude restart/eviction gaps.
 
 ### `ocx ready [--json] [--wait [--timeout <seconds>]]`
 
@@ -379,6 +459,27 @@ accounts (redacted ids) with a recovery `Action:`, and a static OK that the Code
 not fabricate official-client metadata. Doctor never mutates credentials or applies repairs.
 
 ## Catalog sync
+
+### Read saved state separately from synchronization
+
+Model, provider, settings and v2 receipts have different completion contracts.
+Local custom-model changes opportunistically sync: no proxy means a successful
+save, `needsSync:true`, `sync.status:"not-attempted"` and exit 0. An explicit local
+provider `--sync` without a proxy instead returns nonzero after saving.
+
+Settings writes use `catalogRefreshPending`, while live v2/catalog writes use a
+full `catalogRefresh` disposition. Local v2 mode/keep-native and changed on/off
+still attempt their established sync even when no port was discovered. JSON
+reports actual changed state and sync evidence; unverified/failed sync is nonzero.
+Threads/hints and unchanged on/off do not introduce a new sync attempt.
+
+Inspect the same target with `ocx v2 status --json` or `ocx v2 status --live --json`,
+and use `ocx system settings --json` for settings read-back. A saved-but-pending or
+unknown outcome does not prove rollback and is not permission to replay a write.
+See [v2 outcomes](/reference/cli/agents/#explicit-v2-target-and-outcome) and
+[account policy](/reference/cli/providers-accounts/#pool-policy-account-thresholds-and-paid-credit-intent)
+for target, scope and spending boundaries. A reset-grant status read can contact
+upstream status but never consumes or resumes a grant.
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
@@ -717,22 +818,54 @@ or failing to claim a new root safely, therefore leaves the working proxy and it
 place. Existing or conflicting scheduler registrations continue to fail closed rather than being
 deleted as an unsafe best-effort rollback.
 
+If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
+`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
+proxy is not running. The message includes the lock path, recorded PID, current liveness,
+executable name when available, and lease age. The process identity is unverified: the PID
+may have been reused, so liveness and executable name describe whichever process occupies
+that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
+process based only on this PID. A later mutation attempt can reclaim a stale lease once its
+age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+
+On Windows, this shared Node/Bun diagnostic does not launch an executable to look up the
+image name; the recorded PID, liveness, lease age and recovery guidance remain available.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-Wrap a script-based `codex` launcher on PATH with a lightweight autostart script. Real `codex.exe`
-targets are left untouched to avoid breaking exact executable invocations.
-If installation is refused or the resulting shim is unhealthy, the command exits nonzero and
-the dashboard reports the failure reason. A healthy existing shim still counts as success.
+On macOS and Linux, install a private autostart wrapper at `<OPENCODEX_HOME>/bin/codex` and a
+sourceable `<OPENCODEX_HOME>/codex-shell-env.sh`, using the resolved OpenCodex home. The native
+launcher stays where brew, npm, or fnm installed it; package-manager upgrades and version rollbacks
+continue to work without rewrapping that launcher. On Windows, script-based launchers are still
+wrapped in place. Real `codex.exe` targets are left untouched.
+If installation is refused or the wrapper cannot run, the command exits nonzero and the dashboard
+reports the failure reason. A runnable Unix wrapper counts as a successful install even before
+activation in the current shell; an already-installed healthy shim also counts as success.
 For Windows installations that expose only `codex.exe`, use `ocx service install` for autostart.
+
+After brew/fnm and other PATH setup, run the activation command printed by install. With the default
+home, it is:
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+For a custom home, use the printed, quoted path. Sourcing is idempotent: it removes duplicate private
+bin entries and puts that directory first on PATH. To activate future shells, add that source line
+after your package-manager PATH setup yourself; OpenCodex never edits shell startup files. Install
+cannot change its parent shell. `ocx status`, `ocx codex-shim status`, `ocx doctor`, and `ocx connect`
+report a runnable but unselected wrapper as **not active**, with the activation command. Shell
+aliases/functions and separately configured desktop or service launchers still need their own setup.
 
 For fnm-managed Codex, installation resolves the temporary multishell directory to the durable
 Node installation while preserving the launcher filename. If that directory cannot be resolved,
 installation refuses instead of wrapping a temporary path. When Codex is selected, `ocx connect`
-also reports shim readiness. This readiness check skips special-file PATH entries while preserving
-the order of regular launchers, including npm and fnm symlinks. If a different PATH wrapper hides a healthy shim, fix PATH order;
+also reports shim readiness. This readiness check skips special-file PATH entries and, on macOS
+and Linux, files without execute permission, including symlink targets. It preserves the order of
+regular executable launchers, including npm and fnm symlinks. Windows keeps its PATHEXT lookup.
+If a different PATH wrapper hides a runnable shim, fix PATH order;
 reinstalling the same shim does not change which command your shell finds first. If the tracked shim
-is healthy but no `codex` command is found, connect reports it as inactive and asks you to add its
-directory to PATH. A failed PATH inspection reports activation as unverified instead of claiming
+is runnable but no `codex` command is found, connect reports it as inactive and prints the activation
+command. A failed PATH inspection reports activation as unverified instead of claiming
 that no command exists. These warnings do not change the connect command's exit status.
 
 Before an install or repair is committed, OpenCodex runs the saved launcher with `--version` while
@@ -744,11 +877,18 @@ use `ocx service install` instead when a dynamic command-manager launcher cannot
 Cleanup refusals include a bounded diagnostic suffix identifying the probe phase, a recognized
 native error code or signal, and the exit status when known. It does not include launcher paths
 or raw child output, and does not relax the validation or rollback checks.
-During upgrades, an installed Unix shim that lacks the current validation guard is regenerated and
-probed. If its saved launcher is unsafe, OpenCodex removes the obsolete shim and restores the
-original launcher instead of leaving the unsafe wrapper installed.
+An older Unix shim installed in place is migrated only by an explicit `ocx codex-shim install`.
+Migration restores the recorded native launcher without replacing a newer launcher already present,
+then installs the private wrapper. If private installation fails after native restoration, the native
+launcher stays restored and the operation can be retried. Missing or unusable native launchers require
+package-manager repair; OpenCodex does not guess another installation or rewrap the manager's path.
+Migration also refuses when the recorded `codex-shim.json` is not a regular file owned by you or is
+group- or world-writable. Older releases wrote that file with the process umask, so a umask of `002`
+left it at mode `0664`. The refusal names the file and the `chmod 600` that clears only the
+group- or world-writable refusal. Symlink and foreign-owner refusals remain; OpenCodex does not
+change the permissions itself.
 
-Launcher installation alone does not prove that Codex requests will use OpenCodex. After a healthy
+Launcher installation alone does not prove that Codex requests will use OpenCodex. After a runnable
 install, the command checks the current Codex routing and reports a warning instead of a green result
 when routing is external, user-owned, or unverifiable. It also warns when outbound proxy variables
 exist only in the current process while `config.proxy` is unset or unresolved, because Codex
@@ -756,24 +896,24 @@ launchers and background services may not inherit that environment. These checks
 never print proxy values; resolve the reported handoff and run `ocx doctor` before relying on
 autostart.
 
-If a completed external Codex update overwrites an installed shim, the next ordinary `ocx` command
-backs up the stable new launcher and restores the shim before dispatch. The zero-effect
+On Unix, automatic repair refreshes only the private wrapper and never rewrites package-manager
+launchers or migrates an older in-place shim. On Windows, if a completed external Codex update
+overwrites an installed shim, the next ordinary `ocx` command backs up the stable new launcher
+and restores the shim before dispatch. The zero-effect
 `ocx system codex-cli-update check` inspection command and malformed invocations in its reserved
-`ocx system codex-cli-update` namespace never perform that repair.
-A launcher that is still
-changing is left untouched and retried later. Repair failures warn without failing the requested
+`ocx system codex-cli-update` namespace never perform that repair. `ocx status`, `ocx doctor`, and
+`ocx codex-shim status` also skip shim auto-repair and report the observed state.
+A launcher that is still changing is left untouched and retried later. Repair failures warn without failing the requested
 command; manual fallback: `ocx codex-shim install`. Set `codexShimAutoRestore` to `false`, or set
 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out.
 
-That restore needs the original launcher OpenCodex saved next to the shim. A version manager —
-mise, asdf, volta — rewrites its whole install tree on upgrade, which destroys the shim *and* that
-backup, so there is nothing left to restore from. **A version-manager install tree is not a
-supported shim target.** OpenCodex reports the condition and stops rather than wrapping the newly
-installed binary as a replacement original: doing so would record a history that never happened, and
-the next upgrade would overwrite it again, so the repair would silently undo itself on the version
-manager's schedule.
+The Unix wrapper retains its recorded native launcher path. Package-manager changes behind that
+durable entry are followed automatically; removing that entry requires package-manager repair.
+Dynamic command-manager launchers still have to pass the validation above. Windows in-place repair
+needs the saved original beside the shim; if a version manager destroys the whole tree and backup,
+OpenCodex reports the condition and stops instead of inventing a replacement original.
 
-If your `codex` is owned by a version manager, route through Codex configuration instead of the
+If your version-manager launcher cannot pass validation, route through Codex configuration instead of the
 launcher: `ocx start` writes `openai_base_url`, and `ocx service install` provides autostart. Run
 `ocx status` to confirm — it reports the active routing, and warns when a running proxy is not the
 one Codex is pointed at.
@@ -781,15 +921,20 @@ one Codex is pointed at.
 | Subcommand | Action |
 | --- | --- |
 | `install` | Install the shim (or repair if stale). |
-| `uninstall` | Remove the shim and restore the original Codex binary. |
+| `uninstall` | Remove private Unix artifacts, leaving native Codex untouched; on Windows, restore the original launcher. |
 | `remove` | Alias of `uninstall`. |
-| `status` | Report shim state (installed, stale, or missing). |
+| `status` | Report shim state and whether the private wrapper is active on PATH. |
 
 ```bash
 ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+After Unix uninstall, remove the source line from your shell startup file and restart the shell or
+remove the private bin entry from its PATH. Uninstall removes the owned wrapper, shell environment
+file, and state; it leaves the package-manager launcher untouched. An older in-place Unix shim is
+released using its recorded restoration data.
 
 :::note[Windows token environment]
 Newly generated Windows CMD and PowerShell shims restore the caller's `OPENCODEX_API_AUTH_TOKEN` after execution. Codex and its child processes can still inherit the token.
@@ -823,10 +968,13 @@ directly as a systemd `EnvironmentFile=`.
 An `EnvironmentFile=` or `OCX_API_TOKEN_FILE` on `opencodex-proxy.service` configures the proxy process
 only and never flows into an independently launched `codex exec`.
 
-A Codex upgrade that replaces the launcher removes the shim; the next ordinary `ocx` command restores
+Unix package-manager upgrades leave the private wrapper intact. A runnable wrapper that is **not
+active** does not inject the token: source the printed activation file in the launching shell.
+On Windows or with an older in-place shim, a Codex upgrade that replaces the launcher removes the shim;
+on Windows the next ordinary `ocx` command restores
 it (see above), but a `codex exec` that runs before that fails. `ocx doctor` reports this exact
 state under "Codex env_key launch readiness" (env_key configured, variable unset, shim missing or
-unhealthy, token file present) with the repair command, and never prints the token. Reading the token
+unhealthy, token file present) with repair or activation guidance, and never prints the token. Reading the token
 file is not part of the injected `env_key` contract; the launching process must supply that variable.
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
@@ -892,9 +1040,61 @@ ocx update --tag preview
 New versions become available when the [Release workflow](https://github.com/lidge-jun/opencodex/actions/workflows/release.yml)
 publishes them to npm.
 
+## Save cleanup thresholds without starting a cleanup
+
+```bash
+ocx storage policy show --json
+ocx storage policy set --archived-bytes-over 1073741824 --reduce-to-bytes 536870912 --json
+ocx storage policy show --json
+```
+
+The setter writes nested `trigger.archivedBytesOver` and one target. Byte values
+are safe nonnegative integers. Alternatively choose `--remove-oldest-percent 10`
+or legacy `--percent 10`; the two percentage flags and reduce-to are mutually
+exclusive. CLI percentages are integers with server-supported range 1–100.
+Omitted `--enabled` leaves the stored value unchanged; explicit values are `true`
+and `false`. Set does not run cleanup, but an already-enabled schedule remains
+in force. Do not add enable or an immediate policy run unless intended.
+
+The new-field receipt is `{ok:true,policy,job:{status}}`, with observed trigger,
+target, mode, schedule and optional last/next-run facts. `job.status` describes an
+existing idle/running state, not a cleanup started by this command. Read back on
+an unknown outcome rather than replaying the write.
+
+## Forced link revoke and remote recovery
+
+Only when skipping remote cleanup is explicitly intended, use the actual selected
+link ID (`lnk_0123456789abcdef` below is fictional):
+
+```bash
+ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
+```
+
+`--force` requires `--yes`; `--yes` alone is invalid. Ordinary revoke is unchanged.
+A forced success returns `{linkId,remoteCleanup:"skipped",recovery}`. Idempotent
+link-not-found instead reports `remoteCleanup:"unverified"`. Both can exit 0;
+these facts derive from CLI intent, not a server cleanup report. Neither means
+remote disconnect was attempted or confirmed. Follow the recovery instruction,
+`ocx disconnect` on the remote client, when that action is authorized.
+
+## Observe Remote Workspace from the Hub
+
+```bash
+ocx remote-workspace hub status --json
+ocx remote-workspace hub runtimes --json
+ocx remote-workspace hub sessions --json
+```
+
+These fixed management reads are separate from executor-local
+`ocx remote-workspace status`. Runtime availability is a keyed object; an available
+Hub with no devices/sessions is empty success. Disabled Hub observation can arrive
+as HTTP 200 with `available:false` yet exits 1; it is not empty success. Inner
+HTTP 409 exits 5. Reads never enroll devices, create sessions or submit prompts.
+See [Hub observation and recovery](/guides/remote-workspace/#inspect-the-hub-without-starting-a-session).
+
 ## Remote Hub client lifecycle
 
-Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, and `ocx connect rotate --pairing-code-stdin`. The initial catalog download fails after five seconds without incoming bytes, but active transfers may run longer; use `--catalog-timeout <seconds>` (1–120) to override that inactivity window. `ocx disconnect` restores local state offline and does not revoke the hub key. While connected only, `ocx connect revoke --admin-token-stdin` revokes the persisted `apiKeyId`; after disconnect use the hub's **Integrations → API Keys** page. Secrets are stdin-only and never belong in argv.
+Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, and `ocx connect rotate --pairing-code-stdin`. The initial catalog download fails after five seconds without incoming bytes, but active transfers may run longer; use `--catalog-timeout <seconds>` (1–120) to override that inactivity window. `ocx disconnect` restores local state offline and does not revoke the hub key. While connected only, `ocx connect revoke --admin-token-stdin` revokes the persisted `apiKeyId`; after disconnect use the hub's **Connect → API Keys** page. Secrets are stdin-only and never belong in argv.
 
 ## Setup port validation
 

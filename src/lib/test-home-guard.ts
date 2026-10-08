@@ -150,7 +150,8 @@ export function assertNotRealCodexHomeUnderTest(dir: string): void {
   if (canonicalize(dir) !== PROTECTED_CODEX_HOME) return;
   throw new Error(
     `refusing to write the real Codex home (${PROTECTED_CODEX_HOME}) from a test process. `
-    + "Point CODEX_HOME at a temp directory for this test before writing native auth.json.",
+    + "Point CODEX_HOME at a temp directory for this test before writing Codex files "
+    + "(auth.json, the catalog, models_cache.json, the journal or config.toml).",
   );
 }
 

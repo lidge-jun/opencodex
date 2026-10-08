@@ -197,6 +197,8 @@ ocx status --json
 기존 필드는 안정적으로 유지되어야 합니다. 이 스키마는 API 키, OAuth 토큰, Authorization 헤더,
 요청 내용, 이메일, 계정 식별자를 의도적으로 제외합니다.
 
+실시간 읽기는 제한된 서비스 진단이 끝날 때까지 기다립니다. 진단 캐시가 비어 있거나 만료되면 macOS/Linux에서는 최대 6.5초, Windows에서는 최대 16.5초입니다. 캐시된 결과는 신속하게 반환됩니다. 시간 초과 시에는 기존대로 로컬 진단으로 전환합니다. `/healthz`가 정상이라는 사실만으로 재시작 보호가 유효함을 확인할 수는 없습니다.
+
 ### `ocx health [--json]`
 
 실행 중인 프록시의 신원 확인을 수행합니다. 일반 출력은 PID/포트를 보고하고, `--json`은
@@ -351,12 +353,21 @@ Windows에서 Task Scheduler 항목을 만들려면 권한 상승이 필요합�
 작업이나 외부 연산은 자동 권한 상승 표시를 절대 내지 못합니다. 대시보드 UAC 프롬프트를 승인하거나
 상승된 PowerShell 창에서 `ocx service install`을 다시 실행해 주세요.
 
+시작할 때 `another process owns the runtime mutation lease`가 보고되거나 `ocx service status`에 `Runtime mutation lease busy`가 표시되면, 프록시가 실행 중이 아니더라도 이 리스가 시작이나 서비스 변경을 막고 있는 것입니다. 메시지에는 잠금 경로, 기록된 PID, 그 PID가 현재 살아 있는지 여부, 확인할 수 있는 경우 실행 파일 이름, 리스 경과 시간이 들어 있습니다. 프로세스의 신원은 검증되지 않습니다. PID가 재사용되었을 수 있으므로, 생존 여부와 실행 파일 이름은 지금 그 PID를 쓰고 있는 프로세스에 대한 정보입니다. 작업이 끝날 때까지 기다린 뒤 다시 시도하세요. 이 PID만 보고 잠금을 삭제하거나 프로세스를 중지하지 마세요. 리스 경과 시간이 30초를 넘고 기록된 PID가 더 이상 살아 있지 않으면 이후의 변경 시도가 오래된 리스를 회수할 수 있습니다. `ocx service status`는 리스를 확인만 합니다.
+
+Windows에서는 이 공용 Node/Bun 진단 경로가 실행 파일 이름 조회용 프로그램을 실행하지 않습니다. 기록된 PID, 생존 여부, 리스 경과 시간과 복구 안내는 계속 표시됩니다.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-PATH 위의 스크립트 기반 `codex` 런처를 가벼운 자동 시작 스크립트로 감쌉니다. 정확한 실행 파일
-호출을 깨지 않도록 실제 `codex.exe` 대상은 손대지 않습니다.
-설치가 거부되거나 설치 후 shim이 비정상이면 명령은 실패 종료 코드를 반환하고 대시보드는 실패 사유를 표시합니다.
-이미 설치된 정상 shim은 성공으로 처리합니다. Windows에서 `codex.exe`만 제공되는 설치는 자동 시작에 `ocx service install`을 사용하세요.
+macOS와 Linux에서 `ocx codex-shim install`은 확정된 OpenCodex 홈에 전용 wrapper `<OPENCODEX_HOME>/bin/codex`와 셸에서 읽을 `<OPENCODEX_HOME>/codex-shell-env.sh`를 설치합니다. 원래 런처는 brew, npm, fnm이 설치한 위치에 그대로 있어 패키지 관리자 업데이트와 버전 롤백 뒤에도 다시 감쌀 필요가 없습니다. Windows는 기존처럼 스크립트 런처를 제자리에서 감싸며 실제 `codex.exe`는 건드리지 않습니다. Windows에서 `codex.exe`만 제공된다면 `ocx service install`을 사용하세요.
+
+brew/fnm 등의 PATH 설정이 끝난 뒤 설치 명령이 출력한 활성화 명령을 실행하세요. 기본 홈에서는 다음과 같습니다.
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+사용자 지정 홈에서는 출력된 따옴표 포함 경로를 사용하세요. 여러 번 읽어도 전용 bin의 중복 항목을 제거하고 PATH 맨 앞에 배치합니다. 이후 셸에서도 사용하려면 셸 시작 파일의 PATH 설정 뒤에 이 줄을 직접 추가하세요. OpenCodex는 셸 시작 파일을 수정하지 않으며 설치 명령은 부모 셸의 PATH를 바꿀 수 없습니다. wrapper가 실행 가능하면 현재 셸에서 아직 활성화되지 않아도 설치는 성공합니다. 설치가 거부되거나 wrapper를 실행할 수 없으면 실패 종료 코드를 반환합니다. `ocx status`, `ocx codex-shim status`, `ocx doctor`, `ocx connect`는 PATH에서 선택되지 않은 wrapper를 **not active**로 표시하고 활성화 명령을 안내합니다. connect 경고는 종료 상태를 바꾸지 않습니다. 별칭, 함수, 데스크톱과 서비스 실행 환경은 별도 설정이 필요합니다.
 
 설치나 복구를 확정하기 전에 OpenCodex는 서비스 시작을 우회한 상태에서 저장된 런처를
 `--version`으로 실행합니다. 런처가 `codex`를 shim으로 다시 해석해 재귀하거나, 0이 아닌 코드로
@@ -364,28 +375,24 @@ PATH 위의 스크립트 기반 `codex` 런처를 가벼운 자동 시작 스크
 변경을 거부하고 롤백합니다. 따라서 `codex-shim install`은 무조건 성공하는 명령이 아닙니다. 거부되면
 PATH 항목이 구체적인 실행 파일 또는 런처를 가리키도록 Codex를 다시 설치한 뒤 재시도하세요. 동적
 명령 관리자의 런처가 이 검증을 충족할 수 없다면 대신 `ocx service install`을 사용하세요.
-업그레이드할 때 현재 검증 가드가 없는 기존 Unix shim은 다시 생성하고 검증합니다. 저장된 런처가
-안전하지 않으면 OpenCodex는 위험한 wrapper를 그대로 두지 않고 구버전 shim을 제거한 뒤 원래
-런처를 복원합니다.
+기존 Unix 제자리 shim은 명시적인 `ocx codex-shim install`로만 이전합니다. 기록된 원래 런처를 복원하되 이미 있는 더 최신 런처는 덮어쓰지 않고, 이후 전용 wrapper를 설치합니다. 원래 런처 복원 후 전용 설치가 실패해도 복원된 런처는 유지되며 재시도할 수 있습니다. 기록된 런처가 없거나 실행 불가능하면 패키지 관리자로 복구하세요. 다른 설치를 임의로 선택하거나 패키지 관리자 경로를 다시 감싸지 않습니다.
 
-완료된 외부 Codex 업데이트가 설치된 shim을 덮어쓰면, 다음 일반 `ocx` 명령이 안정적인 새 런처를
-백업하고 명령을 처리하기 전에 shim을 복원합니다. 부작용 없는 검사 명령 `ocx system codex-cli-update check`와 예약된 `ocx system codex-cli-update` namespace의 잘못된 호출은 이 복구를 수행하지 않습니다. 아직 변경 중인 런처는 건드리지 않고 나중에 다시 시도합니다.
-복구 실패는 요청한 명령을 실패시키지 않고 경고만 표시합니다. 수동 대체 수단은 `ocx codex-shim install`
-입니다. `codexShimAutoRestore`를 `false`로 설정하거나, 프로세스 수준에서 제외하려면
-`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`을 설정합니다.
+Unix 자동 복구는 전용 wrapper만 갱신하며 패키지 관리자 런처를 다시 작성하거나 기존 제자리 shim을 이전하지 않습니다. Windows에서는 완료된 외부 업데이트가 shim을 덮어쓰면 다음 일반 `ocx` 명령이 안정적인 새 런처를 백업하고 shim을 복원합니다. 변경 중인 런처는 건드리지 않고 나중에 재시도합니다. `ocx status`, `ocx doctor`, `ocx codex-shim status`, `ocx system codex-cli-update check`와 해당 예약 namespace의 잘못된 호출은 shim 자동 복구를 실행하지 않습니다. 복구 실패는 요청한 명령의 종료 상태를 바꾸지 않고 경고만 표시합니다. 수동 복구 명령은 `ocx codex-shim install`입니다. `codexShimAutoRestore`를 `false`로 설정하거나 프로세스별로 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`을 설정하면 자동 복구를 끕니다.
 
 | 하위 명령 | 동작 |
 | --- | --- |
 | `install` | shim을 설치합니다(오래된 경우 복구도 수행합니다). |
-| `uninstall` | shim을 제거하고 원래 Codex 바이너리를 복원합니다. |
+| `uninstall` | Unix 전용 파일만 제거하고 원래 Codex는 유지합니다. Windows에서는 원래 런처를 복원합니다. |
 | `remove` | `uninstall`의 별칭입니다. |
-| `status` | shim 상태(설치됨, 오래됨, 누락)를 보고합니다. |
+| `status` | shim 상태와 전용 wrapper의 PATH 활성화 여부를 보고합니다. |
 
 ```bash
 ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+Unix에서 제거한 뒤 셸 시작 파일의 source 줄을 삭제하고 셸을 다시 시작하거나 PATH에서 전용 bin을 제거하세요. 소유한 wrapper, 셸 환경 파일, 상태만 삭제하며 패키지 관리자 런처는 그대로 둡니다. 기존 제자리 Unix shim은 기록된 복원 정보를 이용해 해제합니다.
 
 :::note[Windows 토큰 환경]
 새로 생성된 Windows CMD 및 PowerShell shim은 실행 후 호출자의 `OPENCODEX_API_AUTH_TOKEN`을 원래 상태로 복원합니다. Codex와 자식 프로세스는 여전히 토큰을 상속할 수 있습니다.
@@ -408,7 +415,7 @@ OpenCodex를 업데이트한 뒤 기존 Windows shim에 이 동작을 적용하�
 
 `opencodex-proxy.service`의 `EnvironmentFile=` 또는 `OCX_API_TOKEN_FILE`은 프록시 프로세스만 구성하며, 별도로 실행된 `codex exec`에 전달되지 않습니다.
 
-실행기를 교체하는 Codex 업그레이드는 shim을 제거합니다. 다음 일반 `ocx` 명령이 shim을 복원하지만(위 내용 참조), 그보다 먼저 실행되는 `codex exec`는 실패합니다. `ocx doctor`는 이 상태(env_key 구성됨, 변수 미설정, shim 누락 또는 비정상, 토큰 파일 존재)를 "Codex env_key launch readiness" 항목에서 복구 명령과 함께 보고하며, 토큰은 출력하지 않습니다. 토큰 파일 읽기는 주입된 `env_key`의 계약에 포함되지 않습니다. 실행을 시작하는 프로세스가 해당 변수를 제공해야 합니다.
+Unix 패키지 관리자 업데이트는 전용 wrapper를 그대로 둡니다. 비활성 상태라면 출력된 활성화 파일을 읽으세요. Windows 또는 기존 제자리 shim에서는 런처를 교체하는 업데이트가 shim을 제거합니다. Windows에서는 다음 일반 `ocx` 명령이 shim을 복원하지만(위 내용 참조), 그보다 먼저 실행되는 `codex exec`는 실패합니다. `ocx doctor`는 이 상태와 비활성 wrapper(env_key 구성됨, 변수 미설정, shim 누락 또는 비정상, 토큰 파일 존재)를 "Codex env_key launch readiness" 항목에서 복구 또는 활성화 안내와 함께 보고하며, 토큰은 출력하지 않습니다. 토큰 파일 읽기는 주입된 `env_key`의 계약에 포함되지 않습니다. 실행을 시작하는 프로세스가 해당 변수를 제공해야 합니다.
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
@@ -456,7 +463,7 @@ npm에 게시하면 사용할 수 있게 됩니다.
 
 ## Remote Hub 클라이언트 라이프사이클
 
-`ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, `ocx connect rotate --pairing-code-stdin`을 사용합니다. `ocx disconnect`는 오프라인에서도 로컬 상태를 복원하지만 허브 키는 폐기하지 않습니다. 연결 중에는 `ocx connect revoke --admin-token-stdin`으로 저장된 `apiKeyId`를 폐기할 수 있고, 연결을 끊은 뒤에는 허브의 **Integrations → API Keys**를 사용해야 합니다. 비밀값은 stdin으로만 전달하고 argv에 넣지 마세요.
+`ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, `ocx connect rotate --pairing-code-stdin`을 사용합니다. `ocx disconnect`는 오프라인에서도 로컬 상태를 복원하지만 허브 키는 폐기하지 않습니다. 연결 중에는 `ocx connect revoke --admin-token-stdin`으로 저장된 `apiKeyId`를 폐기할 수 있고, 연결을 끊은 뒤에는 허브의 **연결 → API 키**를 사용해야 합니다. 비밀값은 stdin으로만 전달하고 argv에 넣지 마세요.
 
 ## Setup port validation
 

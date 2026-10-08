@@ -345,6 +345,8 @@ lui-même s'il souhaite ajouter une étoile au dépôt.
 
 ### Cycle de vie du système
 
+`POST /api/system/restart` conserve par défaut un délai de 60 secondes lorsque le corps est absent ou vaut `{}`. Une session de gestion ou un jeton administrateur peut choisir explicitement un délai plus court avec `{"drainGraceMs":2000}` : la valeur doit être un entier compris entre 1 et 60000 millisecondes. Un corps ou une valeur invalide renvoie 400 sans lancer le redémarrage ; la capacité locale liée à la cible ne permet pas cette option (403). `drainTimeoutMs` indique le délai accepté, fixé par le premier appel et inchangé lors des appels suivants. Il inclut le temps de transmission de la réponse ; les budgets de nettoyage et de préparation du processus de remplacement restent respectivement de 60 et 70 secondes. Une requête interrompue peut déjà avoir été exécutée : vérifiez son résultat avant de la renvoyer, sans répétition automatique.
+
 | Méthode et chemin | Objectif | Erreurs notables |
 | --- | --- | --- |
 | `GET /api/system/memory` | Renvoyer les mesures scalaires du processus, du tas, des flux, de l'état des réponses, du mécanisme de surveillance et des tours actifs | — |
@@ -371,7 +373,7 @@ Codex. Ses routes sont les suivantes :
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | Répertorier, actualiser ou supprimer des comptes Codex. POST est conservé comme point de terminaison de compatibilité désactivé ; les réponses DELETE réussies incluent `catalogRefreshPending`. | POST renvoie toujours 403 `manual_import_disabled` ; 400 entrée DELETE invalide |
 | `PUT /api/codex-auth/accounts/alias` | Définir ou supprimer un alias de compte | 400 invalide account/alias |
-| `PUT /api/codex-auth/accounts/pause` | Suspendre ou reprendre un compte | 400 invalide account/state ; 404 compte manquant |
+| `PUT /api/codex-auth/accounts/pause` | Suspendre ou reprendre manuellement un compte et ses entrées principales ou du pool existantes de même identité ; renvoie `affectedAccountIds` | 400 compte/état invalide ; 404 compte introuvable ; 503 identité du compte principal occupée ou illisible |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Suspendre les comptes dont le quota est épuisé | Les échecs de verrouillage de mutation deviennent 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Effacer le temps de recharge d'exécution pour un compte ou tous les comptes | 400 identifiant invalide |
 | `GET, PUT /api/codex-auth/active` | Lire ou sélectionner le compte actif | 400 compte invalide ou manquant ; 409 conflit avec un compte suspendu ou une ancienne ligne |

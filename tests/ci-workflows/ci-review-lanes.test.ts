@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 
 // Review-lane contracts for ci.yml and enforce-pr-target.yml. They live beside
@@ -148,7 +150,7 @@ describe("CI review lanes", () => {
     expect(changesJob?.outputs?.ci).toBe("${{ steps.scope.outputs.ci }}");
     expect(scopeStep?.id).toBe("scope");
     expect(scopeStep?.shell).toBe("bash");
-    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ steps.filter.outputs.ci }}");
+    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.ci }}");
     expect(scopeStep?.run).not.toContain("${{");
     expect(scopeStep?.run).toContain('case "$CI_SCOPE" in');
     expect(scopeStep?.run).toContain("true|false)");
@@ -169,7 +171,7 @@ describe("CI review lanes", () => {
     }
     const macosControlIf = ci.jobs?.["macos-control"] as { needs?: string; if?: string } | undefined;
     expect(macosControlIf?.needs).toBe("changes");
-    expect(macosControlIf?.if).toBe("github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
+    expect(macosControlIf?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
   });
 
   test("manual release-gates keeps ordinary jobs and skips only diagnostic suites", async () => {
@@ -178,12 +180,12 @@ describe("CI review lanes", () => {
     };
     // These job conditions use boolean operators and lowercase string comparisons.
     // Evaluate the checked-in expressions, rather than a second implementation of them.
-    const enabled = (job: string, event: string, lane: string, scope = "true", packaging = "true", native = "true") => {
+    const enabled = (job: string, event: string, lane: string, scope = "true", packaging = "true", native = "true", windows = "false") => {
       const condition = ci.jobs[job]!.if ?? "true";
       const evaluate = new Function("github", "needs", `return (${condition});`);
       return evaluate(
         { event_name: event, event: { inputs: { lane } } },
-        { changes: { outputs: { ci: scope, packaging, native } } },
+        { changes: { outputs: { ci: scope, packaging, native, windows } } },
       );
     };
     for (const [event, lane, windows, control] of [
@@ -217,8 +219,13 @@ describe("CI review lanes", () => {
       expect(enabled("npm-global-smoke", event, lane, "true", "true")).toBe(true);
       expect(enabled("npm-global-smoke", event, lane, "true", "false")).toBe(false);
     }
+    for (const windows of ["true", "false", ""]) {
+      expect(enabled("platform-windows", "pull_request", "", "true", "true", "true", windows)).toBe(windows === "true");
+    }
+    expect(enabled("platform-windows", "schedule", "", "false", "false", "false")).toBe(true);
+    expect(enabled("macos-control", "schedule", "", "false", "false", "false")).toBe(true);
     expect(ci.jobs["select-windows-runner"]!.if).toBeUndefined();
-    expect(ci.jobs["platform-windows"]!.needs).toBe("select-windows-runner");
+    expect(ci.jobs["platform-windows"]!.needs).toEqual(["changes", "select-windows-runner"]);
     expect(ci.jobs.ci!.if).toBe("always()");
     expect(ci.jobs.ci!.needs).toEqual(expect.arrayContaining([
       "changes", "select-windows-runner",
@@ -293,4 +300,149 @@ describe("CI review lanes", () => {
       expect(result.stdout).toContain(status);
     }
   }, 30_000);
+});
+
+describe("Windows and nightly CI contracts", () => {
+  test("publishes validated Windows selection and one nightly checkout ref", async () => {
+    const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
+      on: { schedule: { cron: string }[] };
+      jobs: Record<string, { outputs?: Record<string, string>; steps?: Array<{
+        id?: string; uses?: string; shell?: string; run?: string;
+        env?: Record<string, string>; with?: Record<string, unknown>;
+      }> }>;
+    };
+    expect(ci.on.schedule).toEqual([{ cron: "17 18 * * *" }]);
+    const changes = ci.jobs.changes!;
+    expect(changes.outputs?.windows).toBe("${{ steps.windows.outputs.windows }}");
+    expect(changes.outputs?.checkout_ref).toBe("${{ steps.nightly.outputs.checkout_ref }}");
+    const checkout = changes.steps?.find(step => step.uses?.startsWith("actions/checkout@"));
+    expect(checkout?.with?.["fetch-depth"]).toBe(2);
+    const filter = changes.steps?.find(step => step.id === "filter");
+    const filters = Bun.YAML.parse(String(filter?.with?.filters ?? "")) as Record<string, string[]>;
+    expect(filters.windows).toEqual([
+      "src/lib/windows-*", "src/lib/*acl*", "src/service/**", "src/update/**",
+      "src/claude/intercept/**", "src/codex/shim*", "src/codex/app-server-processes.ts",
+      "src/codex/desktop-app/**", "src/config/process-state.ts", "src/cli/update-restart*",
+      "src/server/local-management-read-client.ts", "src/server/startup-health-cache.ts",
+      "src/tray/**", "scripts/test.ts", "scripts/test-*.ts", "scripts/ci/**",
+      "tests/preload.ts", "tests/helpers/**", ".github/workflows/ci.yml", "package.json", "bun.lock",
+    ]);
+    const windows = changes.steps?.find(step => step.id === "windows");
+    expect(windows?.shell).toBe("bash");
+    expect(windows?.env).toEqual({ EVENT_NAME: "${{ github.event_name }}", PATH_SELECTED: "${{ steps.filter.outputs.windows }}" });
+    expect(windows?.run).toBe("bash scripts/ci/windows-sensitive-diff.sh");
+    expect(windows?.run).not.toContain("${{");
+    let checkouts = 0;
+    for (const [name, job] of Object.entries(ci.jobs)) {
+      if (name === "changes") continue;
+      for (const step of job.steps ?? []) {
+        if (!step.uses?.startsWith("actions/checkout@")) continue;
+        expect(step.with?.ref, `${name} checkout`).toBe("${{ needs.changes.outputs.checkout_ref }}");
+        checkouts += 1;
+      }
+    }
+    expect(checkouts).toBe(17);
+  });
+
+  test.skipIf(process.platform === "win32" || !Bun.which("jq"))("aggregate requests Windows only for selected PRs and requests both diagnostic jobs nightly", async () => {
+    const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
+      jobs: Record<string, { needs?: string[]; steps?: Array<{ name?: string; shell?: string; env?: Record<string, string>; run?: string }> }>;
+    };
+    const aggregate = ci.jobs.ci!;
+    const step = aggregate.steps?.find(candidate => candidate.name === "Assert every job this event requested succeeded");
+    expect(step?.shell).toBe("bash");
+    expect(step?.env?.CHANGES_WINDOWS).toBe("${{ needs.changes.outputs.windows }}");
+    // Execute only the expectation block (as ci-scope-reduction.test.ts does): the
+    // leg count after it calls the Actions API, which a test must not reach.
+    const script = step!.run!;
+    const start = script.indexOf("scoped=requested");
+    const first = script.indexOf("RESULTS_EOF");
+    const last = script.indexOf("RESULTS_EOF", first + "RESULTS_EOF".length);
+    expect(start).toBeGreaterThan(-1);
+    expect(last).toBeGreaterThan(first);
+    const slice = script.slice(start, last + "RESULTS_EOF".length);
+    for (const [event, lane, windows, expectWindows, expectControl] of [
+      ["schedule", "", undefined, "requested", "requested"],
+      ["pull_request", "", "true", "requested", "not-requested"],
+      ["pull_request", "", "false", "not-requested", "not-requested"],
+      ["pull_request", "", undefined, "not-requested", "not-requested"],
+      ["push", "", "true", "not-requested", "not-requested"],
+      ["workflow_dispatch", "all", "false", "requested", "requested"],
+      ["workflow_dispatch", "release-gates", "true", "not-requested", "not-requested"],
+    ] as const) {
+      const env: Record<string, string> = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin", EVENT_NAME: event, LANE: lane, RESULTS: "{}",
+        CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: "true",
+        CHANGES_DESKTOP: "false", CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
+        CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false",
+        ...(windows === undefined ? {} : { CHANGES_WINDOWS: windows }),
+      };
+      const result = spawnSync("bash", ["-c", `set -u\n${slice}\necho "WIN=$(expected_for platform-windows)"\necho "CTL=$(expected_for macos-control)"`], {
+        encoding: "utf8", timeout: 5_000, env,
+      });
+      expect(result.error).toBeUndefined();
+      expect(`${event}/${lane}/${windows}:${result.stdout.match(/^WIN=(.*)$/m)?.[1]}`).toBe(`${event}/${lane}/${windows}:${expectWindows}`);
+      expect(`${event}/${lane}/${windows}:${result.stdout.match(/^CTL=(.*)$/m)?.[1]}`).toBe(`${event}/${lane}/${windows}:${expectControl}`);
+    }
+  });
+
+  test.skipIf(process.platform === "win32" || !Bun.which("git"))("Windows diff scan considers only added src/tests markers and fails closed without a parent", () => {
+    const scenarios = [
+      { path: "src/example.ts", before: "plain\n", after: "WIN32\n", expected: "true" },
+      { path: "tests/example.ts", before: "plain\n", after: "ordinary\n", expected: "false" },
+      { path: "src/example.ts", before: "powershell\nplain\n", after: "plain\n", expected: "false" },
+      { path: "docs/example.md", before: "plain\n", after: "pwsh\n", expected: "false" },
+      { path: "src/example.ts", before: "plain\n", after: "plain\n", selected: "true", expected: "true" },
+      { path: "src/example.ts", before: "plain\n", after: "plain\n", selected: "invalid", status: 1 },
+      { path: "src/example.ts", before: "plain\n", after: "win32\n", event: "push", expected: "false" },
+      { path: "src/example.ts", before: "plain\n", after: "plain\n", event: "schedule", selected: "true", expected: "true" },
+      { path: "src/example.ts", before: "plain\n", orphan: true, expected: "true" },
+    ];
+    for (const scenario of scenarios) {
+      const directory = mkdtempSync(join(tmpdir(), "ocx-windows-diff-"));
+      try {
+        const git = (...args: string[]) => {
+          const result = spawnSync("git", args, { cwd: directory, encoding: "utf8", timeout: 5_000,
+            env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null" } });
+          expect(result.error).toBeUndefined();
+          expect(result.status, result.stderr).toBe(0);
+        };
+        git("init", "--quiet");
+        const path = join(directory, scenario.path);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, scenario.before);
+        const commit = () => {
+          git("add", ".");
+          git("-c", "user.name=CI Fixture", "-c", "user.email=test@example.test", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "--allow-empty", "-m", "fixture");
+        };
+        commit();
+        if (!scenario.orphan) { writeFileSync(path, scenario.after ?? scenario.before); commit(); }
+        const output = join(directory, "output");
+        const result = spawnSync("bash", [repoPath("scripts", "ci", "windows-sensitive-diff.sh")], {
+          cwd: directory, encoding: "utf8", timeout: 5_000,
+          env: { ...process.env, EVENT_NAME: scenario.event ?? "pull_request", PATH_SELECTED: scenario.selected ?? "false", GITHUB_OUTPUT: output },
+        });
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(scenario.status ?? 0);
+        if (scenario.expected) expect(readFileSync(output, "utf8")).toBe(`windows=${scenario.expected}\n`);
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    }
+  }, 30_000);
+
+  test("startup ACL reads avoid module-autoloaded Get-Acl and Set-Acl across src", () => {
+    const violations: string[] = [];
+    const walk = (directory: string) => {
+      for (const entry of readdirSync(repoPath(...directory.split("/")), { withFileTypes: true })) {
+        const path = `${directory}/${entry.name}`;
+        if (entry.isDirectory()) { walk(path); continue; }
+        if (!entry.isFile() || !/\.(ts|tsx|mjs|cjs|js)$/.test(entry.name)) continue;
+        readFileSync(repoPath(...path.split("/")), "utf8").split("\n").forEach((line, index) => {
+          if (/^(\/\/|\*|\/\*)/.test(line.trimStart())) return;
+          if (/\b(Get|Set)-Acl\b/i.test(line)) violations.push(`${path}:${index + 1}`);
+        });
+      }
+    };
+    walk("src");
+    expect(violations, `${violations.join("\n")}\nRead ACLs through .NET as in src/lib/windows-owner-acl.ts; module autoload rebuilds the analysis cache for 20-27 s on a fresh profile.`).toEqual([]);
+  });
 });

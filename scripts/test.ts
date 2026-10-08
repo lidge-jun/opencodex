@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { getTestRunnerBun } from "./lib/test-runner-bun";
 import {
   acquireTestRunLock,
   resolveWrappedTestRunLockPath,
@@ -88,6 +89,15 @@ export function createIsolatedTestEnvironment(
       // whichever adapter collected the metadata. Naming the file keeps the sandbox
       // (git still writes nothing here) while leaving git's own trust decisions intact.
       GIT_CONFIG_GLOBAL: baseEnv.GIT_CONFIG_GLOBAL ?? join(homedir(), ".gitconfig"),
+      // Pin Bun's runtime transpiler cache for the same reason. Bun keeps it under the home
+      // directory (macOS: ~/Library/Caches/bun/@t@), so a sandboxed HOME/USERPROFILE handed every
+      // batch, and every fixture that gives its child its own HOME, an empty cache: the first child
+      // re-transpiled each large module (73 src files are over the 50 KB cache threshold). On a busy
+      // Windows shard that first child took 10-45 s where later ones took 2-5 s, failing whichever
+      // timed case happened to spawn it. The cache holds transpiled source only, so sharing it keeps
+      // the sandbox. An explicit value, including "" or "0" to disable it, is kept as given.
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: baseEnv.BUN_RUNTIME_TRANSPILER_CACHE_PATH
+        ?? join(hostTemp, "ocx-test-bun-transpiler-cache"),
       HOME: root,
       USERPROFILE: root,
       OPENCODEX_HOME: opencodexHome,
@@ -395,6 +405,8 @@ export const SERIAL_FULL_SUITE_FILES = [
   "service/service.test.ts",
   "service/service-claim.test.ts",
   "service/service-wsl-home-ownership.test.ts",
+  "service/launchd-repair.test.ts",
+  "cli/cli-update-restart-home.test.ts",
   "codex-integration/native-codex-toggle.test.ts",
   "codex-integration/native-grok-toggle.test.ts",
 ] as const;
@@ -541,6 +553,7 @@ export async function runTestLane(
     stdout: (value: string) => { process.stdout.write(value); },
     stderr: (value: string) => { process.stderr.write(value); },
   },
+  testRunner = getTestRunnerBun(),
 ): Promise<{ exitCode: number; output: string }> {
   const isolated = createIsolatedTestEnvironment({
     ...process.env,
@@ -554,7 +567,7 @@ export async function runTestLane(
   });
   const startedAt = Date.now();
   let interrupted: NodeJS.Signals | null = null;
-  const child = Bun.spawn([process.execPath, "test", ...lane.args], {
+  const child = Bun.spawn([testRunner, "test", ...lane.args], {
     env: isolated.env,
     stdin: "inherit",
     stdout: capture ? "pipe" : "inherit",
@@ -652,6 +665,11 @@ export function ensureGuiDependencies(io: {
 }
 
 if (import.meta.main) {
+  let testRunner: string;
+  try { testRunner = getTestRunnerBun(); } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   const requestedTests = process.argv.slice(2);
   const guiDependencies = ensureGuiDependencies();
   if (guiDependencies.kind === "failed") {
@@ -697,7 +715,7 @@ if (import.meta.main) {
       let exitCode = 0;
       let captured = "";
       for (const lane of resolveBunTestPlan(requestedTests, changedRun?.comparisonCommit)) {
-        const result = await runTestLane(lane, runId, inheritedLock, Boolean(changedRun));
+        const result = await runTestLane(lane, runId, inheritedLock, Boolean(changedRun), undefined, testRunner);
         captured += result.output;
         if (result.exitCode !== 0 && exitCode === 0) exitCode = result.exitCode;
         if ([124, 130, 143].includes(result.exitCode)) break;

@@ -25,6 +25,8 @@ export const KIRO_MODELS = [
   "claude-sonnet-4.6",
   "claude-sonnet-4.5",
   "claude-sonnet-4.0",
+  // 261008 preemptive: Haiku 5.5; calls fail upstream until Kiro ships it.
+  "claude-haiku-5.5",
   "claude-haiku-4.5",
   "deepseek-3.2",
   "minimax-m2.5",
@@ -55,6 +57,7 @@ export const KIRO_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "claude-sonnet-4.6": 1_000_000,
   "claude-sonnet-4.5": 200_000,
   "claude-sonnet-4.0": 200_000,
+  "claude-haiku-5.5": 1_000_000,
   "claude-haiku-4.5": 200_000,
   "deepseek-3.2": 128_000,
   "minimax-m2.5": 200_000,

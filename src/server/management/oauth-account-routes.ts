@@ -1164,6 +1164,27 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }, 200, req, config);
   }
 
+  if (url.pathname === "/api/keys/reveal" && req.method === "POST") {
+    if (principal !== "gui-session") {
+      return jsonResponse({ error: "dashboard session required" }, 403, req, config);
+    }
+    // Local page bootstrap is sufficient for the dashboard, not stored-secret disclosure.
+    const authorized = () => ctx.sessionControl?.canRevealDataKeys?.(req, config) === true;
+    const denied = () => jsonResponse({ error: "operator-authorized dashboard session required" }, 403, req, config);
+    if (!authorized()) return denied();
+    const body = await readJsonBody(req);
+    // Body reception can outlive the session or its revocation; do not trust cached admission.
+    if (!authorized()) return denied();
+    if (!body || Object.keys(body).length !== 1 || typeof body.id !== "string" || !body.id) {
+      return jsonResponse({ error: "invalid body" }, 400, req, config);
+    }
+    const entry = config.apiKeys?.find(key => key.id === body.id);
+    if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const response = jsonResponse({ key: entry.key }, 200, req, config);
+    response.headers.set("Cache-Control", "no-store");
+    return response;
+  }
+
   if (url.pathname === "/api/keys/rotate" && req.method === "POST") {
     const body = await readJsonBody(req);
     if (!body || Object.keys(body).length !== 1 || typeof body.id !== "string" || !body.id) {

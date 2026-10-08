@@ -1,5 +1,7 @@
 import {
   closeSync,
+  constants,
+  fstatSync,
   existsSync,
   lstatSync,
   linkSync,
@@ -33,8 +35,9 @@ interface StableShimPathProbe {
 }
 
 function readShimProbePrefix(path: string): string {
-  const fd = openSync(path, "r");
+  const fd = openSync(path, process.platform === "win32" ? "r" : constants.O_RDONLY | constants.O_NONBLOCK);
   try {
+    if (process.platform !== "win32" && !fstatSync(fd).isFile()) throw new Error("Shim probe entry is not a regular file");
     const buffer = Buffer.allocUnsafe(CODEX_SHIM_PROBE_BYTES);
     const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
     return buffer.toString("utf8", 0, bytesRead);
@@ -162,14 +165,16 @@ function shimPathFingerprint(path: string): ShimPathFingerprint | null {
  * fails EEXIST on an occupied destination. Checking existence and then renaming
  * would reintroduce exactly the race this function exists to close.
  */
-function restoreWithoutReplacing(from: string, to: string): void {
+function restoreWithoutReplacing(from: string, to: string, guard?: () => void): void {
   const source = lstatSync(from);
   if (source.isSymbolicLink()) {
     symlinkSync(readlinkSync(from), to);
+    guard?.();
     unlinkSync(from);
     return;
   }
   linkSync(from, to);
+  guard?.();
   unlinkSync(from);
 }
 

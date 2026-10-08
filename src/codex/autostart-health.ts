@@ -4,11 +4,21 @@ import type { OcxConfig } from "../types";
 import { getCodexRoutingKind, type CodexRoutingKind } from "./inject";
 import { collectRoutingAdoption, type RoutingAdoptionEvidence } from "./routing-adoption";
 import { diagnoseCodexShim, type CodexShimDiagnostic } from "./shim";
-import { diagnoseMacDesktopStartup, type DesktopStartupDiagnostic } from "../service/desktop-startup";
+import { diagnoseDesktopStartup, type DesktopStartupDiagnostic } from "../service/desktop-startup";
 
 export type StartupProtection = "service" | "desktop" | "shim" | "none";
 export type StartupHealthStatus = "native" | "protected" | "at-risk";
 export type ShimCoverage = "full" | "cli-only" | "none";
+
+/** Bound the isolated service-manager probe and let its reader outlive that probe. */
+export function startupHealthProbeBudgetMs(platform: NodeJS.Platform = process.platform): number {
+  return platform === "win32" ? 15_000 : 5_000;
+}
+
+export function startupHealthReadBudgetMs(platform: NodeJS.Platform = process.platform): number {
+  // The endpoint waits an extra 500ms for child settlement; reserve another second for HTTP.
+  return startupHealthProbeBudgetMs(platform) + 1_500;
+}
 
 export interface StartupHealthInputs {
   desktop?: DesktopStartupDiagnostic;
@@ -80,7 +90,7 @@ export function deriveStartupHealth(inputs: StartupHealthInputs): StartupHealth 
   // We can only credit an opencodex service/shim for routing that opencodex owns.
   // An arbitrary localhost gateway has an independent lifecycle that OCX cannot repair.
   const ownsLocalRouting = inputs.routingKind === "opencodex-local";
-  const desktopEffective = inputs.platform === "darwin" && !inputs.diagnosticStale
+  const desktopEffective = (inputs.platform === "darwin" || inputs.platform === "linux") && !inputs.diagnosticStale
     && inputs.desktop?.owned === true && inputs.desktop.loginEnabled
     && inputs.desktop.running && inputs.desktop.viable;
   const protection: StartupProtection = ownsLocalRouting && inputs.serviceViable
@@ -137,7 +147,7 @@ export function collectStartupHealth(
   const shim = diagnostics.shim ?? diagnoseCodexShim();
   const service = diagnostics.service ?? diagnoseService();
   const routingKind = diagnostics.routingKind ?? getCodexRoutingKind();
-  const desktop = diagnostics.desktop ?? diagnoseMacDesktopStartup();
+  const desktop = diagnostics.desktop ?? diagnoseDesktopStartup();
   const routingAdoption = diagnostics.routingAdoption
     ?? (routingKind === "opencodex-local" ? collectRoutingAdoption({ routingKind }) : undefined);
   return deriveStartupHealth({

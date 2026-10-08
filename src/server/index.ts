@@ -463,21 +463,19 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     return serveGuiFile(rawPath) !== null;
   }
 
-  // Codex treats empty / non-JSON 503 bodies as "Unknown error" (#452). Keep Retry-After and
-  // the server_is_overloaded code so clients can back off, but always return a JSON envelope.
-  // These two run BEFORE the auth/origin checks, so they need the receiving listener's policy
-  // explicitly (#1102). Reaching for the shared `config` here would attach public-policy CORS
-  // headers to a 503 on the loopback listener — no model runs and no credential is spent, but
-  // it is the one error path that would answer a rebinding origin with its own origin echoed
-  // back.
+  // Codex maps 503 + server_is_overloaded to ServerOverloaded ("model at capacity"), retried
+  // only with retry advice that older clients ignore (#6642); server_restarting is a
+  // retryable UnexpectedStatus in every version and never reads as model capacity.
+  // Keep JSON (empty / non-JSON 503 means "Unknown error", #452) and Retry-After.
+  // Drain and busy run BEFORE auth/origin checks: use the receiving listener's policy
+  // (#1102), because shared public `config` could echo a rebinding origin on loopback.
   function drainingResponse(req: Request, policy: RequestPolicyView): Response {
-    const response = formatErrorResponse(503, "server_error", "Service shutting down");
-    const headers = new Headers(response.headers);
-    for (const [name, value] of Object.entries(corsHeaders(req, policy))) {
-      headers.set(name, value);
-    }
-    headers.set("Retry-After", "5");
-    return new Response(response.body, { status: 503, headers });
+    return withCors(new Response(JSON.stringify({
+      error: { type: "server_error", code: "server_restarting", message: "OpenCodex is restarting; retry this request." },
+    }), {
+      status: 503,
+      headers: { "Content-Type": "application/json", "Retry-After": "5" },
+    }), req, policy);
   }
 
   function serverBusyResponse(req: Request, resource: string, policy: RequestPolicyView): Response {

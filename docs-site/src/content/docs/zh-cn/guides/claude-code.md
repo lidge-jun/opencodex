@@ -102,7 +102,7 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 
 ## Claude Desktop 模式：网关（默认）与第一方
 
-在控制台的 **Claude → Desktop → 连接模式** 中，或使用
+在控制台的 **连接 → Claude Desktop → 连接模式** 中，或使用
 `ocx claude desktop apply --first-party|--gateway` 选择互斥的模式。
 
 ### 网关（默认）
@@ -131,7 +131,7 @@ OpenCodex 拥有的已选网关条目、保存的网关指纹、`settings.json` 
 
 ### Claude Code CLI 第一方模式
 
-在 Claude → Code 中开启 CLI 开关，或运行 `ocx claude config set --first-party on`；关闭时用 `off`。若本地代理不可用、CA 无法准备、设置无法读取，或代理键由其他程序所有，开启请求会被拒绝。关闭操作始终可以保存。仅开启 Desktop 第一方模式时，要让终端完全原生直连，请在 shell 中设置 `NO_PROXY='*'`。上述账户风险也适用于 CLI。
+在 连接 → Claude 中开启 CLI 开关，或运行 `ocx claude config set --first-party on`；关闭时用 `off`。若本地代理不可用、CA 无法准备、设置无法读取，或代理键由其他程序所有，开启请求会被拒绝。关闭操作始终可以保存。仅开启 Desktop 第一方模式时，要让终端完全原生直连，请在 shell 中设置 `NO_PROXY='*'`。上述账户风险也适用于 CLI。
 关闭 Claude 路由会保留由 OpenCodex 管理的代理设置。监听器仍运行时，所有 Messages 请求原样转发；停止后，运行 OpenCodex 或关闭 Desktop/CLI 第一方模式之前，直接运行 `claude` 无法连接。`ocx claude` 原生启动仅在有自有设置且未继承外部 HTTPS 代理时设置 `NO_PROXY=*`。否则保留外部代理，并警告设置中的拦截仍生效；请关闭第一方模式或取消该设置。
 界面区分设置不可读（unknown）、带 opencodex 令牌的代理 URL 却搭配外部 CA（foreign：手动修正 HTTPS_PROXY / NODE_EXTRA_CA_CERTS），以及 Claude 路由已关闭但仍有监听器原样转发请求（disabled：重启前关闭第一方模式以清除设置）。没有监听器时为 stopped；使用受管理的 CA 但端口或令牌不匹配时为 broken。第一方模式开启但无法提供拦截服务时，stopped 和 broken 都显示 routingOff：Claude 路由或拦截功能已关闭，或此设备是另一台 opencodex 中枢的客户端；请在此设备上重新启用拦截服务，或关闭第一方模式以移除设置。仅在拦截服务可用时，stopped 才提示启动 opencodex，broken 才提示运行 `ocx ensure` 或重启。CLI 已开启但没有代理设置为未应用；仅开启一个客户端且代理正常时提示共享转发；两个客户端都关闭但代理设置仍在时提示残留。
 unknown 表示 opencodex 无法确定设置是否仍指向自己的代理。外部 CA 搭配 127.0.0.1 上无令牌的代理时显示 local：归属无法确认；如果不再使用，请从 ~/.claude/settings.json 中删除 HTTPS_PROXY。disabled 仅在设置与运行中的监听器匹配时出现；端口或令牌不匹配时，即使路由关闭也显示 broken。
@@ -141,14 +141,21 @@ unknown 表示 opencodex 无法确定设置是否仍指向自己的代理。外�
 Picker 模式是第一方模式的一部分。在 macOS 上选择第一方时默认开启；设置
 `claudeCode.intercept.picker: false` 后会保持关闭。它会修改第一方 Desktop 的 Code 标签页模型选择器，
 按名称列出可用的 opencodex 模型。首次开启时，macOS 可能会要求你在登录钥匙串中信任本地证书颁发机构。
-该颁发机构限制为 `claude.ai` 及其子域名。其签名密钥只存在于运行中的 OpenCodex 进程内，因此每次重启
-OpenCodex 都会发布新的颁发机构，macOS 也会再次请求信任——请在每次重启后批准该提示，或稍后运行
-`ocx claude desktop picker trust`。
+该颁发机构限制为 `claude.ai` 及其子域名。可导出的签名身份由 OS 凭据存储保护，普通重启会复用同一证书和密钥。
+OpenCodex 配置目录中不保存明文 Picker 签名密钥。受限 CA 的完整验证和 OS 信任检查仍然适用。
+已批准的身份不变且凭据存储可用时，重启不会添加或删除证书信任设置。启动恢复绝不会安装信任：
+若信任缺失、被撤销或无法确认，Picker 会保持待处理状态。请明确运行 `ocx claude desktop picker on`
+或 `ocx claude desktop picker trust` 来授予信任。
+
+从旧身份进行一次性迁移时，清除原有信任可能需要同意。清理未完成时，Picker 不可用，已应用的配置档案
+会使用不解密的中继。macOS 还可能单独要求解锁钥匙串或批准应用访问凭据，重启或升级时也可能出现这些提示。
+Windows 和 Linux 仍不支持 Picker，不会启动 Picker CA、凭据存储或代理工作。主要 Claude 拦截功能仍可用，
+其本地 CA 文件受到所有者、符号链接、文件权限及 Windows ACL 检查保护。
 
 Picker 模式开启期间，Claude Desktop 通过 OpenCodex 访问网络。如果 OpenCodex 停止，Desktop 会处于离线状态，
 直到你完全重启 Desktop 或关闭 Picker 模式。使用 `ocx claude desktop picker status` 查看状态，使用
 `ocx claude desktop picker trust` 重复信任步骤，或使用 `ocx claude desktop picker off` 关闭。
-控制台 **Claude → Desktop** 中也有同样的开关。选择 Picker 配置档案后，请完全退出并重新打开 Claude Desktop。
+控制台 **连接 → Claude Desktop** 中也有同样的开关。选择 Picker 配置档案后，请完全退出并重新打开 Claude Desktop。
 
 Picker 模式属于第一方模式，因此[第一方账户风险](#第一方主动选择)同样适用。
 
@@ -184,7 +191,7 @@ ocx claude desktop bind claude-opus-4-6 native/gpt-6.1-sol
 ocx claude desktop unbind claude-opus-4-6
 ```
 
-也可以在仪表板中通过 **Claude → Desktop → Code 标签页模型绑定** 完成同样操作。绑定之后，在
+也可以在仪表板中通过 **连接 → Claude Desktop → Code 标签页模型绑定** 完成同样操作。绑定之后，在
 Code 标签页选择 **Sonnet 4.6** 时会由 `xai/grok-4.7` 响应。选择器仍显示 Anthropic 名称，且
 Claude Code 的系统提示仍会把模型介绍为那个 Claude 模型，所以建议选择平时不用的条目
 （**More models** 中的条目是不错的候选）。绑定在下一个请求即生效，无需重启 Desktop。
@@ -516,16 +523,18 @@ HMAC 等值标签。**不会存储提示文本、原始对象或跨运行稳定�
 
 ## GUI（Claude 页面）
 
-仪表板侧边栏有一个专用的 **Claude** 页面（位于 API 下方）和 **Claude ON** 开关
-（标签特意在所有语言中保持一致）。该页面显示：
+仪表板的 **连接 → Claude** 在同一页面显示 Claude Code 设置。**Claude Desktop** 是 **连接** 下的另一个标签页。连接概览中的 Claude 卡片也提供同一个连接开关。
+页面从上到下依次显示：
 
-- 入站总开关（启用开关）
-- 快速开始（`ocx claude`）和手动环境变量块
-- Fast Mode 选择器（Auto / ON / OFF）
-- 自动上下文开关和压缩阈值下拉菜单
-- 子代理自动注册开关
-- 模型拦截（modelMap）编辑器
-- 选择器别名实时预览
+- **Claude Code CLI 第一方** 开关。
+- **开始使用**：`ocx claude` 和手动环境变量块。
+- **常规**：Fast Mode、自动上下文、压缩阈值和子代理自动注册设置。
+- **后台辅助模型**：选择用于聊天摘要、主题识别等后台工作的模型。
+- **模型拦截**：将特定模型请求重定向到其他模型的 `modelMap` 编辑器。
+- **可用模型**：`/model` 菜单中模型别名的实时预览。
+- **Claude 连接** 开关。
+
+页面底部的保存栏在滚动时保持可见，显示 **没有更改** 或 **有未保存的更改**。**还原** 撤销未保存的设置更改；**保存** 保存编辑后的设置。**Claude 连接** 和 **Claude Code CLI 第一方** 开关立即生效；**保存** 永远不会改变这两个开关的状态。
 
 `GET /api/claude-code` 返回有效默认值、配置、上下文窗口注册表、有效环境变量、可用路由 ID、
 别名和端口。`PUT /api/claude-code` 接受部分更新并保留省略的字段；`null` 会重置
@@ -564,7 +573,7 @@ Claude 模型时自动加载。对于原生透传，这是正常现象；对于�
 **子代理派发到错误模型**——名册代理（`ocx-*`）使用 `<!-- ocx-route: ... -->` 指令，
 而不是 Agent 工具的 `model` 参数。请确保指令与预期路由一致。传入 `"haiku"` 作为模型占位符。
 
-在 `config.json` 中设置 `claudeCode.stabilizePromptCache: true`，可在转换路由上将系统指令末尾受支持的 Claude 提示移到最后一条用户消息。默认值为 `false`。仅在客户端允许这种角色变化时启用。代码围栏内的示例和不匹配的文本会保留，Anthropic 原生透传不变。没有元数据时，缓存键按稳定后的指令计算。该选项不会生成会话标识，也不保证上游缓存命中。
+在 `config.json` 中设置 `claudeCode.stabilizePromptCache: true`，可在转换路由上剥离系统指令末尾受支持的 Claude 提示。识别出的 `<total_tokens>N tokens left</total_tokens>` 形式的 token 页脚会被删除，包括重复出现的页脚。TaskCreate 提醒仍按原有方式移到末尾的用户消息；如果剥离的只有 token 页脚，则不会添加输入消息。默认值为 `false`。仅在客户端允许这种角色变化时启用。代码围栏内的示例和不匹配的文本会保留，Anthropic 原生透传不变。没有元数据时，缓存键按稳定后的指令计算。该选项不会生成会话标识，也不保证上游缓存命中。
 
 在所有转换后的 Chat 路由上，时间线提醒都会保留在对话中的原有位置（排在尚待返回的工具结果之后）。因此，追加提醒不会重写开头的系统提示，对话中途的指令也不会被挪到它本应跟随的轮次之前。该位置携带哪个角色是单独决定的：除非提供方记录了 `foldDeveloperRoleToSystem: false`，否则提醒以 `system` 发送；该记录表示上游接受 `developer` 角色，此时提醒在同一位置按原样转发。不接受该角色的上游会返回 `400 role 'developer' is not allowed`，这一轮根本无法开始，所以未记录的目的地采用折叠。无论 `stabilizePromptCache` 是否启用，该行为都会生效；Anthropic 原生透传保持不变。缓存复用仍需要稳定的会话标识和可用的上游缓存。修改较早的指令或工具、压缩对话也可能影响缓存命中；仅保留提醒顺序并不保证缓存复用。
 

@@ -101,12 +101,15 @@ ocx debug usage logs [-f|--follow]
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-管理 OpenCodex 准入 API 密钥，并检查外部端点和模型。`ocx api-key
-<list|create|remove> ...` 是 `ocx access key` 的别名。
+查看 OpenCodex 接入 API 密钥列表、外部端点和模型。`ocx api-key` 是 `ocx access key` 命令组的别名。
+
+创建密钥和开始轮换时，无论选择文本还是 JSON 输出，都会返回仅显示一次的明文凭据。代理应将这些步骤交给人在代理会话之外直接操作的终端完成。不要索要密钥本身，也不要让用户将其粘贴到聊天中；只接收配置和连接验证的确认，以及非秘密的密钥 ID 和轮换 ID。
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+确认新密钥已配置并验证连接，不等于批准撤销旧密钥。提交轮换或删除旧密钥前，需要另行获得撤销该密钥的明确授权。执行获准的操作后，再次查看列表。不要通过直接调用 API 绕过这一流程。
 
 ## Client integrations
 
@@ -141,7 +144,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ## Client config export
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|droid>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|commandcode|droid>`
 
 输出连接到正在运行代理的客户端配置。此命令会以所选客户端的原生格式序列化 `opencodex` provider 块，其中包含基础 URL、模型列表，以及该客户端适用的凭据引用或 `opencodex-loopback` 占位值。
 
@@ -149,7 +152,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 | 标志 | 动作 |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|droid>` | 必需。选择客户端配置格式。 |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|commandcode\|droid>` | 必需。选择客户端配置格式。 |
 | `--json` | 仅在 stdout 打印配置 JSON，这样重定向即可捕获字节级精确输出。包括 `--out` 写入提示在内的所有诊断信息都会输出到 stderr。 |
 | `--out <path>` | 将配置写入 `<path>`。拒绝替换已存在的文件。 |
 | `--force` | 允许 `--out` 替换已存在的文件。 |
@@ -180,6 +183,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `raycast` | `~/.config/raycast/ai/providers.yaml`（macOS 与 Windows 相同；Raycast 不遵循 `XDG_CONFIG_HOME`） | `raycast-providers.yaml` | 无 — 仅限回环，不会写入 `api_keys` 条目 |
 | `omo` | `~/.omo/agent/models.json`（设置后依次由 `OMO_CODING_AGENT_DIR`、`SENPI_CODING_AGENT_DIR`、`PI_CODING_AGENT_DIR` 优先；相对路径会被拒绝） | `omo-models.json` | 无 — loopback placeholder |
 | `kilo` | `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json`（`XDG_CONFIG_HOME` 可更改该目录）；均不存在时使用 `kilo.jsonc` | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
+| `commandcode` | `~/.commandcode/providers.json` (Windows：已设置 `HOME` 时使用该目录，否则使用 `%USERPROFILE%`) | `providers.json` | 仅限回环；`apiKey: false`；无需环境变量 |
 | `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | 仅限回环；无需环境变量 |
 
 Raycast 导出是一份独立的 `providers.yaml` 文档，在 `providers` 序列中只有一个 `id: opencodex` 元素：`name: OpenCodex`、代理的 `/v1` 基础 URL，以及每个已路由模型及其 `abilities`（`tools` 与 `system_message` 始终支持，`vision` 取自目录的输入模态，`reasoning_effort` 在模型有 effort 阶梯时设置，`temperature` 对推理模型关闭）。Custom Providers 是 Raycast Pro 功能，且 Raycast 会监视该文件，因此保存后的更改无需重启即可生效。格式见 [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers)。不会写入任何 `api_keys` 条目，所以该导出仅限回环，非回环绑定会被拒绝。
@@ -190,7 +194,7 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。
 :::
 
-任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，只有在客户端配置格式支持的情况下才设置相应的环境变量。有关准入密钥的签发方法，请参阅 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。上游 provider 自身的密钥需要单独配置，请参阅 [Providers](/guides/providers/)。
+任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。仅凭环回地址（`127.0.0.1`）不能认定无需密钥；应检查目标的认证策略和端点。使用所选密钥的模型及音频 CLI 即使在环回上也需要明确提供密钥。当代理绑定到环回地址之外时，只有在客户端配置格式支持的情况下才设置相应的环境变量。有关准入密钥的签发方法，请参阅 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。上游 provider 自身的密钥需要单独配置，请参阅 [Providers](/guides/providers/)。
 
 生成的 gjc 集成使用非机密的本地环回占位值，不需要环境变量。此集成仅支持本地环回，不配置远程准入凭据。
 
@@ -231,7 +235,9 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 
 标识或摘要仅描述观察时的文件，不是持久的更新许可，也不证明选中的运行时、过去的安装程序、实际 npm 配置或工具真实性。明确指定的 Node 也只是被观察，不证明启动器会选择它。命令不会执行目标、请求包注册表、安装、写入配置或控制进程。现有 Windows `check` 仍不执行候选项或配置的文件系统 I/O。
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]` 无需运行代理即可显示本地配置。省略 `show` 时，可使用任一标志或按任意顺序组合使用。`--source` 包含诊断来源、错误和警告，仅适用于显示操作。`--json` 可放在显式操作之前，不会改变执行的操作。重复的 `--json` 或 `--source` 标志及未知参数会被拒绝。
 
 检查并安全修改已验证的 OpenCodex 配置。`show` 和 `get` 会隐藏密钥。导入会先验证再写入，并且需要 `--yes`。
 

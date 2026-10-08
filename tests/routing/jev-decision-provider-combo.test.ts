@@ -71,6 +71,9 @@ describe("JEV decisionProvider combo validation", () => {
     expect(issuesFor({ strategy: "jev", decisionProvider: "jev" })).toEqual([]);
     expect(issuesFor({ strategy: "jev" })).toEqual([]);
     expect(issuesFor({ strategy: "jev", decisionProvider: null, decisionTimeoutMs: null })).toEqual([]);
+    const rows = providers();
+    rows.remote = { ...selfHostedRow, baseUrl: "https://decisions.example/v1/decisions", apiKey: "remote-secret" };
+    expect(issuesFor({ strategy: "jev", decisionProvider: "remote" }, rows)).toEqual([]);
   });
 
   test("rejects unknown rows, non-decision adapters, and use outside the jev strategy", () => {
@@ -87,7 +90,7 @@ describe("JEV decisionProvider combo validation", () => {
     expect(issuesFor({ strategy: "jev" }, rows)).toEqual([]);
     rows.local = { adapter: "jev-decision", baseUrl: "http://127.0.0.1:11434/v1", allowPrivateNetwork: true };
     expect(issuesFor({ strategy: "jev", decisionProvider: "local" }, rows)).toEqual([
-      { path: ["decisionProvider"], message: 'decisionProvider "local" baseUrl must be the full decision endpoint ending in /systemone' },
+      { path: ["decisionProvider"], message: 'decisionProvider "local" baseUrl must be a full HTTPS decision endpoint or an HTTP /systemone endpoint' },
     ]);
     expect(issuesFor({ strategy: "failover", decisionProvider: "ollama-tev1" }, rows)).toEqual([
       { path: ["decisionProvider"], message: 'decisionProvider is only valid with strategy "jev"' },
@@ -291,7 +294,7 @@ describe("JEV decisionProvider management round-trip", () => {
       });
       expect(endpoint.status).toBe(400);
       expect((await endpoint.json() as { error: string }).error).toContain(
-        'combos.custom.decisionProvider: decisionProvider "ollama-tev1" baseUrl must be the full decision endpoint',
+        'combos.custom.decisionProvider: decisionProvider "ollama-tev1" baseUrl must be a full HTTPS decision endpoint',
       );
       expect(cfg.providers["ollama-tev1"]).toMatchObject({ adapter: "jev-decision", baseUrl: selfHostedRow.baseUrl });
       expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
