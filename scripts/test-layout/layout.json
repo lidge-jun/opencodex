@@ -410,6 +410,7 @@
     "claude-native-passthrough.test.ts": "claude-integration",
     "claude-native-rate-limit-headers.test.ts": "claude-integration",
     "claude-outbound.test.ts": "claude-integration",
+    "claude-prompt-too-long.test.ts": "claude-integration",
     "claude-shell-hook.test.ts": "claude-integration",
     "claude-sidecar-override.test.ts": "claude-integration",
     "claude-source-envelope.test.ts": "claude-integration",
