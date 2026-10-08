@@ -1057,6 +1057,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelVercelGatewayRouting: "editor",
   authMode: "editor",
   oauthAccountFailover: "editor",
+  anthropicAccountPool: "editor",
   keyOptional: "editor",
   freeTier: "editor",
   note: "editor",

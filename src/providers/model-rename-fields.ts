@@ -78,6 +78,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   modelVercelGatewayRouting: "record",
   authMode: "none",
   oauthAccountFailover: "none",
+  anthropicAccountPool: "none",
   keyOptional: "none",
   freeTier: "none",
   note: "none",
