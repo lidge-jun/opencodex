@@ -423,7 +423,7 @@ d'OpenCodex, de réappliquer ce profil et de démarrer une nouvelle conversation
 dépannage, sans garantie de résolution. OpenCodex ne peut pas observer l'état du sélecteur ; il achemine
 l'identifiant du modèle porté par chaque requête. Vérifiez ce que le client envoie sous **Logs → requestedModel**.
 
-Les modèles dont la fenêtre de contexte de référence atteint 1M obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur.
+Les modèles dont la fenêtre de contexte de référence atteint 1M ou au moins le seuil de compactage par défaut (829 800) obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur.
 Sa sélection indique à Claude Code la fenêtre complète de 1M pour ce modèle, tout en maintenant le compactage automatique ; le proxy retire
 le marqueur avant le routage.
 La sélection est conservée dans le champ `model` de `settings.json` ; pour les requêtes entrantes, l'alias est de nouveau
@@ -458,8 +458,10 @@ conservent leurs identifiants canoniques sur les deux interfaces.
 
 ### Marqueur `[1m]` de variante contextuelle
 
-Les modèles dont la fenêtre de contexte de référence atteint 1M — ou, avec le contexte automatique, dépasse 200k tout en atteignant
-au moins le seuil de compactage — obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur. En la sélectionnant, Claude Code
+Les modèles dont la fenêtre de contexte de référence atteint 1M ou au moins le seuil de compactage par défaut (829 800)
+obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur. Ce plancher est fixe : modifier la valeur de compactage ne l'abaisse pas,
+et un modèle Claude sur une route Anthropic doit réellement atteindre 1M. Sans contexte automatique, seule une fenêtre de 1M compte.
+Au-delà de la fenêtre réelle, l'erreur `prompt is too long` déclenche le compactage automatique de Claude Code. En la sélectionnant, Claude Code
 tient compte d'un contexte complet de 1M. Le proxy supprime le suffixe `[1m]`, sans tenir compte de la casse, avant la
 résolution de l'alias et le routage.
 

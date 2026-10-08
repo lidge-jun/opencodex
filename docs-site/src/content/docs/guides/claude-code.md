@@ -596,7 +596,8 @@ reapplying the profile, and starting a new conversation. This is a troubleshooti
 guaranteed fix. OpenCodex cannot observe picker state; it routes the model id carried by each
 request. Confirm what the client sends under **Logs → requestedModel**.
 
-Models with an authoritative 1M context window get an extra `…[1m]` picker row: selecting it makes
+Models with a long context window (1M, or at least the 829,800-token default compaction threshold;
+Claude models on an Anthropic route need a genuine 1M) get an extra `…[1m]` picker row: selecting it makes
 Claude Code account a full 1M context for that model (auto-compaction stays on) — the proxy strips
 the marker before routing.
 Selecting one persists it to Claude Code's `settings.json` `model` field; inbound requests resolve
@@ -632,8 +633,10 @@ keep their canonical ids on both surfaces.
 
 ### Context-variant `[1m]` marker
 
-Models with an authoritative context window of 1M (or, under auto-context, above 200k and at
-least the compaction threshold) get an extra `…[1m]` picker row. Selecting it makes Claude Code
+Models with an authoritative context window of 1M, or at least the 829,800-token default
+compaction threshold, get an extra `…[1m]` picker row; the floor is fixed, so a custom compaction
+value does not lower it, and Claude models on an Anthropic route need a genuine 1M. Turning
+auto-context off limits the row to 1M windows. Selecting it makes Claude Code
 account a full 1M context. The proxy strips the case-insensitive `[1m]` suffix before alias
 resolution and routing.
 
@@ -1059,7 +1062,7 @@ the confirmed obsolete token file and applying first-party mode again; never del
 
 ### First-party picker context markers
 
-The Desktop Code-tab picker adds `[1m]` to routed models whose authoritative context window is at least one million tokens, so Claude uses its 1M accounting instead of the smaller custom-model fallback. Labels, profile order, and provider routes stay unchanged. Unknown and sub-million windows remain unmarked, including native long-window opt-ins: the picker cannot guarantee that a Desktop or remote runner receives the matching compaction environment. The paired auto-context setup for `ocx claude` is unchanged. An existing conversation keeps its saved selector until you select the model again from the refreshed picker.
+The Desktop Code-tab picker adds `[1m]` to routed models whose authoritative context window is at least one million tokens or at least the 829,800-token default compaction threshold (for example a native GPT-6 model opted into its 872k window), so Claude uses its 1M accounting instead of the smaller custom-model fallback. Claude models on an Anthropic route still need a genuine 1M. Labels, profile order, and provider routes stay unchanged. Unknown and shorter windows remain unmarked. The picker cannot guarantee that a Desktop or remote runner receives the matching compaction environment, so a long-window model that outgrows its real window gets a `prompt is too long` error, which Claude Code answers by compacting. Desktop 3P `supports1m`/`prefer1m` and generated subagents follow the same rule. The paired auto-context setup for `ocx claude` is unchanged. An existing conversation keeps its saved selector until you select the model again from the refreshed picker.
 
 ### Forced Claude Code subagent model
 
