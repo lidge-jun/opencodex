@@ -38,11 +38,13 @@ function apiRequest(body?: string) {
 
 test("empty API requests and empty objects retain the 60-second default", async () => {
   for (const payload of [undefined, "{}"]) {
-    setSystemRestartIoForTests({ isDraining: () => false, schedule: () => {}, setDraining: () => {} });
+    const delays: number[] = [];
+    setSystemRestartIoForTests({ isDraining: () => false, schedule: (_fn, ms) => { delays.push(ms); }, setDraining: () => {} });
     const req = apiRequest(payload);
     const res = await handleManagementAPI(req, new URL(req.url), apiConfig);
     expect(res?.status).toBe(202);
     expect((await res!.json()).drainTimeoutMs).toBe(60_000);
+    expect(delays).toEqual([200]);
   }
 });
 
@@ -83,7 +85,7 @@ test("invalid API grace or malformed JSON is rejected without beginning a drain"
 
 test("the API accepts both supported grace boundaries", async () => {
   for (const drainGraceMs of [1, 60_000]) {
-    setSystemRestartIoForTests({ isDraining: () => false, schedule: () => {}, setDraining: () => {} });
+    setSystemRestartIoForTests({ isDraining: () => false, schedule: () => {}, scheduleDeadline: () => () => {}, setDraining: () => {} });
     const req = apiRequest(JSON.stringify({ drainGraceMs }));
     const res = await handleManagementAPI(req, new URL(req.url), apiConfig);
     expect(res?.status).toBe(202);
@@ -168,7 +170,7 @@ afterEach(() => {
   resetLifecycleDrainStateForTests();
 });
 
-function restartFixture(options: { automatic?: boolean; holdCleanup?: boolean; holdReadiness?: boolean; failSpawn?: boolean; flushDelayMs?: number; useDefaultGrace?: boolean } = {}) {
+function restartFixture(options: { automatic?: boolean; supervised?: boolean; holdCleanup?: boolean; holdReadiness?: boolean; failSpawn?: boolean; flushDelayMs?: number; useDefaultGrace?: boolean; drainGraceMs?: number } = {}) {
   const clock = new RestartClock();
   const date = spyOn(Date, "now").mockImplementation(() => clock.now);
   const sleep = spyOn(Bun, "sleep").mockImplementation((ms) => new Promise(resolve => {
@@ -176,6 +178,9 @@ function restartFixture(options: { automatic?: boolean; holdCleanup?: boolean; h
   }));
   restore.push(() => date.mockRestore(), () => sleep.mockRestore());
   const calls: string[] = [];
+  const scheduleDelays: number[] = [];
+  const deadlineDelays: number[] = [];
+  const cancelledDeadlines: number[] = [];
   let finishCleanup!: () => void;
   const cleanup = new Promise<void>(resolve => { finishCleanup = resolve; });
   let finishReadiness!: () => void;
@@ -188,8 +193,12 @@ function restartFixture(options: { automatic?: boolean; holdCleanup?: boolean; h
   const accept = () => acceptSystemRestart({
     now: () => clock.now,
     getActiveTurnCount,
-    schedule: (fn, ms) => { clock.schedule(() => { running = fn(); }, options.flushDelayMs ?? ms); },
-    scheduleDeadline: clock.schedule,
+    schedule: (fn, ms) => { scheduleDelays.push(ms); clock.schedule(() => { running = fn(); }, options.flushDelayMs ?? ms); },
+    scheduleDeadline: (fn, ms) => {
+      deadlineDelays.push(ms);
+      const cancel = clock.schedule(fn, ms);
+      return () => { cancelledDeadlines.push(ms); cancel(); };
+    },
     drainAndShutdown: async (_server, ms) => {
       calls.push(`drain:${ms}`);
       const result = await drainAndShutdown(server, ms);
@@ -199,7 +208,7 @@ function restartFixture(options: { automatic?: boolean; holdCleanup?: boolean; h
     stopListener: () => stopServerListener(server),
     listenPort: () => 10123,
     isDesktopSupervised: () => false,
-    isSupervisedServiceChild: () => false,
+    isSupervisedServiceChild: () => options.supervised ?? false,
     spawnStart: async (port, waitForHealth) => {
       calls.push(`spawn:${port}:${waitForHealth}:${clock.now}`);
       if (options.failSpawn) throw Object.assign(new Error("fixture"), { code: "EACCES" });
@@ -208,8 +217,8 @@ function restartFixture(options: { automatic?: boolean; holdCleanup?: boolean; h
     markRecycling: () => { calls.push("recycle"); },
     isClientConnected: () => false,
     exitProcess: code => { calls.push(`exit:${code}`); },
-  }, options.automatic ? { onAccepted: callback => { veto = callback; } } : {}, options.useDefaultGrace ? {} : { drainGraceMs: 2_000 });
-  return { clock, calls, accept, finishCleanup, finishReadiness, veto: () => veto(), running: () => running };
+  }, options.automatic ? { onAccepted: callback => { veto = callback; } } : {}, options.useDefaultGrace ? {} : { drainGraceMs: options.drainGraceMs ?? 2_000 });
+  return { clock, calls, scheduleDelays, deadlineDelays, cancelledDeadlines, accept, finishCleanup, finishReadiness, veto: () => veto(), running: () => running };
 }
 
 function upstreamTurn(bindController = true) {
@@ -220,6 +229,60 @@ function upstreamTurn(bindController = true) {
   // The admitted handler may have sent work whose upstream outcome is not yet known.
   return { lease: lease!, controller };
 }
+
+for (const drainGraceMs of [1, 199]) {
+  for (const supervised of [false, true]) {
+    test(`${drainGraceMs}ms ${supervised ? "supervised" : "standalone"} restart cuts turns by the accepted deadline but waits 200ms to shut down`, async () => {
+      const fixture = restartFixture({ drainGraceMs, supervised });
+      const turn = upstreamTurn();
+      const acceptedAtMs = fixture.clock.now;
+      expect(fixture.accept().drainTimeoutMs).toBe(drainGraceMs);
+      expect(fixture.accept().alreadyDraining).toBe(true);
+      await fixture.clock.advance(drainGraceMs - 1);
+      expect(turn.controller.signal.aborted).toBe(false);
+      expect(getActiveTurnCount()).toBe(1);
+      await fixture.clock.advance(1);
+      expect(fixture.clock.now - acceptedAtMs).toBe(drainGraceMs);
+      expect(turn.controller.signal.aborted).toBe(true);
+      expect(getActiveTurnCount()).toBe(0);
+      expect(fixture.scheduleDelays).toEqual([200]);
+      expect(fixture.deadlineDelays).toEqual([drainGraceMs]);
+      expect(fixture.calls).toEqual([]);
+      await fixture.clock.advance(199 - drainGraceMs);
+      expect(fixture.calls).toEqual([]);
+      await fixture.clock.advance(1);
+      await fixture.running();
+      expect(fixture.calls).toContain("drain:0");
+      expect(fixture.calls).toContain(`stop:${acceptedAtMs + 200}`);
+      expect(fixture.calls).toContain(`exit:${supervised ? 1 : 0}`);
+      expect(fixture.calls.filter(call => call.startsWith("spawn:"))).toEqual(supervised ? [] : [`spawn:10123:true:${acceptedAtMs + 200}`]);
+      expect(tryAdmitTurn()).toBeNull();
+    });
+  }
+}
+
+for (const options of [{ drainGraceMs: 200 }, { drainGraceMs: 60_000 }, { useDefaultGrace: true }]) {
+  test(`restart ${JSON.stringify(options)} arms no early cut`, () => {
+    const fixture = restartFixture(options);
+    fixture.accept();
+    expect(fixture.scheduleDelays).toEqual([200]);
+    expect(fixture.deadlineDelays).toEqual([]);
+  });
+}
+
+test("vetoing a pending short-grace automatic restart cancels its early cut", async () => {
+  const fixture = restartFixture({ automatic: true, drainGraceMs: 1 });
+  const turn = upstreamTurn();
+  fixture.accept();
+  expect(fixture.deadlineDelays).toEqual([1]);
+  fixture.veto();
+  expect(fixture.cancelledDeadlines).toEqual([1]);
+  await fixture.clock.advance(200);
+  expect(turn.controller.signal.aborted).toBe(false);
+  expect(getActiveTurnCount()).toBe(1);
+  expect(fixture.calls).toEqual([]);
+  expect(isDraining()).toBe(false);
+});
 
 for (const automatic of [false, true]) {
   const mode = automatic ? "automatic" : "manual";

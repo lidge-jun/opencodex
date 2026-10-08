@@ -37,6 +37,7 @@
  *   Checked before the service rule: that app, not a service manager, is the parent.
  */
 import {
+  abortAndReleaseAllTurns,
   acquireTemporaryDrain,
   beginShutdownDrain,
   drainAndShutdown,
@@ -64,8 +65,11 @@ import { spawnReplacementStart } from "../restart-replacement";
 export { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../../lib/system-restart-contract";
 export { waitForReplacementReady, type ReplacementReadinessIo } from "../restart-replacement";
 export const DEADLINE_LISTENER_STOP_TIMEOUT_MS = 5_000;
+const RESTART_RESPONSE_FLUSH_DELAY_MS = 200;
 
 export interface SystemRestartIo {
+  /** Cancel and release admitted turns without stopping the listener or process. */
+  abortActiveTurns?: () => void;
   acquireTemporaryDrain?: () => { release(): void } | null;
   drainAndShutdown?: typeof drainAndShutdown;
   /** True when a background service can actually respawn this process after exit(1). */
@@ -105,7 +109,7 @@ export interface SystemRestartAdmission {
 }
 
 let restartIo: SystemRestartIo = {};
-/** Prevents double-scheduling in the 200ms window before drainAndShutdown sets draining. */
+/** Prevents double-scheduling during the 200ms response-flush window. */
 let restartAccepted = false;
 let acceptedDrainGraceMs = MEMORY_DRAIN_RESTART_MS;
 
@@ -331,7 +335,7 @@ async function completeDeadlineRestartHandoff(
 
 /**
  * Accept a drain-and-restart request. Returns immediately; the drain +
- * respawn runs on a short timer so the HTTP response can flush first.
+ * respawn waits 200ms for the HTTP response to flush; shorter grace cuts turns separately.
  * Idempotent while already draining: returns the accepted shape again.
  */
 export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: SystemRestartAdmission = {}, options: SystemRestartOptions = {}): {
@@ -357,7 +361,9 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
     const temporaryDrain = automatic
       ? (io.acquireTemporaryDrain ?? (() => acquireTemporaryDrain("automatic-restart")))()
       : null;
+    let cancelEarlyCut: (() => void) | undefined;
     const releasePending = () => {
+      cancelEarlyCut?.();
       temporaryDrain?.release();
       restartAccepted = false;
     };
@@ -377,11 +383,23 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
     const acceptedAtMs = now();
     const restartDeadlineMs = acceptedAtMs + MEMORY_DRAIN_RESTART_MS;
     const drainDeadlineMs = acceptedAtMs + drainGraceMs;
+    const scheduleDeadline = io.scheduleDeadline ?? ((fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      return () => clearTimeout(timer);
+    });
     // Reject new data-plane traffic immediately (503), before the 200ms response-flush delay.
     if (!automatic) {
       if (io.beginShutdownDrain) io.beginShutdownDrain();
       else if (io.setDraining) io.setDraining(true);
       else beginShutdownDrain();
+    }
+    // A shorter grace cuts admitted turns at acceptance + grace, but listener stop
+    // and process exit must still wait for the full response-flush window.
+    if (!vetoed && drainGraceMs < RESTART_RESPONSE_FLUSH_DELAY_MS) {
+      cancelEarlyCut = scheduleDeadline(() => {
+        if (vetoed) return;
+        (io.abortActiveTurns ?? (() => abortAndReleaseAllTurns(new Error("server shutdown"))))();
+      }, drainGraceMs);
     }
     schedule(async () => {
       if (vetoed) return;
@@ -408,10 +426,6 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
       const drainPromise = Promise.resolve().then(
         () => drain(undefined, Math.max(0, drainDeadlineMs - now())),
       );
-      const scheduleDeadline = io.scheduleDeadline ?? ((fn, ms) => {
-        const timer = setTimeout(fn, ms);
-        return () => clearTimeout(timer);
-      });
       const drainOutcome = await waitForRestartDrain(drainPromise, restartDeadlineMs, now, scheduleDeadline);
       if (!canHandoff()) return;
       const exitProcess = io.exitProcess ?? ((code: number) => { process.exit(code); });
@@ -467,7 +481,7 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
       }
       (io.markRecycling ?? markRecyclingForExit)();
       exitProcess(drainOutcome === "failed" || drainOutcome === "rejected" ? 1 : 0);
-    }, 200);
+    }, RESTART_RESPONSE_FLUSH_DELAY_MS);
   }
 
   return {
