@@ -67,6 +67,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   modelAutoCompactTokenLimits: "record",
   defaultMaxOutputTokens: "none",
   modelMaxOutputTokens: "record",
+  minMaxOutputTokens: "none",
   modelCosts: "record",
   autoReviewModel: "none",
   autoReviewModelOverrides: "record",

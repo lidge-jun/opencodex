@@ -157,6 +157,14 @@ describe("reasoning pin config boundaries", () => {
     expect(config.modelPinnedEfforts).toEqual({ " alpha/one ": "none" });
   });
 
+  test("minMaxOutputTokens is validated at the management boundary like its budget siblings", () => {
+    const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", minMaxOutputTokens: 4096 };
+    expect(providerManagementConfigError("custom", provider)).toBeNull();
+    for (const bad of [0, -1, 1.5, "4096", Number.POSITIVE_INFINITY]) {
+      expect(providerManagementConfigError("custom", { ...provider, minMaxOutputTokens: bad })).not.toBeNull();
+    }
+  });
+
   test("canonical OpenAI admits validated pin overlays while retaining transport and credential checks", () => {
     const seed = providerConfigSeed(getProviderRegistryEntry("openai")!);
     const pins = { pinnedReasoningEffort: "none", modelPinnedReasoningEfforts: { "gpt-test": "ultra" } };

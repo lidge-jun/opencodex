@@ -884,6 +884,12 @@ export function providerManagementConfigError(
   if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
   const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");
   if (maxOutputError) return `provider ${name} ${maxOutputError}`;
+  // Management-boundary parity with the config schema: PATCH handling for this field does not
+  // exist yet (applyProviderPatchFields rejects a patch that names only unrecognized fields),
+  // but the guard belongs here so a future PATCH path cannot persist a value the schema load
+  // would reject and sink the whole provider config to fallback.
+  const minMaxOutputError = positiveIntegerConfigError(raw.minMaxOutputTokens, "minMaxOutputTokens");
+  if (minMaxOutputError) return `provider ${name} ${minMaxOutputError}`;
   const structuredOutputOptOutError = nonBlankStringArrayConfigError(
     raw.noStructuredOutputModels,
     "noStructuredOutputModels",
@@ -1048,6 +1054,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelAutoCompactTokenLimits: "editor",
   defaultMaxOutputTokens: "editor",
   modelMaxOutputTokens: "editor",
+  minMaxOutputTokens: "editor",
   modelCosts: "editor",
   headers: "redacted",
   forwardClientHeaders: "editor",
