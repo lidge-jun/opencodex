@@ -190,8 +190,7 @@ turn is routed. A gateway that validates its top-level schema rejects the reques
 Console Go answers with an unknown-parameter error naming the field, and every turn of that thread
 fails (#4853). The key is scoped by DESTINATION rather than by the canonical surface, because
 `src/server/responses/compact.ts` spreads the caller's raw body into the native
-`/responses/compact` request without passing through this adapter, and that endpoint is offered
-only to OpenAI-operated destinations; stripping on the canonical predicate would make
+`/responses/compact` request without passing through this adapter and applies the same destination strip: official destinations keep it, including native v1; opted-in custom gateways do not. Stripping on the canonical predicate would make
 `openai-apikey` behave differently on its two endpoints.
 
 This table is not an unknown-parameter sanitizer, and the distinction is the point. It lists keys a
@@ -330,7 +329,7 @@ now: the TTL was previously evaluated only on read or on a generation change, so
 again held its entry for the life of the process.
 
 > Decision record: [ADR-0038](../decisions/ADR-0038-responses-http-sse.md)
-
+Custom `openai-responses` gateways declare native v2 triggers with `supportsNativeCompactionTrigger` and native v1 endpoints with `supportsNativeCompactEndpoint`; neither flag implies blob replay or OpenAI identity. `src/adapters/openai-responses/transport.ts` shares normal URL/auth/header construction with custom native v1. Custom v1 scrubs compaction ciphertext, reasoning ciphertext and foreign reasoning ids after each serving bind, using ordinary turns' parent-thread-first replay scope; successful compact sends commit that same provenance. Daybreak endpoint restrictions remain canonical-only. A native 404 handoff preserves User-Agent and allowlisted provider-opted-in metadata through `src/server/responses/core-auth.ts` without widening credential forwarding. V1 fallback remains portable even for v2-capable gateways; cross-provider overrides still force portable summaries. `tests/responses/native-compaction-gateway.test.ts` pins these boundaries.
 A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode,
 and the client replays it on every later turn. The proxy's own `ocx1:` envelopes are transparent
 base64, so they always lower to plain user messages. A native blob is relayed only when there is no

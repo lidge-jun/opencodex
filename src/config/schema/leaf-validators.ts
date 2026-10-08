@@ -335,6 +335,8 @@ export const providerConfigSchema = z.object({
   dropResponsesReasoningItems: z.boolean().optional(),
   modelReasoningEffortsAuthoritative: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
+  supportsNativeCompactionTrigger: z.boolean().optional(),
+  supportsNativeCompactEndpoint: z.boolean().optional(),
   allowEncryptedV2AgentTasks: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
   // Per-provider egress (#2894): absent inherits the global proxy decision, "direct"/null

@@ -32,7 +32,7 @@
     "codex-integration": {
       "match": [
         "^context-compat\\.test\\.ts$",
-        "^(?:active|app|bearer|catalog|combos\\.test\\.ts|doctor\\.test\\.ts|effort|gather|history|injection|issue|multi|native|parallel|project|selected|slug|ultrafast|warmup\\.test\\.ts)-"
+        "^(?:active|app|bearer|catalog|combos\\.test\\.ts|doctor\\.test\\.ts|effort|gather|history|injection|issue|multi|native(?!-compaction-gateway)|parallel|project|selected|slug|ultrafast|warmup\\.test\\.ts)-"
       ]
     },
     "server": {
@@ -62,6 +62,7 @@
     },
     "responses": {
       "match": [
+        "^native-compaction-gateway\\.test\\.ts$",
         "^openai-responses-summary-none\\.test\\.ts$",
         "^(?:apply|chat|citation|continuation|eventstream|legacy|namespace|passthrough|responses|sse|thought|ws)-"
       ]

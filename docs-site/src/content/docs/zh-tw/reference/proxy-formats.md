@@ -226,7 +226,13 @@ Compaction 為需要縮短長 Responses 對話的客戶端回傳取代歷史。
 | 路由型別 | 行為 |
 | --- | --- |
 | 規範 ChatGPT 或官方 OpenAI 路由 | 以解析的帳號與模型認證將請求轉發到原生 `/responses/compact` 端點 |
+| Explicitly opted-in custom `openai-responses` gateway | `supportsNativeCompactEndpoint: true` tries the native v1 endpoint with the provider's normal Responses URL, authentication, and client headers; HTTP 404 uses portable fallback |
 | 其他路由模型 | 執行一個內部、非串流、無工具的 compaction 回合，帶有 `compaction_trigger`；需要恰好一個合成的 `compaction` 項目，其 `encrypted_content` 為 `ocx1:` 封裝；將該摘要解碼為 v1 取代歷史 |
+
+The custom v1 capability is independent of v2 `supportsNativeCompactionTrigger` and
+`decodesNativeCompactionBlobs` for replay. None grants canonical identity or caller credential
+forwarding; cross-provider overrides remain portable. See the canonical
+[provider configuration](/reference/configuration/providers/) before opting in.
 
 原生 compact 回應以 32 MiB 上限緩衝，包含其宣告的 `Content-Length` 已超過限制的回應。Compact 專屬失敗包含：
 

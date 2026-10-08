@@ -7,7 +7,7 @@ import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { isRequestExecutionBudget, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import { isNonReplayableResponse, isNonReplayableUpstreamCode, markResponseNonReplayable, TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
 import { isCyberPolicyCode, isTerminalRefusalCode } from "../../lib/errors";
-import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint, supportsNativeResponsesCompactionTrigger } from "../../providers/openai-tiers";
 import { bridgeToResponsesSSE, formatErrorResponse } from "../../bridge";
 import { buildCompactV1Output, decodeCompactionSummary, encodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { finishRequestAttempt, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
@@ -60,10 +60,12 @@ function portableBody(body: Record<string, unknown>): boolean {
   return selfContainedResponsesBody({ ...body, store: false, input });
 }
 
-function routed(route: RouteResult): boolean {
+function routed(route: RouteResult, kind: "compaction-v1" | "compaction-v2"): boolean {
   return !route.combo && route.routeKind !== "policy" && route.routeReason !== "default-provider"
     && !isCanonicalOpenAiForwardProvider(route.provider)
-    && !supportsNativeResponsesCompactEndpoint(route.providerName, route.provider);
+    && !(kind === "compaction-v1"
+      ? supportsNativeResponsesCompactEndpoint(route.providerName, route.provider)
+      : supportsNativeResponsesCompactionTrigger(route.provider));
 }
 
 /** One reader, bounded bytes, and an exact replacement body; never clone a live stream. */
@@ -89,6 +91,7 @@ export async function runWithCompactionRecovery(
   req: Request, config: OcxConfig, logCtx: RequestLogContext, options: Options, dispatch: Dispatch,
 ): Promise<Response> {
   const recovery = readCompactionRecoveryConfig(config.compactionRecovery);
+  const kind = options.compactionRecoveryKind ?? "compaction-v2";
   if (!recovery || options.compactionRecoveryAttempted || options.comboAttempt || (options.inboundWire && options.inboundWire !== "responses")) {
     return dispatch(req, config, logCtx, options);
   }
@@ -132,7 +135,7 @@ export async function runWithCompactionRecovery(
     },
     onCompactionRecoveryRoute(route) {
       options.onCompactionRecoveryRoute?.(route);
-      if (snapshot && routed(route)) sourceRoute = { ...route };
+      if (snapshot && routed(route, kind)) sourceRoute = { ...route };
     },
     onCompactionRecoveryAdapterEvent(event) {
       options.onCompactionRecoveryAdapterEvent?.(event);
@@ -151,7 +154,7 @@ export async function runWithCompactionRecovery(
     if (!snapshot || !sourceRoute || signal.aborted || req.signal.aborted || isNonReplayableResponse(response)) return keep(response);
     let target: RouteResult;
     try { target = routeConcreteModel(config, recovery.model); } catch { return keep(response); }
-    if (!routed(target) || identity(sourceRoute) === identity(target)) return keep(response);
+    if (!routed(target, kind) || identity(sourceRoute) === identity(target)) return keep(response);
     const originalModel = firstOptions.compactionRoutingOverride?.sourceModel ?? String(snapshot.model);
     // Use the established protocol commit boundary. For runTurn streams the direct event
     // observer additionally preserves side-effect heartbeats that the bridge does not publish.

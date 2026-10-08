@@ -3,7 +3,7 @@ import { OPENAI_PROVIDER_TIER_VERSION } from "../types";
 import { openaiResponsesUrl } from "../adapters/openai-responses-url";
 import { MAX_COST4_RATE } from "../usage/expected-prices";
 import { OPENAI_CODEX_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, LEGACY_CHATGPT_PROVIDER_ID, CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "./openai-tiers-destination";
-export { OPENAI_CODEX_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, LEGACY_CHATGPT_PROVIDER_ID, CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint, isOpenAiOperatedResponsesDestination, destinationDecodesNativeCompactionBlob } from "./openai-tiers-destination";
+export { OPENAI_CODEX_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, LEGACY_CHATGPT_PROVIDER_ID, CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint, supportsNativeResponsesCompactionTrigger, isOpenAiOperatedResponsesDestination, destinationDecodesNativeCompactionBlob } from "./openai-tiers-destination";
 
 const LEGACY_OPENAI_MULTI_PREFIX = `${LEGACY_OPENAI_MULTI_PROVIDER_ID}/`;
 
