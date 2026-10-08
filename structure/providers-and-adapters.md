@@ -354,7 +354,7 @@ destinations untouched. Five catalog ids carry explicit text-and-image input met
 Provider-scoped capability hints remain authoritative when discovery returns an id without
 capabilities. In particular, `src/providers/registry/entries-core.ts` assigns OpenCode Go's live
 `deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
-routed-model fallback. Custom-named Azure OpenAI providers obtain missing context windows through the destination-gated vendor lookup in `src/providers/derive.ts`, consumed by the shared catalog hint projection. This uses known model ids without changing transport selection or persisting generated limits; see [the shared catalog contract](catalog.md#shared-catalog).
+routed-model fallback. Custom-named Azure OpenAI providers obtain missing image/text input metadata and context/output limits through the destination-gated lookup in `src/providers/derive.ts`, consumed by shared catalog hints. Discovery refreshes public models.dev Azure rows through `src/providers/azure-model-metadata.ts`; stale cache and bundled hints remain available offline. This uses known model ids without changing transport selection or persisting model declarations; see [the shared catalog contract](catalog.md#shared-catalog).
 Meta's two direct surfaces keep separate reasoning contracts: `meta-model` remains capped at
 `xhigh`, while `meta-muse` advertises `max` and sends the transparent Muse compatibility
 User-Agent required by that credential surface. The existing registry header merge keeps an

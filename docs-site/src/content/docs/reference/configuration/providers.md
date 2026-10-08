@@ -341,18 +341,27 @@ For example, this applies a provider-wide concurrency cap and a stricter cap to 
 
 The concurrency slot stays occupied until the upstream request finishes, including the final streamed response bytes. Requests above the applicable provider and model limits wait in the pacing queue; when a slot is released, the next eligible request is admitted. Queue waiting does not consume the upstream response-header timeout.
 
-### Azure OpenAI context discovery
+### Azure OpenAI model metadata discovery
 
-For a base URL whose hostname ends in `.openai.azure.com`, missing context windows are filled
-from the bundled vendor metadata even when the provider has a custom name. Lookup uses known
-model ids, first exactly and then without regard to case, with Azure metadata checked before
-other vendor bundles. Reported limits and `modelContextWindows`/`contextWindow` retain
-precedence; `providerContextCaps` still clamps the result.
+For a base URL whose hostname ends in `.openai.azure.com`, discovery fills missing image/text
+input support and context/output limits even when the provider has a custom name. Azure
+`/models` inference and chat flags alone do not describe image support or token limits.
+opencodex supplements them with the public [models.dev catalog](https://models.dev), using its
+Azure rows before bundled Azure metadata and other vendor bundles. Model-id lookup is exact
+or case-insensitive; a newly published model does not require a new opencodex release.
 
-The bundle ships with opencodex and is not fetched from Azure on each request. It describes
-model limits, not the capacity of a particular deployment. For a deployment alias such as
-`my-production-model`, or a deployment with a smaller limit, set `modelContextWindows` for
-that exact deployment id. Unknown aliases retain the ordinary fallback.
+The public metadata snapshot refreshes during discovery at most once per 24 hours, with a
+two-second deadline and a 16 MiB body limit. It is stored in `azure-model-metadata-cache.json`
+under the opencodex config directory. No Azure credentials are sent to the public catalog.
+Offline discovery keeps stale cached metadata or falls back to bundled hints; generation
+requests do not fetch this snapshot.
+
+Explicit input declarations and reported modalities retain precedence, including reported
+`vision: false`. Existing vision sidecar coverage still applies. Reported/configured limits
+remain authoritative and provider caps still clamp them. Metadata describes model support,
+not a particular deployment capacity. Arbitrary deployment aliases such as
+`my-production-model` cannot be mapped from Azure inference flags; set `modelInputModalities`
+and `modelContextWindows` for that exact id when needed. Unknown ids are not guessed.
 
 ### What a provider save keeps
 

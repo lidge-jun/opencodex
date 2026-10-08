@@ -39,6 +39,7 @@ import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, mo
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
+import { isAzureModelMetadataDestination, refreshAzureModelMetadata } from "../../providers/azure-model-metadata";
 import {
   captureFastPolicyAuthority,
   fastPolicyForModel,
@@ -182,6 +183,7 @@ export async function fetchProviderModelsWithAuth(
   const anthropicSelection = name === "anthropic" && prov.authMode === "oauth"
     ? captureOAuthAccountSelection(name) : null;
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
+  if (isAzureModelMetadataDestination(prov.baseUrl)) await refreshAzureModelMetadata(prov.baseUrl);
   const seedVertexDefault = prov.adapter === "google"
     && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0

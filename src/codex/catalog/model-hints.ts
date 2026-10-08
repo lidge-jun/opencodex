@@ -35,7 +35,7 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
-import { azureVendorContextWindow, enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
+import { azureVendorModelMetadata, enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import {
   captureFastPolicyAuthority,
   fastPolicyForModel,
@@ -219,7 +219,8 @@ export function routedMaxOutputTokens(
   metadataModelIdCaseFold?: boolean,
 ): number | undefined {
   const discovered = positiveSafeInteger(model.maxOutputTokens);
-  const generated = generatedMaxOutputTokens(providerName, model.id, metadataId, metadataModelIdCaseFold);
+  const generated = positiveSafeInteger(azureVendorModelMetadata(provider.baseUrl, metadataId)?.maxTokens)
+    ?? generatedMaxOutputTokens(providerName, model.id, metadataId, metadataModelIdCaseFold);
   const configured = positiveSafeInteger(
     modelRecordValue(provider.modelMaxOutputTokens, model.id),
   );
@@ -276,13 +277,14 @@ export function applyProviderConfigHints(
     : model.providerAlias;
   const configuredCap = staticPolicy.model.contextWindow ?? configuredContextWindow(prov, model.id);
   const configuredMaxInput = staticPolicy.model.maxInputTokens;
+  const azureMetadata = azureVendorModelMetadata(prov.baseUrl, model.id);
   const maxOutputTokens = routedMaxOutputTokens(name, prov, model, model.id, metadataModelIdCaseFold);
   const configuredAutoCompact = configuredAutoCompactTokenLimit(prov, model.id);
   // The resolver owns exact capability precedence and legacy exact/colon-family/case-fold fallback.
   // Removing an exact capability row therefore returns this projection to legacy-map inference.
-  let inputModalities = staticPolicy.model.inputModalities
-    ? [...staticPolicy.model.inputModalities]
-    : undefined;
+  const resolvedModalities = staticPolicy.model.inputModalities ?? model.inputModalities
+    ?? (azureMetadata?.input ? modelInputModalities({ id: model.id, input_modalities: azureMetadata.input }, undefined) : undefined);
+  let inputModalities = resolvedModalities ? [...resolvedModalities] : undefined;
   // The shared vision-sidecar consumer predicate keeps catalog advertisement and request-time
   // planning aligned. The catalog must still advertise image input — the Codex app
   // gates attachments client-side on input_modalities, and a text-only entry would block images
@@ -319,7 +321,7 @@ export function applyProviderConfigHints(
     ...(typeof model.maxInputTokens === "number" && model.maxInputTokens > 0 ? { maxInputTokens: model.maxInputTokens } : {}),
   });
   const hintedWindow = projectedLimits.contextWindow
-    ?? azureVendorContextWindow(prov.baseUrl, model.id)
+    ?? positiveSafeInteger(azureMetadata?.contextWindow)
     ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined);
   const hinted = {
     ...modelWithoutServiceTier,

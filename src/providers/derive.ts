@@ -1,6 +1,7 @@
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { COST_VENDOR_PRIORITY, getModelMetadata, getModelMetadataCaseInsensitive } from "../generated/model-metadata";
 import { cloneFastWire } from "./fastwire";
+import { isAzureModelMetadataDestination, publishedAzureModelMetadata, type AzureModelMetadata } from "./azure-model-metadata";
 import { resolveModelPolicy } from "./resolved-model-policy";
 import {
   PROVIDER_REGISTRY,
@@ -656,21 +657,17 @@ const AZURE_VENDOR_METADATA_PRIORITY = [
 ];
 
 /**
- * Fill missing Azure context metadata by destination and known model id. Custom provider
- * names miss PROVIDER_ALIASES; arbitrary deployment aliases still need explicit limits.
+ * Fill missing Azure model metadata by destination and known model id. Custom provider
+ * names miss PROVIDER_ALIASES; arbitrary deployment aliases still need explicit metadata.
  */
-export function azureVendorContextWindow(baseUrl: string | undefined, modelId: string): number | undefined {
-  if (!baseUrl) return undefined;
-  try {
-    if (!new URL(baseUrl).hostname.endsWith(".openai.azure.com")) return undefined;
-  } catch {
-    return undefined;
-  }
+export function azureVendorModelMetadata(baseUrl: string | undefined, modelId: string): AzureModelMetadata | undefined {
+  if (!isAzureModelMetadataDestination(baseUrl)) return undefined;
+  const published = publishedAzureModelMetadata(modelId);
   for (const provider of AZURE_VENDOR_METADATA_PRIORITY) {
     const meta = getModelMetadata(provider, modelId) ?? getModelMetadataCaseInsensitive(provider, modelId);
-    if (typeof meta?.contextWindow === "number" && meta.contextWindow > 0) return meta.contextWindow;
+    if (meta) return { ...meta, ...published };
   }
-  return undefined;
+  return published;
 }
 
 function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
