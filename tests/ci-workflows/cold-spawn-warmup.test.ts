@@ -67,6 +67,15 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
     warmed: true,
     why: "one throwaway lane pays Bun's test-runner bootstrap before the captured-output lane is timed",
   },
+  "tests/ci-workflows/release-version-sources.test.ts": {
+    warmed: false,
+    why:
+      "Its children run scripts/release-version-sources.ts, which imports only node builtins, "
+      + "or a bash -c guard fragment, so an import scan has no repository module graph to warm "
+      + "and a registered warm-up would fail closed. The spawnSync bounds exist because an "
+      + "unbounded child pinned Linux test 1/4 batch 6 until the 120s shard deadline cut it "
+      + "(run 37736425700).",
+  },
   "tests/cli/cli-connect-readiness.test.ts": {
     warmed: true,
     why: "two graphs: the connect eval, and the observed ladder that also loads src/codex/runtime",
