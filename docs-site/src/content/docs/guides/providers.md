@@ -448,6 +448,16 @@ token counts may still be estimated, and the credit value does not replace USD c
 Completion fallback requests add their reported credits. An absent value means Kiro did not
 report credit usage; an explicit zero means it reported no spend.
 
+### Kiro refresh attention
+
+If an AWS SSO refresh returns `400 invalid_request` and matching Kiro CLI recovery does not
+succeed, the dashboard shows the affected account as needing re-authentication once its access
+token expires. The active provider then reports `loggedIn: false` from `/api/oauth/status`.
+A still-valid access token remains logged in. You can sign in again through the dashboard;
+a later successful automatic refresh also clears the attention state. This status does not
+classify the refresh grant as revoked or disable future refresh attempts. Network and server
+errors do not trigger this status.
+
 ### Kiro credential import
 
 The dashboard offers native Builder ID, Google, and GitHub device login without Kiro CLI.

@@ -59,7 +59,7 @@ test("late ensure reuses dispatch ownership, serializes and stays idempotent", a
   expect(await response.text()).toBe("ok");
   expect(owned).toBe(true);
   expect(await lifecycle.ensure()).toEqual(result);
-  expect(binds).toBe(2);
+  expect(binds).toBe(1);
 });
 
 test("stopped lifecycle refuses new work and joins a pending startup", async () => {
@@ -156,7 +156,7 @@ test("CLI first-party save starts a previously unbound pair", async () => {
   }), url, live, { ensureClaudeIntercept: () => lifecycle.ensure() }, "admin-token", undefined, { trustedLoopback: true });
   expect(response!.status).toBe(200);
   expect(loadConfig().claudeCode?.cliFirstParty).toBe(true);
-  expect(binds).toBe(2);
+  expect(binds).toBe(1);
 });
 
 test("remote management never starts interception; routing intent can still persist", async () => {
@@ -208,7 +208,7 @@ test("ensure arriving during null startup joins it before starting with the live
   const pending = lifecycle.ensure();
   expect(lifecycle.ensure()).toBe(pending);
   expect((await pending).ok).toBe(true);
-  expect(binds).toBe(2);
+  expect(binds).toBe(1);
 });
 
 

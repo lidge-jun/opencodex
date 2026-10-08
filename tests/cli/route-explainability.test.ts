@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -275,6 +275,29 @@ describe("route explainability (RI-09)", () => {
     expect(code).toBe(0);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.path).toBe("/api/request-history/id%20with%20spaces/route-decision");
+  });
+
+  test("CLI logs explain text output keeps line breaks and still escapes values", async () => {
+    const { handleObserveCommand } = await import("../../src/cli/observe");
+    // U+009B (C1 CSI) survives JSON.stringify, so only the terminal-safety pass can escape it.
+    const payload = { requestId: "explain-text", summary: { finalModel: "m1\u009b31m" } };
+    const output = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const code = await handleObserveCommand(["logs", "explain", "explain-text"], {
+        baseUrl: "http://cli.test",
+        fetchImpl: async () => new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      });
+      expect(code).toBe(0);
+      const lines = output.mock.calls.map(call => String(call[0]));
+      expect(lines).toEqual(JSON.stringify(payload, null, 2).replace("\u009b", "\\u009b").split("\n"));
+      expect(lines.join("\n")).not.toContain("\\x0a");
+      expect(lines.join("\n")).not.toContain("\u009b");
+    } finally {
+      output.mockRestore();
+    }
   });
 
   test("CLI logs explain rejects missing request ids", async () => {

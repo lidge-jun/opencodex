@@ -156,11 +156,18 @@ fallback until a valid sample is available. Speed uses output tokens per second 
 full request duration: below 15, 15 to below 50, or at least 50. Unavailable speed values are
 excluded when a speed filter is active. Success means 2xx; errors mean 4xx or 5xx.
 
-The request detail also shows **Decode rate (est.)**. When the proxy observed both ends, it is
+Logs labels each decode estimate **Generation window** or **After visible output** in the list
+and attempt table, and uses **Output rate during generation (est.)** or
+**Output rate after first visible output (est.)** in request details. Older cached responses
+without a timing method show **Timing unknown** and **Output rate (est.; timing method unknown)**
+in details. A visible caption below the detail rate explains the timing method; an unavailable
+rate has no caption. When the proxy observed both ends, it is
 output tokens over the generation window: from the first output item or block, reasoning included,
 to the last output delta. Older rows without that window use the time after the first visible
-token instead. Both are proxy-side observations, not the provider's internal token timing, so the
-value is always an estimate, and a window under one second shows as unavailable. The end-to-end
+token until the end of the request instead. Both are proxy-side observations, not the provider's internal token timing, so the
+value is always an estimate, and a window under one second shows as unavailable. Both numerators
+include reported reasoning output tokens, so the two timing bases are not directly comparable.
+Historical logs are not rewritten and missing generation timestamps are not invented. The end-to-end
 tok/s column and speed filter above are not affected.
 
 Active filters show the matching count out of the loaded total. Reset filters restores all
@@ -260,6 +267,8 @@ they have been synchronized. See
 :::
 
 ## Remote Hub sessions, keys, and usage
+
+In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place, and clicking a key shows its full value with a **Copy** button. Revealing a key needs a signed-in dashboard session; the admin token cannot read key values.
 
 The dashboard's management plane is separate from direct client→hub model traffic. **Connect → API Keys** shows pending rotations, displays a replacement secret only once, and requires explicit commit or abort. Browser logout invalidates only the current remote session. Connected usage is the hub store filtered by the client's `apiKeyId`; disconnected usage is local, with no mirroring.
 

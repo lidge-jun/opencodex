@@ -10,7 +10,7 @@ import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability"
 import { maskAccountId } from "../lib/privacy";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
-import { loadAuthStore, peekAuthStore, peekOAuthRefreshIntent, readOAuthRefreshIntent } from "./store";
+import { accountNeedsReauthForStatus, loadAuthStore, peekAuthStore, peekOAuthRefreshIntent, readOAuthRefreshIntent } from "./store";
 import type { ProviderAccount } from "./types";
 
 export type OAuthAccountHealth =
@@ -210,9 +210,10 @@ export function projectStoredOAuthAccountHealth(
   const anthropicSnap = provider === "anthropic"
     ? getAnthropicAccountHealthSnapshot(account.id, now)
     : null;
+  const needsReauth = accountNeedsReauthForStatus(provider, account, now);
   return projectOAuthAccountHealth({
-    needsReauth: account.needsReauth === true,
-    reauthReason: account.needsReauth === true
+    needsReauth,
+    reauthReason: needsReauth
       ? (account.needsReauthReason ?? "refresh_failed")
       : undefined,
     cooldownUntilMs: anthropicSnap?.cooldownUntil,

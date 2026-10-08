@@ -173,9 +173,21 @@ est sélectionné, sauf si `claudeCode.intercept.picker: false` est défini. Il 
 modèles de l'onglet Code de Desktop first-party pour y afficher les modèles opencodex disponibles par
 leur nom. Lors de la première activation, macOS peut demander l'autorisation d'une autorité de certification
 locale dans le trousseau de connexion. Cette autorité est limitée à `claude.ai` et à ses sous-domaines.
-Sa clé de signature n'existe que dans le processus OpenCodex en cours : chaque redémarrage d'OpenCodex
-publie une nouvelle autorité et macOS demande donc de nouveau votre confiance — approuvez la demande,
-ou lancez ensuite `ocx claude desktop picker trust`, après chaque redémarrage.
+Son identité de signature exportable est protégée par le magasin d'identifiants du système et réutilisée
+lors des redémarrages ordinaires. Aucune clé de signature picker en clair n'est enregistrée dans le
+répertoire de configuration OpenCodex. La validation complète de l'autorité contrainte et la vérification
+de la confiance du système restent obligatoires. Avec la même identité approuvée et un magasin accessible,
+un redémarrage n'ajoute ni ne supprime de réglages de confiance des certificats. La restauration au démarrage
+n'installe jamais la confiance : si elle manque, est révoquée ou inconnue, le picker reste en attente.
+Exécutez explicitement `ocx claude desktop picker on` ou `ocx claude desktop picker trust` pour l'accorder.
+
+Une migration unique depuis une ancienne identité peut demander votre consentement pour supprimer sa
+confiance. Si ce nettoyage échoue, le picker reste indisponible et le profil appliqué utilise un relais
+sans déchiffrement jusqu'à sa réussite. macOS peut aussi demander de déverrouiller le trousseau ou
+d'autoriser l'accès d'une application aux identifiants, y compris après un redémarrage ou une mise à jour.
+Le picker reste non pris en charge sous Windows et Linux : aucun travail de CA, de magasin d'identifiants
+ou de proxy picker n'y démarre. L'interception Claude principale reste disponible ; ses fichiers CA locaux
+sont protégés par des vérifications du propriétaire, des liens symboliques, des permissions et des ACL Windows.
 
 Lorsque le mode picker est actif, Claude Desktop accède au réseau par OpenCodex. Si OpenCodex s'arrête,
 Desktop reste hors ligne jusqu'à son redémarrage complet ou jusqu'à la désactivation du mode picker.
@@ -740,7 +752,7 @@ par défaut par un contenu minimal (`blockedSkills: ["claude-api"]`).
 `<!-- ocx-route: ... -->`, et non l'argument `model` de l'outil Agent. Vérifiez que la directive désigne la route voulue.
 Utilisez `"haiku"` comme valeur de remplacement pour le modèle.
 
-Dans `config.json`, `claudeCode.stabilizePromptCache: true` déplace les notices Claude reconnues en fin des instructions système vers un dernier message utilisateur sur les routes traduites. La valeur par défaut est `false`. Activez cette option seulement si ce changement de rôle convient à vos clients. Les exemples dans des blocs de code et le texte non reconnu sont conservés ; le transfert Anthropic natif reste inchangé. Sans métadonnées, la clé de cache suit les instructions stabilisées. Cette option ne crée pas une identité de conversation et ne garantit aucun succès du cache amont.
+Dans `config.json`, `claudeCode.stabilizePromptCache: true` retire les notices Claude reconnues à la fin des instructions système sur les routes traduites. Les pieds de page reconnus de la forme `<total_tokens>N tokens left</total_tokens>` sont supprimés, même lorsqu’ils sont répétés. Les rappels TaskCreate sont toujours déplacés vers un dernier message utilisateur ; si seuls des pieds de page de tokens ont été retirés, aucun message d’entrée n’est ajouté. La valeur par défaut est `false`. Activez cette option seulement si ce changement de rôle convient à vos clients. Les exemples dans des blocs de code et le texte non reconnu sont conservés ; le transfert Anthropic natif reste inchangé. Sans métadonnées, la clé de cache suit les instructions stabilisées. Cette option ne crée pas une identité de conversation et ne garantit aucun succès du cache amont.
 
 Sur toutes les routes Chat traduites, les rappels de l’historique conservent leur position dans la conversation, après les résultats d’outils encore attendus. L’ajout d’un rappel ne réécrit donc pas le prompt système initial, et une instruction placée au milieu de la conversation n’arrive plus avant les tours qu’elle était censée suivre. Le rôle porté par cet emplacement se décide séparément : un rappel part en `system`, sauf si le fournisseur enregistre `foldDeveloperRoleToSystem: false`, ce qui indique que le service en amont accepte le rôle `developer` et le transmet à la même position. Un service qui ne l’accepte pas répond `400 role 'developer' is not allowed` et le tour ne démarre pas, d’où le repli d’une destination non enregistrée. Ce comportement s’applique avec ou sans `stabilizePromptCache` ; le transfert Anthropic natif reste inchangé. La réutilisation du cache exige toujours une identité de session stable et un cache disponible en amont. Les changements des instructions ou outils antérieurs et la compaction de la conversation peuvent aussi affecter les succès du cache ; préserver l’ordre des rappels ne suffit pas à garantir sa réutilisation.
 

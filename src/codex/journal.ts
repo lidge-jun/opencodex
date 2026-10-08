@@ -85,6 +85,9 @@ export interface RestoreJournalResult {
   ownershipRefusal?: CodexHomeOwnerRefusalReason;
   configRestored: boolean;
   profileRestored: boolean;
+  /** True only when restore rewrote or removed a file (not when state was already original). */
+  configRewritten: boolean;
+  profileRewritten: boolean;
   configChanged: boolean;
   profileChanged: boolean;
   complete: boolean;
@@ -299,12 +302,13 @@ export function restoreJournalState(): RestoreJournalResult {
   try { assertCodexHomeOwner(CODEX_HOME); }
   catch (error) {
     if (!(error instanceof CodexHomeOwnerRefusal)) throw error;
-    return { configRestored: false, profileRestored: false, configChanged: false, profileChanged: false,
-      complete: false, unverified: true, ownershipRefusal: error.reason };
+    return { configRestored: false, profileRestored: false, configRewritten: false, profileRewritten: false,
+      configChanged: false, profileChanged: false, complete: false, unverified: true, ownershipRefusal: error.reason };
   }
   const journal = readJournal();
   if (!journal) {
-    return { configRestored: false, profileRestored: false, configChanged: false, profileChanged: false, complete: false, unverified: false };
+    return { configRestored: false, profileRestored: false, configRewritten: false, profileRewritten: false,
+      configChanged: false, profileChanged: false, complete: false, unverified: false };
   }
   const currentConfig = existsSync(CODEX_CONFIG_PATH) ? readFileSync(CODEX_CONFIG_PATH, "utf-8") : null;
   const currentProfile = existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf-8") : null;
@@ -316,6 +320,8 @@ export function restoreJournalState(): RestoreJournalResult {
     return {
       configRestored: comparison.configAlreadyOriginal,
       profileRestored: comparison.profileAlreadyOriginal,
+      configRewritten: false,
+      profileRewritten: false,
       configChanged: !configUnchanged,
       profileChanged: !profileUnchanged,
       complete: false,
@@ -326,14 +332,18 @@ export function restoreJournalState(): RestoreJournalResult {
   assertCodexHomeOwner(CODEX_HOME);
   let configRestored = comparison.configAlreadyOriginal;
   let profileRestored = comparison.profileAlreadyOriginal;
+  let configRewritten = false;
+  let profileRewritten = false;
   if (configUnchanged && !configRestored) {
     atomicWriteFile(CODEX_CONFIG_PATH, comparison.originalConfig);
     configRestored = true;
+    configRewritten = true;
   }
   if (profileUnchanged && !profileRestored) {
     if (comparison.originalProfile !== null) {
       atomicWriteFile(CODEX_PROFILE_PATH, comparison.originalProfile);
       profileRestored = true;
+      profileRewritten = true;
     } else if (existsSync(CODEX_PROFILE_PATH)) {
       // "There was no profile before, so remove the one we generated." Claiming success
       // without checking is how a caller ends up deleting the journal, reporting a clean
@@ -343,6 +353,7 @@ export function restoreJournalState(): RestoreJournalResult {
       try {
         unlinkSync(CODEX_PROFILE_PATH);
         profileRestored = true;
+        profileRewritten = true;
       } catch (error) {
         profileRestored = (error as NodeJS.ErrnoException).code === "ENOENT";
       }
@@ -355,6 +366,8 @@ export function restoreJournalState(): RestoreJournalResult {
   return {
     configRestored,
     profileRestored,
+    configRewritten,
+    profileRewritten,
     configChanged: !configUnchanged,
     profileChanged: !profileUnchanged,
     complete,
@@ -365,6 +378,11 @@ export function restoreJournalState(): RestoreJournalResult {
 
 export function restoreJournal(): boolean {
   return restoreJournalState().complete;
+}
+
+/** A no-rewrite recovery is quiet only when the stale journal is actually gone. */
+function warnIfJournalRetained(): void {
+  if (existsSync(JOURNAL_PATH)) console.error("⚠️ Codex journal recovery found nothing to restore, but the journal could not be removed; it will be retried on the next start.");
 }
 
 export interface ReconcileJournalOptions {
@@ -388,7 +406,13 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
       console.error("⚠️ Codex journal recovery was not verified; current configuration files and the journal were preserved.");
       return false;
     }
-    if (!restored.configRestored && !restored.profileRestored) return false;
+    if (!restored.complete) {
+      console.error("⚠️ Codex journal recovery was incomplete; the journal was preserved — check the Codex files.");
+      return false;
+    }
+    // Warn only when restore actually rewrote state; an already-original
+    // snapshot still cleans itself up but has nothing to report.
+    if (!restored.configRewritten && !restored.profileRewritten) { warnIfJournalRetained(); return false; }
     console.error(`⚠️  Uncommitted or mismatched client routing (${owner.apiKeyId}) was restored from the Codex journal.`);
     return true;
   }
@@ -406,7 +430,14 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
     console.error("⚠️ Codex journal recovery was not verified; current configuration files and the journal were preserved.");
     return false;
   }
-  if (!restored.configRestored && !restored.profileRestored) return false;
+  if (!restored.complete) {
+    console.error("⚠️ Codex journal recovery was incomplete; the journal was preserved — check the Codex files.");
+    return false;
+  }
+  // Warn only when restore actually rewrote state. A stale journal whose
+  // artifacts are already original still cleans itself up (complete removes
+  // it) but has nothing to report — claiming a restore then cries wolf.
+  if (!restored.configRewritten && !restored.profileRewritten) { warnIfJournalRetained(); return false; }
   console.error(`⚠️  Previous session (PID ${pid}) did not shut down cleanly. Codex state restored from journal.`);
   return true;
 }

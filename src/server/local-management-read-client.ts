@@ -25,6 +25,8 @@ export type LocalManagementReadResult =
 
 export interface LocalManagementReadDeps {
   fetchImpl?: typeof fetch;
+  /** Default transport seam; receives the caller deadline. */
+  directFetch?: typeof directLocalHttpFetch;
   readRuntime?: (pid: number) => RuntimePortState | null;
   createNonce?: () => string;
   now?: () => number;
@@ -84,18 +86,20 @@ export async function fetchBoundLocalManagementRead(
   if (!capability) return { kind: "unavailable", reason: "capability-unavailable" };
 
   try {
-    const response = await (deps.fetchImpl ?? directLocalHttpFetch)(
-      `http://${probeHostname(target.hostname)}:${target.port}${path}`,
-      {
-        headers: {
-          [LOCAL_MANAGEMENT_EXPECTED_PID_HEADER]: String(target.pid),
-          [LOCAL_MANAGEMENT_NONCE_HEADER]: nonce,
-          [LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER]: String(expiresAt),
-          [LOCAL_MANAGEMENT_CAPABILITY_HEADER]: capability,
-        },
-        signal: AbortSignal.timeout(deps.timeoutMs ?? 4_000),
+    const timeoutMs = deps.timeoutMs ?? 4_000;
+    const url = `http://${probeHostname(target.hostname)}:${target.port}${path}`;
+    const init: RequestInit = {
+      headers: {
+        [LOCAL_MANAGEMENT_EXPECTED_PID_HEADER]: String(target.pid),
+        [LOCAL_MANAGEMENT_NONCE_HEADER]: nonce,
+        [LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER]: String(expiresAt),
+        [LOCAL_MANAGEMENT_CAPABILITY_HEADER]: capability,
       },
-    );
+      signal: AbortSignal.timeout(timeoutMs),
+    };
+    const response = deps.fetchImpl
+      ? await deps.fetchImpl(url, init)
+      : await (deps.directFetch ?? directLocalHttpFetch)(url, init, { timeoutMs });
     if (deps.requireResponseProof && !verifyLocalAttestationProof(
       runtime.attestationSecret, nonce, target.pid, target.port, response.headers.get(LOCAL_ATTESTATION_PROOF_HEADER),
     )) {

@@ -320,7 +320,7 @@ CLI コマンドは Anthropic OAuth アカウントを id または一意の別�
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新または削除。POST は無効化された互換エンドポイントとしてのみ残り、成功した DELETE は `catalogRefreshPending` を返します。 | POST は常に 403 `manual_import_disabled`。DELETE の入力が無効な場合は 400。 |
 | `PUT /api/codex-auth/accounts/alias` |アカウント エイリアスの設定またはクリア | 400 無効なアカウント/エイリアス |
-| `PUT /api/codex-auth/accounts/pause` | 1 つのアカウントを一時停止または再開する | 400 無効なアカウント/状態。 404 アカウントが見つかりません |
+| `PUT /api/codex-auth/accounts/pause` | アカウントと、同じ ID 情報を持つ既存のメイン／プールのエントリを手動で一時停止または再開する。`affectedAccountIds` を返す | 400 無効なアカウント／状態、404 アカウントが見つからない、503 メインの ID 情報が使用中または読み取り不能 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 1 つのアカウントまたはすべてのアカウントのランタイム クールダウンをクリアする | 400 無効な ID |
 | `GET, PUT /api/codex-auth/active` |アクティブなアカウントを読み取るか選択します | 400 アカウントが無効または欠落しています。 409 一時停止/レガシー行の競合 |

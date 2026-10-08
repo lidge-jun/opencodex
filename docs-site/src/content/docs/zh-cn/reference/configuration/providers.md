@@ -31,7 +31,7 @@ ocx models provider openrouter on
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | 各提供商最后选择的上限，关闭后仍保留。仅保存这些值不会启用上限。有效值优先于保存的选择值。 |
 | `contextCapValue?` | `number` | `350000` | 首次开启时使用的默认值。再次开启时恢复该提供商的选择值。修改全局值时附带 `setAll: true` 只会更新已开启的上限；不带值的 `setAll: true` 会按当前全局值开启所有已配置提供商的上限。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | 由 Codex Auth 管理的 ChatGPT/Codex 池账户元数据。密钥单独存放在 `codex-accounts.json` 中。 |
-| `pausedCodexAccountIds?` | `string[]` | `[]` | 在恢复之前从 Pool 选择中排除的账户，包括被暂停时的主 `__main__` 账户。 |
+| `pausedCodexAccountIds?` | `string[]` | `[]` | 在恢复之前从 Pool 选择中排除的账户，包括被暂停时的主 `__main__` 账户。 手动暂停或恢复会同步更新同一账号、同一工作区的主登录与池内已有入口。 |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 将任意公开 model selector 映射到已保存 Codex account target 的可选配置。启用账户限定的选择器行后，target 存在的每个 selector 都会在 Codex picker 中添加独立的 `<selector>/<native-openai-model>` row，且每个 row 只使用对应账户。只要有 selector 生效，bare native row 就会在 picker 中隐藏；但除非显式禁用，其 id 仍可路由，并继续列在 raw `/v1/models` 中。 |
 | `codexAccountPickerEnabled?` | `boolean` | 映射为空时关闭 | 控制是否根据有效的 `codexAccountNamespaces` 映射生成账户限定的 Codex 选择器行。`true` 允许显示映射行。在非空映射中省略此字段时，为保持向后兼容会视为已启用；映射为空时则关闭。`false` 会隐藏生成行并恢复选择器中的裸原生行，但不会删除映射，也不会禁用精确的 `<selector>/<native-openai-model>` 路由。 |
 | `activeCodexAccountId?` | `string` | — | 为下一次请求手动选定的 Pool 账户。选择会清除线程亲和性；进行中的请求会保留捕获到的凭据。 |

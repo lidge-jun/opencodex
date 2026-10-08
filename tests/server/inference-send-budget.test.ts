@@ -93,6 +93,65 @@ describe("createInferenceSendBudget", () => {
       expect(budget.used).toBe(3);
     } finally { dispose(); }
   });
+  test.each([false, true])("an undispatched adapter hop remains refundable (externally counted=%s)", external => {
+    const budget = createRequestExecutionBudget();
+    const { owner, dispose } = budgetOwner(budget);
+    try {
+      const targetKey = "https://upstream.example/model";
+      const initial = owner.refundableAdapterDispatchBudget!.reserveDispatch({ sendClass: "initial", targetKey });
+      if (!initial.allowed) throw new Error("Expected initial permit");
+      initial.permit.use();
+      const hop = owner.reserveCredentialHop("auth-recovery", targetKey, external);
+      owner.pendingHopPermit = hop.permit;
+      const replay = owner.refundableAdapterDispatchBudget!.reserveDispatch({ sendClass: "transient", targetKey });
+      if (!replay.allowed) throw new Error("Expected replay permit");
+      expect(budget.used).toBe(2);
+      replay.permit.release();
+      replay.permit.release();
+      expect(budget.used).toBe(1);
+      expect(budget.remainingBaseSends(3)).toBe(2);
+      expect(replay.permit.use()).toBe(false);
+      expect(replay.permit.assumeCharge()).toBe(false);
+      owner.noteTransientSends(1);
+      expect(budget.used).toBe(2); // No abandoned external booking can swallow a later send.
+    } finally { dispose(); }
+  });
+
+  test.each(["use", "assumeCharge"] as const)("adapter hop %s settles an external booking once and cannot refund a send", confirm => {
+    const budget = createRequestExecutionBudget();
+    const { owner, dispose } = budgetOwner(budget);
+    try {
+      const targetKey = "https://upstream.example/model";
+      const hop = owner.reserveCredentialHop("auth-recovery", targetKey, true);
+      owner.pendingHopPermit = hop.permit;
+      const replay = owner.refundableAdapterDispatchBudget!.reserveDispatch({ sendClass: "transient", targetKey });
+      if (!replay.allowed) throw new Error("Expected replay permit");
+      expect(replay.permit[confirm]()).toBe(true);
+      expect(replay.permit.use()).toBe(false);
+      expect(replay.permit.assumeCharge()).toBe(false);
+      replay.permit.release();
+      expect(budget.used).toBe(1);
+      owner.noteTransientSends(1);
+      expect(budget.used).toBe(2);
+    } finally { dispose(); }
+  });
+
+  test("a previously settled adapter hop falls back to a fresh reservation", () => {
+    const budget = createRequestExecutionBudget();
+    const { owner, dispose } = budgetOwner(budget);
+    try {
+      const targetKey = "https://upstream.example/model";
+      const hop = owner.reserveCredentialHop("auth-recovery", targetKey, true);
+      expect(hop.permit?.assumeCharge()).toBe(true);
+      owner.pendingHopPermit = hop.permit;
+      const replay = owner.refundableAdapterDispatchBudget!.reserveDispatch({ sendClass: "transient", targetKey });
+      if (!replay.allowed) throw new Error("Expected replay permit");
+      expect(replay.permit.use()).toBe(true);
+      expect(budget.used).toBe(2);
+      replay.permit.release();
+      expect(budget.used).toBe(2);
+    } finally { dispose(); }
+  });
   test("mints a default-policy holder and parks this request's spend tracker on the log", () => {
     const logCtx: RequestLogContext = { model: "m", provider: "p" };
     const req = new Request("http://localhost/v1/responses", { method: "POST" });

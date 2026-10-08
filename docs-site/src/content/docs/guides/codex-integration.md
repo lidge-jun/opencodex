@@ -57,7 +57,11 @@ WebSocket at `api.openai.com` directly unless `experimental_realtime_ws_base_url
 Pool mode the call is created under the account opencodex selects, so a direct join under the app's
 own login fails with `realtime websocket handshake failed` (404). The injected key sends the join
 back through opencodex (`GET /v1/live/{callId}`), where the Pool reuses the account it bound to that
-session/thread pair (a process-local binding). In Direct mode both legs already use the caller's
+session/thread pair (a process-local binding). A call the client created itself is the exception:
+when ChatGPT voice hands a call to a Codex thread, or Codex Desktop creates the call on its own,
+the call belongs to your ChatGPT login and only its sideband join reaches opencodex, so opencodex
+forwards that join with the caller's own ChatGPT credential rather than a Pool account. In Direct
+mode both legs already use the caller's
 current bearer, so the key only keeps the join on the proxy path. It is written only on the loopback
 `openai_base_url` form, is removed together with it, and a user-owned
 `experimental_realtime_ws_base_url` is never overwritten.
@@ -1043,6 +1047,8 @@ In **Codex Set → Multi-auth**, enable the **Codex credits** switch in the **Co
 
 When an account reaches 100% on a usage window and still holds credits, upstream keeps serving it and draws the balance. OpenCodex does not let that happen by default: an account at 100% is switched out while its weekly or monthly window (only monthly on 30-day plans) or its 5-hour window is full, and used again once that window resets. The order of the other accounts does not change, and when no other account is available, selection finds none rather than spending credits. A request for the main account is refused like a hard-lock refusal until the reset. A full 5-hour window without a reset time holds an account only while that reading is fresh. Allowing the main account does not lift its hard lock (on by default at 98%), which still stops it first; turn the lock off if the main account should spend credits (a lock at 100% still stops it at 100%). To let accounts keep working from their credits, turn on **Use credits** next to the **Codex credits** switch in the Codex Auth header. The switch allows every account. To choose accounts one by one, open an account card's **⋯** menu and use **Use credits after limit** there; the header switch shows a middle position when only some accounts are on. An account allowed to spend carries a **Uses credits** badge on its card. New accounts start off. The choice is stored in `creditCodexAccountIds` and never redeems reset credits; the **Codex credits** display switch only shows balances and never changes routing.
 
+For an opted-in main account with a full usage window, the background recovery cycle renews previously spendable credit observations from three minutes of age, even while the dashboard is closed. It prepares a valid token before the authenticated usage lookup so the balance can be observed again before its five-minute freshness limit. Missing, zero, restricted or retracted credits do not trigger this renewal. A failed or incomplete lookup does not refresh old balance evidence, and requests are still refused once that evidence expires. The separate main-account hard lock and upstream retry delays still apply. This metadata lookup does not send a model validation request or set or clear the account's needs-reauth state.
+
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
 
 ### Cancelling main-account device reauthentication
@@ -1438,3 +1444,10 @@ the experimental feature for production work.
 ## Streaming line endings
 
 The shared SSE decoder accepts LF, CRLF and standalone CR line endings, even when a delimiter spans network chunks. This allows compatible providers to stream events without requiring LF-only framing.
+
+
+### Account-qualified requests and credits
+
+Choosing an account-qualified model does not enable credit spending. Stored accounts obey **Use credits after limit** during authentication, when credentials are prepared, and before Responses HTTP or WebSocket dispatch after pacing or retry waits. A held request reports the credit policy, not an authentication failure; wait for the reset, choose another account, or explicitly enable that account’s credit spending.
+
+Stored-account vision and web-search helpers also recheck this policy before sending, including retries. If consent changes or a limit is reached after helper selection, the helper reports the policy refusal without sending that attempt. The standalone search relay returns a reset-bound 429. Caller-owned Direct credentials retain their existing behavior.

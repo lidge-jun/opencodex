@@ -172,9 +172,18 @@ Picker 모드는 1P 모드의 일부예요. macOS에서 1P를 선택하면 기�
 `claudeCode.intercept.picker: false`를 설정하면 꺼져요. 1P Desktop의 Code 탭 모델 선택기를 바꿔서
 사용 가능한 opencodex 모델을 이름으로 보여줘요. 처음 켤 때 macOS 로그인 키체인에서 로컬 인증 기관을
 신뢰하라는 메시지가 표시될 수 있어요. 이 인증 기관은 `claude.ai`와 그 하위 도메인으로 제한돼요.
-서명 키는 실행 중인 OpenCodex 프로세스 안에만 존재하므로, OpenCodex를 다시 시작할 때마다 새 인증
-기관이 발행되고 macOS가 다시 신뢰를 요청해요. 다시 시작할 때마다 메시지를 승인하거나, 나중에
-`ocx claude desktop picker trust`를 실행하면 돼요.
+내보낼 수 있는 서명용 인증서와 키는 OS 자격 증명 저장소로 보호하며, 일반적인 재시작에서는 같은 것을 재사용해요.
+OpenCodex 설정 디렉터리에 Picker 서명 키를 평문으로 저장하지 않아요. 제한된 CA의 전체 검증과 OS 신뢰 확인은
+계속 적용돼요. 승인한 인증서와 키가 같고 자격 증명 저장소를 사용할 수 있다면 재시작 시 인증서 신뢰 설정을
+추가하거나 삭제하지 않아요. 시작 시 복원은 신뢰를 설치하지 않아요. 신뢰가 없거나 철회됐거나 확인할 수 없다면
+Picker는 대기 상태로 남아요. `ocx claude desktop picker on` 또는 `ocx claude desktop picker trust`를 직접 실행해
+신뢰를 부여하면 돼요.
+
+이전 인증서에서 한 번 마이그레이션할 때는 기존 신뢰를 제거하기 위한 동의가 필요할 수 있어요. 정리가 끝나지
+않으면 Picker는 사용할 수 없고 적용된 프로필은 복호화하지 않는 중계로 동작해요. 키체인 잠금 해제나 앱의
+자격 증명 접근 허용은 별도의 macOS 동작이며, 재시작이나 업데이트 때도 메시지가 나올 수 있어요.
+Windows와 Linux에서는 Picker를 지원하지 않으며 Picker CA, 자격 증명 저장소, 프록시 작업을 시작하지 않아요.
+기본 Claude 인터셉트는 계속 사용할 수 있고, 로컬 CA 파일에 소유자, 심볼릭 링크, 파일 권한, Windows ACL 검사를 적용해요.
 
 Picker 모드가 켜져 있는 동안 Claude Desktop의 네트워크는 OpenCodex를 거쳐요. OpenCodex가 중단되면
 Picker 모드를 끄거나 Desktop을 완전히 다시 시작할 때까지 Desktop은 오프라인이에요.
@@ -515,6 +524,7 @@ Claude Code의 `/effort` 설정은 어댑터에서도 유지돼요.
 | Assistant 텍스트 | `output_text` |
 | Assistant `tool_use` | `function_call`(`input` → JSON 문자열로 변환한 `arguments`) |
 | 사용자 `tool_result` | `function_call_output`(`is_error` → `[tool error]` 접두사) |
+| 도구 결과의 `tool_reference` | 짝지어진 결과에 `Tool loaded: <tool_name>` 텍스트로 보존합니다. 도구 선언을 추가하거나 번역 경로의 서버 측 지연 로딩을 활성화하지는 않습니다. |
 | `thinking` / `redacted_thinking` 재생 | 서명과 비공개 페이로드를 제한된 `ocxr1` 봉투에 담은 `reasoning` 항목 |
 | Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`) |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, 이름 지정 함수→`{type:"function",name}`, 호스팅 WebSearch/web_search→`{type:"web_search"}` |
@@ -664,7 +674,7 @@ Anthropic 백엔드를 명시하면 의도적으로 실패 후 중단해요.
 인자가 아니라 `<!-- ocx-route: ... -->` 지시문을 사용해요. 지시문이 원하는 라우트와 일치하는지
 확인하고, 모델 자리 표시자로 `"haiku"`를 전달하세요.
 
-`config.json`에서 `claudeCode.stabilizePromptCache`를 `true`로 설정하면 번역 경로의 시스템 지시 끝에 붙은 지원 대상 Claude 알림을 마지막 사용자 메시지로 옮깁니다. 기본값은 `false`입니다. 사용하는 클라이언트에서 이 역할 변경을 허용할 때만 켜세요. 코드 펜스 안의 예제와 일치하지 않는 원문은 보존하며, Anthropic 원본 전달 경로는 바꾸지 않습니다. 메타데이터가 없는 요청의 캐시 키는 정리된 지시문을 기준으로 계산합니다. 대화 식별자를 만들거나 상위 서비스의 캐시 적중을 보장하는 기능은 아닙니다.
+`config.json`에서 `claudeCode.stabilizePromptCache`를 `true`로 설정하면 변환 경로의 시스템 지시 끝에 붙은 지원 대상 Claude 알림을 떼어냅니다. 인식된 `<total_tokens>N tokens left</total_tokens>` 토큰 푸터는 반복된 경우에도 모두 제거합니다. TaskCreate 알림은 기존처럼 마지막 사용자 메시지로 옮기며, 토큰 푸터만 떼어낸 경우에는 입력 메시지를 추가하지 않습니다. 기본값은 `false`입니다. 사용하는 클라이언트에서 이 역할 변경을 허용할 때만 켜세요. 코드 펜스 안의 예제와 일치하지 않는 원문은 보존하며, Anthropic 원본 전달 경로는 바꾸지 않습니다. 메타데이터가 없는 요청의 캐시 키는 정리된 지시문을 기준으로 계산합니다. 대화 식별자를 만들거나 상위 서비스의 캐시 적중을 보장하는 기능은 아닙니다.
 
 변환된 모든 Chat 경로에서 타임라인 알림은 대기 중인 도구 결과 뒤, 대화 안의 원래 위치를 그대로 유지합니다. 덕분에 새 알림을 추가해도 맨 앞의 시스템 프롬프트를 다시 쓰지 않고, 대화 중간의 지시가 그 지시보다 앞선 턴으로 끌려가지도 않습니다. 그 자리가 어떤 역할을 싣는지는 따로 정합니다. 공급자가 `foldDeveloperRoleToSystem: false`를 기록하지 않는 한 알림은 `system`으로 보내며, 이 기록은 상위 서비스가 `developer` 역할을 받아들인다는 뜻이라 같은 위치에서 그대로 전달합니다. 받아들이지 않는 상위 서비스는 `400 role 'developer' is not allowed`로 응답해 턴이 시작조차 못 하므로, 기록이 없는 목적지는 접는 쪽을 씁니다. `stabilizePromptCache` 설정과 관계없이 적용되며 Anthropic 네이티브 전달은 기존 동작을 유지합니다. 캐시 재사용에는 안정적인 세션 식별자와 사용 가능한 상위 서비스 캐시가 여전히 필요합니다. 이전 지시나 도구의 변경, 대화 압축도 캐시 적중에 영향을 줄 수 있으며, 알림 순서를 유지하는 것만으로 재사용을 보장하지는 않습니다.
 

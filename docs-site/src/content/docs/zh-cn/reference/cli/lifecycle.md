@@ -126,6 +126,8 @@ ocx status --json
 
 真实对象还会包含 `listen`（端口、主机名、运行时/配置来源）、配置加载诊断，以及 bundled Codex 插件诊断。JSON schema 仅允许追加字段：未来版本可能新增字段，但现有字段应保持稳定。它刻意不包含 API keys、OAuth tokens、授权头、请求内容、邮箱和账户身份。
 
+实时读取会等待有上限的服务探测完成：诊断缓存为空或过期时，macOS/Linux 最多等待 6.5 秒，Windows 最多等待 16.5 秒。已有缓存的读取会及时返回。超时仍会回退到本地诊断；仅凭 `/healthz` 健康不能证明重启保护有效。
+
 ### `ocx health [--json]`
 
 对正在运行的代理做身份校验。人类可读输出报告 PID/端口；`--json` 输出 `{ok, pid, port}`。只有在健康时该命令才以 0 退出，否则以 1 退出，因此适合用作服务探针。
@@ -215,14 +217,7 @@ ocx service uninstall
 
 在 Windows 上，创建 Task Scheduler 条目需要提升权限。识别到本地化的访问被拒绝文本时，会沿用现有的指导路径。如果该文本不可读，则回退要求命令形态为 `/create /tn opencodex-proxy /xml <non-empty-path> /f`，状态为 1，并且令牌明确为非提升权限；这时仪表盘的 Startup Safety 操作可以自动请求 UAC。如果该回退无法判断令牌状态，它会保留原始调度器错误。外部任务和操作绝不会发出自动提升标记。请批准仪表盘的 UAC 提示，或在提升权限的 PowerShell 窗口中重新运行 `ocx service install`。
 
-If startup reports `another process owns the runtime mutation lease` or `ocx service status` shows
-`Runtime mutation lease busy`, the lease is blocking startup or service changes even if the
-proxy is not running. The message includes the lock path, recorded PID, current liveness,
-executable name when available, and lease age. The process identity is unverified: the PID
-may have been reused, so liveness and executable name describe whichever process occupies
-that PID now. Wait for the operation to finish and retry; do not delete the lock or stop a
-process based only on this PID. A later mutation attempt can reclaim a stale lease once its
-age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
+如果启动时报告 `another process owns the runtime mutation lease`，或者 `ocx service status` 显示 `Runtime mutation lease busy`，说明即使代理没有在运行，这个租约也在阻止启动或服务变更。消息中包含锁路径、记录的 PID、该 PID 当前是否存活、能获取时的可执行文件名，以及租约已持有的时长。进程身份未经验证：PID 可能已被复用，因此存活状态和可执行文件名描述的是当前占用该 PID 的进程。请等待操作结束后重试；不要仅凭这个 PID 删除锁或终止进程。当租约时长超过 30 秒且记录的 PID 已不再存活时，之后的变更操作可以回收这个过期租约；`ocx service status` 只查看它，不会回收。
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 

@@ -375,7 +375,10 @@ describe("handleResponses replaces a dead socket's send once under retryOnReset 
         expect(http[0]!.get("chatgpt-account-id")).toBe("acc-work");
         if (status === 400) {
           expect(response.status).toBe(400);
-          expect(await response.text()).toBe(body);
+          // The fixture has only detail, so neither an allowlisted error type nor code survives.
+          expect(await response.json()).toEqual({ error: { type: "upstream_error",
+            message: "Provider error 400: upstream diagnostic withheld for a non-replayable failure",
+          } });
         } else {
           expect(response.status).toBe(REPLAY_REFUSED_STATUS);
           expect(response.headers.get("x-should-retry")).toBe("false");

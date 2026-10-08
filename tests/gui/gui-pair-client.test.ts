@@ -329,3 +329,64 @@ test("standalone CLI rejects actual runtime address/port mismatch before request
     expect(requests).toBe(0);
   } finally { log.mockRestore(); }
 });
+
+
+describe("CLI local intent lifecycle", () => {
+  const common = {
+    readRuntime: () => ({ ...target, attestationSecret: secret }),
+    createChallenge: () => nonce,
+  };
+  test("an older runtime cannot downgrade the new pairing contract", async () => {
+    let calls = 0;
+    const result = await requestBoundGuiPairingGrant(target, browserOrigin, {
+      ...common, fetchImpl: async (_url, init) => { calls++; return proofResponse(init, "v1"); },
+    });
+    expect(result).toEqual({ kind: "unavailable", reason: "capability" });
+    expect(calls).toBe(1);
+  });
+  test("intent creation failure stops before POST and is sanitized", async () => {
+    let calls = 0;
+    const result = await requestBoundGuiPairingGrant(target, browserOrigin, {
+      ...common, createIntent: () => { throw new Error("private-path-must-not-leak"); },
+      fetchImpl: async (_url, init) => { calls++; return proofResponse(init); },
+    });
+    expect(result).toEqual({ kind: "unavailable", reason: "local-intent" });
+    expect(calls).toBe(1);
+  });
+  for (const outcome of ["transport", "rejected", "malformed", "created"] as const) {
+    test(`disposes local intent after ${outcome}`, async () => {
+      let calls = 0, disposed = 0;
+      const result = await requestBoundGuiPairingGrant(target, browserOrigin, {
+        ...common,
+        createIntent: () => ({ proof: "D".repeat(43), dispose: () => { disposed++; } }),
+        fetchImpl: async (_url, init) => {
+          calls++;
+          if (calls === 1) return proofResponse(init);
+          expect(new Headers(init?.headers).get("x-opencodex-gui-pair-intent") === "D".repeat(43)).toBe(true);
+          if (outcome === "transport") throw new Error("private transport diagnostic");
+          if (outcome === "rejected") return new Response("private rejection", { status: 403 });
+          if (outcome === "malformed") return new Response("not JSON");
+          return Response.json({ grant: `ocx_pair_${"C".repeat(43)}`, browserOrigin,
+            serverOrigin: "https://hub.example.test", expiresAt: Date.now() + 300_000 });
+        },
+      });
+      expect(disposed).toBe(1); expect(calls).toBe(2);
+      expect(result.kind).toBe(outcome === "created" ? "created" : "unavailable");
+    });
+  }
+  test("the explicit Hub path never publishes a local intent", async () => {
+    let calls = 0;
+    const result = await requestBoundGuiPairingGrant(target, browserOrigin, {
+      ...common, requireLocalIntent: false,
+      createIntent: () => { throw new Error("hub must not publish standalone intent"); },
+      fetchImpl: async (_url, init) => {
+        calls++;
+        if (calls === 1) return proofResponse(init);
+        expect(new Headers(init?.headers).has("x-opencodex-gui-pair-intent")).toBe(false);
+        return Response.json({ grant: `ocx_pair_${"C".repeat(43)}`, browserOrigin,
+          serverOrigin: "https://hub.example.test", expiresAt: Date.now() + 300_000 });
+      },
+    });
+    expect(result.kind).toBe("created"); expect(calls).toBe(2);
+  });
+});

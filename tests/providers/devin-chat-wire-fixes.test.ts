@@ -14,8 +14,9 @@ import { buildGetChatMessageRequestForTests, type ChatHistoryItem } from "../../
 import { normalizeDevinToolParameters } from "../../src/adapters/devin/cloud-direct/tool-schema";
 import { isDevinHistoryOverflow } from "../../src/adapters/devin/context-overflow";
 import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
+import { parseRequest } from "../../src/responses/parser";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest } from "../../src/types";
+import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxToolResultMessage } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 function build(messages: ChatHistoryItem[], extra: Record<string, unknown> = {}): Buffer {
@@ -94,6 +95,173 @@ describe("tool_result_is_error (#9)", () => {
   test("a successful tool result carries no #9", () => {
     const tool = prompts(build(mapOcxMessagesToDevin(parsed(false)))).at(-1)!;
     expect(tool.some((f) => f.num === 9)).toBe(false);
+  });
+});
+
+describe("consecutive Devin tool results", () => {
+  const result = (id: string, content: OcxToolResultMessage["content"], isError = false): OcxToolResultMessage => ({
+    role: "toolResult", toolCallId: id, toolName: "read", content, isError, timestamp: 1,
+  });
+  const parsed = (messages: OcxMessage[]): OcxParsedRequest => ({
+    modelId: "swe-1-6", stream: true, context: { messages }, options: {},
+  });
+
+  test("progress and final chunks encode as one prompt in arrival order", () => {
+    const ps = prompts(build(mapOcxMessagesToDevin(parsed([
+      result("a", "started"), result("a", "still running"), result("a", "finished"),
+    ]))));
+    expect(ps).toHaveLength(1);
+    expect((ps[0]!.find((f) => f.num === 7)!.value as Buffer).toString()).toBe("a");
+    expect(text(ps[0]!)).toBe("started\n\nstill running\n\nfinished");
+  });
+
+  test.each(["assistant", "user", "developer"] as const)("an intervening %s keeps both chronological slots", (role) => {
+    const between: OcxMessage = role === "assistant"
+      ? { role, content: [{ type: "text", text: "between" }], timestamp: 2 }
+      : { role, content: "between", timestamp: 2 };
+    const mapped = mapOcxMessagesToDevin(parsed([result("a", "started"), between, result("a", "finished")]));
+    expect(mapped.map((m) => m.role)).toEqual(["tool", role === "developer" ? "system" : role, "tool"]);
+    expect(mapped.map((m) => m.content)).toEqual(["started", "between", "finished"]);
+  });
+
+  test("an omitted empty assistant still breaks original-message adjacency", () => {
+    const ps = prompts(build(mapOcxMessagesToDevin(parsed([
+      result("a", "started"), { role: "assistant", content: [], timestamp: 2 }, result("a", "finished"),
+    ]))));
+    expect(ps.map(text)).toEqual(["started", "finished"]);
+  });
+
+  test("interleaved parallel call ids remain separate", () => {
+    const ps = prompts(build(mapOcxMessagesToDevin(parsed([
+      result("a", "alpha started"), result("b", "beta started"),
+      result("a", "alpha finished"), result("b", "beta finished"),
+    ]))));
+    expect(ps.map((p) => (p.find((f) => f.num === 7)!.value as Buffer).toString())).toEqual(["a", "b", "a", "b"]);
+    expect(ps.map(text)).toEqual(["alpha started", "beta started", "alpha finished", "beta finished"]);
+  });
+
+  test.each([false, true])("images and error markers survive with the error chunk first: %s", (errorFirst) => {
+    const image = result("a", [{ type: "text", text: "image chunk" }, { type: "image", imageUrl: "data:image/png;base64,YQ==" }]);
+    const error = result("a", "failed", true);
+    const mapped = mapOcxMessagesToDevin(parsed(errorFirst ? [error, image] : [image, error]));
+    expect(mapped).toHaveLength(1);
+    expect(mapped[0]!.is_error).toBe(true);
+    const parts = mapped[0]!.content;
+    expect(Array.isArray(parts)).toBe(true);
+    if (typeof parts === "string") throw new Error("Expected image parts");
+    expect(parts.filter((p) => p.type !== "text")).toEqual([{ type: "image", mimeType: "image/png", base64Data: "YQ==" }]);
+    const ps = prompts(build(mapped));
+    expect(ps).toHaveLength(1);
+    expect(text(ps[0]!)).toMatch(errorFirst ? /ERROR: failed[\s\S]+image chunk/ : /image chunk[\s\S]+ERROR: failed/);
+    expect(Number(ps[0]!.find((f) => f.num === 9)!.value)).toBe(1);
+    const images = ps[0]!.filter((f) => f.num === 10);
+    expect(images).toHaveLength(1);
+    expect([...iterFields(images[0]!.value as Buffer)].map((f) => (f.value as Buffer).toString())).toEqual(["YQ==", "image/png"]);
+  });
+
+  test("multiple structured chunks preserve part order and a structured error marker", () => {
+    const mapped = mapOcxMessagesToDevin(parsed([
+      result("a", [{ type: "image", imageUrl: "data:image/png;base64,YQ==" }], true),
+      result("a", [{ type: "text", text: "finished" }, { type: "image", imageUrl: "data:image/png;base64,Yg==" }]),
+    ]));
+    expect(mapped).toEqual([{ role: "tool", tool_call_id: "a", is_error: true, content: [
+      { type: "text", text: "ERROR:" }, { type: "image", mimeType: "image/png", base64Data: "YQ==" },
+      { type: "text", text: "\n\n" }, { type: "text", text: "finished" },
+      { type: "image", mimeType: "image/png", base64Data: "Yg==" },
+    ] }]);
+  });
+
+  test("structured results append without repeatedly traversing their accumulated prefix", () => {
+    const followups = 128;
+    const initialParts = 1_024;
+    const request = parseRequest({ model: "swe-1-6", stream: true, input: [
+      { type: "function_call", call_id: "a", name: "read", arguments: "{}" },
+      { type: "function_call_output", call_id: "a", output: [
+        { type: "input_image", image_url: "data:image/png;base64,YQ==" },
+        ...Array.from({ length: initialParts }, () => ({ type: "input_text", text: "x" })),
+      ] },
+      ...Array.from({ length: followups }, () => ({ type: "function_call_output", call_id: "a", output: "" })),
+    ] });
+    const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)!;
+    let visits = 0;
+    let mapped: ChatHistoryItem[];
+    try {
+      Object.defineProperty(Array.prototype, Symbol.iterator, { ...descriptor,
+        value: function(this: unknown[]) {
+          const iterator = descriptor.value.call(this) as IterableIterator<unknown>;
+          const first = this[0] as { type?: unknown; base64Data?: unknown } | undefined;
+          // Input parts use imageUrl; this sentinel matches only mapper-owned wire arrays.
+          if (first?.type === "image" && first.base64Data === "YQ==") {
+            const next = iterator.next.bind(iterator);
+            iterator.next = () => {
+              const item = next();
+              if (!item.done) visits += 1;
+              return item;
+            };
+          }
+          return iterator;
+        },
+      });
+      mapped = mapOcxMessagesToDevin(request);
+    } finally { Object.defineProperty(Array.prototype, Symbol.iterator, descriptor); }
+    const tools = mapped!.filter(item => item.role === "tool");
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.content).toHaveLength(1 + initialParts + 2 * followups);
+    expect(visits).toBeLessThanOrEqual(3 * (1 + initialParts + 2 * followups));
+  });
+
+  test("text runs join once at their structured transition and retain empty chunks", () => {
+    const chunks = Array.from({ length: 512 }, (_, i) => i % 2 ? "" : String(i));
+    const request = parsed([
+      ...chunks.map(chunk => result("a", chunk)),
+      result("a", [{ type: "image", imageUrl: "data:image/png;base64,YQ==" }]),
+      result("a", "", true), result("a", "tail"),
+      result("b", "separate"), result("b", ""),
+    ]);
+    const mapped = mapOcxMessagesToDevin(request);
+    expect(mapped).toEqual([
+      { role: "tool", tool_call_id: "a", is_error: true, content: [
+        { type: "text", text: chunks.join("\n\n") }, { type: "text", text: "\n\n" },
+        { type: "image", mimeType: "image/png", base64Data: "YQ==" },
+        { type: "text", text: "\n\n" }, { type: "text", text: "ERROR: " },
+        { type: "text", text: "\n\n" }, { type: "text", text: "tail" },
+      ] },
+      { role: "tool", tool_call_id: "b", content: "separate\n\n" },
+    ]);
+  });
+
+  test("each mapping owns its structured arrays even when the input is frozen", () => {
+    const request = parsed([
+      result("a", [{ type: "image", imageUrl: "data:image/png;base64,YQ==" }]),
+      result("a", [{ type: "text", text: "later" }]), result("a", "last"),
+    ]);
+    for (const message of request.context.messages) {
+      if (Array.isArray(message.content)) {
+        for (const part of message.content) Object.freeze(part);
+        Object.freeze(message.content);
+      }
+      Object.freeze(message);
+    }
+    Object.freeze(request.context.messages); Object.freeze(request.context); Object.freeze(request);
+    const snapshot = JSON.stringify(request);
+    const first = mapOcxMessagesToDevin(request);
+    const second = mapOcxMessagesToDevin(request);
+    expect(first).toEqual(second);
+    expect(first[0]!.content).not.toBe(second[0]!.content);
+    if (typeof first[0]!.content === "string") throw new Error("expected structured content");
+    first[0]!.content.push({ type: "text", text: "owned-only" });
+    expect(first).not.toEqual(second);
+    expect(JSON.stringify(request)).toBe(snapshot);
+  });
+
+  test("consolidation leaves the parsed request unchanged", () => {
+    const request = parsed([
+      result("a", [{ type: "text", text: "started" }, { type: "image", imageUrl: "data:image/png;base64,YQ==" }]),
+      result("a", "failed", true), result("a", "finished"),
+    ]);
+    const before = structuredClone(request);
+    expect(mapOcxMessagesToDevin(request)).toHaveLength(1);
+    expect(request).toEqual(before);
   });
 });
 

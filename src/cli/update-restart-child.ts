@@ -18,8 +18,11 @@ function parseMarker(raw: string): UpdateRestartChildMarker {
     || value.version === "0.0.0" || !parseStrictSemver(value.version) || !value.home
     || !Number.isSafeInteger(value.home.revision)) throw new Error("update_restart_child_marker_invalid");
   for (const directory of [value.home.config, value.home.codex]) {
+    // Windows reports 64-bit NTFS file ids (MFT sequence in the high 16 bits) as doubles above
+    // 2^53. Parent and child read them through the same stat API, so any finite integer is a
+    // faithful identity token; assertUpdateRestartHome still compares path, dev and ino exactly.
     if (!directory || typeof directory.path !== "string" || !directory.path
-      || !Number.isSafeInteger(directory.dev) || !Number.isSafeInteger(directory.ino)) {
+      || !Number.isInteger(directory.dev) || !Number.isInteger(directory.ino)) {
       throw new Error("update_restart_child_marker_invalid");
     }
   }

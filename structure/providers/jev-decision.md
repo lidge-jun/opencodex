@@ -54,7 +54,11 @@ the usage aggregate reports per-backend counts and latency with older rows as `u
 
 `src/combos/jev.ts` extracts bounded user-task, previous-assistant, and latest-tool-output text plus
 the tool name and boolean signals; raw image data, tool arguments, encrypted reasoning, headers, and
-the JEV credential are excluded. It owns the joint target/effort choice map, strict response
+the JEV credential are excluded. All three text samples omit recognized Codex protected envelopes
+and Claude Code `<system-reminder>` blocks before clipping, including nested and unclosed blocks.
+Only an envelope-only `codex_internal_context` goal outside a reminder may supply a fallback task;
+reminder-only text supplies no task. Reminder-free inputs keep their existing sampling behavior.
+It owns the joint target/effort choice map, strict response
 validation, canonical `jev-latest` destination, default four-second deadline, no-redirect policy, bounded response,
 and caller-cancellation propagation. Missing credentials or safe state, transport failures, and invalid
 answers fail open to the first eligible target; no response can escape the configured choice map.
@@ -75,9 +79,15 @@ applicable decision, so operators must keep secrets and private paths out of it.
 An absent note leaves the prior decision payload shape intact.
 
 `src/server/responses/core-combo.ts` computes current eligibility, asks JEV once for the initial pick,
-applies the validated effort, and removes caller `service_tier` for that child. A retryable child
-failure re-enters the ordinary Combo fallback loop from the untouched request without another JEV
-call. Each target may carry an optional non-empty `reasoningEfforts` allowlist. Omission keeps the
+applies the validated effort, and removes caller `service_tier` on the Responses child body. The
+opt-in native Chat lane builds a separate body in `src/server/responses/core-combo-native.ts` and
+does not apply that JEV effort override. A retryable child failure re-enters the ordinary Combo
+fallback loop from the untouched request without another JEV call. Request and attempt
+`requestedEffort` labels retain an applied differing JEV effort as `caller->forced`, followed by
+later child transitions; native children omit the unapplied override and preserve their own
+transitions. Absent or unchanged forced efforts keep the existing label.
+`src/server/responses/combo-requested-effort.ts` owns this pure label calculation.
+Each target may carry an optional non-empty `reasoningEfforts` allowlist. Omission keeps the
 backward-compatible all-advertised behavior; a present list is intersected with current capabilities,
 and an empty intersection removes that target from the JEV choice map rather than broadening it.
 Direct models and every other Combo strategy bypass this path. The shared Combo editor owns the GUI

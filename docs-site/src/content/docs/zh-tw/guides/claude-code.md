@@ -148,9 +148,16 @@ unknown 表示 opencodex 無法確定設定是否仍指向自己的代理。外�
 Picker 模式是第一方模式的一部分。在 macOS 上選擇第一方時預設開啟；設定
 `claudeCode.intercept.picker: false` 後會保持關閉。它會修改第一方 Desktop 的 Code 分頁模型選擇器，
 依名稱列出可用的 opencodex 模型。首次開啟時，macOS 可能會要求你在登入鑰匙圈中信任本機憑證授權單位。
-該授權單位限制為 `claude.ai` 及其子網域。其簽章金鑰只存在於執行中的 OpenCodex 處理程序內，因此每次重新啟動
-OpenCodex 都會發佈新的授權單位，macOS 也會再次請求信任——請在每次重新啟動後核准該提示，或稍後執行
-`ocx claude desktop picker trust`。
+該授權單位限制為 `claude.ai` 及其子網域。可匯出的簽章身分由 OS 認證資料儲存區保護，一般重新啟動會重用相同的憑證與金鑰。
+OpenCodex 設定目錄不會儲存明文 Picker 簽章金鑰。受限 CA 的完整驗證與 OS 信任檢查仍然適用。
+已核准的身分不變且認證資料儲存區可用時，重新啟動不會新增或移除憑證信任設定。啟動復原絕不會安裝信任：
+若信任缺失、遭撤銷或無法確認，Picker 會維持待處理狀態。請明確執行 `ocx claude desktop picker on`
+或 `ocx claude desktop picker trust` 來授予信任。
+
+從舊身分進行一次性移轉時，清除原有信任可能需要同意。清理未完成時，Picker 無法使用，已套用的設定檔
+會使用不解密的中繼。macOS 也可能另外要求解鎖鑰匙圈或核准應用程式存取憑證，重新啟動或升級時也可能出現這些提示。
+Windows 與 Linux 仍不支援 Picker，不會啟動 Picker CA、認證資料儲存區或代理作業。主要 Claude 攔截功能仍可用，
+其本機 CA 檔案受到擁有者、符號連結、檔案權限及 Windows ACL 檢查保護。
 
 Picker 模式開啟期間，Claude Desktop 會透過 OpenCodex 存取網路。如果 OpenCodex 停止，Desktop 會離線，
 直到你完全重新啟動 Desktop 或關閉 Picker 模式。使用 `ocx claude desktop picker status` 查看狀態，
@@ -642,7 +649,7 @@ Claude 模型時自動載入。對於原生透傳，這是正常現象；對於�
 **子代理派發到錯誤模型**——名冊代理（`ocx-*`）使用 `<!-- ocx-route: ... -->` 指令，
 而不是 Agent 工具的 `model` 引數。請確保指令與預期路由一致。傳入 `"haiku"` 作為模型佔位符。
 
-在 `config.json` 中設定 `claudeCode.stabilizePromptCache: true`，可在轉換路由上將系統指令末尾支援的 Claude 提示移到最後一則使用者訊息。預設值為 `false`。僅在用戶端允許這種角色變更時啟用。程式碼圍欄中的範例和不符合的文字會保留，Anthropic 原生轉送不變。沒有中繼資料時，快取鍵依穩定後的指令計算。此選項不會產生對話識別碼，也不保證上游快取命中。
+在 `config.json` 中設定 `claudeCode.stabilizePromptCache: true`，可在轉換路由上移除系統指令末尾支援的 Claude 提示。辨識出的 `<total_tokens>N tokens left</total_tokens>` 格式的 token 頁尾會被刪除，包括重複出現的頁尾。TaskCreate 提醒仍依原有方式移到末尾的使用者訊息；如果移除的只有 token 頁尾，就不會新增輸入訊息。預設值為 `false`。僅在用戶端允許這種角色變更時啟用。程式碼圍欄中的範例和不符合的文字會保留，Anthropic 原生轉送不變。沒有中繼資料時，快取鍵依穩定後的指令計算。此選項不會產生對話識別碼，也不保證上游快取命中。
 
 在所有轉換後的 Chat 路由上，時間線提醒都會保留在對話中的原有位置（排在尚待傳回的工具結果之後）。因此，新增提醒不會重寫開頭的系統提示，對話中途的指令也不會被移到它原本應跟隨的輪次之前。該位置攜帶哪個角色是另外決定的：除非提供者記錄了 `foldDeveloperRoleToSystem: false`，否則提醒以 `system` 傳送；該記錄表示上游接受 `developer` 角色，此時提醒在相同位置照原樣轉送。不接受該角色的上游會回應 `400 role 'developer' is not allowed`，該回合根本無法開始，所以未記錄的目的地採用摺疊。無論 `stabilizePromptCache` 是否啟用，此行為都會生效；Anthropic 原生轉送維持不變。快取重用仍需要穩定的工作階段識別碼和可用的上游快取。修改較早的指令或工具、壓縮對話也可能影響快取命中；僅保留提醒順序並不保證快取重用。
 

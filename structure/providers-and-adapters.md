@@ -1,5 +1,7 @@
 # Providers And Adapters
 
+Devin combines only [consecutive same-ID tool results](adapters/registry.md#devin-consecutive-tool-results), using linear accumulation while preserving intervening message slots, image parts and error markers without mutating the parsed request.
+
 Anthropic account pause, model routes, and quota labels follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
 
 Managed native Anthropic serving UUID and observed CLI header continuity follow [native Messages](data-planes/protocol-paths.md#managed-native-messages); generated Responses retain the adapter's compatibility fingerprint.
@@ -34,7 +36,7 @@ Direct MCP names emitted in a verified custom code-mode catalog follow the
 [Responses restoration boundary](transports/responses-wire-shapes.md#direct-mcp-calls-in-code-mode).
 Ordinary structured functions named `exec` do not opt into this compatibility path.
 
-RunTurn hosted search uses `src/web-search/run-turn-loop.ts`: synthetic calls remain private, progress reaches the bridge during collection, and a validated terminal precedes search execution. Complete search calls remain actionable at a truncated `done`; cancellation prevents subsequent queries and calls. OAuth preflight replay in `src/server/responses/run-turn-execution.ts` retains the synthetic tool while refreshing credential-scoped route state. In `src/server/responses/sidecar-execution.ts`, a search plan takes priority over image/video bridge execution for both transports; only fetch-capable adapters enter the fetch search loop.
+RunTurn hosted search uses `src/web-search/run-turn-loop.ts`: synthetic calls remain private, progress reaches the bridge during collection, and a validated terminal precedes search execution. Complete search calls remain actionable at a truncated `done`; cancellation prevents subsequent queries and calls. OAuth preflight replay in `src/server/responses/run-turn-execution.ts` retains the synthetic tool while refreshing credential-scoped route state. In `src/server/responses/sidecar-execution.ts`, a search plan takes priority over image/video bridge execution for both transports; only fetch-capable adapters enter the fetch search loop. Its Antigravity structured-403 rotation and physical-send accounting follow [Account refusal and rotation boundaries](transports/responses-failover.md#account-refusal-and-rotation-boundaries).
 
 Both search loops keep `web_search` declared after the search budget is exhausted. Further calls receive a paired limit-reached result without another physical search; at most `maxSearches + 3` model iterations run before a terminal error. Ordinary caller tools and cancellation still end the loop. Empty-answer recovery alone removes all tools.
 
@@ -111,6 +113,19 @@ chat. Other HTTP failures and malformed protobufs, including a wrong
 wire type for a known field or a varint longer than ten bytes, keep last-good; a decoded status
 with nothing measurable is authoritative-empty. Only Devin's credential host extends its quota
 cache identity; generic OAuth pause still suppresses per-account probes.
+
+Kiro AWS SSO token refresh in `src/oauth/kiro.ts` retains HTTP 400 `invalid_request` as
+refresh-attention evidence separate from terminal grant errors. Matching rotated CLI credentials
+are tried before the failure reaches `src/oauth/index.ts`. `src/oauth/store.ts` persists the
+failed credential generation under its mutation lock, respecting replacement, config reconciliation,
+and operator pause. Once that generation's access token expires, account summaries project
+`needsReauth: true` and the active login projects `loggedIn: false`. `src/oauth/health.ts` uses
+the same generation/expiry predicate with its supplied observation time, so account-list health
+and CLI diagnostics project `reauth_required` with `refresh_failed`; `ocx doctor` warns with a
+login action. The internal terminal flag
+stays clear so a later refresh remains eligible; successful refresh or credential replacement
+clears the evidence. Desktop input errors, network failures, and 5xx responses create no evidence.
+No upstream description or credential metadata enters the status response.
 
 Kiro's account quota cache persists quota and an optional exhaustion verdict under one
 opaque account key and a non-secret login identity. Hydration admits only matching live
@@ -472,6 +487,7 @@ recovery probe lease no search consumed is always returned.
 `tests/web-search/web-search-bridge-replay.test.ts` pins the restore and each of those refusals.
 A forward OpenAI search sidecar retries a 429 only when the requested delay fits both its retry ceiling and the remaining overall sidecar deadline. A delay that cannot fit returns and records the original 429 so pool routing retains quota evidence.
 One search makes at most three physical sends in total: connection-reset recovery and 429 replays draw from the same budget, and a budget spent with a 429 in hand ends with that 429 as the recorded outcome.
+OpenAI helpers recheck the resolved [stored-account credit policy](codex-account-controls.md#stored-account-authentication-policy) immediately before every physical send, including those retries. An unchanged caller-owned Direct credential is not governed by stored-pool consent.
 A leg whose
 upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes
 any cell it opened rather than leaving it in progress. Assistant text is not treated as a search

@@ -564,9 +564,12 @@
       "path": "remote-link.md",
       "tier": 3,
       "title": "Remote Link",
-      "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer and the private link store.",
+      "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery.",
       "documents": [
-        "src/link/"
+        "src/link/",
+        "src/lib/gui-pair-intent.ts",
+        "src/lib/windows-owner-acl.ts",
+        "src/server/gui-pair-delivery.ts"
       ]
     },
     {

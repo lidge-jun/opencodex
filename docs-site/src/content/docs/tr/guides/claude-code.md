@@ -194,10 +194,20 @@ Picker modu first-party modunun bir parçasıdır. macOS'ta first-party seçildi
 açıktır; `claudeCode.intercept.picker: false` ayarlanırsa kapalı kalır. First-party Desktop'ın Code
 sekmesindeki model seçiciyi değiştirerek kullanılabilir opencodex modellerini adlarıyla listeler.
 İlk etkinleştirmede macOS, giriş anahtar zincirinde yerel bir sertifika yetkilisine güvenmenizi isteyebilir.
-Bu yetkili `claude.ai` ve alt alan adlarıyla sınırlıdır. İmza anahtarı yalnızca çalışan OpenCodex sürecinde
-bulunduğundan her OpenCodex yeniden başlatılmasında yeni bir yetkili yayımlanır ve macOS güveni yeniden ister —
-her yeniden başlatmadan sonra iletişim kutusunu onaylayın veya daha sonra `ocx claude desktop picker trust`
-komutunu çalıştırın.
+Bu yetkili `claude.ai` ve alt alan adlarıyla sınırlıdır. Dışa aktarılabilir imzalama kimliği işletim sisteminin
+kimlik bilgisi deposunda korunur ve normal yeniden başlatmalarda aynı sertifika ve anahtar yeniden kullanılır.
+OpenCodex yapılandırma dizininde düz metin picker imza anahtarı saklanmaz. Kısıtlı CA'nın tam doğrulaması ve
+sistemdeki güven denetimi devam eder. Onaylanmış kimlik aynıysa ve depo erişilebilirse yeniden başlatma,
+sertifika güven ayarlarını eklemez veya kaldırmaz. Başlangıçta geri yükleme hiçbir zaman güven yüklemez:
+güven eksik, iptal edilmiş veya bilinmiyorsa picker beklemede kalır. Güven vermek için açıkça
+`ocx claude desktop picker on` veya `ocx claude desktop picker trust` komutunu çalıştırın.
+
+Eski bir kimlikten bir defalık geçişte önceki güveni kaldırmak için onay gerekebilir. Temizlik tamamlanana
+kadar picker kullanılamaz ve uygulanmış profil şifre çözmeyen bir aktarma kullanır. macOS ayrıca anahtar
+zincirinin kilidini açmanızı veya uygulamanın kimlik bilgilerine erişimini onaylamanızı isteyebilir;
+bu istemler yeniden başlatma veya güncelleme sonrasında da çıkabilir. Windows ve Linux'ta picker desteklenmez:
+picker CA, kimlik bilgisi deposu veya proxy işlemleri başlatılmaz. Ana Claude yakalama işlevi kullanılabilir;
+yerel CA dosyaları için sahiplik, sembolik bağlantı, dosya izinleri ve Windows ACL denetimleri uygulanır.
 
 Picker modu açıkken Claude Desktop ağa OpenCodex üzerinden çıkar. OpenCodex durursa Desktop, tamamen yeniden
 başlatılana veya picker modu kapatılana kadar çevrimdışı kalır. Durumu `ocx claude desktop picker status`
@@ -854,7 +864,7 @@ aracının `model` argümanını değil, `<!-- ocx-route: ... -->` yönergelerin
 kullanır. Yönergenin hedeflenen rotayla eşleştiğinden emin olun. Model yer
 tutucusu olarak `"haiku"` iletin.
 
-`config.json` içindeki `claudeCode.stabilizePromptCache: true`, dönüştürülen rotalarda sistem talimatlarının sonundaki desteklenen Claude bildirimlerini son kullanıcı mesajına taşır. Varsayılan değer `false` olur. Yalnızca bu rol değişikliği istemcileriniz için uygunsa etkinleştirin. Kod bloklarındaki örnekler ve eşleşmeyen metin korunur; yerel Anthropic aktarımı değişmez. Meta veri yoksa önbellek anahtarı kararlı talimatlardan hesaplanır. Bu seçenek konuşma kimliği oluşturmaz veya üst hizmette önbellek isabeti garanti etmez.
+`config.json` içindeki `claudeCode.stabilizePromptCache: true`, dönüştürülen rotalarda sistem talimatlarının sonundaki desteklenen Claude bildirimlerini ayırır. Tanınan `<total_tokens>N tokens left</total_tokens>` biçimindeki token altbilgileri, yinelenenler de dahil olmak üzere silinir. TaskCreate hatırlatmaları eskisi gibi sona eklenen bir kullanıcı mesajına taşınır; yalnızca token altbilgileri ayrılmışsa girişe yeni bir mesaj eklenmez. Varsayılan değer `false` olur. Yalnızca bu rol değişikliği istemcileriniz için uygunsa etkinleştirin. Kod bloklarındaki örnekler ve eşleşmeyen metin korunur; yerel Anthropic aktarımı değişmez. Meta veri yoksa önbellek anahtarı kararlı talimatlardan hesaplanır. Bu seçenek konuşma kimliği oluşturmaz veya üst hizmette önbellek isabeti garanti etmez.
 
 Dönüştürülen tüm Chat rotalarında zaman çizelgesi hatırlatmaları, bekleyen araç sonuçlarından sonra konuşmadaki konumlarını korur. Böylece yeni bir hatırlatma eklenmesi baştaki sistem istemini yeniden yazmaz ve konuşmanın ortasındaki bir yönerge, izlemesi gereken turların önüne geçmez. O konumun hangi rolü taşıdığı ayrı bir karardır: sağlayıcı `foldDeveloperRoleToSystem: false` kaydetmedikçe hatırlatma `system` olarak gönderilir; bu kayıt, üst hizmetin `developer` rolünü kabul ettiğini belirtir ve rol aynı konumda iletilir. Kabul etmeyen bir üst hizmet `400 role 'developer' is not allowed` yanıtı verir ve tur hiç başlamaz; kaydı olmayan hedefin katlanmasının nedeni budur. Bu davranış `stabilizePromptCache` açık veya kapalıyken geçerlidir; yerel Anthropic aktarımı değişmez. Önbelleğin yeniden kullanımı için kararlı bir oturum kimliği ve kullanılabilir üst hizmet önbelleği hâlâ gereklidir. Önceki talimatların veya araçların değişmesi ve konuşmanın sıkıştırılması da önbellek isabetini etkileyebilir; hatırlatma sırasını korumak tek başına yeniden kullanımı garanti etmez.
 
