@@ -115,7 +115,11 @@ If the update appears stalled on `Installing update…` or times out:
      ```powershell
      ocx stop
      ```
-   - Verify with `ocx status` that no lingering runtime holds the port, then proceed with the installation.
+   - Confirm no OpenCodex processes remain running (such as `ocx.exe`, `opencodex-desktop.exe`, or `bun.exe`):
+     ```powershell
+     Get-Process -Name ocx, opencodex-desktop, bun -ErrorAction SilentlyContinue
+     ```
+     If any lingering process still holds the binary, terminate it or wait for it to exit before starting the installer.
 
 
 The updater checks npm's cache folder before it stops the proxy, and the npm staging install uses
