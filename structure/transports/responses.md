@@ -448,7 +448,7 @@ lease while a block-local `admission` holds only the acquisition result.
 reads that holder rather than minting a per-phase allowance. Combo recursion is injected through
 `ResponsesDispatchers`: a child re-enters the public handler without a reverse runtime import
 from the combo implementation into `core.ts`. `core-lifetime.ts` owns the shared run-turn response
-marker and translator-budget finalization, so the combo and delivery paths observe one identity.
+marker and translator-budget finalization, so the combo and delivery paths observe one identity. Owned-budget cleanup on request abort, including unread response bodies, follows the [byte-accounting lifetime contract](byte-accounting.md#stream-buffer-accounting).
 
 The outer admission `finally` remains in `core.ts`. Native execution explicitly transfers its
 pending lease to `passthrough-execution.ts`; both owners await response construction before

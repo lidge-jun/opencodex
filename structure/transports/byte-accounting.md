@@ -61,6 +61,10 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
+HTTP owners in `src/server/responses/core.ts`, `src/server/chat-completions.ts` and `src/server/claude-messages.ts` pass the request abort signal to `src/lib/translator-budget.ts`. An aborted response releases its owned translator budget even when its body is never consumed, and propagates the abort as a stream error rather than successful EOF. Explicit body cancellation also releases the budget before awaiting upstream reader cancellation. EOF and read errors share the same idempotent finalizer, which removes its abort listener. Responses lifetime wrapping in `src/server/responses/core-lifetime.ts` preserves native, eager-relay and preinspected-response markers. The portable Rust regression in `scripts/diagnostics/windows-version-control/tests/async_contracts.rs` holds cancellation pending and covers abort before wrapping, abort after wrapping, explicit cancellation and successful EOF.
+
+Disposed budgets ignore late call, reservation, charge and observation work; reservations created before disposal cannot resurrect per-turn or aggregate counters. The same contract checks both accounting scopes after abort, even while upstream cancellation remains pending.
+
 Devin's [Messages ordering buffer](../clients/claude-desktop.md#devin-messages-output-ordering) charges retained
 semantic events consumed from the independently bounded adapter queue to the shared translator
 budget until downstream delivery. Cancellation and overflow release held events before producer shutdown.

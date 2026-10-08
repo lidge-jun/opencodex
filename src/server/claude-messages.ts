@@ -834,6 +834,7 @@ export async function handleClaudeMessages(
     return finalizeTranslatorBudgetResponse(
       await handleClaudeMessagesWithBudget(req, config, logCtx, translatorBudget, logIds, requestPolicy, ingress),
       translatorBudget,
+      req.signal,
     );
   } catch (error) {
     translatorBudget.dispose();

@@ -2,6 +2,79 @@ use serde_json::Value;
 use std::{env, fs, path::PathBuf, process::Command};
 
 #[test]
+fn aborted_unread_responses_release_owned_budgets_before_cancel_settles() {
+    let result = contract(
+        "aborted-unread-budget",
+        r#"
+const budgets=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/lib/translator-budget.ts')).href);
+const lifetime=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/server/responses/core-lifetime.ts')).href);
+const answers=[];
+for (const kind of ['responses','shared']) for (const mode of ['before','after','cancel']) {
+ const controller=new AbortController(); if(mode==='before')controller.abort('synthetic-client-gone');
+ const baseline=budgets.translatorLiveBudgetCountForTests();
+ const aggregateBaseline=budgets.translatorObservedBufferSnapshot();
+ const budget=budgets.createTranslatorBudget();
+ budget.openCall('reserved-before-abort');
+ const reservedBeforeAbort=budget.reserveTransient(512,{kind:'retained_collectors',callId:'reserved-before-abort'});
+ let release, calls=0;
+ const hold=new Promise(resolve=>{release=resolve});
+ const original=new Response(new ReadableStream({cancel(){calls++; return hold}}));
+ const wrap=kind==='responses'?lifetime.finalizeOwnedTranslatorBudget:budgets.finalizeTranslatorBudgetResponse;
+ const wrapped=wrap(original,budget,controller.signal);
+ if(mode!=='before' && budgets.translatorLiveBudgetCountForTests()!==baseline+1)throw Error('live response released before stream death');
+ let cancel;
+ if(mode==='after')controller.abort('synthetic-client-gone');
+ if(mode==='cancel')cancel=wrapped.body.cancel('synthetic-client-gone');
+ await Bun.sleep(20);
+ const whileHeld=budgets.translatorLiveBudgetCountForTests()-baseline;
+ const beforeReleaseCalls=calls;
+ budget.openCall('late-after-abort');
+ budget.chargeRetained(1024,{kind:'retained_collectors'});
+ const late=budget.reserveTransient(2048,{kind:'retained_collectors'}); late.commitRetained(); late.release();
+ reservedBeforeAbort.commitRetained(); reservedBeforeAbort.release();
+ const observed=budget.observeAcceptedRequestCopy(4096); observed();
+ const afterLate=budget.snapshot();
+ const aggregate=budgets.translatorObservedBufferSnapshot();
+ const aggregateDelta={bytes:budgets.translatorAggregateCurrentBytesForTests()-aggregateBaseline.currentBytes,active:aggregate.active-aggregateBaseline.active};
+ let abortedRead=false;
+ if(mode!=='cancel'){
+  const reader=wrapped.body.getReader();
+  try {await reader.read()}catch(reason){if(reason!=='synthetic-client-gone')throw reason;abortedRead=true}
+  finally {reader.releaseLock()}
+ }
+ cancel??=wrapped.body.cancel('fixture-cleanup').catch(reason=>{if(reason!=='synthetic-client-gone')throw reason});
+ release(); await cancel;
+ answers.push({kind,mode,whileHeld,beforeReleaseCalls,abortedRead,afterLate,aggregateDelta,remaining:budgets.translatorLiveBudgetCountForTests()-baseline});
+}
+const baseline=budgets.translatorLiveBudgetCountForTests();
+const budget=budgets.createTranslatorBudget();
+const source=new Response('synthetic-eof',{status:201,headers:{'x-fixture':'kept'}});
+const eof=lifetime.finalizeOwnedTranslatorBudget(source,budget,new AbortController().signal);
+return {answers,eof:{text:await eof.text(),status:eof.status,header:eof.headers.get('x-fixture'),remaining:budgets.translatorLiveBudgetCountForTests()-baseline}};
+"#,
+    );
+    for answer in result["answers"].as_array().unwrap() {
+        assert_eq!(
+            answer["whileHeld"], 0,
+            "aborted unread body retained its budget"
+        );
+        assert_eq!(answer["beforeReleaseCalls"], 1);
+        assert_eq!(answer["remaining"], 0);
+        assert_eq!(answer["afterLate"]["currentBytes"], 0);
+        assert_eq!(answer["afterLate"]["activeCalls"], 0);
+        assert_eq!(answer["aggregateDelta"]["bytes"], 0);
+        assert_eq!(answer["aggregateDelta"]["active"], 0);
+        if answer["mode"] != "cancel" {
+            assert_eq!(answer["abortedRead"], true);
+        }
+    }
+    assert_eq!(result["eof"]["text"], "synthetic-eof");
+    assert_eq!(result["eof"]["status"], 201);
+    assert_eq!(result["eof"]["header"], "kept");
+    assert_eq!(result["eof"]["remaining"], 0);
+}
+
+#[test]
 fn removal_barrier_waits_for_a_normal_acl_runner_before_its_belt_fires() {
     let result = contract(
         "normal-acl-runner",

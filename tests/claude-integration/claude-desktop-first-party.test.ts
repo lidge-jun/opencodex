@@ -22,6 +22,7 @@ import { setIntegrationEnabled } from "../../src/codex/desired-state";
 import { firstPartyDesired } from "../../src/claude/first-party-settings";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
 
 let root = "";
 let library = "";
@@ -63,7 +64,8 @@ beforeEach(() => {
   writeFileSync(join(root, "config.json"), JSON.stringify(config()));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await flushConfigDirHardeningAndReaps(root);
   for (const key of ENV_KEYS) {
     if (previous[key] === undefined) delete process.env[key];
     else process.env[key] = previous[key];

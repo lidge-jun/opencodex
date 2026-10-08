@@ -1,4 +1,5 @@
 import type { TranslatorBudget } from "../../lib/translator-budget";
+import { finalizeTranslatorBudgetResponse } from "../../lib/translator-budget";
 import {
   isNativePassthroughSseResponse,
   markNativePassthroughSseResponse,
@@ -37,42 +38,8 @@ export const UPSTREAM_JSON_BODY_READ_OPTIONS = {
 
 
 
-export function finalizeOwnedTranslatorBudget(response: Response, budget: TranslatorBudget): Response {
-  if (!response.body) {
-    budget.dispose();
-    return response;
-  }
-  const reader = response.body.getReader();
-  let finalized = false;
-  const finalize = () => {
-    if (finalized) return;
-    finalized = true;
-    budget.dispose();
-  };
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const result = await reader.read();
-        if (result.done) {
-          finalize();
-          controller.close();
-        } else {
-          controller.enqueue(result.value);
-        }
-      } catch (error) {
-        finalize();
-        controller.error(error);
-      }
-    },
-    async cancel(reason) {
-      try { await reader.cancel(reason); } finally { finalize(); }
-    },
-  });
-  const finalizedResponse = new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+export function finalizeOwnedTranslatorBudget(response: Response, budget: TranslatorBudget, signal?: AbortSignal): Response {
+  const finalizedResponse = finalizeTranslatorBudgetResponse(response, budget, signal);
   if (isNativePassthroughSseResponse(response)) {
     markNativePassthroughSseResponse(finalizedResponse);
   }
