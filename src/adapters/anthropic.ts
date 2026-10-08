@@ -624,9 +624,14 @@ function usageFromAnthropic(usage: unknown): OcxUsage | undefined {
   // canonical inclusive convention (types.ts OcxUsage / devlog 070).
   const inputTokens = input + read + write;
   if (!Number.isFinite(inputTokens)) return undefined;
+  // Thinking is a reported subset of output, not extra billable output or an
+  // estimate from visible summaries. Invalid optional detail leaves totals intact.
+  const thinking = isAnthropicRecord(usage.output_tokens_details) ? usage.output_tokens_details.thinking_tokens : undefined;
+  const reasoningOutputTokens = typeof thinking === "number" && Number.isFinite(thinking) && thinking >= 0 && thinking <= output ? thinking : undefined;
   return {
     inputTokens,
     outputTokens: output,
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(hasCache ? {
       cachedInputTokens: read,
       cacheReadInputTokens: read,

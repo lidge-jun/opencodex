@@ -227,6 +227,10 @@ Kiro metering uses the [provider credit contract](providers/kiro.md#kiro-reasoni
 Adapter output must stay in internal `AdapterEvent` form until `src/bridge/sse.ts` converts it back
 to Responses SSE or WebSocket frames, or `src/bridge/response-json.ts` buffers it into a JSON
 response. `src/bridge.ts` is the compatibility facade that re-exports both.
+`src/adapters/anthropic.ts` preserves finite nonnegative `output_tokens_details.thinking_tokens`
+within the inclusive output total as `reasoningOutputTokens`, including final cumulative SSE usage.
+Missing or invalid optional detail stays unreported internally; totals and cache accounting do not change.
+The Chat/Responses projections expose that subset as `reasoning_tokens`; no text-based estimate is made.
 `src/adapters/run-turn-queue.ts` preflight callers may supply an optional wait bound; timeout hands
 the outstanding iterator read to replay once, while callers without a bound keep the existing wait.
 
