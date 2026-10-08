@@ -289,9 +289,9 @@ describe("Command Code real integration writer root-precedence and lifecycle", (
     expect(consumerResolved!.acme).toBeDefined();
   });
 
-  test("executes full lifecycle (Apply -> Disable -> Undo) on ordinary plural-root files", async () => {
+  test.each(["providers", "provider"] as const)("executes full lifecycle (Apply -> Disable -> Undo) on ordinary %s-root files", async root => {
     const rawContent = JSON.stringify({
-      providers: { acme: { name: "Acme", api: "openai-completions", baseURL: "https://acme.test/v1", apiKey: false, models: {} } },
+      [root]: { acme: { name: "Acme", api: "openai-completions", baseURL: "https://acme.test/v1", apiKey: false, models: {} } },
     }, null, 2);
     const configPath = setupConfig(rawContent);
 
@@ -301,9 +301,9 @@ describe("Command Code real integration writer root-precedence and lifecycle", (
     expect(applyRes.state).toBe("current");
 
     const appliedDoc = JSON.parse(readFileSync(configPath, "utf8"));
-    expect(appliedDoc.providers[OPENCODE_PROVIDER_ID]).toBeDefined();
-    expect(appliedDoc.providers.acme).toBeDefined();
-    expect(appliedDoc.provider).toBeUndefined();
+    expect(appliedDoc[root][OPENCODE_PROVIDER_ID]).toBeDefined();
+    expect(appliedDoc[root].acme).toBeDefined();
+    expect(appliedDoc[root === "providers" ? "provider" : "providers"]).toBeUndefined();
 
     // Consumer reads both
     expect(publishedCommandCodeRoot(appliedDoc)![OPENCODE_PROVIDER_ID]).toBeDefined();
@@ -323,18 +323,37 @@ describe("Command Code real integration writer root-precedence and lifecycle", (
     expect(disableRes.ok).toBe(true);
 
     const disabledDoc = JSON.parse(readFileSync(configPath, "utf8"));
-    expect(disabledDoc.providers[OPENCODE_PROVIDER_ID]).toBeUndefined();
-    expect(disabledDoc.providers.acme).toBeDefined();
-    expect(disabledDoc.provider).toBeUndefined();
+    expect(disabledDoc[root][OPENCODE_PROVIDER_ID]).toBeUndefined();
+    expect(disabledDoc[root].acme).toBeDefined();
+    expect(disabledDoc[root === "providers" ? "provider" : "providers"]).toBeUndefined();
 
-    // 4. Undo the disable (restores the active managed block under providers)
+    // 4. Undo the disable (restores the active managed block under the original root)
     const undoDisableRes = await restoreIntegration({ ...input(), opId: (disableRes as any).opId });
     expect(undoDisableRes.ok).toBe(true);
+    expect(readIntegrationState(input()).state).toBe("current");
+    expect(undoDisableRes.state).toBe(readIntegrationState(input()).state);
 
     const restoredDoc = JSON.parse(readFileSync(configPath, "utf8"));
-    expect(restoredDoc.providers[OPENCODE_PROVIDER_ID]).toBeDefined();
-    expect(restoredDoc.providers.acme).toBeDefined();
-    expect(restoredDoc.provider).toBeUndefined();
+    expect(restoredDoc[root][OPENCODE_PROVIDER_ID]).toBeDefined();
+    expect(restoredDoc[root].acme).toBeDefined();
+    expect(restoredDoc[root === "providers" ? "provider" : "providers"]).toBeUndefined();
     expect(publishedCommandCodeRoot(restoredDoc)![OPENCODE_PROVIDER_ID]).toBeDefined();
+  });
+  test("undoing a confirmed drift restore preserves an unparseable snapshot", () => {
+    const configPath = setupConfig(JSON.stringify({ providers: { acme: { models: {} } } }));
+    const applyRes = applyIntegration(input());
+    expect(applyRes.ok).toBe(true);
+    if (!applyRes.ok) throw new Error("apply failed");
+
+    const editedText = "{ invalid JSON";
+    writeFileSync(configPath, editedText, "utf8");
+    const restoreRes = restoreIntegration({ ...input(), opId: applyRes.opId!, confirmDrift: true });
+    expect(restoreRes.ok).toBe(true);
+    if (!restoreRes.ok) throw new Error("restore failed");
+
+    const undoRes = restoreIntegration({ ...input(), opId: restoreRes.opId! });
+    expect(undoRes).toMatchObject({ ok: true, state: "conflict" });
+    expect(readFileSync(configPath, "utf8")).toBe(editedText);
+    expect(readIntegrationState(input()).state).toBe("unsafe");
   });
 });
