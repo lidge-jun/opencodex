@@ -1,10 +1,5 @@
 # GUI And Management API
 
-Provider connection probes preserve the configured authentication mode and use
-the [catalog's Pool 2 discovery ownership](catalog.md#anthropic-pool-discovery-ownership)
-rule. The probe captures its provider row and checks live OAuth ownership again
-before sending. Custom key rows retain their own key.
-
 Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
 `autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
 `PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;
@@ -15,7 +10,7 @@ threshold. The dashboard reuses `AccountAutoSwitchControl` below account actions
 focus/draft semantics and translated copy. The hook protects same-provider selection mutations
 and stale roster reads; confirmed pool-setting changes seed new overrides immediately, without
 overwriting an existing custom draft. Old servers do not show a synthetic control. See
-[Anthropic threshold semantics](providers/anthropic-account-thresholds.md).
+[Anthropic threshold semantics](providers/anthropic-account-thresholds.md). Connection probes use the [discovery credential ownership contract](providers/anthropic-account-pool.md#discovery-credential-ownership), including a live check before sending.
 
 Anthropic account rows now expose the shared boolean `paused` DTO and use the existing
 `PUT /api/oauth/accounts/pause` body `{ provider, accountId, paused }`. The dashboard's

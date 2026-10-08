@@ -1,16 +1,6 @@
 # Model Catalog
 
-## Anthropic pool discovery ownership
-
-`src/oauth/model-discovery-auth.ts` checks the configured Pool 2 row before a
-catalog resolver observes or refreshes its OAuth credential. Observed gathers use
-their captured provider snapshot. `src/oauth/index.ts` applies the same policy
-when building the final models request; Pool 2 OAuth authorization is scoped to
-the first-party API destination. A custom key provider named `anthropic2`
-continues to use its own configured key, including legacy rows with no auth mode.
-Coverage: `tests/oauth/anthropic2-discovery-ownership.test.ts`.
-
-Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Pool 2 discovery uses the [instance credential ownership contract](providers/anthropic-account-pool.md#discovery-credential-ownership).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation supplies no selected-runtime proof to catalog discovery or publication. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).

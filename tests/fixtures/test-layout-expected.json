@@ -1,4 +1,5 @@
 {
+  "oauth-anthropic-instance-multiprocess.test.ts": "oauth",
   "anthropic2-discovery-ownership.test.ts": "oauth",
   "anthropic-instance.test.ts": "providers", "anthropic-instance-pool-config.test.ts": "config", "oauth-anthropic-instance-registration.test.ts": "oauth", "oauth-anthropic-instance-refresh.test.ts": "oauth",
   "claude-picker-upload.test.ts": "claude-integration",

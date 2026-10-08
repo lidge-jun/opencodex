@@ -28,6 +28,17 @@ Regression coverage: `tests/providers/anthropic-instance.test.ts`,
 `tests/oauth/oauth-anthropic-instance-registration.test.ts`, and
 `tests/oauth/oauth-anthropic-instance-refresh.test.ts`.
 
+## Discovery credential ownership
+
+`src/oauth/model-discovery-auth.ts` checks the configured Pool 2 row before a
+catalog resolver observes or refreshes its OAuth credential. Observed gathers use
+their captured provider snapshot. `src/oauth/index.ts` applies the same policy
+when building the final models request; Pool 2 OAuth authorization is scoped to
+the first-party API destination. Connection probes capture the provider row and
+recheck live ownership before sending. A custom key provider named `anthropic2`
+continues to use its own configured key, including legacy rows with no auth mode.
+Coverage: `tests/oauth/anthropic2-discovery-ownership.test.ts`.
+
 ## Anthropic account pause
 
 Anthropic OAuth shares `ProviderAccount.paused` in the protected auth store with generic
