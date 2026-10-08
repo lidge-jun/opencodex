@@ -156,7 +156,7 @@ describe("Codex catalog sync hardening", () => {
         nativeEntry("gpt-5.6-luna", 6),
         nativeEntry("gpt-5.3-codex", 104),   // legacy -> drop
         nativeEntry("gpt-5.2", 104),          // legacy -> drop
-        nativeEntry("codex-auto-review", 104),// legacy -> drop
+        nativeEntry("codex-auto-review", 104),// control plane -> keep hidden
         nativeEntry("user-native", 10),       // user-added -> keep
       ],
     }, null, 2) + "\n");
@@ -187,7 +187,8 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("user-native");           // genuine user native preserved
     expect(slugs).not.toContain("gpt-5.3-codex");      // legacy dropped
     expect(slugs).not.toContain("gpt-5.2");            // legacy dropped
-    expect(slugs).not.toContain("codex-auto-review");  // legacy dropped
+    expect(slugs).toContain("codex-auto-review");      // control plane retained
+    expect(JSON.parse(readFileSync(catalogPath, "utf8")).models.find((row: { slug: string }) => row.slug === "codex-auto-review").visibility).toBe("hide");
   });
 
   test.each(["bare-cache", "account-cache", "account-catalog"])(

@@ -1,3 +1,4 @@
+import { isCodexControlPlaneModel } from "../control-plane-models";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -385,7 +386,7 @@ export function clampEntryToCodexSupportedEfforts(
   entry: RawEntry,
   supported: ReadonlySet<string> | null,
 ): void {
-  if (!supported) return;
+  if (!supported || isCodexControlPlaneModel(entry.slug)) return;
   const levels = Array.isArray(entry.supported_reasoning_levels)
     ? entry.supported_reasoning_levels as Array<{ effort?: string }>
     : null;

@@ -1,6 +1,6 @@
 # Runtime
 
-The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Codex control-plane ids are defined in the dependency-free `src/codex/control-plane-models.ts`; `src/router.ts` routes these exact ids unchanged to canonical OpenAI, retaining the existing error when no OpenAI provider is enabled. They do not widen the public native roster.
 
 ## Resolved static model policy
 

@@ -1,3 +1,5 @@
+import { isCodexControlPlaneModel } from "../control-plane-models";
+import { withCodexControlPlaneRows } from "./control-plane";
 import { CODEX_REASONING_LEVELS, type CodexReasoningLevel } from "../../reasoning-effort";
 import { clearModelCache } from "../model-cache";
 import { routedSlug, slugEquivalenceKey } from "../../providers/slug-codec";
@@ -194,7 +196,7 @@ export function buildCatalogEntriesFromObservedState({
   const comboPublicSlugs = new Set(goModels
     .filter(model => model.provider === COMBO_NAMESPACE)
     .map(catalogModelSlug));
-  for (const slug of gptSlugs) {
+  for (const slug of gptSlugs.filter(slug => !isCodexControlPlaneModel(slug))) {
     const native = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, new Set(), openaiContextCap);
     if (rank.has(slug)) native.priority = rank.get(slug)!;
     nativeEntries.push(native);
@@ -224,7 +226,7 @@ export function buildCatalogEntriesFromObservedState({
     const selectorNativeSlugs = accountNativeSlugsBySelector?.get(selector)
       ?? accountNativeSlugs
       ?? gptSlugs;
-    const accountNativeEntries = selectorNativeSlugs.filter(slug => slug !== NATIVE_RESERVE_MODEL).map(slug => (
+    const accountNativeEntries = selectorNativeSlugs.filter(slug => slug !== NATIVE_RESERVE_MODEL && !isCodexControlPlaneModel(slug)).map(slug => (
       nativeEntriesBySlug.get(slug)
         ?? deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, new Set(), openaiContextCap)
     ));
@@ -306,10 +308,10 @@ export function buildCatalogEntriesFromObservedState({
       delete entry.prefer_websockets;
     }
   }
-  return applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled, {
+  return withCodexControlPlaneRows(applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled, {
     keepNativeChatGptOnV1,
     preserveDefaultMultiAgentVersion: isReserveCatalogProjection,
-  });
+  }), template ? [template] : [], gptSlugs.length > 0, wsEnabled);
 }
 
 export function resetCatalogRuntimeStateForTests(): void {
@@ -409,12 +411,12 @@ export function mergeCatalogModelsWithNativeRecovery(
 ): RawEntry[] {
   const merged = [...primaryCatalogModels];
   const recoveredNativeSlugs = new Set(primaryCatalogModels.flatMap(entry => {
-    const slug = recoverableNativeSlug(entry);
+    const slug = isCodexControlPlaneModel(entry.slug) ? String(entry.slug) : recoverableNativeSlug(entry);
     return slug === null ? [] : [slug];
   }));
   for (const source of nativeRecoverySources) {
     for (const entry of source) {
-      const slug = recoverableNativeSlug(entry);
+      const slug = isCodexControlPlaneModel(entry.slug) ? String(entry.slug) : recoverableNativeSlug(entry);
       if (slug === null || recoveredNativeSlugs.has(slug)) continue;
       merged.push(structuredClone(entry) as RawEntry);
       recoveredNativeSlugs.add(slug);
@@ -460,6 +462,7 @@ export function applyFullModelPickerOrder(entries: RawEntry[], order: readonly s
   if (!pickerOrder.some(slug => !slug.includes("/"))) return;
   const rankOf = modelPickerRank(pickerOrder);
   for (const entry of entries) {
+    if (isCodexControlPlaneModel(entry.slug)) continue;
     const natural = entry[SPAWN_PRIORITY_FIELD] ?? entry.priority ?? 9;
     entry[SPAWN_PRIORITY_FIELD] = natural;
     entry.priority = rankOf(String(entry.slug)) ?? pickerOrder.length + Number(natural);
@@ -539,10 +542,12 @@ export function mergeCatalogEntriesFromObservedState({
   // Raw catalog rows contain nested arrays/objects that normalization mutates. Detach every row at
   // the observed-core boundary so callers can safely retain evidence objects or repeat the merge.
   const detachedCatalogModels = catalogModels
+    .filter(entry => !isCodexControlPlaneModel(entry.slug))
     .map(entry => restoreNativeDisplayName(structuredClone(entry) as RawEntry));
   const detachedBaselineCatalogModels = baselineCatalogModels
+    .filter(entry => !isCodexControlPlaneModel(entry.slug))
     .map(entry => restoreNativeDisplayName(structuredClone(entry) as RawEntry));
-  const detachedRoutedEntries = routedEntries.map(entry => structuredClone(entry) as RawEntry);
+  const detachedRoutedEntries = routedEntries.filter(entry => !isCodexControlPlaneModel(entry.slug)).map(entry => structuredClone(entry) as RawEntry);
   // Track this invocation's generated custom rows, not ownership markers read from disk.
   // Their builder already finalized exact native ladders and ordinary routed mock tiers.
   const freshCustomEntries = new Set(detachedRoutedEntries.filter(entry =>
@@ -948,7 +953,7 @@ export function mergeCatalogEntriesFromObservedState({
     delete entry.opencodex_catalog_kind;
     entry.opencodex_catalog_kind = kind;
   }
-  return versionedEntries;
+  return withCodexControlPlaneRows(versionedEntries, [...catalogModels, ...baselineCatalogModels, ...routedEntries], includeNativeOpenAi, wsEnabled);
 }
 
 /** Merge retained-sync rows using the process-observed Codex feature state. */
