@@ -341,7 +341,7 @@ catalog path calls it, and opencodex never creates, repairs, or removes a role f
 - The role name must equal a listed `*.toml` stem, which is also the path-traversal check. The
   target must be a regular file owned by the running user; the replacement is atomic and does
   not follow a symbolic link.
-- The same pick is mirrored into LazyCodex's `codex.agents.<role>.model`; that half belongs to
+- The same pick is mirrored into LazyCodex's `[codex].agents.<role>.model`; that half belongs to
   [client integrations](clients/integrations.md#omo-codex-lazycodex-role-models). The role file is written first
   and stands even when the mirror is skipped.
 

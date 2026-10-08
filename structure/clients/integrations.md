@@ -497,14 +497,14 @@ The shared atomic replacement publisher also identifies explicit Remote Workspac
 
 Separate from the `models.json` provider integration above, and only when `detectLazyCodex()`
 reports LazyCodex installed, `src/clients/omo-role-models.ts`
-mirrors a dashboard or `ocx agent roles set` pick into `codex.agents.<role>.model` of
+mirrors a dashboard or `ocx agent roles set` pick into `[codex].agents.<role>.model` of
 `~/.omo/omo.jsonc`, which LazyCodex 5.1.1 and later reads. The home is resolved the way omo
 resolves it: `HOME`, then `USERPROFILE`, then the OS home. This write has no ownership record,
 snapshot, or journal. It changes one value the user just chose and leaves every other key as it
 was, re-serialized with the file's indentation, line endings, and BOM.
 
 It never creates the file and never writes one it would damage: a missing file reports
-`absent`, a document that is not an object or whose `codex`, `codex.agents`, or role entry is
+`absent`, a document that is not an object or whose `[codex]`, `[codex].agents`, or role entry is
 not an object reports `invalid`, and a file containing any `//` or block comment reports
 `skipped_comments`, because re-serializing JSONC would drop those comments. The management
 response carries that status and the dashboard shows it; the role TOML write described in

@@ -665,7 +665,7 @@ press Save:
 - opencodex rewrites only the root `model = "..."` line of that role's file. The role's
   instructions, comments, and other keys are left exactly as they were. A role with no pin gets
   one added near the top of the file.
-- The same value is written to `codex.agents.<role>.model` in `~/.omo/omo.jsonc`, which
+- The same value is written to `[codex].agents.<role>.model` in `~/.omo/omo.jsonc`, which
   LazyCodex 5.1.1 and later reads. If that file does not exist it is not created. If it contains
   comments it is left untouched, because saving would remove them; the tab says so, and you can
   set the value there by hand. Symlinks and non-regular files are rejected; on macOS and Linux,
