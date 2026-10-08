@@ -341,6 +341,19 @@ For example, this applies a provider-wide concurrency cap and a stricter cap to 
 
 The concurrency slot stays occupied until the upstream request finishes, including the final streamed response bytes. Requests above the applicable provider and model limits wait in the pacing queue; when a slot is released, the next eligible request is admitted. Queue waiting does not consume the upstream response-header timeout.
 
+### Azure OpenAI context discovery
+
+For a base URL whose hostname ends in `.openai.azure.com`, missing context windows are filled
+from the bundled vendor metadata even when the provider has a custom name. Lookup uses known
+model ids, first exactly and then without regard to case, with Azure metadata checked before
+other vendor bundles. Reported limits and `modelContextWindows`/`contextWindow` retain
+precedence; `providerContextCaps` still clamps the result.
+
+The bundle ships with opencodex and is not fetched from Azure on each request. It describes
+model limits, not the capacity of a particular deployment. For a deployment alias such as
+`my-production-model`, or a deployment with a smaller limit, set `modelContextWindows` for
+that exact deployment id. Unknown aliases retain the ordinary fallback.
+
 ### What a provider save keeps
 
 `POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Eight of them record how one upstream behaves: `preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx` and `retryOnReset`.
@@ -1346,9 +1359,10 @@ upstream accept it; a wrong id fails at request time with the upstream error. Fr
 `ocx provider edit <name> --retain-models gemini-3.7-flash,other-id` (`-` clears).
 
 Preview GPT-5.6 fallback entries use the same mechanism. The OpenAI API-key preset seeds base and Pro
-ids with context `922000` and max input `922000`; OpenRouter seeds `openai/gpt-5.6-sol`,
-`openai/gpt-5.6-terra`, and `openai/gpt-5.6-luna` with context `922000`. Pool/Direct advertises
-`922000`; the synced catalog advertises `max` while keeping `xhigh` distinct.
+ids with context `1050000` and max input `922000`; OpenRouter seeds `openai/gpt-5.6-sol`,
+`openai/gpt-5.6-terra`, and `openai/gpt-5.6-luna` with context `1050000`. Native Pool/Direct
+windows follow the [reserved OpenAI provider policy](#reserved-openai-providers). The synced
+catalog advertises `max` while keeping `xhigh` distinct.
 
 ```json
 {

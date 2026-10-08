@@ -1,4 +1,5 @@
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
+import { COST_VENDOR_PRIORITY, getModelMetadata, getModelMetadataCaseInsensitive } from "../generated/model-metadata";
 import { cloneFastWire } from "./fastwire";
 import { resolveModelPolicy } from "./resolved-model-policy";
 import {
@@ -647,6 +648,29 @@ export function deriveJawcodeAliases(): Record<string, string> {
 export function shouldCaseFoldMetadataModelId(providerId: string): boolean {
   const entry = PROVIDER_REGISTRY.find(row => row.id === providerId);
   return entry?.metadataModelIdNormalize === "case-insensitive";
+}
+
+const AZURE_VENDOR_METADATA_PRIORITY = [
+  "azure-openai",
+  ...COST_VENDOR_PRIORITY.filter(provider => provider !== "azure-openai"),
+];
+
+/**
+ * Fill missing Azure context metadata by destination and known model id. Custom provider
+ * names miss PROVIDER_ALIASES; arbitrary deployment aliases still need explicit limits.
+ */
+export function azureVendorContextWindow(baseUrl: string | undefined, modelId: string): number | undefined {
+  if (!baseUrl) return undefined;
+  try {
+    if (!new URL(baseUrl).hostname.endsWith(".openai.azure.com")) return undefined;
+  } catch {
+    return undefined;
+  }
+  for (const provider of AZURE_VENDOR_METADATA_PRIORITY) {
+    const meta = getModelMetadata(provider, modelId) ?? getModelMetadataCaseInsensitive(provider, modelId);
+    if (typeof meta?.contextWindow === "number" && meta.contextWindow > 0) return meta.contextWindow;
+  }
+  return undefined;
 }
 
 function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {

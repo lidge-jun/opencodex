@@ -35,7 +35,7 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
-import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
+import { azureVendorContextWindow, enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import {
   captureFastPolicyAuthority,
   fastPolicyForModel,
@@ -319,6 +319,7 @@ export function applyProviderConfigHints(
     ...(typeof model.maxInputTokens === "number" && model.maxInputTokens > 0 ? { maxInputTokens: model.maxInputTokens } : {}),
   });
   const hintedWindow = projectedLimits.contextWindow
+    ?? azureVendorContextWindow(prov.baseUrl, model.id)
     ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined);
   const hinted = {
     ...modelWithoutServiceTier,

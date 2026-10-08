@@ -41,7 +41,7 @@ diagnostic/catalog provenance and must be resolved before policy capture. Exact 
 input-modality declarations outrank the registry/config modality map; an empty declaration
 falls through to that map.
 Anthropic numeric point releases inherit the nearest configured family context window before the
-provider-wide fallback. Exact model output limits precede the provider default output limit.
+provider-wide fallback. Exact model output limits precede the provider default output limit. When neither static policy nor discovery supplies a context window, an Azure OpenAI destination (`*.openai.azure.com`) receives a fallback from generated vendor metadata: Azure first, then the existing vendor priority, with exact and case-insensitive model-id lookup. Reported/configured limits retain precedence and provider context caps still clamp the result. Arbitrary deployment aliases receive no inferred model-family limit.
 
 `src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:
 
