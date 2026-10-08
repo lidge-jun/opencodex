@@ -54,6 +54,10 @@ const ANTHROPIC_WIRE_MODELS: Record<string, ReadonlySet<string>> = {
     // provider defaults to OpenAI-compatible; direct Chat returns 500 and direct
     // Messages reaches the session check (#4847).
     "union-alpha",
+    // Zen Go answers both /chat/completions and /responses for claude-haiku-5-5
+    // with 400 ModelProtocolUnsupported, so it is Anthropic-wire-only on this
+    // gateway like the minimax entries above (probed 2026-10-08).
+    "claude-haiku-5-5",
   ]),
 };
 

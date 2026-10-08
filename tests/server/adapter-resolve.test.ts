@@ -65,6 +65,21 @@ describe("per-model wire override (#404)", () => {
       .toBe("openai-chat");
   });
 
+  test("hard-pins OpenCode Go Haiku 5.5 to the Anthropic wire without changing siblings", () => {
+    const provider = gateway();
+
+    expect(resolveWireProtocolOverride("opencode-go", "claude-haiku-5-5", provider).adapter)
+      .toBe("anthropic");
+    expect(resolveWireProtocolOverride("opencode-go", "glm-5.2", provider).adapter)
+      .toBe("openai-chat");
+    // A configured override must not displace the pin: modelAdapters cannot
+    // name the anthropic wire, so without the pin there is no user-side fix.
+    const pinned = resolveWireProtocolOverride("opencode-go", "claude-haiku-5-5", gateway({
+      modelAdapters: { "claude-haiku-5-5": "openai-chat" },
+    }));
+    expect(pinned.adapter).toBe("anthropic");
+  });
+
   test("pins only Command Code API-key Claude ids, including mixed-case ids", () => {
     const provider = gateway({
       baseUrl: "https://api.commandcode.ai/provider/v1",
