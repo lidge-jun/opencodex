@@ -458,8 +458,8 @@ Acknowledging a report is not the same as triaging it, and no first-response tar
 
 ## Development
 
-Source development requires the `bun` CLI on your `PATH`. This is separate from the published npm
-package's bundled Bun runtime, which is used only by installed `ocx` commands.
+Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own
+Bun runtime for installed `ocx` commands; package scripts may also resolve Bun through that bundled dependency.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

@@ -12,7 +12,7 @@ The runner pin avoids 1.4.2's multi-file `bun test --isolate` preload reload seg
 Test jobs, including single-file development-version validation, select `test-runner`. They also build dashboard fixtures; `gates` uploads a dashboard preview and checks release-helper syntax on that pin.
 Release packaging, Docker, installed-artifact and service smoke jobs, desktop shell and widget preparation use `runtime`. Shipped binaries compile through `process.execPath` in `scripts/build-standalone.ts` and `desktop/scripts/prepare-sidecar.ts` on the runtime pin.
 
-`scripts/lib/test-runner-bun.ts` selects the test pin for `scripts/test.ts`, `scripts/release.ts` preflight and provider-option gates: matching current Bun first, then a version-checked `OCX_TEST_RUNNER_BUN`, then PATH outside node_modules and `~/.bun/bin`. Missing or mismatched binaries fail with install guidance, without downloading; package-script PATH shadowing cannot select the shipped runtime for tests. Rejoin only after an upstream fix and green unified `lane=all` proof; then remove the runner pin, resolver and CI role split.
+`scripts/lib/test-runner-bun.ts` selects the test pin for `scripts/test.ts`, `scripts/release.ts` preflight, `scripts/test-layout/verify.ts`, provider-option gates and GUI package tests via `scripts/test-with-pinned-bun.ts`: matching current Bun first, then a version-checked `OCX_TEST_RUNNER_BUN`, then PATH outside node_modules and `~/.bun/bin`. Missing or mismatched binaries fail with install guidance, without downloading; package-script PATH shadowing cannot select the shipped runtime for tests. Rejoin only after an upstream fix and green unified `lane=all` proof; then remove the runner pin, resolver and CI role split.
 
 ## Resolved static model policy
 

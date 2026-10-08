@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolveTestRunnerBun, type TestRunnerBunDeps } from "../../scripts/lib/test-runner-bun";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 function fixture(overrides: Partial<TestRunnerBunDeps> = {}): TestRunnerBunDeps {
   return {
@@ -110,5 +115,33 @@ describe("pinned test runner Bun", () => {
 
   test("rejects an unpinned version before executing probes", () => {
     expect(() => resolveTestRunnerBun(fixture({ pin: "^1.4.0" }))).toThrow("exact Bun version");
+  });
+
+  test("GUI package uses the pinned wrapper, preserving cwd, filters and failures", () => {
+    const guiPackage = JSON.parse(readFileSync(repoPath("gui", "package.json"), "utf8"));
+    expect(guiPackage.scripts.test).toBe("bun ../scripts/test-with-pinned-bun.ts tests");
+    const root = mkdtempSync(join(tmpdir(), "ocx-gui-test-runner-"));
+    const file = join(root, "runner.test.ts");
+    const cwd = repoPath("gui");
+    writeFileSync(file, `import { expect, test } from "bun:test";
+test("selected", () => {
+  expect(Bun.version).toBe("1.4.0");
+  expect(process.cwd()).toBe(${JSON.stringify(cwd)});
+});
+test("excluded failure", () => { throw new Error("fixture failure"); });
+`);
+    try {
+      const run = (filter: string) => Bun.spawnSync([
+        process.execPath, repoPath("scripts", "test-with-pinned-bun.ts"), "--isolate", file, "-t", filter,
+      ], { cwd, stdout: "pipe", stderr: "pipe" });
+      const pass = run("^selected$");
+      expect(pass.exitCode).toBe(0);
+      expect(pass.stderr.toString()).toContain("1 pass");
+      const fail = run("^excluded failure$");
+      expect(fail.exitCode).not.toBe(0);
+      expect(fail.stderr.toString()).toContain("fixture failure");
+    } finally {
+      removeTreeWithRetry(root);
+    }
   });
 });

@@ -437,8 +437,8 @@ CLI／設定／管理 API 參考——由 [`docs-site/`](../docs-site) 建置，
 
 ## 開發
 
-從原始碼開發需要 `PATH` 上有 `bun` CLI。這與已發布 npm
-套件打包的 Bun 執行環境不同，後者只給已安裝的 `ocx` 命令使用。
+從原始碼開發需要 `PATH` 上有 `bun` CLI。已發布的 npm 套件為已安裝的 `ocx` 命令打包自己的
+Bun 執行環境；套件指令碼也可能透過這個打包依賴解析 Bun。
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
