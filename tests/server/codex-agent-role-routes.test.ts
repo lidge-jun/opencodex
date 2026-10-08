@@ -58,7 +58,7 @@ function put(role: string, model: unknown) {
 
 describe("/api/codex-agent-roles", () => {
   test("round-trips a role model through the TOML and omo.jsonc", async () => {
-    writeFileSync(join(root, "home", ".omo", "omo.jsonc"), '{ "codex": {} }\n');
+    writeFileSync(join(root, "home", ".omo", "omo.jsonc"), '{ "[codex]": {} }\n');
     expect((await call("/api/codex-agent-roles")).body).toEqual({
       lazycodex: DETECTED,
       omoJsonc: { state: "present" },
@@ -74,7 +74,7 @@ describe("/api/codex-agent-roles", () => {
   test("without LazyCodex it lists nothing, writes nothing, and never opens omo.jsonc", async () => {
     writeFileSync(join(root, "codex", "config.toml"), "");
     const omoPath = join(root, "home", ".omo", "omo.jsonc");
-    writeFileSync(omoPath, '{ "codex": {} }\n');
+    writeFileSync(omoPath, '{ "[codex]": {} }\n');
     const nativeRead = fs.readFileSync;
     const reads: string[] = [];
     const spy = spyOn(fs, "readFileSync").mockImplementation(((path: fs.PathOrFileDescriptor, options?: unknown) => {
@@ -95,7 +95,7 @@ describe("/api/codex-agent-roles", () => {
     }
     expect(reads).not.toContain(omoPath);
     expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toBe(ROLE);
-    expect(readFileSync(omoPath, "utf8")).toBe('{ "codex": {} }\n');
+    expect(readFileSync(omoPath, "utf8")).toBe('{ "[codex]": {} }\n');
   });
 
   test("reports an absent or commented omo.jsonc without writing it", async () => {
@@ -120,7 +120,7 @@ describe("/api/codex-agent-roles", () => {
 
   test("an unreadable omo.jsonc still lists the roles", async () => {
     const omoPath = join(root, "home", ".omo", "omo.jsonc");
-    writeFileSync(omoPath, '{ "codex": {} }\n');
+    writeFileSync(omoPath, '{ "[codex]": {} }\n');
     const nativeOpen = fs.openSync;
     const spy = spyOn(fs, "openSync").mockImplementation(((path, flags, mode) => {
       if (path === omoPath) throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
