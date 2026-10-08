@@ -108,16 +108,13 @@ export default function ApiKeysListPanel({
 
   // The same gate RemoteLink applies to its local-pairing offer: only the
   // literal same-origin loopback transport the standalone grant mint accepts.
-  // Loopback aliases instead point to the literal address the grant mint accepts.
+  // An alias URL does not reveal the configured bind host, so never invent
+  // a recovery URL from it; keep the generic denial guidance.
   const localPairingTarget = standaloneApiTargets(apiBase).shared;
   const canPairLocally = isStandaloneRuntime()
     && window.location.protocol === "http:"
     && ["127.0.0.1", "[::1]"].includes(window.location.hostname)
     && localPairingTarget.serverOrigin === window.location.origin;
-  const loopbackAlias = isStandaloneRuntime() && window.location.protocol === "http:"
-    && (window.location.hostname === "localhost" || window.location.hostname.endsWith(".localhost"))
-    && localPairingTarget.serverOrigin === window.location.origin;
-  const literalLoopbackUrl = `http://127.0.0.1${window.location.port ? `:${window.location.port}` : ""}`;
 
   const toggleReveal = async (k: ApiKeyEntry) => {
     const generation = disclosure.generation.current;
@@ -216,9 +213,6 @@ export default function ApiKeysListPanel({
       {revealDeniedId !== null && (
         <>
           <Notice tone="warn">{t("api.key.revealDenied")}</Notice>
-          {loopbackAlias && <Notice tone="warn">
-            {t("api.key.pairAtLiteralLoopback")} <a href={literalLoopbackUrl}>{literalLoopbackUrl}</a>
-          </Notice>}
           {/* Pairing authorizes the browser, but never discloses a value itself. */}
           {canPairLocally && (
             <ConnectPairingForm

@@ -157,6 +157,28 @@ OpenCodex demandent à Codex de transmettre les remplacements à `spawn_agent` ;
 
 Le plan de gestion du tableau de bord est séparé du trafic modèle direct client→hub. **Connexion → Clés API** affiche les rotations en attente, montre le secret de remplacement une seule fois et exige une validation ou une annulation explicite. La déconnexion du navigateur n'invalide que la session courante. L'usage connecté vient du hub filtré par `apiKeyId`; l'usage déconnecté est local, sans réplication.
 
+### Afficher une clé API enregistrée
+
+L'affichage de la valeur complète d'une clé enregistrée exige une session du tableau de bord
+créée par un appairage explicite ou une identité Tailscale de confiance. Une session locale
+créée automatiquement peut lire la liste masquée, mais ne peut pas révéler les valeurs enregistrées.
+Le jeton administrateur ne peut pas non plus appeler cette opération réservée aux sessions.
+Utilisez le processus d'appairage Remote Hub existant ou une connexion Tailscale de confiance, si disponible.
+
+Le formulaire d'appairage local est proposé uniquement sur un tableau de bord autonome de même origine,
+ouvert en HTTP à l'adresse IP littérale `127.0.0.1` ou `[::1]`. L'origine doit correspondre à l'adresse
+IP de bouclage configurée pour l'écoute du serveur. Depuis `localhost` ou un alias, vérifiez cette adresse :
+rouvrez `http://127.0.0.1:<port>` pour une écoute sur `127.0.0.1`, ou `http://[::1]:<port>` pour
+une écoute sur `::1`, puis effectuez l'appairage. Un serveur dont le hostname est `localhost` n'a
+aucune origine admissible pour l'appairage local. Le tableau de bord ne peut pas déduire l'adresse
+d'écoute d'une URL avec un alias : il affiche donc le refus général sans suggérer une autre URL.
+
+Après l'appairage, cliquez à nouveau sur la clé pour demander sa valeur. L'appairage seul ne révèle aucune clé.
+Les valeurs affichées et l'état de copie sont effacés lorsque la session partagée est supprimée ou remplacée,
+au début d'un appairage, en quittant ce panneau, en masquant l'onglet ou la fenêtre de l'application,
+ou en changeant de serveur. Cela inclut les valeurs des clés créées ou remplacées, affichées une seule fois.
+Si la session autorisée expire ou est révoquée, effectuez à nouveau l'appairage.
+
 La garantie de remplacement lors d'une création de sous-agent s'applique au texte de consignes v2 **intégré**.
 Un `injectionPrompt` personnalisé remplace entièrement ce texte et doit contenir les espaces réservés
 `{{model}}` et `{{effort}}` — et facultativement `{{roster}}` — sans quoi ces valeurs n'apparaîtront pas dans

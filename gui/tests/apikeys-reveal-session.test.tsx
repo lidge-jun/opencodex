@@ -321,16 +321,16 @@ test("host hide prevents a late clipboard completion from restoring feedback", a
   expect(container.querySelector(".awi-keylist-copy")?.textContent).toBe("Copy");
 });
 
-for (const hostname of ["localhost", "dashboard.localhost"]) {
-  test(hostname + " denial points to literal loopback pairing while withholding the form", async () => {
+for (const hostname of ["localhost", "dashboard.localhost"]) for (const apiBase of ["", origin, "http://[::1]:10100"]) {
+  test(hostname + " denial at " + (apiBase || "same origin") + " omits an unproven pairing URL and keeps generic guidance", async () => {
     win.location.href = `http://${hostname}:10100/`;
-    configureApiTargets(standaloneApiTargets(""));
-    await render({ onReveal: async () => ({ ok: false, kind: "denied" }) });
+    configureApiTargets(standaloneApiTargets(apiBase));
+    await render({ apiBase, onReveal: async () => ({ ok: false, kind: "denied" }) });
     await click();
     expect(container.querySelector("#connect-pairing-code")).toBeNull();
-    expect(container.textContent).toContain("Reopen the dashboard");
-    expect(container.querySelector<HTMLAnchorElement>('a[href="http://127.0.0.1:10100"]')?.href)
-      .toBe("http://127.0.0.1:10100/");
+    expect(container.textContent).toContain("operator-authorized session");
+    expect(container.textContent).not.toContain("Reopen the dashboard");
+    expect(container.querySelector('a[href^="http://127.0.0.1"], a[href^="http://[::1]"]')).toBeNull();
   });
 }
 
@@ -544,3 +544,16 @@ test("a delayed first create inventory cannot replace a newer create inventory",
   const cached = readSessionListCacheEntry<{ keys: { name: string }[] }>("ocx.apikeys.list.v2:");
   expect(cached?.data.keys.map(row => row.name)).toEqual(["alpha", "first created", "second created"]);
 });
+
+for (const literalOrigin of [origin, "http://[::1]:10100"]) {
+  test("same-origin literal loopback retains its pairing form: " + literalOrigin, async () => {
+    win.location.href = literalOrigin;
+    configureApiTargets(standaloneApiTargets(""));
+    await render({ onReveal: async () => ({ ok: false, kind: "denied" }) });
+    await click();
+    expect(container.querySelector("#connect-pairing-code")).not.toBeNull();
+    expect(container.querySelector(".connect-pairing pre")?.textContent)
+      .toBe(`ocx gui pair --origin "${literalOrigin}"`);
+    expect(container.querySelector("a")).toBeNull();
+  });
+}

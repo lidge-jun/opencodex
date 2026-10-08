@@ -2815,7 +2815,6 @@ export const vi: Record<TKey, string> = {
   "api.key.revealFailed": "Không tải được toàn bộ khóa.",
   "api.key.revealDenied": "Hiển thị khóa đã lưu yêu cầu phiên được người vận hành cấp quyền. Ghép nối trình duyệt này để tiếp tục, hoặc đăng nhập qua danh tính Tailscale tin cậy.",
   "api.key.mutationHidden": "Khóa đã được tạo hoặc quá trình xoay khóa đã bắt đầu, nhưng giá trị chỉ hiển thị một lần đã bị ẩn vì phiên hoặc màn hình đã thay đổi.",
-  "api.key.pairAtLiteralLoopback": "Mở lại bảng điều khiển tại địa chỉ IP loopback này và ghép nối trình duyệt tại đó:",
   "api.key.copyFailedShort": "Không sao chép được. Hãy chọn key và sao chép thủ công.",
   "api.key.deleteRowAria": "Xóa {name}",
   "api.key.deleteShort": "Xóa",

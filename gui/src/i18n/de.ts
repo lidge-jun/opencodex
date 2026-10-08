@@ -2285,7 +2285,6 @@ export const de: Record<TKey, string> = {
   "api.key.revealFailed": "Der vollständige Schlüssel konnte nicht geladen werden.",
   "api.key.revealDenied": "Das Anzeigen eines gespeicherten Schlüssels erfordert eine vom Betreiber autorisierte Sitzung. Koppeln Sie diesen Browser, um fortzufahren, oder melden Sie sich über eine vertrauenswürdige Tailscale-Identität an.",
   "api.key.mutationHidden": "Der Schlüssel wurde erstellt oder seine Rotation gestartet, aber der einmalige Wert wurde ausgeblendet, weil sich die Sitzung oder Ansicht geändert hat.",
-  "api.key.pairAtLiteralLoopback": "Öffnen Sie das Dashboard unter dieser Loopback-IP-Adresse erneut und koppeln Sie dort diesen Browser:",
   "api.key.copyFailedShort": "Kopieren fehlgeschlagen. Markiere den Schlüssel und kopiere ihn manuell.",
   "api.key.deleteRowAria": "{name} löschen",
   "api.key.deleteShort": "Löschen",
