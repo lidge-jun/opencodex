@@ -75,6 +75,9 @@ Terms used in every document of this unit:
 
 [050](050_acceptance_map.md) maps every acceptance scenario and release blocker to a phase and test file.
 Implementation workers are `gpt-6.1-sol` subagents (owner request); main integrates, commits and owns git.
+During wp4 the ChatGPT account began refusing every Sol model name for subagents
+(`gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`: "not supported when using Codex with a ChatGPT
+account"), so wp4's workers ran on the session default model; Sol was retried for each new lane.
 
 All implementation lands on one branch, `codex/anthropic2-account-pool`, and ships as one PR so B is
 never exposed half-built. Work inside a phase is split across workers with disjoint file ownership.

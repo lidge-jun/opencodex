@@ -113,7 +113,7 @@ W5 helper settings/UI: `src/server/management/config-routes.ts`,
 `claude-code-types.ts`, `claude-code-save.ts`, `claude-code-sidecar.ts`,
 `claude-code-sections.tsx`.
 Tests: existing Claude sidecar override/serializer tests; new
-`tests/server/sidecar-anthropic-instance-settings.test.ts` and
+`tests/server/management-sidecar-anthropic-instance.test.ts` and
 `gui/tests/anthropic-instance-helper-controls.test.tsx`.
 W5 sends translation key requirements to main/W4 and never edits locale files.
 

@@ -91,8 +91,10 @@ web search defaults to OpenAI and vision keeps its automatic order.
 Only an Anthropic family result consults a pool. `resolveAnthropicHelperInstance` in
 `src/sidecar/auth.ts` takes the explicit `anthropicInstance` of `webSearchSidecar`,
 `visionSidecar` or the matching `claudeCode` override, then the parent request's
-builtin instance, resolved through `configuredAnthropicInstance` so a custom unmarked
-`anthropic2` row is never inherited as Pool 2. A target is available when it is
+builtin instance, resolved through `inheritedAnthropicInstance`: a present custom unmarked
+`anthropic2` row is never inherited as Pool 2, while a parent pool whose row was removed or
+disabled mid-request is still inherited, so its helper refuses instead of discovering
+another pool. A target is available when it is
 configured and holds any account that is neither paused nor awaiting reauth; which
 account sends is decided at snapshot time. An explicit or inherited target that is
 unavailable raises `AnthropicHelperUnavailableError` (`anthropic_helper_unavailable`).
@@ -172,7 +174,7 @@ Regression coverage: `tests/vision/vision-anthropic-instance-sidecar.test.ts`,
 `tests/web-search/web-search-anthropic-instance.test.ts`,
 `tests/providers/provider-anthropic-instance-quota.test.ts`,
 `tests/server/anthropic2-management.test.ts`,
-`tests/server/sidecar-anthropic-instance-settings.test.ts`,
+`tests/server/management-sidecar-anthropic-instance.test.ts`,
 `tests/cli/cli-anthropic2-account.test.ts`, `tests/codex-integration/anthropic2-catalog.test.ts`,
 `tests/usage/anthropic2-usage-attribution.test.ts`, `gui/tests/anthropic2-provider-mark.test.ts`
 and `gui/tests/anthropic-instance-helper-controls.test.tsx`.

@@ -80,6 +80,11 @@ UUID each physical send carried). No suite is copied with a string replace.
   This establishes the narrow old-store compatibility check, not supported in-place
   downgrade with active B. Downgrade instructions retain stop/backup/remove-B-config
   requirements and never move or delete A credentials.
+- The diagnostic workflow (`.github/workflows/anthropic2-contract-diagnostic.yml`), its old-version
+  fixture (`tests/fixtures/anthropic-instance-old-version.ts`) and the dashboard capture scripts
+  (`scripts/ci/anthropic2-gui-capture/`) targeted only this branch and were removed before merge;
+  they remain at `6921271276`. The wp4 helper/surface suites and GUI suites passed there in hosted run
+  37797569391, which also produced the PR screenshots (published on `pr-assets` at `50b1da0832`).
 - Section 9 live-account smoke: needs separate owner approval and real accounts; not run.
 
 ## Release blockers (PRD §11) → evidence

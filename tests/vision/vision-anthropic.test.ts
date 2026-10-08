@@ -377,6 +377,7 @@ describe("Anthropic vision planning and management config", () => {
         enabled: true,
         model: "claude-sonnet-5",
         backend: "anthropic",
+        anthropicPool: { backend: "anthropic", mixed: false, available: [] },
         reasoning: "low",
         maxDescriptionsPerTurn: 4,
         timeoutMs: 45_000,
@@ -389,11 +390,16 @@ describe("Anthropic vision planning and management config", () => {
         config,
       );
       const getBody = await get!.json() as Record<string, any>;
-      expect(getBody.webSearch).toEqual({ enabled: true, model: "claude-haiku-4-5", backend: "anthropic", streamRoutedModelOutput: false });
+      // No provider is configured, so the Pool options report Anthropic with no usable pool.
+      expect(getBody.webSearch).toEqual({
+        enabled: true, model: "claude-haiku-4-5", backend: "anthropic", streamRoutedModelOutput: false,
+        anthropicPool: { backend: "anthropic", mixed: false, available: [] },
+      });
       expect(getBody.vision).toEqual({
         enabled: true,
         model: "claude-sonnet-5",
         backend: "anthropic",
+        anthropicPool: { backend: "anthropic", mixed: false, available: [] },
         reasoning: "low",
         maxDescriptionsPerTurn: 4,
         timeoutMs: 45_000,
