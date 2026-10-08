@@ -764,8 +764,10 @@ client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.
 it does not consult that variable. An override this integration honoured but the
 client ignored would make Apply report success at a path Command Code never opens, so
 the path is always `~/.commandcode/providers.json`.
-On Windows, the integration follows the same HOME-then-USERPROFILE order as the
-client, so a HOME set by Git for Windows or MSYS2 is honoured.
+On Windows with the default home, the integration uses `HOME ?? USERPROFILE`
+only when the selected value is nonblank and Windows-absolute; otherwise it uses
+`homedir()`. A separately supplied home is preserved. A `HOME` set by Git for
+Windows or MSYS2 is therefore honoured only when it passes those checks.
 
 Paste the key yourself if you later move the provider off loopback: Command Code
 stores keys in `~/.commandcode/auth.json` (via `/connect`), not in `providers.json`.
