@@ -44,8 +44,8 @@ replace it. `reportDispatchSends` verifies shared-ledger ownership and consumes 
 Native Chat combo children carry the same exact permit to their physical-send boundary.
 Reset-only generic combo helpers report their named prepaid receipt too, without changing
 the selected retry cap; compaction reconciliation therefore does not count that source again.
-Numeric `used` updates and unnamed, foreign, released or already-reported permits charge actual
-sends without consuming another reservation. Extra retries remain full charges. Reports may arrive
+Without enforced spend, numeric `used` updates and unnamed, foreign, released or already-reported permits charge
+sends without consuming another reservation. Enforced spend accepts only claimed physical starts; extra retries remain full charges. Reports may arrive
 out of reservation order; no FIFO ordering is required. An adapter
 that owns its transport — Kiro's reset ladder, Cursor's transport ladder, or Devin's bounded
 pre-output stated-reset replay — reserves once per physical send instead, so no reporter ever
@@ -54,7 +54,7 @@ arrives. Those ladders are handed
 through `pendingHopPermit` on the adapter's first reservation and closes the booking through
 `permit.assumeCharge()`. The Antigravity fetch web-search path opts into `refundableAdapterDispatchBudget`:
 its booking stays refundable until executor invocation confirms it through `permit.use()` or
-`permit.assumeCharge()`, and failed admission releases it. Other callers keep early settlement.
+`permit.assumeCharge()`, and failed admission releases it. Other callers keep early settlement only when spend enforcement is inactive; enforced permits stay refundable until execution.
 Letting both charge is how one physical send became two charges, and how a spent allowance answered a 429 with a synthetic error instead of the rate limit it was recovering
 from (#4709).
 
@@ -115,11 +115,10 @@ what those sends may cost, and it is the only bound here that survives a restart
 caller is `request-spend.ts`, installed on the execution budget at genuine ingress in `core.ts`
 and parked on the log context so `addFinalRequestLog` can settle it. Native Chat installs the same tracker before its independent physical-send ladder and charges it immediately before each dispatch, so that fast path cannot bypass root, identity or provider-pool ceilings.
 
-The Responses path books by observing the budget's own send counter rather than calling each dispatch site; Native Chat directly charges messages, tool definitions and the output ceiling. That counter moves exactly once per physical send — a reservation increments it, a
-refund decrements it, and an externally reported send settles against a booking already counted —
-so one ledger entry per increment is one entry per send, and a dispatch path added later cannot
-forget to book. The previous attempt at this wiring shipped the whole reserve/dispatch/settle
-vocabulary with no caller at all (#4707), which is the failure mode this shape rules out.
+Unconfigured requests preserve the legacy counter observer: reservations increment the send
+counter, refunds decrement it, and named reports reconcile prepaid sends. Enforced requests use
+the seed and physical-start protocol below across Responses, native Messages and native Chat.
+Each transport claims immediately before inference I/O and retains a producer through completion.
 
 Provider-pool accounting uses the canonical routed provider identity, not the mutable display label
 that may identify an OAuth account in request logs. Responses final-route normalization captures
@@ -132,60 +131,89 @@ target provider; child account labels and the logical `combo` label do not creat
 
 ### Historical pool continuity and rollback
 
-`src/lib/spend-pool-continuity.ts` accepts only explicit operator mappings from exact salted
-historical pool aliases to canonical provider IDs, configured in top-level `spendPoolAliases`.
-Current account rosters, label prefixes, short IDs, and renamed/deleted providers are not evidence
-for automatically assigning old balances. Old canonical-looking aliases also need explicit
-mapping when their positive history predates identity metadata. Zero-balance history needs none.
+`src/lib/spend-pool-continuity.ts` applies the current top-level `spendPoolAliases` mapping
+at read time. Keys are exact salted historical pool aliases; values are verified canonical
+provider IDs. Original scope counters and send targets stay unchanged. Every original bucket
+contributes once: either to its mapped group or, when unmapped and positive, to every candidate
+pool as conservative unbound history. A candidate's own unmapped canonical bucket participates
+in that overlay once, never again as a group member. Account rosters, label prefixes and a
+matching canonical hash do not establish historical ownership, including after restart.
 
-The ledger retains original scope balances and reservation targets. The canonical view adds each
-proven member once, keeping settled, reserved and unresolved buckets separate. Until ownership is
-verified, every positive unbound pool balance is also counted once against each candidate provider
-pool. The unbound balance stays in its original scope; a current provider name or matching salted
-alias does not establish ownership. This conservative overlay may restrict an otherwise unused
-provider pool until an operator supplies a verified mapping. Applying a mapping moves that balance
-from the overlay into its proven group without copying it. Explicit links can join previously
-canonical groups for a verified rename; an already redirected alias cannot be assigned to a
-different group. The complete proposed graph is validated atomically, so a verified merge that
-repeats existing member aliases is independent of salted-key order. A removed config entry never
-removes a journaled link. Group activity, last-seen time and exhaustion govern retention; unbound
-positive balances cannot be evicted. Identity evidence is bounded and retained even when dormant
-under-limit scopes are evicted.
-Each eviction pass aggregates pool groups once before choosing candidates. Retention uses the
-group's newest activity; capacity pressure still removes only the oldest eligible individual
-scope per pass, and every removal journals its original scope alias.
+Mappings are configuration, not journal metadata. Removing or changing a mapping changes the
+next read-time view; it does not rewrite original counters or persist an identity link.
+`src/lib/spend-pool-alias-validation.ts` owns the salted hash and validates that a configured
+provider P's own pool alias cannot map to another provider Q. Configuration reads and writes,
+provider-set changes, live reconfiguration and selected-provider admission enforce this rule.
+Validation reads an existing home salt without creating one. A malformed or conflicting mapping
+keeps existing ceilings and refuses applicable pool admission with `workflow_pool_history_unresolved`.
 
-Before a mapping authorizes admission, a v1 checkpoint durably carries both unchanged accounting
-and optional salted `poolContinuity` metadata. No raw provider/account names are added to the
-journal. New reservations still use the routed canonical pool ID. Replays and compaction preserve
-the links; complete invalid metadata fails closed, including at the final line, and corruption is
-never compacted away. Unparseable torn final JSON keeps the existing conservative replay rule.
+Dormant unbound history expires only when its last activity is strictly before the configured
+retention cutoff. Capacity pressure cannot expire positive unknown history early. Live reservations
+and seed targets remain pinned, including zero-token targets. An ordinary v1 `drop` must persist
+before admission uses a reduced total; the overlay is then rebuilt before group eviction decisions.
+Mapped groups retain the existing active/exhausted protection and group-activity retention rules.
 
-With a configured pool ceiling, an invalid or conflicting mapping refuses admission. Unbound
-positive history alone does not block HTTP admission before a route is known; once a candidate
-pool is known, its reservation check includes the proven group and every unbound positive balance.
-The Responses pre-dispatch seam checks this even without a root ID, before passthrough transports
-that report sends afterwards. Its local refusal explains when unknown-owner history contributed,
-without exposing aliases or journal contents. A prepaid child excludes only its own open
-reservation, proven by its exact permit, shared send ledger and still-pending receipt. Proof is
-single-use; unrelated reservations and other proven pool groups remain counted. HTTP continuity
-refusals still record one rooted workflow event; rootless ones record none. It is a snapshot check,
-not a new atomic reservation for report-only transports: crossing sends, concurrent preflight
-admissions and retries reported afterwards retain their existing limitations. `workflow_pool_history_unresolved`
-identifies an invalid or conflicting identity-metadata refusal without disclosing aliases; storage
-or replay failures keep `workflow_spend_undurable`. Already-sent reports still book actual spend.
-Observe-only mode has no new token refusal, and root/identity accounting remains independent.
+New bookings use the existing `pool` hash domain for the canonical routed provider. Writers emit
+only ordinary v1 records and checkpoints, without `poolContinuity` metadata or a `pool-current`
+domain. Contract C is compatibility with the shipped 2.80.0 reader's own record interpretation:
+2.80.0 reads these counters, compacts them and expires them using its existing per-label rules.
+Downgrade does not preserve canonical cross-alias aggregation or promise the allowance 2.80.0
+would have computed for the same traffic without an upgrade. Keep the current journal and salt;
+restoring an older copy omits subsequent spend. Re-upgrade applies current configured mappings
+to the original balances that survived ordinary old-version retention. There is no launch fence,
+wrapper enrollment or reconciliation command. `tests/lib/spend-contract-c.test.ts` uses the complete
+frozen 2.80.0 reader in `tests/fixtures/spend-ledger-2-80-0.ts.txt` for this contract.
 
-Supported rollback retains/backports **both** canonical route attribution and the continuity-aware
-reader/writer, using the same journal, salt and verified bindings. Restoring an older journal or
-salt loses newer spend and is not a supported rollback. Unmodified older binaries are unsupported:
-they can read v1 counters but do not enforce the canonical aggregate, can introduce fresh account
-label pools, and can discard optional identity metadata during compaction. There is no automatic
-downgrade barrier and no unknown-record fence. If that unsupported write has happened, the current
-reader conservatively counts remaining unidentified positive balances against every candidate
-pool until the operator verifies their mappings. `tests/lib/spend-pool-continuity.test.ts` exercises
-this using the frozen pre-change reader,
-as well as exact aggregation, active/unresolved sends, retention, failures and rootless preflight.
+Unpublished experimental journals containing `pool-current` aliases or `poolContinuity` bindings
+are excluded from contract C, including later checkpoints that retain those opaque aliases. The
+reader ignores the deprecated bindings but preserves original balances and send targets as
+unbound history; it neither converts nor immediately deletes them. Ordinary durable retention
+applies. `tests/lib/spend-experimental-history.test.ts` covers replay, compaction and expiry.
+
+Compaction retains valid accounting even after a corrupt complete record. Configured admission
+remains refused while corruption is recorded in the live ledger; replay of the clean compacted
+journal restores enforcement, matching the shipped behavior. Complete final invalid JSON values
+such as `null` are corruption. An unparseable torn final line retains the existing conservative
+replay rule. Storage/corruption refusals use `workflow_spend_undurable`; unsafe-file and ownership
+errors remain storage failures. `tests/lib/spend-corruption-compat.test.ts` checks these boundaries.
+
+For requests with an applicable root, identity or pool ceiling, each selected target/key first
+obtains a normal-capacity pre-send seed through `reserveSeed`. A failed initial seed refuses the
+wire call, including rootless passthrough and generic adapter ingress. Stable retries reuse that
+seed; a real identity change must acquire its own normal seed. A prepaid combo child adopts only
+its exact permit on the same shared send ledger, excluding that reservation once from preflight.
+Reported additional sends reuse the seed's exact scope references through `reserveReportedFromSeed`
+and allocate no new scope keys. Already-started sends remain booked even during persistence failure.
+
+`src/lib/request-execution-budget.ts` shares a physical-start counter across derived budgets and
+freezes the finite positive limit L at the first claim. The default guarded limit is four; bounded
+OAuth expansion happens before the first start and allows at most eighteen for that profile.
+`createPhysicalSendReporter` owns selected-seed start receipts, reports only claimed sends and
+closes its producer after reconciliation. Adapter permits claim once at their physical boundary; their executor span keeps the start
+rebindable until OAuth selection reaches the wire, then reports and closes it. Zed completion
+requests and token-refresh replays use `src/adapters/physical-send.ts`; authentication exchanges
+remain outside the inference count. Kiro retains this span through its executor-side rebuild.
+Telemetry and raw numeric budget updates cannot create extra enforced send records.
+`request-spend.ts` waits for producers before terminal settlement, marks unknown usage lost, then
+persists ordinary `forget` records before releasing seeds. Forgotten send IDs do not subtract
+scope totals. Persistence failure retains the accounting debt. Shutdown drains reporters before
+releasing ledger ownership; restart resolves orphan reservations conservatively without reviving
+request capabilities.
+
+Claude CLI, CodeBuddy and Qoder use one CLI invocation as one physical-count unit. The shared
+`src/adapters/coding-agent/turn.ts` runner reserves a normal seed before spawning and keeps its
+producer until completion. Child-internal retries and tool turns do not each consume L because
+the proxy cannot observe those wire boundaries. Terminal actual usage, including usage above the
+initial estimate, still settles in full. This preserves configured CLI use while bounding launches.
+
+Within a fixed policy epoch, every live enforced request retains at least one normal-capacity
+seed. For normal send capacity M and largest admitted physical limit Lmax, retained sends are
+bounded by M × Lmax, with no overflow scope allocation. Legacy or experimental over-cap history
+is retained and can prevent new seeds; lowering policy limits does not erase existing accounting.
+`tests/lib/spend-seed-overflow.test.ts` covers capacity, delayed reports, persistence and finalization.
+Unconfigured traffic keeps ordinary record shapes and capacity omission behavior; it does not
+create seed instrumentation or identity checkpoints. `tests/lib/spend-zero-config-compat.test.ts`
+compares exact bytes with the shipped reader for equal pool inputs.
 
 Budget reservations retain their exact durable proof until their own dispatch/report confirms
 them. A later reservation does not confirm an earlier pending send. Refunds remove the exact
@@ -214,9 +242,9 @@ describing it afterwards, and the restart.
 The request tracker checks the current policy against the exact root, identity and pool scopes
 on each charge. With an applicable ceiling, any refused booking prevents a new dispatch,
 including full tracking capacity or a duplicate send id; the log uses the existing specific
-workflow refusal reason. Requests without an applicable ceiling remain observe-only. Reports
-of sends that already left stay permissive and do not count as local refusals; this guard does
-not promise complete accounting when those post-dispatch bookings fail.
+workflow refusal reason. Requests without an applicable ceiling remain observe-only. Enforced reports use their live seed and retain already-started liability without a new
+capacity admission. Observe-only reports keep the shipped permissive behavior, including omitted
+bookings at capacity.
 `tests/responses/responses-spend-capacity-guard.test.ts` covers these boundaries.
 
 The default policy still sets no token ceiling on any scope, so an unconfigured install accounts

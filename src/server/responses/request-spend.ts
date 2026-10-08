@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
-import { sharedSpendLedger, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof } from "../../lib/spend-reservation-ledger";
+import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof } from "../../lib/spend-reservation-ledger";
 import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
 import { recordWorkflowRefusalEvent, workflowDenialSummary, type WorkflowDenial } from "../../lib/workflow-budget";
@@ -88,7 +88,7 @@ export function createRequestSpendTracker(
     ...(target.poolId ?? logCtx.spendPoolId ?? logCtx.provider ? { poolId: target.poolId ?? logCtx.spendPoolId ?? logCtx.provider } : {}),
   });
   const applicable = (scopes: SpendScopes): boolean => {
-    const policy = ledger().policy;
+    const policy = ledgerRef?.policy ?? sharedSpendPolicy();
     return seededAccounting || (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
       || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
       || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
@@ -427,16 +427,20 @@ export function createRequestSpendTracker(
  * request passes exactly once, whatever transport served it and however it ended, and it is
  * where the terminal usage is already known.
  */
+const trackerRequests = new WeakMap<RequestSpendTracker, Pick<Request, "headers">>();
+
 export function attachRequestSpendTracker(
   req: Pick<Request, "headers">,
   logCtx: RequestLogContext,
   ledger?: SpendReservationLedger,
 ): RequestSpendTracker {
-  if (logCtx.spendTracker && "ensureSeed" in logCtx.spendTracker) return logCtx.spendTracker as RequestSpendTracker;
+  const existing = logCtx.spendTracker as RequestSpendTracker | undefined;
+  if (existing && trackerRequests.get(existing) === req) return existing;
   const rootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const tracker = ledger === undefined
     ? createRequestSpendTracker(logCtx, rootId)
     : createRequestSpendTracker(logCtx, rootId, ledger);
   logCtx.spendTracker = tracker;
+  trackerRequests.set(tracker, req);
   return tracker;
 }

@@ -944,62 +944,75 @@ The dashboard warns about old or unknown CLI versions, unavailable targets, and 
 
 ## Historical pool continuity
 
-Provider-pool ceilings use the canonical routed provider, while request logs keep account-specific
-display labels. Older journals may hold spend under those display labels. A journal stores salted
-aliases, not the original provider/account names, so OpenCodex does not guess a mapping from a
-current account roster, a label prefix, or a shortened account ID.
+Provider-pool ceilings use the canonical routed provider. Request logs still use account-specific
+display labels. Earlier journals may record spend under those labels; salted aliases alone cannot
+prove which provider owned them. OpenCodex does not infer ownership from current accounts or names.
 
-If `spend.pool.maxTokens` is configured and positive historical pool balances remain unidentified,
-the ledger keeps each balance in its original scope and conservatively counts it once against every
-candidate provider pool, in addition to that provider's verified group. A request is admitted only
-when that total plus its reservation fits the ceiling. This may restrict an otherwise unused pool
-until the operator verifies mappings; the request-local refusal explains this overrestriction
-without exposing aliases or journal contents. Unidentified history alone does not block admission
-before a route is known. After routing, preflight also refuses a canonical pool whose conservative
-total is already exhausted. A recovery or combo send already admitted by a reservation does not
-count that same reservation against itself a second time; all other reservations remain counted.
-This check does not turn post-reported passthrough sends into atomic reservations:
-a crossing send, concurrent admissions or retries reported afterwards retain their existing limits.
-Observe-only installs remain observe-only. Root and identity ceilings remain in force independently.
+With `spend.pool.maxTokens`, each original balance contributes once to its verified provider group
+or, when unmapped and positive, to every candidate pool. This includes an unmapped bucket whose
+hash matches the current canonical provider; it is never counted twice. Settled, reserved and
+unresolved usage all count. Unknown usage is not a refund. This conservative view may restrict an
+unused pool until its historical mappings are verified. Root and identity ceilings remain independent.
 
-To resolve it, an operator must verify which canonical provider each historical salted pool alias
-belongs to, using their own retained evidence. Verified mappings keep an old balance from being
-charged to every candidate pool. Add a top-level `spendPoolAliases` object in
-`config.json`: each key is the exact 32-character lowercase hexadecimal pool alias from that same
-installation's journal; each value is its verified canonical provider ID. An old alias that already
-represents the canonical provider still needs an explicit entry when it lacks identity metadata.
-A positive alias that cannot be identified remains conservatively charged to every candidate pool.
-Do not infer a match from similar names, account deletion, a current provider name/hash, or a
-short-label collision, and do not share the journal or salt publicly.
+Add verified mappings to the top-level `spendPoolAliases` object in `config.json`. Each key is an
+exact 32-character lowercase hexadecimal pool alias from this installation's journal; each value
+is its verified canonical provider ID. Keep evidence for the mapping and keep the journal and salt
+private. A canonical-looking historical alias also needs an explicit mapping to establish ownership.
 
-Keep `spendPoolAliases` outside `spend`: older versions reject unknown keys inside `spend` and can
-disable the entire section. Invalid top-level mappings are rejected on configuration writes;
-malformed `spendPoolAliases` hand edits retain existing ceilings and fail pool admission closed. Correct the mapping
-and restart through the ordinary configuration workflow. Empty/removing mappings does not erase
-links already recorded durably. A previously redirected alias cannot be reassigned to a different
-group; verified canonical renames can join groups without splitting existing spend. The complete
-mapping is checked together, so a valid group merge does not depend on alias-key order.
+Mappings apply when balances are read. They do not move original balances or persist links in the
+journal: removing a mapping makes that history unbound again. Keep this object outside `spend`,
+because older versions reject unknown fields inside that strict section. Invalid mappings are
+rejected on writes; invalid hand edits retain ceilings and refuse pool admission. A configured
+provider's own salted pool alias cannot map to another provider. This is checked again when the
+provider set changes. Validation reads an existing salt without creating one.
 
-Each original balance is counted once. Settled usage, in-flight reservations and unresolved usage
-all count; unknown usage is never treated as a refund. Original reservation targets are retained.
-New requests continue to record the canonical provider pool, and checkpoints retain salted identity
-evidence without adding raw account/provider names. Unknown positive history and active or exhausted
-groups are protected from cleanup; the existing dormant, under-limit retention rule still applies.
-Identity evidence remains bounded; if its capacity is exhausted, pool admission stops rather than
-forgetting it. No automatic tool reconstructs unverifiable history.
+Dormant unbound history expires only after its last activity is strictly older than
+`spend.retentionDays`. Capacity pressure cannot shorten that interval for positive unknown history.
+Live reservations and seed targets remain protected, even at zero tokens. Cleanup persists a normal
+journal deletion record before admission uses the reduced total. Known groups keep the ordinary
+active/exhausted protections. No automatic tool reconstructs unverifiable mappings.
 
-### Safe rollback requirements
+### Token reservations and reporting
 
-A supported rollback must retain or backport both canonical request attribution and the
-continuity-aware ledger reader/writer, with the same journal, salt and verified mappings.
-Keep the latest journal: restoring a pre-upgrade copy would omit later spend. Do not remove records,
-change the salt, raise ceilings, or disable enforcement to make a downgrade appear compatible.
+When a root, identity or pool ceiling applies, the first physical send for each selected target/key
+requires a normal-capacity reservation. If that cannot be recorded, the send is refused before it
+reaches upstream. Stable retries reuse that reservation's scopes; a different target/key needs a
+new one. Additional sends are counted against a finite request-wide limit fixed at the first start
+(default four; the existing bounded OAuth profile can expand to eighteen before sending).
 
-An unmodified older binary is **not a supported rollback**. It can read the v1 raw balances but
-does not enforce the cross-alias provider total, may create a new account-label pool, and may discard
-optional identity metadata when compacting. There is no automatic downgrade barrier. If such an old
-writer has run, the new reader conservatively counts unidentified positive history against every
-candidate provider pool until the operator verifies the remaining mappings. Storage or
-journal-integrity denials are separate from an alias problem and keep `workflow_spend_undurable`;
-unsafe-file/ownership failures may instead propagate as storage errors, without admitting the
-request.
+Delayed reports retain already-started usage. Terminal settlement waits for reporters, and send IDs
+are forgotten only after their accounting is durable; forgetting an ID does not remove its balance.
+The limit bounds retries, not the final bill: actual usage or already-started retries can exceed a
+token estimate, and their full liability remains counted. With no applicable ceiling, behavior stays
+observe-only, including omitted bookings when tracking capacity is full. No identity checkpoints are
+added for unconfigured traffic.
+
+Claude CLI, CodeBuddy and Qoder count each CLI invocation as one send. Their first invocation
+still needs a normal reservation and is refused if that reservation cannot be obtained. Internal
+CLI retries and tool turns do not separately consume L; their cost settles from actual reported
+usage, including amounts above the initial estimate. This exception preserves CLI use with configured
+spend ceilings while limiting the number of child invocations.
+
+### Rollback to 2.80.0: contract C
+
+New records use the existing v1 format and `pool` alias domain. **Unmodified 2.80.0 reads them using
+its own per-label rules**, including ordinary compaction and retention. There is no required
+backport, launcher fence or reconciliation command. Keep the current journal and salt: restoring
+an older copy loses the spend recorded since that copy.
+
+This does not preserve canonical aggregation after downgrade, nor promise the same remaining
+allowance that 2.80.0 would have calculated for identical traffic without the upgrade. It may book
+new traffic under account labels. On re-upgrade, the current alias configuration applies to the
+original balances still retained by 2.80.0. New checkpoints contain no identity-link metadata that
+an older reader must preserve.
+
+Journals written by unpublished experimental builds with `pool-current` aliases or `poolContinuity`
+metadata are excluded from this compatibility contract, including later checkpoints carrying those
+aliases. Their original balances and send targets remain conservative unbound history until normal
+retention expires them; they are not converted or immediately deleted.
+
+A complete invalid journal record (including a final `null`) causes configured admission to refuse.
+Compaction can still preserve valid accounting in a clean checkpoint; the live refusal remains until
+a clean restart replays it. A torn, unparseable final line keeps the existing recovery behavior.
+Storage/corruption denials use `workflow_spend_undurable`; unsafe files and ownership failures remain
+storage errors. Alias validation failures use `workflow_pool_history_unresolved`.

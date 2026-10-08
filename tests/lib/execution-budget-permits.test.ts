@@ -576,3 +576,56 @@ test("a reported external receipt cannot be taken over by an adapter", () => {
   decision.permit.release();
   expect(budget.used).toBe(1);
 });
+
+test("adapter executor rebinds its live permit to the selected account before wire", async () => {
+  const { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } = await import("../../src/lib/spend-reservation-ledger");
+  const { createRequestSpendTracker } = await import("../../src/server/responses/request-spend");
+  const { createAdapterPhysicalSend } = await import("../../src/adapters/physical-send");
+  const { rebindPhysicalSend } = await import("../../src/lib/request-execution-budget");
+  const ledger = createSpendReservationLedger({ salt: "permit-selected-account", policy: {
+    ...DEFAULT_SPEND_RESERVATION_POLICY, identity: { maxTokens: 30 }, pool: { maxTokens: 1000 },
+  } });
+  const ctx = { provider: "P", spendPoolId: "P", accountLogLabel: "A", spendInputEstimateTokens: 1, spendOutputCeilingTokens: 0 };
+  const tracker = createRequestSpendTracker(ctx, undefined, ledger);
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  let wires = 0;
+  const send = createAdapterPhysicalSend({ sendBudget: budget, executor: (async () => {
+    ctx.accountLogLabel = "B";
+    expect(rebindPhysicalSend(budget, { poolId: "P", identityId: "B" })).toBe(true);
+    wires++;
+    tracker.settle({ inputTokens: 7 });
+    expect(ledger.snapshot("identity", "B")?.reserved).toBe(1);
+    return new Response();
+  }) as typeof fetch });
+  await send({ url: "https://permit.example.test/", dispatch: execute => execute("https://permit.example.test/") });
+  expect(wires).toBe(1);
+  expect(budget.physicalStarted).toBe(1);
+  expect(ledger.snapshot("identity", "A")?.settled ?? 0).toBe(0);
+  expect(ledger.snapshot("identity", "A")?.reserved ?? 0).toBe(0);
+  expect(ledger.snapshot("identity", "B")).toMatchObject({ settled: 7, reserved: 0, unresolved: 0 });
+});
+
+test("adapter executor refuses a reselection whose identity cannot obtain a normal seed", async () => {
+  const { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } = await import("../../src/lib/spend-reservation-ledger");
+  const { createRequestSpendTracker } = await import("../../src/server/responses/request-spend");
+  const { createAdapterPhysicalSend } = await import("../../src/adapters/physical-send");
+  const { rebindPhysicalSend } = await import("../../src/lib/request-execution-budget");
+  const { SendBudgetExhaustedError } = await import("../../src/lib/upstream-retry");
+  const ledger = createSpendReservationLedger({ salt: "permit-selected-account", policy: {
+    ...DEFAULT_SPEND_RESERVATION_POLICY, identity: { maxTokens: 30 }, pool: { maxTokens: 1000 },
+  } });
+  ledger.reserve({ sendId: "prior", scopes: { identityId: "B" }, inputTokens: 30, outputCeilingTokens: 0 });
+  ledger.settle("prior", { inputTokens: 30, outputTokens: 0 });
+  const tracker = createRequestSpendTracker({ provider: "P", accountLogLabel: "A", spendInputEstimateTokens: 1, spendOutputCeilingTokens: 0 }, undefined, ledger);
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  let wires = 0;
+  const send = createAdapterPhysicalSend({ sendBudget: budget, executor: (async () => {
+    if (!rebindPhysicalSend(budget, { poolId: "P", identityId: "B" })) throw new SendBudgetExhaustedError();
+    wires++;
+    return new Response();
+  }) as typeof fetch });
+  await expect(send({ url: "https://permit.example.test/", dispatch: execute => execute("https://permit.example.test/") })).rejects.toThrow(SendBudgetExhaustedError);
+  tracker.settle(undefined);
+  expect(wires).toBe(0);
+  expect(ledger.snapshot("identity", "B")).toMatchObject({ settled: 30, reserved: 0, unresolved: 0 });
+});

@@ -356,6 +356,7 @@ function adapterDispatchBudgetView(
     claimAmbiguousResend: (limit: number): boolean => budget.claimAmbiguousResend?.(limit) === true,
     get ambiguousResendSpent(): boolean { return budget.ambiguousResendSpent === true; },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
+      const refundable = refundableHop || budget.spendEnforced === true;
       // A dispatch whose upstream state is unknown is refused on its own merits. A hop that
       // already paid does not make an unsafe replay safe, so that check stays with the budget.
       if (intent.replaySafe !== false) {
@@ -367,26 +368,30 @@ function adapterDispatchBudgetView(
           hopPermit.release();
           return budget.reserveDispatch({ ...intent, sendClass: hopPermit.sendClass });
         }
-        if (hopPermit !== undefined && (refundableHop || hopPermit.assumeCharge())) {
+        if (hopPermit !== undefined && (refundable || hopPermit.assumeCharge())) {
           let settled = false;
+          let executionPermit = hopPermit;
           const confirm = (): boolean => {
             if (settled) return false;
             settled = true;
             // Admission can still reject this replay. Close its external booking only when
             // the adapter invokes its executor, leaving release() able to refund it until then.
-            if (!refundableHop || hopPermit.assumeCharge()) return true;
+            if (!refundable || hopPermit.assumeCharge()) return true;
             // Preserve the old fallback for a permit another leg already settled.
             const fresh = budget.reserveDispatch(intent);
-            return fresh.allowed && fresh.permit.assumeCharge();
+            if (!fresh.allowed) return false;
+            executionPermit = fresh.permit;
+            return fresh.permit.assumeCharge();
           };
           return {
             allowed: true,
             permit: {
               sendClass: hopPermit.sendClass,
+              execute: run => executionPermit.execute ? executionPermit.execute(run) : run(),
               use: confirm,
               assumeCharge: confirm,
               release: (): void => {
-                if (!refundableHop || settled) return;
+                if (!refundable || settled) return;
                 settled = true;
                 hopPermit.release();
               },

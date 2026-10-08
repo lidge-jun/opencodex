@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { acquireSpendLedgerServerLifecycle } from "../../src/server/index/spend-ledger-lifecycle";
 import { spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 const request = (sendId: string, scopes = {poolId:"P"}, tokens=0) => ({sendId,scopes,inputTokens:tokens,outputCeilingTokens:0});
 const seed = (ledger: SpendReservationLedger, id="seed", scopes={poolId:"P"}, tokens=0): SpendSeed => {
   const decision=ledger.reserveSeed(request(id,scopes,tokens)); expect(decision.reserved).toBe(true);
@@ -70,9 +71,9 @@ test("terminal waits for reporters and failed persistence cannot reclaim a seed"
   const reporter=ledger.registerReporter(); let drained=false; const drain=ledger.waitForReporterDrain().then(()=>{drained=true;});
   await Promise.resolve();expect(drained).toBe(false);expect(ledger.finishSeed(anchor)).toBe(false);
   reporter.close();reporter.close();await drain;expect(drained).toBe(true);
-  disk.failAppend=true; expect(ledger.settle("seed",{inputTokens:7,outputTokens:0})).toBe(false);
+  disk.failAppend=true; expect(ledger.settle("seed",{inputTokens:7,outputTokens:0})).toBe(true);
   expect(ledger.forgetResolved(["seed"])).toBe(false);expect(ledger.finishSeed(anchor)).toBe(false);expect(ledger.knows("seed")).toBe(true);
-  disk.failAppend=false;expect(ledger.settle("seed",{inputTokens:7,outputTokens:0})).toBe(true);
+  disk.failAppend=false;expect(ledger.settle("seed",{inputTokens:7,outputTokens:0})).toBe(false);
   disk.failAppend=true;expect(ledger.forgetResolved(["seed"])).toBe(false);expect(ledger.finishSeed(anchor)).toBe(false);
   disk.failAppend=false;expect(ledger.forgetResolved(["seed"])).toBe(true);expect(ledger.finishSeed(anchor)).toBe(true);
   const delayedDisk = spendTestJournal();
@@ -83,10 +84,10 @@ test("terminal waits for reporters and failed persistence cannot reclaim a seed"
   expect(reported(delayedLedger, delayedSeed, "physical-but-unwritten", 70)).toBe(true);
   delayedLedger.markDispatched("physical-but-unwritten");
   expect(delayedLedger.snapshot("pool", "P")?.reserved).toBe(110);
-  expect(delayedLedger.markLost("physical-but-unwritten")).toBe(false);
+  expect(delayedLedger.markLost("physical-but-unwritten")).toBe(true);
   expect(delayedLedger.finishSeed(delayedSeed)).toBe(false);
   delayedDisk.failAppend = false;
-  expect(delayedLedger.markLost("physical-but-unwritten")).toBe(true);
+  expect(delayedLedger.markLost("physical-but-unwritten")).toBe(false);
   expect(delayedLedger.markLost("initial")).toBe(true);
   expect(delayedLedger.forgetResolved(["initial", "physical-but-unwritten"])).toBe(true);
   expect(delayedLedger.finishSeed(delayedSeed)).toBe(true);
@@ -118,4 +119,66 @@ test("ceiling removal does not drop seeded accounting",()=>{
   const disk=spendTestJournal();const ledger=factory(disk);const anchor=seed(ledger);ledger.reconfigure(spendTestPolicy({pool:{}}));
   expect(reported(ledger,anchor,"delayed",70)).toBe(true);ledger.markDispatched("delayed");ledger.settle("delayed",{inputTokens:70,outputTokens:0});
   expect(createShippedSpendLedger({journal:disk,salt,now:()=>2}).snapshot("pool","P")?.settled).toBe(70);
+});
+
+for (const sends of [1, 2]) test(`terminal usage survives append failure without another tracker settlement (${sends} sends)`, async () => {
+  const disk = spendTestJournal();
+  const ledger = createSpendReservationLedger({ journal: disk, salt, now: () => 2,
+    policy: spendTestPolicy({ pool: { maxTokens: 50 } }) });
+  const tracker = createRequestSpendTracker({ provider: "P", spendInputEstimateTokens: 1 }, undefined, ledger);
+  const anchor = tracker.ensureSeed({ poolId: "P" });
+  if (!anchor) throw new Error("seed denied");
+  const reporter = tracker.beginReporter();
+  for (let ordinal = 1; ordinal <= sends; ordinal++) reporter.start(anchor, ordinal);
+  reporter.report(sends);
+  reporter.close();
+  disk.failAppend = true;
+  tracker.settle({ inputTokens: 70, outputTokens: 0 });
+  // Let the tracker's one drain callback run while storage is still unavailable.
+  await Promise.resolve();
+  expect(ledger.snapshot("pool", "P")).toMatchObject({ settled: 70, reserved: 0, unresolved: sends - 1 });
+  expect(ledger.knows(anchor.sendId)).toBe(true);
+  expect(disk.lines.some(line => JSON.parse(line).kind === "forget")).toBe(false);
+  disk.failAppend = false;
+  expect(ledger.reserve(request("next", { poolId: "P" }, 1))).toMatchObject({
+    reserved: false, denial: { reason: "spend-limit-exceeded", projected: 70 + sends },
+  });
+  const old = createShippedSpendLedger({ journal: disk, salt, now: () => 2 });
+  expect(old.snapshot("pool", "P")).toMatchObject({ settled: 70, unresolved: sends - 1 });
+  expect(old.corruptRecords).toBe(0);
+});
+
+test("partial pending flush preserves reserve dispatch and terminal order without duplicate liability", () => {
+  const disk = spendTestJournal();
+  const append = disk.append.bind(disk);
+  let writesLeft = Number.POSITIVE_INFINITY;
+  disk.append = line => {
+    if (writesLeft-- <= 0) throw new Error("partial flush unavailable");
+    append(line);
+  };
+  const ledger = createSpendReservationLedger({ journal: disk, salt, now: () => 2,
+    policy: spendTestPolicy({ pool: { maxTokens: 50 } }) });
+  const anchor = seed(ledger, "initial", { poolId: "P" }, 1);
+  ledger.markDispatched("initial");
+  writesLeft = 0;
+  expect(reported(ledger, anchor, "terminal", 1)).toBe(true);
+  expect(ledger.markDispatched("terminal")).toBe(true);
+  expect(ledger.markLost("initial")).toBe(true);
+  expect(ledger.settle("terminal", { inputTokens: 70, outputTokens: 0 })).toBe(true);
+  expect(ledger.settle("terminal", { inputTokens: 700, outputTokens: 0 })).toBe(false);
+  expect(ledger.markLost("terminal")).toBe(false);
+  expect(ledger.snapshot("pool", "P")).toMatchObject({ settled: 70, reserved: 0, unresolved: 1 });
+  writesLeft = 1;
+  expect(ledger.forgetResolved(["initial", "terminal"])).toBe(false);
+  expect(disk.lines.map(line => JSON.parse(line).kind)).toEqual(["reserve", "dispatch", "reserve"]);
+  expect(ledger.knows("terminal")).toBe(true);
+  writesLeft = Number.POSITIVE_INFINITY;
+  expect(ledger.reserve(request("next", { poolId: "P" }, 1))).toMatchObject({
+    reserved: false, denial: { reason: "spend-limit-exceeded", projected: 72 },
+  });
+  expect(disk.lines.map(line => JSON.parse(line).kind)).toEqual(["reserve", "dispatch", "reserve", "dispatch", "lost", "settle"]);
+  expect(ledger.forgetResolved(["initial", "terminal"])).toBe(true);
+  expect(ledger.finishSeed(anchor)).toBe(true);
+  expect(createShippedSpendLedger({ journal: disk, salt, now: () => 2 }).snapshot("pool", "P"))
+    .toMatchObject({ settled: 70, unresolved: 1 });
 });

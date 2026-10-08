@@ -1090,9 +1090,12 @@ export async function handleResponsesCompact(
     // actually happens, so every recorder call names the context that produced it.
     let outcomeCtx = authCtx;
     const localDispatchRefusal = (error: unknown): Response | undefined => {
-      const response = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(error), {
-        now: Date.now(), accountSelector: route.codexAccountNamespace,
-      });
+      const cause = unwrapUpstreamRetryEvidenceError(error);
+      const response = cause instanceof SendBudgetExhaustedError
+        ? formatErrorResponse(429, "request_send_budget_exhausted", cause.message)
+        : mapCodexAuthContextErrorToResponse(cause, {
+          now: Date.now(), accountSelector: route.codexAccountNamespace,
+        });
       if (response) {
         releaseUpstreamHostAdmission(compactHostAdmissionLease);
         compactHostAdmissionLease = null;

@@ -651,6 +651,7 @@ export interface SpendReservationLedger {
   /**
    * Settle with real usage. Returns false when the send is unknown or already resolved --
    * double settlement is as wrong as none, so a repeat call changes nothing.
+   * Seeded terminal debt applies immediately; failed writes queue before durable forgetting.
    */
   settle(sendId: string, usage: SpendUsage): boolean;
   /**
@@ -1345,7 +1346,9 @@ export function createSpendReservationLedger(options: {
       const at = now();
       const record: JournalRecord = { v: 1, kind: "settle", send, tokens, at };
       const seeded = seedForSend(send);
-      if (seeded && (!flushPending() || !append(record))) return false;
+      // Terminal usage cannot be refused: the tracker may never report it again, and
+      // the estimate can be smaller than the actual bill. Preserve ordered retryable debt.
+      if (seeded && (pendingRecords.length > 0 || !append(record))) pendingRecords.push(record);
       applyResolve(send, "settled", tokens, at);
       if (!seeded) append(record);
       return true;
@@ -1359,7 +1362,7 @@ export function createSpendReservationLedger(options: {
       const at = now();
       const record: JournalRecord = { v: 1, kind: "lost", send, at };
       const seeded = seedForSend(send);
-      if (seeded && (!flushPending() || !append(record))) return false;
+      if (seeded && (pendingRecords.length > 0 || !append(record))) pendingRecords.push(record);
       applyResolve(send, "lost", 0, at);
       if (!seeded) append(record);
       return true;

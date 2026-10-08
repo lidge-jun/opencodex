@@ -99,6 +99,8 @@ export interface SingleUseDispatchPermit {
    * false, which is what keeps a retry thunk from sending twice on one permit.
    */
   use(): boolean;
+  /** Keep the selected start rebindable until its executor finishes. */
+  execute?<T>(run: () => Promise<T>): Promise<T>;
   /**
    * Hand back a reservation that never dispatched -- a credential move that found no alternate,
    * a rebuild abandoned before the send. Idempotent, and a no-op once the permit was used or
@@ -482,6 +484,8 @@ function createRequestExecutionBudgetWithLedger(
       lastTargetKey = intent.targetKey;
 
       let producer: ReturnType<NonNullable<RequestSendObserver["beginReporter"]>> | undefined;
+      let executing = false;
+      let physicalOrdinal: number | undefined;
       const startPhysical = (): boolean => {
         if (observer?.enforced !== true) return true;
         const seed = observer.ensureSeed?.({ targetKey: intent.targetKey }, spendProof);
@@ -490,13 +494,26 @@ function createRequestExecutionBudgetWithLedger(
         if (ordinal === undefined) return false;
         producer = observer.beginReporter?.();
         producer?.start(seed, ordinal);
-        producer?.report(1);
-        producer?.close();
+        physicalOrdinal = ordinal;
+        if (!executing) { producer?.report(1); producer?.close(); }
         return true;
       };
       let settled: "open" | "used" | "released" = "open";
       const permit: SingleUseDispatchPermit = {
         sendClass: intent.sendClass,
+        async execute<T>(run: () => Promise<T>): Promise<T> {
+          if (executing) throw new Error("Dispatch permit executor already active");
+          executing = true;
+          const binding: PhysicalSendReporter = () => {};
+          binding.bind = (target: SpendScopes & { targetKey?: string }) => physicalOrdinal === undefined || !producer
+            ? true : producer.rebindTarget(target, physicalOrdinal);
+          try { return await activePhysicalReporters.run(binding, run); }
+          finally {
+            executing = false;
+            producer?.report(1);
+            producer?.close();
+          }
+        },
         use(): boolean {
           if (settled !== "open") return false;
           if (intent.countedExternally !== true && !startPhysical()) return false;

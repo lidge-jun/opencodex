@@ -554,6 +554,8 @@ export async function prepareAdapterExchange(
         try {
           if (transportState.activeAdapter.fetchResponse) {
             transportState.noteRoutedAttemptSend(retryEstimate, recovery);
+            const producer = adapterDispatchBudget?.beginSpendProducer?.();
+            try {
             return await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot => {
               // The dispatch boundary is HERE, not before the pacing wait: that wait can reject for
               // an abort, a saturated queue, an expired slot or a removed provider, and none of
@@ -583,6 +585,7 @@ export async function prepareAdapterExchange(
                 }),
               });
             });
+            } finally { producer?.close(); }
           }
           // #2643 review: this leg used to call fetchWithHeaderTimeout directly, so an
           // opted-in provider's transient-5xx policy applied to the initial send and to
