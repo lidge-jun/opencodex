@@ -396,7 +396,7 @@ describe("routed compaction emergency integration", () => {
   test("cancellation after source error does not dispatch emergency", async () => {
     abortOnSource = new AbortController();
     const response = await handleResponses(request(body(), "responses", abortOnSource.signal), settings(), { model: "", provider: "" });
-    await expect(response.text()).rejects.toBe(abortOnSource.signal.reason); await new Promise<void>(resolve => setImmediate(resolve));
+    await response.text();
     expect(calls.map(call => call.model)).toEqual(["swe-2"]);
   });
 

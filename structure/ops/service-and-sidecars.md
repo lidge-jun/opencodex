@@ -73,6 +73,8 @@ barrier: a timeout verdict alone does not make the home removable. The contract 
 `tests/server/server-stop-config-hardening.test.ts`.
 `src/lib/windows-secret-acl.ts` retains removal ownership for an entire async harden, including principal lookup, successive ACL commands, retries and diagnostics, as well as tracking runners that outlive their deadlines. The exact-path timeout indicator keeps its existing meaning for atomic-file fallback. The portable Rust contract in `scripts/diagnostics/windows-version-control/tests/async_contracts.rs` holds two successive normal commands and verifies that removal waits across the gap between them.
 
+Removal comparisons resolve existing physical path identities, including Windows short names and directory aliases. A deleted temporary file is compared through its existing parent. Other identity-read failures conservatively retain registered work rather than declaring it outside the tree. The same portable contract verifies an owned directory alias cannot let removal overtake a normal ACL runner.
+
 ## Service-manager probe
 
 CLI status and doctor give the attested startup-health read the isolated probe budget plus

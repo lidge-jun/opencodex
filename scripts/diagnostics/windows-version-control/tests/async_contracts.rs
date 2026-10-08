@@ -36,30 +36,24 @@ for (const kind of ['responses','shared']) for (const mode of ['before','after',
  const afterLate=budget.snapshot();
  const aggregate=budgets.translatorObservedBufferSnapshot();
  const aggregateDelta={bytes:budgets.translatorAggregateCurrentBytesForTests()-aggregateBaseline.currentBytes,active:aggregate.active-aggregateBaseline.active};
- let abortedRead=false;
- if(mode!=='cancel'){
-  const reader=wrapped.body.getReader();
-  try {await reader.read()}catch(reason){if(reason!=='synthetic-client-gone')throw reason;abortedRead=true}
-  finally {reader.releaseLock()}
- }
- cancel??=wrapped.body.cancel('fixture-cleanup').catch(reason=>{if(reason!=='synthetic-client-gone')throw reason});
+ cancel??=wrapped.body.cancel('fixture-cleanup');
  release(); await cancel;
- answers.push({kind,mode,whileHeld,beforeReleaseCalls,abortedRead,afterLate,aggregateDelta,remaining:budgets.translatorLiveBudgetCountForTests()-baseline});
+ answers.push({kind,mode,whileHeld,beforeReleaseCalls,afterReleaseCalls:calls,afterLate,aggregateDelta,remaining:budgets.translatorLiveBudgetCountForTests()-baseline});
 }
 const baseline=budgets.translatorLiveBudgetCountForTests();
 const budget=budgets.createTranslatorBudget();
 const source=new Response('synthetic-eof',{status:201,headers:{'x-fixture':'kept'}});
 const eof=lifetime.finalizeOwnedTranslatorBudget(source,budget,new AbortController().signal);
 const eofResult={text:await eof.text(),status:eof.status,header:eof.headers.get('x-fixture'),remaining:budgets.translatorLiveBudgetCountForTests()-baseline};
-const cancelledEnvelopes=[];
-for(const wrap of [lifetime.finalizeOwnedTranslatorBudget,budgets.finalizeTranslatorBudgetResponse]){
+const preparedResponses=[];
+for(const wrap of [lifetime.finalizeOwnedTranslatorBudget,budgets.finalizeTranslatorBudgetResponse])for(const status of [200,499,504]){
  const controller=new AbortController(); controller.abort(new Error('synthetic-client-gone'));
  const budget=budgets.createTranslatorBudget(); budget.observeAcceptedRequestCopy(1024);
- const source=Response.json({error:{code:'client_cancel'}},{status:499,headers:{'x-fixture':'kept'}});
+ const source=new Response('synthetic-final-'+status,{status,headers:{'x-fixture':'kept','content-type':status===504?'text/event-stream':'application/json'}});
  const response=wrap(source,budget,controller.signal);
- cancelledEnvelopes.push({status:response.status,header:response.headers.get('x-fixture'),remaining:budgets.translatorLiveBudgetCountForTests()-baseline,bytes:budget.snapshot().currentBytes,body:await response.json()});
+ preparedResponses.push({status:response.status,header:response.headers.get('x-fixture'),remaining:budgets.translatorLiveBudgetCountForTests()-baseline,bytes:budget.snapshot().currentBytes,text:await response.text()});
 }
-return {answers,eof:eofResult,cancelledEnvelopes};
+return {answers,eof:eofResult,preparedResponses};
 "#,
     );
     for answer in result["answers"].as_array().unwrap() {
@@ -67,27 +61,70 @@ return {answers,eof:eofResult,cancelledEnvelopes};
             answer["whileHeld"], 0,
             "aborted unread body retained its budget"
         );
-        assert_eq!(answer["beforeReleaseCalls"], 1);
+        assert_eq!(
+            answer["beforeReleaseCalls"],
+            u64::from(answer["mode"] == "cancel")
+        );
+        assert_eq!(answer["afterReleaseCalls"], 1);
         assert_eq!(answer["remaining"], 0);
         assert_eq!(answer["afterLate"]["currentBytes"], 0);
         assert_eq!(answer["afterLate"]["activeCalls"], 0);
         assert_eq!(answer["aggregateDelta"]["bytes"], 0);
         assert_eq!(answer["aggregateDelta"]["active"], 0);
-        if answer["mode"] != "cancel" {
-            assert_eq!(answer["abortedRead"], true);
-        }
     }
     assert_eq!(result["eof"]["text"], "synthetic-eof");
     assert_eq!(result["eof"]["status"], 201);
     assert_eq!(result["eof"]["header"], "kept");
     assert_eq!(result["eof"]["remaining"], 0);
-    for response in result["cancelledEnvelopes"].as_array().unwrap() {
-        assert_eq!(response["status"], 499);
+    for response in result["preparedResponses"].as_array().unwrap() {
         assert_eq!(response["header"], "kept");
         assert_eq!(response["remaining"], 0);
         assert_eq!(response["bytes"], 0);
-        assert_eq!(response["body"]["error"]["code"], "client_cancel");
+        assert_eq!(
+            response["text"],
+            format!("synthetic-final-{}", response["status"])
+        );
     }
+}
+
+#[test]
+fn removal_barrier_matches_canonical_directory_aliases() {
+    let result = contract(
+        "acl-path-alias",
+        r#"
+const acl=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/lib/windows-secret-acl.ts')).href);
+const principal=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/lib/windows-user-principal.ts')).href);
+const target=join(root,'..physical'); const alias=join(root,'alias'); fs.mkdirSync(target);
+fs.symlinkSync(target,alias,process.platform==='win32'?'junction':'dir');
+const heldFile=join(target,'held.tmp'); fs.writeFileSync(heldFile,'owned-fixture');
+const unrelated=join(root,'unrelated'); fs.mkdirSync(unrelated);
+let release, announce;const held=new Promise(resolve=>{release=resolve});const started=new Promise(resolve=>{announce=resolve});
+acl.setPlatformForTests('win32');
+principal.setAsyncWindowsPrincipalRunnerForTests(async()=>({success:true,exitCode:0,timedOut:false,stdout:'S-1-5-21-1-2-3-1001\nTEST\\user\n'}));
+acl.setAsyncIcaclsBeltSchedulerForTests(()=>()=>{});
+acl.setAsyncIcaclsRunnerForTests(async()=>{announce();await held;return {success:true,exitCode:0,timedOut:false,stdout:''}});
+try {
+ const harden=acl.hardenSecretPathAsync(heldFile,{required:true,deadlineMs:5000}).then(()=>true,()=>false);await started;
+ const guarded=acl.windowsSecretAclReapPendingAtOrBelow(alias);
+ const rootGuard=acl.windowsSecretAclReapPendingAtOrBelow(root);
+ const unrelatedGuard=acl.windowsSecretAclReapPendingAtOrBelow(unrelated);
+ const nativeRealpath=fs.realpathSync.native;let unreadableGuard;
+ try{fs.realpathSync.native=()=>{throw Object.assign(new Error('injected identity read'),{code:'EACCES'})};unreadableGuard=acl.windowsSecretAclReapPendingAtOrBelow(unrelated)}
+ finally{fs.realpathSync.native=nativeRealpath}
+ fs.unlinkSync(heldFile);const deletedGuard=acl.windowsSecretAclReapPendingAtOrBelow(alias);
+ let settled=false;const barrier=acl.flushWindowsSecretAclReapsBeforeRemoval(alias).then(()=>{settled=true});
+ await Bun.sleep(20);const early=settled;release();await Promise.all([harden,barrier]);
+ return {guarded,rootGuard,unrelatedGuard,unreadableGuard,deletedGuard,early,remaining:acl.windowsSecretAclReapPendingAtOrBelow(alias)};
+}finally{release();await acl.flushWindowsSecretAclReapsBeforeRemoval(target);fs.unlinkSync(alias)}
+"#,
+    );
+    assert_eq!(result["guarded"], true);
+    assert_eq!(result["rootGuard"], true);
+    assert_eq!(result["unrelatedGuard"], false);
+    assert_eq!(result["unreadableGuard"], true);
+    assert_eq!(result["deletedGuard"], true);
+    assert_eq!(result["early"], false);
+    assert_eq!(result["remaining"], false);
 }
 
 #[test]

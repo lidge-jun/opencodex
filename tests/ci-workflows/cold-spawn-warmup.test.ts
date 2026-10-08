@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
@@ -17,6 +17,16 @@ import {
   dispositionComplaints,
   type WarmupDisposition,
 } from "../helpers/warmup-registration";
+
+beforeAll(async () => {
+  await warmColdSpawn("cold-spawn-warmup-test/child-process-bootstrap", async deadlineMs => {
+    const result = await spawnModuleGraphWarmupChild(
+      'require("node:child_process"); process.exit(0);', repoRoot(), undefined, deadlineMs,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBe(false);
+  });
+}, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
 /**
  * Three things are checked here, and they answer different questions.

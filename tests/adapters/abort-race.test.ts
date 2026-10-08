@@ -123,7 +123,7 @@ describe("Responses abort guards", () => {
 
       takeSpendHome();
       const response = await post("test-fetch", true, clientAbort.signal);
-      await expect(response.text()).rejects.toBe(clientAbort.signal.reason);
+      await response.text();
       await new Promise<void>(resolve => setImmediate(resolve));
 
       expect(readerAttached).toBe(true);

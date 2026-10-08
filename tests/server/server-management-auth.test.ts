@@ -163,24 +163,30 @@ async function startEphemeralHubServer(deps: Parameters<typeof startServer>[1]) 
 }
 
 function websocketHandshakeOpens(url: URL, token: string): Promise<boolean> {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     const target = new URL("/v1/responses", url);
     target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(target, {
       headers: { "X-OpenCodex-API-Key": token },
     } as unknown as string[]);
-    let settled = false;
-    const finish = (opened: boolean) => {
+    let settled = false, opened = false;
+    const finish = () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      try { socket.close(); } catch { /* already closed */ }
       resolve(opened);
     };
-    socket.addEventListener("open", () => finish(true));
-    socket.addEventListener("error", () => finish(false));
-    socket.addEventListener("close", () => finish(false));
-    const timer = setTimeout(() => finish(false), 5_000);
+    const close = () => {
+      try { socket.close(); } catch { /* already closed */ }
+      if (socket.readyState === WebSocket.CLOSED) finish();
+    };
+    socket.addEventListener("open", () => { opened = true; close(); });
+    socket.addEventListener("error", close);
+    socket.addEventListener("close", finish);
+    const timer = setTimeout(() => {
+      close();
+      if (!settled) { settled = true; reject(new Error("fixture WebSocket did not close within 5000ms")); }
+    }, 5_000);
   });
 }
 

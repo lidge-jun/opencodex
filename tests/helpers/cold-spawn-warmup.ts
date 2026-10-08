@@ -208,6 +208,8 @@ export interface ModuleGraphWarmupResult {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+  deadlineLateMs: number;
+  failureCause?: "deadline" | "capture-limit" | "stream-error";
 }
 
 /**
@@ -250,6 +252,9 @@ export function spawnModuleGraphWarmupChild(
     let timedOut = false;
     let exitCode: number | null = null;
     let signal: NodeJS.Signals | null = null;
+    let deadlineLateMs = 0;
+    let failureCause: ModuleGraphWarmupResult["failureCause"];
+    const deadlineAt = performance.now() + deadlineMs;
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let reap: ReturnType<typeof setTimeout> | undefined;
     const finish = () => {
@@ -266,29 +271,37 @@ export function spawnModuleGraphWarmupChild(
         exitCode,
         signal,
         timedOut,
+        deadlineLateMs,
+        failureCause,
       });
     };
     const beginReapGrace = () => {
       if (settled) return;
       reap ??= setTimeout(finish, WARMUP_REAP_RESERVE_MS);
     };
-    const stop = () => {
+    const stop = (cause: ModuleGraphWarmupResult["failureCause"] = "deadline") => {
       if (settled || timedOut) return;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        exitCode = child.exitCode; signal = child.signalCode;
+        clearTimeout(deadline); beginReapGrace(); return;
+      }
       timedOut = true;
+      failureCause = cause;
+      deadlineLateMs = cause === "deadline" ? Math.max(0, performance.now() - deadlineAt) : 0;
       clearTimeout(deadline);
       beginReapGrace();
       try { child.kill("SIGKILL"); } catch { /* The kill's own failure must not extend the wait. */ }
     };
     const capture = (chunk: Buffer, into: Buffer[]) => {
-      if (settled || timedOut) return;
+      if (settled) return;
       bytes += chunk.length;
-      if (bytes > maxCaptureBytes) { stop(); return; }
+      if (bytes > maxCaptureBytes) { stop("capture-limit"); return; }
       into.push(chunk);
     };
     child.stdout?.on("data", (chunk: Buffer) => capture(chunk, stdoutChunks));
     child.stderr?.on("data", (chunk: Buffer) => capture(chunk, stderrChunks));
-    child.stdout?.on("error", stop);
-    child.stderr?.on("error", stop);
+    child.stdout?.on("error", () => stop("stream-error"));
+    child.stderr?.on("error", () => stop("stream-error"));
     // The child was never started or died at launch; there is nothing to reap.
     child.on("error", finish);
     child.once("exit", (code, exitSignal) => {
@@ -303,7 +316,7 @@ export function spawnModuleGraphWarmupChild(
       signal = exitSignal;
       finish();
     });
-    deadline = setTimeout(stop, deadlineMs);
+    deadline = setTimeout(() => stop("deadline"), deadlineMs);
   });
 }
 
@@ -328,18 +341,21 @@ async function runModuleGraphWarmup(options: ColdSpawnWarmup, deadlineMs: number
   );
   const elapsedMs = (performance.now() - startedAt).toFixed(0);
   const report = parseWarmupReport(result.stdout);
+  const diagnosticStderr = result.stderr.split("\n").filter(line => !line.startsWith("[cold-spawn-phase] ")).join("\n").trim().slice(-600);
   if (result.timedOut) {
+    const phase = result.stderr.match(/\[cold-spawn-phase\] (?:boot|import:\d+:begin|import:\d+:loaded|report)/g)?.at(-1) ?? "no child phase";
     throw new Error(
-      `[cold-spawn-warmup] graph=${options.graph} warm-up child did not exit within ${deadlineMs}ms `
-      + `and was killed (specifiers=${specifiers.length}). `
-      + `stderr: ${result.stderr.trim().slice(0, 600)}`,
+      `[cold-spawn-warmup] graph=${options.graph} warm-up child was stopped `
+      + `(budget=${deadlineMs}ms, specifiers=${specifiers.length}). `
+      + `cause=${String(result.failureCause)}, elapsedMs=${elapsedMs}, timerLateMs=${result.deadlineLateMs.toFixed(0)}, exit=${String(result.exitCode)}, signal=${String(result.signal)}, phase=${phase}, reportLoaded=${String(report?.loaded)}. `
+      + `stderr: ${diagnosticStderr}`,
     );
   }
   if (result.exitCode !== 0 || report === undefined || report.loaded === 0) {
     throw new Error(
       `[cold-spawn-warmup] graph=${options.graph} loaded nothing in ${elapsedMs}ms `
       + `(exitCode=${String(result.exitCode)}, specifiers=${specifiers.length}). `
-      + `stderr: ${result.stderr.trim().slice(0, 600)}`,
+      + `stderr: ${diagnosticStderr}`,
     );
   }
   console.log(
@@ -374,24 +390,27 @@ const WARMUP_REPORT_RESERVE_MS = 3_000;
  */
 function warmupScript(specifiers: readonly string[], deadlineMs: number): string {
   return [
+    'console.error("[cold-spawn-phase] boot");',
     `const specifiers = ${JSON.stringify(specifiers)};`,
-    `const budgetEndsAt = Date.now() + ${Math.max(1_000, deadlineMs - WARMUP_REPORT_RESERVE_MS)};`,
+    `const budgetEndsAt = ${Date.now() + Math.max(1_000, deadlineMs - WARMUP_REPORT_RESERVE_MS)};`,
     "const failures = [];",
     "let loaded = 0;",
-    "for (const specifier of specifiers) {",
+    "for (const [index, specifier] of specifiers.entries()) {",
     "  const remaining = budgetEndsAt - Date.now();",
     "  if (remaining <= 0) { failures.push(specifier + \": warm-up budget exhausted\"); continue; }",
     "  try {",
+    '    console.error("[cold-spawn-phase] import:" + index + ":begin");',
     "    const settled = await Promise.race([",
     "      import(specifier).then(() => \"loaded\"),",
     "      Bun.sleep(remaining).then(() => \"unsettled\"),",
     "    ]);",
-    "    if (settled === \"loaded\") loaded += 1;",
+    '    if (settled === "loaded") { loaded += 1; console.error("[cold-spawn-phase] import:" + index + ":loaded"); }',
     "    else failures.push(specifier + \": did not settle within the warm-up budget\");",
     "  }",
     "  catch (error) { failures.push(specifier + \": \" + String(error && error.message)); }",
     "}",
     `console.log(${JSON.stringify(WARMUP_REPORT_PREFIX)} + JSON.stringify({ loaded, failures }));`,
+    'console.error("[cold-spawn-phase] report");',
     "process.exit(0);",
   ].join("\n");
 }

@@ -376,32 +376,24 @@ export function resetTranslatorAggregateForTests(): void {
 }
 
 export function finalizeTranslatorBudgetResponse(response: Response, budget: TranslatorBudget, signal?: AbortSignal): Response {
-  // A handler can finish cancellation by rendering its 499 envelope before wrapping.
-  // Preserve that existing error body while immediately releasing its dead request budget.
-  if (!response.body || (signal?.aborted && response.status === 499)) {
+  if (!response.body) {
     budget.dispose();
     return response;
   }
   const reader = response.body.getReader();
-  let streamController: ReadableStreamDefaultController<Uint8Array>;
   let finalized = false;
   const finalize = () => {
     if (finalized) return;
     finalized = true;
-    signal?.removeEventListener("abort", onAbort);
+    signal?.removeEventListener("abort", finalize);
     budget.dispose();
   };
-  const onAbort = () => {
-    finalize();
-    streamController.error(signal?.reason ?? new DOMException("Request aborted", "AbortError"));
-    void reader.cancel(signal?.reason).catch(() => undefined);
-  };
+  // The transport owns cancellation and terminal precedence. Abort releases only
+  // accounting here, including when no consumer ever pulls or cancels this body.
   const body = new ReadableStream<Uint8Array>({
-    start(controller) { streamController = controller; },
     async pull(controller) {
       try {
         const result = await reader.read();
-        if (signal?.aborted) return;
         if (result.done) {
           finalize();
           controller.close();
@@ -416,7 +408,7 @@ export function finalizeTranslatorBudgetResponse(response: Response, budget: Tra
       await reader.cancel(reason);
     },
   });
-  if (signal?.aborted) onAbort();
-  else signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) finalize();
+  else signal?.addEventListener("abort", finalize, { once: true });
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }

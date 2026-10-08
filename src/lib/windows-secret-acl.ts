@@ -36,8 +36,8 @@
  *     own caches so one shape never satisfies the other's lookup.
  */
 
-import { existsSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { env, platform } from "node:process";
 import {
   SUBPROCESS_KILL_GRACE_MS,
@@ -454,9 +454,27 @@ function registerPendingAsyncIcaclsReap(
   });
 }
 
+function canonicalRemovalPath(path: string): string | undefined {
+  const missing: string[] = [];
+  let current = resolve(path);
+  while (true) {
+    try { return resolve(realpathSync.native(current), ...missing); }
+    catch (error) {
+      if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
+      const parent = dirname(current);
+      if (parent === current) return undefined;
+      missing.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
 function pathIsAtOrBelow(targetPath: string, rootPath: string): boolean {
-  const relativePath = relative(resolve(rootPath), resolve(targetPath));
-  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+  const target = canonicalRemovalPath(targetPath), root = canonicalRemovalPath(rootPath);
+  // An unreadable identity cannot prove that a registered child is outside this tree.
+  if (target === undefined || root === undefined) return true;
+  const relativePath = relative(root, target);
+  return relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
 }
 
 /** True while an async icacls runner still owns this exact path after its caller's belt fired. */
