@@ -6,6 +6,12 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const vi: Record<TKey, string> = {
+  "sidecar.pool": "Nhóm tài khoản",
+  "sidecar.poolCurrent": "Nhóm của yêu cầu hiện tại",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · Nhóm 2",
+  "sidecar.poolMixed": "Lựa chọn rõ ràng này có thể dùng nhóm khác với yêu cầu chính.",
+  "provider.name.anthropic2": "Anthropic · Nhóm 2",
   "nav.claude": "Claude",
   "claude.pageSub": "Định tuyến và cài đặt OpenCodex cho Claude Code.",
 

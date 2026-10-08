@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * Russian i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ru: Record<TKey, string> = {
+  "sidecar.pool": "Пул аккаунтов",
+  "sidecar.poolCurrent": "Пул текущего запроса",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · Пул 2",
+  "sidecar.poolMixed": "При явном выборе может использоваться другой пул, чем у основного запроса.",
+  "provider.name.anthropic2": "Anthropic · Пул 2",
   "nav.claude": "Claude",
   "claude.pageSub": "Маршрутизация и настройки OpenCodex для Claude Code.",
 

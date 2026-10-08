@@ -31,6 +31,7 @@ import { isSubscriptionCliProvider } from "./subscription-cli";
  * The provider name is the Record key, not a field here.
  */
 export interface WorkspaceProvider {
+  anthropicOAuthInstance?: "anthropic2";
   adapter: string;
   baseUrl: string;
   hasApiKey?: boolean;

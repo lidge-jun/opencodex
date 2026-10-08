@@ -246,12 +246,13 @@ export function resolvePassthroughWebSearchBridgeAuth(
   backend: ProviderWebSearchBridgeBackend | undefined,
   config: OcxConfig,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
+  parentProviderName?: string,
 ): PassthroughWebSearchBridgeAuth {
   switch (backend) {
     case "openai":
       return openAiSidecar ? { openAiSidecar } : {};
     case "anthropic": {
-      const anthropic = findAnthropicSidecarProvider(config);
+      const anthropic = findAnthropicSidecarProvider(config, parentProviderName);
       return anthropic ? { anthropic } : {};
     }
     case "xai": {

@@ -1,3 +1,4 @@
+import type { AnthropicInstanceId } from "../../../../src/providers/anthropic-instance-id";
 /**
  * Opt-in Anthropic OAuth account pool controls (#294).
  * Experimental. The conditions it is meant for are static helper text next to the toggle,
@@ -69,10 +70,12 @@ function enabledStatus(
 
 export default function AnthropicAccountPoolSettings({
   apiBase,
+  provider = "anthropic",
   accountCount,
   onThresholdChange,
 }: {
   apiBase: string;
+  provider?: AnthropicInstanceId;
   accountCount: number;
   onThresholdChange?: (threshold: number) => void;
 }) {
@@ -90,6 +93,7 @@ export default function AnthropicAccountPoolSettings({
   const onThresholdChangeRef = useRef(onThresholdChange);
   const mountedRef = useRef(true);
   const apiBaseRef = useRef(apiBase);
+  const providerRef = useRef(provider);
   const saveAbortRef = useRef<AbortController | null>(null);
 
   useLayoutEffect(() => {
@@ -104,7 +108,8 @@ export default function AnthropicAccountPoolSettings({
   useLayoutEffect(() => {
     onThresholdChangeRef.current = onThresholdChange;
     apiBaseRef.current = apiBase;
-  }, [apiBase, onThresholdChange]);
+    providerRef.current = provider;
+  }, [apiBase, provider, onThresholdChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -119,7 +124,7 @@ export default function AnthropicAccountPoolSettings({
     // in-flight cancellation, which is the part that actually needs to be cancellable.
     void Promise.resolve()
       // Through the shared pool client, which speaks the one contract every kind answers on.
-      .then(() => getPoolSettings(apiBase, "anthropic", (input, init) => fetch(input, init), { signal: ac.signal }))
+      .then(() => getPoolSettings(apiBase, provider, (input, init) => fetch(input, init), { signal: ac.signal }))
       .then(settings => {
         if (!settings) throw new Error("load");
         return settings;
@@ -154,7 +159,7 @@ export default function AnthropicAccountPoolSettings({
       cancelled = true;
       ac.abort();
     };
-  }, [apiBase, reloadVersion]);
+  }, [apiBase, provider, reloadVersion]);
 
   const save = useCallback(async (next: {
     enabled: boolean;
@@ -165,10 +170,11 @@ export default function AnthropicAccountPoolSettings({
     nativeMessages: boolean;
   }) => {
     const requestApiBase = apiBase;
+    const requestProvider = provider;
     saveAbortRef.current?.abort();
     const controller = new AbortController();
     saveAbortRef.current = controller;
-    const currentRequest = () => mountedRef.current && apiBaseRef.current === requestApiBase
+    const currentRequest = () => mountedRef.current && apiBaseRef.current === requestApiBase && providerRef.current === requestProvider
       && saveAbortRef.current === controller && !controller.signal.aborted;
     const previousState = state;
     setSaving(true);
@@ -177,7 +183,7 @@ export default function AnthropicAccountPoolSettings({
     try {
       // The client owns the field mapping: `threshold` becomes `autoSwitchThreshold` and the
       // provider is always sent, so no call site can forget either.
-      const json = await putPoolSettings(requestApiBase, "anthropic", {
+      const json = await putPoolSettings(requestApiBase, requestProvider, {
         enabled: next.enabled,
         threshold: next.threshold,
         strategy: next.strategy,
@@ -221,9 +227,9 @@ export default function AnthropicAccountPoolSettings({
     } finally {
       const ownsSave = saveAbortRef.current === controller;
       if (ownsSave) saveAbortRef.current = null;
-      if (ownsSave && mountedRef.current && apiBaseRef.current === requestApiBase) setSaving(false);
+      if (ownsSave && mountedRef.current && apiBaseRef.current === requestApiBase && providerRef.current === requestProvider) setSaving(false);
     }
-  }, [apiBase, state, t]);
+  }, [apiBase, provider, state, t]);
 
   const enabled = state?.enabled === true;
   const threshold = state?.threshold ?? 80;

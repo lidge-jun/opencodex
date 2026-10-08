@@ -8,7 +8,17 @@ import { AUTO_COMPACT_WINDOW_DEFAULT } from "./claude-code-types";
 export type SidecarBackend = "openai" | "anthropic";
 /** Vision override may carry "routed" (proxy-router describer, #2188). */
 export type VisionOverrideBackend = SidecarBackend | "routed";
-export interface SidecarOverride { backend?: VisionOverrideBackend; model?: string }
+export type AnthropicInstanceId = "anthropic" | "anthropic2";
+export interface AnthropicPoolOptions {
+  backend?: string;
+  parent?: AnthropicInstanceId;
+  selected?: AnthropicInstanceId;
+  resolved?: AnthropicInstanceId;
+  mixed: boolean;
+  available: AnthropicInstanceId[];
+  code?: "anthropic_helper_unavailable";
+}
+export interface SidecarOverride { backend?: VisionOverrideBackend; model?: string; anthropicInstance?: AnthropicInstanceId | null }
 
 export interface ClaudeManualEnvState {
   /**

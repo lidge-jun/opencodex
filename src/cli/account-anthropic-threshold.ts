@@ -1,7 +1,8 @@
+import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { apiError, apiJson, proxyUnreachable, resolveBaseUrl, type AccountDeps } from "./account-api";
 
 /** A separate account selector prevents accidentally changing the whole Anthropic pool. */
-export async function cmdAnthropicAccountThreshold(args: string[], action: string, wantsJson: boolean, deps: AccountDeps): Promise<number> {
+export async function cmdAnthropicAccountThreshold(args: string[], action: string, wantsJson: boolean, deps: AccountDeps, provider: AnthropicInstanceId = "anthropic"): Promise<number> {
   const selector = args.indexOf("--account");
   const accountId = selector >= 0 ? args[selector + 1] : undefined;
   if (selector >= 0) args.splice(selector, 2);
@@ -15,8 +16,8 @@ export async function cmdAnthropicAccountThreshold(args: string[], action: strin
   const base = await resolveBaseUrl(deps);
   if (!base) return proxyUnreachable();
   const response = action === "status"
-    ? await apiJson(deps, base, "GET", "/api/oauth/accounts?provider=anthropic")
-    : await apiJson(deps, base, "PUT", "/api/oauth/accounts/auto-switch", { provider: "anthropic", accountId, threshold });
+    ? await apiJson(deps, base, "GET", `/api/oauth/accounts?provider=${provider}`)
+    : await apiJson(deps, base, "PUT", "/api/oauth/accounts/auto-switch", { provider, accountId, threshold });
   if (response.status === 0) return proxyUnreachable(response.transportError);
   if (response.status !== 200) return apiError(response.json, "failed to update account threshold", response.status);
   if (!response.json || typeof response.json !== "object" || Array.isArray(response.json)) return apiError({}, "invalid account threshold response", 400);
@@ -28,7 +29,10 @@ export async function cmdAnthropicAccountThreshold(args: string[], action: strin
   const validPercent = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100;
   if ((result.autoSwitchThresholdOverride !== null && !validPercent(result.autoSwitchThresholdOverride))
     || !validPercent(result.effectiveAutoSwitchThreshold)) return apiError({}, "invalid account threshold response", 400);
-  const payload = { provider: "anthropic", accountId, autoSwitchThresholdOverride: result.autoSwitchThresholdOverride,
+  const responseProvider = action === "status" ? response.json.provider : result.provider;
+  if ((provider === "anthropic2" || responseProvider !== undefined) && responseProvider !== provider) return apiError({}, "invalid account threshold identity", 400);
+  if (action !== "status" && (provider === "anthropic2" || result.accountId !== undefined) && result.accountId !== accountId) return apiError({}, "invalid account threshold identity", 400);
+  const payload = { provider, accountId, autoSwitchThresholdOverride: result.autoSwitchThresholdOverride,
     effectiveAutoSwitchThreshold: result.effectiveAutoSwitchThreshold };
   if (wantsJson) console.log(JSON.stringify(payload, null, 2));
   else console.log(`auto-switch: ${payload.autoSwitchThresholdOverride === null ? "inherited" : "custom"} (${payload.effectiveAutoSwitchThreshold === 0 ? "usage-based switching disabled" : `${payload.effectiveAutoSwitchThreshold}%`})`);
@@ -36,6 +40,6 @@ export async function cmdAnthropicAccountThreshold(args: string[], action: strin
 }
 
 function invalid(): number {
-  console.error("Usage: ocx account auto-switch anthropic <status|inherit|on|off|threshold <0-100>> --account <id> [--json]");
+  console.error("Usage: ocx account auto-switch <anthropic|anthropic2> <status|inherit|on|off|threshold <0-100>> --account <id> [--json]");
   return 2;
 }

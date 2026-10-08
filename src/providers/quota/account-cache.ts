@@ -194,7 +194,7 @@ export interface ProviderAccountQuota {
 
 /** Providers whose per-account quota can be probed. Extend as other OAuth APIs are covered. */
 export function supportsPerAccountQuota(provider: string): boolean {
-  return provider === "anthropic" || provider === "kiro" || provider === "google-antigravity"
+  return isAnthropicInstanceId(provider) || provider === "kiro" || provider === "google-antigravity"
     || explicitAccountReader(provider);
 }
 
@@ -446,7 +446,7 @@ export function resetProviderQuotaReconcileStateForTests(): void {
 
 /** Drop cached per-account rows (all, or just one provider's). */
 export function clearAccountQuotaCache(provider?: string): void {
-  // Existing active readers remain wp4; the dormant B namespace must not stale an A flight.
+  // Anthropic readers use provider-owned epochs; B cannot revoke an A flight.
   if (provider !== "anthropic2") explicitAccountEpoch += 1;
   if (!provider) {
     allAccountQuotaEpoch += 1;
@@ -488,7 +488,7 @@ export async function getTokenForAccountQuotaProbe(provider: string, accountId: 
   const row = getAccountCredentialWithStatus(provider, accountId);
   if (!row) throw new Error("account credential missing");
   // An operator-paused account is excluded from every automatic upstream use, quota reads included.
-  if (row.paused) throw new Error("account is paused; quota probe skipped");
+  if (row.paused || row.needsReauth) throw new Error("account is unavailable; quota probe skipped");
   const stored = row.credential;
   if (stored.expires > Date.now() + ACCOUNT_TOKEN_SKEW_MS) return stored.access;
   const activeId = getAccountSet(provider)?.activeAccountId;

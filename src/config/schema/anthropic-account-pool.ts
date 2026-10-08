@@ -52,20 +52,22 @@ export function anthropicOAuthInstanceConfigError(value: unknown): string | unde
   const inspect = (raw: unknown, location: string[]): string | undefined => {
     if (!raw || typeof raw !== "object" || seen.has(raw)) return undefined;
     seen.add(raw);
-    for (const [field, child] of Object.entries(raw)) {
+    for (const [field, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(raw))) {
       const path = [...location, field];
       if (field === "anthropicOAuthInstance") {
         const label = redactSecretString(path.join("."));
+        if (!("value" in descriptor)) return `schema_invalid: ${label}: must be an own data property`;
         if (location.length !== 2 || location[0] !== "providers" || location[1] !== "anthropic2") {
           return `schema_invalid: ${label}: misplaced field; valid only on providers.anthropic2`;
         }
-        if (child !== "anthropic2") return `schema_invalid: ${label}: must be anthropic2`;
-        const row = record(raw);
-        if (row?.adapter !== "anthropic" || row?.authMode !== "oauth") {
+        if (descriptor.value !== "anthropic2") return `schema_invalid: ${label}: must be anthropic2`;
+        const row = Object.getOwnPropertyDescriptors(raw);
+        if (row.adapter?.value !== "anthropic" || row.authMode?.value !== "oauth") {
           return `schema_invalid: ${label}: requires Anthropic adapter and OAuth authMode`;
         }
       }
-      const error = inspect(child, path);
+      if (!("value" in descriptor)) continue;
+      const error = inspect(descriptor.value, path);
       if (error) return error;
     }
     seen.delete(raw);
@@ -92,10 +94,46 @@ export function anthropicSidecarConfigError(value: unknown): string | undefined 
       // Web search defaults to OpenAI; vision's absent backend keeps its credential-based auto mode.
       const backend = sidecar.backend === undefined
         ? (field === "webSearchSidecar" ? "openai" : undefined) : sidecar.backend;
+      const modelProvider = typeof sidecar.model === "string" && sidecar.model.includes("/")
+        ? sidecar.model.slice(0, sidecar.model.indexOf("/")) : undefined;
+      if (modelProvider && isAnthropicInstanceId(modelProvider) && modelProvider !== sidecar.anthropicInstance) {
+        return `schema_invalid: ${path}: conflicts with the model's Anthropic instance`;
+      }
       if (backend !== undefined && backend !== "anthropic") {
         return `schema_invalid: ${path}: requires an anthropic backend`;
       }
     }
   }
   return undefined;
+}
+
+/** Validate the effective settings before either management route mutates live state. */
+export function anthropicSidecarPatchError(
+  config: unknown,
+  patches: Record<string, unknown>,
+  claude = false,
+): string | undefined {
+  const source = record(config) ?? {};
+  const next = { ...source };
+  const owner = claude ? { ...record(source.claudeCode) } : next;
+  for (const field of ["webSearchSidecar", "visionSidecar"] as const) {
+    if (!Object.hasOwn(patches, field)) continue;
+    const patch = patches[field];
+    if (patch === null) { delete owner[field]; continue; }
+    const section = record(patch);
+    if (!section) continue; // Shape validation belongs to the route.
+    if (section.anthropicInstance !== undefined && section.anthropicInstance !== null
+      && !isAnthropicInstanceId(section.anthropicInstance)) {
+      return `${field}.anthropicInstance must be anthropic, anthropic2, or null`;
+    }
+    const settings = { ...record(owner[field]) };
+    for (const key of ["backend", "model", "anthropicInstance"] as const) {
+      if (section[key] === null || (key === "model" && section[key] === "")) delete settings[key];
+      else if (section[key] !== undefined) settings[key] = section[key];
+    }
+    if (claude && (Object.keys(section).length === 0 || Object.keys(settings).length === 0)) delete owner[field];
+    else owner[field] = settings;
+  }
+  if (claude) next.claudeCode = owner;
+  return anthropicSidecarConfigError(next);
 }

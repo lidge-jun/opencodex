@@ -1,3 +1,4 @@
+import { isAnthropicOAuthInstance } from "../../providers/anthropic-instance";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { execFileSync } from "node:child_process";
@@ -181,7 +182,7 @@ export async function fetchProviderModelsWithAuth(
   // generation, so a request started with the former account cannot later publish its result.
   const cacheGeneration = captureModelCacheGeneration(name);
   const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
-  const anthropicSelection = (name === "anthropic" || name === "anthropic2") && prov.authMode === "oauth" && mayResolveModelsOAuth(name, prov)
+  const anthropicSelection = isAnthropicOAuthInstance(name) && prov.authMode === "oauth" && mayResolveModelsOAuth(name, prov)
     ? captureOAuthAccountSelection(name) : null;
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   const seedVertexDefault = prov.adapter === "google"
@@ -278,7 +279,7 @@ export async function fetchProviderModelsWithAuth(
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
   const maySendAnthropicDiscovery = () => {
-    if ((name !== "anthropic" && name !== "anthropic2") || prov.authMode !== "oauth") return true;
+    if (!isAnthropicOAuthInstance(name) || prov.authMode !== "oauth") return true;
     if (!mayResolveModelsOAuth(name, prov)) return false;
     const selected = captureOAuthAccountSelection(name);
     const row = auth.oauthAccountId ? getAccountCredentialWithStatus(name, auth.oauthAccountId) : null;
@@ -658,7 +659,7 @@ export async function fetchProviderModelsWithAuth(
   const failedDiscoveryFallback = (
     failure: ProviderModelDiscoveryFailure,
   ): { models: CatalogModel[]; fallback: "stale" | "configured"; shouldLog: boolean } => {
-    if (!isCurrentCacheGeneration()) {
+    if (!isCurrentCacheGeneration() || !maySendAnthropicDiscovery()) {
       return {
         models: withConfiguredRetention(failedDiscoveryConfigured),
         fallback: "configured",
@@ -859,7 +860,7 @@ export async function fetchProviderModelsWithAuth(
         `[opencodex] Provider model discovery for "${name}" returned an authoritative empty catalog; ${droppedConfiguredIds.length > 0 ? `dropping configured model ids: ${droppedConfiguredIds.join(", ")}` : "no models will be exposed"}.`,
       );
     }
-    if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+    if (!maySendAnthropicDiscovery() || !setCached(name, forCache, Date.now(), cacheGeneration)) {
       return observed(withConfiguredRetention(configured), "degraded");
     }
     markProviderDiscoveryOk(name, liveModelCount);

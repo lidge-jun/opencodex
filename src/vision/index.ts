@@ -217,6 +217,7 @@ function descriptionIdentity(job: ImageJob, plan: VisionPlan): { key: string; pe
     key: JSON.stringify([
       plan.backend,
       plan.settings.model,
+      ...(plan.backend === "anthropic" ? [plan.anthropicSidecar?.providerName, plan.settings.reasoning, plan.anthropicSidecar?.config.visionSidecar] : []),
       ...(plan.backend === "openai" ? [plan.settings.reasoning] : []),
       job.detail ?? "high",
       imageHash,

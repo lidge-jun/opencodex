@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  "sidecar.pool": "账户池",
+  "sidecar.poolCurrent": "使用当前请求的账户池",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · 账户池 2",
+  "sidecar.poolMixed": "此显式选择可能使用与主请求不同的账户池。",
+  "provider.name.anthropic2": "Anthropic · 账户池 2",
   "nav.claude": "Claude",
   "claude.pageSub": "管理 Claude Code 的 OpenCodex 路由和设置。",
 

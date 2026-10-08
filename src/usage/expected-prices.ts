@@ -811,7 +811,8 @@ export function findContextTier(
   modelId: string,
   tiers: readonly ContextTier[] = CONTEXT_TIERS,
 ): ContextTier | undefined {
-  return tiers.find(tier => tier.provider === provider && tier.modelId === modelId);
+  const familyProvider = provider === "anthropic2" && tiers === CONTEXT_TIERS ? "anthropic" : provider;
+  return tiers.find(tier => tier.provider === familyProvider && tier.modelId === modelId);
 }
 
 /** Whether a raw input-token count crosses the tier's published boundary. */

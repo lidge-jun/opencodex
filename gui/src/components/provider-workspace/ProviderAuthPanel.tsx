@@ -1,3 +1,4 @@
+import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../../src/providers/anthropic-instance-id";
 /**
  * ProviderAuthPanel — OAuth accounts, API-key pool, and forward-auth
  * embedding for the workspace Settings tab (WP091). Consumes WP040+WP060
@@ -248,13 +249,15 @@ export default function ProviderAuthPanel({
   const grokCoupons = useGrokResetCoupons({ apiBase, accountIds: grokAccountIds, enabled: grokCouponsEnabled });
   const [couponAccount, setCouponAccount] = useState<OAuthAccountRow | null>(null);
   // Claude usage resets ride a separate usage read, like the Grok coupons above.
-  const claudeGrantsEnabled = isOauth && item.name === "anthropic" && accounts.length > 0;
+  const isAnthropicPool = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item);
+  const claudeGrantsEnabled = isOauth && isAnthropicPool && accounts.length > 0;
   const claudeAccountIds = useMemo(
     () => (claudeGrantsEnabled ? accounts.filter(account => !accountShowsReauth(account)).map(account => account.id) : []),
     [claudeGrantsEnabled, accounts],
   );
-  const claudeGrants = useAnthropicResetGrants({ apiBase, accountIds: claudeAccountIds, enabled: claudeGrantsEnabled });
+  const claudeGrants = useAnthropicResetGrants({ apiBase, provider: isAnthropicInstanceId(item.name) ? item.name : "anthropic", accountIds: claudeAccountIds, enabled: claudeGrantsEnabled });
   const [grantAccount, setGrantAccount] = useState<OAuthAccountRow | null>(null);
+  useEffect(() => { setGrantAccount(null); }, [apiBase, item.name]);
   const refreshQuota = async () => {
     if (!onRefreshQuota || refreshingQuota) return;
     const generation = ++quotaRefreshGeneration.current;
@@ -428,10 +431,11 @@ export default function ProviderAuthPanel({
         )}
         {isOauth && (
           <>
-            {item.name === "anthropic" && (
+            {isAnthropicPool && (
               <AnthropicAccountPoolSettings
-                key={apiBase}
+                key={`${apiBase}:${item.name}`}
                 apiBase={apiBase}
+                provider={isAnthropicInstanceId(item.name) ? item.name : "anthropic"}
                 accountCount={accounts.length}
                 onThresholdChange={threshold => { void authHandlers?.onAccountPoolThreshold?.(item.name, threshold); }}
               />
@@ -628,7 +632,7 @@ export default function ProviderAuthPanel({
                     </button>
                     </div>
                     <div className="pwi-auth-acct-quota">
-                      {item.name === "anthropic" && account.autoSwitchThresholdOverride !== undefined
+                      {isAnthropicPool && account.autoSwitchThresholdOverride !== undefined
                         && account.autoSwitchThreshold !== undefined && authHandlers.onAccountThreshold && (
                         <AccountAutoSwitchControl
                           accountLabel={label} inputId={`anthropic-threshold-${account.id}`}
@@ -657,6 +661,7 @@ export default function ProviderAuthPanel({
             )}
             {grantAccount && (
               <AnthropicResetGrantModal
+                key={`${apiBase}:${item.name}:${grantAccount.id}`}
                 accountId={grantAccount.id}
                 accountLabel={oauthAccountDisplayLabel(accounts, grantAccount, t)}
                 entry={claudeGrants.entries[grantAccount.id]}

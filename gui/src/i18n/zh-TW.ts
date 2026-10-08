@@ -2,6 +2,12 @@ import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  "sidecar.pool": "帳戶池",
+  "sidecar.poolCurrent": "使用目前請求的帳戶池",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · 帳戶池 2",
+  "sidecar.poolMixed": "此明確選擇可能使用與主要請求不同的帳戶池。",
+  "provider.name.anthropic2": "Anthropic · 帳戶池 2",
   "nav.claude": "Claude",
   "claude.pageSub": "管理 Claude Code 的 OpenCodex 路由與設定。",
 

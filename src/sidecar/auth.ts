@@ -17,6 +17,39 @@ import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { isCodexAccountUsable } from "../codex/account-usability";
 import { MAIN_CODEX_ACCOUNT_ID, isSelectableCodexPoolAccount } from "../codex/account-id";
 import { getAccountSet } from "../oauth/store";
+import { configuredAnthropicInstance, isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance";
+
+export class AnthropicHelperUnavailableError extends Error {
+  readonly code = "anthropic_helper_unavailable";
+  constructor(readonly instance: AnthropicInstanceId) {
+    super(`The selected ${instance} helper account pool is unavailable`);
+    this.name = "AnthropicHelperUnavailableError";
+  }
+}
+export type AnthropicHelperContext = {
+  backendFamily: string;
+  anthropicInstance?: AnthropicInstanceId;
+  parentProviderName?: string;
+};
+
+export function resolveAnthropicSidecarAuth(config: OcxConfig, instance: AnthropicInstanceId):
+  { anthropicProviderName: AnthropicInstanceId; anthropicProvider: OcxProviderConfig } | undefined {
+  const provider = config.providers[instance];
+  if (!provider || provider.disabled || provider.authMode !== "oauth" || provider.adapter !== "anthropic"
+    || configuredAnthropicInstance(config, instance) !== instance) return undefined;
+  const set = getAccountSet(instance);
+  const active = set?.accounts.find(row => row.id === set.activeAccountId);
+  if (!active || active.needsReauth || active.paused) return undefined;
+  return { anthropicProviderName: instance, anthropicProvider: provider };
+}
+
+export function resolveAnthropicHelperInstance(config: OcxConfig, context: AnthropicHelperContext): AnthropicInstanceId | undefined {
+  if (context.backendFamily !== "anthropic") return undefined;
+  const instance = context.anthropicInstance ?? (isAnthropicInstanceId(context.parentProviderName)
+    ? context.parentProviderName : undefined);
+  if (instance && !resolveAnthropicSidecarAuth(config, instance)) throw new AnthropicHelperUnavailableError(instance);
+  return instance;
+}
 
 export interface SidecarAuthState {
   /** ChatGPT login usable: canonical forward provider AND a live stored credential. */
@@ -63,6 +96,7 @@ function findAnthropicAuthProvider(
   config: OcxConfig,
 ): { providerName: string; provider: OcxProviderConfig } | undefined {
   for (const [providerName, provider] of Object.entries(config.providers)) {
+    if (providerName === "anthropic2") continue;
     if (provider.disabled === true) continue;
     if (provider.adapter !== "anthropic" || provider.authMode !== "oauth") continue;
     const set = getAccountSet(providerName);
@@ -72,8 +106,11 @@ function findAnthropicAuthProvider(
   return undefined;
 }
 
-export function resolveSidecarAuth(config: OcxConfig): SidecarAuthState {
-  const anthropic = findAnthropicAuthProvider(config);
+export function resolveSidecarAuth(config: OcxConfig, instance?: AnthropicInstanceId): SidecarAuthState {
+  const exact = instance ? resolveAnthropicSidecarAuth(config, instance) : undefined;
+  if (instance && !exact) throw new AnthropicHelperUnavailableError(instance);
+  const anthropic = exact ? { providerName: exact.anthropicProviderName, provider: exact.anthropicProvider }
+    : findAnthropicAuthProvider(config);
   return {
     isCodexAuth: hasUsableCodexLogin(config),
     isAnthropicAuth: anthropic !== undefined,

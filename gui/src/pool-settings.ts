@@ -1,3 +1,4 @@
+import { isAnthropicInstanceId } from "../../src/providers/anthropic-instance-id";
 /**
  * One GUI client for the unified pool-settings contract.
  *
@@ -65,7 +66,7 @@ function toDto(json: unknown, provider: string, fallback?: PoolSettingsWrite): P
       : normalizeAccountPoolQuotaWindow(raw.quotaWindow ?? fallback?.quotaWindow),
     // Provider scope wins over a mismatched kind. Present malformed values fail closed;
     // only an absent field may use the submitted value (including false after a 204).
-    nativeMessages: provider !== "anthropic" ? null
+    nativeMessages: !isAnthropicInstanceId(provider) ? null
       : Object.hasOwn(raw, "nativeMessages") ? raw.nativeMessages === true
         : fallback?.nativeMessages ?? true,
     ...(raw.warning === "config_bookkeeping_failed" ? { warning: raw.warning } : {}),
@@ -89,7 +90,7 @@ export function poolSettingsRequestBody(provider: string, fields: PoolSettingsWr
     ...(fields.stickyLimit !== undefined ? { stickyLimit: fields.stickyLimit } : {}),
     ...(fields.threshold !== undefined ? { autoSwitchThreshold: fields.threshold } : {}),
     ...(fields.quotaWindow !== undefined ? { quotaWindow: fields.quotaWindow } : {}),
-    ...(provider === "anthropic" && fields.nativeMessages !== undefined ? { nativeMessages: fields.nativeMessages } : {}),
+    ...(isAnthropicInstanceId(provider) && fields.nativeMessages !== undefined ? { nativeMessages: fields.nativeMessages } : {}),
   };
 }
 
@@ -137,7 +138,7 @@ export async function putPoolSettings(
       body: JSON.stringify(poolSettingsRequestBody(provider, fields)),
     });
     if (!response.ok) {
-      if (provider === "anthropic" && response.status === 409) {
+      if (isAnthropicInstanceId(provider) && response.status === 409) {
         const failure = await response.json().catch(() => null);
         if (failure?.code === "config_save_state_unknown") throw new PoolSettingsSaveStateUnknownError();
       }

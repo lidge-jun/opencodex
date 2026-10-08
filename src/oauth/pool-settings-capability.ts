@@ -27,8 +27,8 @@ export type GenericPoolStrategy = typeof GENERIC_POOL_STRATEGIES[number];
 
 export function poolSettingsCapability(name: string, provider: OcxProviderConfig | undefined): PoolSettingsKind | null {
   if (name === "openai") return "codex";
-  if (name === "anthropic" || isBuiltinAnthropicInstanceRow(name, provider)) return "anthropic";
-  if (!provider) return null;
+  if (name === "anthropic" || (provider?.disabled !== true && isBuiltinAnthropicInstanceRow(name, provider))) return "anthropic";
+  if (name === "anthropic2" || !provider) return null;
   return isGenericFailoverProvider(name, provider) ? "generic" : null;
 }
 

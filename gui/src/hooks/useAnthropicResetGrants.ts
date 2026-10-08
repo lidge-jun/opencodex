@@ -1,3 +1,4 @@
+import type { AnthropicInstanceId } from "../../../src/providers/anthropic-instance-id";
 /**
  * useAnthropicResetGrants — reads and spends Claude usage-limit reset grants for
  * Anthropic OAuth accounts through `GET /api/anthropic/reset-grants` and
@@ -12,7 +13,7 @@
  * `unknown_outcome`, 500 `journal_write_failed`, 409 `in_flight`) is reported as
  * `unknown` so the dialog keeps the operation id and can only retry that same id.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createBoundedFetch } from "../bounded-fetch";
 
 export type AnthropicResetWindow = "five_hour" | "seven_day" | "seven_day_overage_included";
@@ -143,18 +144,29 @@ function errorCode(value: unknown): string {
   return "failed";
 }
 
-export function useAnthropicResetGrants({ apiBase, accountIds, enabled }: {
+export function useAnthropicResetGrants({ apiBase, provider = "anthropic", accountIds, enabled }: {
   apiBase: string;
+  provider?: AnthropicInstanceId;
   accountIds: string[];
   enabled: boolean;
 }): AnthropicResetGrantController {
   const [entries, setEntries] = useState<Record<string, AnthropicGrantEntry>>({});
   const epoch = useRef(0);
+  const namespace = `${apiBase}\0${provider}`;
+  const entryNamespace = useRef(namespace);
   const tokens = useRef(new Map<string, number>());
   const gate = useRef<{ active: number; waiting: Array<() => void> }>({ active: 0, waiting: [] });
   const identity = accountIds.join("\u0000");
+  useLayoutEffect(() => {
+    epoch.current += 1;
+    entryNamespace.current = namespace;
+    tokens.current.clear();
+    setEntries({});
+    return () => { epoch.current += 1; };
+  }, [namespace]);
 
   const read = useCallback(async (accountId: string, rosterEpoch: number) => {
+    if (epoch.current !== rosterEpoch) return;
     const token = (tokens.current.get(accountId) ?? 0) + 1;
     tokens.current.set(accountId, token);
     const queue = gate.current;
@@ -165,11 +177,14 @@ export function useAnthropicResetGrants({ apiBase, accountIds, enabled }: {
     const current = () => epoch.current === rosterEpoch && tokens.current.get(accountId) === token;
     const bounded = createBoundedFetch(READ_TIMEOUT_MS);
     try {
+      if (!current()) return;
       const response = await fetch(
-        `${apiBase}/api/anthropic/reset-grants?accountId=${encodeURIComponent(accountId)}`,
+        `${apiBase}/api/anthropic/reset-grants?accountId=${encodeURIComponent(accountId)}${provider === "anthropic" ? "" : `&provider=${encodeURIComponent(provider)}`}`,
         { signal: bounded.signal },
       );
-      const snapshot = response.ok ? parseAnthropicGrantSnapshot(await response.json().catch(() => null)) : null;
+      const raw = response.ok ? await response.json().catch(() => null) : null;
+      const ownsResponse = isRecord(raw) && (raw.provider === provider || (provider === "anthropic" && raw.provider === undefined));
+      const snapshot = ownsResponse ? parseAnthropicGrantSnapshot(raw) : null;
       if (!current()) return;
       setEntries(existing => ({
         ...existing,
@@ -185,7 +200,7 @@ export function useAnthropicResetGrants({ apiBase, accountIds, enabled }: {
       queue.active -= 1;
       queue.waiting.shift()?.();
     }
-  }, [apiBase]);
+  }, [apiBase, provider]);
 
   useEffect(() => {
     if (!enabled || identity === "") return;
@@ -205,12 +220,13 @@ export function useAnthropicResetGrants({ apiBase, accountIds, enabled }: {
     accountId: string,
     request: { grantId: string; operationId: string },
   ): Promise<AnthropicSpendOutcome> => {
+    const spendEpoch = epoch.current;
     const bounded = createBoundedFetch(SPEND_TIMEOUT_MS);
     try {
       const response = await fetch(`${apiBase}/api/anthropic/reset-grants/consume`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId, grantId: request.grantId, operationId: request.operationId }),
+        body: JSON.stringify({ ...(provider === "anthropic" ? {} : { provider }), accountId, grantId: request.grantId, operationId: request.operationId }),
         signal: bounded.signal,
       });
       if (!response.ok) {
@@ -218,8 +234,9 @@ export function useAnthropicResetGrants({ apiBase, accountIds, enabled }: {
         return UNKNOWN_CODES.has(code) ? { kind: "unknown", code } : { kind: "refused", code };
       }
       const data = await response.json().catch(() => null) as unknown;
-      if (!isRecord(data) || typeof data.code !== "string") return { kind: "unknown", code: "unknown_outcome" };
-      void read(accountId, epoch.current);
+      if (!isRecord(data) || typeof data.code !== "string"
+        || (data.provider !== provider && !(provider === "anthropic" && data.provider === undefined))) return { kind: "unknown", code: "unknown_outcome" };
+      if (spendEpoch === epoch.current) void read(accountId, spendEpoch);
       return {
         kind: "settled",
         code: data.code,
@@ -232,7 +249,7 @@ export function useAnthropicResetGrants({ apiBase, accountIds, enabled }: {
     } finally {
       bounded.clear();
     }
-  }, [apiBase, read]);
+  }, [apiBase, provider, read]);
 
-  return { entries, refresh, spend };
+  return { entries: entryNamespace.current === namespace ? entries : {}, refresh, spend };
 }

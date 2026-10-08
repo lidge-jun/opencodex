@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
+  "sidecar.pool": "Pool de comptes",
+  "sidecar.poolCurrent": "Pool de la requête actuelle",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · Pool 2",
+  "sidecar.poolMixed": "Ce choix explicite peut utiliser un autre pool que la requête principale.",
+  "provider.name.anthropic2": "Anthropic · Pool 2",
   "nav.claude": "Claude",
   "claude.pageSub": "Routage et paramètres OpenCodex pour Claude Code.",
 

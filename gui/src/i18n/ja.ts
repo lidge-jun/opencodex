@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  "sidecar.pool": "アカウントプール",
+  "sidecar.poolCurrent": "現在のリクエストのプール",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · プール2",
+  "sidecar.poolMixed": "この明示的な選択では、メインのリクエストと異なるプールを使用する場合があります。",
+  "provider.name.anthropic2": "Anthropic · プール2",
   "nav.claude": "Claude",
   "claude.pageSub": "Claude Code の OpenCodex ルーティングと設定を管理します。",
 

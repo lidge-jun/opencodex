@@ -6,6 +6,12 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const pt: Record<TKey, string> = {
+  "sidecar.pool": "Pool de contas",
+  "sidecar.poolCurrent": "Pool da solicitação atual",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · Pool 2",
+  "sidecar.poolMixed": "Esta seleção explícita pode usar um pool diferente da solicitação principal.",
+  "provider.name.anthropic2": "Anthropic · Pool 2",
   "compactionRouting.sources": "Origens",
   "compactionRouting.sourcesAll": "Todos os modelos de conversa",
   "compactionRouting.sourcesSelected": "Somente origens selecionadas",

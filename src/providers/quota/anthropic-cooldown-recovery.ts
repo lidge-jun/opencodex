@@ -3,7 +3,7 @@ import { getCachedProviderAccountQuota, captureProviderAccountQuotaEpoch } from 
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import type { AnthropicInstanceId } from "../anthropic-instance-id";
 import type { GenerationContext } from "../../lib/state-store-sweeper";
-import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus } from "../../oauth/store";
+import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import type { ProviderQuota } from "../quota-types";
 
 export class AnthropicQuotaProbeOwnershipError extends Error {}
@@ -62,8 +62,8 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
 
   /** Active usage readers bind this key after token refresh; renewal keeps the legacy flight valid. */
   function anthropicCredentialQuotaFlightKey(baseKey: string, accountId: string): string {
-    const credential = getAccountCredential(instance, accountId);
-    return `${anthropicCooldownFlightKey(baseKey, accountId)}\0${credential ? credentialGeneration(credential) : "missing"}`;
+    const row = getAccountSet(instance)?.accounts.find(row => row.id === accountId);
+    return `${anthropicCooldownFlightKey(baseKey, accountId)}\0${row ? JSON.stringify([credentialGeneration(row.credential), row.loginId, row.addedAt]) : "missing"}`;
   }
 
   function reserveCooldownGeneration(accountId: string): number {
@@ -107,6 +107,10 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     const credential = getAccountCredential(instance, accountId);
     if (!credential || credential.access !== accessToken) return null;
     const generation = credentialGeneration(credential);
+    const incarnation = reserveAnthropicAccountIncarnation(accountId);
+    const quotaEpoch = captureProviderAccountQuotaEpoch(instance);
+    const initialRow = getAccountSet(instance)?.accounts.find(row => row.id === accountId);
+    if (!initialRow || initialRow.paused || initialRow.needsReauth || credentialGeneration(initialRow.credential) !== generation) return null;
     // Lazy because anthropic-routing reads the quota cache on normal request routing.
     const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
     const routing = anthropicRoutingFor(instance);
@@ -114,11 +118,13 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     if (!live || credentialGeneration(live) !== generation) return null;
     const cooldownGeneration = reserveCooldownGeneration(accountId);
     const capturedFamilyGeneration = anthropicModelQuotaFor(instance).captureAnthropicFamilyQuotaGeneration(accountId);
-    const quotaEpoch = captureProviderAccountQuotaEpoch(instance);
     const claim = routing.captureAnthropicCooldownRecovery(accountId);
     const isCurrentCredential = () => {
-      const current = getAccountCredential(instance, accountId);
+      const currentRow = getAccountSet(instance)?.accounts.find(row => row.id === accountId);
+      const current = currentRow?.credential;
       return quotaEpoch === captureProviderAccountQuotaEpoch(instance)
+        && anthropicAccountIncarnation(accountId) === incarnation
+        && currentRow?.loginId === initialRow?.loginId && currentRow?.addedAt === initialRow?.addedAt
         && !!current && credentialGeneration(current) === generation;
     };
     return {
@@ -142,6 +148,7 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
   ): Promise<AnthropicQuotaRecoveryResult | null> {
     const probe = await captureAnthropicCooldownRecoveryProbe(accountId, accessToken);
     if (!probe) throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe lost credential ownership`);
+    if (!probe.isCurrent() || !mayPublish()) throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe lost dispatch ownership`);
     let quota: ProviderQuota | null;
     try { quota = await read(probe.requiresFreshDispatch); }
     catch (error) {

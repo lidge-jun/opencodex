@@ -4,6 +4,8 @@ import { getMainAccountExternalUsageWarning } from "../../codex/main-account-ext
 import { getObservedMainQuotaIdentityKey } from "../../codex/main-account-cache";
 import { compactionRoutingSchema, memoryModelsSchema } from "../../config/schema/leaf-validators";
 import { compactionRecoverySchema } from "../../config/schema/compaction-recovery";
+import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
+import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
@@ -85,7 +87,6 @@ import { getProviderRegistryEntry } from "../../providers/registry";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../../reasoning-effort";
 import { normalizeVisionReasoningForModel } from "../../vision/reasoning";
 import {
-  findAnthropicVisionProvider,
   isValidVisionTimeoutMs,
   MAX_VISION_TIMEOUT_MS,
   MIN_VISION_TIMEOUT_MS,
@@ -105,6 +106,7 @@ import {
   webSearchModelIsRejected,
   webSearchModelOptionsFrom,
   webSearchModelRejection,
+  sidecarAnthropicPoolOptions, sidecarOptionsAuth, sidecarSettingsAfterPatch,
 } from "./web-search-sidecar-options";
 import { validateXaiSearchOptions } from "../../web-search/xai-executor";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -150,7 +152,9 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
   const vs = config.visionSidecar ?? {};
   // Match the runtime's one selected Anthropic executor for both backend fallback
   // and catalog reachability; resolving it once prevents the two projections drifting.
-  const anthropicSidecar = findAnthropicVisionProvider(config);
+  const auth = sidecarOptionsAuth(config, vs.anthropicInstance);
+  const anthropicSidecar = auth.isAnthropicAuth && auth.anthropicProviderName && auth.anthropicProvider
+    ? { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config } : undefined;
   // The routed backend reports its own namespaced model verbatim: it is the
   // dispatched value, and collapsing it through the legacy resolver would
   // display a describer the runtime is not using (roadmap 190).
@@ -290,6 +294,8 @@ function publicVisionSidecarSettings(
     enabled: vs.enabled !== false,
     model: vision.model,
     backend: vs.backend,
+    ...(vs.anthropicInstance ? { anthropicInstance: vs.anthropicInstance } : {}),
+    anthropicPool: sidecarAnthropicPoolOptions(config, { ...vs, backend: vs.backend ?? (vision.models.find(row => row.value === vision.model)?.backend) }),
     reasoning: vision.reasoning,
     maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(vs.maxDescriptionsPerTurn),
     timeoutMs: resolveVisionTimeoutMs(vs.timeoutMs),
@@ -882,6 +888,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         enabled: ws.enabled !== false,
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
+        ...(ws.anthropicInstance ? { anthropicInstance: ws.anthropicInstance } : {}),
+        anthropicPool: sidecarAnthropicPoolOptions(config, ws),
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
@@ -902,10 +910,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { enabled?: unknown; model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
+      webSearch?: { enabled?: unknown; model?: unknown; backend?: unknown; anthropicInstance?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
       vision?: {
         model?: unknown;
         backend?: unknown;
+        anthropicInstance?: unknown;
         reasoning?: unknown;
         maxDescriptionsPerTurn?: unknown;
         enabled?: unknown;
@@ -913,6 +922,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       };
     };
     const WEB_SEARCH_BACKENDS_UNION = ["openai", "anthropic", "xai", "gemini", "exa"] as const;
+    const instanceError = anthropicSidecarPatchError(config, {
+      ...(body.webSearch ? { webSearchSidecar: body.webSearch } : {}),
+      ...(body.vision ? { visionSidecar: body.vision } : {}),
+    });
+    if (instanceError) return jsonResponse({ error: instanceError }, 400);
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
       && !WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
       return jsonResponse({ error: "webSearch.backend must be openai, anthropic, xai, gemini, exa, or null" }, 400);
@@ -956,7 +970,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // rejection body, so a 400 cannot cost two provider fetches.
     if (body.vision && typeof body.vision.model === "string" && body.vision.model !== "") {
       const requested = body.vision.model;
-      const candidates = await visionCandidateRows(config);
+      const candidates = await visionCandidateRows({ ...config, visionSidecar: sidecarSettingsAfterPatch(config.visionSidecar, body.vision) });
       const hint = body.vision.backend === "anthropic" || body.vision.backend === "openai"
         || body.vision.backend === "routed"
         ? body.vision.backend
@@ -994,7 +1008,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // only case that owes a config.toml rewrite.
     const webSearchEnabledBefore = config.webSearchSidecar?.enabled !== false;
     if (body.webSearch) {
-      const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
+      const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined || body.webSearch.anthropicInstance !== undefined;
       // Validate against the backend the caller SUBMITTED, across the whole
       // union — not just openai/anthropic (#2457). The union check above has
       // already refused unknown literals, so a surviving string is a member;
@@ -1013,12 +1027,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         ? body.webSearch.model || undefined
         : config.webSearchSidecar?.model;
       if (pairTouched && effectiveModel) {
-        const candidates = await webSearchCandidateRows(config);
+        const candidates = await webSearchCandidateRows({ ...config, webSearchSidecar: sidecarSettingsAfterPatch(config.webSearchSidecar, body.webSearch) });
         if (webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
           return jsonResponse(webSearchModelRejection("webSearch.model", effectiveBackend, effectiveModel, candidates), 400);
         }
       }
       const webSearchCandidate = { ...config.webSearchSidecar };
+      if (body.webSearch.anthropicInstance === null) delete webSearchCandidate.anthropicInstance;
+      else if (isAnthropicInstanceId(body.webSearch.anthropicInstance)) webSearchCandidate.anthropicInstance = body.webSearch.anthropicInstance;
       if (typeof body.webSearch.model === "string") {
         if (body.webSearch.model === "") delete webSearchCandidate.model;
         else webSearchCandidate.model = body.webSearch.model;
@@ -1098,6 +1114,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.vision) {
       config.visionSidecar = { ...config.visionSidecar };
+      if (body.vision.anthropicInstance === null) delete config.visionSidecar.anthropicInstance;
+      else if (isAnthropicInstanceId(body.vision.anthropicInstance)) config.visionSidecar.anthropicInstance = body.vision.anthropicInstance;
       if (typeof body.vision.model === "string") {
         if (body.vision.model === "") delete config.visionSidecar.model;
         else config.visionSidecar.model = body.vision.model;
@@ -1143,6 +1161,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         enabled: ws.enabled !== false,
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
+        ...(ws.anthropicInstance ? { anthropicInstance: ws.anthropicInstance } : {}),
+        anthropicPool: sidecarAnthropicPoolOptions(config, ws),
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },

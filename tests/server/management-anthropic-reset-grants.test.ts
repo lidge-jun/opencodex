@@ -241,4 +241,47 @@ describe("POST /api/anthropic/reset-grants/consume", () => {
     expect((await consume(deps(up))).status).toBe(503);
     expect(up.claims).toEqual([]);
   });
+
+  test("equal account, grant and operation IDs spend independently in A and B journals", async () => {
+    const a = upstream();
+    const b = upstream();
+    const bDeps = deps(b, { provider: "anthropic2", journalPath: join(dir, "anthropic2-reset-grant-ledger.json") });
+    expect(await consume(deps(a))).toMatchObject({ status: 200, json: { provider: "anthropic", replayed: false } });
+    const body = { provider: "anthropic2", accountId: "acct-1", grantId: GRANT, operationId: OP };
+    expect(await consume(bDeps, body)).toMatchObject({ status: 200, json: { provider: "anthropic2", replayed: false } });
+    expect(await consume(bDeps, body)).toMatchObject({ status: 200, json: { provider: "anthropic2", replayed: true } });
+    expect(a.claims).toHaveLength(1);
+    expect(b.claims).toHaveLength(1);
+  });
+
+  test("B unknown outcomes remain in B and cannot block A", async () => {
+    const a = upstream();
+    const b = upstream();
+    b.claim = () => { throw new TypeError("synthetic lost answer"); };
+    const bDeps = deps(b, { provider: "anthropic2", journalPath: join(dir, "anthropic2-reset-grant-ledger.json") });
+    expect(await consume(bDeps, { provider: "anthropic2", accountId: "acct-1", grantId: GRANT, operationId: OP }))
+      .toMatchObject({ status: 502, json: { error: { provider: "anthropic2", operationId: OP } } });
+    expect((await call("GET", "/api/anthropic/reset-grants?provider=anthropic2", bDeps)).json)
+      .toMatchObject({ provider: "anthropic2", pendingOperation: { operationId: OP } });
+    expect((await call("GET", "/api/anthropic/reset-grants", deps(a))).json.pendingOperation).toBeNull();
+    expect((await consume(deps(a))).status).toBe(200);
+  });
+
+  test("ownership revoked during status await prevents claim and journal reservation", async () => {
+    const up = upstream();
+    let current = true;
+    up.status = () => { current = false; return Response.json({ cedar_ember: grantBlock() }); };
+    expect(await consume(deps(up, { isCurrent: () => current }))).toMatchObject({ status: 401 });
+    expect(up.claims).toHaveLength(0);
+    expect((await call("GET", "/api/anthropic/reset-grants", deps(up))).json.pendingOperation).toBeNull();
+  });
+
+  test("B cannot use legacy A dependencies and admin tokens cannot spend B resets", async () => {
+    const up = upstream();
+    const body = { provider: "anthropic2", accountId: "acct-1", grantId: GRANT, operationId: OP };
+    expect(await consume(deps(up), body)).toMatchObject({ status: 400, json: { error: { code: "invalid_provider" } } });
+    const bDeps = deps(up, { provider: "anthropic2", journalPath: join(dir, "anthropic2-reset-grant-ledger.json") });
+    expect(await consume(bDeps, body, "admin-token")).toMatchObject({ status: 403, json: { error: { code: "session_required" } } });
+    expect(up.claims).toHaveLength(0);
+  });
 });

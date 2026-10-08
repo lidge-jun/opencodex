@@ -79,3 +79,23 @@ jobs:
             tests/routing/fastwire-policy.test.ts; do
             bun test "$file"
           done
+      - name: Helper and surface contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            tests/cli/cli-anthropic2-account.test.ts \
+            tests/codex-integration/anthropic2-catalog.test.ts \
+            tests/providers/provider-anthropic-instance-quota.test.ts \
+            tests/server/anthropic2-management.test.ts \
+            tests/server/sidecar-anthropic-instance-settings.test.ts \
+            tests/usage/anthropic2-usage-attribution.test.ts \
+            tests/vision/vision-anthropic-instance-sidecar.test.ts \
+            tests/web-search/web-search-anthropic-instance.test.ts \
+            tests/server/management-anthropic-reset-grants.test.ts \
+            tests/claude-integration/claude-sidecar-override.test.ts; do
+            bun test "$file"
+          done
+      - name: GUI surface contracts
+        working-directory: gui
+        run: bun test --isolate tests/anthropic2-provider-mark.test.ts tests/anthropic-instance-helper-controls.test.tsx tests/anthropic-reset-grants.test.tsx tests/claude-code-save.test.ts tests/claude-code-sidecar.test.ts tests/provider-account-pause-refresh.test.tsx
