@@ -23,12 +23,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await uninstallPolicyApiHarness(harness);
+  if (harness) await uninstallPolicyApiHarness(harness);
 });
 
 test("blocked worker completion preserves concurrent policy PUT edits", async () => {
-  const blockMs = 1_500;
-  setStorageCleanupPolicyJobTestHooks({ blockMs });
+  const loadGate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  setStorageCleanupPolicyJobTestHooks({ workerLoadGate: loadGate });
   seedArchived(harness.isolatedCodexHome.path);
   const server = startServer(0);
   try {
@@ -52,19 +52,11 @@ test("blocked worker completion preserves concurrent policy PUT edits", async ()
     expect(runStart.started).toBe(true);
     expect(runStart.job?.status).toBe("running");
 
-    const editDeadline = Date.now() + 5_000;
-    let sawRunning = false;
-    while (Date.now() < editDeadline) {
-      const peek = await fetch(new URL("/api/storage/cleanup-policy", server.url));
-      const peekBody = await peek.json() as { job?: { status?: string } };
-      if (peekBody.job?.status === "running") {
-        sawRunning = true;
-        break;
-      }
-      await Bun.sleep(20);
-    }
-    expect(sawRunning).toBe(true);
-    await Bun.sleep(800);
+    // Running means accepted, not that the Worker has read the enabled policy.
+    // Wait for that exact point and hold completion until the PUT has committed.
+    const loadDeadline = Date.now() + 10_000;
+    while (Atomics.load(loadGate, 0) !== 1 && Date.now() < loadDeadline) await Bun.sleep(20);
+    expect(Atomics.load(loadGate, 0)).toBe(1);
 
     const put = await fetch(new URL("/api/storage/cleanup-policy", server.url), {
       method: "PUT",
@@ -81,6 +73,9 @@ test("blocked worker completion preserves concurrent policy PUT edits", async ()
     const putBody = await put.json() as { ok?: boolean; policy?: { enabled?: boolean } };
     expect(putBody.ok).toBe(true);
     expect(putBody.policy?.enabled).toBe(false);
+    expect(Atomics.load(loadGate, 0)).toBe(1);
+    Atomics.store(loadGate, 0, 2);
+    Atomics.notify(loadGate, 0);
 
     const done = await waitForJobIdle(server.url, runStart.job!.startedAt);
     expect(done.job.lastOutcome?.ok).toBe(true);
@@ -109,6 +104,8 @@ test("blocked worker completion preserves concurrent policy PUT edits", async ()
     expect(typeof body.lastRun?.at).toBe("number");
     expect(typeof body.nextRun).toBe("number");
   } finally {
+    Atomics.store(loadGate, 0, 2);
+    Atomics.notify(loadGate, 0);
     await stopPolicyServer(server);
     await resetStorageCleanupPolicyJobForTestsAsync();
   }

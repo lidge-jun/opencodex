@@ -48,11 +48,23 @@ fn contract(name: &str, expression: &str) -> Value {
                 .unwrap()
                 .to_path_buf()
         });
-    let root = env::temp_dir().join(format!(
-        "ocx-catalog-contract-{}-{name}",
-        std::process::id()
-    ));
-    fs::create_dir(&root).expect("new fixture root");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = (0..32)
+        .find_map(|attempt| {
+            let path = env::temp_dir().join(format!(
+                "ocx-catalog-contract-{}-{name}-{stamp}-{attempt}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => Some(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => panic!("cannot create owned fixture: {error}"),
+            }
+        })
+        .expect("unique fixture root");
     let _owned = OwnedRoot(root.clone());
     let result = {
         let exe = root.join(if cfg!(windows) {
@@ -118,7 +130,20 @@ console.log('@@catalog-contract@@'+JSON.stringify(answer));
             .expect("contract answer");
         serde_json::from_str(json).unwrap()
     };
-    fs::remove_dir_all(&root).expect("remove owned test fixture after child exit");
+    let cleanup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match fs::remove_dir_all(&root) {
+            Ok(()) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                assert!(
+                    std::time::Instant::now() < cleanup_deadline,
+                    "owned fixture cleanup failed: {error}"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+    }
     result
 }
 
