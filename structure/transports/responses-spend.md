@@ -191,8 +191,8 @@ errors remain storage failures. `tests/lib/spend-corruption-compat.test.ts` chec
 
 An ordinary observe-only reservation whose first write failed keeps bounded in-memory repair
 metadata until it resolves or is evicted. Before reporting dispatch or terminal usage, the ledger
-queues the missing ordinary reserve prefix ahead of those records. Later pruning or admission
-flushes that queue, so a recovered writer cannot leave terminal usage without its reservation.
+queues the missing ordinary reserve prefix ahead of those records. Later pruning or any admission,
+including observe-only admission, retries that queue so recovered storage retains the reservation.
 This grants no seed or overflow capacity and adds no journal record type or identity metadata.
 
 For requests with an applicable root, identity or pool ceiling, each selected target/key first

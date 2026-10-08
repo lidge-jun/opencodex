@@ -129,18 +129,20 @@ test("the actual first target determines the frozen enforcement mode", async () 
   expect(budget.spendEnforced).toBe(true);
 });
 
-for (const usage of [70, undefined]) test(`ordinary failed reserve repairs its prefix before terminal ${usage}`, async () => {
+for (const recovery of ["prune", "admission"] as const) for (const usage of [70, undefined]) test(`ordinary failed reserve repairs its prefix before terminal ${usage} via ${recovery}`, async () => {
   const { request, journal, ledger, policy } = policyEpochFixture();
   journal.failAppend = true;
   const old = request(); await old.send();
   old.tracker.settle(usage === undefined ? undefined : { inputTokens: usage });
-  journal.failAppend = false; ledger.prune();
+  journal.failAppend = false;
+  if (recovery === "prune") ledger.prune();
+  else expect(ledger.reserve({ sendId: "next-admission", scopes: {}, inputTokens: 0, outputCeilingTokens: 0 }).reserved).toBe(true);
   const expected = { settled: usage ?? 0, unresolved: usage === undefined ? 10 : 0, reserved: 0 };
   expect(ledger.snapshot("pool", "P")).toMatchObject(expected);
   for (const create of [createSpendReservationLedger, createShippedSpendLedger]) {
     expect(create({ policy, journal: spendTestJournal(journal.lines), salt: testSpendSalt, now: () => 2 }).snapshot("pool", "P")).toMatchObject(expected);
   }
-  expect(journal.lines.map(line => JSON.parse(line).kind)).toEqual(["reserve", "dispatch", usage === undefined ? "lost" : "settle"]);
+  expect(journal.lines.map(line => JSON.parse(line).kind)).toEqual(["reserve", "dispatch", usage === undefined ? "lost" : "settle", ...(recovery === "admission" ? ["reserve"] : [])]);
 });
 
 test("captured ceiling preflight preserves exact prepaid exclusion across policy changes", () => {

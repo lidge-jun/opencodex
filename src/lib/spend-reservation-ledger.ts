@@ -1315,6 +1315,7 @@ export function createSpendReservationLedger(options: {
     reserve(request: SpendReservationRequest): SpendReservationDecision {
       assertOwnedAccounting?.();
       retryCleanup();
+      const pendingDurable = flushPending(); // Observe-only admissions also retry ordinary repair debt.
       const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
       const at = request.at ?? now();
       const send = aliasFor("send", request.sendId);
@@ -1333,7 +1334,7 @@ export function createSpendReservationLedger(options: {
       if (enforced && corruptRecords > 0) {
         return { reserved: false, denial: { reason: "journal-corrupt", corruptRecords } };
       }
-      if (enforced && request.alreadySent !== true && !flushPending()) {
+      if (enforced && request.alreadySent !== true && !pendingDurable) {
         return { reserved: false, denial: { reason: "reserve-not-durable", sendId: request.sendId } };
       }
       const continuityDenial = preparePoolContinuity(request.scopes.poolId);
