@@ -15,7 +15,6 @@ export function isSystemOneEndpoint(baseUrl: string): boolean {
   try {
     const raw = baseUrl.trim();
     // URL drops empty delimiters ("?", "#", "@") and strips tab/CR/LF, so check the raw text first.
-    // eslint-disable-next-line no-control-regex
     if (/[\u0000-\u001f\u007f]/.test(raw)) return false;
     const authority = raw.replace(/^[a-z][a-z\d+.-]*:[/\\]*/i, "").split(/[/\\]/, 1)[0] ?? "";
     if (/[?#]/.test(raw) || authority.includes("@")) return false;
