@@ -44,7 +44,7 @@
   B `local-cli` provenance is rejected. Refresh-time merges are not blocked (rotations of an already
   admitted row must not strand A).
 - Collision (D-09): every config-aware decision uses `isBuiltinAnthropicInstanceRow` (adapter `anthropic`,
-  `authMode: oauth`, `baseUrl` absent or `https://api.anthropic.com`). Login, OAuth upsert and config
+  `authMode: oauth`, explicit `anthropicOAuthInstance: "anthropic2"` for B). Login, OAuth upsert and config
   publication for `anthropic2` refuse a row that fails it; startup catalog reconciliation and registry
   enrichment (`src/providers/registry.ts` lookups for a configured row) leave such a row custom.
 - `src/oauth/token-guardian.ts`: B participates only when configured and enabled.
@@ -64,13 +64,13 @@ Shared leaf code (main writes it first, so both workers import a fixed contract)
 export const ANTHROPIC_INSTANCE_IDS = ["anthropic", "anthropic2"] as const;
 export type AnthropicInstanceId = typeof ANTHROPIC_INSTANCE_IDS[number];
 export function isAnthropicInstanceId(value: unknown): value is AnthropicInstanceId;
-export function anthropicInstanceRowShapeMatches(name: string, row: { adapter?: string; authMode?: string; baseUrl?: string } | undefined): boolean;
+export function anthropicInstanceRowShapeMatches(name: string, row: { adapter?: string; authMode?: string; baseUrl?: string; anthropicOAuthInstance?: unknown } | undefined): boolean;
 //   pure; "anthropic": true; "anthropic2": row present, adapter "anthropic", authMode "oauth",
-//   baseUrl property absent or equal to https://api.anthropic.com after trimming trailing slashes; other names: false
+//   own anthropicOAuthInstance marker equals "anthropic2"; endpoint is not ownership; other names: false
 
 // src/providers/anthropic-instance.ts
 export function isAnthropicOAuthInstance(id: string): id is AnthropicInstanceId;   // exact ID + registry oauthFamily/oauthId/authKind
-export function isBuiltinAnthropicInstanceRow(name: string, row?: Partial<Pick<OcxProviderConfig, "adapter" | "authMode" | "baseUrl">>): boolean;
+export function isBuiltinAnthropicInstanceRow(name: string, row?: Partial<Pick<OcxProviderConfig, "adapter" | "authMode" | "baseUrl" | "anthropicOAuthInstance">>): boolean;
 //   isAnthropicOAuthInstance(name) && anthropicInstanceRowShapeMatches(name, row); re-exports the leaf
 export function configuredAnthropicInstance(config: Pick<OcxConfig, "providers">, name: string | undefined): AnthropicInstanceId | undefined;
 //   anthropic: "anthropic" whenever name === "anthropic" — a compatibility identity result only; callers keep
@@ -83,9 +83,10 @@ export function resolveAnthropicAccountPoolConfig(config, instance): AnthropicAc
 export function isAnthropicPoolEnabledFor(config, instance): boolean;
 ```
 
-B's registry row sets `allowBaseUrlOverride: false` (A keeps `true`): B is pinned to the first-party
-endpoint so the D-09 shape check stays meaningful. This is the one configuration affordance B does not
-share and the PR states it.
+P3 fidelity refinement supersedes the initial endpoint-shaped rule: both registry rows keep
+`allowBaseUrlOverride: true`. Explicit B creation seeds its ownership marker; config load, enrichment,
+reconciliation and migrations never stamp it onto an existing custom row. Browser-only local credential
+intake remains the owner-approved onboarding exception.
 
 Registry ownership guard: `providerMatchesRegistryTransport` in `src/providers/registry.ts` today returns
 `true` for every non-key entry. For `anthropic2` it must first return

@@ -38,7 +38,7 @@ UUID each physical send carried). No suite is copied with a string replace.
 | AUTH-04, AUTH-05, AUTH-08 | wp2 | `tests/oauth/oauth-anthropic-instance-refresh.test.ts` |
 | AUTH-06, AUTH-07 | wp2 | same file, run for both instances against the existing single-flight/intent contract |
 | AUTH-09, AUTH-10, AUTH-11, AUTH-13, AUTH-16 | wp2 | `tests/oauth/oauth-anthropic-instance-registration.test.ts` |
-| STATE-10 | wp2 | same file (custom key provider, gateway OAuth row, orphan auth row preserved) |
+| STATE-10 | wp2/wp3 refinement | same file (custom key provider, gateway OAuth row, unmarked canonical OAuth row and orphan auth row preserved); marked override parity and marker round-trip in provider/config/discovery tests |
 
 ## Pool policy and recovery
 
