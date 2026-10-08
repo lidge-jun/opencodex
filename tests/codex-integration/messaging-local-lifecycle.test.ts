@@ -37,7 +37,8 @@ test("messaging activation is command-local, never on an ordinary proxy startup 
   // Native parser inventory, not graph completeness: catches static/dynamic literal imports.
   const allowed = new Set(["src/cli/message-args.ts", "src/cli/message-command.ts"]);
   const transpiler = new Bun.Transpiler({ loader: "ts" });
-  for await (const path of new Bun.Glob("src/**/*.{ts,mts}").scan({ cwd: repoPath() })) {
+  for await (const scanned of new Bun.Glob("src/**/*.{ts,mts}").scan({ cwd: repoPath() })) {
+    const path = scanned.replaceAll("\\", "/"); // Bun.Glob yields native separators on Windows.
     if (path.startsWith("src/messaging/") || /\.d\.(?:ts|mts)$/.test(path)) continue;
     const imports = transpiler.scanImports(readFileSync(repoPath(path), "utf8").replace(/^#![^\n]*\n/, ""));
     const incoming = imports.filter(entry => /(?:^|\/)messaging(?:\/|$)/.test(entry.path));
