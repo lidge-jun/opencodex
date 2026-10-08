@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
 import type { AnthropicInstanceId } from "../../src/providers/anthropic-instance-id";
-import { getValidAccessTokenForAccount, OAUTH_PROVIDERS, OAuthLoginRequiredError, refreshAnthropicAccountWithLock } from "../../src/oauth";
+import { getValidAccessTokenForAccount, OAUTH_PROVIDERS, OAuthAccountPausedError, OAuthLoginRequiredError, OAuthTokenRefreshStaleError, refreshAnthropicAccountWithLock } from "../../src/oauth";
 import { AnthropicTokenError } from "../../src/oauth/anthropic";
 import { captureAnthropicCredentialOwner, captureAnthropicCredentialOwnerForInstance, newerClaudeCredentialForInstance } from "../../src/oauth/anthropic-continuity";
 import { bindAnthropicIdentity } from "../../src/oauth/anthropic-identity";
@@ -13,7 +13,7 @@ import { AnthropicLocalCliImportError } from "../../src/oauth/store-anthropic-in
 import { __resetGuardianState, guardianSweep } from "../../src/oauth/token-guardian";
 import {
   credentialGeneration, getAccountCredential, getAccountSet, getAuthRefreshIntentLockPath, getAuthRefreshIntentPath,
-  mergeAccountCredential, readOAuthRefreshIntent, saveCredential, setAnthropicAccountThreshold,
+  mergeAccountCredential, readOAuthRefreshIntent, removeAccount, saveAccountCredential, saveCredential, setAccountPaused, setAnthropicAccountThreshold,
   setAnthropicAccountThresholdForInstance, writeOAuthRefreshIntent,
 } from "../../src/oauth/store";
 import { subscribeOAuthAccountRoutingPolicyChanges } from "../../src/lib/account-selection-events";
@@ -139,6 +139,81 @@ test("B CLI continuity returns absent before detector entry, even for legacy loc
 });
 
 for (const instance of ["anthropic", "anthropic2"] as const) {
+  for (const change of ["paused", "removed", "replaced", "reauthenticated", "reauthenticated-before-terminal-error"] as const) {
+    test(`${instance}: ${change} while awaiting the token response preserves ownership and the equal-ID sibling`, async () => {
+      const id = await seedBoth();
+      const other = instance === "anthropic" ? "anthropic2" : "anthropic";
+      const otherBefore = structuredClone(getAccountSet(other));
+      const otherIntent = writeOAuthRefreshIntent(other, id, credentialGeneration(getAccountCredential(other, id)!));
+      const stored = getAccountCredential(instance, id)!;
+      const loginId = getAccountSet(instance)!.accounts[0]!.loginId;
+      const fresh = credential(instance, true);
+      const reauthenticated = { ...fresh, access: `synthetic-${instance}-reauth-access`, refresh: `synthetic-${instance}-reauth-refresh`,
+        anthropicIdentity: bindAnthropicIdentity(`synthetic-${instance}-reauth-access`, `synthetic-${instance}-uuid`) };
+      const entered = deferred();
+      const release = deferred();
+      const sent: string[] = [];
+      const refresh = spyOn(OAUTH_PROVIDERS[instance]!, "refresh").mockImplementation(async token => {
+        sent.push(token);
+        entered.resolve();
+        await release.promise;
+        if (change === "reauthenticated-before-terminal-error") throw new AnthropicTokenError("synthetic late rejection", 400, "invalid_grant");
+        return fresh;
+      });
+      const pending = getValidAccessTokenForAccount(instance, id);
+      try {
+        await Promise.race([entered.promise,
+          pending.then(() => { throw new Error("Refresh settled before the token response barrier"); }),
+        ]);
+        expect(sent).toEqual([stored.refresh]);
+        expect(readOAuthRefreshIntent(instance, id)).toMatchObject({ provider: instance, accountId: id,
+          generation: credentialGeneration(stored) });
+        if (change === "paused") {
+          expect((await setAccountPaused(instance, id, true)).status).toBe("updated");
+        } else if (change === "removed") {
+          expect(await removeAccount(instance, id)).toBe(true);
+        } else if (change === "replaced") {
+          // Identical tokens isolate the login-owner fence from the token-generation CAS.
+          await saveAccountCredential(instance, id, stored, { rotateLoginId: true });
+          expect(getAccountSet(instance)!.accounts[0]!.loginId).not.toBe(loginId);
+          expect(credentialGeneration(getAccountCredential(instance, id)!)).toBe(credentialGeneration(stored));
+        } else {
+          await saveAccountCredential(instance, id, reauthenticated, { rotateLoginId: true });
+          expect(credentialGeneration(getAccountCredential(instance, id)!)).not.toBe(credentialGeneration(stored));
+        }
+        const changedBefore = structuredClone(getAccountSet(instance));
+        release.resolve();
+        if (change === "paused") {
+          await expect(pending).rejects.toBeInstanceOf(OAuthAccountPausedError);
+          expect(getAccountCredential(instance, id)).toEqual(fresh);
+          expect(getAccountSet(instance)!.accounts[0]!).toMatchObject({ paused: true });
+          expect(getAccountSet(instance)!.accounts[0]!.needsReauth).toBeUndefined();
+          expect(readOAuthRefreshIntent(instance, id)).toBeUndefined();
+        } else if (change === "removed") {
+          await expect(pending).rejects.toThrow();
+          expect(getAccountCredential(instance, id)).toBeNull();
+          expect(getAccountSet(instance)).toEqual(changedBefore);
+        } else if (change === "replaced") {
+          await expect(pending).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+          expect(getAccountSet(instance)).toEqual(changedBefore);
+        } else {
+          if (change === "reauthenticated-before-terminal-error") {
+            await expect(pending).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+          } else {
+            await expect(pending).resolves.toBe(reauthenticated.access);
+          }
+          expect(getAccountSet(instance)).toEqual(changedBefore);
+          expect(getAccountCredential(instance, id)).toEqual(reauthenticated);
+          expect(getAccountSet(instance)!.accounts[0]!.needsReauth).toBeUndefined();
+          expect(readOAuthRefreshIntent(instance, id)).toBeUndefined();
+        }
+        expect(refresh).toHaveBeenCalledTimes(1);
+        expect(getAccountSet(other)).toEqual(otherBefore);
+        expect(readOAuthRefreshIntent(other, id)).toEqual(otherIntent);
+      } finally { release.resolve(); await Promise.allSettled([pending]); refresh.mockRestore(); }
+    });
+  }
+
   test(`${instance}: the shared refresh definition exchanges only its supplied token at Anthropic`, async () => {
     const sends: Array<{ url: string; token: unknown }> = [];
     globalThis.fetch = (async (url, init) => {
