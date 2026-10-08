@@ -100,9 +100,10 @@ describe("CLI command registry parity", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  test("system help exposes the exact Codex CLI inspection grammar", () => {
+  test("system help exposes the exact Codex CLI update grammar", () => {
     const details = findCommand("system")?.details ?? [];
     expect(details).toContain("ocx system codex-cli-update check [--json]");
+    expect(details).toContain("ocx system codex-cli-update plan [--channel latest] [--json]");
     expect(details.some(line => line.includes("dry-run"))).toBe(false);
   });
 

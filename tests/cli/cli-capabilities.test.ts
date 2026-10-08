@@ -85,7 +85,7 @@ describe("capability table is a checked data graph", () => {
     expect(cap?.json).toBe("envelope");
     expect(cap?.flags.some(flag => flag.name === "--json")).toBe(true);
     expect(cap?.summary).toContain("configured Codex CLI candidate");
-    expect(cap?.details.join(" ")).toContain("does not attest or admit a selected runtime");
+    expect(cap?.details.join(" ")).toContain("reports rather than admits a runtime");
     expect(cap?.details.join(" ")).not.toContain("dry-run");
   });
 });

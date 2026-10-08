@@ -544,7 +544,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the redacted provenance report as JSON."}],
     mutates: false,
     json: "envelope",
-    details: ["Proof-bound published-launcher context authenticates the configured candidate snapshot, not successful Codex execution; this check does not attest or admit a selected runtime.","On Windows this first slice performs no candidate or configuration filesystem I/O: only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels; every other Windows candidate fails closed.","Makes no package-registry request.","Does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state."],
+    details: ["Proof-bound published-launcher context authenticates the configured candidate snapshot, not successful Codex execution; the selection is attested only when the runtime resolver picks the same canonical path, and even then this check reports rather than admits a runtime.","On Windows this first slice performs no candidate or configuration filesystem I/O: only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels; every other Windows candidate fails closed.","Makes no package-registry request.","Does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state."],
     usage: "ocx system codex-cli-update check [--json]",
   },
   {
@@ -556,6 +556,25 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "envelope",
     details: ["Opt-in Windows x64 local-volume inspection using held native file handles; refuses reparse points, active writers and unsupported layouts.","Without explicit paths, the proof-bound launcher snapshot identifies the selected candidate: the configured CODEX_CLI_PATH or the first codex on the captured PATH, with an OpenCodex wrapper resolving to its codex.opencodex-real backing. Discovery only proposes paths; the held-handle observation remains the authority.","Success binds observed file identities and bytes, not selected-runtime admission or installer ownership.","selectionAttested, managed and applyAllowed remain false. The digest is an observation, not a durable update permit.","Does not run the named Codex/npm/Node files, query a registry, install software, control processes or persist state."],
     usage: "ocx system codex-cli-update attest [--candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path>] [--json]",
+  },
+  {
+    command: ["system", "codex-cli-update", "plan"],
+    summary: "Dry-run a Codex CLI update and print the plan id binding the decision's evidence.",
+    routes: [],
+    flags: [
+      { name: "--channel", value: "string", summary: "Registry channel to resolve. Only the stable latest channel is offered." },
+      { name: "--json", value: "boolean", summary: "Emit the plan as JSON." },
+    ],
+    mutates: false,
+    json: "envelope",
+    details: [
+      "Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.",
+      "The registry evidence is pinned to the official npm registry with project/user npm configuration isolated, so a redirected .npmrc cannot supply the answer.",
+      "Installs nothing and mutates no application state; registry evidence is gathered under an isolated temporary npm root (npmrc, cwd, cache and logs) removed best-effort afterwards. A refusal is a normal dry-run answer and still exits 0.",
+      "The plan id is a digest of the evidence the decision rests on — ownership, the installed version, a digest of the canonical install root, the resolved target — not a stored job. There is no plan state on disk to expire, collide or clean up.",
+      "An unreadable process table refuses rather than reading as no live session.",
+    ],
+    usage: "ocx system codex-cli-update plan [--channel latest] [--json]",
   },
   {
     command: ["system","codex-restart"],
