@@ -1795,6 +1795,8 @@ const PASSTHROUGH_DROP_HEADERS: ReadonlySet<string> = new Set([
   "te",
   "trailer",
   "upgrade",
+  // Adapter-private routing metadata must never escape native passthrough responses.
+  "x-opencodex-mirasim-response-wire",
 ]);
 
 export interface CodexSafetyBufferingFilterOptions {

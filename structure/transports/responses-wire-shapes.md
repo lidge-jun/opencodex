@@ -31,9 +31,9 @@ The same applies to a provider-added `default.` prefix when neither explicit `de
 The request must carry verified custom-tool provenance: an ordinary JSON function named
 `exec` does not authorize this repair. Explicitly declared MCP tools keep their identity,
 legacy shell catalogs stay unchanged, and unknown nested tools fail at the host.
-Names and arguments are serialized as data; plain-text tool-call transcripts are never
-promoted into executable calls by this rule. Native forwarding and injection lack this
-restoration step, so their undeclared-tool guard still rejects a direct MCP call.
+Names and arguments are serialized as data; plain-text tool-call transcripts are never promoted into executable calls.
+Native custom tools may use the same recovery only when the current request proves a genuine bare custom code-mode `exec`
+and the adapter marks that wire identity for representation repair; native forwarding or injection without it is rejected.
 
 Per-wire request and stream shapes on the Responses data plane: mixed-wire model defaults, xAI
 agent-message continuation, declared-tool membership by inbound wire, and passthrough SSE stream

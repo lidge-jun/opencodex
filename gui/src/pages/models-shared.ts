@@ -5,13 +5,24 @@ import { formatNamespacedModelId } from "../provider-icons";
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
+export function discoveryFailureBadgeLabel(
+  t: TFn,
+  discovery: Extract<ProviderDiscoverySummary, { status: "failed" }>,
+): string {
+  return discovery.reason === "http" && discovery.httpStatus === 429
+    ? t("models.discoveryRateLimitedBadge")
+    : t("models.discoveryFailedBadge");
+}
+
 export function discoveryFailureLabel(
   t: TFn,
   discovery: Extract<ProviderDiscoverySummary, { status: "failed" }>,
 ): string {
   switch (discovery.reason) {
     case "http":
-      return t("models.discoveryFailedHttp", { status: discovery.httpStatus });
+      return discovery.httpStatus === 429
+        ? t("models.discoveryRateLimitedHttp", { status: discovery.httpStatus })
+        : t("models.discoveryFailedHttp", { status: discovery.httpStatus });
     case "blocked":
       return t("models.discoveryFailedBlocked");
     case "invalid_response":

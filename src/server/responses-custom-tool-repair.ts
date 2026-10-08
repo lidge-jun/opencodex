@@ -3,7 +3,7 @@ import { mayBecomePatchEnvelope, normalizeApplyPatchDelimiters } from "../respon
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
 import { mayBecomeCodeModeShellInput } from "../responses/code-mode-shell-input";
 import { progressiveFreeformInput } from "../responses/progressive-freeform-input";
-import { declaresCodeModeExec } from "../types/tools";
+import { declaresCodeModeExec, isCodeModeMcpDirectName } from "../types/tools";
 import {
   customToolItemId,
   restoreRoutedCustomCalls,
@@ -53,8 +53,9 @@ export function createRoutedCustomToolRestoreBlockRewrite(
   budget?: TranslatorBudget,
   repairNames: ReadonlySet<string> = new Set(),
   declaredNames?: ReadonlySet<string>,
+  directMcpRecoveryNames?: ReadonlySet<string>,
 ): SseBlockRewrite {
-  const itemNames = new Map<string, { name: string; aliased: boolean; namespace?: string }>();
+  const itemNames = new Map<string, { name: string; wireName: string; aliased: boolean; namespace?: string }>();
   // Native helper aliases and genuine bare code-mode exec calls share completion repair.
   const customExecItemNames = new Map<string, string>();
   const repairItemNames = new Map<string, string>();
@@ -156,7 +157,12 @@ export function createRoutedCustomToolRestoreBlockRewrite(
     ) {
       const upstreamItemId = typeof parsed.item.id === "string" ? parsed.item.id : undefined;
       const wireName = routedCustomToolWireName(parsed.item);
-      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames);
+      const targetName = routedCustomToolTargetName(
+        parsed.item,
+        names,
+        declaredNames,
+        directMcpRecoveryNames,
+      );
       const aliased = targetName !== undefined && targetName !== wireName;
       const codeModeExec = targetName === "exec" && parsed.item.name === "exec"
         && parsed.item.namespace === undefined && declaresCodeModeExec(declaredNames);
@@ -169,7 +175,13 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       const repairable = wireName !== undefined && repairNames.has(wireName);
       if (upstreamItemId && repairable) repairItemNames.set(upstreamItemId, parsed.item.name);
       const restored = repairable || aliased || codeModeExec
-        ? restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames)
+        ? restoreRoutedCustomCalls(
+          parsed,
+          names,
+          repairNames,
+          declaredNames,
+          directMcpRecoveryNames,
+        )
         : { value: parsed, changed: false };
       if (type === "response.output_item.done" && upstreamItemId) releaseCall(upstreamItemId);
       return restored.changed
@@ -183,13 +195,19 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       && typeof parsed.item.name === "string"
     ) {
       const upstreamItemId = typeof parsed.item.id === "string" ? parsed.item.id : undefined;
-      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames);
+      const targetName = routedCustomToolTargetName(
+        parsed.item,
+        names,
+        declaredNames,
+        directMcpRecoveryNames,
+      );
       const routed = targetName !== undefined;
       const wireName = routedCustomToolWireName(parsed.item);
       if (upstreamItemId) {
         if (routed) {
           itemNames.set(upstreamItemId, {
             name: parsed.item.name,
+            wireName: wireName!,
             aliased: targetName !== wireName,
             ...(typeof parsed.item.namespace === "string" ? { namespace: parsed.item.namespace } : {}),
           });
@@ -209,7 +227,13 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       if (upstreamItemId && pending.length > 0 && !openCalls.has(upstreamItemId)) {
         openCalls.set(upstreamItemId, { argumentsText: "", emittedInput: "", retainedBytes: 0 });
       }
-      const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames);
+      const restored = restoreRoutedCustomCalls(
+        parsed,
+        names,
+        repairNames,
+        declaredNames,
+        directMcpRecoveryNames,
+      );
       const restoredBlock = restored.changed
         ? replaceSseDataPayload(block, JSON.stringify(restored.value))
         : block;
@@ -349,7 +373,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       // Name-based alias first; otherwise a raw patch envelope submitted as the `exec` body
       // resolves to the same apply_patch helper (devlog/_plan/260905_apply_patch_envelope_gap).
       const helper = itemName?.aliased
-        ? itemName.name
+        ? (isCodeModeMcpDirectName(itemName.wireName) ? itemName.wireName : itemName.name)
         : resolveCodeModeHelperName(undefined, itemName?.name ?? "", source, itemName?.namespace, declaredNames);
       const next = {
         ...rest,
@@ -362,7 +386,13 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       return [replaceSseDataPayload(replaceSseEventName(block, nextType), JSON.stringify(next))];
     }
 
-    const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames);
+    const restored = restoreRoutedCustomCalls(
+      parsed,
+      names,
+      repairNames,
+      declaredNames,
+      directMcpRecoveryNames,
+    );
     const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
     if (terminal) releaseAll();
     return restored.changed

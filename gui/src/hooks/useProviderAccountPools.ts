@@ -39,16 +39,37 @@ function selectionRows<T extends { id: string; active: boolean }>(rows: T[], id:
   return id === undefined ? rows : rows.map(row => ({ ...row, active: row.id === id }));
 }
 
+type FullQuotaLoadOwnership = {
+  generation: number;
+  modes?: ReadonlyMap<string, AccountQuotaReading["quotaMode"]>;
+};
+
+const quotaLoadOwnsRow = (ownership: FullQuotaLoadOwnership | undefined, row: QuotaRow): boolean =>
+  ownership !== undefined && (ownership.modes === undefined || ownership.modes.get(row.id) === row.quotaMode);
+
+function settleUnownedPendingRows<T extends QuotaRow>(rows: T[], ownership: FullQuotaLoadOwnership | undefined): T[] {
+  return rows.map(row => row.quotaPending === true && !quotaLoadOwnsRow(ownership, row)
+    ? { ...row, quotaPending: false }
+    : row);
+}
+
 /** An invalidation read changes membership/selection, not quota probe state. */
-function mergeRosterRows<T extends QuotaRow>(rows: T[], previous: T[]): T[] {
+function mergeRosterRows<T extends QuotaRow>(rows: T[], previous: T[], quotaLoad?: FullQuotaLoadOwnership): T[] {
   const prior = new Map(previous.map(row => [row.id, row]));
-  return mergeQuotaRows(rows, previous, false).map(row => supportsQuotaRead(row) ? {
-    ...row,
-    quotaPending: prior.get(row.id)?.quotaPending ?? false,
-    quotaUnavailable: prior.get(row.id)?.quotaMode === row.quotaMode ? prior.get(row.id)?.quotaUnavailable ?? false : false,
-    quotaFailure: row.quotaMode === "probe" && prior.get(row.id)?.quotaMode === row.quotaMode && prior.get(row.id)?.quotaUnavailable
-      ? parseQuotaFailureCode(prior.get(row.id)?.quotaFailure) : undefined,
-  } : row);
+  return mergeQuotaRows(rows, previous, false).map(row => {
+    if (!supportsQuotaRead(row)) return row;
+    const previousRow = prior.get(row.id);
+    const sameMode = previousRow?.quotaMode === row.quotaMode;
+    const unresolved = !sameMode || (previousRow?.quota === undefined && previousRow?.quotaUnavailable !== true);
+    const owned = quotaLoadOwnsRow(quotaLoad, row);
+    return {
+      ...row,
+      quotaPending: row.quotaMode === "probe" && owned && (previousRow?.quotaPending === true || unresolved),
+      quotaUnavailable: sameMode ? previousRow?.quotaUnavailable ?? false : false,
+      quotaFailure: row.quotaMode === "probe" && sameMode && previousRow?.quotaUnavailable
+        ? parseQuotaFailureCode(previousRow.quotaFailure) : undefined,
+    };
+  });
 }
 
 /** A probe started before a newer roster may update quota only on surviving IDs. */
@@ -137,6 +158,7 @@ export function useProviderAccountPools(deps: {
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const rosterGenerationRef = useRef<Record<string, number>>({});
   const quotaGenerationRef = useRef<Record<string, number>>({});
+  const fullQuotaLoadRef = useRef<Record<string, FullQuotaLoadOwnership>>({});
   const selectionMutationsRef = useRef(new Map<string, symbol>());
   const requestsRef = useRef(new Set<AbortController>());
   const pausingAccountRef = useRef(new Map<string, { provider: string; accountId: string }>());
@@ -148,6 +170,7 @@ export function useProviderAccountPools(deps: {
     const requests = requestsRef.current;
     const rosterGenerations = rosterGenerationRef.current;
     const quotaGenerations = quotaGenerationRef.current;
+    const fullQuotaLoads = fullQuotaLoadRef.current;
     const mutations = selectionMutationsRef.current;
     const pausingOwners = pausingAccountRef.current;
     const switchingOwners = switchingAccountRef.current;
@@ -167,6 +190,7 @@ export function useProviderAccountPools(deps: {
       for (const key of Object.keys(generations)) generations[key] += 1;
       for (const key of Object.keys(rosterGenerations)) rosterGenerations[key] += 1;
       for (const key of Object.keys(quotaGenerations)) quotaGenerations[key] += 1;
+      for (const key of Object.keys(fullQuotaLoads)) delete fullQuotaLoads[key];
       mutations.clear();
       pausingOwners.clear();
       switchingOwners.clear();
@@ -210,6 +234,10 @@ export function useProviderAccountPools(deps: {
       const key = `oauth:${provider}`;
       const generation = (accountRequestGenerationRef.current[key] ?? 0) + 1;
       accountRequestGenerationRef.current[key] = generation;
+      fullQuotaLoadRef.current[key] = { generation };
+      const clearFullQuotaLoad = () => {
+        if (fullQuotaLoadRef.current[key]?.generation === generation) delete fullQuotaLoadRef.current[key];
+      };
       const rosterGeneration = (rosterGenerationRef.current[key] ?? 0) + 1;
       rosterGenerationRef.current[key] = rosterGeneration;
       const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && accountRequestGenerationRef.current[key] === generation;
@@ -220,14 +248,20 @@ export function useProviderAccountPools(deps: {
         // even when Anthropic's usage endpoint is slow or timing out.
         const data = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(url);
         if (!Array.isArray(data.accounts)) throw new Error("Invalid account roster");
-        if (!currentRequest()) return false;
+        if (!currentRequest()) { clearFullQuotaLoad(); return false; }
         const rows = selectionRows(data.accounts, data.activeAccountId);
+        const ownership = fullQuotaLoadRef.current[key];
+        if (ownership?.generation === generation) {
+          ownership.modes = new Map(rows.filter(supportsQuotaRead).map(row => [row.id, row.quotaMode]));
+        }
         setAccountSets(current => currentRoster() ? { ...current, [provider]: {
           activeAccountId: data.activeAccountId ?? null,
           accounts: mergeQuotaRows(rows, current[provider]?.accounts ?? [], false),
+        } } : current[provider] ? { ...current, [provider]: {
+          ...current[provider], accounts: settleUnownedPendingRows(current[provider].accounts, ownership),
         } } : current);
         setAccountLoadStates(current => currentRoster() ? { ...current, [provider]: "ready" } : current);
-        if (!rows.some(supportsQuotaRead)) return true;
+        if (!rows.some(supportsQuotaRead)) { clearFullQuotaLoad(); return true; }
 
         const enrich = async (): Promise<boolean> => {
           // Manual selection invalidates roster reads, not a per-ID quota probe already sent.
@@ -256,12 +290,15 @@ export function useProviderAccountPools(deps: {
               ...current, [provider]: { ...current[provider], accounts: unavailableQuotaRows(current[provider].accounts, rows) },
             } : current);
             return false;
+          } finally {
+            clearFullQuotaLoad();
           }
         };
         if (refresh) return await enrich();
         void enrich();
         return true;
       } catch {
+        clearFullQuotaLoad();
         if (!currentRoster()) return false;
         setAccountLoadStates(current => currentRoster() ? { ...current, [provider]: "error" } : current);
         setAccountSets(current => currentRoster() && current[provider] ? {
@@ -279,6 +316,10 @@ export function useProviderAccountPools(deps: {
       const key = `key:${name}`;
       const generation = (accountRequestGenerationRef.current[key] ?? 0) + 1;
       accountRequestGenerationRef.current[key] = generation;
+      fullQuotaLoadRef.current[key] = { generation };
+      const clearFullQuotaLoad = () => {
+        if (fullQuotaLoadRef.current[key]?.generation === generation) delete fullQuotaLoadRef.current[key];
+      };
       const rosterGeneration = (rosterGenerationRef.current[key] ?? 0) + 1;
       rosterGenerationRef.current[key] = rosterGeneration;
       const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && accountRequestGenerationRef.current[key] === generation;
@@ -292,10 +333,16 @@ export function useProviderAccountPools(deps: {
       try {
         const data = await readRoster<{ activeId?: string | null; keys?: ApiKeyEntry[] }>(url);
         if (!Array.isArray(data.keys)) throw new Error("Invalid key roster");
-        if (!currentRequest()) return false;
+        if (!currentRequest()) { clearFullQuotaLoad(); return false; }
         const rows = selectionRows(data.keys, data.activeId);
-        setKeyPools(current => currentRoster() ? { ...current, [name]: mergeQuotaRows(rows, current[name] ?? [], false) } : current);
-        if (!rows.some(supportsQuotaRead)) return true;
+        const ownership = fullQuotaLoadRef.current[key];
+        if (ownership?.generation === generation) {
+          ownership.modes = new Map(rows.filter(supportsQuotaRead).map(row => [row.id, row.quotaMode]));
+        }
+        setKeyPools(current => currentRoster()
+          ? { ...current, [name]: mergeQuotaRows(rows, current[name] ?? [], false) }
+          : current[name] ? { ...current, [name]: settleUnownedPendingRows(current[name], ownership) } : current);
+        if (!rows.some(supportsQuotaRead)) { clearFullQuotaLoad(); return true; }
         const enrich = async (): Promise<boolean> => {
           const quotaGeneration = (quotaGenerationRef.current[key] ?? 0) + 1;
           quotaGenerationRef.current[key] = quotaGeneration;
@@ -314,12 +361,14 @@ export function useProviderAccountPools(deps: {
             if (currentQuota()) setKeyPools(current => currentQuota()
               ? { ...current, [name]: unavailableQuotaRows(current[name] ?? [], rows) } : current);
             return false;
+          } finally {
+            clearFullQuotaLoad();
           }
         };
         if (refresh) return await enrich();
         void enrich();
         return true;
-      } catch { return failed(); }
+      } catch { clearFullQuotaLoad(); return failed(); }
     }));
     return results.every(Boolean);
   }, [apiBase, aliveRef, readRoster]);
@@ -345,7 +394,7 @@ export function useProviderAccountPools(deps: {
           const rows = selectionRows(data.accounts, data.activeAccountId);
           setAccountSets(current => currentRequest() ? { ...current, [provider]: {
             activeAccountId: data.activeAccountId === undefined ? rows.find(row => row.active)?.id ?? null : data.activeAccountId,
-            accounts: mergeRosterRows(rows, current[provider]?.accounts ?? []),
+            accounts: mergeRosterRows(rows, current[provider]?.accounts ?? [], fullQuotaLoadRef.current[key]),
           } } : current);
           setAccountLoadStates(current => currentRequest() ? { ...current, [provider]: "ready" } : current);
         } else {
@@ -353,7 +402,9 @@ export function useProviderAccountPools(deps: {
             `${apiBase}/api/providers/keys?name=${encodeURIComponent(provider)}`, signal);
           if (!Array.isArray(data.keys) || !currentRequest()) return false;
           const rows = selectionRows(data.keys, data.activeId);
-          setKeyPools(current => currentRequest() ? { ...current, [provider]: mergeRosterRows(rows, current[provider] ?? []) } : current);
+          setKeyPools(current => currentRequest() ? { ...current, [provider]: mergeRosterRows(
+            rows, current[provider] ?? [], fullQuotaLoadRef.current[key],
+          ) } : current);
         }
         return true;
       } catch {

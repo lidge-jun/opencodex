@@ -83,6 +83,8 @@ export const MODELS_FETCH_FAILURE_COOLDOWN_MS = 30_000;
 
 interface DiscoveryFailure {
   at: number;
+  /** Upstream-advised absolute retry deadline (for example, Retry-After on HTTP 429). */
+  retryAt?: number;
   /**
    * Credential the failure was observed under, for entitlement-specific rosters. Absent means
    * the failure is credential-agnostic (a plain `/models` endpoint) and suppresses every
@@ -106,8 +108,16 @@ export function markModelsFetchFailure(
   provider: string,
   now = Date.now(),
   authorityIdentity?: string,
+  retryAt?: number,
 ): void {
-  failureAt.set(provider, { at: now, ...(authorityIdentity ? { authorityIdentity } : {}) });
+  const advisedRetryAt = typeof retryAt === "number" && Number.isFinite(retryAt) && retryAt > now
+    ? retryAt
+    : undefined;
+  failureAt.set(provider, {
+    at: now,
+    ...(advisedRetryAt !== undefined ? { retryAt: advisedRetryAt } : {}),
+    ...(authorityIdentity ? { authorityIdentity } : {}),
+  });
 }
 
 /** `liveModelCount` is required so a caller that forgets to pass it fails typecheck instead of
@@ -178,7 +188,9 @@ export function isModelsFetchCoolingDown(
   authorityIdentity?: string,
 ): boolean {
   const failure = failureAt.get(provider);
-  if (failure === undefined || now - failure.at >= cooldownMs) return false;
+  if (failure === undefined) return false;
+  const retryAt = Math.max(failure.at + cooldownMs, failure.retryAt ?? 0);
+  if (now >= retryAt) return false;
   if (failure.authorityIdentity === undefined || authorityIdentity === undefined) return true;
   return failure.authorityIdentity === authorityIdentity;
 }

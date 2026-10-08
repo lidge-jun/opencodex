@@ -1171,5 +1171,13 @@
   "web-search-run-turn-loop.test.ts": "web-search", "responses-run-turn-web-search.test.ts": "responses",
   "server-combo-cooldown-recording.test.ts": "server", "injection-routing-drift.test.ts": "codex-integration",
   "injection-routing-healer.test.ts": "codex-integration", "injection-routing-heal-apply.test.ts": "codex-integration",
-  "cli-start-routing-heal-wiring.test.ts": "cli", "cli-status-codex-routing-drift.test.ts": "cli"
+  "cli-start-routing-heal-wiring.test.ts": "cli", "cli-status-codex-routing-drift.test.ts": "cli",
+  "mirasim-control-plane.test.ts": "providers",
+  "mirasim-crypto.test.ts": "providers",
+  "mirasim-endpoints.test.ts": "providers",
+  "mirasim-oauth.test.ts": "providers",
+  "mirasim-provider.test.ts": "providers",
+  "mirasim-recovery.test.ts": "providers",
+  "mirasim-transport.test.ts": "providers",
+  "mirasim-compact-endpoint.test.ts": "responses"
 }

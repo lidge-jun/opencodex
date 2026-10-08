@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 793 698" role="img" aria-labelledby="title">
+  <title id="title">Mirasim</title>
+  <rect width="793" height="698" fill="#000"/>
+  <g fill="#fff">
+    <rect x="0" y="0" width="57" height="698" rx="28.5"/>
+    <rect x="96" y="93" width="57" height="506" rx="28.5"/>
+    <rect x="192" y="249" width="57" height="300" rx="28.5"/>
+    <rect x="288" y="412" width="57" height="99" rx="28.5"/>
+    <rect x="448" y="412" width="57" height="99" rx="28.5"/>
+    <rect x="544" y="249" width="57" height="300" rx="28.5"/>
+    <rect x="640" y="97" width="57" height="502" rx="28.5"/>
+    <rect x="736" y="0" width="57" height="698" rx="28.5"/>
+  </g>
+</svg>
