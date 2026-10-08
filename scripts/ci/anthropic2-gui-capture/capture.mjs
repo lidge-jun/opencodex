@@ -424,12 +424,16 @@ const POPULATED_SPECS = [
     hash: "dashboard",
     async run(page) {
       const T = TEXT.en;
-      // A first-run sub-agent advisory dialog can cover the dashboard; it is unrelated to Pool 2.
+      // A first-run sub-agent advisory dialog opens shortly after load and covers the dashboard;
+      // it is unrelated to Pool 2, so wait for it briefly and keep it closed before any capture.
       const advisory = page.getByRole("button", { name: "Continue", exact: true });
-      if (await advisory.isVisible().catch(() => false)) {
-        await advisory.click();
-        await advisory.waitFor({ state: "hidden" }).catch(() => {});
-      }
+      const dismissAdvisory = async (timeout) => {
+        if (await advisory.waitFor({ state: "visible", timeout }).then(() => true, () => false)) {
+          await advisory.click();
+          await advisory.waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
+        }
+      };
+      await dismissAdvisory(8000);
       const grid = await visible(page.locator(".dash-sidecar-grid"), "sidecar cards (.dash-sidecar-grid)");
       const triggers = page.locator(`button[aria-haspopup="listbox"][aria-label="${T.pool}"]`);
       await waitCount(triggers, 2, `"${T.pool}" selects (web search + vision)`);
@@ -444,6 +448,7 @@ const POPULATED_SPECS = [
         await save(page, "05b-sidecar-pool-viewport-en.png"),
       ];
       // Opening the menu changes nothing; only choosing an option saves.
+      await dismissAdvisory(1000);
       await triggers.first().click();
       await visible(page.locator(`[role="listbox"][aria-label="${T.pool}"]`), "open Pool menu");
       await page.waitForTimeout(300);

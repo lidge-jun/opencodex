@@ -18,6 +18,19 @@ import { isCodexAccountUsable } from "../codex/account-usability";
 import { MAIN_CODEX_ACCOUNT_ID, isSelectableCodexPoolAccount } from "../codex/account-id";
 import { getAccountSet } from "../oauth/store";
 import { configuredAnthropicInstance, type AnthropicInstanceId } from "../providers/anthropic-instance";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
+
+/**
+ * The parent request's pool for an inheriting helper. A missing or disabled row keeps the parent's
+ * identity, so a pool removed mid-request refuses instead of discovering another pool; only a present
+ * custom row that is not the builtin instance (an unmarked custom `anthropic2`) stops inheritance.
+ */
+export function inheritedAnthropicInstance(config: OcxConfig, parentProviderName: string | undefined): AnthropicInstanceId | undefined {
+  if (!isAnthropicInstanceId(parentProviderName)) return undefined;
+  const row = config.providers?.[parentProviderName];
+  if (!row || row.disabled === true) return parentProviderName;
+  return configuredAnthropicInstance(config, parentProviderName);
+}
 
 export class AnthropicHelperUnavailableError extends Error {
   readonly code = "anthropic_helper_unavailable";
@@ -53,7 +66,7 @@ export function resolveAnthropicSidecarAuth(config: OcxConfig, instance: Anthrop
  */
 export function resolveAnthropicHelperInstance(config: OcxConfig, context: AnthropicHelperContext): AnthropicInstanceId | undefined {
   if (context.backendFamily !== "anthropic") return undefined;
-  const instance = context.anthropicInstance ?? configuredAnthropicInstance(config, context.parentProviderName);
+  const instance = context.anthropicInstance ?? inheritedAnthropicInstance(config, context.parentProviderName);
   if (instance && !resolveAnthropicSidecarAuth(config, instance)) throw new AnthropicHelperUnavailableError(instance);
   return instance;
 }

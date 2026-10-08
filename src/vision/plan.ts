@@ -11,8 +11,7 @@ import {
   modelAcceptsImageInput,
 } from "./eligibility";
 import { normalizeVisionReasoningForModel } from "./reasoning";
-import { resolveSidecarAuth, resolveAnthropicHelperInstance, resolveAnthropicSidecarAuth, withAnthropicHelperRefusal } from "../sidecar/auth";
-import { configuredAnthropicInstance } from "../providers/anthropic-instance";
+import { inheritedAnthropicInstance, resolveSidecarAuth, resolveAnthropicHelperInstance, resolveAnthropicSidecarAuth, withAnthropicHelperRefusal } from "../sidecar/auth";
 import { DEFAULT_VISION_TIMEOUT_MS, MAX_VISION_TIMEOUT_MS, MIN_VISION_TIMEOUT_MS } from "./timeout-bounds";
 import { carriesImages } from "./image-rewrite";
 
@@ -73,7 +72,7 @@ export function resolveVisionBackend(
 /** Existing family preference, with a builtin parent contributing its own auth availability. */
 function preferredVisionBackend(config: OcxConfig, parentProviderName?: string): "openai" | "anthropic" {
   const cfg = config.visionSidecar ?? {};
-  const requested = cfg.anthropicInstance ?? configuredAnthropicInstance(config, parentProviderName);
+  const requested = cfg.anthropicInstance ?? inheritedAnthropicInstance(config, parentProviderName);
   const exact = requested ? resolveAnthropicSidecarAuth(config, requested) : undefined;
   const legacy = findAnthropicVisionProvider({ ...config, visionSidecar: { ...cfg, anthropicInstance: undefined } });
   return resolveVisionBackend(cfg.backend, exact
