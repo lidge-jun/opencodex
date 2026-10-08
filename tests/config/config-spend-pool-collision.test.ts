@@ -104,3 +104,16 @@ test("unreadable malformed and linked existing salts cannot validate a mapping",
     }
   } finally { process.env.OPENCODEX_HOME = home; removeTreeWithRetry(other); }
 });
+
+for (const target of [" P", "P ", "missing-provider"]) {
+  test(`invalid alias target ${JSON.stringify(target)} rejects writes and warns on load without hiding spend`, () => {
+    installSalt();
+    const raw = candidate({ [alias("historical-account")]: target });
+    expect(validateConfigCandidate(raw).ok).toBe(false);
+    const loaded = configDiagnosticsFromRaw(JSON.stringify(raw));
+    expect(loaded.config.spend).toEqual(raw.spend);
+    expect(loaded.warnings?.join("\n")).toContain("spendPoolAliases invalid");
+    const ledger = createSpendReservationLedger({ salt, policy: policy(raw.spendPoolAliases, ["P", "Q"]) });
+    expect(reserve(ledger)).toMatchObject({ reserved: false, denial: { reason: "pool-history-unresolved" } });
+  });
+}

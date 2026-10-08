@@ -944,27 +944,32 @@ The dashboard warns about old or unknown CLI versions, unavailable targets, and 
 
 ## Historical pool continuity
 
-Provider-pool ceilings use the canonical routed provider. Request logs still use account-specific
-display labels. Earlier journals may record spend under those labels; salted aliases alone cannot
-prove which provider owned them. OpenCodex does not infer ownership from current accounts or names.
+Provider-pool ceilings use the canonical routed provider. For every currently configured provider
+`P`, OpenCodex automatically binds its salted pool alias, `h(pool, P)`, to `P` when reading
+balances. No manual self-mapping or salt calculation is needed for independent
+provider ceilings. This rule also applies to retained historical balances with that exact alias.
 
-With `spend.pool.maxTokens`, each original balance contributes once to its verified provider group
-or, when unmapped and positive, to every candidate pool. This includes an unmapped bucket whose
-hash matches the current canonical provider; it is never counted twice. Settled, reserved and
-unresolved usage all count. Unknown usage is not a refund. This conservative view may restrict an
-unused pool until its historical mappings are verified. Root and identity ceilings remain independent.
+Request logs still use account-specific display labels. A different historical label, including an
+account ordinal, does not establish provider ownership. With `spend.pool.maxTokens`, each original
+balance contributes once to its bound provider group or, when still unbound and positive, to every
+candidate pool. Settled, reserved and unresolved usage all count; unknown usage is not a refund.
+Unbound history may therefore restrict an otherwise unused pool. Current account order and display
+names do not resolve that history. Root and identity ceilings remain independent.
 
-Add verified mappings to the top-level `spendPoolAliases` object in `config.json`. Each key is an
-exact 32-character lowercase hexadecimal pool alias from this installation's journal; each value
-is its verified canonical provider ID. Keep evidence for the mapping and keep the journal and salt
-private. A canonical-looking historical alias also needs an explicit mapping to establish ownership.
+For distinct historical labels whose ownership you have verified, add mappings to the top-level
+`spendPoolAliases` object in `config.json`. Each key is an exact 32-character lowercase hexadecimal
+pool alias from this installation's journal; each value is the exact ID of a verified, currently
+configured canonical provider, with no surrounding whitespace.
+Keep evidence for the mapping and keep the journal and salt private.
 
-Mappings apply when balances are read. They do not move original balances or persist links in the
-journal: removing a mapping makes that history unbound again. Keep this object outside `spend`,
-because older versions reject unknown fields inside that strict section. Invalid mappings are
-rejected on writes; invalid hand edits retain ceilings and refuse pool admission. A configured
-provider's own salted pool alias cannot map to another provider. This is checked again when the
-provider set changes. Validation reads an existing salt without creating one.
+Automatic self-bindings and explicit mappings apply only when balances are read. They do not move
+original balances or persist identity links in the journal. Removing an explicit historical mapping
+makes that history unbound again unless its alias is a currently configured provider's own alias.
+Keep `spendPoolAliases` outside `spend`, because older versions reject unknown fields inside that
+strict section. Invalid mappings are rejected on writes; invalid hand edits retain ceilings and
+refuse pool admission. A configured provider's own salted pool alias cannot map to another provider.
+This is checked again when the provider set changes. Validation reads an existing salt without
+creating one.
 
 Dormant unbound history expires only after its last activity is strictly older than
 `spend.retentionDays`. Capacity pressure cannot shorten that interval for positive unknown history.
@@ -977,8 +982,9 @@ active/exhausted protections. No automatic tool reconstructs unverifiable mappin
 When a root, identity or pool ceiling applies, the first physical send for each selected target/key
 requires a normal-capacity reservation. If that cannot be recorded, the send is refused before it
 reaches upstream. Stable retries reuse that reservation's scopes; a different target/key needs a
-new one. Additional sends are counted against a finite request-wide limit fixed at the first start
+new one. `L` is the request-wide physical-send limit, frozen at the first physical start
 (default four; the existing bounded OAuth profile can expand to eighteen before sending).
+Every additional physical send shares this finite limit.
 
 Delayed reports retain already-started usage. Terminal settlement waits for reporters, and send IDs
 are forgotten only after their accounting is durable; forgetting an ID does not remove its balance.
@@ -989,8 +995,8 @@ added for unconfigured traffic.
 
 Claude CLI, CodeBuddy and Qoder count each CLI invocation as one send. Their first invocation
 still needs a normal reservation and is refused if that reservation cannot be obtained. Internal
-CLI retries and tool turns do not separately consume L; their cost settles from actual reported
-usage, including amounts above the initial estimate. This exception preserves CLI use with configured
+CLI retries and tool turns do not separately consume this request-wide send limit; their cost
+settles from actual reported usage, including amounts above the initial estimate. This exception preserves CLI use with configured
 spend ceilings while limiting the number of child invocations.
 
 ### Rollback to 2.80.0: contract C
@@ -1002,8 +1008,8 @@ an older copy loses the spend recorded since that copy.
 
 This does not preserve canonical aggregation after downgrade, nor promise the same remaining
 allowance that 2.80.0 would have calculated for identical traffic without the upgrade. It may book
-new traffic under account labels. On re-upgrade, the current alias configuration applies to the
-original balances still retained by 2.80.0. New checkpoints contain no identity-link metadata that
+new traffic under account labels. On re-upgrade, current configured-provider self-bindings and explicit
+alias mappings apply to the original balances still retained by 2.80.0. New checkpoints contain no identity-link metadata that
 an older reader must preserve.
 
 Journals written by unpublished experimental builds with `pool-current` aliases or `poolContinuity`

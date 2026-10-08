@@ -131,7 +131,7 @@ test("top-level pool aliases preserve all ceilings and malformed hand edits fail
   writeFileSync(join(home, "spend-ledger.salt"), "7".repeat(64) + "\n", { mode: 0o600 });
   const alias = "a".repeat(32);
   const spend = { root: { maxTokens: 200 }, identity: { maxTokens: 150 }, pool: { maxTokens: 100 } };
-  const valid = { ...candidate(spend), spendPoolAliases: { [alias]: "fixture-provider" } };
+  const valid = { ...candidate(spend), spendPoolAliases: { [alias]: "xai" } };
   expect(validateConfigCandidate(valid).ok).toBe(true);
   for (const aliases of [null, [], { wrong: "fixture-provider" }, { [alias]: 1 }]) {
     const raw = { ...valid, spendPoolAliases: aliases };

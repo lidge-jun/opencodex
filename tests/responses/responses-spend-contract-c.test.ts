@@ -22,7 +22,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const salt = "6".repeat(64);
 const pool = (id: string) => createHash("sha256").update(salt).update("\0pool\0").update(id).digest("hex").slice(0, 32);
 const policy = (poolAliases?: unknown, limit = 100): SpendReservationPolicy => ({
-  ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: limit }, poolAliases,
+  ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: limit }, poolAliases, canonicalProviderIds: ["P", "Q"],
 });
 const journal = (records: unknown[] = []): SpendJournal & { lines: string[] } => {
   const lines = records.map(record => JSON.stringify(record));
@@ -95,7 +95,7 @@ test("Responses A B and Messages share canonical ceiling", async () => {
   }
 });
 
-test("own unbound canonical bucket is counted once for absent partial complete maps", () => {
+test("self-bound canonical bucket is counted once for absent partial complete maps", () => {
   for (const aliases of [undefined, { [pool("old-A")]: "P" },
     { [pool("old-A")]: "P", [pool("old-B")]: "P", [pool("P")]: "P" }]) {
     const disk = journal([checkpoint([["P", 20, 0], ["old-A", 30, 0], ["old-B", 0, 10]])]);
@@ -109,20 +109,22 @@ test("own unbound canonical bucket is counted once for absent partial complete m
   }
 });
 
-test("restart does not self-bind ambiguous canonical history", () => {
+test("restart keeps configured canonical history self-bound without persisted metadata", () => {
   const disk = journal();
   let ledger = createSpendReservationLedger({ journal: disk, salt, policy: policy(), now: () => 2 });
   expect(reserve(ledger, "initial", "P", 40).reserved).toBe(true);
   expect(ledger.settle("initial", { inputTokens: 40, outputTokens: 0 })).toBe(true);
   ledger = createSpendReservationLedger({ journal: disk, salt, policy: policy(), now: () => 3 });
+  expect(ledger.hasUnboundPositivePoolHistory()).toBe(false);
+  expect(ledger.snapshot("pool", "P")?.settled).toBe(40);
+  expect(ledger.snapshot("pool", "Q")).toBeUndefined();
+  expect(reserve(ledger, "other-independent", "Q", 100).reserved).toBe(true);
+  ledger.abandon("other-independent");
+  ledger.reconfigure({ ...policy(), canonicalProviderIds: ["Q"] });
   expect(ledger.hasUnboundPositivePoolHistory()).toBe(true);
   expect(ledger.snapshot("pool", "Q")?.settled).toBe(40);
-  expect(reserve(ledger, "other-over", "Q", 61)).toMatchObject({ reserved: false, denial: { projected: 101 } });
-  ledger.reconfigure(policy({ [pool("P")]: "P" }));
-  expect(ledger.hasUnboundPositivePoolHistory()).toBe(false);
-  expect(ledger.snapshot("pool", "Q")).toBeUndefined();
   ledger.reconfigure(policy());
-  expect(ledger.snapshot("pool", "Q")?.settled).toBe(40);
+  expect(ledger.snapshot("pool", "Q")?.settled ?? 0).toBe(0);
   expect(disk.lines.some(line => JSON.parse(line).poolContinuity !== undefined)).toBe(false);
 });
 
@@ -133,7 +135,7 @@ test("combo A to B preserves exact current permit exclusion", async () => {
   }, combos: { spend: { strategy: "failover", targets: [{ provider: "A", model: "m" }, { provider: "B", model: "m" }] } } };
   const disk = journal();
   const ledger = createSpendReservationLedger({ journal: disk, salt,
-    policy: policy({ [pool("A")]: "A", [pool("B")]: "B" }, 10) });
+    policy: { ...policy({ [pool("A")]: "A", [pool("B")]: "B" }, 10), canonicalProviderIds: ["A", "B"] } });
   const ctx = log("stale");
   const tracker = createRequestSpendTracker(ctx, undefined, ledger);
   const budget = createRequestExecutionBudget(undefined, "combo-contract-c", tracker);

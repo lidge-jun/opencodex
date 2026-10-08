@@ -624,11 +624,14 @@ export interface SpendSeed { readonly sendId: string }
 export type SpendSeedDecision = { reserved: true; seed: SpendSeed } | { reserved: false; denial: SpendDenial };
 
 export interface SpendReservationLedger {
-  reserveSeed(request: SpendReservationRequest): SpendSeedDecision;
+  /** Tracker owners isolate cleanup barriers; omitted owners retain the installation barrier. */
+  reserveSeed(request: SpendReservationRequest, owner?: object): SpendSeedDecision;
   reserveReportedFromSeed(seed: SpendSeed, request: { sendId: string; inputTokens: number; outputCeilingTokens: number }): boolean;
-  forgetResolved(sendIds: readonly string[]): boolean;
-  finishSeed(seed: SpendSeed): boolean;
-  registerReporter(): { close(): void };
+  forgetResolved(sendIds: readonly string[], owner?: object): boolean;
+  finishSeed(seed: SpendSeed, owner?: object): boolean;
+  registerReporter(owner?: object): { close(): void };
+  /** Retry completed tracker cleanup on later admission or maintenance after storage recovers. */
+  deferCleanup(owner: object, cleanup: () => boolean): void;
   waitForReporterDrain(): Promise<void>;
   reserve(request: SpendReservationRequest): SpendReservationDecision;
   /** Pre-dispatch guard, including transports which report their sends after dispatch. */
@@ -731,13 +734,26 @@ export function createSpendReservationLedger(options: {
   const scopes = new Map<string, ScopeState>();
   const reservations = new Map<string, Reservation>();
   // Object identity is the capability: a copied sendId or another ledger's seed is not proof.
-  const seeds = new Map<SpendSeed, { targets: readonly ScopeRef[]; sends: Set<string>; abandoned: boolean }>();
-  const seedForSend = (send: string) => [...seeds.values()].find(seed => seed.sends.has(send));
-  const pinnedScope = (key: string): boolean => [...seeds.values()].some(seed =>
-    seed.targets.some(ref => scopeKey(ref.scope, ref.alias) === key));
+  type SeedState = { targets: readonly ScopeRef[]; sends: Set<string>; abandoned: boolean; owner?: object };
+  const seeds = new Map<SpendSeed, SeedState>();
+  const seedBySend = new Map<string, SeedState>();
+  const pinnedKeys = new Map<string, number>();
+  const seedForSend = (send: string) => seedBySend.get(send);
+  const pinnedScope = (key: string): boolean => pinnedKeys.has(key);
   const pendingRecords: JournalRecord[] = [];
   let reporters = 0;
+  const ownerReporters = new WeakMap<object, number>();
+  const activeReporters = (owner?: object): number => owner === undefined ? reporters : ownerReporters.get(owner) ?? 0;
   const drainWaiters = new Set<() => void>();
+  const deferredCleanups = new Map<object, () => boolean>();
+  let retryingCleanup = false;
+  const retryCleanup = (): void => {
+    if (retryingCleanup) return;
+    retryingCleanup = true;
+    try {
+      for (const [owner, cleanup] of deferredCleanups) if (cleanup()) deferredCleanups.delete(owner);
+    } finally { retryingCleanup = false; }
+  };
   let poolContinuity = resolvePoolAliases(policy.poolAliases, salt, policy.canonicalProviderIds);
   let persistFailures = 0;
   let corruptRecords = 0;
@@ -774,9 +790,8 @@ export function createSpendReservationLedger(options: {
       const member = key.slice(5);
       const unbound = !poolContinuity.known(member);
       if (unbound) {
-        // Ownership cannot be inferred because an old alias hashes to a current provider ID.
-        // Keep that original balance out of the proven group, then charge it once through the
-        // conservative overlay below for every candidate provider.
+        // Configured provider buckets bind at read time. Only unmapped historical labels
+        // absent from that roster remain unbound and overlay every candidate provider.
         if (state.settled + state.reserved + state.unresolved === 0) continue;
         includesUnboundHistory = true;
       } else if (poolContinuity.resolve(member) !== group) {
@@ -1151,21 +1166,27 @@ export function createSpendReservationLedger(options: {
   };
 
   const ledger: SpendReservationLedger = {
-    reserveSeed(request): SpendSeedDecision {
+    reserveSeed(request, owner): SpendSeedDecision {
       assertOwnedAccounting?.();
       // Initial anchors never borrow already-sent capacity or bypass token/durability checks.
       const decision = ledger.reserve({ ...request, alreadySent: false });
       if (!decision.reserved) return decision;
       const seed: SpendSeed = Object.freeze({ sendId: request.sendId });
       const send = aliasFor("send", seed.sendId);
-      seeds.set(seed, { targets: reservations.get(send)!.targets, sends: new Set([send]), abandoned: false });
+      const state: SeedState = { targets: reservations.get(send)!.targets, sends: new Set([send]), abandoned: false, owner };
+      seeds.set(seed, state);
+      seedBySend.set(send, state);
+      for (const ref of state.targets) {
+        const key = scopeKey(ref.scope, ref.alias);
+        pinnedKeys.set(key, (pinnedKeys.get(key) ?? 0) + 1);
+      }
       return { reserved: true, seed };
     },
     reserveReportedFromSeed(seed, request): boolean {
       assertOwnedAccounting?.();
       const owned = seeds.get(seed);
       const send = aliasFor("send", request.sendId);
-      if (!owned || owned.abandoned || reservations.has(send)
+      if (!owned || owned.abandoned || reservations.has(send) || seedBySend.has(send)
         || owned.targets.some(ref => !scopes.has(scopeKey(ref.scope, ref.alias)))) return false;
       const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
       const at = now();
@@ -1174,13 +1195,15 @@ export function createSpendReservationLedger(options: {
       if (pendingRecords.length > 0 || !append(record)) pendingRecords.push(record);
       applyReserve(send, owned.targets, tokens, at);
       owned.sends.add(send);
+      seedBySend.set(send, owned);
       compact(at);
       return true;
     },
-    forgetResolved(sendIds): boolean {
+    forgetResolved(sendIds, owner): boolean {
       assertOwnedAccounting?.();
-      if (reporters > 0 || !flushPending()) return false;
+      if (activeReporters(owner) > 0) return false;
       const sends = [...new Set(sendIds.map(id => aliasFor("send", id)))];
+      if (sends.some(send => { const seed = seedForSend(send); return seed && seed.owner !== owner; }) || !flushPending()) return false;
       if (sends.some(send => { const entry = reservations.get(send); return entry && isLive(entry.status); })) return false;
       for (const send of sends) {
         if (!reservations.has(send)) continue;
@@ -1189,10 +1212,10 @@ export function createSpendReservationLedger(options: {
       }
       return true;
     },
-    finishSeed(seed): boolean {
+    finishSeed(seed, owner): boolean {
       assertOwnedAccounting?.();
       const owned = seeds.get(seed);
-      if (!owned || !flushPending()) return false;
+      if (!owned || owned.owner !== owner || !flushPending()) return false;
       if (owned.abandoned) {
         // A never-sent provisional anchor cannot have delayed physical reports. Rebinding
         // during another live producer is safe only for this explicitly abandoned capability.
@@ -1201,22 +1224,38 @@ export function createSpendReservationLedger(options: {
           if (!append({ v: 1, kind: "forget", send, at: now() })) return false;
           applyForget(send);
         }
-      } else if (reporters > 0) return false;
+      } else if (activeReporters(owner) > 0) return false;
       if ([...owned.sends].some(send => reservations.has(send))) return false;
       seeds.delete(seed);
+      for (const send of owned.sends) seedBySend.delete(send);
+      for (const ref of owned.targets) {
+        const key = scopeKey(ref.scope, ref.alias);
+        const count = pinnedKeys.get(key)! - 1;
+        if (count === 0) pinnedKeys.delete(key); else pinnedKeys.set(key, count);
+      }
       return true;
     },
-    registerReporter() {
+    registerReporter(owner) {
       assertOwnedAccounting?.();
       reporters += 1;
+      if (owner) ownerReporters.set(owner, activeReporters(owner) + 1);
       let closed = false;
       return { close() {
         if (closed) return;
         assertOwnedAccounting?.();
         closed = true;
         reporters -= 1;
+        if (owner) {
+          const remaining = activeReporters(owner) - 1;
+          if (remaining === 0) ownerReporters.delete(owner); else ownerReporters.set(owner, remaining);
+        }
+        retryCleanup();
         if (reporters === 0) { for (const resolve of drainWaiters) resolve(); drainWaiters.clear(); }
       } };
+    },
+    deferCleanup(owner, cleanup) {
+      assertOwnedAccounting?.();
+      deferredCleanups.set(owner, cleanup);
     },
     waitForReporterDrain() {
       assertOwnedAccounting?.();
@@ -1243,6 +1282,7 @@ export function createSpendReservationLedger(options: {
 
     reserve(request: SpendReservationRequest): SpendReservationDecision {
       assertOwnedAccounting?.();
+      retryCleanup();
       const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
       const at = request.at ?? now();
       const send = aliasFor("send", request.sendId);
@@ -1252,7 +1292,7 @@ export function createSpendReservationLedger(options: {
       // A send id this ledger already knows is REFUSED. Returning success while booking
       // nothing -- the old behaviour -- let one id authorise an unlimited number of physical
       // sends with the scope totals never moving.
-      if (reservations.has(send)) {
+      if (reservations.has(send) || seedBySend.has(send)) {
         return { reserved: false, denial: { reason: "duplicate-send-id", sendId: request.sendId } };
       }
       // Replay could not prove these totals are complete, so a configured ceiling cannot be
@@ -1370,7 +1410,8 @@ export function createSpendReservationLedger(options: {
 
     knows(sendId: string): boolean {
       assertOwnedAccounting?.();
-      return reservations.has(aliasFor("send", sendId));
+      const send = aliasFor("send", sendId);
+      return reservations.has(send) || seedBySend.has(send);
     },
 
     snapshot(scope: SpendScope, scopeId: string): ScopeSpendSnapshot | undefined {
@@ -1401,6 +1442,7 @@ export function createSpendReservationLedger(options: {
 
     prune(at: number = now()): void {
       assertOwnedAccounting?.();
+      retryCleanup();
       // Removal requires BOTH inactive and not exhausted inside the window. An
       // exhausted-but-idle scope that was dropped would be recreated fresh under the
       // same id -- the exact laundering the ceiling exists to stop.
@@ -1410,6 +1452,7 @@ export function createSpendReservationLedger(options: {
 
     reconfigure(next: SpendReservationPolicy): void {
       assertOwnedAccounting?.();
+      retryCleanup();
       policy = next;
       poolContinuity = resolvePoolAliases(policy.poolAliases, salt, policy.canonicalProviderIds);
     },

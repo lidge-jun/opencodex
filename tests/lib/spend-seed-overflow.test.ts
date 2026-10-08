@@ -134,7 +134,7 @@ for (const sends of [1, 2]) test(`terminal usage survives append failure without
   reporter.close();
   disk.failAppend = true;
   tracker.settle({ inputTokens: 70, outputTokens: 0 });
-  // Let the tracker's one drain callback run while storage is still unavailable.
+  // A terminal write failure must survive without another caller settlement.
   await Promise.resolve();
   expect(ledger.snapshot("pool", "P")).toMatchObject({ settled: 70, reserved: 0, unresolved: sends - 1 });
   expect(ledger.knows(anchor.sendId)).toBe(true);
@@ -143,6 +143,7 @@ for (const sends of [1, 2]) test(`terminal usage survives append failure without
   expect(ledger.reserve(request("next", { poolId: "P" }, 1))).toMatchObject({
     reserved: false, denial: { reason: "spend-limit-exceeded", projected: 70 + sends },
   });
+  expect(ledger.knows(anchor.sendId)).toBe(false);
   const old = createShippedSpendLedger({ journal: disk, salt, now: () => 2 });
   expect(old.snapshot("pool", "P")).toMatchObject({ settled: 70, unresolved: sends - 1 });
   expect(old.corruptRecords).toBe(0);
@@ -181,4 +182,111 @@ test("partial pending flush preserves reserve dispatch and terminal order withou
   expect(ledger.finishSeed(anchor)).toBe(true);
   expect(createShippedSpendLedger({ journal: disk, salt, now: () => 2 }).snapshot("pool", "P"))
     .toMatchObject({ settled: 70, unresolved: 1 });
+});
+
+test("completed trackers reclaim seeds while another tracker still reports", async () => {
+  const disk = spendTestJournal();
+  const ledger = factory(disk, 1, 2);
+  const busy = createRequestSpendTracker({ provider: "P" }, undefined, ledger);
+  const busySeed = busy.ensureSeed({});
+  if (!busySeed) throw new Error("busy seed denied");
+  const busyReporter = busy.beginReporter();
+  busyReporter.start(busySeed, 1);
+  let drained = false;
+  const drain = ledger.waitForReporterDrain().then(() => { drained = true; });
+  for (let index = 0; index < 3; index++) {
+    const tracker = createRequestSpendTracker({ provider: "P" }, undefined, ledger);
+    const anchor = tracker.ensureSeed({});
+    expect(anchor).toBeDefined();
+    if (!anchor) throw new Error("overlapping seed denied");
+    const reporter = tracker.beginReporter();
+    reporter.start(anchor, 1);
+    tracker.settle({ inputTokens: 1, outputTokens: 0 });
+    expect(ledger.knows(anchor.sendId)).toBe(true);
+    reporter.close();
+    expect(ledger.knows(anchor.sendId)).toBe(false);
+  }
+  await Promise.resolve();
+  expect(drained).toBe(false);
+  busyReporter.close();
+  busy.settle({ inputTokens: 1, outputTokens: 0 });
+  await drain;
+  expect(drained).toBe(true);
+  expect(ledger.knows(busySeed.sendId)).toBe(false);
+  expect(createShippedSpendLedger({ journal: disk, salt, now: () => 2 }).snapshot("pool", "P")?.settled).toBe(4);
+});
+
+test("later admission retries tracker cleanup after partial durable forgetting fails", async () => {
+  const disk = spendTestJournal();
+  const append = disk.append.bind(disk);
+  let forgetsBeforeFailure = 1;
+  disk.append = line => {
+    if (JSON.parse(line).kind === "forget" && forgetsBeforeFailure-- <= 0) throw new Error("forget unavailable");
+    append(line);
+  };
+  const ledger = factory(disk);
+  const tracker = createRequestSpendTracker({ provider: "P", spendInputEstimateTokens: 1 }, undefined, ledger);
+  const anchor = tracker.ensureSeed({});
+  if (!anchor) throw new Error("seed denied");
+  const reporter = tracker.beginReporter();
+  reporter.start(anchor, 1);
+  reporter.start(anchor, 2);
+  reporter.close();
+  tracker.settle({ inputTokens: 70, outputTokens: 0 });
+  await Promise.resolve();
+  expect(disk.lines.filter(line => JSON.parse(line).kind === "forget")).toHaveLength(1);
+  expect(ledger.reserveSeed(request("still-full"))).toMatchObject({ reserved: false, denial: { reason: "tracking-capacity-exhausted" } });
+  forgetsBeforeFailure = Number.POSITIVE_INFINITY;
+  // No second settle call: ordinary admission must release the durable completed seed.
+  expect(ledger.reserveSeed(request("recovered"))).toMatchObject({ reserved: true });
+  expect(disk.lines.filter(line => JSON.parse(line).kind === "forget")).toHaveLength(2);
+  expect(createShippedSpendLedger({ journal: disk, salt, now: () => 2 }).snapshot("pool", "P"))
+    .toMatchObject({ settled: 70, unresolved: 1 });
+});
+
+test("seed reverse indexes release all sends and retain shared scope pins until the last seed closes", () => {
+  const ledger = factory(spendTestJournal(), 1, 2);
+  ledger.reconfigure(spendTestPolicy({ maxTrackedScopes: 1, maxTrackedSends: 2, poolAliases: { [spendAlias("pool", "P")]: "P" } }));
+  const first = seed(ledger, "first");
+  const last = seed(ledger, "last");
+  expect(reported(ledger, first, "overflow")).toBe(true);
+  for (const sendId of ["first", "overflow"]) ledger.settle(sendId, { inputTokens: 0, outputTokens: 0 });
+  expect(ledger.forgetResolved(["first", "overflow"])).toBe(true);
+  expect(ledger.finishSeed(first)).toBe(true);
+  ledger.prune(1e12);
+  expect(ledger.snapshot("pool", "P")).toBeDefined();
+  expect(reported(ledger, last, "overflow")).toBe(true);
+  for (const sendId of ["last", "overflow"]) ledger.settle(sendId, { inputTokens: 0, outputTokens: 0 });
+  expect(ledger.forgetResolved(["last", "overflow"])).toBe(true);
+  expect(ledger.finishSeed(last)).toBe(true);
+  ledger.prune(1e12);
+  expect(ledger.snapshot("pool", "P")).toBeUndefined();
+  expect(ledger.reserveSeed(request("first", { poolId: "Q" }))).toMatchObject({ reserved: true });
+  expect(reported(ledger, first, "late")).toBe(false);
+});
+
+test("seed cleanup checks the owning reporter count and rejects another owner", () => {
+  const ledger = factory();
+  const owner = {};
+  const foreign = {};
+  const decision = ledger.reserveSeed(request("owned"), owner);
+  if (!decision.reserved) throw new Error("seed denied");
+  const first = ledger.registerReporter(owner);
+  const second = ledger.registerReporter(owner);
+  const unrelated = ledger.registerReporter(foreign);
+  ledger.settle("owned", { inputTokens: 1, outputTokens: 0 });
+  first.close();
+  first.close();
+  expect(ledger.forgetResolved(["owned"], owner)).toBe(false);
+  expect(ledger.finishSeed(decision.seed, owner)).toBe(false);
+  second.close();
+  expect(ledger.forgetResolved(["owned"], {})).toBe(false);
+  expect(ledger.finishSeed(decision.seed, {})).toBe(false);
+  expect(ledger.forgetResolved(["owned"], owner)).toBe(true);
+  // A forgotten alias stays pinned until its seed closes; it cannot be rebound underneath it.
+  expect(ledger.knows("owned")).toBe(true);
+  expect(ledger.reserve(request("owned"))).toMatchObject({ reserved: false, denial: { reason: "duplicate-send-id" } });
+  expect(ledger.finishSeed(decision.seed, owner)).toBe(true);
+  unrelated.close();
+  expect(ledger.reserveSeed(request("owned"), foreign)).toMatchObject({ reserved: true });
 });

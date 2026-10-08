@@ -1,5 +1,6 @@
 import { createPhysicalSendReporter } from "../../lib/request-execution-budget";
 import { createInferenceSendBudget } from "../inference/context";
+import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { capturePoolQuotaWriter } from "../../codex/account-store";
 import { previewXaiOauthWireModel } from "./core-normalize";
 import {
@@ -1092,7 +1093,7 @@ export async function handleResponsesCompact(
     const localDispatchRefusal = (error: unknown): Response | undefined => {
       const cause = unwrapUpstreamRetryEvidenceError(error);
       const response = cause instanceof SendBudgetExhaustedError
-        ? formatErrorResponse(429, "request_send_budget_exhausted", cause.message)
+        ? unboundPoolSpendRefusalResponse(logCtx) ?? formatErrorResponse(429, "request_send_budget_exhausted", cause.message)
         : mapCodexAuthContextErrorToResponse(cause, {
           now: Date.now(), accountSelector: route.codexAccountNamespace,
         });

@@ -79,7 +79,6 @@ export function createRequestSpendTracker(
   let reporters = 0;
   const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean }>();
   const resolvedSendIds = new Set<string>();
-  let awaitingDrain = false;
   const completedSeeds = new Set<SpendSeed>();
   const physical = new Map<number, { seed: SpendSeed; sendId?: string }>();
   const selectedScopes = (target: SpendTargetIdentity = {}): SpendScopes => ({
@@ -96,49 +95,41 @@ export function createRequestSpendTracker(
   const estimates = () => ({ inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
     outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0 });
   const seedState = (seed: SpendSeed) => [...seeds.values()].find(state => state.seed === seed);
-  const finalizeSeeds = (): void => {
-    if (!finalRequested || reporters !== 0 || resolved || !seededAccounting) return;
+  const tryFinalizeSeeds = (): boolean => {
     // All starts are booked before producers close. Ordinal, never callback order, owns usage.
     const entries = [...physical.entries()].sort((a, b) => a[0] - b[0]);
     const terminal = entries.at(-1)?.[1].sendId;
     const ids: string[] = [];
     for (const [, entry] of entries) {
-      if (!entry.sendId) return;
+      if (!entry.sendId) return false;
       const reported = entry.sendId === terminal && (typeof finalUsage?.inputTokens === "number" || typeof finalUsage?.outputTokens === "number");
       if (!resolvedSendIds.has(entry.sendId)) {
         const ok = reported ? ledger().settle(entry.sendId, { inputTokens: finalUsage?.inputTokens ?? 0, outputTokens: finalUsage?.outputTokens ?? 0 })
           : ledger().markLost(entry.sendId);
-        if (!ok) return;
+        if (!ok) return false;
         resolvedSendIds.add(entry.sendId);
       }
       ids.push(entry.sendId);
     }
     for (const state of seeds.values()) if (!state.started && !completedSeeds.has(state.seed)) {
-      if (!resolvedSendIds.has(state.seed.sendId) && !ledger().abandon(state.seed.sendId)) return;
+      if (!resolvedSendIds.has(state.seed.sendId) && !ledger().abandon(state.seed.sendId)) return false;
       resolvedSendIds.add(state.seed.sendId);
       ids.push(state.seed.sendId);
     }
-    if (!ledger().forgetResolved(ids)) {
-      if (!awaitingDrain) {
-        awaitingDrain = true;
-        void ledger().waitForReporterDrain().then(() => {
-          awaitingDrain = false;
-          // One retry after the installation producer barrier; storage failure keeps debt.
-          if (!ledger().forgetResolved(ids)) return;
-          for (const state of seeds.values()) if (!completedSeeds.has(state.seed)) {
-            if (!ledger().finishSeed(state.seed)) return;
-            completedSeeds.add(state.seed);
-          }
-          resolved = true;
-        });
-      }
-      return;
-    }
+    if (!ledger().forgetResolved(ids, tracker)) return false;
     for (const state of seeds.values()) if (!completedSeeds.has(state.seed)) {
-            if (!ledger().finishSeed(state.seed)) return;
-            completedSeeds.add(state.seed);
-          }
+      if (!ledger().finishSeed(state.seed, tracker)) return false;
+      completedSeeds.add(state.seed);
+    }
     resolved = true;
+    return true;
+  };
+  const finalizeSeeds = (): void => {
+    if (!finalRequested || reporters !== 0 || resolved || !seededAccounting) return;
+    if (!tryFinalizeSeeds()) {
+      // Failed durable cleanup remains owned by this ledger until later activity retries it.
+      ledger().deferCleanup(tracker, () => resolved || tryFinalizeSeeds());
+    }
   };
   /**
    * Confirm the sends this request has already moved past.
@@ -214,10 +205,10 @@ export function createRequestSpendTracker(
       }
       // Rebind an unused provisional anchor before selection changes. Dispatched anchors stay live.
       for (const [oldKey, state] of seeds) if (!state.started) {
-        if (!ledger().abandon(state.seed.sendId)) return undefined;
-        // The ledger pins abandoned anchors until its reporter drain. Keep the capability
-        // for final cleanup if another producer is currently registered.
-        if (!ledger().finishSeed(state.seed)) continue;
+        if (!resolvedSendIds.has(state.seed.sendId) && !ledger().abandon(state.seed.sendId)) return undefined;
+        resolvedSendIds.add(state.seed.sendId);
+        // Keep a durably abandoned capability for final cleanup if forgetting fails.
+        if (!ledger().finishSeed(state.seed, tracker)) continue;
         seeds.delete(oldKey);
         const index = live.indexOf(state.seed.sendId);
         if (index >= 0) live.splice(index, 1);
@@ -226,7 +217,7 @@ export function createRequestSpendTracker(
       // Exact prepaid proofs originate from this tracker and are found above; foreign receipts
       // cannot enroll arbitrary scopes. Normal reservation remains the only initial admission.
       if (prepaidProof && prepaidProof.ledger !== ledger()) return undefined;
-      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...estimates() });
+      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...estimates() }, tracker);
       if (!decision.reserved) {
         // Use the established denial mapping without making another reservation.
         refusal(decision.denial);
@@ -238,7 +229,7 @@ export function createRequestSpendTracker(
     },
     beginReporter() {
       if (resolved || finalRequested && reporters === 0) throw new Error("Spend reporter registered after final closure");
-      const lease = ledger().registerReporter();
+      const lease = ledger().registerReporter(tracker);
       reporters++;
       let closed = false;
       let reported = 0;
@@ -368,7 +359,10 @@ export function createRequestSpendTracker(
     refund(proof): void {
       if (proof && proof.ledger === ledgerRef && seededAccounting) {
         const match = [...seeds.entries()].find(([, state]) => state.seed.sendId === proof.sendId);
-        if (match && !match[1].started && ledger().abandon(proof.sendId) && ledger().finishSeed(match[1].seed)) seeds.delete(match[0]);
+        if (match && !match[1].started && (resolvedSendIds.has(proof.sendId) || ledger().abandon(proof.sendId))) {
+          resolvedSendIds.add(proof.sendId);
+          if (ledger().finishSeed(match[1].seed, tracker)) seeds.delete(match[0]);
+        }
         return;
       }
       // null is an exact budget reservation that obtained no durable booking.

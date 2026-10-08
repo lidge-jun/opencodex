@@ -41,6 +41,7 @@ import { sweepAbandonedResponseStateTemps, sweepExpiredResponseStates, sweepOrph
 import { sweepExpiredAntigravityReplay } from "../adapters/google-antigravity-replay";
 import { reconcileProviderAccountQuotaRows } from "../providers/quota";
 import { reconcileRouterWarningMemos } from "../router";
+import { configureSharedSpendLedger, spendPolicyFromConfig } from "./spend-reservation-ledger";
 import type { OcxConfig } from "../types";
 import {
   type GenerationContext,
@@ -58,6 +59,10 @@ export function setLiveStateStoreConfig(config: OcxConfig): void {
 
 export function reconcileLiveStateStores() {
   if (!liveServerConfig) return { storesVisited: 0, rowsRemoved: 0 };
+  // Only adopted live providers own canonical pools; detached disk snapshots may
+  // contain providers the routing instance deliberately has not activated yet.
+  configureSharedSpendLedger(spendPolicyFromConfig(liveServerConfig.spend,
+    liveServerConfig.spendPoolAliases, Object.keys(liveServerConfig.providers)));
   return reconcileStateGeneration(buildGenerationContext());
 }
 

@@ -92,6 +92,8 @@ function rawPoolAliasesError(value: unknown): string | undefined {
   if (!mapping || Object.keys(mapping).length === 0) return undefined;
   const providers = rawConfigRecord(record.providers ?? {});
   if (!providers) return "providers must be an object to validate spendPoolAliases";
+  const targetError = spendPoolAliasesError(aliases, Object.keys(providers));
+  if (targetError) return targetError;
   const salt = readExistingSpendSalt(getConfigDir());
   if (!salt) return "spendPoolAliases requires a safely readable existing spend salt";
   return validatePoolAliasOwners(aliases, salt, Object.keys(providers));

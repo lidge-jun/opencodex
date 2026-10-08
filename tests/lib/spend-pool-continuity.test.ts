@@ -119,26 +119,37 @@ describe("historical pool identity continuity", () => {
     expect(ledger.hasUnboundPositivePoolHistory()).toBe(true);
   });
 
-  test("same-spelling unknown history stays unbound and is not counted twice", () => {
+  test("configured provider history self-binds without manual aliases and survives restart", () => {
     const disk = journal([checkpoint([["provider", 40, 0]])]);
-    const ledger = createSpendReservationLedger({ journal: disk, salt, policy: policy(), now: () => 2 });
-
-    // Matching the current provider's salted alias is not identity evidence by itself.
-    expect(ledger.checkPoolContinuity()).toBeUndefined();
-    expect(ledger.hasUnboundPositivePoolHistory()).toBe(true);
-    expect(reserve(ledger, "same-spelling-exact", "provider", 60).reserved).toBe(true);
+    const current = policy(undefined, { canonicalProviderIds: ["provider", "unrelated-provider"] });
+    let ledger = createSpendReservationLedger({ journal: disk, salt, policy: current, now: () => 2 });
+    expect(ledger.hasUnboundPositivePoolHistory()).toBe(false);
+    expect(reserve(ledger, "exact", "provider", 60).reserved).toBe(true);
     expect(ledger.snapshot("pool", "provider")).toEqual({ settled: 40, reserved: 60, unresolved: 0, exhausted: true });
-    // New bookings use the ordinary pool domain; the unbound original counts once.
     expect(JSON.parse(disk.lines.at(-1)!).targets).toEqual([{ scope: "pool", alias: pool("provider") }]);
-    expect(reserve(ledger, "unrelated-under-overlay", "unrelated-provider", 1)).toMatchObject({
-      reserved: false, denial: { reason: "spend-limit-exceeded", projected: 101 },
-    });
-    const mapped = createSpendReservationLedger({ journal: disk, salt,
-      policy: policy({ [pool("provider")]: "provider" }), now: () => 3 });
-    expect(mapped.checkPoolContinuity()).toBeUndefined();
-    expect(mapped.hasUnboundPositivePoolHistory()).toBe(false);
-    expect(mapped.snapshot("pool", "provider")).toMatchObject({ settled: 40, unresolved: 60 });
-    expect(reserve(mapped, "unrelated-after-mapping", "unrelated-provider", 100).reserved).toBe(true);
+    expect(reserve(ledger, "unrelated", "unrelated-provider", 100).reserved).toBe(true);
+    ledger = createSpendReservationLedger({ journal: disk, salt, policy: current, now: () => 3 });
+    expect(ledger.snapshot("pool", "provider")).toMatchObject({ settled: 40, unresolved: 60 });
+    expect(ledger.snapshot("pool", "unrelated-provider")).toMatchObject({ settled: 0, unresolved: 100 });
+    expect(ledger.hasUnboundPositivePoolHistory()).toBe(false);
+  });
+
+  test("five configured provider ceilings stay independent while historical labels overlay each once", () => {
+    const ids = ["P", "Q", "R", "S", "T"];
+    for (const historical of [0, 20]) {
+      const disk = journal(historical ? [checkpoint([["P-account-2", historical, 0]])] : []);
+      const current = policy(undefined, { canonicalProviderIds: ids });
+      let ledger = createSpendReservationLedger({ journal: disk, salt, policy: current, now: () => 2 });
+      for (const id of ids) {
+        expect(reserve(ledger, `fill-${id}`, id, 100 - historical).reserved).toBe(true);
+        expect(ledger.settle(`fill-${id}`, { inputTokens: 100 - historical, outputTokens: 0 })).toBe(true);
+        expect(reserve(ledger, `over-${id}`, id, 1)).toMatchObject({ reserved: false, denial: { projected: 101 } });
+      }
+      ledger = createSpendReservationLedger({ journal: disk, salt, policy: current, now: () => 3 });
+      for (const id of ids) expect(ledger.snapshot("pool", id)).toMatchObject({ settled: 100 });
+      expect(ledger.hasUnboundPositivePoolHistory()).toBe(historical > 0);
+      expect(disk.lines.some(line => JSON.parse(line).poolContinuity !== undefined)).toBe(false);
+    }
   });
 
   test("unbound history is overlaid when a pool ceiling is enabled later", () => {

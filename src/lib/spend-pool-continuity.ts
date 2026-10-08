@@ -1,12 +1,18 @@
-import { hashSpendAlias, validatePoolAliasOwners } from "./spend-pool-alias-validation";
+import { hashSpendAlias, spendPoolAliasesError, validatePoolAliasOwners } from "./spend-pool-alias-validation";
 export { spendPoolAliasesError } from "./spend-pool-alias-validation";
 
 /** Current config supplies a read-time graph; original counters never move between buckets. */
-export function resolvePoolAliases(config: unknown, salt: string, providerIds: Iterable<string> = []) {
-  const error = validatePoolAliasOwners(config, salt, providerIds);
+export function resolvePoolAliases(config: unknown, salt: string, providerIds?: Iterable<string>) {
+  const providers = providerIds === undefined ? undefined : [...providerIds];
+  const error = spendPoolAliasesError(config, providers) ?? validatePoolAliasOwners(config, salt, providers ?? []);
   const bindings = new Map<string, string>();
   if (!error) for (const [alias, provider] of Object.entries(config ?? {})) {
     bindings.set(alias, hashSpendAlias(salt, "pool", provider as string));
+  }
+  // Current provider IDs own their ordinary v1 pool buckets; no identity record is written.
+  if (!error) for (const provider of providers ?? []) {
+    const alias = hashSpendAlias(salt, "pool", provider);
+    bindings.set(alias, alias);
   }
   const resolve = (original: string): string => {
     let alias = original;

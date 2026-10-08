@@ -218,7 +218,7 @@ and build a ledger by replaying that directory's own journal. A second process o
 directory is refused even for observe-only spend configuration, while a separate directory is
 independent. Ordinary stop drains the spend reporters after listener teardown before releasing the final
 reference. `src/server/index/spend-ledger-lifecycle.ts` also holds the lease through failed-start listener rollback. Enforced seeds remain live until reporters close and settlement plus send-ID forgetting are durable; scope totals survive forgetting. SQLite and the OS release a crashed owner; no PID, timestamp,
-TTL or lock-file deletion participates in recovery. Startup passes top-level pool-alias evidence with the spend policy. HTTP admission checks [historical continuity](transports/responses-spend.md#historical-pool-continuity-and-rollback) even without a root; failed accounting reads release the active-turn lease. Rooted continuity denials record exactly one workflow refusal event before response formatting.
+TTL or lock-file deletion participates in recovery. Startup passes the provider roster and top-level pool aliases with the spend policy; live state reconciliation refreshes both without opening an unused ledger. HTTP admission checks [historical continuity](transports/responses-spend.md#historical-pool-continuity-and-rollback) even without a root; failed accounting reads release the active-turn lease. Rooted continuity denials record exactly one workflow refusal event before response formatting.
 
 An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
 serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.

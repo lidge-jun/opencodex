@@ -38,15 +38,17 @@ export function hashSpendAlias(salt: string, kind: string, id: string): string {
 const isAlias = (value: unknown): value is string =>
   typeof value === "string" && /^[0-9a-f]{32}$/.test(value);
 
-/** Shape check. Kept outside `spend`: older strict spend schemas must keep all configured ceilings. */
-export function spendPoolAliasesError(value: unknown): string | undefined {
+/** Shape and optional roster check, outside `spend` so old schemas keep configured ceilings. */
+export function spendPoolAliasesError(value: unknown, providerIds?: Iterable<string>): string | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) return "spendPoolAliases must be an object";
   if (Object.keys(value).length > 4_096) return "spendPoolAliases has too many entries";
+  const providers = providerIds === undefined ? undefined : new Set(providerIds);
   for (const [alias, provider] of Object.entries(value)) {
-    if (!isAlias(alias) || typeof provider !== "string" || !provider.trim() || provider.length > 256) {
+    if (!isAlias(alias) || typeof provider !== "string" || !provider.trim() || provider.trim() !== provider || provider.length > 256) {
       return "spendPoolAliases requires exact 32-character salted pool aliases and nonempty provider IDs";
     }
+    if (providers && !providers.has(provider)) return "spendPoolAliases targets a provider that is not configured";
   }
   return undefined;
 }

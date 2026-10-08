@@ -10,6 +10,7 @@ import { handleResponsesCompact } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { configureSharedSpendLedger, sharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 
 const originalFetch = globalThis.fetch;
 
@@ -104,6 +105,34 @@ describe("compact handoff route admission namespacing", () => {
       parallel_tool_calls: true,
     };
   }
+
+  for (const historicalPool of ["retired-display-label", "openai"]) test(`native compact explains spend refusal with history from ${historicalPool}`, async () => {
+    await withPoolEnv(async config => {
+      configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: 100 } }, undefined, ["openai"]));
+      const ledger = sharedSpendLedger();
+      expect(ledger.reserve({ sendId: "historical", scopes: { poolId: historicalPool },
+        inputTokens: 90, outputCeilingTokens: 0 }).reserved).toBe(true);
+      ledger.markDispatched("historical");
+      ledger.settle("historical", { inputTokens: 90, outputTokens: 0 });
+      let calls = 0;
+      globalThis.fetch = (async () => { calls++; throw new Error("compact must refuse before wire"); }) as typeof fetch;
+      const response = await handleResponsesCompact(compactionRequest(compactionBody("gpt-5.6-sol"), {}),
+        config, { model: "", provider: "", spendInputEstimateTokens: 20 });
+      expect(response.status).toBe(429);
+      const body = await response.text();
+      if (historicalPool === "retired-display-label") {
+        expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+        expect(body).toContain("unassigned historical provider-pool balances");
+      } else {
+        expect(response.headers.get("x-opencodex-local-refusal")).toBeNull();
+        expect(body).toContain("request_send_budget_exhausted");
+        expect(body).not.toContain("unassigned historical provider-pool balances");
+      }
+      expect(body).not.toContain("retired-display-label");
+      expect(calls).toBe(0);
+      expect(ledger.snapshot("pool", "openai")?.settled).toBe(90);
+    });
+  });
 
   test("a remembered route is claimed only by the principal that stored it", async () => {
     await withPoolEnv(async config => {

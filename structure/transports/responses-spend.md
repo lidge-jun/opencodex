@@ -131,21 +131,22 @@ target provider; child account labels and the logical `combo` label do not creat
 
 ### Historical pool continuity and rollback
 
-`src/lib/spend-pool-continuity.ts` applies the current top-level `spendPoolAliases` mapping
-at read time. Keys are exact salted historical pool aliases; values are verified canonical
-provider IDs. Original scope counters and send targets stay unchanged. Every original bucket
-contributes once: either to its mapped group or, when unmapped and positive, to every candidate
-pool as conservative unbound history. A candidate's own unmapped canonical bucket participates
-in that overlay once, never again as a group member. Account rosters, label prefixes and a
-matching canonical hash do not establish historical ownership, including after restart.
+`src/lib/spend-pool-continuity.ts` applies the current provider roster and top-level
+`spendPoolAliases` mapping at read time. Each configured provider P automatically owns its
+ordinary salted `pool` alias, so its canonical bucket counts only toward P's group. Explicit
+mapping keys are exact salted historical aliases and values are current provider IDs. Other
+historical labels, including account-ordinal labels, remain unbound until explicitly mapped.
+Each positive unbound bucket overlays every candidate once; original counters and send targets
+never move or double-count. Restart reconstructs the same view from the current roster and mapping.
 
-Mappings are configuration, not journal metadata. Removing or changing a mapping changes the
-next read-time view; it does not rewrite original counters or persist an identity link.
-`src/lib/spend-pool-alias-validation.ts` owns the salted hash and validates that a configured
-provider P's own pool alias cannot map to another provider Q. Configuration reads and writes,
-provider-set changes, live reconfiguration and selected-provider admission enforce this rule.
-Validation reads an existing home salt without creating one. A malformed or conflicting mapping
-keeps existing ceilings and refuses applicable pool admission with `workflow_pool_history_unresolved`.
+Mappings and automatic self-bindings are read-time configuration, not journal metadata. Removing
+a provider or mapping changes the next view without rewriting counters or persisting identity links.
+`src/lib/spend-pool-alias-validation.ts` owns the salted hash and validates that P's own alias cannot
+map to Q. Padded mapping values and destinations absent from the current roster are rejected at the
+write boundary; hand-edited invalid mappings warn on load and refuse applicable pool admission with
+`workflow_pool_history_unresolved`, keeping existing ceilings. Configuration writes, provider-set
+changes, live reconfiguration and selected-provider admission enforce owner conflicts. Validation
+reads an existing home salt without creating one.
 
 Dormant unbound history expires only when its last activity is strictly before the configured
 retention cutoff. Capacity pressure cannot expire positive unknown history early. Live reservations
@@ -159,7 +160,7 @@ domain. Contract C is compatibility with the shipped 2.80.0 reader's own record 
 2.80.0 reads these counters, compacts them and expires them using its existing per-label rules.
 Downgrade does not preserve canonical cross-alias aggregation or promise the allowance 2.80.0
 would have computed for the same traffic without an upgrade. Keep the current journal and salt;
-restoring an older copy omits subsequent spend. Re-upgrade applies current configured mappings
+restoring an older copy omits subsequent spend. Re-upgrade applies current provider self-bindings and explicit mappings
 to the original balances that survived ordinary old-version retention. There is no launch fence,
 wrapper enrollment or reconciliation command. `tests/lib/spend-contract-c.test.ts` uses the complete
 frozen 2.80.0 reader in `tests/fixtures/spend-ledger-2-80-0.ts.txt` for this contract.
@@ -193,10 +194,14 @@ closes its producer after reconciliation. Adapter permits claim once at their ph
 rebindable until OAuth selection reaches the wire, then reports and closes it. Zed completion
 requests and token-refresh replays use `src/adapters/physical-send.ts`; authentication exchanges
 remain outside the inference count. Kiro retains this span through its executor-side rebuild.
-Telemetry and raw numeric budget updates cannot create extra enforced send records.
+Telemetry and raw numeric budget updates cannot create extra enforced send records. Native compact
+uses the same unbound-history refusal explanation and workflow header as other Responses executors.
 `request-spend.ts` waits for producers before terminal settlement, marks unknown usage lost, then
-persists ordinary `forget` records before releasing seeds. Forgotten send IDs do not subtract
-scope totals. Persistence failure retains the accounting debt. Shutdown drains reporters before
+persists ordinary `forget` records before releasing seeds. Each tracker waits only for its own
+reporters, so overlapping traffic cannot pin a completed request. Storage-failed cleanup stays
+queued on the ledger and retries on later admission, pruning, reconfiguration or reporter closure.
+Send-to-seed and reference-counted scope-pin indexes avoid scanning all seeds on admission.
+Forgotten send IDs do not subtract scope totals. Shutdown drains all reporters before
 releasing ledger ownership; restart resolves orphan reservations conservatively without reviving
 request capabilities.
 
