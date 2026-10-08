@@ -1,5 +1,9 @@
 {
   "claude-picker-upload.test.ts": "claude-integration",
+  "model-costs-pricing-cache.test.ts": "server",
+  "model-costs-prompt-length-pricing.test.ts": "server",
+  "cli-models-prompt-length-pricing.test.ts": "cli",
+  "usage-prompt-length-pricing.test.ts": "usage",
   "messages-native-scope.test.ts": "claude-integration", "catalog-auto-review-row.test.ts": "codex-integration",
   "cli-log-view-filter.test.ts": "cli",
   "cli-usage-model-search.test.ts": "cli",

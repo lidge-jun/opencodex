@@ -163,16 +163,25 @@ export interface ProviderWebSearchBridgeConfig {
   endpoint?: string;
 }
 
-/**
- * User-configured display price for one model (USD per 1M tokens).
- * Mirrors the `Cost4` shape used by the usage cost estimator; structurally
- * compatible so config rows can be lifted directly into price overlays.
- */
+/** Optional user-owned prompt-length policy; rates are USD per 1M tokens. */
+export type PromptLengthPricing =
+  | { mode: "automatic" }
+  | { mode: "flat" }
+  | {
+    mode: "custom";
+    thresholdTokens: number;
+    comparison: "gt" | "gte";
+    rates: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  };
+
+/** Complete base rates for one model, with automatic pricing when policy is absent. */
 export interface ProviderCostOverlay {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Absent means automatic vendor prompt-length pricing. */
+  promptLengthPricing?: PromptLengthPricing;
 }
 
 export interface RequestPacingRule {

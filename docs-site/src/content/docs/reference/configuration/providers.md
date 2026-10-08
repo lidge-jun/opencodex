@@ -247,7 +247,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `modelAutoCompactTokenLimits?` | `Record<string, number>` | Positive safe-integer per-model soft auto-compaction budgets. Values can only lower the effective 90%-of-context/max-input envelope and are omitted when no authoritative context window is known. For canonical `openai`, keys must be exact supported native model IDs without provider or account-selector prefixes. Provider PATCH merges entries; set a key to `null` to delete it or the whole field to `null` to clear the map. These `null` tombstones are PATCH-only. |
 | `defaultMaxOutputTokens?` | `number` | Provider-wide `openai-chat` fallback when the client omits `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Positive per-model `openai-chat` fallback budgets; exact/pattern matches beat the provider default. |
-| `modelCosts?` | `Record<string, Cost4>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an explicit all-zero user entry means a known-zero estimate; delete that model entry to restore automatic pricing. All-zero catalog metadata still falls through. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
+| `modelCosts?` | `Record<string, ProviderCostOverlay>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an explicit all-zero user entry means a known-zero estimate; delete that model entry to restore automatic pricing. All-zero catalog metadata still falls through. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
 | `headers?` | `Record<string, string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid names are rejected. Requests that ride the provider outbound wrapper — model discovery, connection tests, and other proxy-originated diagnostics such as the Ollama show probe — send `User-Agent: opencodex` unless a User-Agent is set here or by the provider preset. |
 | `forwardClientHeaders?` | `string[]` | `openai-responses` only: opt in to copying named inbound client metadata headers onto inference requests when the provider has not already set that header. Credential and transport-owned names such as `Authorization`, cookies, API-key headers, `Content-Type`, `Content-Length`, `Host`, and `x-oai-attestation` are rejected and also filtered at runtime. Header names are case-insensitive and may not repeat. `headers` remains authoritative; the existing caller `User-Agent` fallback still applies when neither surface sets one.  Supported names: `originator`, `x-client-request-id`, `x-codex-app-version`, `user-agent`; all other names are refused. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Default OpenRouter `order`, `only`, and `allowFallbacks` preferences; valid only for canonical OpenRouter with `openai-chat`. |
@@ -1527,6 +1527,54 @@ Every consumer that answers "can this model take an image" applies one rule to t
 image is absent from the list. A row declaring only `audio` or `video` therefore counts as
 image-incapable, rather than being treated as a text model by one predicate and an image target
 by the other.
+
+### Prompt-length pricing
+
+In **Models → Price**, keep four base rates and choose a prompt-length mode:
+
+- **Automatic** keeps the catalog context rules. It is also the behavior of existing four-rate overrides without a policy.
+- **Flat rate** uses the base rates at every prompt length, disabling catalog context adjustments.
+- **Custom threshold** selects four absolute alternative rates using `>` or `≥` and one token threshold. The custom policy replaces the catalog context rule on both sides of the threshold.
+
+All prompt tokens count, including cache reads and writes, before billable-input subtraction.
+Output does not count toward the threshold. Once crossed, the alternative rates apply to the
+entire request, including output, not only the excess tokens. Custom rates are standard-speed
+rates: an applicable Fast/Priority premium applies once after the rates are selected and follows
+the catalog's relation between Priority and long-context pricing for that model. A confirmed
+Priority request shows the custom estimate as a lower bound only when the catalog declares that
+relation as `lower-bound`, as for xAI Grok, which publishes no combined rate. A model with no
+catalog context rule applies any Priority multiplier once. These settings control estimates; they
+do not change provider billing.
+**Reset to automatic** deletes the entire override and restores catalog prices and rules. Saving or
+editing the config updates live estimates and historical totals.
+
+For example, a Haiku 5.5 override with alternative rates strictly above 100,000 prompt tokens:
+
+```json
+{
+  "modelCosts": {
+    "claude-haiku-5-5": {
+      "input": 0.10,
+      "output": 0.50,
+      "cacheRead": 0.01,
+      "cacheWrite": 0.125,
+      "promptLengthPricing": {
+        "mode": "custom",
+        "thresholdTokens": 100000,
+        "comparison": "gt",
+        "rates": { "input": 0.50, "output": 2.50, "cacheRead": 0.05, "cacheWrite": 0.625 }
+      }
+    }
+  }
+}
+```
+
+This is an example of user-defined prices, not an official Haiku price list.
+Any positive safe-integer threshold, including `272000`, is supported; use `"gte"` for inclusive
+comparison. All four alternative rates are required and follow the base-rate limits, including zero.
+The other policy is `{ "mode": "flat" }`. Omit `promptLengthPricing` to retain automatic context
+rules with your base prices; an explicit `{ "mode": "automatic" }` is accepted and means the same,
+and saves from the dashboard or API store it as an absent field.
 
 ### Renamed API-key presets
 

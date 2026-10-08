@@ -1,6 +1,6 @@
 # GUI And Management API
 
-Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
+Model-price APIs and receipt validation follow the [pricing contract](pricing.md). Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
 `autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
 `PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;
 explicit null restores inheritance and missing/invalid values fail. Other providers are rejected.

@@ -1024,6 +1024,12 @@ verified official-price fallbacks. Unknown models return `null`; no price is inv
 Automatic defaults are derived on read and do not populate `modelCosts` in your config,
 so catalog updates remain effective. Use `set-price` to save provider-specific rates.
 
+`price --json` also preserves a saved `promptLengthPricing` policy in `cost`; the four
+`effectiveCost` rates are the base rates, before evaluating a request's prompt length or tier.
+Use **Models → Price** or the management API to edit a prompt-length policy. Existing `set-price`
+commands replace the four base rates and keep the model's saved Flat or Custom threshold policy;
+`--auto` removes both the rates and any policy.
+
 Discover command syntax with `ocx models --help` before live work. `list-custom`
 reads local configuration; `add` and `remove` save locally unless given `--live`.
 Local custom writes opportunistically synchronize when a proxy exists. The remaining

@@ -452,11 +452,28 @@ Explicit all-zero user rates mean a known-zero estimate; **Reset to automatic** 
 override and restores the usual catalog fallback. These remain display estimates, not bills.
 
 `GET /api/providers/{provider}/model-costs` returns `{ provider, modelCosts }`, with sanitized
-four-rate entries keyed by exact upstream model ID. `PUT` on the same route accepts
-`{ modelId, cost }`, where `cost` is `{ input, output, cacheRead, cacheWrite }` or `null` to reset.
+four-rate entries and their optional `promptLengthPricing` policy, keyed by exact upstream model ID.
+`PUT` on the same route accepts `{ modelId, cost }`, where `cost` contains
+`{ input, output, cacheRead, cacheWrite }` and optionally `promptLengthPricing`, or is `null` to reset.
 All four rates must be finite numbers from 0 through 1,000,000, in USD per 1M tokens.
 Unknown fields and malformed rates are rejected. A write preserves other models' overrides
 and returns `{ ok: true, provider, modelId, cost }`; reset returns `cost: null`.
+
+The **Model price** dialog offers **Automatic**, **Flat rate**, and **Custom threshold**
+prompt-length pricing. Automatic (also the default when the policy is absent) retains catalog
+context rules with the saved base rates. Flat disables context adjustments. Custom selects four
+absolute alternative rates using one positive safe-integer `thresholdTokens` and `comparison`
+(`"gt"` for `>`, `"gte"` for `≥`). All prompt tokens count, including cache reads and writes;
+output does not. The selected rates apply to the whole request, including output, not just the
+excess tokens. Custom replaces the catalog context rule both below and above its threshold.
+Custom rates are standard-speed rates: an applicable Fast/Priority adjustment applies once after
+rate selection and follows the catalog's Priority relation for that model. Only a model whose
+catalog relation is `lower-bound` reports `priorityLowerBound: true`; a model with no catalog rule
+applies any Priority multiplier once.
+`{ "mode": "automatic" }` is accepted on write and stored as an absent policy, so GET and PUT
+receipts never contain it.
+**Reset to automatic** removes the entire override, including base rates and the policy.
+See the [configuration example](../configuration/providers/#prompt-length-pricing).
 
 ```bash
 ocx models price ollama/custom-model --json

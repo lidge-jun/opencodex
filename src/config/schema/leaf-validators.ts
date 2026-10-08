@@ -33,7 +33,7 @@ import {
 import { fastWireDeclarationError } from "../../providers/fastwire";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport, providerModelWireDefault } from "../../providers/registry";
 import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
-import { COST4_RATE_KEYS, isValidCost4Rate } from "../../usage/user-cost-overlays";
+import { COST4_RATE_KEYS, isValidCost4Rate, isValidPromptLengthPricing, copyPromptLengthPricing } from "../../usage/user-cost-overlays";
 import { MAX_COST4_RATE } from "../../usage/expected-prices";
 import {
   DECLARABLE_HOSTED_TOOL_TYPES,
@@ -418,7 +418,7 @@ export { providerRelativeSendPathConfigError } from "../provider-relative-send-p
 
 /**
  * Validate `providers.<name>.modelCosts`: a plain object keyed by exact model
- * id, each value a 4-tuple of non-negative finite USD-per-1M-token rates.
+ * id, each value four USD-per-1M-token rates and an optional prompt-length policy.
  * Returns null when valid/absent, else a human-readable error.
  */
 export function providerModelCostsConfigError(value: unknown, field = "modelCosts"): string | null {
@@ -438,25 +438,28 @@ export function providerModelCostsConfigError(value: unknown, field = "modelCost
     const rates = entry as Record<string, unknown>;
     for (const key of COST4_RATE_KEYS) {
       const rate = rates[key];
-      if (!isValidCost4Rate(rate)) {
+      if (!Object.hasOwn(rates, key) || !isValidCost4Rate(rate)) {
         return `${field}.${safeModelId}.${key} must be a non-negative finite number at most ${MAX_COST4_RATE} (USD per 1M tokens)`;
       }
+    }
+    if (Object.hasOwn(rates, "promptLengthPricing") && !isValidPromptLengthPricing(rates.promptLengthPricing)) {
+      return `${field}.${safeModelId}.promptLengthPricing must be automatic, flat, or a complete custom policy with a positive safe-integer thresholdTokens, gt/gte comparison, and four valid rates`;
     }
     // Reject unknown fields: a misplaced apiKey/apiKeyPool under a cost row
     // would otherwise be persisted and echoed verbatim by display paths that
     // mask only top-level provider secrets.
     const extraKeys = Object.keys(rates)
-      .filter((key) => !(COST4_RATE_KEYS as readonly string[]).includes(key));
+      .filter((key) => key !== "promptLengthPricing" && !(COST4_RATE_KEYS as readonly string[]).includes(key));
     if (extraKeys.length > 0) {
-      return `${field}.${safeModelId} has unexpected fields ${JSON.stringify(extraKeys.map(redactSecretString).join(", "))} — only input, output, cacheRead, and cacheWrite are allowed (USD per 1M tokens)`;
+      return `${field}.${safeModelId} has unexpected fields ${JSON.stringify(extraKeys.map(redactSecretString).join(", "))} — only input, output, cacheRead, cacheWrite, and promptLengthPricing are allowed (USD per 1M tokens)`;
     }
   }
   return null;
 }
 
 /**
- * Serialize `providers.<name>.modelCosts` for display: copy ONLY the four
- * numeric rate fields per model and DROP secret-shaped model ids, so a pasted
+ * Serialize `providers.<name>.modelCosts` for display: copy the four validated
+ * rates and complete validated policy and DROP secret-shaped model ids, so a pasted
  * API key in a key position cannot be echoed back by CLI/DTO display paths.
  * The result uses a null prototype so "__proto__" remains an own row.
  */
@@ -466,6 +469,7 @@ export function sanitizeModelCostsForDisplay(costs: unknown): Record<string, Pro
   for (const [modelId, entry] of Object.entries(costs)) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const rates = entry as Record<string, unknown>;
+    if (Object.hasOwn(rates, "promptLengthPricing") && !isValidPromptLengthPricing(rates.promptLengthPricing)) continue;
     const input = rates.input;
     const output = rates.output;
     const cacheRead = rates.cacheRead;
@@ -479,7 +483,10 @@ export function sanitizeModelCostsForDisplay(costs: unknown): Record<string, Pro
       // Secret-shaped ids are DROPPED rather than mapped to "[REDACTED]" so
       // distinct rows cannot collapse into one placeholder key.
       if (redactSecretString(modelId) !== modelId) continue;
-      out[modelId] = { input, output, cacheRead, cacheWrite };
+      const policy = isValidPromptLengthPricing(rates.promptLengthPricing)
+        ? copyPromptLengthPricing(rates.promptLengthPricing) : undefined;
+      out[modelId] = { input, output, cacheRead, cacheWrite,
+        ...(policy ? { promptLengthPricing: policy } : {}) };
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;

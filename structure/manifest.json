@@ -469,6 +469,22 @@
       ]
     },
     {
+      "path": "pricing.md",
+      "tier": 5,
+      "title": "Model Price Overrides",
+      "scope": "User price policies, prompt-length rate selection, persistence and estimate cache invalidation.",
+      "documents": [
+        "src/config/live-reconcile.ts",
+        "src/cli/models-runtime.ts",
+        "src/types/provider.ts",
+        "src/config/schema/leaf-validators.ts",
+        "src/server/management/model-routes.ts",
+        "src/usage/cost.ts",
+        "src/usage/user-cost-overlays.ts",
+        "gui/src/components/ModelPriceDialog.tsx"
+      ]
+    },
+    {
       "path": "clients/integrations.md",
       "tier": 5,
       "title": "Client Integrations",

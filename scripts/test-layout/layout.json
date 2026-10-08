@@ -1,7 +1,8 @@
 {
   "version": 1,
   "root": "tests",
-  "explicit": {
+    "explicit": {
+    "model-costs-pricing-cache.test.ts": "server", "model-costs-prompt-length-pricing.test.ts": "server", "cli-models-prompt-length-pricing.test.ts": "cli", "usage-prompt-length-pricing.test.ts": "usage",
     "claude-picker-upload.test.ts": "claude-integration", "messages-native-scope.test.ts": "claude-integration", "catalog-auto-review-row.test.ts": "codex-integration",
     "cli-log-view-filter.test.ts": "cli", "cli-usage-model-search.test.ts": "cli", "cli-companion-usage.test.ts": "cli", "cli-account-key-quota.test.ts": "cli",
     "cli-observe-snapshot.test.ts": "cli", "cli-access-data-plane.test.ts": "cli", "cli-access-key-guard.test.ts": "cli", "cli-access-rename.test.ts": "cli",

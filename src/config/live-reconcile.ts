@@ -1,4 +1,4 @@
-import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import { adoptCustomModelCatalogMigration, projectCustomModelCatalogMigration } from "../codex/custom-model-catalog-migration";
 import { refreshPreservedProviderOwner } from "../usage/user-cost-overlays";
@@ -15,7 +15,7 @@ import {
 } from "./rebase-provenance";
 import { withConfigMutationLockSync, bumpGenerationForCooperatingConfigWrite } from "./mutation-lock";
 import { ConfigWritePublishedError, persistConfigUnlocked, readRawConfigJson } from "./persist-unlocked";
-import { configDiagnosticsFromRaw, readConfigDiagnostics } from "./diagnostics";
+import { configDiagnosticsFromRaw, readConfigDiagnostics, validateConfigCandidate } from "./diagnostics";
 import { normalizePersistedClaudeCode } from "./load-degrade";
 
 // ---------------------------------------------------------------------------
@@ -41,6 +41,35 @@ const claudeCodeBaseline = new WeakMap<OcxConfig, unknown>();
  * reconciliation paths below.
  */
 const liveConfigBaseline = new WeakMap<OcxConfig, OcxConfig>();
+
+type ModelCostReplacement = { provider: string; modelId: string; cost: ProviderCostOverlay | null };
+const modelCostReplacements = new WeakMap<OcxConfig, ModelCostReplacement>();
+
+/** Explicit pricing PUT owns one whole row, even when its base tuple equals the baseline. */
+export function withModelCostRowReplacement(
+  config: OcxConfig, provider: string, modelId: string, cost: ProviderCostOverlay | null, save: () => void,
+): void {
+  const previous = modelCostReplacements.get(config);
+  const replacementCost = structuredClone(cost);
+  if (replacementCost?.promptLengthPricing?.mode === "automatic") delete replacementCost.promptLengthPricing;
+  modelCostReplacements.set(config, { provider, modelId, cost: replacementCost });
+  try { save(); }
+  finally {
+    if (previous) modelCostReplacements.set(config, previous);
+    else modelCostReplacements.delete(config);
+  }
+}
+
+function applyModelCostRowReplacement(config: OcxConfig): void {
+  const replacement = modelCostReplacements.get(config);
+  if (!replacement) return;
+  if (!Object.hasOwn(config.providers, replacement.provider)) throw new Error("pricing provider was removed before persistence");
+  const provider = config.providers[replacement.provider]!;
+  const costs = Object.assign(Object.create(null) as Record<string, ProviderCostOverlay>, provider.modelCosts ?? {});
+  if (replacement.cost === null) delete costs[replacement.modelId];
+  else costs[replacement.modelId] = structuredClone(replacement.cost);
+  provider.modelCosts = costs;
+}
 
 /**
  * Adopt a committed discovery decision and its merge baseline as one synchronous step.
@@ -445,6 +474,10 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
   if (pinError) throw new Error(pinError);
   let published = false;
   const persist = (candidate: OcxConfig): void => {
+    if (modelCostReplacements.has(config)) {
+      const validation = validateConfigCandidate(candidate);
+      if (!validation.ok) throw new Error(validation.error);
+    }
     const changed = persistConfigUnlocked(candidate);
     published = true;
     if (changed) bumpGenerationForCooperatingConfigWrite();
@@ -509,6 +542,9 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
       }
     }
     applyConfigObjectChildDeletions(config, childDeletions);
+    // Recursive three-way merging preserves sibling rows; explicit PUT/reset
+    // replaces only its model after merging, including absent policy fields.
+    applyModelCostRowReplacement(config);
     if (claudeCodeBaseline.has(config)) {
       if (onDisk !== undefined) {
         const baseline = claudeCodeBaseline.get(config);

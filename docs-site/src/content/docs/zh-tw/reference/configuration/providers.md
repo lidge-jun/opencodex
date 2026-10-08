@@ -437,3 +437,8 @@ Vercel AI Gateway 可在多個底層推論供應商之間路由一個模型。`v
 ### `anthropicAccountPool.routes`
 
 `anthropicAccountPool.routes` 將模型綁定至已儲存的 Anthropic OAuth 帳戶 ID。啟用帳戶池後，區分大小寫的 `match` 萬用模式依順序採用第一個符合的規則，限制首次選擇與 429 重試。僅當該規則沒有可用帳戶時，`fallback: true` 才會回退到一般帳戶池。
+
+
+### `promptLengthPricing`
+
+選用欄位 `promptLengthPricing` 擴充四項基礎費率。`mode: "automatic"`（或省略欄位）保留目錄的上下文計價規則；`mode: "flat"` 停用這些規則。`mode: "custom"` 使用正安全整數 `thresholdTokens`、值為 `"gt"`（>）或 `"gte"`（≥）的 `comparison`，以及含四項絕對替代費率的 `rates`。門檻計算所有提示詞 token，包括快取讀取與寫入，不包括輸出。所選費率適用於包含輸出的整個請求，並在門檻兩側皆取代目錄上下文規則。Fast/Priority 調整在選定費率後只套用一次，並遵循目錄為該模型公布的 Priority 關係；僅當目錄將該關係宣告為 `lower-bound`（目前為 xAI Grok）時，估算才會標示為下限；沒有目錄規則的模型只套用一次 Priority 倍率。可在 **Models → Price** 中設定。**Reset to automatic** 刪除包含基礎費率與規則的整個覆寫設定。舊設定保持相容；這些設定僅涉及顯示的費用估算。
