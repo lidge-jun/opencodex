@@ -2358,7 +2358,7 @@ export const pt: Record<TKey, string> = {
   "integrations.lazycodexRoles.auto.moveUp": "Suba de nível se: {text}",
   "integrations.lazycodexRoles.auto.moveDown": "Desça de nível se: {text}",
   "integrations.semantics.cline": "Gerencia o OpenCodex no providers.json e no models.json do Cline CLI. Pare o Cline antes de alterar ou sincronizar esses arquivos e reinicie depois. Desfazer restaura os dois originais. Seu provedor padrão permanece inalterado; selecione o OpenCodex no Cline.",
-  "integrations.semantics.commandcode": "Gerencia apenas provider.opencodex em ~/.commandcode/providers.json. Seus outros provedores e configurações permanecem inalterados.",
+  "integrations.semantics.commandcode": "Gerencia apenas a entrada do provedor OpenCodex em ~/.commandcode/providers.json. Seus outros provedores e configurações permanecem inalterados.",
   "integrations.semantics.kilo": "Gerencia apenas provider.opencodex na configuração global do Kilo — o primeiro arquivo existente entre kilo.jsonc, kilo.json, opencode.jsonc, opencode.json ou config.json em ~/.config/kilo (XDG_CONFIG_HOME realoca esse diretório; kilo.jsonc é criado quando nenhum existe). As demais chaves permanecem inalteradas. Aplicar reescreve o arquivo inteiro, então comentários e vírgulas finais não são preservados. Selecione opencodex/<model> no Kilo.",
   "integrations.semantics.droid": "Adiciona modelos personalizados do OpenCodex ao settings.json do Factory Droid. Desativar remove apenas as linhas gerenciadas; desfazer restaura o arquivo salvo.",
   "integrations.raycast.proRequired": "Custom Providers é um recurso do Raycast Pro. O arquivo será gravado, mas o Raycast o ignora até que uma assinatura Pro esteja ativa.",

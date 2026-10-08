@@ -23,7 +23,7 @@ description: 대시보드에서 OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, 
 | omo | `~/.omo/agent/models.json` | JSON | 새 세션에서 | 루프백 자리표시자 |
 | Cline CLI | `~/.cline/data/settings/providers.json` 및 같은 위치의 `models.json` | JSON 파일 쌍 | Cline을 중지하고 다시 시작한 뒤 | 루프백 자리표시자 |
 | Kilo | `~/.config/kilo`에서 먼저 존재하는 `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, `config.json` (`XDG_CONFIG_HOME`로 디렉터리 변경 가능, 모두 없으면 `kilo.jsonc` 생성) | JSONC | 새 세션에서 | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (Windows: `%HOME%`이 설정되어 있으면 해당 경로, 아니면 `%USERPROFILE%` 아래의 `.commandcode\providers.json`) | JSON | 다음 Command Code 실행 시 | 없음 — 키 없는 루프백 (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (Windows 기본 홈 사용 시: `HOME ?? USERPROFILE` 값이 비어 있거나 공백만으로 구성되지 않은 Windows 절대 경로일 때만 사용하고, 그 외에는 `homedir()` 사용. 별도로 전달된 홈은 유지. 해당 홈 아래의 `.commandcode\providers.json`) | JSON | 다음 Command Code 실행 시 | 없음 — 키 없는 루프백 (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows에서) | JSON | 파일 변경 시 즉시 | 키 없는 루프백 |
 
 생성된 카탈로그에는 각 프로바이더 선택에서 활성화된 모델만 들어갑니다. Pi와 Aside를 포함한 다운로드와 관리형 연동 모두에 적용됩니다. 관리 모델 목록에는 전체 모델이 계속 표시되어 추가 모델을 활성화할 수 있습니다.

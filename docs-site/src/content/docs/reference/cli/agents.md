@@ -952,7 +952,7 @@ client applies its own defaults for those).
 | `raycast` | `~/.config/raycast/ai/providers.yaml` on macOS and Windows alike (Raycast does not honor `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | none — loopback only, no `api_keys` entry is written |
 | `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, then `SENPI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR` win in that order when set; a relative value is refused) | `omo-models.json` | none — loopback placeholder |
 | `kilo` | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` (`XDG_CONFIG_HOME` relocates that directory); uses `kilo.jsonc` when none exists | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
-| `commandcode` | `~/.commandcode/providers.json` (on Windows: `HOME` if set, otherwise `%USERPROFILE%`) | `providers.json` | loopback only; `apiKey: false`; no environment variable |
+| `commandcode` | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | `providers.json` | loopback only; `apiKey: false`; no environment variable |
 | `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | loopback only; no environment variable |
 
 The managed DSH export requires DSH 0.1.0-rc.6 or newer and owns only
