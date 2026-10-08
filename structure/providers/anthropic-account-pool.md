@@ -84,6 +84,85 @@ default-provider path. Its dedicated refusal maps to authentication errors in Ch
 and Responses ingress, including native Chat, which may bypass the Responses
 preparation pipeline. The router uses the import-free identity leaf.
 
+## Pool-bound helpers
+
+Vision and web search choose their backend family first, by the existing rules:
+web search defaults to OpenAI and vision keeps its automatic order.
+Only an Anthropic family result consults a pool. `resolveAnthropicHelperInstance` in
+`src/sidecar/auth.ts` takes the explicit `anthropicInstance` of `webSearchSidecar`,
+`visionSidecar` or the matching `claudeCode` override, then the parent request's
+builtin instance. An explicit or inherited target that is not configured and usable
+raises `AnthropicHelperUnavailableError` (`anthropic_helper_unavailable`); executors
+keep that refusal and never discover another pool. With neither target, legacy
+discovery keeps its order and never adds Pool 2. `resolveAnthropicSidecarAuth` is an
+exact instance lookup with no fallback.
+
+`src/sidecar/anthropic-binding.ts` gives builtin helpers the selected instance's
+model-route admission, account selection and committed snapshot through
+`resolveAnthropicHelperSnapshot`. `fetchAnthropicHelper` rechecks the configured row,
+captured target, live account and bearer before each physical send, so a removed,
+paused or replaced account refuses rather than sending. Custom helper providers keep
+their own credential path. `src/vision/plan.ts`, `src/vision/anthropic-describe.ts`
+and `src/web-search/` consume this binding; account-refusal recovery in
+`src/web-search/loop.ts` and `src/images/loop.ts` stays within the sending instance.
+
+`src/config/schema/anthropic-account-pool.ts` accepts `anthropicInstance` only as
+`anthropic` or `anthropic2`, only with an Anthropic backend, and rejects a
+provider-qualified helper model naming the other instance. Claude Code overrides are
+validated after inheriting the global helper fields. In
+`src/server/management/config-routes.ts` and `agent-settings-routes.ts` a missing field
+preserves, `null` deletes and an instance sets; an unset choice is never written as
+`anthropic`. The option DTOs in `web-search-sidecar-options.ts` and
+`vision-sidecar-options.ts` report the selected, parent, mixed and available pools.
+
+## Pool-bound quota and reset grants
+
+`src/providers/quota/anthropic-account-quota.ts` probes per-account usage for either
+instance. It refuses an unconfigured instance, resolves token renewal before keying its
+flight on the credential actually dispatched, and publishes only while the instance's
+quota epoch, configured row, account incarnation and login identity are unchanged.
+`captureProviderAccountQuotaEpoch(instance)` and the cache keys in
+`src/providers/quota/account-cache.ts` are per instance, so clearing Pool 2 quota never
+invalidates the primary pool.
+
+`src/providers/anthropic-reset-grant-ledger.ts` names the journal by instance:
+`anthropic-reset-grant-ledger.json` keeps the primary pool's existing bytes and records,
+and Pool 2 uses `anthropic2-reset-grant-ledger.json`.
+`src/server/management/anthropic-reset-grant-routes.ts` reads `provider` from the GET
+query and the consume body, treats omission as the primary pool, echoes the provider and
+returns `invalid_provider` for an unconfigured instance. Account, grant and operation IDs,
+unknown-outcome retry ownership and session consent stay bound to that instance.
+
+## Pool-bound management surfaces
+
+`src/server/management/anthropic-pool-settings.ts` owns Anthropic pool persistence.
+`writeAnthropicPoolSettings` writes exactly one location (top-level for the primary pool,
+the provider row for Pool 2) and never recreates a deleted Pool 2 row.
+`persistAnthropicPoolPatch` takes a required instance for the durable mutation, the
+uncertain-save comparison and live publication; an unknown outcome returns 409
+`config_save_state_unknown`. `src/server/management/oauth-account-routes.ts` serves
+`/api/oauth/accounts/pool` and `/api/pool/settings` for both instances with DTO kind
+`anthropic` and the actual provider. An unconfigured Pool 2 is refused: 409 from
+`/api/oauth/accounts/pool` and 400 from `/api/pool/settings`, which has no pool kind for it.
+
+`src/cli/account.ts` and its siblings accept `anthropic2` for pool, auto-switch, routes
+and account selection; `ocx account anthropic-reset-grants` keeps its syntax and adds
+`--provider anthropic|anthropic2`. `src/codex/catalog/provider-models.ts` discovers Pool 2
+like the primary pool. `src/providers/label.ts` and `src/usage/cost.ts` keep Pool 2's own
+label and grouping while pricing it from the shared Anthropic family metadata.
+`gui/src/provider-icons.ts` maps `anthropic2` to the green Claude mark, mirrored by
+`desktop/src-tauri/src/provider_icons.rs`; GUI query keys and mutation state carry the
+provider.
+
+Regression coverage: `tests/vision/vision-anthropic-instance-sidecar.test.ts`,
+`tests/web-search/web-search-anthropic-instance.test.ts`,
+`tests/providers/provider-anthropic-instance-quota.test.ts`,
+`tests/server/anthropic2-management.test.ts`,
+`tests/server/sidecar-anthropic-instance-settings.test.ts`,
+`tests/cli/cli-anthropic2-account.test.ts`, `tests/codex-integration/anthropic2-catalog.test.ts`,
+`tests/usage/anthropic2-usage-attribution.test.ts`, `gui/tests/anthropic2-provider-mark.test.ts`
+and `gui/tests/anthropic-instance-helper-controls.test.tsx`.
+
 ## Anthropic account pause
 
 Anthropic OAuth shares `ProviderAccount.paused` in the protected auth store with generic

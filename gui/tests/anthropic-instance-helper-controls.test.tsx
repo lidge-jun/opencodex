@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useState, type ReactNode } from "react";
+import { act, useLayoutEffect, useState, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
 import { en } from "../src/i18n/en";
 import { LanguageProvider } from "../src/i18n/provider";
@@ -101,7 +101,8 @@ const claude: ClaudeCodeState = {
 test("Claude draft derives mixed note immediately, keeps unset omitted, and clears pool on backend transition", async () => {
   let current = claude;
   function Harness() {
-    const [state, setState] = useState(claude); current = state;
+    const [state, setState] = useState(claude);
+    useLayoutEffect(() => { current = state; }, [state]);
     return <ClaudeCodeSettingsCard state={state} availableModels={[]} autoCompactOptions={[]} onStateChange={setState} />;
   }
   await mount(<Harness />);
@@ -120,12 +121,14 @@ test("Claude draft derives mixed note immediately, keeps unset omitted, and clea
 });
 
 test("Claude inherits an Anthropic backend and can set only its pool without materializing a backend", async () => {
-  let current: ClaudeCodeState = { ...claude, webSearchSidecar: undefined, visionSidecar: undefined,
+  const initial: ClaudeCodeState = { ...claude, webSearchSidecar: undefined, visionSidecar: undefined,
     sidecarPools: { webSearchSidecar: { backend: "anthropic", mixed: false, available: ["anthropic2"] },
       visionSidecar: { backend: "openai", mixed: false, available: ["anthropic2"] } },
   };
+  let current = initial;
   function Harness() {
-    const [state, setState] = useState(current); current = state;
+    const [state, setState] = useState(initial);
+    useLayoutEffect(() => { current = state; }, [state]);
     return <ClaudeCodeSettingsCard state={state} availableModels={[]} autoCompactOptions={[]} onStateChange={setState} />;
   }
   await mount(<Harness />);

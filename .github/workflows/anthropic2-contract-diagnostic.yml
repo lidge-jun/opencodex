@@ -122,4 +122,4 @@ jobs:
           done
       - name: GUI surface contracts
         working-directory: gui
-        run: bun test --isolate tests/anthropic2-provider-mark.test.ts tests/anthropic-instance-helper-controls.test.tsx tests/anthropic-reset-grants.test.tsx tests/claude-code-save.test.ts tests/claude-code-sidecar.test.ts tests/provider-account-pause-refresh.test.tsx
+        run: bun test --isolate tests/anthropic2-provider-mark.test.ts tests/anthropic2-provider-surfaces.test.tsx tests/anthropic-instance-helper-controls.test.tsx tests/anthropic-reset-grants.test.tsx tests/claude-code-save.test.ts tests/claude-code-sidecar.test.ts tests/provider-account-pause-refresh.test.tsx

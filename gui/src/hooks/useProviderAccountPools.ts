@@ -140,6 +140,7 @@ export function useProviderAccountPools(deps: {
   const selectionMutationsRef = useRef(new Map<string, symbol>());
   const requestsRef = useRef(new Set<AbortController>());
   const pausingAccountRef = useRef(new Map<string, { provider: string; accountId: string }>());
+  const switchingAccountRef = useRef(new Map<string, { provider: string; accountId: string }>());
   const mountedRef = useRef(true);
   const serverRef = useRef(apiBase);
   useEffect(() => {
@@ -148,6 +149,8 @@ export function useProviderAccountPools(deps: {
     const rosterGenerations = rosterGenerationRef.current;
     const quotaGenerations = quotaGenerationRef.current;
     const mutations = selectionMutationsRef.current;
+    const pausingOwners = pausingAccountRef.current;
+    const switchingOwners = switchingAccountRef.current;
     mountedRef.current = true;
     const serverChanged = serverRef.current !== apiBase;
     serverRef.current = apiBase;
@@ -165,8 +168,8 @@ export function useProviderAccountPools(deps: {
       for (const key of Object.keys(rosterGenerations)) rosterGenerations[key] += 1;
       for (const key of Object.keys(quotaGenerations)) quotaGenerations[key] += 1;
       mutations.clear();
-      pausingAccountRef.current.clear();
-      switchingAccountRef.current.clear();
+      pausingOwners.clear();
+      switchingOwners.clear();
       for (const controller of requests) controller.abort();
       requests.clear();
     };
@@ -175,7 +178,6 @@ export function useProviderAccountPools(deps: {
   // uncancellable, and StrictMode double-invokes their effects, so dedupe by list identity here.
   const accountSetsKeyRef = useRef<string | null>(null);
   const keyPoolsKeyRef = useRef<string | null>(null);
-  const switchingAccountRef = useRef(new Map<string, { provider: string; accountId: string }>());
 
   const readRoster = useCallback(async <T,>(url: string, signal?: AbortSignal): Promise<T> => {
     const bounded = createBoundedFetch(20_000);
