@@ -361,6 +361,8 @@ export interface ProviderRegistryEntry {
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
   oauthId?: string;
+  /** OAuth implementation family; instance identity remains the exact id/oauthId. */
+  oauthFamily?: "anthropic";
   virtualModels?: Record<string, { wireModelId: string; reasoningMode: "pro" }>;
   modelMaxInputTokens?: Record<string, number>;
   jawcodeBundle?: string;

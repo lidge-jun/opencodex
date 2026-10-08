@@ -54,3 +54,76 @@
 - `tests/providers/anthropic-instance.test.ts` — exact IDs, `anthropic-apikey`/compatible adapters excluded, B seed is a deep copy, B absent from default config.
 - `tests/config/anthropic-instance-pool-config.test.ts` — A/B locations, no inheritance, misplaced field rejected, `anthropicInstance` validation.
 - `tests/oauth/oauth-anthropic-instance-registration.test.ts` — duplicate token / verified UUID rejected across instances, distinct accounts with equal IDs accepted, B local-cli refused, collision guard.
+
+## wp2 execution
+
+Shared leaf code (main writes it first, so both workers import a fixed contract):
+
+```ts
+// src/providers/anthropic-instance-id.ts — no imports (registry.ts may import this leaf; it must never import anthropic-instance.ts)
+export const ANTHROPIC_INSTANCE_IDS = ["anthropic", "anthropic2"] as const;
+export type AnthropicInstanceId = typeof ANTHROPIC_INSTANCE_IDS[number];
+export function isAnthropicInstanceId(value: unknown): value is AnthropicInstanceId;
+export function anthropicInstanceRowShapeMatches(name: string, row: { adapter?: string; authMode?: string; baseUrl?: string } | undefined): boolean;
+//   pure; "anthropic": true; "anthropic2": row present, adapter "anthropic", authMode "oauth",
+//   baseUrl property absent or equal to https://api.anthropic.com after trimming trailing slashes; other names: false
+
+// src/providers/anthropic-instance.ts
+export function isAnthropicOAuthInstance(id: string): id is AnthropicInstanceId;   // exact ID + registry oauthFamily/oauthId/authKind
+export function isBuiltinAnthropicInstanceRow(name: string, row?: Partial<Pick<OcxProviderConfig, "adapter" | "authMode" | "baseUrl">>): boolean;
+//   isAnthropicOAuthInstance(name) && anthropicInstanceRowShapeMatches(name, row); re-exports the leaf
+export function configuredAnthropicInstance(config: Pick<OcxConfig, "providers">, name: string | undefined): AnthropicInstanceId | undefined;
+//   anthropic: "anthropic" whenever name === "anthropic" — a compatibility identity result only; callers keep
+//   every existing auth-mode, enabled-provider and eligibility check they apply to A today;
+//   anthropic2: only when the row exists, is not disabled and passes isBuiltinAnthropicInstanceRow
+
+// src/oauth/anthropic-pool-config.ts
+export function rawAnthropicAccountPool(config, instance): unknown;          // A: config.anthropicAccountPool; B: providers.anthropic2.anthropicAccountPool
+export function resolveAnthropicAccountPoolConfig(config, instance): AnthropicAccountPoolConfig; // object or {}
+export function isAnthropicPoolEnabledFor(config, instance): boolean;
+```
+
+B's registry row sets `allowBaseUrlOverride: false` (A keeps `true`): B is pinned to the first-party
+endpoint so the D-09 shape check stays meaningful. This is the one configuration affordance B does not
+share and the PR states it.
+
+Registry ownership guard: `providerMatchesRegistryTransport` in `src/providers/registry.ts` today returns
+`true` for every non-key entry. For `anthropic2` it must first return
+`anthropicInstanceRowShapeMatches("anthropic2", provider)`, so a colliding custom row is never pinned or
+enriched as the builtin. `registry.ts` stays within its 232-line cap (move code to a sibling if needed).
+
+The pool config type leaf `src/types/anthropic-account-pool.ts` carries `AnthropicAccountPoolConfig`
+together with the rotation-strategy, quota-window and model-route types it references; `config.ts` imports
+and re-exports them, never the reverse.
+
+W2-oauth keeps the old continuity and threshold signatures as A wrappers and adds distinct
+`...ForInstance` variants; A's existing refresh and import behaviour is pinned by fixtures in its new tests.
+Routing/native callers stay with wp3; wp2 proves the foundation contracts, not runtime B readiness.
+
+| Worker | Owns (exclusive writes) | New tests |
+|---|---|---|
+| W2-config | `src/providers/registry/types.ts`, `registry/model-ids.ts`, `registry/entries-core.ts`, `src/providers/registry.ts` (232-line baseline cap: net growth 0), `src/providers/derive.ts`, `src/types/anthropic-account-pool.ts` (new), `src/types/config.ts`, `src/types/provider.ts`, `src/config/schema/*`, `src/config/diagnostics.ts`, `src/generated/model-metadata.ts` (generator output only) | `tests/providers/anthropic-instance.test.ts`, `tests/config/anthropic-instance-pool-config.test.ts` |
+| W2-oauth | `src/oauth/index.ts` (1996/1999: extract first), `src/oauth/anthropic-oauth-definitions.ts` (new), `src/oauth/store.ts`, `src/oauth/store-anthropic-instance.ts` (new, duplicate guard), `src/oauth/anthropic-continuity.ts`, `src/oauth/anthropic.ts`, `src/oauth/token-guardian.ts`, `src/oauth/login-cli.ts` | `tests/oauth/oauth-anthropic-instance-registration.test.ts`, `tests/oauth/oauth-anthropic-instance-refresh.test.ts` |
+
+Main owns the leaf files above, both layout inventories and every `structure/` edit. Workers do not run tests,
+typecheck, lint or builds; the only local command allowed besides read/search is the deterministic
+model-metadata generator. Workers report the layout entries their new tests need.
+
+### wp2 audit fold (reviewer near-pass)
+
+- Ownership: main writes, before dispatch, exactly `src/providers/anthropic-instance-id.ts`,
+  `src/providers/anthropic-instance.ts`, `src/oauth/anthropic-pool-config.ts` and
+  `src/types/anthropic-account-pool.ts`. W2-config edits `src/types/config.ts` to import/re-export the type
+  leaf and owns any sibling extracted from `src/providers/registry.ts` (e.g. `src/providers/registry-transport.ts`).
+- Publication atomicity: B login publishes its provider row through `mutatePersistedConfig`, rechecking
+  `anthropicInstanceRowShapeMatches` against the latest persisted row inside the callback. The shape is also
+  checked before the browser opens and before credentials persist. If a competing writer claims the name in
+  between, publication refuses with a typed error, the custom row is left untouched, and the B credential just
+  written stays as an orphan auth row that no request can use (orphan rows are never execution candidates);
+  the error tells the user to remove it or rename the custom provider. A deterministic competing-write case goes
+  in `oauth-anthropic-instance-registration.test.ts`.
+- Load versus write: the shared pool schema keeps A's tolerant load semantics exactly (malformed
+  `nativeMessages` loads as `false`, a malformed pool container loads as absent, unrelated providers survive)
+  and applies the same tolerance to B's nested field; strict rejection applies only to validated writes and
+  diagnostics. W2-config adds A and B cases for both paths next to `tests/config/config-load-degrade.test.ts`
+  behaviour in `tests/config/anthropic-instance-pool-config.test.ts`.

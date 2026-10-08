@@ -15,6 +15,7 @@ export interface ModelMetadata {
 const PROVIDER_ALIASES: Record<string, string> = {
   "xai": "xai",
   "anthropic": "anthropic",
+  "anthropic2": "anthropic",
   "anthropic-apikey": "anthropic",
   "anthropic-key": "anthropic",
   "kimi": "moonshot",

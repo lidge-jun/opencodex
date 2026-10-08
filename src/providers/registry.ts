@@ -7,7 +7,7 @@ import type {
 } from "./registry/types";
 import { PROVIDER_REGISTRY_CORE } from "./registry/entries-core";
 import { PROVIDER_REGISTRY_EXTENDED } from "./registry/entries-extended";
-
+import { anthropicInstanceRowShapeMatches } from "./anthropic-instance-id";
 export type {
   ProviderAuthKind,
   MetadataModelIdNormalize,
@@ -106,6 +106,7 @@ export function providerMatchesRegistryTransport(
 ): boolean {
   const entry = getProviderRegistryEntry(id);
   if (!entry) return false;
+  if (id === "anthropic2") return anthropicInstanceRowShapeMatches(id, provider);
   if (entry.authKind !== "key" || entry.preserveCustomDestination !== true) return true;
   // The opt-in is intentionally limited to fixed key destinations. Fail closed if a future
   // registry edit combines it with an override/template despite the registry parity tests.
@@ -115,7 +116,6 @@ export function providerMatchesRegistryTransport(
   if (provider.authMode !== undefined && provider.authMode !== "key") return false;
   return normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
 }
-
 /**
  * Resolve the registry entry a configured provider actually points at, by TRANSPORT
  * rather than by name.

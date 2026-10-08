@@ -30,7 +30,7 @@ Terms used in every document of this unit:
 | D-06 | B starts empty and supports browser OAuth only (OPEN-01, owner-confirmed 2026-10-08). No Claude Code CLI import, adoption or write-back for B; A keeps its import/continuity behaviour. Proven duplicate access/refresh token or verified account UUID across instances is rejected inside the store write lock. |
 | D-07 | A direct `anthropic2/<model>` request never recovers onto A. Explicit combos/helpers naming A remain a user-declared cross-provider choice. Helper `backend: "anthropic"` names the family; the new optional `anthropicInstance` names an instance; unset means "inherit the request's instance". |
 | D-08 | Pool separation is an opencodex routing boundary only. It does not claim provider-side account separation, terms compliance or OS-level isolation. |
-| D-09 | A pre-existing user provider called `anthropic2` is never rewritten, renamed or moved. A configured `anthropic2` row is the builtin instance only when it has `adapter: anthropic`, `authMode: oauth` and either no `baseUrl` or `https://api.anthropic.com` (`isBuiltinAnthropicInstanceRow`). Before this change no OAuth definition existed for that name, so such a row could not hold working accounts; treating it as B changes nothing the user configured. Any other row keeps its custom meaning everywhere: registry enrichment, catalog reconciliation, routing, native eligibility, login, management mutations and helper discovery all check the row shape first, and B onboarding refuses with guidance. |
+| D-09 | Chosen compatibility policy: a pre-existing user provider called `anthropic2` is never rewritten, renamed or moved. A configured `anthropic2` row is the builtin instance only when it has `adapter: anthropic`, `authMode: oauth` and either no `baseUrl` property or `https://api.anthropic.com`. Such a row already points at the same first-party destination with the same auth mode, so adopting it does not redirect anything the user configured. Any other row keeps its custom meaning everywhere: registry transport ownership, enrichment, catalog reconciliation, routing, native eligibility, login, management mutations and helper discovery check the row shape first, and B onboarding refuses with guidance. |
 | D-10 | GUI: B uses the Claude mark recoloured green (`claude-green.svg`, design-system green) so the two pools are distinguishable at a glance. |
 
 ## Code contract (shared by every slice)
@@ -39,7 +39,8 @@ Terms used in every document of this unit:
   `ANTHROPIC_INSTANCE_IDS`, `isAnthropicInstanceId(id)` (pure string check). The registry imports only this leaf.
 - `src/providers/anthropic-instance.ts`: `isAnthropicOAuthInstance(id)` (exact ID + registry entry with
   `oauthFamily`), `isBuiltinAnthropicInstanceRow(name, providerConfig)` (D-09 shape check) and
-  `configuredAnthropicInstance(config, name)` (returns the instance only when the row exists, is enabled and
+  `configuredAnthropicInstance(config, name)` (for `anthropic` it returns the instance as a compatibility
+  identity and callers keep their existing checks; for `anthropic2` only when the row exists, is enabled and
   passes the shape check). Runtime selection and physical send use `configuredAnthropicInstance`, so an
   orphan `anthropic2` auth row without an enabled builtin-shaped config row never activates B.
 - `src/oauth/anthropic-pool-config.ts`: `resolveAnthropicAccountPoolConfig(config, instance)`

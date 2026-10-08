@@ -4,6 +4,8 @@ import { bindAnthropicIdentity, resolveAnthropicAccountIdentity } from "./anthro
 import { generatePKCE } from "./pkce";
 import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
 import { outboundProxyConfigured, startupOutboundProxyConfigured } from "../lib/proxy-env";
+import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
+import { AnthropicLocalCliImportError } from "./store-anthropic-instance";
 
 const CLIENT_ID = atob("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
@@ -178,9 +180,10 @@ export class AnthropicOAuthFlow extends OAuthCallbackFlow {
 
 export async function loginAnthropic(
   ctrl: OAuthController,
-  opts?: { importLocal?: LocalTokenImportMode },
+  opts?: { importLocal?: LocalTokenImportMode; instance?: AnthropicInstanceId },
 ): Promise<OAuthCredentials> {
   const importLocal = opts?.importLocal ?? "off";
+  if (opts?.instance === "anthropic2" && importLocal !== "off") throw new AnthropicLocalCliImportError();
   if (importLocal !== "off") {
     const { detectClaudeCodeToken } = await import("./local-token-detect");
     const local = detectClaudeCodeToken();
