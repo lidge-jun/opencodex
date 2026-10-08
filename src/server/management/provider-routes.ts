@@ -40,6 +40,7 @@ import { commitProviderPatch } from "./provider-patch-transaction";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import { canonicalAutoReviewModelKey, mergeModelPinnedEfforts, modelPinnedEffortsConfigError, pinnedReasoningEffortConfigError } from "../../config/provider-validation";
 import { replaceProviderAccountSet } from "../../oauth/store";
+import { captureModelsOAuthTarget, mayResolveModelsOAuth, modelsOAuthTargetMatches } from "../../oauth/model-discovery-auth";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
@@ -115,7 +116,6 @@ import {
   publicProviderBaseUrl,
   safeConfigDTO,
   type ProviderEditorConfigDTO,
-  type ProviderEditorProviderDTO,
 } from "../auth-cors";
 import { providerCatalogCapabilityConfigError } from "./provider-capability-config";
 import { providerEmptyToolOutputConfigError } from "../../config/provider-validation";
@@ -138,6 +138,7 @@ import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostR
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
+import { anthropicInstancePublicationError, mergeProviderEditorRow, preserveAnthropicInstanceMarker } from "./provider-instance-ownership";
 import { providerTlsProfileDiagnostic } from "../../lib/provider-tls-profile";
 
 type ProviderPatchApplication =
@@ -213,28 +214,6 @@ type ProviderEditorCandidateResult =
 
 type ProviderEditorMutationValue = ProviderEditorCandidateResult;
 
-function mergeProviderEditorRow(
-  persisted: OcxProviderConfig | undefined,
-  baseline: ProviderEditorProviderDTO | undefined,
-  next: ProviderEditorProviderDTO,
-): OcxProviderConfig {
-  const merged = structuredClone(persisted ?? {}) as Record<string, unknown>;
-  const fields = new Set([...Object.keys(baseline ?? {}), ...Object.keys(next)]);
-  for (const field of fields) {
-    const baselineHasField = baseline !== undefined && Object.hasOwn(baseline, field);
-    const nextHasField = Object.hasOwn(next, field);
-    if (
-      baselineHasField === nextHasField
-      && (!baselineHasField || isDeepStrictEqual(baseline[field], next[field]))
-    ) {
-      continue;
-    }
-    if (nextHasField) merged[field] = structuredClone(next[field]);
-    else delete merged[field];
-  }
-  return merged as unknown as OcxProviderConfig;
-}
-
 /** Build and validate a complete candidate without mutating the caller's snapshot. */
 function providerEditorCandidate(
   persisted: OcxConfig,
@@ -273,6 +252,8 @@ function providerEditorCandidate(
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(candidate.codexAccountNamespaces, name);
     if (namespaceCollision) return { ok: false, status: 409, error: namespaceCollision, code: "provider_namespace_conflict" };
     const merged = mergeProviderEditorRow(persisted.providers[name], baseline.providers[name], publicProvider);
+    const markerCollision = anthropicInstancePublicationError(name, merged, persisted.providers[name]);
+    if (markerCollision) return { ok: false, status: 409, error: markerCollision, code: "anthropic_instance_collision" };
     const transportCandidate = providerTransportValidationCandidate(merged as unknown as Record<string, unknown>);
     // The editor merges onto the persisted row, so stored operator overlays (selectedModels,
     // disabled, …) ride along in the candidate. They are owned by their own write boundaries;
@@ -1172,6 +1153,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const aliasOwnershipError = providerAliasOverlayOwnershipError(body.provider, existing);
     if (aliasOwnershipError) return jsonResponse({ error: aliasOwnershipError }, 400);
     const transportCandidate = providerTransportValidationCandidate(body.provider);
+    preserveAnthropicInstanceMarker(name, transportCandidate as unknown as OcxProviderConfig, existing);
+    const markerCollision = anthropicInstancePublicationError(name, transportCandidate as unknown as OcxProviderConfig, existing);
+    if (markerCollision) return jsonResponse({ error: markerCollision }, 409);
     const pinError = applyProviderPinFields(transportCandidate as unknown as OcxProviderConfig, body.provider, existing);
     if (pinError) return jsonResponse({ error: pinError }, 400);
     const providerError = providerManagementConfigError(name, transportCandidate)
@@ -1328,6 +1312,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // DNS validation above awaits. Re-read the live row so a dedicated alias write that
     // completed during that wait remains authoritative instead of being overwritten by the
     // older ownership snapshot used to admit this POST.
+    const lateMarkerCollision = anthropicInstancePublicationError(name, prov, config.providers[name]);
+    if (lateMarkerCollision) return jsonResponse({ error: lateMarkerCollision }, 409);
+    preserveAnthropicInstanceMarker(name, prov, config.providers[name]);
     restorePersistedAliasOverlays(prov, config.providers[name]);
     const capabilities = Object.hasOwn(body.provider, "modelCapabilities")
       ? mergeModelCapabilities(undefined, prov.modelCapabilities)
@@ -1371,6 +1358,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const rollback = pinsOwned ? captureConfigTopLevelRollback(config, ["defaultProvider", "modelDiscovery", "disabledModels"]) : undefined;
     let validationError: string | undefined;
     withConfigMutationLockSync(() => {
+      validationError = anthropicInstancePublicationError(name, candidate, config.providers[name]);
+      if (validationError) return;
       const liveTiers = config.providers[name]?.modelContextTiers;
       if (submittedModelContextTiers && liveTiers) candidate.modelContextTiers = Object.assign(Object.create(null), liveTiers, candidate.modelContextTiers ?? {});
       else if (!submittedModelContextTiers && liveTiers) candidate.modelContextTiers = { ...liveTiers };
@@ -1621,7 +1610,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
       return jsonResponse({ error: "unknown provider" }, 404);
     }
-    const prov = config.providers[name]!;
+    const prov = { ...config.providers[name]! };
+    const authorizedTarget = captureModelsOAuthTarget(name, prov);
     if (prov.disabled) {
       return jsonResponse({ ok: false, error: "Provider is disabled", latencyMs: 0 });
     }
@@ -1646,10 +1636,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // credential resolution/network access for providers such as Antigravity.
       return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
     }
-    const { buildModelsRequest, getValidAccessTokenSnapshot, resolveModelsAuthToken } = await import("../../oauth");
+    const { buildModelsRequest, getModelsOAuthAccessSnapshot, resolveModelsAuthToken } = await import("../../oauth");
     const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
-    const snapshot = prov.authMode === "oauth"
-      ? await getValidAccessTokenSnapshot(name).catch(() => undefined)
+    const snapshot = prov.authMode === "oauth" && mayResolveModelsOAuth(name, config.providers[name])
+      ? await getModelsOAuthAccessSnapshot(name, prov).catch(() => undefined)
       : undefined;
     const apiKey = prov.authMode === "oauth" ? snapshot?.accessToken : await resolveModelsAuthToken(name, prov);
     if (prov.authMode === "oauth" && !apiKey) {
@@ -1735,7 +1725,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // Same canonical-URL TUN transparency as catalog discovery: the registry's
       // own fixed discovery URL survives purely-benchmark (Clash/Surge/Mihomo
       // fake-IP) DNS without proxy env.
-      const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl };
+      const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
+        beforeSend: () => prov.authMode !== "oauth" || (mayResolveModelsOAuth(name, config.providers[name])
+          && modelsOAuthTargetMatches(name, config.providers[name], authorizedTarget)
+          && (name !== "anthropic2" || new URL(modelsUrl).href === authorizedTarget)) };
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,

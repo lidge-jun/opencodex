@@ -567,6 +567,7 @@ resolves `env.HOME ?? env.USERPROFILE` plus that path with no relocation variabl
 `commandCodeProviderRoot` mirrors that against the target and writes under the existing root
 (singular for fresh files); both roots are in `CLIENT_MANAGED_PATHS` so Disable removes either.
 Uses keyless `apiKey: false`; no service-token is read. Contract: `tests/clients/command-code-client-contract.test.ts`.
+`src/cli/integrations.ts` pins Command Code restore requests to `/api/client-integrations/commandcode/restore` and its `/preview` path, including fingerprint-bound calls through `src/cli/integration-preview.ts`. The path supplies the fixed client; a conflicting body identity is refused. Old servers reject these paths, and scoped CLI calls neither follow redirects nor retry a generic endpoint. The management restore and restore-preview endpoints validate this optional identity against the journal before profile delegation or mutation; invalid identities return 400, absent root operations 404, and different clients 409. Generic calls without the field retain their existing restore semantics. Client-specific restore rejects client/profile selector overrides. `tests/server/management-integration-routes.test.ts` and `tests/cli/cli-integration-preview.test.ts` cover the binding and unchanged state on refusal.
 
 ## Cline paired files
 

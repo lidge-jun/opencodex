@@ -13,6 +13,7 @@ import {
 } from "./combos";
 import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider } from "./config/provider-name";
+import { anthropicInstanceRowShapeMatches } from "./providers/anthropic-instance-id";
 import { providerUsesKeyAuthOverride, resolveProviderApiKey } from "./providers/key-store";
 import { captureProviderApiKeySelection } from "./providers/api-key-selection-capture";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
@@ -53,6 +54,14 @@ import { getRoutingProfile, resolvePolicyProfileId, POLICY_NAMESPACE } from "./r
 import { evaluatePolicyProfile, type PolicyRequestEvidence } from "./routing/evaluator";
 import { assemblePolicyCandidateEvidence } from "./routing/compatibility/assemble";
 import { resolveModelPolicy, type ResolvedModelPolicy } from "./providers/resolved-model-policy";
+
+/** Explicit Pool 2 admission refusal; ingress must not recover it through default routing. */
+export class AnthropicSecondaryInstanceUnavailableError extends Error {
+  constructor() {
+    super("Anthropic Pool 2 requires an enabled configured provider with valid OAuth ownership");
+    this.name = "AnthropicSecondaryInstanceUnavailableError";
+  }
+}
 
 export class UnknownRoutingPolicyError extends Error {
   constructor(readonly profileId: string) {
@@ -522,9 +531,18 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   return resolved;
 }
 
+/**
+ * Rows eligible for bare-model inference (configured default model, model list, model alias).
+ *
+ * The marked builtin Pool 2 row is excluded: it seeds the same catalog as `anthropic`, so letting it
+ * compete would move a bare `claude-*` request onto Pool 2 by insertion order, or make a shared alias
+ * ambiguous. Pool 2 is reached only through `anthropic2/<model>`, its provider alias, or an explicit
+ * `defaultProvider`. An unmarked custom row named `anthropic2` keeps its ordinary custom meaning.
+ */
 function activeProviderEntries(config: OcxConfig): [string, OcxProviderConfig][] {
   return Object.entries(config.providers)
-    .filter(([name, provider]) => name !== LEGACY_CHATGPT_PROVIDER_ID && provider.disabled !== true);
+    .filter(([name, provider]) => name !== LEGACY_CHATGPT_PROVIDER_ID && provider.disabled !== true
+      && !(name === "anthropic2" && anthropicInstanceRowShapeMatches(name, provider)));
 }
 
 export class NoEnabledOpenAiProviderError extends Error {
@@ -618,6 +636,9 @@ function routeResult(
   routeReason: string,
   redirectState: BlockedModelRedirectState,
 ): RouteResult {
+  if (providerName === "anthropic2" && provider.authMode === "oauth" && !anthropicInstanceRowShapeMatches(providerName, provider)) {
+    throw new AnthropicSecondaryInstanceUnavailableError();
+  }
   const qualified = resolveBlockedModelRedirect(config, `${providerName}/${modelId}`);
   const bare = resolveBlockedModelRedirect(config, modelId);
   const crossTarget = config && (
@@ -811,6 +832,11 @@ function routeModelInternal(
   if (slash > 0) {
     const requestedProvider = modelId.slice(0, slash);
     const requestedLower = requestedProvider.toLowerCase();
+    // Literal B is a reserved instance selector even before its row exists. Keep other
+    // qualifiers, including exact uppercase custom keys, on the ordinary routing path.
+    if (requestedProvider === "anthropic2" && !hasOwnProvider(config.providers, requestedProvider)) {
+      throw new AnthropicSecondaryInstanceUnavailableError();
+    }
     let provName: string | undefined;
 
     if (hasOwnProvider(config.providers, requestedProvider)) {

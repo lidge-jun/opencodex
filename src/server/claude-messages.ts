@@ -80,7 +80,9 @@ import { upstreamWireForAdapter } from "../protocols/contract";
 import { createProtocolEnvelope, type ProtocolEnvelope } from "../protocols/envelope";
 import { featuresFromMessagesBody, type ProtocolFeature } from "../protocols/features";
 import { credentialDomainFor, messagesBodyHasOpaqueState } from "../protocols/opaque-state";
-import { hasAnthropicFailoverQuorum, anthropicSessionKeyFromParts } from "../oauth/anthropic-routing";
+import { anthropicRoutingFor, anthropicSessionKeyFromParts } from "../oauth/anthropic-routing";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
+import { messagesSelectorTargetsSecondaryInstance, messagesSecondaryInstanceUnavailable } from "./messages-native-selector";
 import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
 import { requestPathForLane } from "../protocols/path";
 import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols/settings";
@@ -244,6 +246,7 @@ function wantsNativePassthrough(
 ): model is string {
   if (cc?.nativePassthrough === false) return false;
   if (typeof model !== "string" || !/^(claude|anthropic)/i.test(model)) return false;
+  if (messagesSelectorTargetsSecondaryInstance(config, model, cc)) return false;
   // Authorization and x-api-key both belong to the upstream on this branch. An exposed listener
   // therefore requires the dedicated admission header even though the routed Messages surface
   // keeps accepting all three legacy admission forms.
@@ -961,6 +964,11 @@ async function handleClaudeMessagesWithBudget(
       recordProtocolShadowPlan(logCtx, config, { inbound: "messages", model: requestedModel });
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
+    if (isRec(anthropicBody) && typeof anthropicBody.model === "string"
+      && messagesSecondaryInstanceUnavailable(config, anthropicBody.model, cc)) {
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 401, { closeReason: "non_stream" });
+      return anthropicErrorResponse(401, "Configured Anthropic OAuth instance is unavailable", "authentication_error");
+    }
     // Only Anthropic holds message-thread state; the error makes Claude Code resend the full turn.
     if (carriesMessageThread(anthropicBody)) {
       logCtx.errorCode = "claude_thread_unsupported";
@@ -1148,10 +1156,16 @@ async function handleClaudeMessagesWithBudget(
 
   // PF-08: a managed-key Anthropic route sends its Messages body natively. The caller-forward
   // passthrough above was decided on the caller's own credential and never reaches this point.
+  const settledInstance = configuredAnthropicInstance(config, settledRoute?.providerName);
+  if (settledRoute?.providerName === "anthropic2" && settledRoute.provider.authMode === "oauth" && !settledInstance) {
+    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 401, { closeReason: "non_stream" });
+    return anthropicErrorResponse(401, "Configured Anthropic OAuth instance is unavailable", "authentication_error");
+  }
   const nativeSelector: NativeMessagesSelector = {
     effortRow: !!effortRow, fastRow: !!fastRow, routeSelector: String(internalBody.model ?? ""), claudeCode: cc,
     // PF-10: a stored second OAuth account turns on the bridge's rotation, so it stays there.
-    ...(settledRoute?.provider.authMode === "oauth" ? { oauthFailoverQuorum: hasAnthropicFailoverQuorum() } : {}),
+    ...(settledRoute?.provider.authMode === "oauth" && settledInstance
+      ? { oauthFailoverQuorum: anthropicRoutingFor(settledInstance).hasAnthropicFailoverQuorum() } : {}),
   };
   const nativeDecline = settledRoute && isRec(anthropicBody)
     ? nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector)

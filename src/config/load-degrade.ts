@@ -3,6 +3,7 @@ import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
+import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import {
   modelPinnedEffortsConfigError,
   pinnedReasoningEffortConfigError,
@@ -156,6 +157,39 @@ export function warnDegradedMemoryModels(rawParsed: unknown, validated: OcxConfi
   for (const phase of ["extract", "consolidation"] as const) {
     if ((raw as Record<string, unknown>)[phase] !== undefined && validated.memoryModels[phase] === undefined) {
       console.warn("\u26a0\ufe0f  config.json memoryModels." + phase + " is invalid (expected { model, reasoningEffort? } with a nonblank model) \u2014 that phase keeps its existing route, which may include shadow-call interception");
+    }
+  }
+}
+
+/**
+ * Load-time degradation for helper `anthropicInstance` (loadConfig only). A malformed id, or one
+ * that conflicts with its block's backend or model, drops just that key with a warning, so the
+ * helper inherits the request's pool and every provider/key survives. Validated writes still
+ * reject the value and file diagnostics still report it from the raw document.
+ *
+ * Each location is checked in isolation, global blocks first, so a Claude override is judged
+ * against the already-degraded global block it inherits from. An override that owns no
+ * `anthropicInstance` of its own is left untouched: the conflicting key lives in the global
+ * block, which is valid on its own, and the inherited value is still a well-formed instance.
+ */
+export function sanitizeAnthropicSidecarInstanceForLoad(parsed: unknown): void {
+  const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+    value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  const root = asRecord(parsed);
+  if (!root) return;
+  for (const scope of ["global", "claude"] as const) {
+    const owner = scope === "global" ? root : asRecord(root.claudeCode);
+    for (const field of ["webSearchSidecar", "visionSidecar"] as const) {
+      const sidecar = asRecord(owner?.[field]);
+      if (!sidecar || !Object.hasOwn(sidecar, "anthropicInstance")) continue;
+      const probe = scope === "global"
+        ? { [field]: sidecar }
+        : { [field]: root[field], claudeCode: { [field]: sidecar } };
+      const error = anthropicSidecarConfigError(probe);
+      if (!error) continue;
+      delete sidecar.anthropicInstance;
+      // The message names a static path and reason only; the hand-edited value is never echoed.
+      console.warn(`⚠️  config.json ${error} — ignoring that anthropicInstance; the helper inherits the request's Anthropic pool`);
     }
   }
 }

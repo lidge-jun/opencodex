@@ -183,7 +183,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `raycast` | `~/.config/raycast/ai/providers.yaml`（macOS 与 Windows 相同；Raycast 不遵循 `XDG_CONFIG_HOME`） | `raycast-providers.yaml` | 无 — 仅限回环，不会写入 `api_keys` 条目 |
 | `omo` | `~/.omo/agent/models.json`（设置后依次由 `OMO_CODING_AGENT_DIR`、`SENPI_CODING_AGENT_DIR`、`PI_CODING_AGENT_DIR` 优先；相对路径会被拒绝） | `omo-models.json` | 无 — loopback placeholder |
 | `kilo` | `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json`（`XDG_CONFIG_HOME` 可更改该目录）；均不存在时使用 `kilo.jsonc` | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
-| `commandcode` | `~/.commandcode/providers.json` (Windows：已设置 `HOME` 时使用该目录，否则使用 `%USERPROFILE%`) | `providers.json` | 仅限回环；`apiKey: false`；无需环境变量 |
+| `commandcode` | `~/.commandcode/providers.json` (Windows 使用默认主目录时：仅当 `HOME ?? USERPROFILE` 的值非空、非纯空白且为 Windows 绝对路径时使用，否则使用 `homedir()`；单独传入的主目录保持不变；文件位于其下的 `.commandcode\providers.json`) | `providers.json` | 仅限回环；`apiKey: false`；无需环境变量 |
 | `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | 仅限回环；无需环境变量 |
 
 Raycast 导出是一份独立的 `providers.yaml` 文档，在 `providers` 序列中只有一个 `id: opencodex` 元素：`name: OpenCodex`、代理的 `/v1` 基础 URL，以及每个已路由模型及其 `abilities`（`tools` 与 `system_message` 始终支持，`vision` 取自目录的输入模态，`reasoning_effort` 在模型有 effort 阶梯时设置，`temperature` 对推理模型关闭）。Custom Providers 是 Raycast Pro 功能，且 Raycast 会监视该文件，因此保存后的更改无需重启即可生效。格式见 [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers)。不会写入任何 `api_keys` 条目，所以该导出仅限回环，非回环绑定会被拒绝。

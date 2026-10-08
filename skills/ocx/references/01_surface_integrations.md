@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 40.
+Declared capabilities: 41.
 
 ### `ocx claude config`
 
@@ -516,6 +516,33 @@ JSON mode: `payload`.
 - With --client, restore requires --profile; only Aside profiles accept that selector. No automatic drift confirmation or retry.
 - Preview preserves exact opId/profile/confirm-drift intent. Generic restore derives the client on the server; the returned plan does not embed opId or complete command input.
 - A refused or no-op preview is completed inspection, not applied work. A stale bound mutation exits5 with a fixed re-preview hint; no replacement token is automatically adopted.
+
+### `ocx commandcode restore`
+
+Usage: `ocx commandcode restore --op <opId> [--confirm-drift] [--preview | --plan-fingerprint <token>] [--json]`
+
+Restore a Command Code rollback operation, retaining client ownership and drift checks.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| POST | `/api/client-integrations/commandcode/restore` |
+| POST | `/api/client-integrations/commandcode/restore/preview` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--op` | string | Command Code operation ID; --op-id is an alias. |
+| `--confirm-drift` | boolean | Explicitly allow replacing edits made after the snapshot. |
+| `--preview` | boolean | Inspect restoration without mutating; exclusive with a commit fingerprint. |
+| `--plan-fingerprint` | string | Optional versioned token from a matching preview; stale intent is refused without retry. |
+| `--json` | boolean | Emit the result as JSON. |
+
+JSON mode: `payload`.
+
+- cmd restore is an alias. --client and --profile are rejected; the dedicated route binds the operation to Command Code.
+- Older proxies without the dedicated route fail without a generic restore fallback. Redirects are refused.
+- Preview preserves the operation and drift intent. A stale bound mutation requires a new explicit preview.
 
 ### `ocx claude config status`
 

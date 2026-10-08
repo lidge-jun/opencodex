@@ -245,6 +245,8 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     // Preserve the registry auth kind verbatim (including "local") so fail-closed gates that
     // distinguish local runtimes from API-key providers keep working after the seed round-trip.
     authMode: entry.authKind,
+    ...(entry.id === "anthropic2" && entry.authKind === "oauth" && entry.oauthFamily === "anthropic"
+      ? { anthropicOAuthInstance: "anthropic2" as const } : {}),
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.keyOptional !== undefined ? { keyOptional: entry.keyOptional } : {}),
     ...(entry.freeTier !== undefined ? { freeTier: entry.freeTier } : {}),

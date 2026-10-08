@@ -1,3 +1,4 @@
+import { isAnthropicOAuthInstance } from "../../providers/anthropic-instance";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { execFileSync } from "node:child_process";
@@ -28,11 +29,12 @@ import {
 } from "../model-cache";
 import {
   buildModelsRequest,
-  getValidAccessTokenSnapshot,
+  getModelsOAuthAccessSnapshot,
   observeActiveOAuthAccessToken,
   resolveModelsAuthToken,
   type OAuthActiveTokenObservation,
 } from "../../oauth";
+import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -145,7 +147,8 @@ export function observedModelsAuthResolver(
         return { apiKey: resolveProviderApiKey(provider.apiKey), observed: true };
       }
 
-      const observation = observeActiveOAuthAccessToken(name, authStoreBuffer);
+      const observation: OAuthActiveTokenObservation = mayResolveModelsOAuth(name, provider)
+        ? observeActiveOAuthAccessToken(name, authStoreBuffer) : { kind: "missing" };
       outcomes.push({ provider: name, state: observation.kind });
       if (observation.kind !== "available") return { apiKey: undefined, observed: true };
       return {
@@ -179,7 +182,7 @@ export async function fetchProviderModelsWithAuth(
   // generation, so a request started with the former account cannot later publish its result.
   const cacheGeneration = captureModelCacheGeneration(name);
   const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
-  const anthropicSelection = name === "anthropic" && prov.authMode === "oauth"
+  const anthropicSelection = isAnthropicOAuthInstance(name) && prov.authMode === "oauth" && mayResolveModelsOAuth(name, prov)
     ? captureOAuthAccountSelection(name) : null;
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   const seedVertexDefault = prov.adapter === "google"
@@ -257,9 +260,11 @@ export async function fetchProviderModelsWithAuth(
     }
     return observed(configured, "authoritative");
   }
-  const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"
+  const auth: ModelsAuthResolution = prov.authMode === "oauth" && !mayResolveModelsOAuth(name, prov)
+    ? { apiKey: undefined, observed: resolveAuth.kind === "observed" }
+    : captured.observedAuth ?? (resolveAuth.kind === "refreshing"
     ? prov.authMode === "oauth"
-      ? await getValidAccessTokenSnapshot(name)
+      ? await getModelsOAuthAccessSnapshot(name, prov)
         .then(snapshot => ({
           apiKey: snapshot.accessToken,
           observed: false,
@@ -274,7 +279,8 @@ export async function fetchProviderModelsWithAuth(
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
   const maySendAnthropicDiscovery = () => {
-    if (name !== "anthropic" || prov.authMode !== "oauth") return true;
+    if (!isAnthropicOAuthInstance(name) || prov.authMode !== "oauth") return true;
+    if (!mayResolveModelsOAuth(name, prov)) return false;
     const selected = captureOAuthAccountSelection(name);
     const row = auth.oauthAccountId ? getAccountCredentialWithStatus(name, auth.oauthAccountId) : null;
     return !!anthropicSelection && !!selected && !!row && !row.paused && !row.needsReauth
@@ -633,7 +639,7 @@ export async function fetchProviderModelsWithAuth(
   }
   // The captured request predates any refresh, so a refreshing gather rebuilds it
   // from the auth it resolved: the token and its origin, together.
-  const request = resolveAuth.kind === "refreshing"
+  const request = resolveAuth.kind === "refreshing" && name !== "anthropic2"
     ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl)
     : captured.request;
   const url = request.url;
@@ -653,7 +659,7 @@ export async function fetchProviderModelsWithAuth(
   const failedDiscoveryFallback = (
     failure: ProviderModelDiscoveryFailure,
   ): { models: CatalogModel[]; fallback: "stale" | "configured"; shouldLog: boolean } => {
-    if (!isCurrentCacheGeneration()) {
+    if (!isCurrentCacheGeneration() || !maySendAnthropicDiscovery()) {
       return {
         models: withConfiguredRetention(failedDiscoveryConfigured),
         fallback: "configured",
@@ -854,7 +860,7 @@ export async function fetchProviderModelsWithAuth(
         `[opencodex] Provider model discovery for "${name}" returned an authoritative empty catalog; ${droppedConfiguredIds.length > 0 ? `dropping configured model ids: ${droppedConfiguredIds.join(", ")}` : "no models will be exposed"}.`,
       );
     }
-    if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+    if (!maySendAnthropicDiscovery() || !setCached(name, forCache, Date.now(), cacheGeneration)) {
       return observed(withConfiguredRetention(configured), "degraded");
     }
     markProviderDiscoveryOk(name, liveModelCount);

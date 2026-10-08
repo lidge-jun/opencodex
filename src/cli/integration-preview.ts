@@ -1,5 +1,6 @@
 /** Preview and explicitly bound mutations use the existing management authority. */
 import type { IntegrationMutationPlan, IntegrationPlanOperation } from "../integrations/mutation-plan";
+import type { IntegrationClientId } from "../integrations/registry";
 import { redactSecretString, redactUserPath } from "../lib/redact";
 import {
   CliUsageError, RuntimeApiError, printData, runtimeRequest, terminalSafeText,
@@ -186,9 +187,15 @@ function reportError(error: unknown): number {
   return 1;
 }
 
-export async function handleIntegrationPreviewCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+export async function handleIntegrationPreviewCommand(argv: string[], deps: RuntimeApiDeps = {}, expectedClientId?: IntegrationClientId): Promise<number> {
   try {
     const intent = parseIntent(argv);
+    if (expectedClientId !== undefined && intent.operation === "restore") {
+      if (intent.client !== undefined || intent.profile !== undefined) throw new CliUsageError("client-specific restore does not accept --client or --profile", USAGE);
+      intent.client = expectedClientId;
+      intent.path = `${clientIntegrationPath(expectedClientId)}/restore${intent.preview ? "/preview" : ""}`;
+      intent.body.expectedClientId = expectedClientId;
+    }
     const result = await runtimeRequest(intent.path, {
       method: intent.preview || intent.operation === "restore" ? "POST" : "PUT",
       redirect: "error", body: JSON.stringify(intent.body),

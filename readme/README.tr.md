@@ -325,7 +325,7 @@ OpenCodex, süreçte tutulan durumu aşağıdaki kategorilerde izler. Her birini
   sabitlenmiştir ve hiç tahliye edilmez.
 - **4 gözlenen arabellek** (çevirici biriktiricileri, görsel/OAuth/Grok kuyrukları) tahliye edilmeden,
   yalnızca uçuştaki bayt baskısı için izlenir.
-- **28 state-store kaydı**, süre dolumu taramalarını (60 sn aralık) ve yapılandırma kuşağı uzlaştırmasını
+- **31 state-store kaydı**, süre dolumu taramalarını (60 sn aralık) ve yapılandırma kuşağı uzlaştırmasını
   yürüterek eski sağlayıcı/hesap anahtarlarını kaldırır.
 - **Yol ve parmak izi notları** (çalışma alanı meta verileri, sağlamlaştırılmış kimlikler, kurulum
   tuzları, mod ipucu yetenekleri) ekleme sıralı LRU sınırları kullanır (8–128 girdi).

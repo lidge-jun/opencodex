@@ -4,6 +4,12 @@ import type { TKey } from "./en";
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  "sidecar.pool": "账户池",
+  "sidecar.poolCurrent": "使用当前请求的账户池",
+  "sidecar.poolA": "Anthropic",
+  "sidecar.poolB": "Anthropic · 账户池 2",
+  "sidecar.poolMixed": "此显式选择可能使用与主请求不同的账户池。",
+  "provider.name.anthropic2": "Anthropic · 账户池 2",
   "nav.claude": "Claude",
   "claude.pageSub": "管理 Claude Code 的 OpenCodex 路由和设置。",
 
@@ -1741,7 +1747,7 @@ export const zh: Record<TKey, string> = {
   "integrations.semantics.dsh": "OpenCodex 只管理 $DSH_HOME/profiles/desktop/cordis.patch.yml（DSH 0.1.7 起读取的 Desktop profile；该 profile 不存在时为 $DSH_HOME/settings.yaml）中 llm-pi-ai 这一行的 opencodex provider。DSH 会热重载该 provider；你的默认模型和 deepseek-official 保持不变。目前仅支持环回地址，且不会写入真实凭据。",
   "integrations.semantics.mcode": "仅管理 custom_provider.opencodex，不会更改默认模型或 MiniMax 登录状态。",
   "integrations.semantics.zcode": "仅管理 ~/.zcode/v2/config.json 中的 provider.opencodex，不会更改 Z.ai 登录状态或其他提供商。更改后请重启 ZCode。",
-  "integrations.semantics.commandcode": "仅管理 ~/.commandcode/providers.json 中的 provider.opencodex。其他提供商和设置保持不变。",
+  "integrations.semantics.commandcode": "仅管理 ~/.commandcode/providers.json 中的 OpenCodex 提供商条目。其他提供商和设置保持不变。",
   "integrations.semantics.prime": "仅管理 Prime Agent 的 models.json 中的 providers.opencodex；默认位于 ~/.prime/agent，若设置 PRIME_AGENT_CODING_AGENT_DIR 则以其为准。不会更改其他提供商或模型覆盖设置。对新会话生效。",
   "integrations.semantics.aside": "仅管理此配置文件的 ~/.aside/u/<id>/models.json 中的 providers.opencodex。其他提供商保持不变。应用后请完全退出并重新打开 Aside。",
   "integrations.semantics.raycast": "在 Raycast 的 providers.yaml 中添加一个 OpenCodex 提供商条目，让所有已路由的模型出现在 Raycast AI 模型选择器中。需要 Raycast Pro。",
