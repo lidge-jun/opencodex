@@ -281,7 +281,7 @@ function userMessageToItems(content: unknown, input: Rec[], elide: SkillElisionC
   pushUserMessage(input, pending);
 }
 
-function assistantMessageToItems(content: unknown, input: Rec[], budget: TranslatorBudget): void {
+function assistantMessageToItems(content: unknown, input: Rec[], budget: TranslatorBudget, requestedModel: string): void {
   if (typeof content === "string") {
     if (content.length > 0) input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text: content }] });
     return;
@@ -314,6 +314,20 @@ function assistantMessageToItems(content: unknown, input: Rec[], budget: Transla
           const owned = decodeReasoningEnvelope(signature, budget);
           if (!owned) throw new AnthropicRequestError("malformed ocxr1 reasoning signature");
           if (Object.hasOwn(owned, "sig")) throw new AnthropicRequestError("OpenCodex reasoning continuity cannot be replayed as an Anthropic signature");
+          if (owned.nat) {
+            // The provider's own blob goes back only to the model that minted it; any other
+            // model gets the visible text alone, as before this envelope field existed.
+            const nat = owned.nat.model === requestedModel ? owned.nat : undefined;
+            if (nat) budget.chargeRetained(2 * nat.enc.length, { kind: "reasoning" });
+            if (thinking.length === 0 && !nat) break;
+            input.push({
+              type: "reasoning",
+              id: nat?.id ?? `rs_${crypto.randomUUID().replace(/-/g, "")}`,
+              summary: thinking.length > 0 ? [{ type: "summary_text", text: thinking }] : [],
+              ...(nat ? { encrypted_content: nat.enc } : {}),
+            });
+            break;
+          }
         }
         const encrypted = signature.length === 0 ? undefined : signature.startsWith(OCX_REASONING_PREFIX) ? signature : encodeReasoningEnvelope({ sig: signature }, budget);
         if (encrypted) budget.chargeRetained(2 * encrypted.length, { kind: "reasoning" });
@@ -411,7 +425,7 @@ function translateAnthropicRequest(
   for (const msg of raw.messages) {
     if (!isRec(msg)) throw new AnthropicRequestError("each message must be an object");
     if (msg.role === "user") userMessageToItems(msg.content, input, elide);
-    else if (msg.role === "assistant") assistantMessageToItems(msg.content, input, budget);
+    else if (msg.role === "assistant") assistantMessageToItems(msg.content, input, budget, raw.model);
     else if (msg.role === "system") {
       const text = systemMessageText(msg.content);
       // Keep it where the client put it. `developer` is first-class in the Responses
@@ -531,6 +545,9 @@ function translateAnthropicRequest(
       reasoning.effort = effortForThinkingBudget(thinking.budget_tokens);
     }
     body.reasoning = reasoning;
+    // store:false returns a provider's encrypted reasoning only on request. The outbound
+    // envelope (`nat`) carries it to the client so the next turn can hand it back.
+    body.include = ["reasoning.encrypted_content"];
   }
 
   return { body, cacheKeySource };

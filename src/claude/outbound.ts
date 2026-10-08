@@ -20,7 +20,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { sseFieldOffset, sseFieldValue } from "../lib/sse-decoder";
-import { decodeReasoningEnvelope, encodeReasoningEnvelope } from "../responses/reasoning-envelope";
+import { decodeReasoningEnvelope, encodeReasoningEnvelope, OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 
 type Rec = Record<string, unknown>;
 
@@ -280,6 +280,13 @@ interface OpenBlock {
   thinkingBuf?: string;
   thinkingBufBytes?: number;
   reasoningSig?: string;
+  /** The provider's own encrypted reasoning for this item; signed into the block on close. */
+  reasoningNative?: { enc: string; id?: string };
+}
+
+/** A provider-minted (not ocxr1) `encrypted_content`, or `""`. */
+function nativeEncryptedReasoning(encrypted: string): string {
+  return encrypted.length > 0 && !encrypted.startsWith(OCX_REASONING_PREFIX) ? encrypted : "";
 }
 
 /** Streaming: Responses SSE bytes -> Anthropic Messages SSE bytes. */
@@ -396,7 +403,11 @@ export function responsesSseToAnthropicSse(
               delta: { type: "thinking_delta", thinking: open.thinkingBuf },
             });
           }
-          const signature = open.reasoningSig ?? encodeReasoningEnvelope({ txt: open.thinkingBuf ?? "" }, translatorBudget);
+          const native = open.reasoningNative;
+          const signature = open.reasoningSig ?? encodeReasoningEnvelope({
+            txt: open.thinkingBuf ?? "",
+            ...(native ? { nat: { ...native, model } } : {}),
+          }, translatorBudget);
           emit("content_block_delta", {
             type: "content_block_delta", index: open.index,
             delta: { type: "signature_delta", signature },
@@ -684,11 +695,15 @@ export function responsesSseToAnthropicSse(
                 emit("content_block_start", { type: "content_block_start", index: idx, content_block: { type: "redacted_thinking", data } });
                 emit("content_block_stop", { type: "content_block_stop", index: idx });
               }
-              if (env?.sig && open?.kind !== "thinking") {
+              // A provider's own blob is the only copy of its reasoning the client can hold, so
+              // it gets a thinking block even when no summary text arrived.
+              const native = nativeEncryptedReasoning(encrypted);
+              if ((env?.sig || native) && open?.kind !== "thinking") {
                 ensureBlock("thinking");
               }
               if (open?.kind === "thinking") {
                 if (env?.sig) open.reasoningSig = env.sig;
+                if (native) open.reasoningNative = typeof item.id === "string" && item.id.length > 0 ? { enc: native, id: item.id } : { enc: native };
                 closeOpenBlock();
               }
             }
@@ -917,10 +932,13 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
         // Legacy combined envelopes place redacted blocks before the signed block,
         // matching the Anthropic adapter. New bridge output uses separate items.
         for (const data of env?.red ?? []) content.push({ type: "redacted_thinking", data });
-        // env.txt may be locally hidden text. Do not expose it here or manufacture
-        // a new signed continuity carrier; hidden-summary replay remains limited.
-        if (parts.length > 0 || env?.sig) {
-          content.push({ type: "thinking", thinking: parts.join("\n\n"), signature: env?.sig ?? encodeReasoningEnvelope({ txt: parts.join("\n\n") }, translatorBudget) });
+        // env.txt may be locally hidden text. Do not expose it here. A provider's own blob is
+        // carried in the envelope so the next request can hand it back (see inbound.ts).
+        const native = nativeEncryptedReasoning(encrypted);
+        if (parts.length > 0 || env?.sig || native) {
+          const text = parts.join("\n\n");
+          const nat = native ? { enc: native, model, ...(typeof raw.id === "string" && raw.id.length > 0 ? { id: raw.id } : {}) } : undefined;
+          content.push({ type: "thinking", thinking: text, signature: env?.sig ?? encodeReasoningEnvelope({ txt: text, ...(nat ? { nat } : {}) }, translatorBudget) });
         }
         break;
       }
