@@ -9,6 +9,7 @@ import { LanguageProvider } from "../src/i18n/provider";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, resetApiAuthFetchForTests, SESSION_UNAVAILABLE_EVENT } from "../src/api";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { standaloneApiTargets } from "../src/api-targets";
+import { readSessionListCacheEntry } from "../src/session-list-cache";
 import type { RevealKeyResult } from "../src/pages/api-keys-utils";
 
 const origin = "http://127.0.0.1:10100";
@@ -393,7 +394,7 @@ for (const operation of ["create", "rotate"] as const) for (const change of ["se
   });
 }
 
-test("a create completed after switching servers refreshes only its original inventory", async () => {
+test("a create completed after switching servers revalidates its original inventory on return", async () => {
   const pending = defer<Response>();
   const reads: string[] = [];
   let completed = false;
@@ -411,9 +412,13 @@ test("a create completed after switching servers refreshes only its original inv
   await act(async () => root!.render(<LanguageProvider><ApiKeys apiBase="http://127.0.0.1:20200" /></LanguageProvider>));
   const before = reads.length;
   await act(async () => { completed = true; pending.resolve(Response.json({ key: full })); });
-  expect(reads.slice(before)).toEqual(["/api/keys"]);
+  expect(reads.slice(before)).toEqual([]);
   expect(container.textContent).toContain("current server");
   expect(container.textContent).not.toContain("original created");
+  expect(container.textContent).not.toContain(full);
+  await act(async () => root!.render(<LanguageProvider><ApiKeys apiBase="" /></LanguageProvider>));
+  expect(reads.slice(before)).toEqual(["/api/keys"]);
+  expect(container.textContent).toContain("original created");
   expect(container.textContent).not.toContain(full);
 });
 
@@ -470,4 +475,72 @@ test("a rejected one-time clipboard completion after host hide does not restore 
   await act(async () => reject(new Error("clipboard refused")));
   expect(container.textContent).not.toContain(full);
   expect(container.textContent).not.toContain("Could not copy");
+});
+
+for (const finish of ["commit", "abort"] as const) {
+  test("a delayed rotation-start inventory cannot resurrect pending controls after " + finish, async () => {
+    document.head.innerHTML = '<meta name="opencodex-runtime-role" content="client">';
+    const older = defer<Response>();
+    const newer = defer<Response>();
+    const signals: (AbortSignal | null | undefined)[] = [];
+    let reads = 0;
+    const inventory = (pending: boolean) => Response.json({ authMatrix, keys: [{ ...key,
+      ...(pending ? { pendingRotation: { id: "r1", createdAt: key.createdAt, expiresAt: "2026-12-01T00:00:00.000Z" } } : {}) }] });
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/keys/rotate" && init?.method === "POST") return Response.json({ key: full, rotationId: "r1" });
+      if (path === "/api/keys/rotate/commit" || (path === "/api/keys/rotate" && init?.method === "DELETE")) return Response.json({ ok: true });
+      if (path === "/api/keys") {
+        signals.push(init?.signal);
+        return ++reads === 1 ? inventory(false) : reads === 2 ? older.promise : newer.promise;
+      }
+      return Response.json([]);
+    } });
+    await act(async () => root!.render(<LanguageProvider><ApiKeys apiBase="" /></LanguageProvider>));
+    await act(async () => container.querySelector<HTMLButtonElement>(".awi-keylist-name")!.click());
+    await act(async () => button("Start rotation").click());
+    expect(container.textContent).toContain(full);
+    expect(reads).toBe(2);
+    await act(async () => button(finish === "commit" ? "Commit rotation" : "Abort rotation").click());
+    expect(reads).toBe(3);
+    await act(async () => newer.resolve(inventory(false)));
+    expect(button("Start rotation")).toBeDefined();
+    await act(async () => older.resolve(inventory(true)));
+    expect(button("Start rotation")).toBeDefined();
+    expect(button("Commit rotation")).toBeUndefined();
+    expect(button("Abort rotation")).toBeUndefined();
+    expect(signals[1]?.aborted).toBe(true);
+    expect(signals[2]?.aborted).toBe(false);
+    const cached = readSessionListCacheEntry<{ keys: { pendingRotation?: unknown }[] }>("ocx.apikeys.list.v2:");
+    expect(cached?.data.keys[0]?.pendingRotation).toBeUndefined();
+  });
+}
+
+test("a delayed first create inventory cannot replace a newer create inventory", async () => {
+  const older = defer<Response>();
+  const newer = defer<Response>();
+  let reads = 0;
+  let creates = 0;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/keys" && init?.method === "POST") {
+      creates++;
+      return Response.json({ key: full });
+    }
+    if (String(input) === "/api/keys") return ++reads === 1 ? Response.json({ authMatrix, keys: [key] })
+      : reads === 2 ? older.promise : newer.promise;
+    return Response.json([]);
+  } });
+  await act(async () => root!.render(<LanguageProvider><ApiKeys apiBase="" /></LanguageProvider>));
+  await act(async () => button("Generate").click());
+  await act(async () => button("Generate").click());
+  expect(creates).toBe(2);
+  expect(reads).toBe(3);
+  const first = { ...key, id: "k2", name: "first created" };
+  const second = { ...key, id: "k3", name: "second created" };
+  await act(async () => newer.resolve(Response.json({ authMatrix, keys: [key, first, second] })));
+  expect(container.textContent).toContain("second created");
+  await act(async () => older.resolve(Response.json({ authMatrix, keys: [key, first] })));
+  expect(container.textContent).toContain("second created");
+  const cached = readSessionListCacheEntry<{ keys: { name: string }[] }>("ocx.apikeys.list.v2:");
+  expect(cached?.data.keys.map(row => row.name)).toEqual(["alpha", "first created", "second created"]);
 });

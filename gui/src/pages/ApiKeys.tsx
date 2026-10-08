@@ -13,7 +13,7 @@ import {
 } from "../api-access-models";
 import { readSessionListCacheEntry, writeSessionListCacheEntry } from "../session-list-cache";
 import { createBoundedFetch } from "../bounded-fetch";
-import { setClientResourceData } from "../client-resource";
+import { invalidateClientResource } from "../client-resource";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { useKeyDisclosure } from "../use-key-disclosure";
@@ -198,7 +198,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       authMatrix: data.authMatrix,
     };
     // Prefixes only — never the secret key material.
-    writeSessionListCacheEntry(keysCacheKey, next);
+    if (!signal.aborted) writeSessionListCacheEntry(keysCacheKey, next);
     return next;
   }, [apiBase, keysCacheKey, t]);
 
@@ -267,19 +267,6 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   const refreshKeys = keysResource.refresh;
   const refreshModels = modelsResource.refresh;
 
-  // Bind reconciliation to the mutation's server. The resource refresh callback
-  // uses the latest fetcher, which may already belong to a different apiBase.
-  const refreshMutationKeys = async () => {
-    const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
-    try {
-      setClientResourceData(keysResourceKey, await fetchKeys(bounded.signal));
-    } catch {
-      if (currentApiBase.current === apiBase) setActionError(t("api.keysLoadFailed"));
-    } finally {
-      bounded.clear();
-    }
-  };
-
   const filteredModels = useMemo(() => {
     const query = modelQuery.trim().toLowerCase();
     if (!query) return models;
@@ -305,7 +292,10 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: effectiveName || "default" }),
       });
-      if (res.ok) void refreshMutationKeys();
+      if (res.ok) {
+        if (currentApiBase.current === apiBase) refreshKeys();
+        else invalidateClientResource(keysResourceKey);
+      }
       const data = await readJsonOrThrow<CreateKeyResponse>(res, t("api.createFailed"));
       if (!disclosure.current(generation)) {
         setHiddenMutationBase(apiBase);
@@ -417,7 +407,10 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         body: JSON.stringify({ id }),
         signal: bounded.signal,
       });
-      if (res.ok) void refreshMutationKeys();
+      if (res.ok) {
+        if (currentApiBase.current === apiBase) refreshKeys();
+        else invalidateClientResource(keysResourceKey);
+      }
       const data = await readJsonOrThrow<StartRotationResponse>(res, t("api.rotation.startFailed"));
       if (!disclosure.current(generation)) {
         setHiddenMutationBase(apiBase);
