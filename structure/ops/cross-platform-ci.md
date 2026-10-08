@@ -1,5 +1,7 @@
 # Cross-platform CI
 
+`.github/workflows/catalog-async-contracts.yml` runs the Rust-owned Bun-module catalog contracts on Linux, macOS and Windows for affected pushes, pull requests or manual dispatch. The portable fixture uses synthetic homes and cleared child environments. This read-only workflow has no secrets, publication step or release-eligibility effect.
+
 The [desktop membership contract](../runtime.md#codex-desktop-process-membership) has adapter regression coverage on every host and real PowerShell prefilter regression coverage with synthetic CIM rows on Windows in `tests/clients/desktop-app-restart.test.ts`. A skipped Windows lane does not exercise that native filter; uid-dependent POSIX cases in `tests/clients/desktop-app-restart-posix.test.ts` are skipped on Windows.
 
 `.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. A pull

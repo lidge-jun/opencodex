@@ -1,26 +1,71 @@
-#![cfg(windows)]
-
 use serde_json::Value;
-use std::{env, fs, os::windows::process::CommandExt, path::PathBuf, process::Command};
+use std::{env, fs, path::PathBuf, process::Command};
+
+struct OwnedRoot(PathBuf);
+impl Drop for OwnedRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn hidden(command: Command) -> Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = command;
+        command.creation_flags(0x08000000);
+        command
+    }
+    #[cfg(not(windows))]
+    command
+}
+
+fn bun_binary() -> PathBuf {
+    let candidate = env::var_os("OCX_CATALOG_TEST_BUN").unwrap_or_else(|| "bun".into());
+    let output = hidden(Command::new(candidate))
+        .args(["--no-env-file", "--print", "process.execPath"])
+        .output()
+        .expect("Bun must be installed for the catalog contracts");
+    assert!(output.status.success(), "Bun path discovery failed");
+    let path = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+    assert!(
+        path.is_absolute(),
+        "Bun must resolve to an absolute executable"
+    );
+    path
+}
 
 // Rust owns the fixture/environment and assertions. These expressions invoke the existing
 // Bun modules and their owner test seams; they are not an alternative catalog implementation.
 fn contract(name: &str, expression: &str) -> Value {
-    let bun = env::var_os("OCX_CATALOG_TEST_BUN").expect("OCX_CATALOG_TEST_BUN is required");
-    let repo = PathBuf::from(
-        env::var_os("OCX_CATALOG_TEST_REPO").expect("OCX_CATALOG_TEST_REPO is required"),
-    );
+    let bun = bun_binary();
+    let repo = env::var_os("OCX_CATALOG_TEST_REPO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .nth(3)
+                .unwrap()
+                .to_path_buf()
+        });
     let root = env::temp_dir().join(format!(
         "ocx-catalog-contract-{}-{name}",
         std::process::id()
     ));
     fs::create_dir(&root).expect("new fixture root");
+    let _owned = OwnedRoot(root.clone());
     let result = {
-        let exe = root.join("probe-env.exe");
-        fs::copy(env!("CARGO_BIN_EXE_ocx-version-control"), &exe).unwrap();
-        let system = env::var_os("SystemRoot").unwrap();
-        let path =
-            env::join_paths([root.clone(), PathBuf::from(&system).join("System32")]).unwrap();
+        let exe = root.join(if cfg!(windows) {
+            "probe-env.exe"
+        } else {
+            "probe-env"
+        });
+        fs::copy(env!("CARGO_BIN_EXE_ocx-catalog-fixture"), &exe).unwrap();
+        let mut search = vec![root.clone()];
+        if let Some(system) = env::var_os("SystemRoot") {
+            search.push(PathBuf::from(system).join("System32"));
+        }
+        let path = env::join_paths(search).unwrap();
         let script = format!(
             r#"
 const fs = await import('node:fs');
@@ -29,6 +74,7 @@ const {{ join }} = await import('node:path');
 const bundled = await import(pathToFileURL(join(process.env.CONTRACT_REPO, 'src/codex/catalog/bundled.ts')).href);
 const runtime = await import(pathToFileURL(join(process.env.CONTRACT_REPO, 'src/codex/runtime.ts')).href);
 const paths = await import(pathToFileURL(join(process.env.CONTRACT_REPO, 'src/codex/paths.ts')).href);
+const effort = await import(pathToFileURL(join(process.env.CONTRACT_REPO, 'src/codex/catalog/effort.ts')).href);
 const root = process.env.OPENCODEX_HOME;
 const row = slug => ({{ slug, display_name:slug, base_instructions:'synthetic', context_window:128000,
   supported_reasoning_levels:[{{effort:'medium',description:'synthetic'}}], default_reasoning_level:'medium' }});
@@ -38,10 +84,12 @@ const answer = await (async () => {{ {expression} }})();
 console.log('@@catalog-contract@@'+JSON.stringify(answer));
 "#
         );
-        let output = Command::new(bun)
-            .env_clear()
-            .env("SystemRoot", &system)
-            .env("WINDIR", &system)
+        let mut command = hidden(Command::new(bun));
+        command.env_clear();
+        if let Some(system) = env::var_os("SystemRoot") {
+            command.env("SystemRoot", &system).env("WINDIR", &system);
+        }
+        let output = command
             .env("PATH", path)
             .env("TEMP", &root)
             .env("TMP", &root)
@@ -56,7 +104,6 @@ console.log('@@catalog-contract@@'+JSON.stringify(answer));
             .env("CODEX_CI", "1")
             .args(["--no-env-file", "--no-orphans", "--eval", &script])
             .current_dir(&repo)
-            .creation_flags(0x08000000)
             .output()
             .unwrap();
         assert!(
@@ -76,7 +123,6 @@ console.log('@@catalog-contract@@'+JSON.stringify(answer));
 }
 
 #[test]
-#[ignore = "requires explicit Bun and repository paths"]
 fn bundled_snapshot_keeps_native_source_priority_and_rejects_changed_inputs() {
     let result = contract(
         "source-priority",
@@ -89,7 +135,7 @@ const stable = bundled.readCurrentCatalogOrCache();
 bundled.setBundledCatalogCacheForTests(selected, catalog, {expiresAt:0});
 const stale = bundled.readCurrentCatalogOrCache();
 await bundled.loadBundledCodexCatalogAsync();
-process.env.CODEX_CLI_PATH = root+'\\missing.exe';
+process.env.CODEX_CLI_PATH = join(root,'missing.exe');
 const switched = bundled.bundledCodexCatalogSnapshot();
 return {stable:stable.models.map(row=>row.slug), stale:stale.models.map(row=>row.slug), switched:switched===null};
 "#,
@@ -103,7 +149,6 @@ return {stable:stable.models.map(row=>row.slug), stale:stale.models.map(row=>row
 }
 
 #[test]
-#[ignore = "requires explicit Bun and repository paths"]
 fn concurrent_default_catalog_refreshes_share_one_flight() {
     let result = contract(
         "single-flight",
@@ -124,7 +169,6 @@ return {all:results.every(value=>value?.models[0]?.slug==='gpt-5.5'),
 }
 
 #[test]
-#[ignore = "requires explicit Bun and repository paths"]
 fn invalidation_and_stopped_source_discard_late_catalogs() {
     let result = contract(
         "invalidation",
@@ -151,7 +195,6 @@ return {invalidated:invalidated===null, stopped:(await stoppedPending)===null,
 }
 
 #[test]
-#[ignore = "requires explicit Bun and repository paths"]
 fn async_runtime_persistence_rejects_pin_changes_cache_clear_and_stopped_sources() {
     let result = contract(
         "persist-guards",
@@ -188,7 +231,6 @@ return {pin:await resolveCase('pin'),clear:await resolveCase('clear'),stop:await
     assert_eq!(result["valid"]["version"], "0.160.0");
 }
 #[test]
-#[ignore = "requires explicit Bun and repository paths"]
 fn failed_refresh_keeps_confirmed_rows_without_a_request_retry_storm() {
     let result = contract(
         "retry-backoff",
@@ -216,7 +258,6 @@ return {stale:stale.models.map(row=>row.slug), unchanged:snapshots.every(value=>
 }
 
 #[test]
-#[ignore = "requires explicit Bun and repository paths"]
 fn refresh_deadline_settles_an_uncooperative_executor_and_allows_the_next_load() {
     let result = contract(
         "deadline",
@@ -241,7 +282,6 @@ return {expired:expired===null,fresh:fresh?.models.map(row=>row.slug)};
 }
 
 #[test]
-#[ignore = "requires explicit Bun and repository paths"]
 fn asynchronous_loader_preserves_large_valid_bundled_instructions() {
     let result = contract(
         "large-catalog",
@@ -256,7 +296,6 @@ return {models:loaded?.models.length ?? 0,instructions:loaded?.models[0]?.base_i
 }
 
 #[test]
-#[ignore = "requires explicit Bun and repository paths"]
 fn warm_runtime_observation_does_not_repeat_version_processes() {
     let result = contract(
         "warm-runtime",
@@ -274,7 +313,6 @@ return {before,after:starts()};
 }
 
 #[test]
-#[ignore = "requires explicit Bun and repository paths"]
 fn failed_catalog_cannot_retain_a_different_runtime_version() {
     let result = contract(
         "failed-version",
@@ -291,7 +329,6 @@ return {dropped:bundled.bundledCodexCatalogSnapshot()===null};
 }
 
 #[test]
-#[ignore = "requires explicit Bun and repository paths"]
 fn source_abort_does_not_cancel_an_independent_shared_catalog_refresh() {
     let result = contract(
         "source-abort",
@@ -312,4 +349,44 @@ return {stopped:stopped===null,shared:shared?.models[0]?.slug,
     assert_eq!(result["stopped"], true);
     assert_eq!(result["shared"], "gpt-5.5");
     assert_eq!(result["visible"], "gpt-5.5");
+}
+
+#[test]
+fn observed_effort_clamp_never_calls_a_synchronous_version_executor() {
+    let result = contract(
+        "observed-effort",
+        r#"
+await bundled.loadBundledCodexCatalogAsync();
+await bundled.loadBundledCodexCatalogAsync(); // settle the input signature after initial persistence
+const observed = bundled.bundledCodexCatalogSnapshot();
+if (!observed) throw new Error('confirmed bundled catalog missing');
+const settledCommand = runtime.getCodexRuntimeSnapshot().runtime.command;
+let syncCalls = 0;
+const entry = {...row('gpt-5.5'), supported_reasoning_levels:[
+  {effort:'medium',description:'synthetic'},{effort:'high',description:'synthetic'}],
+  default_reasoning_level:'high'};
+effort.clampCatalogModelsToCodexSupport([entry], {
+  observedCatalog:observed,
+  execFileSync:()=>{syncCalls++;return 'codex-cli 0.160.0';}
+});
+fs.writeFileSync(join(root,'arm'),'version-gated');
+runtime.resetCodexRuntimeResolveCacheForTests();
+const ends = () => fs.readFileSync(join(root,'fake-events.jsonl'),'utf8').trim().split('\n').map(JSON.parse)
+  .filter(event=>event.event==='end'&&event.version).length;
+const before = ends();
+effort.clampCatalogModelsToCodexSupport([entry], {observedCatalog:observed});
+const after = ends();
+fs.writeFileSync(join(root,'version-release'),'release');
+await runtime.resolveCodexRuntimeAsync();
+return {syncCalls,before,after,sameSelection:runtime.getCodexRuntimeSnapshot().runtime.command===settledCommand,
+  levels:entry.supported_reasoning_levels.map(level=>level.effort),
+  defaultLevel:entry.default_reasoning_level,
+  runtime:runtime.getCodexRuntimeSnapshot().runtime.command};
+"#,
+    );
+    assert_eq!(result["syncCalls"], 0);
+    assert_eq!(result["before"], result["after"]);
+    assert_eq!(result["sameSelection"], true);
+    assert_eq!(result["levels"], serde_json::json!(["medium"]));
+    assert_eq!(result["defaultLevel"], "medium");
 }
