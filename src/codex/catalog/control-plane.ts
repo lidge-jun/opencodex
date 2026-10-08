@@ -14,7 +14,9 @@ export function withCodexControlPlaneRows(
   for (const slug of CODEX_INTERNAL_OPENAI_MODELS) {
     const source = sourceRows.find(entry => entry.slug === slug)
       ?? pinnedNativeModelRows().find(entry => entry.slug === slug);
-    if (!source) throw new Error(`Pinned Codex control-plane model is missing: ${slug}`);
+    // A pin without the row degrades to Codex's own task-model fallback rather than failing the
+    // whole catalog write.
+    if (!source) continue;
     const row: RawEntry = structuredClone(source);
     row.visibility = "hide";
     if (wsEnabled) row.supports_websockets = true;
