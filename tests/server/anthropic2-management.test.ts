@@ -54,8 +54,8 @@ test("missing, disabled and unmarked B never mutate pool or account state", asyn
     else delete config.providers.anthropic2;
     expect(poolSettingsCapability("anthropic2", invalid)).toBeNull();
     expect(() => writeAnthropicPoolSettings(config, "anthropic2", {})).toThrow();
-    for (const path of ["/api/pool/settings", "/api/oauth/accounts/pool", "/api/oauth/accounts/auto-switch", "/api/oauth/accounts/active", "/api/oauth/accounts/clear-cooldown"]) {
-      const response = await route(path, "PUT", { provider: "anthropic2", accountId: "same", threshold: 1, enabled: false });
+    for (const [path, method] of [["/api/pool/settings", "PUT"], ["/api/oauth/accounts/pool", "PUT"], ["/api/oauth/accounts/auto-switch", "PUT"], ["/api/oauth/accounts/active", "PUT"], ["/api/oauth/accounts/clear-cooldown", "POST"]] as const) {
+      const response = await route(path, method, { provider: "anthropic2", accountId: "same", threshold: 1, enabled: false });
       expect(response.status).toBeGreaterThanOrEqual(400);
     }
     expect(JSON.parse(readFileSync(home.path("auth.json"), "utf8")).anthropic2.accounts[0].autoSwitchThresholdOverride).toBeUndefined();

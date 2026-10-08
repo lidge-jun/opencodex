@@ -6,6 +6,30 @@ on:
 permissions:
   contents: read
 jobs:
+  react-doctor-report:
+    if: github.event.pull_request.head.ref == 'codex/anthropic2-account-pool'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Print React Doctor findings for changed GUI files
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          git diff --name-only "$BASE_SHA"...HEAD -- gui > "$RUNNER_TEMP/changed-root.txt"
+          sed 's#^gui/##' "$RUNNER_TEMP/changed-root.txt" > "$RUNNER_TEMP/changed-gui.txt"
+          for list in changed-root.txt changed-gui.txt; do
+            echo "== $list"
+            npm exec --yes --package react-doctor@0.9.11 -- react-doctor gui --json --blocking warning --scope changed --changed-files-from "$RUNNER_TEMP/$list" > "$RUNNER_TEMP/report.json"
+            echo "exit=$?"
+            node -e 'const r=require(process.argv[1]);const d=r.diagnostics||r.issues||r.findings||r;console.log(JSON.stringify(d,null,1).slice(0,20000))' "$RUNNER_TEMP/report.json" || cat "$RUNNER_TEMP/report.json" | head -c 20000
+          done
   old-version:
     if: github.event.pull_request.head.ref == 'codex/anthropic2-account-pool'
     runs-on: ubuntu-latest
