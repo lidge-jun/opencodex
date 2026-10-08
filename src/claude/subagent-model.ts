@@ -38,12 +38,17 @@ function subagentSelectorMode(bare: string): AutoContextMode {
   return anthropic ? AUTO_CONTEXT_OFF : UNPAIRED_AUTO_CONTEXT;
 }
 
-export function withSubagentContextMarker(selector: string, windows: Record<string, number>): string {
+/**
+ * `accounting200k` (claudeCode.contextAccounting "200k") stops automatic marking only: an unmarked
+ * selector stays bare, while an explicit [1m] still follows its selector's safety rule.
+ */
+export function withSubagentContextMarker(selector: string, windows: Record<string, number>, accounting200k = false): string {
   const bare = stripOneMillionMarker(selector);
   const wasMarked = selector !== bare;
   const canonicalExact = wasMarked ? `${bare}[1m]` : selector;
   const authoritativeWindow = windows[selector] ?? windows[canonicalExact] ?? windows[bare];
   if (typeof authoritativeWindow === "number" && authoritativeWindow > 0) {
+    if (accounting200k && !wasMarked) return bare;
     const mode = subagentSelectorMode(bare);
     return shouldMarkOneMillion(authoritativeWindow, mode)
       ? (withOneMillionMarker(selector, windows, mode) ?? selector)
@@ -75,6 +80,11 @@ function selectorIdentity(selector: string): string {
   return fullSelectorIdentity(stripOneMillionMarker(selector));
 }
 
+/** Whether the config opted into 200k accounting (shared by roster, self and force markers). */
+export function accountsAt200k(config: OcxConfig): boolean {
+  return config.claudeCode?.contextAccounting === "200k";
+}
+
 /** Resolve only currently exposed entries; retained roster rows are not exposure proof. */
 export function resolveSubagentForceModel(config: OcxConfig, windows: Record<string, number>, available: SubagentForceExposure): string | null {
   const entry = config.claudeCode?.subagentModelForce;
@@ -97,7 +107,7 @@ export function resolveSubagentForceModel(config: OcxConfig, windows: Record<str
     // Identity admission must not let an appended context promise ride on an
     // ordinary exposed model. Exact catalog ids such as kimi/k3[1m] remain literal.
     if (requestedMarker && !exactMarkedExposure && !(typeof window === "number" && Number.isFinite(window) && shouldMarkOneMillion(window, subagentSelectorMode(bare)))) return null;
-    const marked = exactMarkedExposure ? parts.alias : withSubagentContextMarker(parts.alias, windows);
+    const marked = exactMarkedExposure ? parts.alias : withSubagentContextMarker(parts.alias, windows, accountsAt200k(config));
     // Bare Anthropic names are indistinguishable from the old CLI's fallback.
     // Encode only the force selector; handlers restore native identity before
     // their existing credential/model-map checks. Roster generation is unchanged.

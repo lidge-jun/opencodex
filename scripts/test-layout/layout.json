@@ -419,7 +419,7 @@
     "messages-native-oauth.test.ts": "claude-integration",
     "messages-native-opaque-state.test.ts": "claude-integration",
     "messages-surface-matrix.test.ts": "claude-integration", "claude-long-context-eligibility.test.ts": "claude-integration",
-    "claude-model-info.test.ts": "claude-integration",
+    "claude-context-accounting.test.ts": "claude-integration", "claude-model-info.test.ts": "claude-integration",
     "claude-models-discovery.test.ts": "claude-integration",
     "claude-native-affinity.test.ts": "claude-integration",
     "claude-native-passthrough.test.ts": "claude-integration",

@@ -20,7 +20,7 @@ const CLAUDE_USAGE = `Usage:
   ocx claude config [status] [--json]
   ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>]
       [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>]
-      [--compact-window <tokens|default>] [--inject-agents <on|off>]
+      [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>]
       [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
       [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->]
       [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]
@@ -76,6 +76,7 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
     const fastMode = takeBooleanOption(args, "--fast-mode");
     const autoContext = takeBooleanOption(args, "--auto-context");
     const compact = takeOption(args, "--compact-window");
+    const accounting = takeOption(args, "--context-accounting");
     const injectAgents = takeBooleanOption(args, "--inject-agents");
     const smallFastModel = takeOption(args, "--small-fast-model");
     const modelMap = takeOption(args, "--model-map");
@@ -97,6 +98,11 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
         if (!Number.isInteger(value) || value <= 0) throw new CliUsageError("--compact-window must be a positive integer or default", CLAUDE_USAGE);
         body.autoCompactWindow = value;
       }
+    }
+    if (accounting !== undefined) {
+      const value = accounting.toLowerCase();
+      if (value !== "1m" && value !== "200k") throw new CliUsageError("--context-accounting must be 1m or 200k", CLAUDE_USAGE);
+      body.contextAccounting = value;
     }
     if (injectAgents !== undefined) body.injectAgents = injectAgents;
     if (smallFastModel !== undefined) body.smallFastModel = smallFastModel === "-" ? "" : smallFastModel;

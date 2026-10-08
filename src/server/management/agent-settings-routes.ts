@@ -1472,6 +1472,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       alwaysEnableEffort: config.claudeCode?.alwaysEnableEffort === true,
       autoContext: config.claudeCode?.autoContext !== false,
       autoCompactWindow: config.claudeCode?.autoCompactWindow ?? null,
+      contextAccounting: config.claudeCode?.contextAccounting === "200k" ? "200k" : "1m",
       blockedSkills: config.claudeCode?.blockedSkills ?? null,
       injectAgents: config.claudeCode?.injectAgents !== false,
       sidecarPools: {
@@ -1508,7 +1509,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       return prototype === Object.prototype || prototype === null;
     };
     if (!isPlainObject(parsedBody)) return jsonResponse({ error: "body must be an object" }, 400);
-    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; contextAccounting?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
     if (body.cliFirstParty !== undefined && typeof body.cliFirstParty !== "boolean")
       return jsonResponse({ error: "cliFirstParty must be a boolean" }, 400);
     if (body.cliFirstParty !== undefined && Object.keys(body).length !== 1)
@@ -1778,6 +1779,15 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (body.autoContext) delete next.autoContext;
       else next.autoContext = false;
     }
+    if (body.contextAccounting !== undefined) {
+      // Sparse like autoContext (devlog/_plan/261009_claude_1m_default/030): "1m" is the default
+      // and drops the key; "200k" is the only stored value.
+      if (body.contextAccounting !== "1m" && body.contextAccounting !== "200k") {
+        return jsonResponse({ error: "contextAccounting must be \"1m\" or \"200k\"" }, 400);
+      }
+      if (body.contextAccounting === "200k") next.contextAccounting = "200k";
+      else delete next.contextAccounting;
+    }
     if (body.injectAgents !== undefined) {
       // Default-on boolean (devlog 260712 070): true = drop the key, false = store.
       if (typeof body.injectAgents !== "boolean") return jsonResponse({ error: "injectAgents must be a boolean" }, 400);
@@ -1892,7 +1902,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // levers feed the same injection, so a changed or cleared slot must not linger in
     // launchd until the next restart.
     const systemEnvInputs = ["systemEnv", "authMode", "model", "smallFastModel", "tierModels",
-      "maxContextTokens", "alwaysEnableEffort", "autoContext", "autoCompactWindow"] as const;
+      "maxContextTokens", "alwaysEnableEffort", "autoContext", "autoCompactWindow", "contextAccounting"] as const;
     if (systemEnvInputs.some(field => body[field] !== undefined)) {
       try {
         await applySystemEnvToggle(config, config.port);

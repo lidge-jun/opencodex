@@ -490,6 +490,19 @@ reste prioritaire pour le marquage des variables de lancement ; le proxy s'appu
 Les lignes de découverte ignorent cet export et conservent le plancher fixe.
 Les valeurs de configuration invalides définies manuellement reviennent à 829,800.
 
+### Comptabilisation du contexte (1M par défaut, 200k sur option)
+
+`claudeCode.contextAccounting` fixe ce qu'opencodex choisit par défaut. Absent (`1m`, valeur par défaut), les modèles à
+longue fenêtre sont proposés à 1M dans les emplacements d'environnement du lancement, les sélecteurs Desktop, Desktop 3P
+(`prefer1m`) et les sous-agents générés. Avec `200k`, rien n'est marqué `[1m]` automatiquement, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+n'est pas injecté et Desktop 3P retire `prefer1m` tout en gardant `supports1m`. Un sélecteur que vous marquez vous-même `[1m]`
+le conserve, et la découverte liste toujours les lignes `· 1M` des modèles réellement à 1M. `200k` l'emporte sur le contexte
+automatique et sur une valeur de compactage exportée.
+
+```bash
+ocx claude config set --context-accounting 200k
+```
+
 ### Environnement effectif des modèles
 
 `effectiveModelEnv` calcule six emplacements injectés par `ocx claude`, l'environnement système ou le fichier d'environnement du shell :

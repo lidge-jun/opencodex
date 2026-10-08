@@ -175,6 +175,15 @@ export interface OcxClaudeCodeConfig {
   /** Compact-window tokens for auto-context. Default 829_800 (AUTO_COMPACT_WINDOW_DEFAULT). */
   autoCompactWindow?: number;
   /**
+   * Context accounting on Claude surfaces (devlog/_plan/261009_claude_1m_default/030). Absent
+   * (the default) = "1m": long-window models are offered at 1M wherever opencodex picks the
+   * default (launch env slots, Desktop pickers, Desktop 3P prefer1m, generated subagents).
+   * "200k" is the opt-in: nothing is marked [1m] automatically and no compact window is injected;
+   * a selector the user marks [1m] keeps it, and discovery and Desktop 3P keep offering 1M as a
+   * choice. The only stored value; "1m" deletes the key.
+   */
+  contextAccounting?: "200k";
+  /**
    * Local CONNECT proxy + TLS listener that intercepts Claude Code's own `api.anthropic.com`
    * traffic without any `ANTHROPIC_BASE_URL` rewrite (src/claude/intercept). Claude Code reaches
    * it via `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` in its settings env. Default: enabled on a

@@ -396,6 +396,17 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 低於 1M 的原生 Anthropic 模型絕不會被自動標記。你自行匯出的壓縮值在啟動槽位標記上始終優先（代理會使用**你的**
 值來判斷哪些模型可以安全標記）。探索列表忽略該匯出值並保持固定下限。手動編輯設定時填入的無效值會回退到 829,800。
 
+### 上下文計算方式（預設 1M，200k 需選擇啟用）
+
+`claudeCode.contextAccounting` 決定 opencodex 預設選用的值。未設定（`1m`，預設）時，長上下文模型在啟動環境槽位、
+Desktop 選擇器、Desktop 3P（`prefer1m`）和產生的子代理中按 1M 提供。設為 `200k` 即可退出：不再自動加上 `[1m]` 標記，
+不注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，Desktop 3P 保留 `supports1m` 但移除 `prefer1m`。你自己標記 `[1m]` 的選擇會保留，
+探索清單中真正 1M 模型的 `· 1M` 條目也仍然存在。`200k` 優先於自動上下文和你自行匯出的壓縮值。
+
+```bash
+ocx claude config set --context-accounting 200k
+```
+
 ### 有效模型環境變數
 
 `effectiveModelEnv` 會計算由 `ocx claude` / 系統環境 / shell 檔案注入的六個槽位：

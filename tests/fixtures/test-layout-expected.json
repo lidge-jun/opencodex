@@ -303,6 +303,7 @@
   "claude-model-info.test.ts": "claude-integration", "claude-models-discovery.test.ts": "claude-integration",
   "claude-native-affinity.test.ts": "claude-integration", "claude-native-passthrough.test.ts": "claude-integration",
   "claude-native-rate-limit-headers.test.ts": "claude-integration", "claude-outbound.test.ts": "claude-integration",
+  "claude-context-accounting.test.ts": "claude-integration",
   "claude-long-context-eligibility.test.ts": "claude-integration",
   "claude-prompt-too-long.test.ts": "claude-integration",
   "claude-shell-hook.test.ts": "claude-integration", "claude-sidecar-override.test.ts": "claude-integration",

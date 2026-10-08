@@ -678,6 +678,19 @@ for launch-slot marking (the proxy uses YOUR value to decide which models are sa
 Discovery rows ignore that export and keep the fixed floor. Invalid hand-edited config values
 fall back to 829,800.
 
+### Context accounting (1M by default, 200k opt-in)
+
+`claudeCode.contextAccounting` decides what opencodex picks by default. Absent (`1m`, the
+default), long-window models are offered at 1M in the launch env slots, the Desktop pickers,
+Desktop 3P (`prefer1m`) and generated subagents. Set `200k` to opt out: nothing is marked `[1m]`
+automatically, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is not injected, and Desktop 3P drops `prefer1m`
+while keeping `supports1m`. A selector you mark `[1m]` yourself keeps it, and discovery still lists
+the `· 1M` rows of genuine 1M models. `200k` wins over auto-context and a compact window you export.
+
+```bash
+ocx claude config set --context-accounting 200k
+```
+
 ### Effective model environment
 
 `effectiveModelEnv` computes six slots injected by `ocx claude` / system env / shell file:

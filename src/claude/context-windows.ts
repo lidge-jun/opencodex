@@ -45,6 +45,8 @@ export interface AutoContextMode {
   enabled: boolean;
   /** Effective CLAUDE_CODE_AUTO_COMPACT_WINDOW value (tokens). */
   compactWindow: number;
+  /** claudeCode.contextAccounting "200k": nothing is marked [1m] automatically, whatever its window. */
+  accounting200k?: true;
 }
 
 export const AUTO_CONTEXT_OFF: AutoContextMode = { enabled: false, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT };
@@ -56,10 +58,14 @@ export const AUTO_CONTEXT_OFF: AutoContextMode = { enabled: false, compactWindow
  */
 export const UNPAIRED_AUTO_CONTEXT: AutoContextMode = { enabled: true, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT };
 
+/** The "200k" opt-in: no widening, no compact-window injection, no automatic marker. */
+export const ACCOUNTING_200K: AutoContextMode = { enabled: false, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT, accounting200k: true };
+
 interface AutoContextConfigSlice {
   autoContext?: boolean;
   autoCompactWindow?: number;
   maxContextTokens?: number;
+  contextAccounting?: string;
 }
 
 function inAutoCompactRange(value: number): boolean {
@@ -83,6 +89,8 @@ function inAutoCompactRange(value: number): boolean {
  * to AUTO_COMPACT_WINDOW_DEFAULT (the management API rejects them; this guards hand-edits).
  */
 export function resolveAutoContext(claudeCode: AutoContextConfigSlice | undefined, envOverride?: string): AutoContextMode {
+  // The 200k opt-in wins over every other lever, a user-exported compact window included.
+  if (claudeCode?.contextAccounting === "200k") return ACCOUNTING_200K;
   if (claudeCode?.autoContext === false) return AUTO_CONTEXT_OFF;
   const maxCtx = claudeCode?.maxContextTokens;
   if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) return AUTO_CONTEXT_OFF;
@@ -125,6 +133,7 @@ export function claudeToolSearchEnv(value: boolean | string | undefined): string
  */
 export function shouldMarkOneMillion(window: number | undefined, auto: AutoContextMode): boolean {
   if (typeof window !== "number" || window <= 0) return false;
+  if (auto.accounting200k) return false;
   if (window >= ONE_MILLION) return true;
   return auto.enabled && window > AUTO_CONTEXT_FLOOR && window >= auto.compactWindow;
 }
@@ -241,7 +250,7 @@ export interface ClaudeTierModels {
  * value injected into BOTH haiku variables.
  */
 export function effectiveModelEnv(
-  claudeCode: { model?: string; smallFastModel?: string; tierModels?: ClaudeTierModels; autoContext?: boolean; autoCompactWindow?: number; maxContextTokens?: number } | undefined,
+  claudeCode: { model?: string; smallFastModel?: string; tierModels?: ClaudeTierModels; autoContext?: boolean; autoCompactWindow?: number; maxContextTokens?: number; contextAccounting?: string } | undefined,
   windows: Record<string, number>,
   autoOverride?: AutoContextMode,
 ): Record<string, string> {

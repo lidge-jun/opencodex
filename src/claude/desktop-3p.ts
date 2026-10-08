@@ -319,16 +319,30 @@ export function buildDesktop3pRegistry(
 }
 
 /** Generate Claude Desktop 3P model entries from the proxy's available models. */
+export interface Desktop3pModelOptions {
+  /**
+   * false under claudeCode.contextAccounting "200k": a long-window model stays selectable at 1M
+   * (`supports1m`) but no longer defaults to it (`prefer1m` dropped).
+   */
+  preferOneMillion?: boolean;
+}
+
 export function generateDesktop3pModels(
   nativeSlugs: string[],
   routedModels: Array<Desktop3pRoutedModel>,
   profile?: OcxClaudeDesktopProfile,
   nativeContextCap?: NativeContextLimitsInput,
+  options: Desktop3pModelOptions = {},
 ): Desktop3pModelEntry[] {
   const { models, registry, realAnthropicIds } = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
   desktop3pRegistry = registry;
   desktop3pRealAnthropicIds = realAnthropicIds;
-  return models;
+  return options.preferOneMillion === false ? models.map(({ prefer1m: _prefer1m, ...model }) => model) : models;
+}
+
+/** The Desktop model options a config asks for (one place, so writer and export agree). */
+export function desktop3pModelOptions(claudeCode: { contextAccounting?: string } | undefined): Desktop3pModelOptions {
+  return { preferOneMillion: claudeCode?.contextAccounting !== "200k" };
 }
 
 /** Resolve an alias using the most recently generated Desktop model registry. */
@@ -384,6 +398,7 @@ export function generateDesktop3pConfig(
   mode: Desktop3pConfigMode = "static",
   profile?: OcxClaudeDesktopProfile,
   nativeContextCap?: NativeContextLimitsInput,
+  options: Desktop3pModelOptions = {},
 ): object {
   const base = {
     inferenceProvider: "gateway",
@@ -400,7 +415,7 @@ export function generateDesktop3pConfig(
     ...base,
     modelDiscoveryEnabled: mode === "hybrid",
     inferenceModels: (() => {
-      const models = generateDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
+      const models = generateDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap, options);
       // Fail loud at the write boundary rather than ship a config Desktop rejects:
       // the output counterpart of the request-path guards.
       assertDesktop3pModelsValid(models);
@@ -723,7 +738,8 @@ export function writeDesktop3pConfig(
         );
       }
       return writeDesktop3pConfigWithGenerator(() => (
-        generateDesktop3pConfig(destination.origin, nativeSlugs, routedModels, gatewayKey, mode, profile, nativeContextCap)
+        generateDesktop3pConfig(destination.origin, nativeSlugs, routedModels, gatewayKey, mode, profile, nativeContextCap,
+          desktop3pModelOptions(latest.config.claudeCode))
       ), requiredId && refreshOnly ? { requiredId, expectedFingerprint: refreshOnly.appliedFingerprint, admit: refreshOnly.admit } : undefined);
     }), lifecycleLockDeps);
   } catch { return { written: false, path: resolveDesktop3pConfigLibraryPath(), reason: "desktop_lifecycle_busy_or_unsafe" }; }

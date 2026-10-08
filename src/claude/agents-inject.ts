@@ -16,7 +16,7 @@ import { join } from "node:path";
 import type { OcxConfig } from "../types";
 import { renameAtomicFile } from "../lib/windows-atomic-replace";
 import { assertNotRealClaudeConfigUnderTest } from "../lib/test-home-guard";
-import { entryParts, SAFE_AGENT_MODEL_ID, withSubagentContextMarker } from "./subagent-model";
+import { accountsAt200k, entryParts, SAFE_AGENT_MODEL_ID, withSubagentContextMarker } from "./subagent-model";
 import { stripOneMillionMarker } from "./context-windows";
 import { claudeConfigDir } from "./gateway-cache";
 import { DEFAULT_SUBAGENT_MODELS } from "../config";
@@ -98,7 +98,7 @@ export function buildClaudeAgentDefs(
     // Generated defs mark [1m] on the authoritative window only — never the
     // main-session auto-context predicate (a 372K route marked [1m] would be
     // accounted at 1M with no compaction safety net in the subagent).
-    const model = withSubagentContextMarker(alias, windows);
+    const model = withSubagentContextMarker(alias, windows, accountsAt200k(config));
     const bare = alias.toLowerCase();
     if (coveredModels.has(bare)) return;
     coveredModels.add(bare);
@@ -131,7 +131,7 @@ export function buildClaudeAgentDefs(
   // the next launch sync — documented limit. No resolvable default -> no self def.
   const selfModel = pickerDefaultModel(configDir) ?? (config.claudeCode?.model?.trim() || null);
   if (selfModel) {
-    const marked = withSubagentContextMarker(selfModel, windows);
+    const marked = withSubagentContextMarker(selfModel, windows, accountsAt200k(config));
     defs.push({
       file: `${OWNED_PREFIX}self.md`,
       name: `${OWNED_PREFIX}self`,

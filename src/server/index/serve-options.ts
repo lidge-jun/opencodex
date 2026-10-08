@@ -119,6 +119,7 @@ import { handleChatCompletions } from "../chat-completions";
 import { anthropicErrorResponse } from "../../claude/outbound";
 import {
   buildDesktop3pRegistry,
+  desktop3pModelOptions,
   generateDesktop3pModels,
 } from "../../claude/desktop-3p";
 import { buildDesktopDiscoveryInputs } from "../../claude/desktop-discovery-inputs";
@@ -1025,6 +1026,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             const models = config.claudeCode?.enabled === false ? [] : generateDesktop3pModels(
               desktopInputs.nativeSlugs, desktopInputs.routedModels,
               config.claudeCode?.desktopProfile, desktopInputs.nativeContextCap,
+              desktop3pModelOptions(config.claudeCode),
             );
             const response = jsonResponse({ version: 1, models }, 200, req, policy);
             response.headers.set("Cache-Control", "no-store");
