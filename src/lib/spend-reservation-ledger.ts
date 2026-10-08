@@ -152,7 +152,11 @@ export interface SpendUsage {
   readonly outputTokens: number;
 }
 
+/** Immutable numeric ceilings captured by one request; totals and capacity remain shared. */
+export type SpendAdmissionPolicy = Readonly<Pick<SpendReservationPolicy, "root" | "identity" | "pool">>;
+
 export interface SpendReservationRequest {
+  readonly admissionPolicy?: SpendAdmissionPolicy;
   /** Stable id of the physical send. Settlement is idempotent on this key. */
   readonly sendId: string;
   readonly scopes: SpendScopes;
@@ -654,18 +658,17 @@ export interface SpendReservationLedger {
   /**
    * Settle with real usage. Returns false when the send is unknown or already resolved --
    * double settlement is as wrong as none, so a repeat call changes nothing.
-   * Seeded or explicitly retained terminal debt applies immediately; failed writes queue
-   * for ordered retry. This intent grants no reservation capacity or seed capability.
+   * Seeded terminal debt applies immediately; failed writes queue before durable forgetting.
    */
-  settle(sendId: string, usage: SpendUsage, options?: { retainOnFailure: boolean }): boolean;
+  settle(sendId: string, usage: SpendUsage): boolean;
   /**
    * Usage never arrived. The reservation moves to unresolved spend -- it may have been
    * billed -- rather than being released. Idempotent on the same key as settle.
    */
-  markLost(sendId: string, options?: { retainOnFailure: boolean }): boolean;
+  markLost(sendId: string): boolean;
   snapshot(scope: SpendScope, scopeId: string): ScopeSpendSnapshot | undefined;
   /** Exclude only a proven current dispatch's still-open reservation in this scope. */
-  exhausted(scope: SpendScope, scopeId: string, excludingSendId?: string): boolean;
+  exhausted(scope: SpendScope, scopeId: string, excludingSendId?: string, admissionPolicy?: SpendAdmissionPolicy): boolean;
   /**
    * Drop dormant scopes per the retention rule in SpendReservationPolicy. Cleanup also runs
    * automatically on every reservation, so nothing depends on a caller remembering this.
@@ -742,6 +745,9 @@ export function createSpendReservationLedger(options: {
   const seedForSend = (send: string) => seedBySend.get(send);
   const pinnedScope = (key: string): boolean => pinnedKeys.has(key);
   const pendingRecords: JournalRecord[] = [];
+  // Bounded by live ordinary reservations; never persisted as new metadata.
+  const nondurableReserves = new Map<string, JournalRecord>();
+  const retainedOrdinary = new Set<string>();
   let reporters = 0;
   const ownerReporters = new WeakMap<object, number>();
   const activeReporters = (owner?: object): number => owner === undefined ? reporters : ownerReporters.get(owner) ?? 0;
@@ -852,6 +858,15 @@ export function createSpendReservationLedger(options: {
     return true;
   };
 
+  const repairReservePrefix = (send: string, reservation: Reservation): void => {
+    const reserve = nondurableReserves.get(send);
+    if (!reserve) return;
+    pendingRecords.push(reserve);
+    if (reservation.status === "dispatched") pendingRecords.push({ v: 1, kind: "dispatch", send, at: reservation.resolvedAt });
+    nondurableReserves.delete(send);
+    retainedOrdinary.add(send);
+  };
+
   const applyReserve = (send: string, targets: readonly ScopeRef[], tokens: number, at: number): void => {
     if (reservations.has(send)) return;
     reservations.set(send, { targets, tokens, status: "open", at, resolvedAt: at });
@@ -872,6 +887,8 @@ export function createSpendReservationLedger(options: {
   const applyResolve = (send: string, outcome: "settled" | "lost" | "abandoned", tokens: number, at: number): void => {
     const reservation = reservations.get(send);
     if (!reservation || !isLive(reservation.status)) return;
+    nondurableReserves.delete(send);
+    retainedOrdinary.delete(send);
     reservation.status = outcome;
     reservation.resolvedAt = at;
     for (const ref of reservation.targets) {
@@ -895,6 +912,8 @@ export function createSpendReservationLedger(options: {
     const reservation = reservations.get(send);
     if (!reservation || isLive(reservation.status)) return;
     reservations.delete(send);
+    nondurableReserves.delete(send);
+    retainedOrdinary.delete(send);
   };
 
   const applyDrop = (scope: SpendScope, alias: string): void => {
@@ -1093,6 +1112,8 @@ export function createSpendReservationLedger(options: {
     for (const candidate of candidates) {
       if (!flushPending() || !append({ v: 1, kind: "forget", send: candidate.send, at })) continue;
       reservations.delete(candidate.send);
+      nondurableReserves.delete(candidate.send);
+      retainedOrdinary.delete(candidate.send);
       removed += 1;
     }
     return removed;
@@ -1288,7 +1309,8 @@ export function createSpendReservationLedger(options: {
       const at = request.at ?? now();
       const send = aliasFor("send", request.sendId);
       const refs = refsFor(request.scopes);
-      const enforced = refs.some((ref) => limitFor(ref.scope) !== undefined);
+      const admissionLimit = (scope: SpendScope) => (request.admissionPolicy ?? policy)[scope].maxTokens;
+      const enforced = refs.some((ref) => admissionLimit(ref.scope) !== undefined);
 
       // A send id this ledger already knows is REFUSED. Returning success while booking
       // nothing -- the old behaviour -- let one id authorise an unlimited number of physical
@@ -1317,7 +1339,7 @@ export function createSpendReservationLedger(options: {
       for (const ref of refs) {
         // A recorded send has no limit to fail: it already happened, and the point of booking
         // it is to let the total go OVER the ceiling so the next request can be refused.
-        const limit = request.alreadySent === true ? undefined : limitFor(ref.scope);
+        const limit = request.alreadySent === true ? undefined : admissionLimit(ref.scope);
         if (limit === undefined) continue;
         const poolView = ref.scope === "pool" ? poolState(ref.alias) : undefined;
         const state = ref.scope === "pool" ? poolView?.totals : scopes.get(scopeKey(ref.scope, ref.alias));
@@ -1339,11 +1361,13 @@ export function createSpendReservationLedger(options: {
       // Durability BEFORE admission. The record goes to disk first, and under a configured
       // limit a failed write refuses the request rather than admitting one that a restart
       // would forget -- which is exactly the disk-full and permission case durability is for.
-      const durable = append({ v: 1, kind: "reserve", send, targets: refs, tokens, at });
+      const record: JournalRecord = { v: 1, kind: "reserve", send, targets: refs, tokens, at };
+      const durable = append(record);
       if (!durable && enforced && request.alreadySent !== true) {
         return { reserved: false, denial: { reason: "reserve-not-durable", sendId: request.sendId } };
       }
       applyReserve(send, refs, tokens, at);
+      if (!durable) nondurableReserves.set(send, record);
       compact(at);
       return { reserved: true, sendId: request.sendId, tokens, durable };
     },
@@ -1353,11 +1377,13 @@ export function createSpendReservationLedger(options: {
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || reservation.status !== "open") return false;
+      repairReservePrefix(send, reservation);
       const at = now();
       applyDispatch(send, at);
       const record: JournalRecord = { v: 1, kind: "dispatch", send, at };
-      if (seedForSend(send) && pendingRecords.length > 0) pendingRecords.push(record);
-      else if (!append(record) && seedForSend(send)) pendingRecords.push(record);
+      const retained = seedForSend(send) || retainedOrdinary.has(send);
+      if (retained && pendingRecords.length > 0) pendingRecords.push(record);
+      else if (!append(record) && retained) pendingRecords.push(record);
       return true;
     },
 
@@ -1378,34 +1404,36 @@ export function createSpendReservationLedger(options: {
       return true;
     },
 
-    settle(sendId: string, usage: SpendUsage, options?: { retainOnFailure: boolean }): boolean {
+    settle(sendId: string, usage: SpendUsage): boolean {
       assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || !isLive(reservation.status)) return false;
+      repairReservePrefix(send, reservation);
       const tokens = sanitizeTokens(usage.inputTokens) + sanitizeTokens(usage.outputTokens);
       const at = now();
       const record: JournalRecord = { v: 1, kind: "settle", send, tokens, at };
-      const retained = seedForSend(send) || options?.retainOnFailure;
+      const seeded = seedForSend(send) || retainedOrdinary.has(send);
       // Terminal usage cannot be refused: the tracker may never report it again, and
       // the estimate can be smaller than the actual bill. Preserve ordered retryable debt.
-      if (retained && (pendingRecords.length > 0 || !append(record))) pendingRecords.push(record);
+      if (seeded && (pendingRecords.length > 0 || !append(record))) pendingRecords.push(record);
       applyResolve(send, "settled", tokens, at);
-      if (!retained) append(record);
+      if (!seeded) append(record);
       return true;
     },
 
-    markLost(sendId: string, options?: { retainOnFailure: boolean }): boolean {
+    markLost(sendId: string): boolean {
       assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || !isLive(reservation.status)) return false;
+      repairReservePrefix(send, reservation);
       const at = now();
       const record: JournalRecord = { v: 1, kind: "lost", send, at };
-      const retained = seedForSend(send) || options?.retainOnFailure;
-      if (retained && (pendingRecords.length > 0 || !append(record))) pendingRecords.push(record);
+      const seeded = seedForSend(send) || retainedOrdinary.has(send);
+      if (seeded && (pendingRecords.length > 0 || !append(record))) pendingRecords.push(record);
       applyResolve(send, "lost", 0, at);
-      if (!retained) append(record);
+      if (!seeded) append(record);
       return true;
     },
 
@@ -1430,7 +1458,7 @@ export function createSpendReservationLedger(options: {
       };
     },
 
-    exhausted(scope: SpendScope, scopeId: string, excludingSendId?: string): boolean {
+    exhausted(scope: SpendScope, scopeId: string, excludingSendId?: string, admissionPolicy?: SpendAdmissionPolicy): boolean {
       assertOwnedAccounting?.();
       const alias = scope === "pool" ? poolAliasFor(scopeId) : aliasFor(scope, scopeId);
       const state = stateFor(scope, alias);
@@ -1438,11 +1466,14 @@ export function createSpendReservationLedger(options: {
       const own = excludingSendId === undefined ? undefined : reservations.get(aliasFor("send", excludingSendId));
       const matches = own?.status === "open" && own.targets.some(target => target.scope === scope
         && (scope === "pool" ? (!poolContinuity.known(target.alias) || poolContinuity.resolve(target.alias) === poolContinuity.resolve(alias)) : target.alias === alias));
-      return isExhausted(scope, matches ? { ...state, reserved: Math.max(0, state.reserved - own.tokens) } : state);
+      const totals = matches ? { ...state, reserved: Math.max(0, state.reserved - own.tokens) } : state;
+      const limit = (admissionPolicy ?? policy)[scope].maxTokens;
+      return limit !== undefined && totals.settled + totals.reserved + totals.unresolved >= limit;
     },
 
     prune(at: number = now()): void {
       assertOwnedAccounting?.();
+      flushPending();
       retryCleanup();
       // Removal requires BOTH inactive and not exhausted inside the window. An
       // exhausted-but-idle scope that was dropped would be recreated fresh under the

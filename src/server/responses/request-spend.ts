@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
-import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof } from "../../lib/spend-reservation-ledger";
+import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof, type SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
 import { recordWorkflowRefusalEvent, workflowDenialSummary, type WorkflowDenial } from "../../lib/workflow-budget";
@@ -19,7 +19,6 @@ export interface RequestSpendSettlement {
 export interface SpendTargetIdentity extends SpendScopes { readonly targetKey?: string }
 export interface RequestSpendReporter {
   start(seed: SpendSeed, ordinal: number): void;
-  startObserved(target: SpendTargetIdentity, ordinal: number, proof?: SpendReservationProof): void;
   rebindTarget(target: SpendTargetIdentity, ordinal: number): boolean;
   report(sends: number): void;
   close(): void;
@@ -68,89 +67,58 @@ export function createRequestSpendTracker(
   // one. It also means the home in effect at dispatch is the one that gets written.
   let ledgerRef: SpendReservationLedger | undefined = injected;
   const ledger = (): SpendReservationLedger => (ledgerRef ??= sharedSpendLedger());
+  let admissionPolicy: SpendAdmissionPolicy | undefined;
+  let initialEnforced: boolean | undefined;
   // Outstanding entries; exact dispatch reports move their reservation to the end.
   const live: string[] = [];
   const pendingDispatch = new Set<string>();
-  const legacyOrder = new Map<string, number>();
-  let dispatchOrder = 0;
   let refusals = 0;
   let resolved = false;
   let terminalProcessed = false;
   let seededAccounting = false;
-  let enforcementObserved = false;
   let finalRequested = false;
   let finalUsage: TerminalSpendUsage | undefined;
   let reporters = 0;
   const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean }>();
-  // Abandoned capabilities retain only a cleanup obligation, never an admission lookup.
+  // Abandoned capabilities retain cleanup ownership, never admission lookup.
   const retiredSeeds = new Set<SpendSeed>();
   const resolvedSendIds = new Set<string>();
   const completedSeeds = new Set<SpendSeed>();
-  type PhysicalEntry = { order: number; seed?: SpendSeed; sendId?: string; observed?: {
-    scopes: SpendScopes; inputTokens: number; outputCeilingTokens: number;
-  }; reported?: boolean };
-  const physical = new Map<number, PhysicalEntry>();
+  const physical = new Map<number, { seed: SpendSeed; sendId?: string }>();
   const selectedScopes = (target: SpendTargetIdentity = {}): SpendScopes => ({
     ...(rootId !== undefined ? { rootId } : {}),
     ...(target.identityId ?? logCtx.accountLogLabel ? { identityId: target.identityId ?? logCtx.accountLogLabel } : {}),
     ...(target.poolId ?? logCtx.spendPoolId ?? logCtx.provider ? { poolId: target.poolId ?? logCtx.spendPoolId ?? logCtx.provider } : {}),
   });
   const applicable = (scopes: SpendScopes): boolean => {
-    const policy = ledgerRef?.policy ?? sharedSpendPolicy();
-    const enforced = seededAccounting || (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
+    if (initialEnforced !== undefined) return initialEnforced;
+    const policy = admissionPolicy ?? ledgerRef?.policy ?? sharedSpendPolicy();
+    return (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
       || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
       || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
-    if (enforced) enforcementObserved = true;
-    return enforced;
   };
   const estimates = () => ({ inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
     outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0 });
   const seedState = (seed: SpendSeed) => [...seeds.values()].find(state => state.seed === seed);
-  // Observe-only starts use ordinary records, never overflow capabilities. A full normal
-  // table may omit the booking. If policy activates, retain that debt until normal room is available.
-  const bookObserved = (entry: PhysicalEntry): boolean => {
-    if (entry.sendId) return true;
-    if (!entry.observed) return false;
-    const sendId = randomUUID();
-    const decision = ledger().reserve({ sendId, ...entry.observed, alreadySent: true });
-    if (!decision.reserved) return false;
-    entry.sendId = sendId;
-    if (entry.reported) ledger().markDispatched(sendId);
-    return true;
-  };
   const cleanupRetiredSeeds = (): boolean => {
     for (const seed of retiredSeeds) if (ledger().finishSeed(seed, tracker)) retiredSeeds.delete(seed);
     return retiredSeeds.size === 0;
   };
   const tryFinalizeSeeds = (): boolean => {
-    applicable(selectedScopes());
-    const durability = { retainOnFailure: enforcementObserved };
     // All starts are booked before producers close. Ordinal, never callback order, owns usage.
     const entries = [...physical.entries()].sort((a, b) => a[0] - b[0]);
-    const terminalOrder = Math.max(0, ...entries.map(([, entry]) => entry.order), ...live.map(id => legacyOrder.get(id) ?? 0));
+    const terminal = entries.at(-1)?.[1].sendId;
     const ids: string[] = [];
     for (const [, entry] of entries) {
-      if (!entry.sendId && entry.observed && !enforcementObserved) continue;
-      if (!entry.sendId && !bookObserved(entry)) return false;
       if (!entry.sendId) return false;
-      const reported = entry.order === terminalOrder && (typeof finalUsage?.inputTokens === "number" || typeof finalUsage?.outputTokens === "number");
+      const reported = entry.sendId === terminal && (typeof finalUsage?.inputTokens === "number" || typeof finalUsage?.outputTokens === "number");
       if (!resolvedSendIds.has(entry.sendId)) {
-        const ok = reported ? ledger().settle(entry.sendId, { inputTokens: finalUsage?.inputTokens ?? 0, outputTokens: finalUsage?.outputTokens ?? 0 }, durability)
-          : ledger().markLost(entry.sendId, durability);
+        const ok = reported ? ledger().settle(entry.sendId, { inputTokens: finalUsage?.inputTokens ?? 0, outputTokens: finalUsage?.outputTokens ?? 0 })
+          : ledger().markLost(entry.sendId);
         if (!ok) return false;
         resolvedSendIds.add(entry.sendId);
       }
-      if (entry.seed) ids.push(entry.sendId);
-    }
-    for (const sendId of live) {
-      if (!resolvedSendIds.has(sendId)) {
-        const reported = legacyOrder.get(sendId) === terminalOrder
-          && (typeof finalUsage?.inputTokens === "number" || typeof finalUsage?.outputTokens === "number");
-        const ok = reported ? ledger().settle(sendId, { inputTokens: finalUsage?.inputTokens ?? 0, outputTokens: finalUsage?.outputTokens ?? 0 }, durability)
-          : ledger().markLost(sendId, durability);
-        if (!ok) return false;
-        resolvedSendIds.add(sendId);
-      }
+      ids.push(entry.sendId);
     }
     for (const state of seeds.values()) if (!state.started && !completedSeeds.has(state.seed)) {
       if (!resolvedSendIds.has(state.seed.sendId) && !ledger().abandon(state.seed.sendId)) return false;
@@ -158,7 +126,7 @@ export function createRequestSpendTracker(
       ids.push(state.seed.sendId);
     }
     if (!cleanupRetiredSeeds()) return false;
-    if ((ids.length > 0 || enforcementObserved) && !ledger().forgetResolved(ids, tracker)) return false;
+    if (!ledger().forgetResolved(ids, tracker)) return false;
     for (const state of seeds.values()) if (!completedSeeds.has(state.seed)) {
       if (!ledger().finishSeed(state.seed, tracker)) return false;
       completedSeeds.add(state.seed);
@@ -169,7 +137,7 @@ export function createRequestSpendTracker(
   const deferCleanup = (): void => ledger().deferCleanup(tracker, () => resolved
     || (finalRequested && reporters === 0 ? tryFinalizeSeeds() : cleanupRetiredSeeds()));
   const finalizeSeeds = (): void => {
-    if (!finalRequested || reporters !== 0 || resolved || (!seededAccounting && physical.size === 0)) return;
+    if (!finalRequested || reporters !== 0 || resolved || !seededAccounting) return;
     // Own terminal retry before an append can throw; propagation must not orphan the debt.
     deferCleanup();
     if (!tryFinalizeSeeds()) {
@@ -237,25 +205,21 @@ export function createRequestSpendTracker(
         return;
   };
   const tracker: RequestSpendTracker = {
+    startRequest(target) {
+      if (admissionPolicy) return;
+      const policy = ledgerRef?.policy ?? sharedSpendPolicy();
+      admissionPolicy = Object.freeze({ root: Object.freeze({ ...policy.root }), identity: Object.freeze({ ...policy.identity }), pool: Object.freeze({ ...policy.pool }) });
+      initialEnforced = applicable(selectedScopes(target));
+      if (!initialEnforced) admissionPolicy = Object.freeze({ root: Object.freeze({}), identity: Object.freeze({}), pool: Object.freeze({}) });
+    },
     get enforced(): boolean { return applicable(selectedScopes()); },
+    get policyStarted(): boolean { return admissionPolicy !== undefined; },
+    get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return admissionPolicy; },
     ensureSeed(target, prepaidProof) {
+      tracker.startRequest?.(target);
       if (resolved || finalRequested && reporters === 0) return undefined;
       const scopes = selectedScopes(target);
       if (!applicable(scopes)) return undefined;
-      // Activation cannot authorize a new send while an earlier observe-only liability
-      // still lacks normal tracking capacity. It never grants that liability a seed.
-      for (const entry of physical.values()) if (entry.observed && !bookObserved(entry)) {
-        refusal({ reason: "tracking-capacity-exhausted" });
-        return undefined;
-      }
-      if (prepaidProof && prepaidProof.ledger === ledgerRef && pendingDispatch.has(prepaidProof.sendId)) {
-        // A reservation made before activation is not an enforced seed. Release its
-        // undispatched booking before asking NORMAL admission under the new policy.
-        if (!ledger().abandon(prepaidProof.sendId)) return undefined;
-        pendingDispatch.delete(prepaidProof.sendId);
-        const index = live.indexOf(prepaidProof.sendId);
-        if (index >= 0) live.splice(index, 1);
-      }
       const key = JSON.stringify([scopes.rootId, scopes.identityId, scopes.poolId, target.targetKey]);
       const existing = seeds.get(key);
       if (existing) return existing.seed;
@@ -283,7 +247,7 @@ export function createRequestSpendTracker(
       // Exact prepaid proofs originate from this tracker and are found above; foreign receipts
       // cannot enroll arbitrary scopes. Normal reservation remains the only initial admission.
       if (prepaidProof && prepaidProof.ledger !== ledger()) return undefined;
-      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...estimates() }, tracker);
+      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...estimates(), admissionPolicy }, tracker);
       if (!decision.reserved) {
         // Use the established denial mapping without making another reservation.
         refusal(decision.denial);
@@ -299,56 +263,28 @@ export function createRequestSpendTracker(
       reporters++;
       let closed = false;
       let reported = 0;
-      const starts: Array<{ seed?: SpendSeed; ordinal: number }> = [];
+      const starts: Array<{ seed: SpendSeed; ordinal: number }> = [];
       return {
         start(seed, ordinal) {
           if (closed || !seedState(seed) || physical.has(ordinal)) throw new Error("Invalid spend reporter start");
           const state = seedState(seed)!;
           state.started = true;
           starts.push({ seed, ordinal });
-          physical.set(ordinal, { seed, order: ++dispatchOrder });
-        },
-        startObserved(target, ordinal, proof) {
-          if (closed || physical.has(ordinal)) throw new Error("Invalid observed reporter start");
-          const entry: PhysicalEntry = { order: ++dispatchOrder, observed: { scopes: selectedScopes(target), ...estimates() } };
-          if (proof && proof.ledger === ledgerRef && pendingDispatch.has(proof.sendId)) {
-            entry.sendId = proof.sendId;
-            pendingDispatch.delete(proof.sendId);
-            const index = live.indexOf(proof.sendId);
-            if (index >= 0) live.splice(index, 1);
-          }
-          physical.set(ordinal, entry);
-          starts.push({ ordinal });
-          bookObserved(entry);
+          physical.set(ordinal, { seed });
+
         },
         rebindTarget(target, ordinal) {
           const entry = physical.get(ordinal);
           const owned = starts.find(start => start.ordinal === ordinal);
-          if (closed || !entry || !owned || entry.reported || entry.seed && entry.sendId) throw new Error("Invalid spend reporter rebind");
-          if (entry.observed) {
-            const scopes = selectedScopes(target);
-            const enforced = applicable(scopes);
-            if (!enforced && JSON.stringify(scopes) === JSON.stringify(entry.observed.scopes)) return true;
-            if (entry.sendId && !ledger().abandon(entry.sendId)) return false;
-            physical.delete(ordinal);
-            if (enforced) {
-              const seed = tracker.ensureSeed(target);
-              if (!seed) { starts.splice(starts.indexOf(owned), 1); return false; }
-              physical.set(ordinal, { seed, order: entry.order }); owned.seed = seed; seedState(seed)!.started = true;
-            } else {
-              const rebound: PhysicalEntry = { order: entry.order, observed: { scopes, ...estimates() } };
-              physical.set(ordinal, rebound); bookObserved(rebound);
-            }
-            return true;
-          }
-          const old = seedState(entry.seed!)!;
+          if (closed || !entry || !owned || entry.sendId) throw new Error("Invalid spend reporter rebind");
+          const old = seedState(entry.seed)!;
           // A helper start is provisional until selection reaches the executor. If this is
           // the first start on its seed, abandon/rebind at NORMAL capacity before the wire.
           physical.delete(ordinal);
           old.started = [...physical.values()].some(start => start.seed === old.seed);
           const seed = tracker.ensureSeed(target);
           if (!seed) { starts.splice(starts.indexOf(owned), 1); return false; }
-          physical.set(ordinal, { seed, order: entry.order });
+          physical.set(ordinal, { seed });
           owned.seed = seed;
           seedState(seed)!.started = true;
           return true;
@@ -358,12 +294,7 @@ export function createRequestSpendTracker(
           const count = Number.isFinite(sends) ? Math.max(0, Math.trunc(sends)) : 0;
           for (let i = 0; i < count && reported < starts.length; i++) {
             const entry = starts[reported++]!;
-            if (entry.seed) tracker.reportFromSeed(entry.seed, entry.ordinal);
-            else {
-              const observed = physical.get(entry.ordinal)!;
-              observed.reported = true;
-              if (bookObserved(observed) && observed.sendId) ledger().markDispatched(observed.sendId);
-            }
+            tracker.reportFromSeed(entry.seed, entry.ordinal);
           }
         },
         close() {
@@ -395,6 +326,7 @@ export function createRequestSpendTracker(
       finalizeSeeds();
     },
     charge(options?: Parameters<RequestSendObserver["charge"]>[0]): boolean {
+      tracker.startRequest?.();
       // A send that has already left is RECORDED, never refused: the tokens are spent, and a
       // booking the ledger drops is a booking the ceiling can never see. This is the reporting
       // transports' path -- the passthrough ladder reports through `onSendsConsumed` after the
@@ -418,13 +350,14 @@ export function createRequestSpendTracker(
           ? { poolId: logCtx.spendPoolId ?? logCtx.provider }
           : {}),
       };
-      const policy = bookedLedger.policy;
+      const policy = admissionPolicy!;
       const enforced = (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
         || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
         || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
       const decision = bookedLedger.reserve({
         sendId,
         scopes,
+        admissionPolicy,
         inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
         outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0,
         ...(alreadySent ? { alreadySent: true } : {}),
@@ -440,18 +373,17 @@ export function createRequestSpendTracker(
       if (!alreadySent) options?.onReserved?.({ ledger: bookedLedger, sendId });
       live.push(sendId);
       if (options?.deferDispatch) pendingDispatch.add(sendId);
-      else { legacyOrder.set(sendId, ++dispatchOrder); confirmOlderSends(); }
+      else confirmOlderSends();
       // It has already left, so the reservation cannot be handed back for free: from here only
       // a settlement or unresolved spend is honest about it.
       if (alreadySent) ledger().markDispatched(sendId);
       return true;
     },
     dispatch(proof): void {
-      if (proof.ledger === ledgerRef && [...seeds.values()].some(state => state.seed.sendId === proof.sendId)) return;
+      if (seededAccounting && proof.ledger === ledgerRef) return;
       if (proof.ledger !== ledgerRef || !pendingDispatch.has(proof.sendId)) return;
       ledger().markDispatched(proof.sendId);
       pendingDispatch.delete(proof.sendId);
-      legacyOrder.set(proof.sendId, ++dispatchOrder);
       // Terminal usage follows dispatch/report order, not reservation order.
       const index = live.indexOf(proof.sendId);
       if (index >= 0) live.push(...live.splice(index, 1));
@@ -459,10 +391,8 @@ export function createRequestSpendTracker(
     refund(proof): void {
       if (proof && proof.ledger === ledgerRef && seededAccounting) {
         const match = [...seeds.entries()].find(([, state]) => state.seed.sendId === proof.sendId);
-        if (match) {
-          if (!match[1].started) retireSeed(match[0], match[1].seed);
-          return;
-        }
+        if (match && !match[1].started) retireSeed(match[0], match[1].seed);
+        return;
       }
       // null is an exact budget reservation that obtained no durable booking.
       if (proof === null || (proof && proof.ledger !== ledgerRef)) return;
@@ -477,7 +407,7 @@ export function createRequestSpendTracker(
     },
     settle(usage: TerminalSpendUsage | undefined): void {
       if (resolved) return;
-      if (seededAccounting || physical.size > 0 || reporters > 0) { tracker.requestFinalSettlement(usage); return; }
+      if (seededAccounting) { tracker.requestFinalSettlement(usage); return; }
       try {
         if (!terminalProcessed && live.length > 0) {
           const terminal = live[live.length - 1] as string;

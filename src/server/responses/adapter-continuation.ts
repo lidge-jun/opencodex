@@ -241,6 +241,9 @@ export function createAdapterContinuations(
           : fetchWithResetRetry;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
+            sendBudgetState.adapterSendBudget?.startRequest?.({
+              poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
+            });
             transportState.noteRoutedAttemptSend(continuationEstimate, recovery ?? replayKind);
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,

@@ -332,7 +332,9 @@ Etkin olmayan belirsiz geçmiş, yalnızca son etkinliği `spend.retentionDays` 
 
 ### Rezervasyonlar ve gönderim sınırı
 
-Kök, kimlik veya havuz sınırı geçerliyse her hedef ya da anahtarın ilk gönderimi normal izleme kapasitesinden bir rezervasyon gerektirir. Rezervasyon alınamazsa sağlayıcıya gönderim yapılmaz. Aynı hedefteki yeniden denemeler aynı kapsamları kullanır; farklı hedef veya anahtar yeni rezervasyon gerektirir. `L`, ilk fiziksel gönderimde sabitlenen, isteğin tamamı için fiziksel gönderim sınırıdır. Varsayılan değer dörttür; mevcut OAuth genişletmesi gönderimler başlamadan önce bunu en fazla on sekize çıkarabilir.
+Kök, kimlik veya havuz sınırı geçerliyse her hedef ya da anahtarın ilk gönderimi normal izleme kapasitesinden bir rezervasyon gerektirir. Rezervasyon alınamazsa sağlayıcıya gönderim yapılmaz. Aynı hedefteki yeniden denemeler aynı kapsamları kullanır; farklı hedef veya anahtar yeni rezervasyon gerektirir. `L`, istek başladığında sabitlenen, isteğin tamamı için fiziksel gönderim sınırıdır. Varsayılan değer dörttür; mevcut OAuth istek profili en fazla on sekiz gönderime izin verir.
+
+Sınırların uygulanıp uygulanmayacağı, geçerli kök, kimlik ve havuz belirteç sınırları ile `L`, her isteğin başlangıcında belirlenir. Yapılandırma değişiklikleri yalnızca değişiklikten sonra başlayan istekleri etkiler. Devam eden istekler, tüm yeniden denemeler ve devam çağrıları için başlangıç politikalarını korur: bir sınırı etkinleştirmek veya düşürmek onları daha fazla kısıtlamaz; yükseltmek veya kaldırmak da daha fazla izin vermez. Yalnızca gözlem modunda başlayan bir istek, tamamlanana kadar bu modda kalır.
 
 Son hesaplaşma, başlamış gönderimlerin raporlarını bekler. Bir gönderim kimliği ancak muhasebesi kalıcılaştıktan sonra unutulur; bakiyesi silinmez. Sınır faturayı değil gönderim sayısını sınırlar: ilk tahmini aşan gerçek kullanımın tamamı kaydedilir. Geçerli bir harcama sınırı yoksa yalnızca gözlem davranışı sürer; izleme kapasitesi dolduğunda kayıtların atlanması da değişmez. Kimlik bağlantısı içeren yeni kontrol noktaları eklenmez.
 

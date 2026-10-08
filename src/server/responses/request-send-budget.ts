@@ -98,7 +98,8 @@ export function createResponsesSendBudget(
   }
   const prepaid = isRequestExecutionBudget(sendBudget)
     ? claimDispatchSpendProof(sendBudget, options.compactionRecoveryPermit ?? options.comboDispatchPermit) : undefined;
-  const spentCeiling = workflowSpendCeilingReached(workflowRootId, undefined, logCtx.spendPoolId ?? logCtx.provider, prepaid);
+  const admissionPolicy = isRequestExecutionBudget(sendBudget) ? sendBudget.spendAdmissionPolicy : undefined;
+  const spentCeiling = workflowSpendCeilingReached(workflowRootId, undefined, logCtx.spendPoolId ?? logCtx.provider, prepaid, admissionPolicy);
   if (spentCeiling) {
     return workflowRefusalResponse(
       "workflow-spend-exhausted",
@@ -341,6 +342,9 @@ function adapterDispatchBudgetView(
     get physicalStarted() { return budget.physicalStarted; },
     get physicalLimit() { return budget.physicalLimit; },
     get spendEnforced() { return budget.spendEnforced; },
+    get spendPolicyStarted() { return budget.spendPolicyStarted; },
+    get spendAdmissionPolicy() { return budget.spendAdmissionPolicy; },
+    startRequest: target => budget.startRequest?.(target),
     claimPhysicalSend: () => budget.claimPhysicalSend?.(),
     beginSpendProducer: () => budget.beginSpendProducer?.(),
     get used(): number { return budget.used; },

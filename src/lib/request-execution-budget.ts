@@ -15,7 +15,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * sends plus one alternate -- by funding the alternate from a reserve that a validated
  * sanitized repair can spend instead, but never both.
  */
-import type { SpendSeed, SpendScopes, SpendReservationProof } from "./spend-reservation-ledger";
+import type { SpendSeed, SpendScopes, SpendReservationProof, SpendAdmissionPolicy } from "./spend-reservation-ledger";
 import type { TransientSendBudget } from "./upstream-retry";
 
 export type SendClass =
@@ -152,14 +152,12 @@ export interface RequestSendObserver {
   charge(options?: { alreadySent?: boolean; deferDispatch?: boolean; onReserved?: (proof: SpendReservationProof) => void; targetKey?: string }): boolean;
   /** Confirm the exact reservation once its dispatch is known. */
   readonly enforced?: boolean;
+  readonly policyStarted?: boolean;
+  readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
+  /** Capture request policy at its first admission or actual physical start. */
+  startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   ensureSeed?(target: SpendScopes & { targetKey?: string }, proof?: SpendReservationProof): SpendSeed | undefined;
-  beginReporter?(): {
-    start(seed: SpendSeed, ordinal: number): void;
-    startObserved?(target: SpendScopes & { targetKey?: string }, ordinal: number, proof?: SpendReservationProof): void;
-    rebindTarget(target: SpendScopes & { targetKey?: string }, ordinal: number): boolean;
-    report(sends: number): void;
-    close(): void;
-  };
+  beginReporter?(): { start(seed: SpendSeed, ordinal: number): void; rebindTarget(target: SpendScopes & { targetKey?: string }, ordinal: number): boolean; report(sends: number): void; close(): void };
   dispatch?(proof: SpendReservationProof): void;
   /** Give back a booking whose send never happened. */
   refund(proof?: SpendReservationProof | null): void;
@@ -174,6 +172,9 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly physicalStarted?: number;
   readonly physicalLimit?: number;
   readonly spendEnforced?: boolean;
+  readonly spendPolicyStarted?: boolean;
+  readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
+  startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   claimPhysicalSend?(): number | undefined;
   beginSpendProducer?(): { close(): void } | undefined;
   readonly logicalRequestId: string;
@@ -298,7 +299,7 @@ export type PhysicalSendReporter = ((sends: number) => void) & {
 const activePhysicalReporters = new AsyncLocalStorage<PhysicalSendReporter>();
 /** Selection owners rebind this helper's current start before invoking the executor. */
 export function rebindPhysicalSend(budget: TransientSendBudget | undefined, target: SpendScopes & { targetKey?: string }): boolean {
-  if (!budget) return true;
+  if (!(budget as RequestExecutionBudget | undefined)?.spendEnforced) return true;
   return activePhysicalReporters.getStore()?.bind?.(target) ?? true;
 }
 export function createPhysicalSendReporter(
@@ -325,27 +326,27 @@ export function createPhysicalSendReporter(
     if (counter) counter.spent += count - prepaid;
     telemetry?.(count);
   };
-  if (observer?.beginReporter) report.beforeSend = () => {
+  if (observer?.startRequest || observer?.enforced === true) report.beforeSend = () => {
     if (closed) return false;
+    const selected = target();
+    if ((budget as RequestExecutionBudget).startRequest) (budget as RequestExecutionBudget).startRequest!(selected);
+    else observer?.startRequest?.(selected);
+    if (observer?.enforced !== true) return true;
     producer ??= observer.beginReporter?.();
     const receipt = permit && dispatchSpendProofs.get(permit);
     const proof = receipt?.owner === counter ? receipt?.claim() : undefined;
-    const selected = target();
-    const enforced = observer.enforced === true;
-    const seed = enforced ? observer.ensureSeed?.(selected, proof) : undefined;
-    if (enforced && !seed) return false;
+    const seed = observer.ensureSeed?.(selected, proof);
+    if (!seed) return false;
     const ordinal = (budget as RequestExecutionBudget).claimPhysicalSend?.();
     if (ordinal === undefined) return false;
-    if (seed) producer?.start(seed, ordinal);
-    else producer?.startObserved?.(selected, ordinal, proof);
+    producer?.start(seed, ordinal);
     currentOrdinal = ordinal;
     started++;
     return true;
   };
   report.execute = run => activePhysicalReporters.run(report, run);
   report.bind = (selected: SpendScopes & { targetKey?: string }) => {
-    if (!producer || currentOrdinal === undefined) return true;
-    if (observer?.enforced && (counter?.physicalLimit === undefined || currentOrdinal > counter.physicalLimit)) return false;
+    if (!producer || currentOrdinal === undefined || observer?.enforced !== true) return true;
     return producer.rebindTarget(selected, currentOrdinal);
   };
   report.close = () => {
@@ -404,13 +405,19 @@ function createRequestExecutionBudgetWithLedger(
     get physicalStarted(): number { return counter.physicalStarted; },
     get physicalLimit(): number | undefined { return counter.physicalLimit; },
     get spendEnforced(): boolean { return observer?.enforced === true; },
+    get spendPolicyStarted(): boolean { return observer?.policyStarted === true; },
+    get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return observer?.spendAdmissionPolicy; },
+    startRequest(target) {
+      observer?.startRequest?.(target);
+      if (observer?.enforced && counter.physicalLimit === undefined) {
+        counter.physicalLimit = Number.isSafeInteger(policy.maxTotalModelSends) && policy.maxTotalModelSends > 0 ? policy.maxTotalModelSends : 0;
+      }
+    },
     beginSpendProducer() { return observer?.enforced ? observer.beginReporter?.() : undefined; },
     claimPhysicalSend(): number | undefined {
-      if (counter.physicalLimit === undefined) {
-        if (Number.isSafeInteger(policy.maxTotalModelSends) && policy.maxTotalModelSends > 0) counter.physicalLimit = policy.maxTotalModelSends;
-        else if (observer?.enforced === true) return undefined;
-      }
-      if (observer?.enforced === true && (counter.physicalLimit === undefined || counter.physicalStarted >= counter.physicalLimit)) return undefined;
+      budget.startRequest?.();
+      if (observer?.enforced !== true || counter.physicalLimit === undefined) return undefined;
+      if (counter.physicalStarted >= counter.physicalLimit) return undefined;
       return ++counter.physicalStarted;
     },
     get used(): number { return counter.spent; },
@@ -473,6 +480,7 @@ function createRequestExecutionBudgetWithLedger(
       // Consulted last, because it is the only bound here that WRITES. A ledger entry booked
       // for a dispatch a cheaper check above would have refused is spend this request never
       // makes, and it would hold those tokens against the scope until retention expired.
+      budget.startRequest?.({ targetKey: intent.targetKey });
       let spendProof: SpendReservationProof | undefined;
       if (observer && !observer.charge({ targetKey: intent.targetKey, deferDispatch: true, onReserved: proof => { spendProof = proof; } })) {
         return { allowed: false, reason: "spend-exhausted" };
@@ -495,15 +503,13 @@ function createRequestExecutionBudgetWithLedger(
       let executing = false;
       let physicalOrdinal: number | undefined;
       const startPhysical = (): boolean => {
-        if (!observer?.beginReporter) return true;
-        const enforced = observer.enforced === true;
-        const seed = enforced ? observer.ensureSeed?.({ targetKey: intent.targetKey }, spendProof) : undefined;
-        if (enforced && !seed) return false;
+        if (observer?.enforced !== true) return true;
+        const seed = observer.ensureSeed?.({ targetKey: intent.targetKey }, spendProof);
+        if (!seed) return false;
         const ordinal = budget.claimPhysicalSend?.();
         if (ordinal === undefined) return false;
         producer = observer.beginReporter?.();
-        if (seed) producer?.start(seed, ordinal);
-        else producer?.startObserved?.({ targetKey: intent.targetKey }, ordinal, spendProof);
+        producer?.start(seed, ordinal);
         physicalOrdinal = ordinal;
         if (!executing) { producer?.report(1); producer?.close(); }
         return true;
@@ -515,11 +521,8 @@ function createRequestExecutionBudgetWithLedger(
           if (executing) throw new Error("Dispatch permit executor already active");
           executing = true;
           const binding: PhysicalSendReporter = () => {};
-          binding.bind = (target: SpendScopes & { targetKey?: string }) => {
-            if (physicalOrdinal === undefined || !producer) return true;
-            if (observer?.enforced && (counter.physicalLimit === undefined || physicalOrdinal > counter.physicalLimit)) return false;
-            return producer.rebindTarget(target, physicalOrdinal);
-          };
+          binding.bind = (target: SpendScopes & { targetKey?: string }) => physicalOrdinal === undefined || !producer
+            ? true : producer.rebindTarget(target, physicalOrdinal);
           try { return await activePhysicalReporters.run(binding, run); }
           finally {
             executing = false;

@@ -382,6 +382,11 @@ export async function prepareAdapterExchange(
         : fetchWithResetRetry;
       upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
+          // Unconfigured generic sends may omit the counting reporter. Capture policy
+          // independently so a later recovery still belongs to this request's start.
+          sendBudgetState.adapterSendBudget?.startRequest?.({
+            poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
+          });
           if (compactPrepaid && !compactPrepaidUsed) {
             if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
             compactPrepaidUsed = true;
@@ -617,6 +622,9 @@ export async function prepareAdapterExchange(
           try {
             return await refetchWithPolicy(
               recoveryKind => {
+                sendBudgetState.adapterSendBudget?.startRequest?.({
+                  poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
+                });
                 if (refetchAllowance?.permit && !refetchAllowance.permit.use()) {
                   throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
                 }

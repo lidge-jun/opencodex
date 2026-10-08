@@ -70,24 +70,27 @@ describe("configured spend cannot dispatch without a capacity booking", () => {
     expect(f.ledger.snapshot("pool", "fixture-pool")?.reserved).toBe(1);
   });
 
-  test("enabling a ceiling affects the existing tracker on its next charge", () => {
+  test("enabling a ceiling applies to new requests while the started tracker remains observe-only", () => {
     const f = fixture({ maxTrackedScopes: 1 });
     expect(f.attempt().allowed).toBe(true);
     f.ledger.reconfigure({ ...f.ledger.policy, pool: { maxTokens: 1000 } });
-    expect(f.attempt().allowed).toBe(false);
-    expect(f.dispatched()).toBe(1);
-    expect(f.budget.used).toBe(1);
-    expect(f.tracker.refusals).toBe(1);
+    expect(f.attempt().allowed).toBe(true);
+    expect(f.dispatched()).toBe(2);
+    expect(f.tracker.refusals).toBe(0);
+    const next = createRequestSpendTracker(f.context, "fixture-root", f.ledger);
+    expect(next.charge()).toBe(false);
   });
 
-  test("newly resolved identity applies on the next charge without reconstructing the tracker", () => {
+  test("a newly resolved identity does not change a request that already started observe-only", () => {
     const f = fixture({ identity: { maxTokens: 1000 }, maxTrackedScopes: 1 });
     delete f.context.accountLogLabel;
     expect(f.attempt().allowed).toBe(true);
     f.context.accountLogLabel = "newly-resolved-account";
-    expect(f.attempt().allowed).toBe(false);
-    expect(f.dispatched()).toBe(1);
-    expect(f.budget.used).toBe(1);
+    expect(f.attempt().allowed).toBe(true);
+    expect(f.dispatched()).toBe(2);
+    expect(f.budget.used).toBe(2);
+    const next = createRequestSpendTracker(f.context, "fixture-root", f.ledger);
+    expect(next.charge()).toBe(false);
   });
 });
 

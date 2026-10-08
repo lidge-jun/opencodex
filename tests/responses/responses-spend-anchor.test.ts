@@ -20,6 +20,7 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 import { acquireSpendLedgerServerLifecycle } from "../../src/server/index/spend-ledger-lifecycle";
+import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
 
 function fixture(enforced = true, capacity = 8) {
   const lines: string[] = [];
@@ -204,6 +205,125 @@ async function invokeExecutor(kind: ExecutorKind, config: OcxConfig, logCtx: Req
     const text = await response.text();
     return new Response(text, { status: response.status, headers: response.headers });
   } finally { translatorBudget.dispose(); }
+}
+
+for (const recovery of [false, true]) test(`generic observe-only executor captures before ${recovery ? "same-key recovery" : "an uncounted send"}`, async () => withExecutorHome(async ledger => {
+  configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, canonicalProviderIds: ["P"] });
+  const ctx: RequestLogContext = { model: "model", provider: "P", spendPoolId: "P", spendInputEstimateTokens: 2, spendOutputCeilingTokens: 1 };
+  const tracker = createRequestSpendTracker(ctx, undefined, ledger);
+  ctx.spendTracker = tracker;
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  let wires = 0;
+  const wire = (async () => {
+    wires++;
+    expect(budget.spendPolicyStarted).toBe(true);
+    if (wires === 1) {
+      configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, canonicalProviderIds: ["P"], pool: { maxTokens: 1 } });
+      if (recovery) return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    }
+    expect(budget.spendEnforced).toBe(false);
+    return executorSuccess("generic");
+  }) as typeof fetch;
+  globalThis.fetch = wire;
+  const config = executorConfig("generic", wire);
+  delete config.providers.P!.transientRetryOn5xx;
+  if (recovery) config.providers.P!.retryOn429 = { attempts: 1, intervalMs: 1, maxIntervalMs: 1, respectRetryAfter: false };
+  const response = await invokeExecutor("generic", config, ctx, budget);
+  expect(response.status, await response.text()).toBe(200);
+  expect(wires).toBe(recovery ? 2 : 1);
+  expect(budget.physicalStarted).toBe(0);
+  expect(budget.used).toBe(0);
+}));
+
+test("generic terminal continuation retains the policy captured by its uncounted initial send", async () => withExecutorHome(async ledger => {
+  configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, canonicalProviderIds: ["P"] });
+  const ctx: RequestLogContext = { model: "model", provider: "P", spendPoolId: "P" };
+  const tracker = createRequestSpendTracker(ctx, undefined, ledger);
+  ctx.spendTracker = tracker;
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  let wires = 0;
+  const wire = (async () => {
+    wires++;
+    expect(budget.spendPolicyStarted).toBe(true);
+    if (wires === 1) configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, canonicalProviderIds: ["P"], pool: { maxTokens: 1 } });
+    expect(budget.spendEnforced).toBe(false);
+    const delta = wires === 1 ? { content: "我接下来会修改相关文件。" }
+      : { tool_calls: [{ index: 0, id: "call_fixture", type: "function", function: { name: "exec_command", arguments: "{}" } }] };
+    return new Response(`data: ${JSON.stringify({ choices: [{ index: 0, delta }] })}\n\ndata: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: wires === 1 ? "stop" : "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  globalThis.fetch = wire;
+  const config = executorConfig("generic", wire);
+  delete config.providers.P!.transientRetryOn5xx;
+  config.providers.P!.terminalContinuationGuard = true;
+  const req = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "P/model", input: "Edit the file", stream: true, tools: [{ type: "function", name: "exec_command", parameters: { type: "object", properties: {} } }] }) });
+  const response = await handleResponses(req, config, ctx, { sendBudget: budget });
+  const text = await response.text();
+  expect(response.status, text).toBe(200);
+  expect(text).toContain("exec_command");
+  expect(wires).toBe(2);
+  expect(budget.physicalStarted).toBe(0);
+  expect(budget.used).toBe(0);
+}));
+
+for (const originallyEnforced of [false, true]) test(`Responses re-entry retains ${originallyEnforced ? "higher" : "disabled"} starting ceiling after a new lower ceiling`, async () => withExecutorHome(async ledger => {
+  configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, canonicalProviderIds: ["P"], pool: originallyEnforced ? { maxTokens: 100 } : {} });
+  expect(ledger.reserve({ sendId: "history", scopes: { poolId: "P" }, inputTokens: 10, outputCeilingTokens: 0 }).reserved).toBe(true);
+  ledger.settle("history", { inputTokens: 10, outputTokens: 0 });
+  const ctx: RequestLogContext = { model: "model", provider: "P", spendPoolId: "P", spendInputEstimateTokens: 1 };
+  const tracker = createRequestSpendTracker(ctx, undefined, ledger);
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  expect(budget.spendPolicyStarted).toBe(false);
+  budget.startRequest?.({ poolId: "P" });
+  configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, canonicalProviderIds: ["P"], pool: { maxTokens: 1 } });
+  const req = new Request("http://localhost/v1/responses");
+  const child = createResponsesSendBudget({ req, logCtx: ctx, options: { sendBudget: budget } });
+  expect(child).not.toBeInstanceOf(Response);
+  if (child instanceof Response) throw new Error("frozen request refused by current policy");
+  const admission = child.adapterDispatchBudget!.reserveDispatch({ sendClass: "initial", targetKey: "P/model" });
+  expect(admission.allowed).toBe(true);
+  if (admission.allowed) admission.permit.release();
+  expect(createResponsesSendBudget({ req, logCtx: { ...ctx }, options: {} })).toBeInstanceOf(Response);
+  tracker.settle(undefined);
+}));
+
+for (const change of ["disable", "raise"] as const) test(`Responses re-entry still applies the original seed ceiling after ${change}`, async () => withExecutorHome(async ledger => {
+  configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, canonicalProviderIds: ["P"], pool: { maxTokens: 1 } });
+  const ctx: RequestLogContext = { model: "model", provider: "P", spendPoolId: "P", spendInputEstimateTokens: 2 };
+  const tracker = createRequestSpendTracker(ctx, undefined, ledger);
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  budget.startRequest?.({ poolId: "P" });
+  configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, canonicalProviderIds: ["P"], pool: change === "disable" ? {} : { maxTokens: 100 } });
+  const req = new Request("http://localhost/v1/responses");
+  const child = createResponsesSendBudget({ req, logCtx: ctx, options: { sendBudget: budget } });
+  expect(child).not.toBeInstanceOf(Response);
+  if (child instanceof Response) throw new Error("unexpected preflight refusal");
+  expect(child.adapterDispatchBudget!.reserveDispatch({ sendClass: "initial", targetKey: "P/model" }))
+    .toMatchObject({ allowed: false, reason: "spend-exhausted" });
+}));
+
+for (const change of ["disable", "raise", "lower"] as const) {
+  for (const rootId of [undefined, "snapshot-root"]) test(`Responses frozen ${rootId ? "root" : "pool"} preflight keeps one-use prepaid exclusion after ${change}`, async () => withExecutorHome(async ledger => {
+    configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, canonicalProviderIds: ["P"], root: { maxTokens: 10 }, pool: { maxTokens: 10 } });
+    const ctx: RequestLogContext = { model: "model", provider: "P", spendPoolId: "P", spendInputEstimateTokens: 10 };
+    const tracker = createRequestSpendTracker(ctx, rootId, ledger);
+    const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+    const prepaid = budget.reserveDispatch({ sendClass: "initial", targetKey: "P/model", countedExternally: true });
+    if (!prepaid.allowed) throw new Error("prepaid admission refused");
+    const scopePolicy = change === "disable" ? {} : { maxTokens: change === "raise" ? 100 : 1 };
+    configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, canonicalProviderIds: ["P"], root: scopePolicy, pool: scopePolicy });
+    const req = new Request("http://localhost/v1/responses", { headers: rootId ? { "x-codex-parent-thread-id": rootId } : {} });
+    const options = { sendBudget: budget, compactionRecoveryPermit: prepaid.permit };
+    expect(createResponsesSendBudget({ req, logCtx: ctx, options })).not.toBeInstanceOf(Response);
+    const repeated = createResponsesSendBudget({ req, logCtx: ctx, options });
+    expect(repeated).toBeInstanceOf(Response);
+    if (repeated instanceof Response) {
+      expect(repeated.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+      expect(await repeated.text()).toContain("10");
+    }
+    prepaid.permit.release();
+    tracker.settle(undefined);
+  }));
 }
 
 for (const kind of executorKinds) {

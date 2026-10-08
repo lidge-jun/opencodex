@@ -458,7 +458,9 @@ export async function runNativeChatAttempt(
               const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
                 poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
               }), execution.comboDispatchPermit);
-              if (physicalBudget.spendEnforced && !spendReport.beforeSend?.()) {
+              // Capture this request's spend policy at its first physical boundary, including
+              // observe-only starts; later configuration changes belong to later requests.
+              if (spendReport.beforeSend && !spendReport.beforeSend()) {
                 spendReport.close?.();
                 if ((logCtx.spendTracker as { refusals?: number } | undefined)?.refusals) throw new NativeChatSpendRefusal();
                 throw new SendBudgetExhaustedError();

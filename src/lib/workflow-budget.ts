@@ -22,6 +22,7 @@
 import {
   sharedSpendLedger,
   spendCeilingsConfigured,
+  type SpendAdmissionPolicy,
   type SpendReservationLedger,
   type SpendReservationProof,
   type SpendScope,
@@ -733,10 +734,11 @@ function spentRootCeiling(
   rootId: string,
   ledger: SpendReservationLedger,
   excludingSendId?: string,
+  admissionPolicy?: SpendAdmissionPolicy,
 ): WorkflowSpendDenialDetail | undefined {
-  const limit = ledger.policy.root.maxTokens;
+  const limit = (admissionPolicy ?? ledger.policy).root.maxTokens;
   if (limit === undefined) return undefined;
-  return ledger.exhausted("root", rootId, excludingSendId) ? { scope: "root", limit } : undefined;
+  return ledger.exhausted("root", rootId, excludingSendId, admissionPolicy) ? { scope: "root", limit } : undefined;
 }
 
 /**
@@ -755,16 +757,20 @@ export function workflowSpendCeilingReached(
   spendLedger?: SpendReservationLedger,
   poolId?: string,
   reservation?: SpendReservationProof,
+  admissionPolicy?: SpendAdmissionPolicy,
 ): WorkflowSpendDenialDetail | undefined {
   if (!rootId && !poolId) return undefined;
-  const ledger = spendLedger ?? (spendCeilingsConfigured() ? sharedSpendLedger() : undefined);
+  // An explicit empty snapshot belongs to an observe-only request, even if current config
+  // enables a ceiling. Conversely, old enforced requests still read totals after disable.
+  if (admissionPolicy && admissionPolicy.root.maxTokens === undefined && admissionPolicy.pool.maxTokens === undefined) return undefined;
+  const ledger = spendLedger ?? (admissionPolicy || spendCeilingsConfigured() ? sharedSpendLedger() : undefined);
   if (!ledger) return undefined;
   // This reads the current alias partition; it never publishes continuity metadata.
   const excludingSendId = reservation?.ledger === ledger ? reservation.sendId : undefined;
-  const root = rootId ? spentRootCeiling(rootId, ledger, excludingSendId) : undefined;
+  const root = rootId ? spentRootCeiling(rootId, ledger, excludingSendId, admissionPolicy) : undefined;
   if (root) return root;
-  const limit = ledger.policy.pool.maxTokens;
-  return poolId && limit !== undefined && ledger.exhausted("pool", poolId, excludingSendId)
+  const limit = (admissionPolicy ?? ledger.policy).pool.maxTokens;
+  return poolId && limit !== undefined && ledger.exhausted("pool", poolId, excludingSendId, admissionPolicy)
     ? {
       scope: "pool",
       limit,

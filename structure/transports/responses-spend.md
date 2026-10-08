@@ -116,21 +116,20 @@ caller is `request-spend.ts`, installed on the execution budget at genuine ingre
 and parked on the log context so `addFinalRequestLog` can settle it. Native Chat installs the same tracker before its independent physical-send ladder and charges it immediately before each dispatch, so that fast path cannot bypass root, identity or provider-pool ceilings.
 
 Unconfigured requests preserve the legacy counter observer: reservations increment the send
-counter, refunds decrement it, and named reports reconcile prepaid sends. Physical helpers retain
-their start order even while observing, without creating seed capabilities or imposing a new
-observe-only send limit. Enforced requests use the seed protocol below across Responses, native Messages and native Chat.
+counter, refunds decrement it, and named reports reconcile prepaid sends. Enforced requests use
+the seed and physical-start protocol below across Responses, native Messages and native Chat.
 Each transport claims immediately before inference I/O and retains a producer through completion.
 
-Enabling a ceiling during an in-flight call preserves that call's accounting and the request's
-existing physical-start count. Subsequent starts require normal seed admission under the current
-policy; a prepaid reservation from before activation is not an enforced admission. Selection-time
-rebinding checks the current policy even when the target stays the same. Terminal usage follows
-the last actual start across both modes. Once enforcement is observed, an earlier omitted booking
-remains pending debt and must obtain normal capacity before another enforced start is admitted;
-it never becomes an overflow capability. Requests that remain observe-only retain capacity omission.
-After activation, ordinary observed terminal records also retain failed writes in the ledger's
-ordered retry queue. This persistence intent grants no admission capacity. Cleanup is registered
-before terminal writes can throw, so later ledger activity retries without another settlement call.
+A request fixes its enforcement mode, token ceilings and physical-send limit L when it actually
+starts. Configuration changes apply to requests that start afterward. An in-flight request keeps
+its starting policy until completion, including when an operator enables, disables, raises or
+lowers a ceiling. Changing policy never resets that request's physical-send allowance. A request
+that starts observe-only keeps the existing observe-only path throughout its lifetime.
+The shared tracker captures once at the first actual spend admission or start; constructing a
+budget or reading its enforcement preview does not capture policy. Generic Responses paths that
+omit retry reporters still invoke that same capture before the wire. Re-entry's token-ceiling
+preflight and exact seed admission use the same frozen numeric policy and prepaid proof;
+pool continuity validation and shared tracking-capacity safeguards remain active.
 
 Provider-pool accounting uses the canonical routed provider identity, not the mutable display label
 that may identify an OAuth account in request logs. Responses final-route normalization captures
@@ -190,6 +189,12 @@ such as `null` are corruption. An unparseable torn final line retains the existi
 replay rule. Storage/corruption refusals use `workflow_spend_undurable`; unsafe-file and ownership
 errors remain storage failures. `tests/lib/spend-corruption-compat.test.ts` checks these boundaries.
 
+An ordinary observe-only reservation whose first write failed keeps bounded in-memory repair
+metadata until it resolves or is evicted. Before reporting dispatch or terminal usage, the ledger
+queues the missing ordinary reserve prefix ahead of those records. Later pruning or admission
+flushes that queue, so a recovered writer cannot leave terminal usage without its reservation.
+This grants no seed or overflow capacity and adds no journal record type or identity metadata.
+
 For requests with an applicable root, identity or pool ceiling, each selected target/key first
 obtains a normal-capacity pre-send seed through `reserveSeed`. A failed initial seed refuses the
 wire call, including rootless passthrough and generic adapter ingress. Stable retries reuse that
@@ -199,8 +204,8 @@ Reported additional sends reuse the seed's exact scope references through `reser
 and allocate no new scope keys. Already-started sends remain booked even during persistence failure.
 
 `src/lib/request-execution-budget.ts` shares a physical-start counter across derived budgets and
-freezes the finite positive limit L at the first claim. The default guarded limit is four; bounded
-OAuth expansion happens before the first start and allows at most eighteen for that profile.
+freezes the finite positive limit L when the request starts. The default guarded limit is four;
+the initial bounded OAuth request profile allows at most eighteen.
 `createPhysicalSendReporter` owns selected-seed start receipts, reports only claimed sends and
 closes its producer after reconciliation. Adapter permits claim once at their physical boundary; their executor span keeps the start
 rebindable until OAuth selection reaches the wire, then reports and closes it. Zed completion

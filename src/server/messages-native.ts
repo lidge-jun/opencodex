@@ -536,12 +536,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             }));
             try {
               if (init.signal?.aborted) throw init.signal.reason;
-              if (physicalBudget.spendEnforced) {
-                if (!spendReport.beforeSend?.()) {
-                  if (spendTracker.refusals) throw new NativeMessagesSpendRefusal();
-                  throw new SendBudgetExhaustedError();
-                }
-              } else if (!spendTracker.charge()) throw new NativeMessagesSpendRefusal();
+              // Capture before either accounting path so this request retains its start policy.
+              if (spendReport.beforeSend && !spendReport.beforeSend()) {
+                if (spendTracker.refusals) throw new NativeMessagesSpendRefusal();
+                throw new SendBudgetExhaustedError();
+              }
+              if (!physicalBudget.spendEnforced && !spendTracker.charge()) throw new NativeMessagesSpendRefusal();
               noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
               dispatched = await sendWithConnectionPolicy(
                 (activeProvider as OcxProviderTransport).fetch ?? execute,
