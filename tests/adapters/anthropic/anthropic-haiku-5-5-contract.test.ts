@@ -40,13 +40,11 @@ describe("Claude Haiku 5.5 wire contract", () => {
   });
 
   test("omitted reasoning sends neither thinking nor effort and drops sampling", async () => {
-    for (const reasoning of [undefined]) {
-      const body = await wireBody("claude-haiku-5-5", { reasoning, temperature: 0.2, topP: 0.9 });
-      expect(body.thinking).toBeUndefined();
-      expect(body.output_config).toBeUndefined();
-      expect(body.temperature).toBeUndefined();
-      expect(body.top_p).toBeUndefined();
-    }
+    const body = await wireBody("claude-haiku-5-5", { temperature: 0.2, topP: 0.9 });
+    expect(body.thinking).toBeUndefined();
+    expect(body.output_config).toBeUndefined();
+    expect(body.temperature).toBeUndefined();
+    expect(body.top_p).toBeUndefined();
   });
 
   test("required and named tool choices survive at every effort", async () => {

@@ -35,6 +35,7 @@ export const DESKTOP_PICKER_ID_SUGGESTIONS: readonly string[] = [
   "claude-sonnet-5-5",
   "claude-sonnet-5",
   "claude-fable-5-1",
+  "claude-haiku-5-5", // 261008 preemptive suggestion; Desktop owns the live picker.
   "claude-haiku-4-5",
   "claude-opus-5",
   "claude-fable-5",

@@ -1389,7 +1389,7 @@
     "provider-quota-label-sanitize.test.ts": "providers",
     "provider-quota-observed-marker.test.ts": "providers",
     "provider-quota.test.ts": "providers",
-    "provider-registry-parity.test.ts": "providers",
+    "provider-registry-parity.test.ts": "providers", "haiku-5-5-catalog.test.ts": "providers",
     "provider-send-path-import.test.ts": "server",
     "provider-static-model-discovery.test.ts": "providers",
     "provider-subscription-cli.test.ts": "gui",
