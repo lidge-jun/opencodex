@@ -340,9 +340,9 @@ endpoint. A mismatch marks the credential domain as rewritten, exactly like a sh
 intercept, and forces the portable summarizer even for a native-capable target: `compact.ts`
 skips `/responses/compact`, and `request-prepare.ts` sets `parsed._portableCompaction`, which
 `request-sidecar-auth.ts` (`routedCompaction`) and the passthrough adapter's compaction body
-build both honor for canonical ChatGPT destinations. Native ciphertext is replayable only by the
-backend that minted it; the conversation model would otherwise resume with an omission marker
-in place of its history.
+build both honor for canonical ChatGPT destinations. Native ciphertext is replayable only by the backend that minted it; the conversation model would otherwise resume with an omission marker in place of its history.
+
+The portable Responses summarizer in `src/adapters/openai-responses/passthrough.ts` removes remaining top-level `web_search_call` history items along with tool declarations: hosted replay requires a tool surface that the prose-only summary deliberately does not expose. Bridge-restored function call/result pairs and existing messages/citations remain. This loses hosted action metadata (queries, visited URLs and sources stored only in those cells); it neither re-searches nor invents results. The projection is request-local, after bridge restoration; ordinary turns and native compaction retain their existing history handling. A failed summary publishes no replacement history.
 
 `tests/responses/responses-compaction-override.test.ts` covers source filtering, trigger selection, config
 validation, native and routed handlers, credential retention, portable summaries and replay, and combo failover.

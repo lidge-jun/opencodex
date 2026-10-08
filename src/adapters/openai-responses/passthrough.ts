@@ -141,7 +141,9 @@ function buildRoutedCompactionBody(body: unknown): unknown {
   const kept = input.filter(item => !isPlainObject(item)
     // `additional_tools` is how Codex Desktop's responses-lite shape carries tools;
     // leaving it in would break the no-tools invariant even with `tools` removed.
-    || (item.type !== "compaction_trigger" && item.type !== "additional_tools"));
+    // Hosted search cells also require that tool surface. Omit the replay metadata,
+    // keeping messages/citations and any bridge-restored call/result pairs intact.
+    || (item.type !== "compaction_trigger" && item.type !== "additional_tools" && item.type !== "web_search_call"));
   return {
     ...rest,
     input: [

@@ -743,3 +743,85 @@ describe("compaction routing triggers", () => {
     expect(JSON.stringify(calls[0])).not.toContain("native-reasoning-blob");
   });
 });
+
+describe("hosted search history at the compaction boundary", () => {
+  const history = () => [
+    { type: "message", role: "user", content: [{ type: "input_text", text: "Remember AZURE-KITE-731 and 17." }] },
+    ...[
+      { type: "search", query: "example reference", queries: ["example reference"] },
+      { type: "open_page", url: "https://example.com/reference" },
+      { type: "find_in_page", url: "https://example.com/reference", pattern: "reference" },
+    ].map((action, i) => ({ type: "web_search_call", id: `ws_history_${i}`, status: "completed", action })),
+    { type: "message", role: "assistant", content: [{ type: "output_text",
+      text: "AZURE-KITE-731 has value 17. Source: https://example.com/reference",
+      annotations: [{ type: "url_citation", url: "https://example.com/reference", title: "Reference", start_index: 39, end_index: 68 }],
+    }] },
+    { type: "function_call", call_id: "call_read", name: "read_file", arguments: "{}" },
+    { type: "function_call_output", call_id: "call_read", output: "Recorded value: 17" },
+  ];
+  const tools = [{ type: "web_search" }, { type: "function", name: "read_file", parameters: { type: "object", properties: {} } }];
+
+  for (const target of ["gateway", "openai"]) {
+    for (const version of ["v1", "v2"]) {
+      test.each(["manual", "auto"])(`${target} ${version} portable %s compaction omits hosted calls and preserves readable evidence`, async trigger => {
+        const settings = config();
+        if (target === "openai") settings.providers.openai = {
+          adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        };
+        settings.compactionRouting = { model: target === "openai" ? "gpt-6-luna" : "gateway/cheap", triggers: ["manual", "auto"] };
+        const input = { ...body(false), ...(version === "v1" ? { tools } : {}), input: [
+          ...history(), ...(version === "v2" ? [{ type: "additional_tools", tools }] : []),
+          ...(version === "v2" ? [{ type: "compaction_trigger" }] : []),
+        ] };
+        const saved = structuredClone(input);
+        const calls: Array<Record<string, any>> = [];
+        globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+          const outbound = JSON.parse(String(init?.body));
+          calls.push(outbound);
+          // Reproduce the observed rejection of hosted history without its tool declaration.
+          if (!outbound.tools && outbound.input.some((item: any) => item.type === "web_search_call")) {
+            return Response.json({ error: { type: "invalid_request_error", message: "Hosted history requires web_search tools" } }, { status: 400 });
+          }
+          return upstreamCompletion(outbound);
+        }) as typeof fetch;
+        const req = request(input, trigger, version === "v1" ? "responses/compact" : "responses");
+        req.headers.set("authorization", `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "fixture-account" })}`);
+        const response = await (version === "v1" ? handleResponsesCompact : handleResponses)(req, settings, { model: "", provider: "" });
+        expect(response.status).toBe(200);
+        const result = await response.json() as { output: Array<Record<string, any>> };
+        expect(calls).toHaveLength(1);
+        const outbound = calls[0]!;
+        expect(outbound.tools).toBeUndefined();
+        expect(outbound.input.some((item: any) => ["web_search_call", "additional_tools", "compaction_trigger"].includes(item.type))).toBe(false);
+        for (const item of history().filter(item => item.type !== "web_search_call")) expect(outbound.input).toContainEqual(item);
+        if (version === "v1") expect(JSON.stringify(result.output)).toContain(SUMMARY_PREFIX);
+        else expect(decodeCompactionSummary(result.output.find(item => item.type === "compaction")!.encrypted_content)).toContain("Retain progress");
+        expect(input).toEqual(saved);
+        const resumed = await handleResponses(request({ ...body(false), input: [...result.output, ...body(false).input] }), settings, { model: "", provider: "" });
+        expect(resumed.status).toBe(200);
+        await resumed.text();
+        expect(JSON.stringify(calls[1]!.input)).toContain("Retain progress");
+      });
+    }
+  }
+
+  test.each(["ordinary", "native-v1", "native-v2"])("%s retains hosted search history", async mode => {
+    const settings = config();
+    delete settings.compactionRouting;
+    settings.providers.openai = { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" };
+    let outbound: Record<string, any> | undefined;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      outbound = JSON.parse(String(init?.body));
+      return upstreamCompletion(outbound!);
+    }) as typeof fetch;
+    const input = { ...body(false), model: "gpt-6-luna", tools, input: [...history(), ...(mode === "native-v2" ? [{ type: "compaction_trigger" }] : [])] };
+    const req = request(input, mode === "ordinary" ? undefined : "manual", mode === "native-v1" ? "responses/compact" : "responses");
+    req.headers.set("authorization", `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "fixture-account" })}`);
+    const response = await (mode === "native-v1" ? handleResponsesCompact : handleResponses)(req, settings, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(outbound!.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(3);
+    expect(outbound!.tools).toContainEqual({ type: "web_search" });
+  });
+});

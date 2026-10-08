@@ -730,7 +730,11 @@ use that backend's native compact endpoint. Otherwise, including when either sid
 the conversation model is remembered as a combo target, OpenCodex runs the portable summarizer
 instead, so the summary stays readable when the conversation resumes on its own model, and the
 caller's credential does not cross to the other provider. The selected model must support the
-input size and content. Restart the proxy after editing
+input size and content. For portable Responses summaries, hosted `web_search_call` history items
+are omitted because the summary request has no tools. Existing answer text, citations and ordinary
+tool results remain available, but search queries, visited URLs and source metadata present only
+in those hosted items are not summarized. This does not delete the original conversation history
+or change native compaction; a failed summary does not replace the history. Restart the proxy after editing
 `config.json` by hand. Dashboard saves apply immediately.
 
 ## Memory routing
