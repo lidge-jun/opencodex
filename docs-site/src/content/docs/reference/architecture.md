@@ -47,8 +47,9 @@ full owner inventory for the Responses surface.
 `server/index/serve-options.ts` owns the HTTP boundary and delegates the Responses data plane to
 the `server/responses.ts` facade and its `server/responses/*.ts` modules:
 
-1. `server/index/serve-options.ts` applies CORS and API authentication, rejects new work while draining, and
-   records request lifecycle metadata. It serves `GET /v1/models`, `POST /v1/responses`,
+1. `server/index/serve-options.ts` applies CORS and API authentication, rejects new work while draining
+   with HTTP 503, JSON `error.code: "server_restarting"`, and `Retry-After: 5`, and
+   records request lifecycle metadata. Drain responses use the receiving listener's CORS policy. It serves `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
    (relayed to an OpenAI-family upstream by `server/images.ts` for codex's built-in `image_gen`
    tool), `POST /v1/live` / `POST /v1/realtime/calls` (ChatGPT / Codex App voice and OpenAI

@@ -1,5 +1,5 @@
 import { X509Certificate } from "node:crypto";
-import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, rmSync, writeFileSync, type Stats } from "node:fs";
 import { join } from "node:path";
 import {
   decodePickerCaCredential, openPickerCaCredential, pickerCaConfigId, readPickerCaCredential,
@@ -21,11 +21,16 @@ export function canonicalPickerConfigDir(configDir: string): string {
 
 /** Public records still cannot follow symlinks or accept oversized/malformed recovery data. */
 function readState(path: string, configId: string, initialization: boolean): Initialization | AuthorityMetadata | null {
+  let expected: Stats;
+  try { expected = lstatSync(path); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw new Error("picker_ca_metadata_unsafe"); }
+  if (expected.isSymbolicLink()) throw new Error("picker_ca_metadata_unsafe");
   let fd: number;
   try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw new Error("picker_ca_metadata_unsafe"); }
   try {
     const stat = fstatSync(fd);
+    if (stat.dev !== expected.dev || stat.ino !== expected.ino) throw new Error("picker_ca_metadata_unsafe");
     if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_PUBLIC_STATE_BYTES
       || (process.platform !== "win32" && stat.uid !== process.getuid!())) throw new Error();
     const bytes = Buffer.alloc(MAX_PUBLIC_STATE_BYTES + 1);
@@ -46,7 +51,10 @@ function readState(path: string, configId: string, initialization: boolean): Ini
     if (initialization && value.predecessor !== null
       && new X509Certificate(value.predecessor).toString() !== value.predecessor) throw new Error();
     return value;
-  } catch { throw new Error("picker_ca_metadata_invalid"); }
+  } catch (error) {
+    if (error instanceof Error && error.message === "picker_ca_metadata_unsafe") throw error;
+    throw new Error("picker_ca_metadata_invalid");
+  }
   finally { closeSync(fd); }
 }
 

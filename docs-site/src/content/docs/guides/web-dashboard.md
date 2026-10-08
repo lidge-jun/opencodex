@@ -268,6 +268,8 @@ they have been synchronized. See
 
 ## Remote Hub sessions, keys, and usage
 
+In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place, and clicking a key shows its full value with a **Copy** button. Revealing a key needs a signed-in dashboard session; the admin token cannot read key values.
+
 The dashboard's management plane is separate from direct client→hub model traffic. **Connect → API Keys** shows pending rotations, displays a replacement secret only once, and requires explicit commit or abort. Browser logout invalidates only the current remote session. Connected usage is the hub store filtered by the client's `apiKeyId`; disconnected usage is local, with no mirroring.
 
 The spawn override guarantee applies to the **built-in** v2 guidance text. A custom

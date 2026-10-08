@@ -1019,7 +1019,15 @@ The same main dispatch may also switch once on a 403 when Google's bounded error
 finds a complete structured `VALIDATION_REQUIRED` reason. The 401 and 403 paths share one sibling
 attempt per request; an unrelated or incomplete 403 keeps its original error. A rejected sibling,
 cancellation or exhausted send budget does not cause another upstream send.
-Continuations, native Responses passthrough, image and web-search sidecars, and output already sent
+The fetch-based web-search loop also rotates once on this structured 403 reason, using the sibling's
+OAuth token and matching Cloud Code Assist project. It accepts only complete, bounded Google error
+envelopes with `error.details[].reason === "VALIDATION_REQUIRED"`; verification wording alone does
+not authorize rotation, and this path does not persist a reauthentication mark. Each physical send,
+including a 429 retry, consumes the same request budget exactly once. A disabled pool, cancellation,
+exhausted budget or unavailable sibling preserves the failure. If sibling request construction or
+dispatch fails, the original bounded 403 remains the error; a replay rejected before physical
+dispatch returns its unused send allowance.
+Continuations, native Responses passthrough, image sidecars, and output already sent
 to the client do not use this rotation.
 
 Current scope is the ordinary Responses request paths. Cursor reports rate limits as adapter

@@ -474,9 +474,11 @@ The decision state is deliberately bounded: up to 500 characters of the current 
 240-character previous-assistant tail, a 520-character latest-tool-output tail, the tool name, and
 boolean image/tool signals may be sent to the selected decision backend. It excludes credentials,
 request headers, raw image bytes, tool arguments, encrypted reasoning, and full conversation history.
-Use a decision method only for content you are willing to send to that backend. Recognized OpenCodex machine-context
-envelopes are removed from all three text samples, but ordinary assistant and tool-output text is
-not a secret scanner and may still contain sensitive content. TypeSafe states that Jev is not
+Use a decision method only for content you are willing to send to that backend. Recognized Codex machine-context
+envelopes and Claude Code `<system-reminder>` blocks are removed from all three text samples before
+clipping, so injected reminders do not displace the actual task. The original model request is
+unchanged. This is not a secret scanner: ordinary assistant and tool-output text may still contain
+sensitive content. TypeSafe states that Jev is not
 trained on customer requests, but its terms set no fixed retention period for submitted state and
 offer zero data retention only on enterprise plans
 ([models](https://docs.typesafe.ai/models), [legal](https://docs.typesafe.ai/legal)). TypeSafe
@@ -485,6 +487,13 @@ before relying on them. Logs contain only the selected
 target/effort, a coarse decision gate, latency, optional confidence/probability, and numeric usage.
 Automated tests use mocked TypeSafe responses plus a no-key fail-open smoke; a live TypeSafe decision
 requires an operator-supplied key and is not run implicitly.
+
+When JEV's selected effort is applied to the Responses child, request and attempt logs show a
+differing effort as `high->xhigh` or `high->low`. Later effort adjustments remain in the chain,
+such as `high->xhigh->medium`. An unchanged effort or a target without effort control keeps the
+existing label; fallback attempts do not inherit the initial JEV effort. With the opt-in
+`protocols.rollout.nativeChatCombos` path, native Chat children currently do not apply JEV's
+selected effort; their labels retain the caller's effort and any native child adjustments instead.
 
 After the Combo has served requests, open **Models → Combos → jev-auto → Stats** to inspect JEV's
 picks without replacing the normal model picker or Usage page. The tab separates backend-reported decision

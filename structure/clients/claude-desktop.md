@@ -179,6 +179,7 @@ The shared CONNECT primitive accepts optional `allowedTargets` authorities. It s
 normalizes that list at startup; an empty list denies all, and other host/port pairs receive 403
 before tunnel selection or dialing. Authentication and loopback refusal remain in force.
 Existing Claude consumers omit this option and retain blind forwarding; it enables no new integration or certificate trust.
+Windows local-CA publication in `src/claude/intercept/local-ca-files.ts` hardens legacy inherited DACLs only after verifying the current owner and exclusively current-user, SYSTEM or Administrators grants; already private directories skip hardening. Newly created exclusive files and directories are hardened before strict owner/ACL verification and before CA access. ACL verification, including inherited SQLite sidecar ACLs, is memoized by bigint device/inode/birthtime within one publication; birthtime distinguishes recycled file IDs while preserving same-volume rename identity. Path and descriptor identity checks remain active on every access, and removed or replaced entries retire their memo.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
 
 On macOS, when the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
@@ -228,7 +229,7 @@ application-access dialogs are controlled by macOS; restart or upgrade does not 
 `picker-ca-store.ts` owns the versioned OS credential service, canonical-config identity namespace,
 bounded exact-shape payload, full constrained CA profile, validity and P-256 private-key match validation.
 `picker-ca-persistence.ts` validates public `authority.json` and `authority-init.json` records under
-the canonical CA lock. Initialization journals the config identity, new fingerprint and public
+the canonical CA lock, rejecting symlinks and mismatched pre-open/path and descriptor identities. Initialization journals the config identity, new fingerprint and public
 predecessor before writing the credential, verifies readback, then commits metadata and publication;
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
@@ -482,7 +483,7 @@ The explicit sync coordinator also accepts Cline CLI as a separate file integrat
 
 `claudeCode.stabilizePromptCache` is a default-off operator setting for
 [translated instruction stabilization](../data-planes/inbound-compat.md#opt-in-claude-instruction-stabilization).
-Config JSON preserves the boolean; only literal true activates the role-changing transform.
+Config JSON preserves the boolean; only literal true activates the transform, which drops recognized token footers and retains TaskCreate nudges as trailing user messages.
 The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
@@ -516,6 +517,8 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 The [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) is scoped to Codex Responses metadata and original Responses ingress; Claude Messages replay retains its own routing.
 
 ## Routed bundled-skill text
+
+Translated tool results in `src/claude/inbound.ts` retain nonempty string `tool_reference.tool_name` values as `Tool loaded: <name>` text lines in the paired `function_call_output`, preserving mixed-content order and the error marker. Each marker ends with a newline and starts with one after text that does not, because text-only tool output is joined without separators downstream. References describe client output; they do not declare or authorize executable tools, enable translated server-side deferral, or alter native passthrough. `tests/claude-integration/claude-inbound-tool-reference.test.ts` covers reference-only results, mixed/error output, malformed names, caller immutability and the real Responses parser.
 
 `src/claude/inbound.ts` bounds the text-carrier skill-directory probe to 4,096 UTF-16 code units, plus one character to recognize the terminating newline. A longer first line is preserved intact instead of being scanned or stubbed; normal POSIX, Windows, mixed and UNC separators retain their basename matching. The existing 10,000-character payload threshold and `claudeCode.blockedSkills` policy remain: `claude-api` is blocked by default, and an explicit empty list disables elision. Native Anthropic passthrough and tool-call/result pairing are unchanged. `tests/claude-integration/claude-inbound.test.ts` covers the exact 4,096/4,097 boundary and a long newline-free carrier.
 

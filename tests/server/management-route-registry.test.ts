@@ -59,6 +59,11 @@ const moduleOf = (file: string): string => file.replace(/^src\//, "").replace(/\
 const key = (method: string, path: string): string => `${method} ${path}`;
 
 describe("management route registry reconciliation", () => {
+  test("data-key reveal is declared as a dashboard-session-only read", () => {
+    expect(MANAGEMENT_ROUTES.find(route => route.method === "POST" && route.path === "/api/keys/reveal"))
+      .toMatchObject({ module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "session-only" } });
+  });
+
   test("every route resolvable from source is declared in the registry", () => {
     const declared = new Set(MANAGEMENT_ROUTES.map(r => key(r.method, r.path)));
     const undeclared: string[] = [];

@@ -321,6 +321,28 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
     }
   };
 
+  /** The full key for one row. Read-only, but bounded like the mutations so a
+   *  stalled connection releases the cell's pending state. */
+  const handleReveal = async (id: string): Promise<string | null> => {
+    const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${apiBase}/api/keys/reveal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+        signal: bounded.signal,
+        cache: "no-store",
+      });
+      if (!res.ok) return null;
+      const body = await res.json() as { key?: unknown };
+      return typeof body.key === "string" && body.key ? body.key : null;
+    } catch {
+      return null;
+    } finally {
+      bounded.clear();
+    }
+  };
+
   /** Pessimistic: the name changes on screen only after the server accepts it,
    *  and a failure keeps the draft rather than discarding what was typed.
    *  Bounded for the same reason as delete — it holds the same lock. */
@@ -559,6 +581,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         onDismissNewKey={() => setNewKey(null)}
         onCopyKey={() => { void copyKey(); }}
         onDelete={handleDelete}
+        onRevealKey={handleReveal}
         onRename={handleRename}
         {...(isConnectedRuntime() ? {
           // Key rotation is a connected-client operation: it swaps the data key this

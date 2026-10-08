@@ -11,7 +11,7 @@ import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
 import type { WebSearchBackendId } from "./index";
-import { clearableDeadline } from "../lib/abort";
+import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
@@ -353,6 +353,8 @@ export interface WebSearchLoopDeps {
     | { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind }
     | null
     | Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null>;
+  /** Release a credential-hop permit if this iteration ended before the adapter used it. */
+  onIterationEnd?: () => void;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
   /** Called only when the final bridged Responses stream reaches completed or incomplete. */
@@ -455,10 +457,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ...(recoveringEmptyAnswer ? { options: { ...parsed.options, toolChoice: "none" as const } } : {}),
       context: { ...parsed.context, messages: iterMessages, tools: recoveringEmptyAnswer ? [] : allTools },
     };
-    // One cumulative header deadline spans every pool-key 429 rotation in this model iteration.
+    // One cumulative header deadline spans key rotations and reset sends, excluding local pacing.
     // clear() stops only its timer after final headers; the direct turn signal remains attached to
     // the returned response body through AbortSignal.any().
-    let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+    let headerDeadline = pacingHeaderDeadline(connectTimeoutMs, signal);
     try {
       /**
        * Build and fetch one web-search iteration on the given adapter, under the iteration
@@ -491,7 +493,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
-        const requestFetch = deps.fetchForRequest?.(request, iterParsed) ?? routedProviderFetch;
+        const requestFetch = headerDeadline.pacedFetch(deps.fetchForRequest?.(request, iterParsed) ?? routedProviderFetch);
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
@@ -501,6 +503,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
+              sendBudget: deps.incomingMeta.sendBudget,
+              onPhysicalSend: deps.incomingMeta.onPhysicalSend,
               executor: requestFetch,
             });
           } else {
@@ -563,7 +567,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // The deliberate backoff must not consume the cumulative response-header deadline:
         // start a fresh one so the replay gets a new connect budget (504 stays reserved for real
         // upstream latency).
-        headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+        headerDeadline = pacingHeaderDeadline(connectTimeoutMs, signal);
         // Stall-watchdog seam between bounded retry fetches.
         yield { type: "heartbeat" };
         prepared = await fetchOnce(adapter, "rate-limit-429");
@@ -571,18 +575,34 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
       while ((prepared.response.status === 429
-        || (prepared.response.status === 403 && deps.incomingMeta?.providerName === "anthropic" && !accountRefusalOutputStarted)
+        || (prepared.response.status === 403
+          && (deps.incomingMeta?.providerName === "anthropic" || deps.incomingMeta?.providerName === "google-antigravity")
+          && !accountRefusalOutputStarted)
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);
         if (!rotated) break;
-        // Never let a broken body's cancel promise outlive the cumulative header deadline. Observe
-        // it, but proceed immediately to the rotated fetch under the SAME deadline signal.
-        try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        const retainRefusal = prepared.response.status === 403
+          && deps.incomingMeta?.providerName === "google-antigravity" && rotated.recoveryKind === "oauth-account-403";
+        // Keep the bounded refusal readable until the sibling actually returns headers.
+        // Other rotation paths retain their existing cancellation boundary.
+        if (!retainRefusal) {
+          try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        }
         adapter = rotated.adapter;
         // Stall-watchdog seam between bounded retry fetches (audit 011 B3).
         yield { type: "heartbeat" };
-        prepared = await fetchOnce(adapter, rotated.recoveryKind);
+        let replacement: IterationResponse;
+        try {
+          replacement = await fetchOnce(adapter, rotated.recoveryKind);
+        } catch (error) {
+          if (!retainRefusal || signal.aborted || headerDeadline.didExpire() || isTranslatorBudgetExceededError(error)) throw error;
+          break; // Format the original 403 safely; replacement diagnostics are not client errors.
+        }
+        if (retainRefusal) {
+          try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        }
+        prepared = replacement;
       }
 
       // Final headers have arrived. Clear only the deadline timer before ANY body read.
@@ -623,6 +643,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       headerDeadline.clear();
+      deps.onIterationEnd?.();
     }
   };
 

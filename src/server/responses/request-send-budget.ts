@@ -171,19 +171,21 @@ export function createResponsesSendBudget(
    * The hop hands its reservation down through `pendingHopPermit`, the same seam the
    * passthrough ladder already uses, and this view spends it on the adapter's FIRST
    * reservation. Every later send in that ladder is a new physical send and is charged
-   * normally. A permit the adapter takes but never sends under is released through the same
-   * call it would have used for a reservation of its own, so an abandoned replay is refunded
-   * rather than left charged.
+   * normally. The refundable view below keeps an unused hop open until executor invocation;
+   * its adapter release hands back an abandoned replay. The ordinary view retains early
+   * settlement for existing callers.
    */
+  const claimHopPermit = (): SingleUseDispatchPermit | undefined => {
+    const permit = pendingHopPermit;
+    pendingHopPermit = undefined;
+    return permit;
+  };
   const adapterDispatchBudget: RequestExecutionBudget | undefined = adapterSendBudget === undefined
-    ? undefined
-    : adapterDispatchBudgetView(adapterSendBudget, {
-      claimHopPermit: () => {
-        const permit = pendingHopPermit;
-        pendingHopPermit = undefined;
-        return permit;
-      },
-    });
+    ? undefined : adapterDispatchBudgetView(adapterSendBudget, { claimHopPermit });
+  // Opt in only where the adapter's executor is the confirmation boundary. Ordinary callers
+  // keep the existing early settlement contract, including already-settled permit fallback.
+  const refundableAdapterDispatchBudget: RequestExecutionBudget | undefined = adapterSendBudget === undefined
+    ? undefined : adapterDispatchBudgetView(adapterSendBudget, { claimHopPermit }, true);
   /**
    * How many sends a recovery leg may make, and the permit that authorises the last one.
    *
@@ -279,6 +281,7 @@ export function createResponsesSendBudget(
     get sendsUsed(): number { return sendBudget.used; },
     adapterSendBudget,
     adapterDispatchBudget,
+    refundableAdapterDispatchBudget,
     noteAdapterPhysicalSend,
     noteAdapterRecoveryWithheld,
     sendBudgetExhausted,
@@ -312,6 +315,7 @@ export type ResponsesSendBudget = Exclude<ReturnType<typeof createResponsesSendB
 function adapterDispatchBudgetView(
   budget: RequestExecutionBudget,
   hop: { claimHopPermit: () => SingleUseDispatchPermit | undefined },
+  refundableHop = false,
 ): RequestExecutionBudget {
   return {
     get used(): number { return budget.used; },
@@ -338,30 +342,29 @@ function adapterDispatchBudgetView(
           hopPermit.release();
           return budget.reserveDispatch({ ...intent, sendClass: hopPermit.sendClass });
         }
-        // Confirmed here rather than in `use()`: the adapter reserves immediately before it
-        // opens the transport, which is the same boundary the hop's own confirmation uses.
-        // A permit some other leg already settled returns false, and this falls through to a
-        // real reservation rather than handing the adapter a dead permit -- an adapter whose
-        // `use()` fails treats the request as exhausted and stops sending entirely.
-        if (hopPermit !== undefined && hopPermit.assumeCharge()) {
-          let spent = false;
+        if (hopPermit !== undefined && (refundableHop || hopPermit.assumeCharge())) {
+          let settled = false;
+          const confirm = (): boolean => {
+            if (settled) return false;
+            settled = true;
+            // Admission can still reject this replay. Close its external booking only when
+            // the adapter invokes its executor, leaving release() able to refund it until then.
+            if (!refundableHop || hopPermit.assumeCharge()) return true;
+            // Preserve the old fallback for a permit another leg already settled.
+            const fresh = budget.reserveDispatch(intent);
+            return fresh.allowed && fresh.permit.assumeCharge();
+          };
           return {
             allowed: true,
             permit: {
               sendClass: hopPermit.sendClass,
-              use: (): boolean => {
-                if (spent) return false;
-                spent = true;
-                return true;
+              use: confirm,
+              assumeCharge: confirm,
+              release: (): void => {
+                if (!refundableHop || settled) return;
+                settled = true;
+                hopPermit.release();
               },
-              assumeCharge: (): boolean => {
-                if (spent) return false;
-                spent = true;
-                return true;
-              },
-              // The hop's charge is already settled and belongs to the leg that asked for it,
-              // so there is nothing here to refund.
-              release: (): void => {},
             },
           };
         }

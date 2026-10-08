@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import * as filesystem from "node:fs";
 import { generateKeyPairSync, X509Certificate } from "node:crypto";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "../../src/claude/intercept/picker-ca";
@@ -282,6 +283,35 @@ test("metadata mismatch and symlink recovery records fail before credential muta
   expect(readFileSync(target, "utf8")).toBe(original);
   expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(ca.certPem);
   expect(fake.writes).toBe(1);
+});
+
+test("metadata replaced between lstat and open fails before credential access", () => {
+  const dir = root();
+  const fake = memoryPickerCaStore();
+  ensurePickerCa(dir, { persistent: true, rotation: "startup", store: fake.store });
+  // The picker canonicalizes its config directory (macOS tmpdir is /var -> /private/var).
+  const path = join(filesystem.realpathSync(dir), "claude-picker", "authority.json");
+  const original = readFileSync(path, "utf8");
+  const open = filesystem.openSync;
+  let replaced = false;
+  const opening = spyOn(filesystem, "openSync").mockImplementation((target, flags, mode) => {
+    if (target === path && !replaced) {
+      filesystem.renameSync(path, join(dir, "original-metadata"));
+      writeFileSync(path, original, { mode: 0o600 });
+      replaced = true;
+    }
+    return open(target, flags, mode);
+  });
+  let storeCalls = 0;
+  try {
+    expect(() => { ensurePickerCa(dir, { persistent: true, rotation: "startup", store: (service, account) => {
+      storeCalls++;
+      return fake.store(service, account);
+    } }); }).toThrow("picker_ca_metadata_unsafe");
+    expect(replaced).toBe(true);
+    expect(storeCalls).toBe(0);
+    expect(fake.writes).toBe(1);
+  } finally { opening.mockRestore(); }
 });
 
 test("unsafe picker directory or lock cannot reach the credential store", () => {

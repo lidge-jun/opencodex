@@ -827,6 +827,9 @@ that PID now. Wait for the operation to finish and retry; do not delete the lock
 process based only on this PID. A later mutation attempt can reclaim a stale lease once its
 age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
 
+On Windows, this shared Node/Bun diagnostic does not launch an executable to look up the
+image name; the recorded PID, liveness, lease age and recovery guidance remain available.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
 On macOS and Linux, install a private autostart wrapper at `<OPENCODEX_HOME>/bin/codex` and a
@@ -879,6 +882,11 @@ Migration restores the recorded native launcher without replacing a newer launch
 then installs the private wrapper. If private installation fails after native restoration, the native
 launcher stays restored and the operation can be retried. Missing or unusable native launchers require
 package-manager repair; OpenCodex does not guess another installation or rewrap the manager's path.
+Migration also refuses when the recorded `codex-shim.json` is not a regular file owned by you or is
+group- or world-writable. Older releases wrote that file with the process umask, so a umask of `002`
+left it at mode `0664`. The refusal names the file and the `chmod 600` that clears only the
+group- or world-writable refusal. Symlink and foreign-owner refusals remain; OpenCodex does not
+change the permissions itself.
 
 Launcher installation alone does not prove that Codex requests will use OpenCodex. After a runnable
 install, the command checks the current Codex routing and reports a warning instead of a green result
