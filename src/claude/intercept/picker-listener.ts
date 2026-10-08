@@ -11,7 +11,7 @@
  * HTTP/1.1 server, unchanged. Upstream is one HTTP/1.1 request per client request on both paths.
  * Only the bounded bootstrap response is held; other bodies and upgraded sockets relay as streams.
  */
-import { createSecureServer } from "node:http2";
+import { constants as h2Constants, createSecureServer } from "node:http2";
 import type { Http2ServerRequest, Http2ServerResponse, ServerHttp2Session } from "node:http2";
 import { createServer, request as httpsRequest } from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -184,9 +184,35 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     // reason phrase differs, and sendHead branches on it.
     const res = relayRes as ServerResponse;
     const h2 = req.httpVersionMajor === 2;
+    // Bun's h2 compat response emits finish only after both stream halves close.
+    const responseWritable = h2 ? (req as Http2ServerRequest).stream : res;
+    // Framing, not method, determines whether a peer can keep sending a body. A bodyless h2
+    // request carries END_STREAM on its headers; HTTP/1.1 needs length or chunked framing.
+    const uploading = h2 ? !(req as Http2ServerRequest).stream.endAfterHeaders
+      : req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
+    const closeInput = (completeReply = false) => {
+      if (h2) {
+        const stream = (req as Http2ServerRequest).stream;
+        if (!stream.closed && !stream.destroyed) {
+          stream.close(completeReply ? h2Constants.NGHTTP2_NO_ERROR : h2Constants.NGHTTP2_CANCEL);
+        }
+      } else if (!req.destroyed) {
+        if (completeReply) {
+          // finish is not peer receipt: destroy can truncate bytes still queued in TLS/TCP.
+          // Discard further input and flush a graceful FIN without waiting for body completion.
+          req.resume();
+          req.socket.end();
+        } else req.destroy();
+      }
+    };
     // Refusals answer with an empty response and a fixed log line that carries no request data.
     const refuse = (status: 400 | 503) => {
-      res.writeHead(status, { "Content-Length": "0" });
+      // Do not leave a refused, still-uploading stream behind after delivering its empty reply.
+      if (uploading && !req.complete) {
+        req.once("error", () => res.destroy());
+        responseWritable.once("finish", () => closeInput(true));
+      }
+      res.writeHead(status, { "Content-Length": "0", ...(!h2 && uploading && !req.complete ? { Connection: "close" } : {}) });
       res.end();
       options.log?.(`picker request refused ${status}`);
     };
@@ -209,12 +235,16 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     const fail = () => {
       if (clientGone) return;
       if (res.headersSent) res.destroy();
-      else { res.writeHead(502, { "Content-Length": "0" }); res.end(); log(502); }
+      else {
+        res.writeHead(502, { "Content-Length": "0", ...(!h2 && uploading && !req.complete ? { Connection: "close" } : {}) });
+        res.end(); log(502);
+      }
     };
     const omit = bootstrap ? new Set(["accept-encoding"]) : new Set<string>();
     const headers = upstreamRequestHeaders(req, omit);
     if (bootstrap) headers.push("Accept-Encoding", narrowBootstrapAcceptEncoding());
     let upReq: ReturnType<typeof httpsRequest>;
+    let upstreamResponded = false;
     try {
       // The HTTP/1.1 client validates the method, path and header values synchronously.
       upReq = httpsRequest({
@@ -222,13 +252,17 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
         ca: upstream.ca, rejectUnauthorized: true, agent: false,
         method, path: req.url, headers, maxHeaderSize: PICKER_MAX_HEADER_BYTES,
         }, upRes => {
+        upstreamResponded = true;
         const status = upRes.statusCode ?? 502;
         const originalHeaders = filteredHeaders(upRes.rawHeaders);
         const sendHead = (raw: string[]) => {
           if (res.headersSent) return;
           // HTTP/2 has no reason phrase; its compat writeHead takes the same flat raw header array.
           if (h2) (relayRes as Http2ServerResponse).writeHead(status, raw as unknown as Record<string, string>);
-          else res.writeHead(status, upRes.statusMessage, raw);
+          else {
+            if (uploading && !req.complete) raw.push("Connection", "close");
+            res.writeHead(status, upRes.statusMessage, raw);
+          }
           log(status);
         };
         upRes.on("error", fail);
@@ -293,6 +327,39 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     // Bun's compat response skips its close event for a HEAD reset before end(); the stream's own
     // close always fires. Destroying an upstream request that already completed is a no-op.
     if (h2) (req as Http2ServerRequest).stream.once("close", onClientClose);
+    if (uploading) {
+      let uploadFinished = false;
+      const finishUpload = () => {
+        if (uploadFinished) return;
+        uploadFinished = true;
+        req.off("end", finishUpload);
+        req.off("close", finishUpload);
+        upReq.off("close", onUpstreamClose);
+        responseWritable.off("finish", onResponseFinish);
+        res.off("close", stopUnfinishedUpload);
+        if (h2) (req as Http2ServerRequest).stream.off("close", finishUpload);
+      };
+      // Upstream close can precede draining a successful reply to a slow downstream.
+      // Stop relaying input only once that reply's writable finishes or closes.
+      const stopUnfinishedUpload = (completeReply = false) => {
+        if (!uploadFinished) {
+          req.unpipe(upReq);
+          closeInput(completeReply);
+          finishUpload();
+          upReq.destroy();
+        }
+      };
+      const onResponseFinish = () => stopUnfinishedUpload(true);
+      const onUpstreamClose = () => {
+        if (!upstreamResponded && !res.writableEnded) stopUnfinishedUpload();
+      };
+      req.once("end", finishUpload);
+      req.once("close", finishUpload);
+      upReq.once("close", onUpstreamClose);
+      responseWritable.once("finish", onResponseFinish);
+      res.once("close", stopUnfinishedUpload);
+      if (h2) (req as Http2ServerRequest).stream.once("close", finishUpload);
+    }
     req.pipe(upReq);
   };
   server.on("request", relay);

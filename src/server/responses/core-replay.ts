@@ -37,6 +37,11 @@ export function adapterNeedsForcedContinuation(name: string): boolean {
   return name === "kiro" || name === "cursor";
 }
 
+/** Adapters opting into restricted store:false replay for pending client function calls. */
+export function adapterNeedsToolCallContinuation(name: string): boolean {
+  return name === "qoder";
+}
+
 
 export type ContinuationOwnerRead =
   | { kind: "missing" }

@@ -249,6 +249,13 @@ statuses; HTTP 429/5xx and malformed responses remain transient. Description-onl
 compatibility never overrides a structured code. Endpoint diagnostics contain fixed outcome,
 HTTP status and an allowlisted code, never provider descriptions or credential material. Pool
 refresh errors retain that same safe status/code metadata without changing cooldown classification.
+Once a stored-pool record carries the persisted terminal verdict (`lastCodexValidationTerminal`
+with a failed status), `auth-api/pool-quota-probe.ts` answers passive quota reads with that
+`refresh_failed` reauthentication result instead of spending the dead grant again. Passive reads
+are GET listings including `?refresh=1`, dashboard quota polls, priming, and recovery probes. An
+explicit `POST /api/codex-auth/accounts/refresh` from any principal, a post-reset readback, and
+source-linked credentials still probe, and any credential write or completed validation clears
+the verdict.
 
 A native-main refusal is stored by physical auth path and refresh-grant fingerprint in a bounded
 process-local set (64 oldest-first entries). Ordinary quarantine clears and successful usage polls

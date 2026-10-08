@@ -399,6 +399,13 @@ export function isAllowedToolChoice(value: OcxToolChoice | undefined): value is 
   return typeof value === "object" && value !== null && "allowedTools" in value;
 }
 
+export function requiresToolCall(choice: OcxToolChoice | undefined): boolean {
+  return choice === "required"
+    || (typeof choice === "object" && choice !== null && (
+      "name" in choice || ("mode" in choice && choice.mode === "required")
+    ));
+}
+
 /** Compile the request's tool-choice policy into a reusable advertisement/restoration predicate. */
 export function toolChoiceToolPredicate(
   choice: OcxToolChoice | undefined,

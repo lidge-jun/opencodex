@@ -30,6 +30,7 @@ import { inspectResponseSpillStorage, responseStateMetrics, type ResponseSpillDi
 import { appOwnedBytesSnapshot } from "../../lib/app-owned-memory";
 import { readWindowsReplaceRetryCounters } from "../../lib/windows-atomic-replace";
 import {
+  MEMORY_DRAIN_RESTART_MS,
   SYSTEM_RESTART_EXPECTED_PID_HEADER,
   parseExpectedSystemRestartPid,
 } from "../../lib/system-restart-contract";
@@ -46,6 +47,7 @@ import type {
 } from "../../codex/app-server-restart-service";
 import type { ManagementContext } from "./context";
 import { acceptSystemRestart } from "./system-restart";
+import { readOptionalManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
 const ENDPOINT_SAMPLE_LIMIT = 60;
 // The spill report reads the snapshot and walks the spill directory synchronously,
@@ -179,8 +181,28 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       }, 409, req, config);
     }
 
-    // Longer informed drain than /api/stop; does not tear down Codex/Grok injection.
-    const result = acceptSystemRestart();
+    let body: unknown;
+    try { body = await readOptionalManagementJsonBody(req); }
+    catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ success: false, error: "Invalid restart JSON body." }, 400, req, config);
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return jsonResponse({ success: false, error: "Invalid restart JSON body." }, 400, req, config);
+    }
+    const drainGraceMs = (body as Record<string, unknown>).drainGraceMs;
+    if (drainGraceMs !== undefined && (
+      typeof drainGraceMs !== "number" || !Number.isSafeInteger(drainGraceMs)
+      || drainGraceMs < 1 || drainGraceMs > MEMORY_DRAIN_RESTART_MS
+    )) {
+      return jsonResponse({ success: false, error: "drainGraceMs must be an integer from 1 to 60000." }, 400, req, config);
+    }
+    // The process capability signs the restart target, not this new body option.
+    if (drainGraceMs !== undefined && ctx.principal === "system-restart-capability") {
+      return jsonResponse({ success: false, error: "Short grace requires management authentication." }, 403, req, config);
+    }
+    // Omission retains the informed 60s drain; only an explicit API request shortens it.
+    const result = acceptSystemRestart(undefined, {}, { drainGraceMs });
     return jsonResponse({
       success: true,
       message: result.alreadyDraining
