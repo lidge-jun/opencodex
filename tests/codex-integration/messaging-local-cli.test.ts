@@ -1,12 +1,10 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { messageCodexHome, messageCodexRuntime } from "../../src/cli/message-runtime";
+import { messageCodexHome } from "../../src/cli/message-runtime";
 import { skipsCodexShimAutoRestore } from "../../src/cli/codex-shim-autorestore";
 import { CAPABILITIES } from "../../src/cli/capabilities";
-import { MessageBudget } from "../../src/messaging/budget";
-import { runMessageProcess } from "../../src/messaging/process";
-import { LOCAL_TARGET, localMessagingFixture } from "../helpers/messaging-local";
+import { LOCAL_TARGET, LocalFixtureRpcError, localMessagingFixture, NO_REPLY } from "../helpers/messaging-local";
 import { repoPath } from "../helpers/repo-root";
 
 test("command is local-only in registry and skips global repair even on malformed usage", () => {
@@ -31,42 +29,50 @@ test("invalid usage allocates no timer, socket, helper or runtime-selection work
   expect(errors).not.toContain("Unexpected resource allocation");
 });
 
-test.skipIf(process.platform === "win32")("real CLI resolves effective home/runtime, emits one private-body-free receipt and no repair", async () => {
-  const fixture = localMessagingFixture();
-  const launcher = join(fixture.root, "native fixture launcher");
-  const record = join(fixture.root, "native-calls.jsonl");
-  const env = { PATH: process.env.PATH, HOME: fixture.root, CODEX_HOME: fixture.codexHome,
-    OPENCODEX_HOME: join(fixture.root, "ocx"), CODEX_CLI_PATH: launcher,
-    OPENAI_API_KEY: "private-fixture-key", OCX_TEST_HOME_GUARD: "1" };
-  const help = "Usage: codex queue [OPTIONS] --thread <THREAD> --message <TEXT>\n  --thread <THREAD>\n  --message <TEXT>\n  --remote <ADDR>\nunix://PATH";
-  await Bun.write(launcher, `#!${process.execPath}\n
-    const args = process.argv.slice(2);
-    const fs = await import('node:fs');
-    fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({args, home: process.env.CODEX_HOME, bypass: process.env.OCX_SHIM_BYPASS, keyPresent: Boolean(process.env.OPENAI_API_KEY)})+'\\n');
-    console.log(args.includes('--version') ? 'codex-cli 0.160.0' : args.includes('--help') ? ${JSON.stringify(help)} : 'PRIVATE native output');
-  `);
-  chmodSync(launcher, 0o700);
-  const budget = new MessageBudget();
-  try {
-    expect(messageCodexHome(env)).toBe(fixture.codexHome);
-    expect(messageCodexRuntime(env).argv(["queue", "--thread", LOCAL_TARGET])).toEqual([launcher, "queue", "--thread", LOCAL_TARGET]);
-    const cli = [process.execPath, repoPath("src/cli/index.ts"), "message"];
-    const directory = await runMessageProcess([...cli, "sessions", "--json"], budget, { env });
-    expect(directory.exitCode).toBe(0);
-    expect(JSON.parse(directory.stdout).sessions).toEqual([{ id: LOCAL_TARGET, name: "recipient", status: "idle" }]);
-    expect(existsSync(record)).toBe(false); // Discovery has no native helper probe.
-    const result = await runMessageProcess([...cli, "send", "--name", "recipient", "--kind", "notification", "--stdin", "--json"],
-      budget, { env, stdin: "PRIVATE body from stdin" });
-    expect(result.exitCode).toBe(0);
-    const receipt = JSON.parse(result.stdout);
-    expect(receipt.status).toBe("queued"); expect(receipt.target.threadId).toBe(LOCAL_TARGET);
-    expect(result.stdout).not.toContain("PRIVATE");
-    const calls = readFileSync(record, "utf8").trim().split("\n").map(line => JSON.parse(line));
-    expect(calls).toHaveLength(3);
-    expect(calls[2].args.slice(0, 3)).toEqual(["queue", "--thread", LOCAL_TARGET]);
-    expect(calls[2].args.slice(-2)).toEqual(["--remote", fixture.nativeUrl]);
-    expect(calls.every(call => !call.keyPresent && call.bypass === "1" && !existsSync(call.home))).toBe(true);
-    expect(existsSync(join(env.OPENCODEX_HOME, "codex-runtime.json"))).toBe(false);
-    expect(fixture.failures).toEqual([]);
-  } finally { budget.dispose(); await fixture.close(); }
+test.skipIf(process.platform === "win32")("full CLI uses the daemon directly, emits safe receipts and preserves exit codes", async () => {
+  for (const mode of ["queued", "unsupported", "rejected", "unknown", "unloaded"]) {
+    let reads = 0;
+    const fixture = localMessagingFixture(call => {
+      if (call.method === "thread/read" && mode === "unloaded" && ++reads === 2) {
+        return { thread: { id: LOCAL_TARGET, name: "recipient", status: { type: "notLoaded" } } };
+      }
+      if (call.method !== "thread/queue/add") return;
+      if (mode === "unsupported") return new LocalFixtureRpcError(-32601, "PRIVATE remote error");
+      if (mode === "rejected") return new LocalFixtureRpcError(-32000, "PRIVATE remote error");
+      if (mode === "unknown") { fixture.closeConnections(); return NO_REPLY; }
+    });
+    const preload = join(fixture.root, "no-spawn.ts");
+    await Bun.write(preload, `const fail = () => { throw new Error('Unexpected helper spawn'); }; Bun.spawn = fail; Bun.spawnSync = fail;`);
+    const env = { PATH: process.env.PATH, HOME: fixture.root, CODEX_HOME: fixture.codexHome,
+      OPENCODEX_HOME: join(fixture.root, "ocx"), CODEX_CLI_PATH: "/nonexistent/native", OCX_TEST_HOME_GUARD: "1" };
+    const cli = [process.execPath, "--preload", preload, repoPath("src/cli/index.ts"), "message"];
+    const run = async (args: string[], stdin = "") => {
+      const child = Bun.spawn([...cli, ...args], { env, stdin: new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
+      const timer = setTimeout(() => child.kill(), 10_000);
+      try {
+        const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+        return { exitCode, stdout, stderr };
+      } finally { clearTimeout(timer); }
+    };
+    try {
+      expect(messageCodexHome(env)).toBe(fixture.codexHome);
+      if (mode === "queued") {
+        const directory = await run(["sessions", "--json"]);
+        expect(directory.exitCode).toBe(0); expect(directory.stderr).toBe("");
+        expect(JSON.parse(directory.stdout).sessions).toEqual([{ id: LOCAL_TARGET, name: "recipient", status: "idle" }]);
+      }
+      const result = await run(["send", "--name", "recipient", "--kind", "notification", "--stdin", "--json"], "PRIVATE body from stdin");
+      expect(result.exitCode).toBe(mode === "queued" ? 0 : mode === "unknown" ? 3 : 1);
+      expect(result.stderr).toBe(""); expect(result.stdout).not.toContain("PRIVATE");
+      const receipt = JSON.parse(result.stdout);
+      expect(receipt.status).toBe(mode === "queued" ? "queued" : mode === "unknown" ? "unknown" : "not_sent");
+      expect(receipt.target.threadId).toBe(LOCAL_TARGET);
+      const calls = fixture.calls.filter(call => call.method === "thread/queue/add");
+      expect(calls).toHaveLength(mode === "unloaded" ? 0 : 1);
+      if (mode !== "unloaded") expect(calls[0]!.params.clientUserMessageId).toBe(receipt.messageId);
+      expect(existsSync(join(env.OPENCODEX_HOME, "codex-runtime.json"))).toBe(false);
+      expect(fixture.connectionCount).toBe(mode === "queued" ? 2 : 1);
+      expect(fixture.failures).toEqual([]);
+    } finally { await fixture.close(); }
+  }
 }, 30_000);

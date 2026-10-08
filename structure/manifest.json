@@ -132,7 +132,7 @@
       "path": "local-messaging.md",
       "tier": 3,
       "title": "Local Codex Messaging",
-      "scope": "Command-local metadata discovery, native queued submission, peer envelopes, receipts and owned lifecycle bounds.",
+      "scope": "Command-local metadata discovery, Unix RPC queued submission, peer envelopes, receipts and owned lifecycle bounds.",
       "documents": [
         "src/messaging/",
         "src/cli/"

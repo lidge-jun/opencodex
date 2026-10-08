@@ -377,7 +377,7 @@
   "messaging-local-envelope.test.ts": "codex-integration",
   "messaging-local-send.test.ts": "codex-integration",
   "messaging-local-lifecycle.test.ts": "codex-integration",
-  "messaging-local-native-queue.test.ts": "codex-integration",
+  "messaging-local-socket.test.ts": "codex-integration",
   "codex-features-cache.test.ts": "codex-integration",
   "codex-features-residual.test.ts": "codex-integration", "codex-filesystem-evidence.test.ts": "codex-integration",
   "codex-gather-authority.test.ts": "codex-integration", "codex-history-job.test.ts": "codex-integration",

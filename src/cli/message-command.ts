@@ -16,8 +16,8 @@ export async function runMessageCommand(argv: readonly string[], env: NodeJS.Pro
   process.once("SIGINT", cancel); process.once("SIGTERM", cancel);
   const budget = new MessageBudget(30_000, controller.signal);
   try {
-    // Keep home/runtime selection on this command path and after syntax validation.
-    const { messageCodexHome, messageCodexRuntime } = await import("./message-runtime");
+    // Keep home selection on this command path and after syntax validation.
+    const { messageCodexHome } = await import("./message-runtime");
     const home = messageCodexHome(env);
     if (args.action === "sessions") {
       const sessions = await localSessions(home, budget);
@@ -27,7 +27,7 @@ export async function runMessageCommand(argv: readonly string[], env: NodeJS.Pro
     }
     const body = await readMessageInput(Bun.stdin.stream(), budget);
     const receipt = await sendLocalMessage({ ...args, body },
-      { home, senderId: env.CODEX_THREAD_ID, runtime: () => messageCodexRuntime(env) }, budget);
+      { home, senderId: env.CODEX_THREAD_ID }, budget);
     if (args.json) console.log(JSON.stringify(receipt));
     else console.log(terminalSafeText(`${receipt.status}: ${receipt.messageId}${receipt.error ? ` — ${receipt.error.message}` : " (submitted, not proof of processing)"}`));
     return receipt.status === "queued" ? 0 : receipt.status === "unknown" ? 3 : 1;

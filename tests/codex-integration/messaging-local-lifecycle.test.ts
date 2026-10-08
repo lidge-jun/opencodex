@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { MessageBudget } from "../../src/messaging/budget";
-import { runMessageProcess } from "../../src/messaging/process";
 import { LocalMessageRpc } from "../../src/messaging/rpc";
 import { localDaemonEndpoint, localSocket } from "../../src/messaging/socket";
 import { LOCAL_TARGET, localMessagingFixture, NO_REPLY } from "../helpers/messaging-local";
@@ -20,7 +19,7 @@ test("transport rejects remote URLs and unsupported platforms without opening a 
 });
 
 test("importing the unactivated subsystem allocates no listener, timer, child or socket", async () => {
-  const modules = ["types", "budget", "socket", "rpc", "discovery", "process", "envelope", "input", "native", "send"].map(name => repoPath("src", "messaging", `${name}.ts`));
+  const modules = ["types", "budget", "socket", "rpc", "discovery", "envelope", "input", "send"].map(name => repoPath("src", "messaging", `${name}.ts`));
   const script = `
     const forbidden = () => { throw new Error("unexpected messaging resource allocation"); };
     globalThis.setTimeout = forbidden;
@@ -118,115 +117,13 @@ describe.skipIf(process.platform === "win32")("local RPC lifecycle", () => {
     const fixture = localMessagingFixture();
     const url = `${fixture.url.slice(0, -2)}.absent:/`;
     const budget = new MessageBudget();
-    try { await expect(LocalMessageRpc.connect(url, budget)).rejects.toThrow("existing local Codex"); }
+    try { await expect(LocalMessageRpc.connect(url, budget)).rejects.toThrow("not trusted"); }
     finally { budget.dispose(); await fixture.close(); }
   });
 });
 
-describe("command-owned child runner", () => {
-  test("deadline inputs are finite bounded integer milliseconds before any spawn", async () => {
-    for (const timeout of [0, -1, 0.5, Infinity, NaN, 30_001]) {
-      expect(() => new MessageBudget(timeout)).toThrow("deadline");
-    }
-    const budget = new MessageBudget();
-    try {
-      await expect(runMessageProcess([process.execPath, "-e", "throw new Error('must not run')"], budget,
-        { timeoutMs: 20_001 })).rejects.toThrow("Helper timeout");
-    } finally { budget.dispose(); }
-  });
-
-  test("bounded stdout is captured, stderr is not returned and nonzero exits are not retried", async () => {
-    const budget = new MessageBudget();
-    try {
-      const result = await runMessageProcess([process.execPath, "-e", "console.log('once'); console.error('private fixture stderr'); process.exit(7)"], budget);
-      expect(result).toEqual({ exitCode: 7, stdout: "once\n" });
-    } finally { budget.dispose(); }
-  });
-
-  test("already-cancelled operations do not spawn a helper", async () => {
-    const controller = new AbortController(); controller.abort();
-    const budget = new MessageBudget(30_000, controller.signal);
-    try { await expect(runMessageProcess([process.execPath, "-e", "throw new Error('must not run')"], budget)).rejects.toThrow("cancelled"); }
-    finally { budget.dispose(); }
-  });
-
-  test.skipIf(process.platform === "win32")("timeout cleans up launcher descendants that retain inherited pipes", async () => {
-    const fixture = localMessagingFixture();
-    const budget = new MessageBudget();
-    const pidFile = resolve(fixture.root, "helper-pid");
-    const script = `
-      const child = Bun.spawn([process.execPath, '-e', "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000)"],
-        { stdout: 'inherit', stderr: 'inherit' });
-      await Bun.write(process.argv[1], String(child.pid));
-      setInterval(()=>{},1000);
-    `;
-    const operation = runMessageProcess([process.execPath, "-e", script, pidFile], budget, { timeoutMs: 1000 }).catch(error => error);
-    try {
-      for (let i = 0; !existsSync(pidFile) && i < 100; i++) await Bun.sleep(5);
-      expect(existsSync(pidFile)).toBe(true);
-      const pid = Number(readFileSync(pidFile, "utf8"));
-      expect(Number.isInteger(pid) && pid > 0).toBe(true);
-      expect((await operation).code).toBe("process_incomplete");
-      let live = true;
-      for (let i = 0; live && i < 100; i++) {
-        try {
-          process.kill(pid, 0);
-          // A dead orphan awaiting init's reap is terminated, not a running helper.
-          if (process.platform === "linux" && /^\S+\s+\([^]*\)\s+Z\s/.test(readFileSync(`/proc/${pid}/stat`, "utf8"))) live = false;
-        } catch { live = false; }
-        if (live) await Bun.sleep(5);
-      }
-      expect(live).toBe(false);
-    } finally { budget.dispose(); await operation; await fixture.close(); }
-  }, 5000);
-
-  test("timeout joins the helper and output overflow never leaks child text in errors", async () => {
-    for (const script of ["setInterval(()=>{},1000)", "process.stdout.write('x'.repeat(70000))", "process.stderr.write('x'.repeat(70000))"]) {
-      const budget = new MessageBudget();
-      try {
-        await expect(runMessageProcess([process.execPath, "-e", script], budget, { timeoutMs: 150 })).rejects.toThrow("did not complete");
-      } finally { budget.dispose(); }
-    }
-  });
-
-  test.skipIf(process.platform === "win32")("timeout, cancellation and overflow bound detached descendant pipes", async () => {
-    for (const cause of ["timeout", "cancel", "overflow"] as const) {
-      const fixture = localMessagingFixture();
-      const controller = new AbortController();
-      const budget = new MessageBudget(3000, controller.signal);
-      const pidFile = resolve(fixture.root, "detached-pid");
-      // This fixture belongs to the test, not the runner's original process group.
-      // A finite lifetime also makes the pre-fix red run safe to complete.
-      const script = `
-        const child = Bun.spawn([process.execPath, '-e',
-          "process.on('SIGTERM',()=>{}); setTimeout(()=>process.exit(0),4000)"],
-          { detached: true, stdout: 'inherit', stderr: 'inherit' });
-        await Bun.write(process.argv[1], String(child.pid));
-        ${cause === "overflow" ? "process.stdout.write('x'.repeat(70000));" : ""}
-        setInterval(()=>{},1000);
-      `;
-      const started = performance.now();
-      const operation = runMessageProcess([process.execPath, "-e", script, pidFile], budget,
-        { timeoutMs: cause === "timeout" ? 500 : 2500 }).catch(error => error);
-      let pid: number | undefined;
-      try {
-        for (let i = 0; !existsSync(pidFile) && i < 100; i++) await Bun.sleep(5);
-        expect(existsSync(pidFile)).toBe(true);
-        pid = Number(readFileSync(pidFile, "utf8"));
-        expect(Number.isInteger(pid) && pid > 0).toBe(true);
-        if (cause === "cancel") controller.abort();
-        expect((await operation).code).toBe("process_incomplete");
-        expect(performance.now() - started).toBeLessThan(2500);
-        // The wrapper must not signal a detached group it does not own.
-        expect(() => process.kill(pid!, 0)).not.toThrow();
-      } finally {
-        budget.dispose();
-        await operation;
-        if (pid !== undefined && Number.isInteger(pid) && pid > 0) {
-          try { process.kill(pid, "SIGKILL"); } catch { /* Self-expiring fixture already exited. */ }
-        }
-        await fixture.close();
-      }
-    }
-  }, 20_000);
+test("deadline inputs are finite bounded integer milliseconds", () => {
+  for (const timeout of [0, -1, 0.5, Infinity, NaN, 30_001]) {
+    expect(() => new MessageBudget(timeout)).toThrow("deadline");
+  }
 });

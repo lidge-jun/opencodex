@@ -7,7 +7,7 @@ import { removeTreeWithRetry } from "./remove-tree";
 export const LOCAL_TARGET = "00000000-0000-4000-8000-000000000002";
 export const LOCAL_OTHER = "00000000-0000-4000-8000-000000000003";
 export const NO_REPLY = Symbol("no-reply");
-export interface LocalCall { method: string; params: Record<string, unknown> }
+export interface LocalCall { id?: number; method: string; params: Record<string, unknown> }
 
 /** Explicit RPC rejection for native-client failure tests, distinct from fixture-handler failure. */
 export class LocalFixtureRpcError {
@@ -36,6 +36,7 @@ export function localMessagingFixture(handler?: (call: LocalCall) => unknown | P
   const tasks = new Set<Promise<void>>();
   const sockets = new Set<Bun.ServerWebSocket<{ initialized: boolean }>>();
   let activeConnections = 0;
+  let connectionCount = 0;
   let closing = false;
   const server = Bun.serve<{ initialized: boolean }>({
     unix: join(socketDir, "app-server-control.sock"),
@@ -44,12 +45,12 @@ export function localMessagingFixture(handler?: (call: LocalCall) => unknown | P
       return new Response(null, { status: 400 });
     },
     websocket: {
-      open(ws) { activeConnections++; sockets.add(ws); },
+      open(ws) { connectionCount++; activeConnections++; sockets.add(ws); },
       close(ws) { activeConnections--; sockets.delete(ws); },
       message(ws, message) {
         const task = (async () => {
           const raw = JSON.parse(String(message));
-          const call: LocalCall = { method: raw.method, params: raw.params ?? {} };
+          const call: LocalCall = { id: raw.id, method: raw.method, params: raw.params ?? {} };
           calls.push(call);
           if (call.method === "initialized" && raw.id === undefined) { ws.data.initialized = true; return; }
           const allowed = ["initialize", "thread/loaded/list", "thread/read", "thread/queue/add"];
@@ -77,6 +78,8 @@ export function localMessagingFixture(handler?: (call: LocalCall) => unknown | P
   let closePromise: Promise<void> | undefined;
   return { root, codexHome, ...localDaemonEndpoint(codexHome), calls, failures,
     get activeConnections() { return activeConnections; },
+    get connectionCount() { return connectionCount; },
+    closeConnections() { for (const socket of sockets) socket.close(); },
     broadcast(frame: string | Uint8Array) { for (const socket of sockets) socket.send(frame); },
     close(): Promise<void> {
       return closePromise ??= (async () => {

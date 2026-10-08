@@ -1,7 +1,7 @@
 # ADR-6478 — decision recorded under "Local Codex messaging foundation"
 
 - Contract owner: [local-messaging.md](../local-messaging.md#local-codex-messaging-foundation)
-- Status: provisional contribution implementation, not upstream acceptance.
+- Status: original transport choice superseded by the amendment below; contribution remains provisional.
 
 ## Decision record
 
@@ -27,3 +27,14 @@ incomplete discovery fails instead of choosing a possibly ambiguous name.
 Initial platform scope excludes Windows. CLI integration, receipt/envelope
 semantics and their documentation remain subsequent bounded work. Starting the
 foundation does not authorize a PR, deployment or the broader architecture.
+
+## Transport amendment
+
+The current contract uses experimental `thread/queue/add` directly on the same
+validated Unix connection used for discovery and final revalidation. Text stays
+in RPC frames, and daemon identity stays bound to that connection. The receipt
+UUID is also `clientUserMessageId`. The historical CLI choice and version pin
+above no longer apply: the daemon must support this method. No submission helper,
+CLI selection or version probe remains. Filesystem trust checks precede connection.
+A confirmed server rejection is `not_sent`; an uncertain post-write result is
+`unknown` without retry. This amendment preserves the original record as history.

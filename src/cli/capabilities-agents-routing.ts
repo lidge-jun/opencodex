@@ -21,7 +21,7 @@ export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
       { name: "--in-reply-to", value: "string", summary: "Request message UUID; required only for a response." },
       { name: "--json", value: "boolean", summary: "Emit a receipt with not_sent, queued or unknown status." },
     ],
-    details: ["Contract-tested Codex 0.160.0 only. Sender context comes from CODEX_THREAD_ID, not an authentication claim.",
+    details: ["Requires daemon support for experimental thread/queue/add. Sender context comes from CODEX_THREAD_ID, not an authentication claim.",
       "queued means submitted, not processed. unknown must not be replayed; no automatic retry, daemon start or thread resume.",
       "Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No remote/Claude transport or skill installation."],
   },

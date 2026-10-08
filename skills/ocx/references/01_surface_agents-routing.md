@@ -189,7 +189,7 @@ Drives no management route.
 
 JSON mode: `envelope`.
 
-- Contract-tested Codex 0.160.0 only. Sender context comes from CODEX_THREAD_ID, not an authentication claim.
+- Requires daemon support for experimental thread/queue/add. Sender context comes from CODEX_THREAD_ID, not an authentication claim.
 - queued means submitted, not processed. unknown must not be replayed; no automatic retry, daemon start or thread resume.
 - Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No remote/Claude transport or skill installation.
 

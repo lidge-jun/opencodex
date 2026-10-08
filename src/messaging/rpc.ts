@@ -2,14 +2,21 @@ import { MessageBudget } from "./budget";
 import { localSocket, type LocalSocket } from "./socket";
 import { isRecord, isThreadId, LocalMessagingError, type LocalMetadataClient, type LocalThread } from "./types";
 
-type Method = "initialize" | "thread/loaded/list" | "thread/read";
+type Method = "initialize" | "thread/loaded/list" | "thread/read" | "thread/queue/add";
+interface QueueResult {
+  status: "not_sent" | "queued" | "unknown";
+  error?: { code: string; message: string };
+}
+/** Only a validated server rejection can establish non-submission after a write. */
+class QueueRejection extends LocalMessagingError {}
 interface Pending {
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
+  method: Method;
 }
 
-/** Read-only metadata RPC; there is intentionally no turn/session/queue mutation method. */
+/** Metadata discovery plus one text-only queue method; no session/turn/permission mutation. */
 export class LocalMessageRpc implements LocalMetadataClient {
   private nextId = 0;
   private readonly pending = new Map<number, Pending>();
@@ -89,6 +96,35 @@ export class LocalMessageRpc implements LocalMetadataClient {
     return { id, name: typeof thread.name === "string" ? thread.name : null, status: thread.status.type as LocalThread["status"] };
   }
 
+  /** Submit once on this connection; after an accepted write only a correlated reply is definitive. */
+  async queueMessage(threadId: string, text: string, messageId: string): Promise<QueueResult> {
+    let written = false;
+    try {
+      if (!isThreadId(threadId) || !isThreadId(messageId) || !text || text.includes("\0")
+        || Buffer.byteLength(text) > 32 * 1024) {
+        throw new LocalMessagingError("invalid_message", "A bounded text message and UUID correlation are required.");
+      }
+      const raw = await this.request("thread/queue/add", {
+        threadId, input: [{ type: "text", text }], clientUserMessageId: messageId,
+      }, () => { written = true; });
+      const queued = isRecord(raw) ? raw.queuedSubmission : null;
+      if (!isRecord(queued) || typeof queued.id !== "string" || !queued.id || queued.id.length > 4096
+        || queued.clientUserMessageId !== messageId || !Array.isArray(queued.input) || queued.input.length !== 1
+        || !isRecord(queued.input[0]) || queued.input[0].type !== "text" || queued.input[0].text !== text) {
+        throw this.invalidMetadata();
+      }
+      return { status: "queued" };
+    } catch (error) {
+      if (error instanceof QueueRejection || !written) {
+        return { status: "not_sent", error: error instanceof LocalMessagingError
+          ? { code: error.code, message: error.message }
+          : { code: "messaging_failed", message: "Local queue submission could not be started." } };
+      }
+      return { status: "unknown", error: { code: "submission_unknown",
+        message: "Local queue submission may have occurred. Do not replay; recipient processing is unknown." } };
+    }
+  }
+
   /** Idempotently reject pending work, remove handlers and terminate only this connection. */
   close(error: Error = new LocalMessagingError("daemon_unavailable", "Local Codex connection closed.")): void {
     if (this.closed) return;
@@ -107,17 +143,17 @@ export class LocalMessageRpc implements LocalMetadataClient {
     return error;
   }
 
-  /** Issue one whitelisted metadata RPC with bounded concurrency and timeout. */
-  private request(method: Method, params: Record<string, unknown>): Promise<unknown> {
+  /** Issue one whitelisted RPC with bounded concurrency and timeout; record accepted writes. */
+  private request(method: Method, params: Record<string, unknown>, onWritten?: () => void): Promise<unknown> {
     this.budget.throwIfEnded();
-    if (this.closed) throw new LocalMessagingError("daemon_unavailable", "Local Codex connection is closed.");
+    if (this.closed || this.socket.readyState !== 1) throw new LocalMessagingError("daemon_unavailable", "Local Codex connection is closed.");
     if (this.pending.size >= 4) throw new LocalMessagingError("rpc_limit", "Local Codex metadata concurrency limit exceeded.");
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.close(new LocalMessagingError("rpc_timeout", "Local Codex metadata request timed out.")),
+      const timer = setTimeout(() => this.close(new LocalMessagingError("rpc_timeout", "Local Codex request timed out.")),
         this.budget.remainingMs(this.rpcTimeoutMs));
-      this.pending.set(id, { resolve, reject, timer });
-      try { this.socket.send(JSON.stringify({ id, method, params })); } catch { this.close(); }
+      this.pending.set(id, { resolve, reject, timer, method });
+      try { this.socket.send(JSON.stringify({ id, method, params })); onWritten?.(); } catch { this.close(); }
     });
   }
 
@@ -132,9 +168,22 @@ export class LocalMessageRpc implements LocalMetadataClient {
         || Object.hasOwn(raw, "result") === Object.hasOwn(raw, "error")) throw new Error();
       const pending = this.pending.get(raw.id);
       if (!pending) return;
+      let rejection: LocalMessagingError | undefined;
+      if (Object.hasOwn(raw, "error")) {
+        const error = raw.error;
+        if (!isRecord(error) || !Number.isSafeInteger(error.code) || typeof error.message !== "string") throw new Error();
+        if (pending.method === "thread/queue/add") {
+          const unsupported = error.code === -32601 || (error.code === -32600
+            && (error.message === "thread/queue/add requires experimentalApi capability"
+              || error.message.startsWith("Invalid request: unknown variant `thread/queue/add`")));
+          rejection = unsupported
+            ? new QueueRejection("unsupported_queue", "Your Codex daemon does not support local queueing (experimental thread/queue/add).")
+            : new QueueRejection("queue_rejected", "Codex rejected the local queue submission.");
+        } else rejection = new LocalMessagingError("rpc_rejected", "Codex rejected the local metadata request.");
+      }
       this.pending.delete(raw.id);
       clearTimeout(pending.timer);
-      if (Object.hasOwn(raw, "error")) pending.reject(new LocalMessagingError("rpc_rejected", "Codex rejected the local metadata request."));
+      if (rejection) pending.reject(rejection);
       else pending.resolve(raw.result);
     } catch { this.close(new LocalMessagingError("invalid_metadata", "Codex returned an invalid or oversized RPC frame.")); }
   }

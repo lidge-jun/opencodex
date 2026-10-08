@@ -1,7 +1,7 @@
 # ADR-6479 — decision recorded under "Command-local CLI"
 
 - Contract owner: [local-messaging.md](../local-messaging.md#command-local-cli)
-- Status: provisional contribution implementation, not upstream acceptance.
+- Status: original transport choice superseded by the amendment below; contribution remains provisional.
 
 ## Decision record
 
@@ -28,3 +28,14 @@ tests before admission. Same-user processes can inspect native message argv.
 Remote, dashboard, Claude, idle notices, permission semantics and
 managed skill installation remain separate proposals. PR publication requires
 the user's go-ahead; independent review remains a separate readiness gate.
+
+## Transport amendment
+
+The current contract uses experimental `thread/queue/add` directly on the same
+validated Unix connection used for discovery and final revalidation. Text stays
+in RPC frames, and daemon identity stays bound to that connection. The receipt
+UUID is also `clientUserMessageId`. The historical CLI choice and version pin
+above no longer apply: the daemon must support this method. No submission helper,
+CLI selection or version probe remains. Filesystem trust checks precede connection.
+A confirmed server rejection is `not_sent`; an uncertain post-write result is
+`unknown` without retry. This amendment preserves the original record as history.
