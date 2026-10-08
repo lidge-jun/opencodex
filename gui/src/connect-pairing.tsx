@@ -7,10 +7,13 @@ import { useCopyFeedback } from "./components/use-copy-feedback";
 export function ConnectPairingForm({
   target,
   onConnected,
+  onPairingStart,
   local = false,
 }: {
   target: ApiTarget;
   onConnected: () => void;
+  /** Let a secret-bearing surface expire its previous disclosure lifetime. */
+  onPairingStart?: () => void;
   /** Explicit local pairing for a standalone link join; never an automatic bootstrap. */
   local?: boolean;
 }) {
@@ -27,6 +30,7 @@ export function ConnectPairingForm({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (busy) return;
+    onPairingStart?.();
     setBusy(true);
     setError(null);
     const controller = new AbortController();

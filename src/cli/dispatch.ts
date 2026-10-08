@@ -145,6 +145,7 @@ const commandRunners: Record<string, CommandRunner> = {
     if (!deps.head.resolveArgs) return 64;
     return await deps.handleResolve(deps.head.resolveArgs);
   },
+  message: async deps => (await import("./message-command")).runMessageCommand(deps.args.slice(1)),
   restore: async deps => {
     const restoreArgs = deps.args.slice(1);
     const restoreJson = takeFlag(restoreArgs, "--json");

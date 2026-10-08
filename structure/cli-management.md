@@ -24,6 +24,8 @@ Runnable capability parents also expose their declared descendants. Nested help 
 
 A declaration may carry `usage`, the exact synopsis for a verified leaf. `capabilityInvocation` and matching still use canonical command tokens. `src/cli/capabilities-command.ts` projects `usage` only when present, preserving the previous JSON object shape otherwise. The help renderer then uses the exact Usage line and omits that leaf's incomplete-grammar disclaimer. A declaration without usage keeps the prior Command/partial-grammar presentation. Root aliases, hidden entries, head-only invocations and the models-context special topic retain their existing semantics.
 
+The agents/routing leaf also declares local `message sessions` and `message send`; their command-local transport and receipt contract belongs to [local messaging](local-messaging.md#command-local-cli). These declarations import no messaging handlers and preserve baseline capability order. The operating-reference generator places the two verbs in the agents/routing chapter.
+
 ## Generated operating reference
 
 `scripts/generate-ocx-skill-surface.ts` renders the compact `skills/ocx/references/01_management_surface.md` index and eight flat domain chapters from the same capability data. The index retains canonical fragment forwarders and links to complete chapter entries. Counts derive from declarations; grouping does not choose runtime dispatch or grant authority. Unknown roots and duplicate anchors are rejected rather than silently omitted.

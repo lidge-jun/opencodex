@@ -1,3 +1,5 @@
+import { hasOrdinaryNativeOpenAiRow } from "./control-plane";
+import { isCodexControlPlaneModel } from "../control-plane-models";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -385,7 +387,7 @@ export function clampEntryToCodexSupportedEfforts(
   entry: RawEntry,
   supported: ReadonlySet<string> | null,
 ): void {
-  if (!supported) return;
+  if (!supported || isCodexControlPlaneModel(entry.slug)) return;
   const levels = Array.isArray(entry.supported_reasoning_levels)
     ? entry.supported_reasoning_levels as Array<{ effort?: string }>
     : null;
@@ -530,6 +532,14 @@ export function clampCatalogModelsToObservedCodexSupport(
     }
     if (omitted) models.splice(index, 1);
     else index += 1;
+  }
+
+  // Only Reserve rows are currently omitted above; ordinary natives keep a fallback ladder.
+  // Also repair a persisted orphan so a removed Reserve can never leave a reviewer behind.
+  if (!hasOrdinaryNativeOpenAiRow(models)) {
+    for (let index = models.length - 1; index >= 0; index -= 1) {
+      if (isCodexControlPlaneModel(models[index]!.slug)) models.splice(index, 1);
+    }
   }
 
   return {

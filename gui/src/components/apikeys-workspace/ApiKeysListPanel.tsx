@@ -13,12 +13,16 @@
  * concluded a key could not be removed. A hover-only control would repeat that on
  * touch screens, so it stays on screen.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { IconTrash } from "../../icons";
 import { useT } from "../../i18n/shared";
-import { formatCreatedDate, type ApiKeyEntry } from "../../pages/api-keys-utils";
+import { formatCreatedDate, type ApiKeyEntry, type RevealKeyResult } from "../../pages/api-keys-utils";
 import type { UsageReadMetadata } from "../../usage-summary-resource";
 import { UsageIncompleteNotice } from "../usage-incomplete-notice";
+import { Notice } from "../../ui";
+import { isStandaloneRuntime, standaloneApiTargets } from "../../api-targets";
+import { ConnectPairingForm } from "../../connect-pairing";
+import { useKeyDisclosure, type DisclosureResetReason } from "../../use-key-disclosure";
 
 export default function ApiKeysListPanel({
   keys,
@@ -27,6 +31,9 @@ export default function ApiKeysListPanel({
   attributionSince,
   usageMetadata,
   localeTag,
+  apiBase,
+  active = true,
+  onPairingStart,
   busy,
   onSelect,
   onDelete,
@@ -39,18 +46,24 @@ export default function ApiKeysListPanel({
   attributionSince?: string;
   usageMetadata?: UsageReadMetadata;
   localeTag?: string;
+  /** Management API origin a reveal denial pairs this dashboard against. */
+  apiBase: string;
+  active?: boolean;
+  onPairingStart?: () => void;
   /** A mutation is in flight; its result is bound to one key, so navigation waits. */
   busy: boolean;
   onSelect: (id: string) => void;
   /** Resolves true only when the key is really gone. */
   onDelete?: (id: string) => Promise<boolean>;
-  /** The full key, or null when the server would not hand it over. */
-  onReveal?: (id: string) => Promise<string | null>;
+  /** The reveal outcome: the full key, a standing refusal, or a transient failure. */
+  onReveal?: (id: string) => Promise<RevealKeyResult>;
 }) {
   const t = useT();
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [revealPendingId, setRevealPendingId] = useState<string | null>(null);
   const [revealFailedId, setRevealFailedId] = useState<string | null>(null);
+  /** A refused row offers pairing; success still needs a fresh reveal click. */
+  const [revealDeniedId, setRevealDeniedId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copyFailedId, setCopyFailedId] = useState<string | null>(null);
   const copiedTimer = useRef<number | null>(null);
@@ -58,6 +71,20 @@ export default function ApiKeysListPanel({
   const [confirmArmed, setConfirmArmed] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteFailedId, setDeleteFailedId] = useState<string | null>(null);
+  const pendingReveal = useRef<string | null>(null);
+  const clearDisclosure = useCallback((reason: DisclosureResetReason) => {
+    const interrupted = pendingReveal.current;
+    pendingReveal.current = null;
+    setRevealed({});
+    setRevealPendingId(null);
+    setRevealFailedId(null);
+    setRevealDeniedId(current => reason === "session" ? interrupted ?? current : reason === "pairing" ? current : null);
+    setCopiedId(null);
+    setCopyFailedId(null);
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    copiedTimer.current = null;
+  }, []);
+  const disclosure = useKeyDisclosure(apiBase, active, clearDisclosure);
 
   // Same 300ms fuse as the detail pane: the click that opened the confirmation
   // must not be able to land on the button that replaced it.
@@ -79,22 +106,46 @@ export default function ApiKeysListPanel({
 
   const rowLocked = busy || deletingId !== null;
 
+  // The same gate RemoteLink applies to its local-pairing offer: only the
+  // literal same-origin loopback transport the standalone grant mint accepts.
+  // An alias URL does not reveal the configured bind host, so never invent
+  // a recovery URL from it; keep the generic denial guidance.
+  const localPairingTarget = standaloneApiTargets(apiBase).shared;
+  const canPairLocally = isStandaloneRuntime()
+    && window.location.protocol === "http:"
+    && ["127.0.0.1", "[::1]"].includes(window.location.hostname)
+    && localPairingTarget.serverOrigin === window.location.origin;
+
   const toggleReveal = async (k: ApiKeyEntry) => {
+    const generation = disclosure.generation.current;
+    if (!disclosure.current(generation)) return;
     const id = k.id;
     setRevealFailedId(null);
+    setRevealDeniedId(null);
     if (currentReveal(k) !== undefined) {
       setRevealed(({ [id]: _hidden, ...rest }) => rest);
       return;
     }
     if (!onReveal || revealPendingId) return;
+    pendingReveal.current = id;
     setRevealPendingId(id);
     try {
-      const full = await onReveal(id);
-      if (deletedIds.current.has(id)) return;
-      if (full) setRevealed(prev => ({ ...prev, [id]: full }));
+      const result = await onReveal(id);
+      if (!disclosure.current(generation) || deletedIds.current.has(id)) return;
+      if (result.ok) setRevealed(prev => ({ ...prev, [id]: result.key }));
+      else if (result.kind === "denied") {
+        disclosure.invalidate();
+        onPairingStart?.();
+        setRevealDeniedId(id);
+      }
       else setRevealFailedId(id);
+    } catch {
+      if (disclosure.current(generation)) setRevealFailedId(id);
     } finally {
-      setRevealPendingId(null);
+      if (disclosure.current(generation)) {
+        pendingReveal.current = null;
+        setRevealPendingId(null);
+      }
     }
   };
 
@@ -104,6 +155,8 @@ export default function ApiKeysListPanel({
   };
 
   const copyKey = (id: string, value: string) => {
+    const generation = disclosure.generation.current;
+    if (!disclosure.current(generation)) return;
     setCopyFailedId(null);
     let write: Promise<void> | undefined;
     try {
@@ -116,13 +169,14 @@ export default function ApiKeysListPanel({
       return;
     }
     write.then(() => {
+      if (!disclosure.current(generation) || deletedIds.current.has(id)) return;
       setCopiedId(id);
       if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => {
         setCopiedId(current => current === id ? null : current);
         copiedTimer.current = null;
       }, 2000);
-    }, () => copyFailed(id));
+    }, () => { if (disclosure.current(generation)) copyFailed(id); });
   };
 
   useEffect(() => () => {
@@ -156,6 +210,27 @@ export default function ApiKeysListPanel({
       </div>
 
       <UsageIncompleteNotice data={usageMetadata} />
+      {revealDeniedId !== null && (
+        <>
+          <Notice tone="warn">{t("api.key.revealDenied")}</Notice>
+          {/* Pairing authorizes the browser, but never discloses a value itself. */}
+          {canPairLocally && (
+            <ConnectPairingForm
+              local
+              target={localPairingTarget}
+              onPairingStart={() => {
+                disclosure.invalidate();
+                onPairingStart?.();
+              }}
+              onConnected={() => {
+                disclosure.invalidate();
+                onPairingStart?.();
+                setRevealDeniedId(null);
+              }}
+            />
+          )}
+        </>
+      )}
       {keysLoading ? (
         <div className="api-active-keys-skeleton" role="status" aria-label={t("common.loading")} />
       ) : keys.length === 0 ? (

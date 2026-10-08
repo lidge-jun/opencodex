@@ -443,8 +443,8 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## 개발
 
-소스 개발에는 `PATH`에 `bun` CLI가 있어야 합니다. 배포된 npm 패키지가 번들하는 Bun 런타임과는
-별개이며, 그 런타임은 설치된 `ocx` 명령만 씁니다.
+소스 개발에는 `PATH`에 `bun` CLI가 있어야 합니다. 배포된 npm 패키지는 설치된 `ocx` 명령용 Bun
+런타임을 번들하며, package script도 이 번들 의존성에서 Bun을 선택할 수 있습니다.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

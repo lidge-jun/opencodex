@@ -164,6 +164,26 @@ için [Alt Ajan Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 Pano yönetim düzlemi doğrudan client→hub model trafiğinden ayrıdır. **Bağlantı → API Anahtarları** bekleyen döndürmeyi gösterir, yeni sırrı bir kez görüntüler ve açık onay veya iptal ister. Tarayıcı logout yalnızca mevcut oturumu geçersiz kılar. Bağlı kullanım hub üzerinde `apiKeyId` ile filtrelenir; bağlantı kesilince yerel kayıt kullanılır ve yansıtma yapılmaz.
 
+### Kaydedilmiş bir API anahtarını görüntüleme
+
+Kaydedilmiş bir anahtarın tam değerini göstermek için açık eşleştirme veya güvenilir Tailscale
+kimlik doğrulamasıyla oluşturulmuş bir pano oturumu gerekir. Otomatik yerel oturum maskelenmiş
+listeyi okuyabilir, ancak kaydedilmiş değerleri gösteremez. Yönetici belirteci de yalnızca oturumlara
+izin verilen bu işlemi çağıramaz. Mevcut Remote Hub eşleştirme akışını veya varsa güvenilir Tailscale girişini kullanın.
+
+Yerel eşleştirme formu yalnızca HTTP üzerinden doğrudan `127.0.0.1` veya `[::1]` IP adresinde açılmış,
+aynı origin'e sahip bağımsız panoda sunulur. Origin, sunucunun yapılandırılmış geri döngü IP bağlama
+adresine uymalıdır. `localhost` veya bir takma adres kullanıyorsanız sunucunun bağlama adresini kontrol edin:
+`127.0.0.1` için `http://127.0.0.1:<port>`, `::1` için `http://[::1]:<port>` adresinde yeniden açıp
+eşleştirin. hostname değeri `localhost` olan sunucuda uygun bir yerel eşleştirme origin'i yoktur.
+Pano, takma adresli URL'den gerçek bağlama adresini belirleyemediği için başka bir URL önermeden genel ret açıklamasını gösterir.
+
+Eşleştirmeden sonra değeri istemek için anahtara yeniden tıklayın. Eşleştirme tek başına anahtarı göstermez.
+Paylaşılan oturum temizlendiğinde veya değiştirildiğinde, eşleştirme başladığında, panelden ayrıldığınızda,
+tarayıcı sekmesi ya da masaüstü penceresi gizlendiğinde veya sunucu değiştiğinde gösterilen değerler ve
+kopyalama durumu temizlenir. Bir kez gösterilen yeni ve yedek anahtar değerleri de temizlenir.
+Yetkili oturumun süresi dolarsa veya iptal edilirse yeniden eşleştirin.
+
 Spawn geçersiz kılma garantisi **yerleşik** v2 rehberlik metni için geçerlidir.
 Özel bir `injectionPrompt` bu metnin yerini tamamen alır ve `{{model}}` ve
 `{{effort}}` yer tutucularını (ve isteğe bağlı olarak `{{roster}}`) içermelidir,

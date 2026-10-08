@@ -96,7 +96,7 @@ test("fresh routed rows do not inherit a previously ordered native template's gu
 
   applyFullModelPickerOrder(rows, order);
   expect(effectiveSubagentRoster(featured, "v2", rows)).toEqual(before);
-  expect(rows.toSorted((a, b) => Number(a.priority) - Number(b.priority)).map(row => row.slug)).toEqual(order);
+  expect(rows.filter(row => row.visibility === "list").toSorted((a, b) => Number(a.priority) - Number(b.priority)).map(row => row.slug)).toEqual(order);
   expect(template).toEqual(previousTemplate);
 });
 
@@ -457,7 +457,7 @@ test("public catalog wrapper applies saved full order while preserving guidance 
   const natural = build([]);
   const order = ["gpt-5.5", "p/f", "p/e", "p/d", "p/c", "p/b", "p/a"];
   const ordered = build(order);
-  expect(ordered.toSorted((a, b) => Number(a.priority) - Number(b.priority)).map(row => row.slug)).toEqual(order);
+  expect(ordered.filter(row => row.visibility === "list").toSorted((a, b) => Number(a.priority) - Number(b.priority)).map(row => row.slug)).toEqual(order);
   expect(effectiveSubagentRoster(featured, "v1", ordered)).toEqual(effectiveSubagentRoster(featured, "v1", natural));
   // Independently mirror the upstream description's visible-priority window, not the OCX helper.
   const nativeDescription = ordered.toSorted((a, b) => Number(a.priority) - Number(b.priority))

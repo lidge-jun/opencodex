@@ -8,12 +8,7 @@
  */
 
 import { open } from "node:fs/promises";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { serveCodingAgentMcpTools } from "../coding-agent/mcp-server";
 import { CODEBUDDY_TOOL_LIMITS } from "./tool-bridge";
 
 interface ToolDefinition {
@@ -156,25 +151,7 @@ async function loadTools(path: string): Promise<ToolDefinition[]> {
 
 export async function runCodeBuddyMcpServer(catalogPath: string): Promise<void> {
   if (!catalogPath) throw new Error("missing tool catalog");
-  // The pinned SDK does not detect stdin EOF itself. The capture server must exit when
-  // the parent terminates its CLI, including after a captured message_stop.
-  const exitOnStdinClose = (): void => process.exit(0);
-  process.stdin.on("end", exitOnStdinClose);
-  process.stdin.on("close", exitOnStdinClose);
-
-  const tools = await loadTools(catalogPath);
-  const advertisedNames = new Set(tools.map(tool => tool.name));
-  const server = new Server(
-    { name: "opencodex-codebuddy-capture", version: "1.0.0" },
-    { capabilities: { tools: {} } },
-  );
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
-  server.setRequestHandler(CallToolRequestSchema, async request => {
-    if (!advertisedNames.has(request.params.name)) throw new Error("unknown isolated tool");
-    // The external Codex client retains approval and execution ownership.
-    return await new Promise<never>(() => {});
-  });
-  await server.connect(new StdioServerTransport());
+  await serveCodingAgentMcpTools(await loadTools(catalogPath), "opencodex-codebuddy-capture");
 }
 
 if (import.meta.main) await runCodeBuddyMcpServer(process.argv[2] ?? "");

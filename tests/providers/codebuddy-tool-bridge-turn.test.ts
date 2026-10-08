@@ -93,6 +93,37 @@ const BLOCK_STOP = { type: "stream_event", event: { type: "content_block_stop" }
 const MESSAGE_STOP = { type: "stream_event", event: { type: "message_stop" } };
 
 describe("CodeBuddy capture-only tool bridge turn", () => {
+  test("active bridge continuation keeps prior tool calls under the bare request name", async () => {
+    const p = parsed([tool("probe_echo")]);
+    const callId = "cb_prior_call";
+    p.context.messages = [
+      { role: "user", content: "run probe", timestamp: 0 },
+      { role: "assistant", content: [{ type: "toolCall", id: callId, name: "probe_echo", arguments: { a: 1 } }], timestamp: 1 },
+      { role: "toolResult", toolCallId: callId, content: "PROBE_OK", timestamp: 2 },
+    ];
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    expect(cliName).toMatch(/^mcp__/);
+    let stdin = "";
+    let args: readonly string[] = [];
+    const adapter = createCodeBuddyAdapter(provider(), {
+      which: () => "/usr/bin/codebuddy",
+      spawn: (_command, childArgs) => {
+        args = childArgs;
+        const child = fakeChild(frameLines([INIT_OK, { type: "result", subtype: "success", is_error: false }]));
+        child.stdin = new Writable({ write(chunk, _encoding, callback) { stdin += String(chunk); callback(); } });
+        return child as unknown as ChildProcess;
+      },
+    });
+    const events = await run(adapter, p);
+    expect(args).toContain("--mcp-config");
+    expect(args[args.indexOf("--allowedTools") + 1]).toBe(cliName);
+    const text = JSON.parse(stdin.trim()).message.content[0].text;
+    expect(text).toContain(`[Tool call: probe_echo (call_id: ${callId}) with args: {"a":1}]`);
+    expect(text).not.toContain(`[Tool call: ${cliName}`);
+    expect(text).toContain(`TOOL RESULT (call_id: ${callId}):\nPROBE_OK`);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
   test.each(["catalog.json", "mcp.json"])("bridge staging failure in %s is private and cleans both staging directories", async failedFile => {
     const before = new Set(readdirSync(tmpdir()));
     const promptDirs: string[] = [];
