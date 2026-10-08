@@ -1,5 +1,5 @@
 import { isCodexReasoningEffort, isDeclaredReasoningEffort } from "../reasoning-effort";
-import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
+import { SUPPORTED_NATIVE_OPENAI_SLUGS, isNativeLargeContextVariant } from "../codex/catalog/native-models";
 import type { OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
 import { COMBO_NAMESPACE, isValidComboId, resolveComboId, targetKey } from "./identifiers";
 import {
@@ -272,7 +272,7 @@ export function comboConfigIssues(
   }
   const alias = typeof body.alias === "string" ? body.alias.trim() : "";
   const nativeAlias = body.nativeAlias === true;
-  if (nativeAlias && !SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias)) {
+  if (nativeAlias && !SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias) && !isNativeLargeContextVariant(alias)) {
     issues.push({
       path: ["nativeAlias"],
       message: "nativeAlias requires a currently supported bare OpenAI-native model alias",

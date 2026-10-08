@@ -10,6 +10,7 @@
  * catches the pathological case and stays out of the way otherwise. Every uncertainty
  * resolves toward admitting.
  */
+import { nativeLargeContextLimits, stripCodexLargeContextAlias, isNativeLargeContextVariant } from "../../codex/catalog/context-variants";
 import {
   nativeOpenAiContextWindow,
   nativeOpenAiMaxInputTokens,
@@ -184,6 +185,19 @@ function resolveContextLimits(
   const canonicalNativeBare = providerName === OPENAI_CODEX_PROVIDER_ID
     && isCanonicalOpenAiForwardProvider(provider)
     && !modelId.includes("/");
+  if (canonicalNativeBare && isNativeLargeContextVariant(modelId)) {
+    const base = stripCodexLargeContextAlias(modelId);
+    const limits = typeof nativeContextCap === "number" ? { cap: nativeContextCap } : (nativeContextCap ?? {});
+    const large = nativeLargeContextLimits(modelId, {
+      ...limits,
+      providerWindow: positive(provider.contextWindow) ?? limits.providerWindow,
+      modelWindows: { ...limits.modelWindows, ...provider.modelContextWindows },
+      modelMaxInputTokens: { ...limits.modelMaxInputTokens,
+        [modelId]: positive(modelRecordValue(provider.modelMaxInputTokens, modelId)) ?? limits.modelMaxInputTokens?.[modelId] ?? 0,
+        [base]: positive(modelRecordValue(provider.modelMaxInputTokens, base)) ?? limits.modelMaxInputTokens?.[base] ?? 0 },
+    });
+    if (large) return large;
+  }
   const nativeLimits = canonicalNativeBare && configured !== null
     ? {
         ...(typeof nativeContextCap === "number" ? { cap: nativeContextCap } : (nativeContextCap ?? {})),
@@ -321,7 +335,10 @@ export function checkInputAdmission(
   modelId: string,
   nativeContextCap?: NativeContextLimitsInput,
 ): InputAdmissionResult {
-  const ceiling = resolveInputCeiling(provider, providerName, modelId, nativeContextCap);
+  const effectiveModelId = parsed._nativeContextModelId && stripCodexLargeContextAlias(parsed._nativeContextModelId) === modelId
+    ? parsed._nativeContextModelId
+    : modelId;
+  const ceiling = resolveInputCeiling(provider, providerName, effectiveModelId, nativeContextCap);
   if (ceiling === null) return { admitted: true, estimatedTokens: 0, ceiling: null };
   const estimatedTokens = estimateInputTokens(parsed, modelId, provider);
   return { admitted: estimatedTokens <= ceiling * ADMISSION_TOLERANCE, estimatedTokens, ceiling };

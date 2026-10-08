@@ -16,8 +16,13 @@ export function expandUserPath(raw: string): string {
 let resolvedConfigDirCache: { raw: string | undefined; path: string } | null = null;
 const configDirHardeningFlights = new Map<string, Promise<void>>();
 
+export function resetConfigDirCacheForTests(): void {
+  resolvedConfigDirCache = null;
+}
+
 export function getConfigDir(): string {
-  const raw = process.env["OPENCODEX_HOME"]?.trim() || undefined;
+  const rawEnv = process.env["OPENCODEX_HOME"];
+  const raw = typeof rawEnv === "string" ? rawEnv.trim() || undefined : undefined;
   if (resolvedConfigDirCache && resolvedConfigDirCache.raw === raw) return resolvedConfigDirCache.path;
   const path = raw ? resolve(expandUserPath(raw)) : join(homedir(), ".opencodex");
   resolvedConfigDirCache = { raw, path };

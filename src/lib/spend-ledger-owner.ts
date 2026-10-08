@@ -60,6 +60,11 @@ export function onSpendLedgerOwnerReleased(hook: () => void): void {
   releaseHooks.push(hook);
 }
 
+export function resetSpendLedgerOwnerForTests(): void {
+  activeOwner = null;
+  boundLedgerHome = null;
+}
+
 function errorCode(error: unknown): unknown {
   return error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
 }

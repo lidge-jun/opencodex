@@ -1,5 +1,6 @@
 import { CODEX_INTERNAL_OPENAI_MODELS } from "./codex/control-plane-models";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
+import { isNativeLargeContextVariant, stripCodexLargeContextAlias } from "./codex/catalog/context-variants";
 import { createHash } from "node:crypto";
 import { peekAuthStore } from "./oauth/store";
 import { resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "./oauth/devin/api-base";
@@ -85,6 +86,7 @@ export interface RouteResult {
   providerName: string;
   provider: OcxProviderConfig;
   modelId: string;
+  nativeContextVariant?: { requestedModel: string; wireModel: string };
   /** Immutable static policy for the current final wire model. */
   staticPolicy: ResolvedModelPolicy;
   /** Which deterministic routing path produced this route (RI-01). */
@@ -640,7 +642,8 @@ function routeResult(
     throw new AnthropicSecondaryInstanceUnavailableError();
   }
   const qualified = resolveBlockedModelRedirect(config, `${providerName}/${modelId}`);
-  const bare = resolveBlockedModelRedirect(config, modelId);
+  const bare = resolveBlockedModelRedirect(config, modelId)
+    ?? (isNativeLargeContextVariant(modelId) ? resolveBlockedModelRedirect(config, stripCodexLargeContextAlias(modelId)) : undefined);
   const crossTarget = config && (
     crossProviderRedirectTarget(config, providerName, qualified)
     ?? crossProviderRedirectTarget(config, providerName, bare)
@@ -663,7 +666,15 @@ function routeResult(
   }
   // Existing bare mappings remain one post-resolution, same-provider substitution.
   const redirected = bare;
-  const effectiveModelId = redirected ?? modelId;
+  const selectedModelId = redirected ?? modelId;
+  const isComboTarget = Boolean(config?.combos && Object.values(config.combos).some(c => c.alias === selectedModelId || (c.nativeAlias && selectedModelId === "gpt-6-sol-900k")));
+  const nativeContextVariant = providerName === OPENAI_CODEX_PROVIDER_ID
+    && isCanonicalOpenAiForwardProvider(routedProviderConfig(providerName, provider))
+    && isNativeLargeContextVariant(selectedModelId)
+    && !isComboTarget
+    ? { requestedModel: selectedModelId, wireModel: stripCodexLargeContextAlias(selectedModelId) }
+    : undefined;
+  const effectiveModelId = nativeContextVariant?.wireModel ?? selectedModelId;
   const effectiveRouteReason = redirected ? "blocked-model-redirect" : routeReason;
   const codexAccountMode = providerCodexAccountMode(providerName, provider);
   const routedProvider = routedProviderConfig(providerName, provider);
@@ -674,6 +685,7 @@ function routeResult(
     providerName,
     provider: routedProvider,
     modelId: effectiveModelId,
+    ...(nativeContextVariant ? { nativeContextVariant } : {}),
     staticPolicy: captureRouteStaticPolicy(providerName, effectiveModelId, routedProvider, effectiveAlias),
     routeKind,
     routeReason: effectiveRouteReason,

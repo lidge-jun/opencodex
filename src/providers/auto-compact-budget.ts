@@ -1,4 +1,4 @@
-import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
+import { SUPPORTED_NATIVE_OPENAI_SLUGS, isNativeLargeContextVariant } from "../codex/catalog/native-models";
 import { redactSecretString } from "../lib/redact";
 
 const RESERVED_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -51,7 +51,7 @@ export function modelAutoCompactTokenLimitsConfigError(
       return `${field} key ${safeModelId} is reserved`;
     }
     if (options.requireNativeIds
-      && (modelId.includes("/") || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(modelId))) {
+      && (modelId.includes("/") || (!SUPPORTED_NATIVE_OPENAI_SLUGS.has(modelId) && !isNativeLargeContextVariant(modelId)))) {
       return `${field} key ${safeModelId} must be an exact supported native model id`;
     }
     if (options.allowTombstones && entry === null) continue;
