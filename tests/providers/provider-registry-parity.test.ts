@@ -1176,10 +1176,10 @@ describe("provider registry parity", () => {
   test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    // Registry order. Both OAuth entries (anthropic, google-antigravity) are gated by
+    // Registry order. OAuth entries, including both Anthropic instances, are gated by
     // providerSecureTransportConfigError; the rest are key/local providers that never send a
     // subscription bearer to the override.
-    expect(optedIn.map(entry => entry.id)).toEqual(["orcarouter-oauth", "anthropic", "google-antigravity", "ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["orcarouter-oauth", "anthropic", "anthropic2", "google-antigravity", "ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }
