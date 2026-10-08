@@ -15,7 +15,7 @@ import { desktop3pAlias } from "./desktop-3p";
 import { nativeOpenAiContextWindow, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
 import { ANTHROPIC_MODEL_CONTEXT_WINDOWS } from "../providers/registry/model-seeds";
 import type { OcxClaudeCodeConfig } from "../types";
-import { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR, isAnthropicClaudeRoute, ONE_MILLION } from "./long-context";
+import { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR, ONE_MILLION } from "./long-context";
 
 export { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR } from "./long-context";
 
@@ -184,12 +184,12 @@ export function buildClaudeContextWindows(
   }
   // Anthropic passthrough guard (audit 021 #3): canonical claude ids ride the
   // subscription passthrough — marking a sub-1M one would strap [1m]/1M-beta onto
-  // a model that cannot host it. Register Claude rows of either pool only at >=1M.
+  // a model that cannot host it. Register anthropic rows only at >=1M.
   const registrable = routedModels.filter(
     m =>
       typeof m.contextWindow === "number" &&
       m.contextWindow > 0 &&
-      !(isAnthropicClaudeRoute(m.provider, m.id) && m.contextWindow < ONE_MILLION),
+      !(m.provider === "anthropic" && m.contextWindow < ONE_MILLION),
   );
   // Bare routed ids are registered only when unambiguous across providers (audit
   // 021 #5) — natives are registered first, so a native slug always wins the bare

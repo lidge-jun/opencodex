@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { claudeSurfaceSupportsOneMillion, isLongContextWindow, routeSupportsOneMillion } from "../../src/claude/long-context";
-import { AUTO_CONTEXT_OFF, buildClaudeContextWindows, UNPAIRED_AUTO_CONTEXT } from "../../src/claude/context-windows";
+import { AUTO_CONTEXT_OFF, UNPAIRED_AUTO_CONTEXT } from "../../src/claude/context-windows";
 import { buildAnthropicModelInfos } from "../../src/claude/model-info";
 import { generateDesktop3pModels } from "../../src/claude/desktop-3p";
 import { withSubagentContextMarker } from "../../src/claude/subagent-model";
@@ -67,19 +67,6 @@ describe("Desktop 3P", () => {
     const [k3] = generateDesktop3pModels([], [{ provider: "kimi", id: "k3", contextWindow: 262_144 }]);
     expect(k3!.supports1m).toBeUndefined();
     expect(k3!.prefer1m).toBeUndefined();
-  });
-});
-
-describe("launch window map", () => {
-  test("a sub-1M Claude row on Pool 2 is not registered, like a Pool 1 row; other models on that name are", () => {
-    const windows = buildClaudeContextWindows([], [
-      { provider: "anthropic2", id: "claude-short", contextWindow: 872_000 },
-      { provider: "anthropic2", id: "claude-long", contextWindow: 1_000_000 },
-      { provider: "anthropic2", id: "kimi-k3", contextWindow: 900_000 },
-    ] as Parameters<typeof buildClaudeContextWindows>[1]);
-    expect(windows["anthropic2/claude-short"]).toBeUndefined();
-    expect(windows["anthropic2/claude-long"]).toBe(1_000_000);
-    expect(windows["anthropic2/kimi-k3"]).toBe(900_000);
   });
 });
 

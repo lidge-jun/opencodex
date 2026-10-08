@@ -41,10 +41,13 @@ export function isLongContextWindow(window: number | undefined): boolean {
 }
 
 /**
- * A real Anthropic model on an Anthropic route. Its windows are 200k or a genuine 1M, and a bare
- * id rides the native passthrough, so the long-window rule never widens it. The model id is part
- * of the test on purpose: a configured gateway that merely shares the name `anthropic2` and
- * serves other models is not an Anthropic pool.
+ * A Claude model on an Anthropic-named route. Claude windows are 200k or a genuine 1M and a bare
+ * id rides the native passthrough, so the long-window rule never widens one: a Claude row listed
+ * under 1M is a capped one, and on a runner without the compaction env it keeps the 200k
+ * accounting it had before long windows were widened. Keyed on the model id as well, so a
+ * configured gateway that only shares the name `anthropic2` and serves other models keeps the
+ * long-window rule. A custom `anthropic2` gateway serving Claude below 1M is treated like a pool
+ * row on these surfaces, which is the pre-existing (unwidened) behavior.
  */
 export function isAnthropicClaudeRoute(provider: string, modelId: string): boolean {
   return isAnthropicInstanceId(provider) && modelId.startsWith("claude-");
