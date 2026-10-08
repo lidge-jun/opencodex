@@ -95,3 +95,28 @@ exact-head hosted CI on the PR. Local checks are limited to static inspection (`
 reading diffs). Each phase adds focused regression tests next to the subsystem it changes; they run
 in CI. New test files are registered in `scripts/test-layout/layout.json` and
 `tests/fixtures/test-layout-expected.json`. Files at their size cap get sibling modules, never a raised cap.
+
+## Outcome (2026-10-09)
+
+Landed as one PR, [#6743](https://github.com/lidge-jun/opencodex/pull/6743), squash-merged into `dev`
+as `4222989ff4` at head `9445c48caf`. Every check passed at that head
+([Cross-platform CI 37812949507](https://github.com/lidge-jun/opencodex/actions/runs/37812949507): 41 pass,
+four conditional skips, aggregate `ci` pass). No local suite, typecheck, lint or build ran, by owner
+instruction; hosted CI is the only execution evidence.
+
+`anthropic2` ("Anthropic · Pool 2") ships as a dormant builtin preset that shares the Anthropic
+implementation and keeps its own credentials (browser OAuth only, OPEN-01), pool settings, runtime
+state, quota, usage labels and reset journal. Helpers bind to an explicit or inherited pool and skip,
+never fall back, when that pool is unavailable. Bare `claude-*`, the default provider and Claude Code
+forwarding stay on `anthropic`. The dashboard shows Pool 2 with a green Claude mark.
+
+Reviews folded before merge: a wp4 correctness review (helper refusal no longer fails the main
+request; inheritance ignores a custom unmarked row while a pool removed mid-request still refuses;
+availability counts any usable account; reset currency uses the live config), a security review
+(PASS; Lab live probes now refuse a Pool 2 bearer for an unmarked row), and CodeRabbit (marked Pool 2
+excluded from bare-model fallback; an invalid sidecar `anthropicInstance` degrades at load instead of
+resetting the config; native OAuth target and send-time eligibility judged on the routed provider).
+
+Subagent note: from wp4 on, every Sol model name was refused for this ChatGPT account, so wp4 and
+wp5 workers ran on the session default model. Not verified: live Anthropic accounts, real OAuth
+login, provider-side account separation.
