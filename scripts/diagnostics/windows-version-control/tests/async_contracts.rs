@@ -289,3 +289,27 @@ return {dropped:bundled.bundledCodexCatalogSnapshot()===null};
     );
     assert_eq!(result["dropped"], true);
 }
+
+#[test]
+#[ignore = "requires explicit Bun and repository paths"]
+fn source_abort_does_not_cancel_an_independent_shared_catalog_refresh() {
+    let result = contract(
+        "source-abort",
+        r#"
+await bundled.loadBundledCodexCatalogAsync();
+await bundled.loadBundledCodexCatalogAsync();
+bundled.setBundledCatalogCacheForTests(selected,catalog,{expiresAt:0});
+fs.writeFileSync(join(root,'arm'),'catalog-delay');
+const controller = new AbortController();
+const scoped = bundled.loadBundledCodexCatalogAsync({},()=>true,controller.signal);
+const independent = bundled.loadBundledCodexCatalogAsync();
+setTimeout(()=>controller.abort(),50);
+const [stopped,shared] = await Promise.all([scoped,independent]);
+return {stopped:stopped===null,shared:shared?.models[0]?.slug,
+  visible:bundled.bundledCodexCatalogSnapshot()?.models[0]?.slug};
+"#,
+    );
+    assert_eq!(result["stopped"], true);
+    assert_eq!(result["shared"], "gpt-5.5");
+    assert_eq!(result["visible"], "gpt-5.5");
+}

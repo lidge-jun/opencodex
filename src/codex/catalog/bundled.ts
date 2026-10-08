@@ -84,6 +84,7 @@ let bundledCatalogEpoch = 0;
 let bundledCatalogCache: BundledCatalogMemo | null = null;
 let bundledCatalogRetry: { inputs: string; epoch: number; after: number } | null = null;
 let bundledCatalogFlight: { inputs: string; epoch: number; controller: AbortController; promise: Promise<ReadonlyRawCatalog | null> } | null = null;
+const catalogAlwaysCurrent = () => true;
 
 function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
   const clone = (current: unknown): unknown => {
@@ -355,19 +356,30 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): Readonly
 /** Same candidate/parser authority, with version and bundled-model execs off the event loop. */
 export function loadBundledCodexCatalogAsync(
   deps: BundledCatalogDeps = {},
-  isCurrent: () => boolean = () => true,
+  isCurrent: () => boolean = catalogAlwaysCurrent,
   signal?: AbortSignal,
 ): Promise<ReadonlyRawCatalog | null> {
+  if (signal?.aborted || !isCurrent()) return Promise.resolve(null);
+  const view = (promise: Promise<ReadonlyRawCatalog | null>) => {
+    if (!signal) return promise.then(value => isCurrent() ? value : null);
+    let abort: (() => void) | undefined;
+    return Promise.race([promise, new Promise<null>(resolve => {
+      abort = () => resolve(null);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+    })]).then(value => isCurrent() && !signal.aborted ? value : null)
+      .finally(() => { if (abort) signal.removeEventListener("abort", abort); });
+  };
   const runtimeDeps = bundledRuntimeDeps(deps);
   const inputs = codexRuntimeSelectionIdentity(runtimeDeps);
   const epoch = bundledCatalogEpoch;
   const useCache = !deps.commandCandidates && !deps.execFileSync && !deps.execFile && !deps.configDir && !deps.env;
   if (useCache && bundledCatalogFlight?.inputs === inputs && bundledCatalogFlight.epoch === epoch) {
-    return bundledCatalogFlight.promise.then(value => isCurrent() ? value : null);
+    return view(bundledCatalogFlight.promise);
   }
   const controller = new AbortController();
   const flight = { inputs, epoch, controller, promise: Promise.resolve<ReadonlyRawCatalog | null>(null) };
-  if (useCache) {
+  if (useCache && !signal && isCurrent === catalogAlwaysCurrent) {
     bundledCatalogFlight?.controller.abort();
     bundledCatalogFlight = flight;
   }
@@ -375,6 +387,7 @@ export function loadBundledCodexCatalogAsync(
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let deadlineReached = false;
   const work = (async () => {
     const active = () => !controller.signal.aborted && isCurrent() && bundledCatalogEpoch === epoch;
     const resolved = deps.commandCandidates ? null : await resolveAndPersistCodexRuntimeAsync({ ...runtimeDeps, signal: controller.signal },
@@ -397,10 +410,11 @@ export function loadBundledCodexCatalogAsync(
     return step.value;
   })().catch(() => null);
   flight.promise = Promise.race([work, new Promise<null>(resolve => {
-    timer = setTimeout(() => { controller.abort(); resolve(null); }, 45_000);
+    timer = setTimeout(() => { deadlineReached = true; controller.abort(); resolve(null); }, 45_000);
     timer.unref?.();
   })]).then(value => {
-    if (useCache && value === null && isCurrent() && bundledCatalogEpoch === epoch
+    if (useCache && value === null && (!controller.signal.aborted || deadlineReached)
+      && isCurrent() && bundledCatalogEpoch === epoch
       && flight.inputs === codexRuntimeSelectionIdentity(runtimeDeps)) {
       bundledCatalogRetry = { inputs: flight.inputs, epoch, after: Date.now() + BUNDLED_CATALOG_CACHE_MS };
     }
@@ -411,7 +425,7 @@ export function loadBundledCodexCatalogAsync(
     controller.abort();
     if (bundledCatalogFlight === flight) bundledCatalogFlight = null;
   });
-  return flight.promise;
+  return view(flight.promise);
 }
 
 /** Serve only the same selection's last confirmed catalog; refresh never holds a request. */
