@@ -59,6 +59,7 @@ function prepareStore(root: string, values: readonly [OAuthCredentials, OAuthCre
   const ocx = join(root, "ocx");
   mkdirSync(ocx, { mode: 0o700 });
   mkdirSync(join(root, "claude"), { mode: 0o700 });
+  mkdirSync(join(root, "codex"), { mode: 0o700 });
   const config: OcxConfig = {
     port: 10100,
     defaultProvider: "anthropic",
