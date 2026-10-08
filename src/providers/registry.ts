@@ -102,11 +102,11 @@ export function normalizedProviderEndpoint(value: string): string {
  */
 export function providerMatchesRegistryTransport(
   id: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode" | "anthropicOAuthInstance">>,
 ): boolean {
   const entry = getProviderRegistryEntry(id);
   if (!entry) return false;
-  if (id === "anthropic2") return anthropicInstanceRowShapeMatches(id, provider);
+  if (id === "anthropic2") return entry.authKind === "oauth" && entry.oauthId === id && entry.oauthFamily === "anthropic" && anthropicInstanceRowShapeMatches(id, provider);
   if (entry.authKind !== "key" || entry.preserveCustomDestination !== true) return true;
   // The opt-in is intentionally limited to fixed key destinations. Fail closed if a future
   // registry edit combines it with an override/template despite the registry parity tests.

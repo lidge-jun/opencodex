@@ -1,3 +1,5 @@
+import { isBuiltinAnthropicInstanceRow, isAnthropicInstanceId } from "../providers/anthropic-instance";
+import { resolveAnthropicAccountPoolConfig } from "./anthropic-pool-config";
 import { isGenericFailoverProvider } from "./generic-account-failover";
 import { parseAccountPoolStickyLimit, parseAccountPoolStrategy, parseCodexAccountPoolStrategy } from "./pool-kernel";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -25,7 +27,7 @@ export type GenericPoolStrategy = typeof GENERIC_POOL_STRATEGIES[number];
 
 export function poolSettingsCapability(name: string, provider: OcxProviderConfig | undefined): PoolSettingsKind | null {
   if (name === "openai") return "codex";
-  if (name === "anthropic") return "anthropic";
+  if (name === "anthropic" || isBuiltinAnthropicInstanceRow(name, provider)) return "anthropic";
   if (!provider) return null;
   return isGenericFailoverProvider(name, provider) ? "generic" : null;
 }
@@ -173,7 +175,7 @@ export function unifiedPoolSettingsDto(
     };
   }
   if (kind === "anthropic") {
-    const pool = config.anthropicAccountPool ?? {};
+    const pool = isAnthropicInstanceId(provider) ? resolveAnthropicAccountPoolConfig(config, provider) : {};
     const enabled = typeof pool.enabled === "boolean" ? pool.enabled : null;
     return {
       ...base,

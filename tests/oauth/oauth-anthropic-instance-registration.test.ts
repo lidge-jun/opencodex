@@ -14,7 +14,7 @@ import type { OAuthCredentials } from "../../src/oauth/types";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
-const originalEnv = { HOME: process.env.HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+const originalEnv = { CODEX_HOME: process.env.CODEX_HOME, HOME: process.env.HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
 const originalFetch = globalThis.fetch;
 let home: string;
 let cliFile: string;
@@ -22,7 +22,10 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-anthropic-instance-registration-"));
   process.env.HOME = home;
   process.env.OPENCODEX_HOME = join(home, "ocx");
+  process.env.CODEX_HOME = join(home, "codex");
   process.env.CLAUDE_CONFIG_DIR = join(home, "claude");
+  mkdirSync(process.env.CODEX_HOME);
+  mkdirSync(process.env.OPENCODEX_HOME);
   mkdirSync(process.env.CLAUDE_CONFIG_DIR);
   cliFile = join(process.env.CLAUDE_CONFIG_DIR, ".credentials.json");
   // A valid synthetic file prevents the detector from falling through to the real Keychain.
@@ -147,6 +150,8 @@ for (const writer of writers) {
 const customRows: OcxProviderConfig[] = [
   { adapter: "openai-chat", baseUrl: "https://custom.example.test/v1", authMode: "key", apiKey: "synthetic-key", models: ["custom-model"] },
   { adapter: "anthropic", baseUrl: "https://gateway.example.test", authMode: "oauth", models: ["gateway-model"] },
+  { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth", models: ["canonical-custom-model"] },
+  { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "key", apiKey: "synthetic-canonical-key" },
 ];
 for (const custom of customRows) {
   test(`custom ${custom.authMode} anthropic2 row refuses login/upsert and survives catalog reconciliation`, async () => {
@@ -227,7 +232,59 @@ test("successful B login publishes only B and preserves A's provider model and g
     expect(after.defaultProvider).toBe(before.defaultProvider);
     expect(after.providers.anthropic2!.adapter).toBe("anthropic");
     expect(after.providers.anthropic2!.authMode).toBe("oauth");
+    expect(after.providers.anthropic2!.anthropicOAuthInstance).toBe("anthropic2");
     expect(getAccountSet("anthropic")).toEqual(aBefore);
+  } finally { login.mockRestore(); }
+});
+
+test("unmarked OAuth row without baseUrl refuses B before browser login", async () => {
+  const loaded = loadConfig();
+  loaded.providers.anthropic2 = { adapter: "anthropic", authMode: "oauth" } as OcxProviderConfig;
+  const login = spyOn(OAUTH_PROVIDERS.anthropic2!, "login").mockResolvedValue(credential("b"));
+  try {
+    await expect(runLogin("anthropic2", {}, undefined, { loadConfig: () => loaded })).rejects.toBeInstanceOf(AnthropicInstanceCollisionError);
+    expect(login).not.toHaveBeenCalled();
+    expect(loaded.providers.anthropic2.anthropicOAuthInstance).toBeUndefined();
+    expect(getAccountSet("anthropic2")).toBeNull();
+  } finally { login.mockRestore(); }
+});
+
+test("raw no-baseUrl B row blocks onboarding even when typed config loading falls back", async () => {
+  const raw = { ...baseConfig(), providers: { ...baseConfig().providers, anthropic2: { adapter: "anthropic", authMode: "oauth" } } };
+  const configBytes = JSON.stringify(raw);
+  writeFileSync(getConfigPath(), configBytes);
+  const login = spyOn(OAUTH_PROVIDERS.anthropic2!, "login").mockResolvedValue(credential("b"));
+  try {
+    await expect(runLogin("anthropic2", {})).rejects.toBeInstanceOf(AnthropicInstanceCollisionError);
+    expect(login).not.toHaveBeenCalled();
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(configBytes);
+    expect(getAccountSet("anthropic2")).toBeNull();
+    await expect(saveCredential("anthropic2", credential("b"))).rejects.toBeInstanceOf(AnthropicInstanceCollisionError);
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(configBytes);
+  } finally { login.mockRestore(); }
+});
+
+test("owned B update keeps explicit provenance and operator settings without changing A", async () => {
+  const config = loadConfig();
+  upsertOAuthProvider(config, "anthropic2");
+  config.providers.anthropic2!.note = "owned operator note";
+  config.providers.anthropic2!.anthropicAccountPool = { enabled: true, nativeMessages: false, stickyLimit: 5 };
+  saveConfig(config);
+  const a = structuredClone(config.providers.anthropic);
+  const login = spyOn(OAUTH_PROVIDERS.anthropic2!, "login").mockResolvedValue(credential("b"));
+  try {
+    await runLogin("anthropic2", {});
+    const after = loadConfig();
+    expect(after.providers.anthropic2!.anthropicOAuthInstance).toBe("anthropic2");
+    expect(after.providers.anthropic2!.note).toBe("owned operator note");
+    expect(after.providers.anthropic2!.anthropicAccountPool).toEqual(config.providers.anthropic2!.anthropicAccountPool);
+    expect(after.providers.anthropic).toEqual(a);
+    delete after.providers.anthropic2!.anthropicOAuthInstance;
+    saveConfig(after);
+    const bytes = readFileSync(getAuthStorePath(), "utf8");
+    await expect(runLogin("anthropic2", {})).rejects.toBeInstanceOf(AnthropicInstanceCollisionError);
+    expect(readFileSync(getAuthStorePath(), "utf8")).toBe(bytes);
+    expect(login).toHaveBeenCalledTimes(1);
   } finally { login.mockRestore(); }
 });
 

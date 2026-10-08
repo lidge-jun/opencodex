@@ -86,7 +86,7 @@ export {
   parseAnthropicRateLimitHeaders,
   providerOAuthAccountQuotaMode,
   readPassiveProviderAccountQuotas,
-  recordAnthropicAccountQuotaFromHeaders,
+  recordAnthropicAccountQuotaFromHeaders, recordAnthropicAccountQuotaFromHeadersForInstance,
   recordPassiveAccountQuota,
   reconcileProviderAccountQuotaRows,
   resetProviderQuotaReconcileStateForTests,

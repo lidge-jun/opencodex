@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,9 @@ import {
   validateConfigCandidate,
 } from "../../src/config";
 import { configDiagnosticsFromRaw } from "../../src/config/diagnostics";
+import { configuredAnthropicInstance } from "../../src/providers/anthropic-instance";
+import { parseProviderEditorConfigDTO, providerEditorConfigDTO, providerManagementConfigError } from "../../src/server/auth-cors";
+import { anthropicInstancePublicationError, mergeProviderEditorRow, preserveAnthropicInstanceMarker } from "../../src/server/management/provider-instance-ownership";
 import {
   isAnthropicPoolEnabledFor,
   rawAnthropicAccountPool,
@@ -21,22 +24,29 @@ import type { AnthropicAccountPoolConfig, OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let home = "";
-let previousHome: string | undefined;
+let previousEnv: Record<string, string | undefined>;
 beforeEach(() => {
-  previousHome = process.env.OPENCODEX_HOME;
+  previousEnv = { HOME: process.env.HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME,
+    CODEX_HOME: process.env.CODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
   home = mkdtempSync(join(tmpdir(), "ocx-anthropic-instance-config-"));
+  process.env.HOME = home;
   process.env.OPENCODEX_HOME = home;
+  process.env.CODEX_HOME = join(home, "codex");
+  process.env.CLAUDE_CONFIG_DIR = join(home, "claude");
+  mkdirSync(process.env.CODEX_HOME);
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR);
 });
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
+  for (const [key, value] of Object.entries(previousEnv)) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
   removeTreeWithRetry(home);
 });
 
 function configWithBothInstances(): OcxConfig {
   const config = getDefaultConfig();
   config.providers.anthropic = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com" };
-  config.providers.anthropic2 = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com" };
+  config.providers.anthropic2 = { anthropicOAuthInstance: "anthropic2", adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com" };
   config.providers.unrelated = {
     adapter: "openai-chat", authMode: "key", baseUrl: "https://example.com/v1", apiKey: "fixture-preserved",
   };
@@ -62,6 +72,100 @@ function expectRejected(value: unknown, path: string): void {
 }
 
 describe("Anthropic pool configuration locations", () => {
+  test("CLI builtin creation publishes provenance; custom key overrides drop it and cannot be adopted by force", async () => {
+    saveConfig(getDefaultConfig());
+    const { handleProviderCommand } = await import("../../src/cli/provider");
+    const print = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const exitCode = process.exitCode;
+    try {
+      const before = loadConfig().defaultProvider;
+      await handleProviderCommand(["add", "anthropic2", "--json"]);
+      expect(loadConfig().providers.anthropic2.anthropicOAuthInstance).toBe("anthropic2");
+      expect(loadConfig().defaultProvider).toBe(before);
+      await handleProviderCommand(["add", "anthropic2", "--force", "--auth-mode", "key", "--api-key", "synthetic-custom-key",
+        "--base-url", "https://custom.example.test/v1", "--json"]);
+      const custom = loadConfig();
+      expect(custom.providers.anthropic2.anthropicOAuthInstance).toBeUndefined();
+      expect(custom.providers.anthropic2.apiKey).toBe("synthetic-custom-key");
+      expect(custom.providers.anthropic2.authMode).toBe("key");
+      const bytes = readFileSync(getConfigPath(), "utf8");
+      await handleProviderCommand(["add", "anthropic2", "--force", "--json"]);
+      expect(process.exitCode).toBe(2);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+    } finally { process.exitCode = exitCode; print.mockRestore(); error.mockRestore(); }
+  });
+
+  test("marker survives disk/editor round trips; removing it deactivates B without touching auth/config", () => {
+    const config = configWithBothInstances();
+    saveConfig(config);
+    const loaded = loadConfig();
+    expect(loaded.providers.anthropic2.anthropicOAuthInstance).toBe("anthropic2");
+    const baseline = providerEditorConfigDTO(loaded);
+    const parsed = parseProviderEditorConfigDTO(baseline);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const next = structuredClone(parsed.value.providers.anthropic2!);
+    next.note = "operator edit";
+    const merged = mergeProviderEditorRow(loaded.providers.anthropic2, baseline.providers.anthropic2, next);
+    expect(merged.anthropicOAuthInstance).toBe("anthropic2");
+    delete next.anthropicOAuthInstance;
+    const removed = mergeProviderEditorRow(merged, baseline.providers.anthropic2, next);
+    loaded.providers.anthropic2 = removed;
+    expect(configuredAnthropicInstance(loaded, "anthropic2")).toBeUndefined();
+    saveConfig(loaded);
+    expect(loadConfig().providers.anthropic2.anthropicOAuthInstance).toBeUndefined();
+    expect(loadConfig().providers.unrelated.apiKey).toBe("fixture-preserved");
+  });
+
+  test("raw marker diagnostics reject malformed, misplaced and incompatible shapes without rewriting disk", () => {
+    for (const marker of [null, false, "anthropic", "Anthropic2", {}, 2]) {
+      const config = configWithBothInstances();
+      const raw = { ...config, providers: { ...config.providers, anthropic2: { ...config.providers.anthropic2, anthropicOAuthInstance: marker } } };
+      expectRejected(raw, "providers.anthropic2.anthropicOAuthInstance");
+      const bytes = JSON.stringify(raw);
+      writeFileSync(getConfigPath(), bytes);
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.error).toContain("anthropicOAuthInstance");
+      expect(diagnostics.config.providers.anthropic2.adapter).toBe("anthropic");
+      expect(diagnostics.config.providers.anthropic2.authMode).toBe("oauth");
+      expect(diagnostics.config.providers.unrelated.apiKey).toBe("fixture-preserved");
+      expect(configuredAnthropicInstance(diagnostics.config, "anthropic2")).toBeUndefined();
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+    }
+    const config = configWithBothInstances();
+    expectRejected({ ...config, anthropicOAuthInstance: "anthropic2" }, "anthropicOAuthInstance");
+    expectRejected({ ...config, claudeCode: { anthropicOAuthInstance: "anthropic2" } }, "claudeCode.anthropicOAuthInstance");
+    for (const name of ["anthropic", "unrelated"]) {
+      expectRejected({ ...config, providers: { ...config.providers, [name]: { ...config.providers[name], anthropicOAuthInstance: "anthropic2" } } }, `providers.${name}.anthropicOAuthInstance`);
+    }
+    for (const change of [{ authMode: "key" }, { adapter: "openai-chat" }]) {
+      const row = { ...config.providers.anthropic2, ...change };
+      expectRejected({ ...config, providers: { ...config.providers, anthropic2: row } }, "providers.anthropic2.anthropicOAuthInstance");
+      expect(providerManagementConfigError("anthropic2", row)).toContain("anthropicOAuthInstance");
+    }
+  });
+
+  test("unmarked canonical rows stay unmarked; form publication cannot adopt them", () => {
+    const config = configWithBothInstances();
+    delete config.providers.anthropic2.anthropicOAuthInstance;
+    const row = structuredClone(config.providers.anthropic2);
+    saveConfig(config);
+    expect(loadConfig().providers.anthropic2).toMatchObject(row);
+    expect(readConfigDiagnostics().config.providers.anthropic2.anthropicOAuthInstance).toBeUndefined();
+    expect(configuredAnthropicInstance(loadConfig(), "anthropic2")).toBeUndefined();
+    preserveAnthropicInstanceMarker("anthropic2", row, config.providers.anthropic2);
+    expect(row.anthropicOAuthInstance).toBeUndefined();
+    expect(anthropicInstancePublicationError("anthropic2", { ...row, anthropicOAuthInstance: "anthropic2" }, row)).toContain("custom provider");
+    const owned = { ...row, anthropicOAuthInstance: "anthropic2" as const };
+    const edit = { ...row, note: "edited" };
+    preserveAnthropicInstanceMarker("anthropic2", edit, owned);
+    expect(edit.anthropicOAuthInstance).toBe("anthropic2");
+    const keyEdit = { ...row, authMode: "key" as const, apiKey: "synthetic-custom-key" };
+    preserveAnthropicInstanceMarker("anthropic2", keyEdit, owned);
+    expect(keyEdit.anthropicOAuthInstance).toBeUndefined();
+  });
+
   test("A and B resolve their own raw object with no inheritance in either direction", () => {
     const config = configWithBothInstances();
     const a: AnthropicAccountPoolConfig = { enabled: true, strategy: "round-robin", stickyLimit: 3, quotaWindow: "weekly" };

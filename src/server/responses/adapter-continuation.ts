@@ -1,4 +1,4 @@
-import { rotateAnthropicAccountOnResponse } from "../../oauth/anthropic-account-refusal";
+import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -35,7 +35,7 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-  getAnthropicPoolAccessSnapshot,
+  anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
 import {
@@ -83,6 +83,8 @@ export function createAdapterContinuations(
     | "oauthDispatch"
     | "invalidateSameTargetRequest"
     | "resolveSelectionAdapter"
+    | "anthropicInstance"
+    | "currentAnthropicRouteDecision"
     | "anthropicRouteDecision"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
@@ -122,6 +124,8 @@ export function createAdapterContinuations(
     oauthDispatch,
     invalidateSameTargetRequest,
     resolveSelectionAdapter,
+    anthropicInstance,
+    currentAnthropicRouteDecision,
     anthropicSessionKey,
     commitResolvedOAuthSelection,
     applyFailoverSnapshot,
@@ -391,25 +395,26 @@ export function createAdapterContinuations(
       }
      if (
        (response.status === 429 || response.status === 403)
+       && anthropicInstance
        && transportState.anthropicPoolAccountId
         && !isNonReplayableResponse(response)
       ) {
-        const nextAccountId = await rotateAnthropicAccountOnResponse(response, {
+        const nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance, response, {
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: upstream.signal,
+          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: upstream.signal,
           canRetry: !sendBudgetExhausted() && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
           allowAccountRefusal, allow429Recovery: allowAccountRefusal,
         });
         if (nextAccountId) {
           try {
-            const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
+            const admitted = await commitResolvedOAuthSelection(await anthropicRoutingFor(anthropicInstance).getAnthropicPoolAccessSnapshot(nextAccountId));
             if (!admitted) throw new Error("OAuth selection changed during recovery");
             try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
             transportState.anthropicPoolAccountId = admitted.accountId;
             transportState.anthropicPoolFailovers += 1;
             route.provider = { ...route.provider, apiKey: admitted.accessToken };
             invalidateSameTargetRequest();
-            logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
+            logCtx.provider = formatAnthropicProviderForLog(anthropicInstance, admitted.accountId, config);
             transportState.activeAdapter = resolveSelectionAdapter(
               resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
               config.cacheRetention,

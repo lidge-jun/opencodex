@@ -118,7 +118,7 @@ function anthropicOAuthEntry(id: AnthropicInstanceId, label: string): ProviderRe
     adapter: "anthropic",
     baseUrl: "https://api.anthropic.com",
     authKind: "oauth",
-    allowBaseUrlOverride: id === "anthropic",
+    allowBaseUrlOverride: true,
     featured: true,
     oauthId: id,
     oauthFamily: "anthropic",

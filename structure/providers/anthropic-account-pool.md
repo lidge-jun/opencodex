@@ -5,8 +5,12 @@
 `src/providers/anthropic-instance-id.ts` owns the fixed `anthropic` and `anthropic2`
 identifiers. The registry declares both as Anthropic OAuth family members; they share
 one adapter and model metadata. `src/providers/anthropic-instance.ts` distinguishes
-instance identity from configured admission. Pool 2 requires an enabled OAuth row
-pointing at the first-party API. A same-named custom destination keeps its transport.
+instance identity from configured admission. Pool 2 requires an enabled Anthropic
+OAuth row with its own `anthropicOAuthInstance: "anthropic2"` marker. Explicit
+builtin creation supplies the marker; load, enrichment and reconciliation never
+adopt an existing unmarked row, even at the canonical endpoint. Both pools retain
+the existing endpoint override behavior. The marker records configuration intent,
+not a cryptographic or OS boundary.
 
 `src/types/anthropic-account-pool.ts` defines the shared configuration shape.
 `src/oauth/anthropic-pool-config.ts` reads the primary pool from the top-level
@@ -34,10 +38,35 @@ Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
 catalog resolver observes or refreshes its OAuth credential. Observed gathers use
 their captured provider snapshot. `src/oauth/index.ts` applies the same policy
 when building the final models request; Pool 2 OAuth authorization is scoped to
-the first-party API destination. Connection probes capture the provider row and
-recheck live ownership before sending. A custom key provider named `anthropic2`
+the target authorized by its marked configuration. Connection probes capture the
+provider row and recheck live ownership and target before sending. A custom key provider named `anthropic2`
 continues to use its own configured key, including legacy rows with no auth mode.
 Coverage: `tests/oauth/anthropic2-discovery-ownership.test.ts`.
+
+## Instance-scoped runtime
+
+`anthropicRoutingFor(instance)` in `src/oauth/anthropic-routing.ts` binds account
+selection, affinity, quorum, manual preference, cooldown and rotation to one
+instance. Legacy named exports mean the primary pool. Model routes widen only
+within that instance's roster. Pure protocol/model transformations remain shared.
+Pause, policy and selection notifications affect only the matching existing state.
+
+`src/oauth/anthropic-model-quota.ts`, `src/oauth/anthropic-rate-limit-policy.ts`
+and `src/providers/quota/anthropic-cooldown-recovery.ts` expose corresponding
+instance-bound owners. Family leases, admission pauses and probe generations
+include the instance and account. Clear/removal fences prevent an older claim from
+becoming current after the same account ID is re-added.
+`src/lib/state-store-registrations.ts` sweeps and reconciles existing instance
+buckets without starting dormant pools.
+
+Responses and native Messages retain the configured instance and authorized
+target through preparation, retries and continuations. Named Pool 2 OAuth routes
+that fail configured admission refuse before generic OAuth resolution.
+Physical response attribution checks the sent provider, bearer and credential
+generation; native also checks its UUID. The header writer's numeric config
+generation is separate from the credential-generation string and preserves the
+existing live-roster exception. Explicit combos retain their declared targets;
+direct Pool 2 account recovery never selects the primary pool.
 
 ## Anthropic account pause
 
@@ -206,8 +235,8 @@ Account changes may start a cold cache. The proxy does not share caches across a
 
 ## Native request preference
 
-`anthropicAccountPool.nativeMessages` is an optional Anthropic-only boolean, defaulting to true.
-`src/protocols/settings.ts` applies this default only to the settled `anthropic` provider with
+`anthropicAccountPool.nativeMessages` is an optional per-instance boolean, defaulting to true.
+`src/protocols/settings.ts` applies this default to the settled builtin Anthropic instance with
 the pool enabled and only to absent native rollout flags. Explicit false or malformed present
 flags stay off; a false/malformed pool preference vetoes pooled native dispatch, and OAuth requires
 managed native. Pool-off and other providers retain explicit settings. Policy revisions include

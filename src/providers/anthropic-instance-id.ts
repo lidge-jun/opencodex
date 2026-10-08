@@ -17,7 +17,12 @@ export const ANTHROPIC_PRIMARY_INSTANCE: AnthropicInstanceId = "anthropic";
 /** The second, independent pool ("Anthropic · Pool 2"). Browser OAuth only. */
 export const ANTHROPIC_POOL2_INSTANCE: AnthropicInstanceId = "anthropic2";
 
-const ANTHROPIC_FIRST_PARTY_ORIGIN = "https://api.anthropic.com";
+export type AnthropicInstanceRow = {
+  adapter?: string;
+  authMode?: string;
+  baseUrl?: string;
+  anthropicOAuthInstance?: unknown;
+};
 
 export function isAnthropicInstanceId(value: unknown): value is AnthropicInstanceId {
   return value === "anthropic" || value === "anthropic2";
@@ -28,16 +33,15 @@ export function isAnthropicInstanceId(value: unknown): value is AnthropicInstanc
  *
  * `anthropic` keeps its historical meaning: the row named `anthropic` is the instance. A row named
  * `anthropic2` may predate the builtin as a user's custom provider, so it is the builtin only when it is
- * an Anthropic OAuth row pointed at the first-party API (no `baseUrl` property, or exactly that origin).
+ * explicitly marked as an Anthropic OAuth instance. Transport endpoints never establish ownership.
  * Anything else keeps its custom meaning and is never pinned, enriched or routed as the builtin pool.
  */
 export function anthropicInstanceRowShapeMatches(
   name: string,
-  row: { adapter?: string; authMode?: string; baseUrl?: string } | undefined,
+  row: AnthropicInstanceRow | undefined,
 ): boolean {
   if (name === "anthropic") return true;
   if (name !== "anthropic2" || !row) return false;
-  if (row.adapter !== "anthropic" || row.authMode !== "oauth") return false;
-  if (!Object.hasOwn(row, "baseUrl") || row.baseUrl === undefined) return true;
-  return typeof row.baseUrl === "string" && row.baseUrl.trim().replace(/\/+$/, "") === ANTHROPIC_FIRST_PARTY_ORIGIN;
+  return Object.hasOwn(row, "anthropicOAuthInstance") && row.anthropicOAuthInstance === "anthropic2"
+    && row.adapter === "anthropic" && row.authMode === "oauth";
 }

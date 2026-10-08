@@ -275,6 +275,8 @@ export interface ModelCapabilities {
 }
 
 export interface OcxProviderConfig {
+  /** Explicit builtin Pool 2 provenance; endpoints never imply ownership. */
+  anthropicOAuthInstance?: "anthropic2";
   /** Independent Anthropic pool settings; valid only on providers.anthropic2. */
   anthropicAccountPool?: AnthropicAccountPoolConfig;
   /** Optional browser-compatible outbound TLS profile; disabled by default. */

@@ -8,6 +8,7 @@ import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
 import { fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
 import { clearModelCache } from "../../src/codex/model-cache";
 import * as oauth from "../../src/oauth";
+import { captureModelsOAuthTarget, guardModelsOAuthRequest } from "../../src/oauth/model-discovery-auth";
 import { getAccountSet, getAuthStorePath, saveCredential } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -40,6 +41,12 @@ function builtin(): OcxProviderConfig {
 function gateway(): OcxProviderConfig {
   return { adapter: "anthropic", authMode: "oauth", baseUrl: "https://gateway.example.test",
     models: ["gateway-fallback"], liveModels: true };
+}
+function unmarkedCanonical(): OcxProviderConfig {
+  const row = builtin();
+  delete row.anthropicOAuthInstance;
+  row.models = ["gateway-fallback"];
+  return row;
 }
 function credential(expires = Date.now() + 3_600_000): OAuthCredentials {
   return { access: "synthetic-pool2-access", refresh: "synthetic-pool2-refresh", expires,
@@ -77,6 +84,8 @@ beforeEach(() => {
   process.env.CODEX_HOME = join(root, "codex");
   process.env.CLAUDE_CONFIG_DIR = join(root, "claude");
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
+  mkdirSync(process.env.CODEX_HOME);
+  mkdirSync(process.env.OPENCODEX_HOME);
   mkdirSync(process.env.CLAUDE_CONFIG_DIR);
   writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
     accessToken: "synthetic-cli-a-access", refreshToken: "synthetic-cli-a-refresh", expiresAt: Date.now() + 3_600_000,
@@ -97,9 +106,10 @@ afterEach(() => {
 
 for (const mode of modes) {
   for (const expired of [false, true]) {
-    test(`${mode}: custom OAuth B obtains no bearer and performs no refresh or discovery send (${expired ? "expired" : "valid"})`, async () => {
+    for (const customRow of [gateway, unmarkedCanonical]) {
+    test(`${mode}: custom OAuth B ${customRow.name} obtains no bearer and performs no refresh or discovery send (${expired ? "expired" : "valid"})`, async () => {
       await saveCredential("anthropic2", credential(expired ? Date.now() - 1 : undefined));
-      saveConfig(config(gateway()));
+      saveConfig(config(customRow()));
       const live = attachTransport(loadConfig());
       const before = readFileSync(getAuthStorePath(), "utf8");
       const refresh = spyOn(oauth.OAUTH_PROVIDERS.anthropic2!, "refresh").mockImplementation(async () => {
@@ -118,6 +128,7 @@ for (const mode of modes) {
         expect(readFileSync(getAuthStorePath(), "utf8")).toBe(before);
       } finally { refresh.mockRestore(); }
     });
+    }
   }
 
   test(`${mode}: absent and disabled B rows leave the orphan credential inert`, async () => {
@@ -151,6 +162,29 @@ for (const mode of modes) {
     for (const call of calls) {
       expect(call.url).toBe("https://api.anthropic.com/v1/models?limit=1000");
       expect(call.headers.get("authorization")).toBe("Bearer synthetic-pool2-access");
+    }
+    expect(unexpectedFetches).toBe(0);
+  });
+
+  test(`${mode}: marked override sends its own bearer only to the authorized configured discovery target`, async () => {
+    await saveCredential("anthropic2", credential());
+    const override = { ...builtin(), baseUrl: "https://owned-override.example.test/v1" };
+    saveConfig(config(override));
+    const live = attachTransport(loadConfig());
+    expect((await gather(live, mode)).some(model => model.provider === "anthropic2" && model.id === "discovered-model")).toBe(true);
+    expect((await probe(live)).ok).toBe(true);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.url).toBe("https://owned-override.example.test/v1/models?limit=1000");
+      expect(call.headers.get("authorization")).toBe("Bearer synthetic-pool2-access");
+    }
+    const request = oauth.buildModelsRequest(override, "synthetic-pool2-access", "anthropic2");
+    const target = captureModelsOAuthTarget("anthropic2", override);
+    for (const url of ["https://api.anthropic.com/v1/models?limit=1000", "https://other.example.test/v1/models?limit=1000",
+      "https://owned-override.example.test/v1/messages", "https://owned-override.example.test/v1/models?limit=1",
+      "https://user@owned-override.example.test/v1/models?limit=1000"]) {
+      expect(new Headers(guardModelsOAuthRequest("anthropic2", override, { ...request, url }, target).headers).get("authorization")).toBeNull();
+      expect(new Headers(guardModelsOAuthRequest("anthropic2", override, { ...request, url }, url).headers).get("authorization")).toBeNull();
     }
     expect(unexpectedFetches).toBe(0);
   });
@@ -209,19 +243,20 @@ test("publication-time OAuth gateway collision leaves B orphaned through both re
 test("outgoing builder refuses a directly supplied B snapshot for custom OAuth and disabled B rows", async () => {
   await saveCredential("anthropic2", credential());
   const snapshot = await oauth.getValidAccessTokenSnapshot("anthropic2");
-  for (const row of [gateway(), { ...gateway(), adapter: "openai-chat" as const },
+  for (const row of [gateway(), unmarkedCanonical(), { ...gateway(), adapter: "openai-chat" as const },
     { ...gateway(), adapter: "google" as const, googleMode: "ai-studio" as const }, { ...builtin(), disabled: true }]) {
     const request = oauth.buildModelsRequest(row, snapshot.accessToken, "anthropic2", { oauthApiBaseUrl: snapshot.apiBaseUrl });
     expect(new Headers(request.headers).get("authorization")).toBeNull();
     expect(JSON.stringify(request.headers)).not.toContain(snapshot.accessToken);
-    if (!row.disabled) expect(new URL(request.url).origin).toBe("https://gateway.example.test");
+    if (!row.disabled) expect(new URL(request.url).origin).toBe(new URL(row.baseUrl).origin);
   }
   expect(new Headers(oauth.buildModelsRequest(builtin(), snapshot.accessToken, "anthropic2", { oauthApiBaseUrl: snapshot.apiBaseUrl }).headers)
     .get("authorization")).toBe("Bearer synthetic-pool2-access");
+  const authorizedTarget = captureModelsOAuthTarget("anthropic2", builtin());
   await withRegistryDiscovery("anthropic2", { url: "https://gateway.example.test/models" }, () => {
     const request = oauth.buildModelsRequest(builtin(), snapshot.accessToken, "anthropic2", { oauthApiBaseUrl: snapshot.apiBaseUrl });
     expect(request.url).toBe("https://gateway.example.test/models");
-    expect(new Headers(request.headers).get("authorization")).toBeNull();
+    expect(new Headers(guardModelsOAuthRequest("anthropic2", builtin(), request, authorizedTarget).headers).get("authorization")).toBeNull();
   });
 });
 
@@ -254,6 +289,38 @@ test("probe rechecks B ownership after snapshot resolution before transport", as
     expect((await probe(live)).ok).toBe(false);
     expect(calls).toEqual([]); expect(unexpectedFetches).toBe(0);
   } finally { snapshot.mockRestore(); }
+});
+
+for (const change of ["remove-marker", "replace-target", "mutate-target"] as const) {
+  test(`probe refuses ${change} after an OAuth await even when the row otherwise remains compatible`, async () => {
+    await saveCredential("anthropic2", credential());
+    const live = attachTransport(config(builtin()));
+    const resolve = oauth.getModelsOAuthAccessSnapshot;
+    const snapshot = spyOn(oauth, "getModelsOAuthAccessSnapshot").mockImplementation(async (name, row) => {
+      const result = await resolve(name, row);
+      if (change === "remove-marker") delete live.providers.anthropic2!.anthropicOAuthInstance;
+      else if (change === "replace-target") live.providers.anthropic2 = withTransport({ ...builtin(), baseUrl: "https://replacement.example.test" });
+      else live.providers.anthropic2!.baseUrl = "https://mutated.example.test";
+      return result;
+    });
+    try {
+      expect((await probe(live)).ok).toBe(false);
+      expect(calls).toEqual([]);
+      expect(unexpectedFetches).toBe(0);
+    } finally { snapshot.mockRestore(); }
+  });
+}
+
+test("refreshing B catalog retains captured target when registry discovery changes after admission", async () => {
+  await saveCredential("anthropic2", credential());
+  const captured = captureProviderGather("anthropic2", withTransport(builtin()), refreshingModelsAuthResolver);
+  await withRegistryDiscovery("anthropic2", { url: "https://new-policy.example.test/models" }, async () => {
+    await fetchProviderModelsWithAuth(captured, 0, undefined, refreshingModelsAuthResolver);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://api.anthropic.com/v1/models?limit=1000");
+    expect(calls[0]!.headers.get("authorization")).toBe("Bearer synthetic-pool2-access");
+  });
+  expect(unexpectedFetches).toBe(0);
 });
 
 test("A and an unrelated key provider retain their existing discovery authentication", async () => {

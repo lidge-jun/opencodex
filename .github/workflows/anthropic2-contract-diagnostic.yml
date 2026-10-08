@@ -26,6 +26,18 @@ jobs:
         run: |
           set -euo pipefail
           for file in \
+            tests/adapters/anthropic/anthropic-instance-isolation.test.ts \
+            tests/adapters/anthropic/anthropic-instance-pool-parity.test.ts \
+            tests/adapters/anthropic/anthropic-instance-quota.test.ts \
+            tests/adapters/anthropic/anthropic-instance-recovery.test.ts \
+            tests/adapters/anthropic/anthropic2-fast-parity.test.ts \
+            tests/claude-integration/anthropic2-native-routing.test.ts \
+            tests/oauth/oauth-anthropic-instance-health.test.ts \
+            tests/responses/anthropic2-responses-parity.test.ts \
+            tests/claude-integration/messages-native-oauth.test.ts \
+            tests/adapters/anthropic/anthropic-account-pool.test.ts \
+            tests/adapters/anthropic/anthropic-429-policy.test.ts \
+            tests/adapters/anthropic/anthropic-model-weekly-admission.test.ts \
             tests/oauth/oauth-anthropic-instance-multiprocess.test.ts \
             tests/oauth/oauth-anthropic-instance-refresh.test.ts \
             tests/oauth/oauth-anthropic-instance-registration.test.ts \

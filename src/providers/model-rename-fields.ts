@@ -79,6 +79,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   authMode: "none",
   oauthAccountFailover: "none",
   anthropicAccountPool: "none",
+  anthropicOAuthInstance: "none",
   keyOptional: "none",
   freeTier: "none",
   note: "none",

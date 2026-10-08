@@ -375,6 +375,7 @@ export interface ProviderRegistryEntry {
 
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
+  "anthropicOAuthInstance" |
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "chatCompletionsPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelDisplayNames"

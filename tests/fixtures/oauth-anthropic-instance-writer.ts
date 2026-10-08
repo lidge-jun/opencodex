@@ -25,7 +25,10 @@ try {
     || !Number.isFinite(readyBudgetMs) || readyBudgetMs <= 0
     || process.env.HOME !== root || process.env.USERPROFILE !== root
     || process.env.OPENCODEX_HOME !== join(root, "ocx")
-    || process.env.CLAUDE_CONFIG_DIR !== join(root, "claude")) {
+    || process.env.CLAUDE_CONFIG_DIR !== join(root, "claude")
+    || process.env.CODEX_HOME !== join(root, "codex")
+    || process.env.XDG_CONFIG_HOME !== join(root, "xdg")
+    || [root, join(root, "ocx"), join(root, "claude"), join(root, "codex"), join(root, "xdg")].some(path => !existsSync(path))) {
     throw new Error("Invalid isolated writer setup");
   }
   watchdog = setTimeout(() => {
@@ -33,6 +36,11 @@ try {
     process.exit(1);
   }, readyBudgetMs + INTERNAL_DEADLINE_MS);
   globalThis.fetch = (async () => { throw new Error("Network forbidden in registration fixture"); }) as typeof fetch;
+
+  const seededConfig = JSON.parse(readFileSync(join(root, "ocx", "config.json"), "utf8"));
+  if (seededConfig.providers?.anthropic2?.anthropicOAuthInstance !== "anthropic2") {
+    throw new Error("Writer requires an explicitly owned B seed before runtime imports");
+  }
 
   phase = "import-store";
   const { getAuthStorePath, loadAuthStore, saveCredentialWithReceipt }: typeof import("../../src/oauth/store")

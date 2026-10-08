@@ -17,16 +17,16 @@
  *
  * Loaded lazily by `claude-messages.ts` only when the switch is on and a route is eligible.
  */
-import { resolveAnthropicModelRoute } from "../oauth/anthropic-model-routes";
-import { bindAnthropicRefusalCredential, rotateAnthropicAccountOnResponse } from "../oauth/anthropic-account-refusal";
-import { claimAnthropicFamilyRevalidation } from "../oauth/anthropic-model-quota";
+import { resolveAnthropicModelRouteForInstance } from "../oauth/anthropic-model-routes";
+import { bindAnthropicRefusalCredential, rotateAnthropicAccountOnResponseForInstance } from "../oauth/anthropic-account-refusal";
+import { anthropicModelQuotaFor } from "../oauth/anthropic-model-quota";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
-import { recordAnthropicAccountQuotaFromHeaders } from "../providers/quota";
+import { recordAnthropicAccountQuotaFromHeadersForInstance } from "../providers/quota";
 import { credentialGeneration, getAccountCredentialWithStatus } from "../oauth/store";
 import { ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST } from "../oauth/anthropic-routing";
 import { enforceAnthropicImageLimits } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
-import { formatAnthropicErrorBody } from "../adapters/anthropic";
+import { formatAnthropicErrorBody, resolveAnthropicMessagesUrl } from "../adapters/anthropic";
 import {
   anthropicMessagesNativeWireBody,
   buildAnthropicMessagesPassthroughRequest,
@@ -67,7 +67,8 @@ import {
 } from "../providers/key-failover";
 import { stampApiKeyAccountLabel } from "../providers/label";
 import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../oauth";
-import { AnthropicAccountCooldownError, formatAnthropicProviderForLog, hasAnthropicFailoverQuorum } from "../oauth/anthropic-routing";
+import { AnthropicAccountCooldownError, formatAnthropicProviderForLog, anthropicRoutingFor } from "../oauth/anthropic-routing";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { resolveProtocolSettings } from "../protocols/settings";
 import { addProtocolEntryReason, markProtocolBlocked } from "../protocols/trace";
 import type { OcxProviderTransport } from "../providers/xai-transport";
@@ -88,11 +89,12 @@ import { beginInferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog, type FinalRequestLogMeta } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
+import { messagesSecondaryInstanceUnavailable } from "./messages-native-selector";
 import {
   nativeOAuthBindingIsCurrent,
   NativeOAuthSelectionChangedError,
   NativeOAuthModelRouteError,
-  resolveNativeOAuthBinding,
+  resolveNativeOAuthBindingForInstance,
   restoreOAuthToolNamesInMessage,
   restoreOAuthToolNamesInSse,
   type NativeOAuthBinding,
@@ -300,6 +302,7 @@ async function prepareNativeBody(body: Rec, signal: AbortSignal): Promise<void> 
  */
 export async function handleNativeMessages(options: HandleNativeMessagesOptions): Promise<Response> {
   const { req, config, logCtx, logIds, route, body, requestedModel, translatorBudget } = options;
+  const nativeInstance = configuredAnthropicInstance(config, route.providerName);
   const requestedStream = body.stream === true;
   logCtx.inboundProtocol = "messages";
   logCtx.model = route.modelId;
@@ -353,11 +356,18 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     return null;
   };
 
+  if (route.provider.authMode === "oauth" && !nativeInstance) {
+    return fail(401, "Configured Anthropic OAuth instance is unavailable", "authentication_error");
+  }
+
   const toolScopeDenial = nativeMessagesToolScopeDenial(options.modelScope, route.providerName, requestedModel, body);
   if (toolScopeDenial) {
     finishLog(403, toolScopeDenial.message);
     return admissionModelDeniedResponse(toolScopeDenial);
   }
+  let routeTarget: string;
+  try { routeTarget = resolveAnthropicMessagesUrl(route.provider); }
+  catch { return fail(400, "Invalid Anthropic Messages destination", "invalid_request_error"); }
 
   try {
     await prepareNativeBody(body, req.signal);
@@ -391,7 +401,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const oauthProvider = (binding: NativeOAuthBinding): OcxProviderConfig => ({ ...route.provider, apiKey: binding.snapshot.accessToken });
   if (route.provider.authMode === "oauth") {
     try {
-      oauthBinding = await resolveNativeOAuthBinding(config, { sessionKey: options.sessionKey, model: route.modelId });
+      oauthBinding = await resolveNativeOAuthBindingForInstance(nativeInstance!, config, { routeTarget, sessionKey: options.sessionKey, model: route.modelId });
     } catch (error) {
       cleanupAbort();
       upstream.abort();
@@ -473,6 +483,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     : Number.POSITIVE_INFINITY;
   const transientSendAvailable = (): boolean => remainingTransientSends() > 0;
   const selector: NativeMessagesSelector = options.selector ?? {};
+  const nativeOAuthRouteIsCurrent = (binding: NativeOAuthBinding): boolean => {
+    const provider = config.providers[binding.instance];
+    return configuredAnthropicInstance(config, binding.instance) === binding.instance
+      && !!provider && resolveAnthropicMessagesUrl(provider) === routeTarget
+      && nativeMessagesDeclineReason({ ...route, provider }, body, config, selector) === undefined;
+  };
 
   const send = async (recovery?: "rate-limit-429" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
@@ -493,12 +509,13 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
           modelId: route.modelId,
           dispatchOverride: async (_input, init, execute) => {
             if (oauthBinding) {
+              if (!nativeOAuthRouteIsCurrent(oauthBinding)) throw new NativeOAuthSelectionChangedError();
               // The OAuth twin of the key check below: re-resolve through the same selection
               // owner when the committed account or its credential moved since the build.
               for (let attempt = 0; !nativeOAuthBindingIsCurrent(oauthBinding); attempt++) {
                 if (attempt >= 3) throw new NativeOAuthSelectionChangedError();
                 try {
-                  oauthBinding = await resolveNativeOAuthBinding(config, { sessionKey: options.sessionKey, model: route.modelId });
+                  oauthBinding = await resolveNativeOAuthBindingForInstance(nativeInstance!, config, { routeTarget, sessionKey: options.sessionKey, model: route.modelId });
                 } catch (error) {
                   if (error instanceof OAuthAccountPausedError || error instanceof OAuthLoginRequiredError
                     || error instanceof AnthropicAccountCooldownError || error instanceof NativeOAuthModelRouteError) throw error;
@@ -522,8 +539,13 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             const snapshot = oauthBinding?.snapshot;
             const providerAccountUuid = oauthBinding?.providerAccountUuid;
             const writerGeneration = snapshot ? captureConfigGeneration() : 0;
-            const ownsBearer = snapshot && headers.get("authorization") === `Bearer ${snapshot.accessToken}` && !headers.has("x-api-key");
-            const releaseFamily = snapshot ? claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
+            const ownsBearer = snapshot && snapshot.provider === nativeInstance
+              && headers.get("authorization") === `Bearer ${snapshot.accessToken}` && !headers.has("x-api-key");
+            if (oauthBinding && (!ownsBearer || wire.url !== oauthBinding.routeTarget
+              || !nativeOAuthRouteIsCurrent(oauthBinding) || !nativeOAuthBindingIsCurrent(oauthBinding))) {
+              throw new NativeOAuthSelectionChangedError();
+            }
+            const releaseFamily = snapshot && oauthBinding ? anthropicModelQuotaFor(oauthBinding.instance).claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
             if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
             let dispatched: Response;
             try {
@@ -539,11 +561,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             } finally { releaseFamily(); }
             if (ownsBearer && snapshot) {
               try {
-                const current = getAccountCredentialWithStatus("anthropic", snapshot.accountId);
-                if (current && !current.needsReauth && credentialGeneration(current.credential) === snapshot.generation
+                const current = getAccountCredentialWithStatus(snapshot.provider, snapshot.accountId);
+                if (current && !current.needsReauth && current.credential.access === snapshot.accessToken
+                  && credentialGeneration(current.credential) === snapshot.generation
                   && current.credential.accountId === providerAccountUuid) {
                   bindAnthropicRefusalCredential(dispatched, snapshot, providerAccountUuid);
-                  recordAnthropicAccountQuotaFromHeaders(snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId);
+                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId);
                 }
               } catch { /* Passive observation must not fail the response. */ }
             }
@@ -622,12 +645,13 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       const sendingBinding = oauthBinding;
       const expectedRecoverySelection = sendingBinding.selection;
       triedAccountIds.add(sendingBinding.snapshot.accountId);
-      const nextAccountId = await rotateAnthropicAccountOnResponse(response, {
+      const nextAccountId = await rotateAnthropicAccountOnResponseForInstance(sendingBinding.instance, response, {
         config, accountId: sendingBinding.snapshot.accountId, model: route.modelId,
         sessionKey: sendingBinding.sessionKey, decision: sendingBinding.routeDecision,
         excludedAccountIds: triedAccountIds,
         currentDecision: () => {
-          const resolved = resolveAnthropicModelRoute(config, route.modelId);
+          if (!nativeOAuthRouteIsCurrent(sendingBinding)) throw new NativeOAuthSelectionChangedError();
+          const resolved = resolveAnthropicModelRouteForInstance(sendingBinding.instance, config, route.modelId);
           if (resolved.error) throw new NativeOAuthModelRouteError(`Invalid Anthropic model routes: ${resolved.error}`);
           return resolved.decision;
         },
@@ -637,7 +661,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       if (!nextAccountId) break;
       const recovery = response.status === 403 ? "oauth-account-403" : "rate-limit-429";
       discard(response);
-      oauthBinding = await resolveNativeOAuthBinding(config, {
+      oauthBinding = await resolveNativeOAuthBindingForInstance(nativeInstance!, config, { routeTarget,
         sessionKey: options.sessionKey, model: route.modelId, candidateAccountId: nextAccountId,
         expectedRecoverySelection, expectedRecoveryRouteDecision: sendingBinding.routeDecision,
       });
@@ -865,6 +889,7 @@ export function nativeMessagesCountBody(
 ): Rec | undefined {
   if (typeof body.model !== "string") return undefined;
   try {
+    if (messagesSecondaryInstanceUnavailable(config, body.model, cc)) return undefined;
     const selectorId = resolveInboundModel(body.model, cc);
     // Combo and policy selectors are never eligible, and routing them would advance round-robin
     // state or run the policy evaluator for a request that sends nothing.
@@ -875,11 +900,13 @@ export function nativeMessagesCountBody(
       route.providerName, route.modelId, route.provider, route.staticPolicy.effectiveAlias, "anthropic",
     );
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic", route.staticPolicy);
+    const instance = configuredAnthropicInstance(config, route.providerName);
     const selector: NativeMessagesSelector = {
       ...rows,
       routeSelector: selectorId,
       claudeCode: cc,
-      ...(route.provider.authMode === "oauth" ? { oauthFailoverQuorum: hasAnthropicFailoverQuorum() } : {}),
+      ...(route.provider.authMode === "oauth" && instance
+        ? { oauthFailoverQuorum: anthropicRoutingFor(instance).hasAnthropicFailoverQuorum() } : {}),
     };
     if (nativeMessagesDeclineReason(route, body, config, selector) !== undefined) return undefined;
     // The body without a credential: counting never resolves or refreshes an OAuth account.

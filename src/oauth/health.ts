@@ -1,7 +1,8 @@
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { MainAccountHardLockStatus } from "../codex/main-account-hard-lock";
 import type { MainAccountExternalUsageWarning } from "../codex/main-account-external-usage";
 import { getCodexAccountHealthSnapshot, type CodexCooldownSource } from "../codex/routing";
-import { getAnthropicAccountHealthSnapshot } from "./anthropic-routing";
+import { anthropicRoutingFor } from "./anthropic-routing";
 import { isAccountNeedsReauth } from "../codex/account-runtime-state";
 import { getCodexAccountCredential, listCodexAccountIds, readCodexAccountRecord } from "../codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
@@ -207,8 +208,8 @@ export function projectStoredOAuthAccountHealth(
   now = Date.now(),
   opts: { observeOnly?: boolean } = {},
 ): OAuthAccountHealth {
-  const anthropicSnap = provider === "anthropic"
-    ? getAnthropicAccountHealthSnapshot(account.id, now)
+  const anthropicSnap = isAnthropicInstanceId(provider)
+    ? anthropicRoutingFor(provider).getAnthropicAccountHealthSnapshot(account.id, now)
     : null;
   const needsReauth = accountNeedsReauthForStatus(provider, account, now);
   return projectOAuthAccountHealth({

@@ -181,7 +181,7 @@ export async function fetchProviderModelsWithAuth(
   // generation, so a request started with the former account cannot later publish its result.
   const cacheGeneration = captureModelCacheGeneration(name);
   const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
-  const anthropicSelection = name === "anthropic" && prov.authMode === "oauth"
+  const anthropicSelection = (name === "anthropic" || name === "anthropic2") && prov.authMode === "oauth" && mayResolveModelsOAuth(name, prov)
     ? captureOAuthAccountSelection(name) : null;
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   const seedVertexDefault = prov.adapter === "google"
@@ -278,7 +278,8 @@ export async function fetchProviderModelsWithAuth(
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
   const maySendAnthropicDiscovery = () => {
-    if (name !== "anthropic" || prov.authMode !== "oauth") return true;
+    if ((name !== "anthropic" && name !== "anthropic2") || prov.authMode !== "oauth") return true;
+    if (!mayResolveModelsOAuth(name, prov)) return false;
     const selected = captureOAuthAccountSelection(name);
     const row = auth.oauthAccountId ? getAccountCredentialWithStatus(name, auth.oauthAccountId) : null;
     return !!anthropicSelection && !!selected && !!row && !row.paused && !row.needsReauth
@@ -637,7 +638,7 @@ export async function fetchProviderModelsWithAuth(
   }
   // The captured request predates any refresh, so a refreshing gather rebuilds it
   // from the auth it resolved: the token and its origin, together.
-  const request = resolveAuth.kind === "refreshing"
+  const request = resolveAuth.kind === "refreshing" && name !== "anthropic2"
     ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl)
     : captured.request;
   const url = request.url;

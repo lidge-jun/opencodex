@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { anthropicInstanceRowShapeMatches, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
+import { readFileSync } from "node:fs";
+import { getConfigPath } from "../config/paths";
+import { anthropicInstanceRowShapeMatches, type AnthropicInstanceId, type AnthropicInstanceRow } from "../providers/anthropic-instance-id";
 import type { OcxConfig } from "../types";
 import { normalizeAnthropicIdentity } from "./anthropic-identity";
 import type { AuthStore } from "./store";
@@ -31,9 +33,29 @@ export class AnthropicInstanceCollisionError extends Error {
 }
 
 export function assertAnthropicInstanceLoginConfig(config: Pick<OcxConfig, "providers">, provider: string, credentialWritten = false): void {
+  if (provider !== "anthropic2") return;
   const row = config.providers.anthropic2;
-  if (provider === "anthropic2" && row !== undefined && !anthropicInstanceRowShapeMatches(provider, row)) {
+  if (Object.hasOwn(config.providers, provider) && !anthropicInstanceRowShapeMatches(provider, row)) {
     throw new AnthropicInstanceCollisionError(credentialWritten);
+  }
+  // A malformed custom row (for example, missing baseUrl) can disappear behind loadConfig's
+  // fallback. Raw presence still owns this namespace; onboarding must not overwrite its bytes.
+  let raw: string;
+  try { raw = readFileSync(getConfigPath(), "utf8"); }
+  catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+    throw new Error("Cannot verify Anthropic Pool 2 ownership in the existing config file.");
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw.replace(/^\uFEFF/, "")); }
+  catch { throw new Error("Cannot verify Anthropic Pool 2 ownership in the existing config file."); }
+  const providers = parsed && typeof parsed === "object" && "providers" in parsed ? parsed.providers : undefined;
+  if (providers && typeof providers === "object" && Object.hasOwn(providers, provider)) {
+    const persisted = (providers as Record<string, unknown>)[provider];
+    if (!persisted || typeof persisted !== "object" || Array.isArray(persisted)
+      || !anthropicInstanceRowShapeMatches(provider, persisted as AnthropicInstanceRow)) {
+      throw new AnthropicInstanceCollisionError(credentialWritten);
+    }
   }
 }
 

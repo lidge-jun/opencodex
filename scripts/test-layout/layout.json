@@ -2,6 +2,10 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "anthropic-instance-isolation.test.ts": "adapters/anthropic", "anthropic-instance-pool-parity.test.ts": "adapters/anthropic",
+    "anthropic-instance-quota.test.ts": "adapters/anthropic", "anthropic-instance-recovery.test.ts": "adapters/anthropic",
+    "anthropic2-fast-parity.test.ts": "adapters/anthropic", "anthropic2-native-routing.test.ts": "claude-integration",
+    "oauth-anthropic-instance-health.test.ts": "oauth", "anthropic2-responses-parity.test.ts": "responses",
     "oauth-anthropic-instance-multiprocess.test.ts": "oauth",
     "anthropic2-discovery-ownership.test.ts": "oauth",
     "provider-anthropic-instance.test.ts": "providers", "config-anthropic-instance-pool.test.ts": "config", "oauth-anthropic-instance-registration.test.ts": "oauth", "oauth-anthropic-instance-refresh.test.ts": "oauth",

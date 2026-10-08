@@ -32,7 +32,7 @@ import {
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError } from "./anthropic";
 import { isAnthropicOAuthInstance, anthropicInstanceRowShapeMatches } from "../providers/anthropic-instance";
-import { guardModelsOAuthRequest, mayResolveModelsOAuth } from "./model-discovery-auth";
+import { captureModelsOAuthTarget, guardModelsOAuthRequest, mayResolveModelsOAuth } from "./model-discovery-auth";
 import { anthropicOAuthDefinition, assertAnthropicInstanceLoginConfig, AnthropicInstanceCollisionError,
   clearAnthropicRefreshIntentBestEffort, clearAnthropicRefreshIntentForKnownFailure,
   resumeAnthropicRefreshIntentCleanup, clearObservedAnthropicRefreshIntent } from "./anthropic-oauth-definitions";
@@ -1118,6 +1118,7 @@ export function buildModelsRequest(
   providerName = "",
   observedAuth?: ModelsRequestObservedAuth,
 ): { method?: "POST"; url: string; headers: Record<string, string> } {
+  const authorizedTarget = captureModelsOAuthTarget(providerName, prov);
   if (prov.authMode === "oauth" && !mayResolveModelsOAuth(providerName, prov)) apiKey = undefined;
   const transportSeed = modelDiscoveryTransportSeed(providerName, prov);
   const copilotApiBaseUrl = observedAuth === undefined
@@ -1146,7 +1147,7 @@ export function buildModelsRequest(
     defaultUrl,
   );
   const guarded = <T extends { url: string; headers: Record<string, string> }>(request: T): T =>
-    guardModelsOAuthRequest(providerName, prov, request);
+    guardModelsOAuthRequest(providerName, prov, request, authorizedTarget);
   if (effectiveGoogleMode(providerName, effectiveProvider) === "cloud-code-assist") {
     headers.Accept = "application/json";
     headers["Content-Type"] = "application/json";

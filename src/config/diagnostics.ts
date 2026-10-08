@@ -7,7 +7,7 @@ import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import type { OcxConfig } from "../types";
-import { anthropicAccountPoolConfigError, anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
+import { anthropicAccountPoolConfigError, anthropicOAuthInstanceConfigError, anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import { loopbackCompanionAllowed } from "../codex/loopback-target";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../codex/upstream-host-health";
@@ -153,7 +153,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   return {
     config: normalized,
     source: "file",
-    error: anthropicAccountPoolConfigError(rawParsed) ?? anthropicSidecarConfigError(rawParsed) ?? null,
+    error: anthropicOAuthInstanceConfigError(rawParsed) ?? anthropicAccountPoolConfigError(rawParsed) ?? anthropicSidecarConfigError(rawParsed) ?? null,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
@@ -655,7 +655,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   if (protocols !== undefined && !protocolConfigSchema.safeParse(protocols).success) {
     return { ok: false, error: "schema_invalid: protocols: expected valid protocol policy and boolean rollout flags" };
   }
-  const anthropicError = anthropicAccountPoolConfigError(value) ?? anthropicSidecarConfigError(value);
+  const anthropicError = anthropicOAuthInstanceConfigError(value) ?? anthropicAccountPoolConfigError(value) ?? anthropicSidecarConfigError(value);
   if (anthropicError) return { ok: false, error: anthropicError };
   const boundaryError = blockedModelRedirectsError(value)
     ?? compactionRecoveryConfigError(value) ?? configReasoningPinsConfigError(value)

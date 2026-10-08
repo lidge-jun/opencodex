@@ -46,6 +46,34 @@ export function anthropicAccountPoolConfigError(value: unknown): string | undefi
   return undefined;
 }
 
+/** Raw provenance validation runs before tolerant parsing and never adopts or edits a row. */
+export function anthropicOAuthInstanceConfigError(value: unknown): string | undefined {
+  const seen = new WeakSet<object>();
+  const inspect = (raw: unknown, location: string[]): string | undefined => {
+    if (!raw || typeof raw !== "object" || seen.has(raw)) return undefined;
+    seen.add(raw);
+    for (const [field, child] of Object.entries(raw)) {
+      const path = [...location, field];
+      if (field === "anthropicOAuthInstance") {
+        const label = redactSecretString(path.join("."));
+        if (location.length !== 2 || location[0] !== "providers" || location[1] !== "anthropic2") {
+          return `schema_invalid: ${label}: misplaced field; valid only on providers.anthropic2`;
+        }
+        if (child !== "anthropic2") return `schema_invalid: ${label}: must be anthropic2`;
+        const row = record(raw);
+        if (row?.adapter !== "anthropic" || row?.authMode !== "oauth") {
+          return `schema_invalid: ${label}: requires Anthropic adapter and OAuth authMode`;
+        }
+      }
+      const error = inspect(child, path);
+      if (error) return error;
+    }
+    seen.delete(raw);
+    return undefined;
+  };
+  return inspect(value, []);
+}
+
 /** Validate explicit helper identity without materializing an absent instance preference. */
 export function anthropicSidecarConfigError(value: unknown): string | undefined {
   const config = record(value);

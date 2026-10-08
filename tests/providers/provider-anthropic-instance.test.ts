@@ -21,7 +21,7 @@ import { resolveMetadataProvider } from "../../src/generated/model-metadata";
 import type { OcxProviderConfig } from "../../src/types";
 
 const builtin: OcxProviderConfig = {
-  adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com",
+  adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", anthropicOAuthInstance: "anthropic2",
 };
 
 /** Compare every container recursively, including nested model lists and Fast wire metadata. */
@@ -70,20 +70,23 @@ describe("Anthropic OAuth instance identity", () => {
     }
   });
 
-  test("B requires a first-party OAuth row while A retains its historical identity", () => {
+  test("B requires explicit own provenance while A retains its historical identity", () => {
     expect(anthropicInstanceRowShapeMatches("anthropic2", undefined)).toBe(false);
-    expect(anthropicInstanceRowShapeMatches("anthropic2", { adapter: "anthropic", authMode: "oauth" })).toBe(true);
-    for (const baseUrl of ["https://api.anthropic.com", " https://api.anthropic.com/// "]) {
+    expect(anthropicInstanceRowShapeMatches("anthropic2", { adapter: "anthropic", authMode: "oauth" })).toBe(false);
+    expect(anthropicInstanceRowShapeMatches("anthropic2", { ...builtin, baseUrl: undefined })).toBe(true);
+    expect(anthropicInstanceRowShapeMatches("anthropic2", Object.create(builtin))).toBe(false);
+    for (const marker of [undefined, null, false, "anthropic", "Anthropic2", {}]) {
+      expect(anthropicInstanceRowShapeMatches("anthropic2", { ...builtin, anthropicOAuthInstance: marker })).toBe(false);
+    }
+    for (const baseUrl of ["https://api.anthropic.com", " https://api.anthropic.com/// ", "https://gateway.example/v1",
+      "https://api.anthropic.com/v1", "https://api.anthropic.com.evil.example", ""]) {
       expect(isBuiltinAnthropicInstanceRow("anthropic2", { ...builtin, baseUrl })).toBe(true);
     }
     for (const row of [
       { ...builtin, authMode: "key" as const },
       { ...builtin, authMode: undefined },
       { ...builtin, adapter: "openai-chat" },
-      { ...builtin, baseUrl: "https://gateway.example/v1" },
-      { ...builtin, baseUrl: "https://api.anthropic.com/v1" },
-      { ...builtin, baseUrl: "https://api.anthropic.com.evil.example" },
-      { ...builtin, baseUrl: "" },
+      { ...builtin, anthropicOAuthInstance: undefined },
     ]) {
       expect(isBuiltinAnthropicInstanceRow("anthropic2", row)).toBe(false);
       expect(providerMatchesRegistryTransport("anthropic2", row)).toBe(false);
@@ -102,6 +105,8 @@ describe("Anthropic OAuth instance identity", () => {
     config.providers.anthropic2 = { ...builtin, disabled: true };
     expect(configuredAnthropicInstance(config, "anthropic2")).toBeUndefined();
     config.providers.anthropic2 = { ...builtin, baseUrl: "https://gateway.example/v1" };
+    expect(configuredAnthropicInstance(config, "anthropic2")).toBe("anthropic2");
+    delete config.providers.anthropic2.anthropicOAuthInstance;
     expect(configuredAnthropicInstance(config, "anthropic2")).toBeUndefined();
     config.providers.anthropic2 = { ...builtin };
     expect(configuredAnthropicInstance(config, "anthropic2")).toBe("anthropic2");
@@ -122,7 +127,7 @@ describe("Anthropic registry seeds", () => {
     });
     expect(b).toMatchObject({
       id: "anthropic2", label: "Anthropic · Pool 2", oauthId: "anthropic2", oauthFamily: "anthropic",
-      note: "Independent Claude account pool — log in with a separate Claude account", allowBaseUrlOverride: false,
+      note: "Independent Claude account pool — log in with a separate Claude account", allowBaseUrlOverride: true,
     });
     const instanceFields = new Set(["id", "label", "oauthId", "note", "allowBaseUrlOverride"]);
     const familyFields = (row: typeof a) => Object.fromEntries(Object.entries(row).filter(([key]) => !instanceFields.has(key)));
@@ -137,7 +142,8 @@ describe("Anthropic registry seeds", () => {
     const snapshotB = structuredClone(b);
     const aSeed = providerConfigSeed(a);
     const bSeed = providerConfigSeed(b);
-    expect(bSeed).toEqual(aSeed);
+    expect(bSeed).toEqual({ ...aSeed, anthropicOAuthInstance: "anthropic2" });
+    expect(aSeed.anthropicOAuthInstance).toBeUndefined();
     expectDetached(aSeed, bSeed);
     bSeed.models!.push("fixture-only");
     bSeed.modelInputModalities![b.models![0]].push("fixture-only");
@@ -153,8 +159,9 @@ describe("Anthropic registry seeds", () => {
   test("custom same-named rows are not enriched with B's registry defaults", () => {
     for (const provider of [
       { ...builtin, authMode: "key" as const, baseUrl: "https://gateway.example/v1" },
-      { ...builtin, baseUrl: "https://gateway.example/v1" },
+      { ...builtin, anthropicOAuthInstance: undefined, baseUrl: "https://gateway.example/v1" },
       { ...builtin, adapter: "openai-chat", baseUrl: "https://gateway.example/v1" },
+      { ...builtin, anthropicOAuthInstance: undefined },
     ]) {
       const before = structuredClone(provider);
       enrichProviderFromRegistry("anthropic2", provider);

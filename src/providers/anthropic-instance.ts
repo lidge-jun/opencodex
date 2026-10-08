@@ -23,7 +23,7 @@ export function isAnthropicOAuthInstance(id: string | undefined): id is Anthropi
 
 export function isBuiltinAnthropicInstanceRow(
   name: string,
-  row?: Partial<Pick<OcxProviderConfig, "adapter" | "authMode" | "baseUrl">>,
+  row?: Partial<Pick<OcxProviderConfig, "adapter" | "authMode" | "baseUrl" | "anthropicOAuthInstance">>,
 ): boolean {
   return isAnthropicOAuthInstance(name) && anthropicInstanceRowShapeMatches(name, row);
 }

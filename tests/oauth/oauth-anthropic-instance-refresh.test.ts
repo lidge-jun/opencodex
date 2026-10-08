@@ -20,7 +20,7 @@ import { subscribeOAuthAccountRoutingPolicyChanges } from "../../src/lib/account
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
-const originalEnv = { HOME: process.env.HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+const originalEnv = { CODEX_HOME: process.env.CODEX_HOME, HOME: process.env.HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
 const originalFetch = globalThis.fetch;
 let home: string;
 let cliFile: string;
@@ -30,7 +30,10 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-anthropic-instance-refresh-"));
   process.env.HOME = home;
   process.env.OPENCODEX_HOME = join(home, "ocx");
+  process.env.CODEX_HOME = join(home, "codex");
   process.env.CLAUDE_CONFIG_DIR = join(home, "claude");
+  mkdirSync(process.env.CODEX_HOME);
+  mkdirSync(process.env.OPENCODEX_HOME);
   mkdirSync(process.env.CLAUDE_CONFIG_DIR);
   cliFile = join(process.env.CLAUDE_CONFIG_DIR, ".credentials.json");
   writeCli("synthetic-cli-access", "synthetic-cli-refresh");
