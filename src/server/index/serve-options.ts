@@ -40,7 +40,8 @@ import {
 import { websocketsEnabled } from "../../config";
 import { metricsExportEnabled } from "../../config/feature-flags";
 import { grokDefaultReasoningEffort } from "../../grok/effort";
-import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
+import { COMBO_NAMESPACE } from "../../combos";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
 import {
   codexAccountNamespaceEntries,
@@ -923,7 +924,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           throw error;
         }
         const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiMaxOutputTokens, nativeOpenAiContextTier, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
-        const { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } = await import("../../codex/catalog/native-models");
+        const { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, isNativeLargeContextVariant, stripCodexLargeContextAlias } = await import("../../codex/catalog/native-models");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
         const bareEligibleAccountIds = providerCodexAccountMode(
@@ -1139,7 +1140,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // to enable its effort control; every other consumer ignores them. See
         // src/server/models-capabilities.ts.
         const nativeLimits = nativeContextLimits(config);
-        const nativeContextInput = (metadataId: string) => {
+        const nativeContextInput = (metadataId: string, id = metadataId) => {
+          if (isNativeLargeContextVariant(id)) {
+            const large = nativeLargeContextLimits(id, nativeLimits);
+            return { contextWindow: large?.window ?? 872_000 };
+          }
           const tier = nativeOpenAiContextTier(metadataId, nativeLimits);
           return tier
             ? { contextWindow: tier.defaultWindow, longContextWindow: tier.longWindow }
@@ -1159,7 +1164,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               // Cursor "Max Mode": advertise the family's default/long pair (272k/922k for
               // GPT-5.6) so the client can pick per request; without a tier, the effective
               // window is the only value.
-              ...nativeContextInput(metadataId),
+              ...nativeContextInput(metadataId, id),
               maxOutputTokens: nativeOpenAiMaxOutputTokens(metadataId),
               inputModalities: nativeInputModalities(metadataId),
             }),
@@ -1187,10 +1192,16 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             ? bareSelectorNativeSlugs.filter(slug => !shadowedNativeSlugs.has(slug))
             : visibleNativeSlugs(config)
           : [];
+        const { nativeLargeContextLimits, LARGE_CONTEXT_ALIAS_SUFFIX } = await import("../../codex/catalog/context-variants");
+        const { resolveInputCeiling } = await import("../responses/input-admission");
         const visibleAccountNatives = accountSelectors.flatMap(selector =>
           (accountNativeSlugsBySelector.get(selector) ?? []).filter(metadataId => !disabledNatives.has(metadataId)).flatMap(metadataId => {
-            const id = `${selector}/${metadataId}`;
-            return disabledModels.has(id) ? [] : [{ id, metadataId }];
+        const qualifiedId = `${selector}/${metadataId}`;
+        const rows = [{ id: qualifiedId, metadataId }];
+        if (!isNativeLargeContextVariant(metadataId)) {
+          rows.push({ id: qualifiedId + LARGE_CONTEXT_ALIAS_SUFFIX, metadataId: metadataId + LARGE_CONTEXT_ALIAS_SUFFIX });
+        }
+        return rows;
           })
         );
         // What a scoped key may see, filtered by the same predicate that refuses
@@ -1222,19 +1233,37 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           : null;
         const expandedNativeModelRow = (id: string, metadataId = id) => {
           const reasoningEfforts = nativeReasoningEfforts(metadataId);
-          return expandCursorEffortRow(nativeModelRow(id, metadataId), reasoningEfforts, config, {
+          const baseRows = expandCursorEffortRow(nativeModelRow(id, metadataId), reasoningEfforts, config, {
             knownIds: effortRowKnownIds,
             table: cursorEffortTable,
             supportsReasoning: reasoningEfforts.length > 0,
           }).flatMap(row => expandFastRow(
             row,
-            // Only the BASE row earns a fast sibling. An effort row already spent the
-            // grammar, and the parser requires the stripped base to be routable, so
-            // `<base>--<effort>--fast` would publish a row no ingress can resolve.
             row.id === id && nativeFastEligible(metadataId),
             config,
             effortRowKnownIds,
           ));
+          if (metadataId !== id) return baseRows;
+          if (isNativeLargeContextVariant(id)) return baseRows;
+          const nativeProvider = config.providers[OPENAI_CODEX_PROVIDER_ID];
+          if (!nativeProvider || !isCanonicalOpenAiForwardProvider(nativeProvider)) return baseRows;
+        const hasComboOverride = Object.values(config.combos ?? {}).some(combo => combo.alias === id || combo.alias === `${id}-900k` || (Boolean(combo.nativeAlias) && (combo.alias === "gpt-6-sol-900k" || `${id}-900k` === "gpt-6-sol-900k")));
+        if (hasComboOverride) return baseRows;
+          const large = nativeLargeContextLimits(metadataId + LARGE_CONTEXT_ALIAS_SUFFIX, nativeLimits);
+          if (!large) return baseRows;
+          const aliasId = id + LARGE_CONTEXT_ALIAS_SUFFIX;
+          const isBlockedByKeyScope = !listAllows(OPENAI_CODEX_PROVIDER_ID, aliasId);
+          if (isBlockedByKeyScope) return baseRows;
+          const { pricing: _baseTierPricing, ...aliasBaseRow } = nativeModelRow(aliasId, metadataId);
+          const aliasRow = {
+            ...aliasBaseRow,
+            ...modelCapabilityFields({ reasoningEfforts, contextWindow: large.window,
+              maxOutputTokens: nativeOpenAiMaxOutputTokens(metadataId), inputModalities: nativeInputModalities(metadataId) }),
+            max_context_window: large.window,
+            max_input_tokens: resolveInputCeiling(nativeProvider,
+              OPENAI_CODEX_PROVIDER_ID, metadataId + LARGE_CONTEXT_ALIAS_SUFFIX, nativeLimits) ?? large.ceiling,
+          };
+          return [...baseRows, aliasRow];
         };
         const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered)
           .filter(m => listAllows(m.provider, m.id))
@@ -1292,7 +1321,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             .filter(({ metadataId }) => listAllows(OPENAI_CODEX_PROVIDER_ID, metadataId))
             .flatMap(({ id, metadataId }) => expandedNativeModelRow(id, metadataId)),
           ...routedRows.flat(),
-        ];
+        ].filter(row => listAllows(row.owned_by ?? "openai", row.id));
         return jsonResponse({ object: "list", data }, 200, req, policy);
       }
 

@@ -88,6 +88,8 @@ export function resolveAdmissionModelScope(
  * `provider/model` form, so an operator can scope one model everywhere or
  * pin it to a single provider without a second field.
  */
+import { isNativeLargeContextVariant, stripCodexLargeContextAlias } from "../codex/catalog/native-models";
+
 export function routeAllowedByScope(
   scope: AdmissionModelScope | undefined,
   route: ScopedRoute,
@@ -96,7 +98,14 @@ export function routeAllowedByScope(
   const model = normalize(route.modelId);
   if (!providerAllowedByScope(scope, route.providerName)) return false;
   if (scope.models.length === 0) return true;
-  return scope.models.includes(model) || scope.models.includes(normalize(route.providerName) + "/" + model);
+  const base = stripCodexLargeContextAlias(model);
+  const qual = normalize(route.providerName) + "/" + model;
+  const baseQual = normalize(route.providerName) + "/" + base;
+  if (scope.models.includes(model) || scope.models.includes(qual)) return true;
+  if (isNativeLargeContextVariant(model)) {
+    return scope.models.includes(base) || scope.models.includes(baseQual);
+  }
+  return false;
 }
 
 /**

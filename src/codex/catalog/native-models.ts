@@ -1,6 +1,26 @@
 /** Reserve wire identity, not a globally available native catalog registration. */
 export const NATIVE_RESERVE_MODEL = "gpt-reserve";
 
+/** Exact opt-in grammar shared by config and catalog, with no runtime imports. */
+export function isNativeLargeContextVariant(model: string): boolean {
+  return model.endsWith("-900k") && isNativeContextVariantBase(model.slice(0, -5));
+}
+
+export function isNativeContextVariantBase(model: string): boolean {
+  return [
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
+    NATIVE_DAYBREAK_BLUE_MODEL,
+  ].includes(model) || (
+    /^gpt-(?:6-(?:sol|luna))-\d{4}-\d{2}-\d{2}$/.test(model)
+  );
+}
+
+export function stripCodexLargeContextAlias(model: string): string {
+  return isNativeLargeContextVariant(model) ? model.slice(0, -5) : model;
+}
+
 /** ChatGPT/Codex wire id observed for the account-native Daybreak Blue surface. */
 export const NATIVE_DAYBREAK_BLUE_MODEL = "gpt-daybreak-blue-latest";
 
@@ -267,13 +287,23 @@ type ConfiguredNativeListener = (current: readonly string[], removed: readonly s
 const configuredNativeListeners: ConfiguredNativeListener[] = [];
 
 const CONFIGURED_NATIVE_SLUG = /^gpt-[a-z0-9][a-z0-9.-]*$/;
+/** Special suffixes like -900k are synthetic catalog aliases, not independent configured models. */
+const SYNTHETIC_NATIVE_SUFFIX = /-900k$/;
 
 /** Whether a bare id may become a configured native (shape, not built in, not retired or reserve). */
 export function isEligibleConfiguredNativeOpenAiModel(id: string): boolean {
   return CONFIGURED_NATIVE_SLUG.test(id)
+    && !SYNTHETIC_NATIVE_SUFFIX.test(id)
     && !BUILT_IN_NATIVE_OPENAI_MODELS.includes(id)
     && !RETIRED_NATIVE_OPENAI_MODELS.has(id)
     && id !== NATIVE_RESERVE_MODEL;
+}
+
+/** Whether a model id may be keyed in modelAutoCompactTokenLimits. */
+export function isValidAutoCompactTokenLimitKey(id: string): boolean {
+  return isEligibleConfiguredNativeOpenAiModel(id)
+    || BUILT_IN_NATIVE_OPENAI_MODELS.includes(id)
+    || isNativeLargeContextVariant(id);
 }
 
 export function configuredNativeOpenAiModels(): readonly string[] {

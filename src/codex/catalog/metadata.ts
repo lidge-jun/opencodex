@@ -259,6 +259,7 @@ export interface NativeContextLimits {
   readonly providerWindow?: number;
   /** `providers.openai.modelContextWindows` — per-model, wins over `providerWindow`. */
   readonly modelWindows?: Readonly<Record<string, number>>;
+  readonly modelMaxInputTokens?: Readonly<Record<string, number>>;
   /** `providers.openai.modelAutoCompactTokenLimits` — soft, lowering-only budgets. */
   readonly modelAutoCompactTokenLimits?: Readonly<Record<string, number>>;
 }
@@ -290,11 +291,12 @@ export function nativeContextLimits(
     if (budget !== undefined) modelAutoCompactTokenLimits[slug] = budget;
   }
   return {
-    ...(positiveInt(providerContextCap(config, OPENAI_CODEX_PROVIDER_ID)) !== undefined
-      ? { cap: providerContextCap(config, OPENAI_CODEX_PROVIDER_ID) }
+    ...(positiveInt(config.providerContextCaps?.[OPENAI_CODEX_PROVIDER_ID]) !== undefined
+      ? { cap: config.providerContextCaps![OPENAI_CODEX_PROVIDER_ID] }
       : {}),
     ...(positiveInt(provider?.contextWindow) !== undefined ? { providerWindow: provider!.contextWindow } : {}),
     ...(Object.keys(modelWindows).length > 0 ? { modelWindows } : {}),
+    modelMaxInputTokens: (provider as any)?.modelMaxInputTokens,
     ...(Object.keys(modelAutoCompactTokenLimits).length > 0 ? { modelAutoCompactTokenLimits } : {}),
   };
 }
@@ -459,10 +461,17 @@ export function disabledNativeSlugs(config: Pick<OcxConfig, "disabledModels">): 
   return new Set((config.disabledModels ?? []).filter(id => !id.includes("/")));
 }
 
+import { isNativeContextVariantBase, LARGE_CONTEXT_ALIAS_SUFFIX } from "./context-variants";
+
 export function visibleNativeSlugs(config: Pick<OcxConfig, "disabledModels" | "combos">): string[] {
   const disabled = disabledNativeSlugs(config);
   const shadowed = configuredNativeAliasSlugs(config);
-  return nativeOpenAiSlugs().filter(slug => !disabled.has(slug) && !shadowed.has(slug));
+  const base = nativeOpenAiSlugs().filter(slug => !disabled.has(slug) && !shadowed.has(slug));
+  const large = base
+    .filter(slug => isNativeContextVariantBase(slug))
+    .map(slug => slug + LARGE_CONTEXT_ALIAS_SUFFIX)
+    .filter(slug => !disabled.has(slug) && !shadowed.has(slug));
+  return [...base, ...large];
 }
 
 /** Whether an enabled canonical OpenAI provider can serve exact account-qualified routes. */
@@ -545,6 +554,8 @@ export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "comb
   });
 }
 
+import { isNativeLargeContextVariant, stripCodexLargeContextAlias } from "./native-models";
+
 export function applyNativeVisibility(
   entries: RawEntry[],
   disabledModels: ReadonlySet<string>,
@@ -558,9 +569,11 @@ export function applyNativeVisibility(
     const nativeSlug = accountBoundSlug ?? slug;
     if (!nativeSlug
       || (!accountBoundSlug && slug.includes("/"))
-      || (!SUPPORTED_NATIVE_OPENAI_SLUGS.has(nativeSlug) && !observedNativeSlugs.has(nativeSlug))) continue;
-    const disabled = disabledModels.has(nativeSlug)
-      || (accountBoundSlug !== undefined && disabledModels.has(slug));
+      || (!SUPPORTED_NATIVE_OPENAI_SLUGS.has(stripCodexLargeContextAlias(nativeSlug)) && !observedNativeSlugs.has(nativeSlug))) continue;
+    const base = stripCodexLargeContextAlias(nativeSlug);
+    const disabled = disabledModels.has(nativeSlug) || disabledModels.has(base)
+      || (accountBoundSlug !== undefined && (disabledModels.has(slug)
+        || disabledModels.has(slug.slice(0, slug.indexOf("/") + 1) + base)));
     entry.visibility = disabled || (!accountBoundSlug && hideBareNative)
       ? "hide"
       : "list";

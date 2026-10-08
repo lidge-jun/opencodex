@@ -13,6 +13,7 @@ import {
   normalizeServiceTiers,
 } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawEntry } from "./parsing";
+import { isNativeLargeContextVariant, nativeLargeContextLimits, LARGE_CONTEXT_ALIAS_SUFFIX } from "./context-variants";
 import {
   CODEX_NATIVE_ALIAS_CATALOG_KIND,
   NATIVE_OPENAI_MODELS,
@@ -43,6 +44,7 @@ import {
 } from "./aggregation";
 import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { NATIVE_RESERVE_MODEL } from "./native-models";
+import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { isReserveCatalogProjection, type ReserveCatalogProjection } from "./reserve";
 import { deriveEntry, finishUpstreamNativeEntry, isExactComboCatalogEntry } from "./derive-entry";
 import { PICKER_ORDER_PRIORITY_BASE, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
@@ -194,13 +196,33 @@ export function buildCatalogEntriesFromObservedState({
   const comboPublicSlugs = new Set(goModels
     .filter(model => model.provider === COMBO_NAMESPACE)
     .map(catalogModelSlug));
-  for (const slug of gptSlugs) {
+
+  const sourceSlugs = [...new Set([...gptSlugs, ...(accountNativeSlugs ?? []),
+    ...[...(accountNativeSlugsBySelector?.values() ?? [])].flatMap(slugs => [...slugs])])]
+    .filter(slug => !isNativeLargeContextVariant(slug));
+  for (const slug of sourceSlugs) {
     const native = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, new Set(), openaiContextCap);
     if (rank.has(slug)) native.priority = rank.get(slug)!;
     nativeEntries.push(native);
+    const resolvedLargeVariant = nativeLargeContextLimits(slug + LARGE_CONTEXT_ALIAS_SUFFIX, openaiContextCap);
+    if (resolvedLargeVariant) {
+      const largeEntry = JSON.parse(JSON.stringify(native)) as RawEntry;
+      largeEntry.slug = slug + LARGE_CONTEXT_ALIAS_SUFFIX;
+      largeEntry.priority = (typeof native.priority === "number" ? native.priority : 9) + 1;
+      largeEntry.display_name = `${String(native.display_name ?? slug)} (Large context)`;
+      largeEntry.context_window = resolvedLargeVariant.window;
+      largeEntry.max_context_window = resolvedLargeVariant.ceiling;
+      const softBudgets = typeof openaiContextCap === "object" ? openaiContextCap.modelAutoCompactTokenLimits : undefined;
+      largeEntry.auto_compact_token_limit = Math.min(
+        clampAutoCompactTokenLimit(resolvedLargeVariant.window, resolvedLargeVariant.ceiling, softBudgets?.[slug]),
+        clampAutoCompactTokenLimit(resolvedLargeVariant.window, resolvedLargeVariant.ceiling, softBudgets?.[String(largeEntry.slug)]),
+      );
+      nativeEntries.push(largeEntry);
+      if (!suppressedBareNativeSlugs.has(slug) && !comboPublicSlugs.has(String(largeEntry.slug)) && !comboPublicSlugs.has(slug + LARGE_CONTEXT_ALIAS_SUFFIX)) out.push(largeEntry);
+    }
     const nativeAlias = nativeAliasesBySlug.get(slug);
     if (!nativeAlias || collisionSkipped.has(nativeAlias)) {
-      if (!suppressedBareNativeSlugs.has(slug)) out.push(native);
+      if (gptSlugs.includes(slug) && !suppressedBareNativeSlugs.has(slug)) out.push(native);
       continue;
     }
     const routed = deriveEntry(
@@ -224,10 +246,12 @@ export function buildCatalogEntriesFromObservedState({
     const selectorNativeSlugs = accountNativeSlugsBySelector?.get(selector)
       ?? accountNativeSlugs
       ?? gptSlugs;
-    const accountNativeEntries = selectorNativeSlugs.filter(slug => slug !== NATIVE_RESERVE_MODEL).map(slug => (
-      nativeEntriesBySlug.get(slug)
-        ?? deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, new Set(), openaiContextCap)
-    ));
+    const accountNativeEntries = selectorNativeSlugs.filter(slug => slug !== NATIVE_RESERVE_MODEL && !isNativeLargeContextVariant(slug)).flatMap(slug => {
+      const source = nativeEntriesBySlug.get(slug)
+        ?? deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, new Set(), openaiContextCap);
+      const large = nativeEntriesBySlug.get(slug + LARGE_CONTEXT_ALIAS_SUFFIX);
+      return large ? [source, large] : [source];
+    });
     if (reserve?.mainSelectors.includes(selector)) accountNativeEntries.push(reserve.source);
     for (const [nativeIndex, native] of accountNativeEntries.entries()) {
       const nativeSlug = String(native.slug);
@@ -664,6 +688,7 @@ export function mergeCatalogEntriesFromObservedState({
     ? catalogModelsForMerge
     .filter(m => typeof m.slug === "string"
       && !(m.slug as string).includes("/")
+      && !isNativeLargeContextVariant(m.slug as string)
       && m.owned_by !== COMBO_NAMESPACE
       && (policy.unsupportedNativeEntries === "preserve"
         || policy.nativeBackfillSlugs.includes(m.slug as string)
@@ -715,6 +740,15 @@ export function mergeCatalogEntriesFromObservedState({
       native.push(entry);
     }
   }
+
+  const baseSlugs = native.flatMap(entry => typeof entry.slug === "string" && !isNativeLargeContextVariant(entry.slug) ? [entry.slug] : []);
+  const rebuiltVariants = buildCatalogEntriesFromObservedState({
+    template, gptSlugs: baseSlugs,
+    goModels: [], wsEnabled, multiAgentMode, exactComboSlugs, accountSelectors: [],
+    suppressedBareNativeSlugs, disabledNativeAccountSlugs: new Set(), multiAgentV2Enabled, openaiContextCap,
+  }).filter(entry => typeof entry.slug === "string" && isNativeLargeContextVariant(entry.slug)
+    && !freshEquivalent(entry.slug));
+  native.push(...rebuiltVariants);
 
   const nativeSourceBySlug = new Map([...nativeSourceEntries, ...native].flatMap(entry =>
     typeof entry.slug === "string" ? [[entry.slug, entry] as const] : []
@@ -864,7 +898,8 @@ export function mergeCatalogEntriesFromObservedState({
   const mergedEntries = [...native, ...managedEntries].map(m => {
     const reserveProjection = isReserveCatalogProjection(m);
     const normalized = reserveProjection ? m : normalizeServiceTiers(m);
-    if (!reserveProjection && !isNativeAliasCatalogEntry(normalized)) applyNativeOpenAiContextOverride(normalized, openaiContextCap);
+    if (!reserveProjection && !isNativeAliasCatalogEntry(normalized)
+      && !isNativeLargeContextVariant(trustedAccountBoundNativeCatalogSlug(normalized) ?? String(normalized.slug))) applyNativeOpenAiContextOverride(normalized, openaiContextCap);
     const exactCombo = isExactComboCatalogEntry(m, exactComboSlugs);
     // The builder copied this metadata from the pinned first-party row only for an exact
     // ChatGPT/Codex forward custom alias. Freshness plus source equality prevents an old or

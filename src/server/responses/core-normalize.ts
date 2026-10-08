@@ -157,6 +157,10 @@ export async function applyFinalRouteRequestNormalization(args: {
   const preserveAnthropicResponseModel = route.providerName === "anthropic"
     || route.provider.adapter === "anthropic";
   const finalSelectedModelId = route.modelId;
+  if (route.nativeContextVariant) {
+    parsed.modelId = route.nativeContextVariant.wireModel;
+    parsed._nativeContextModelId = route.nativeContextVariant.requestedModel;
+  }
   const virtualModel = applyOpenAiVirtualModel(parsed, route, logCtx, inboundWire);
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace.

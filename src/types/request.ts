@@ -46,6 +46,7 @@ export interface OcxReasoningReplayScopeRef {
 
 export interface OcxParsedRequest {
   modelId: string;
+  _nativeContextModelId?: string;
   /** Client-facing model selector retained for Anthropic routes after wire-model normalization. */
   _responseModelId?: string;
   /** Selected OpenAI API virtual-model id retained after it rewrites the upstream wire model. */
