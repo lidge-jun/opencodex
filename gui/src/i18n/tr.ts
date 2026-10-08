@@ -6,7 +6,7 @@ import type { TKey } from "./en";
  */
 export const tr: Record<TKey, string> = {
   "reasoningRetention.title": "Akıl yürütmeyi saklama",
-  "reasoningRetention.description": "Okunabilir özet döndüren yönlendirilmiş v1 sıkıştırmada bağlam yüzdesi ile token sınırının küçüğüne kadar akıl yürütme yerelde tutulur, sıkıştırma modeline gönderilmez ve başarıdan sonra geçmiş bağlam olarak geri getirilir. Sınır aşılırsa yerel arşivlenir ve dosya yolu notuyla değiştirilir. Varsayılan: %20 ve 100.000 token. Sağlayıcının özel akıl yürütmesi çözülmez; opak sıkıştırma çıktısı değişmeden kalır.",
+  "reasoningRetention.description": "Okunabilir özet döndüren yönlendirilmiş v1/v2 sıkıştırmada bağlam yüzdesi ile token sınırının küçüğüne kadar akıl yürütme yerelde tutulur, sıkıştırma modeline gönderilmez ve başarıdan sonra geçmiş bağlam olarak geri getirilir. Sınır aşılırsa yerel arşivlenir ve dosya yolu notuyla değiştirilir. Varsayılan: %20 ve 100.000 token. Sağlayıcının özel akıl yürütmesi çözülmez; opak sıkıştırma çıktısı değişmeden kalır.",
   "reasoningRetention.percent": "Bağlam penceresi (%)",
   "reasoningRetention.tokens": "Token sınırı",
   "reasoningRetention.reset": "Varsayılanları geri yükle",

@@ -5,7 +5,7 @@ import type { TKey } from "./en";
  */
 export const ja: Record<TKey, string> = {
   "reasoningRetention.title": "推論の保持",
-  "reasoningRetention.description": "読み取り可能な要約を返すルーティング v1 圧縮でのみ、コンテキスト割合とトークン上限の小さい方まで推論をローカルに保持し、圧縮モデルには送らず、成功後に履歴コンテキストとして戻します。超過時はローカルに保存し、パスの説明に置き換えます。既定値：20% と 100,000 トークン。プロバイダーの非公開推論は復号せず、暗号化された圧縮出力は変更しません。",
+  "reasoningRetention.description": "読み取り可能な要約を返すルーティング v1/v2 圧縮でのみ、コンテキスト割合とトークン上限の小さい方まで推論をローカルに保持し、圧縮モデルには送らず、成功後に履歴コンテキストとして戻します。超過時はローカルに保存し、パスの説明に置き換えます。既定値：20% と 100,000 トークン。プロバイダーの非公開推論は復号せず、暗号化された圧縮出力は変更しません。",
   "reasoningRetention.percent": "コンテキスト割合（%）",
   "reasoningRetention.tokens": "トークン上限",
   "reasoningRetention.reset": "既定値に戻す",

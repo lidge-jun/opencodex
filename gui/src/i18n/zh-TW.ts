@@ -3,7 +3,7 @@ import type { TKey } from "./en";
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
   "reasoningRetention.title": "推理保留",
-  "reasoningRetention.description": "僅路由 v1 壓縮的可讀摘要路徑啟用：閾值取上下文視窗比例與 token 上限中的較小值。閾值內的可讀推理暫留本機，不傳給壓縮模型，成功後隨摘要作為歷史上下文帶回；超限則本機封存並回傳路徑說明。預設 20% 和 100,000 token。無法解密供應商的私有推理，原生密文壓縮輸出保持原樣。",
+  "reasoningRetention.description": "僅路由 v1/v2 壓縮的可讀摘要路徑啟用：閾值取上下文視窗比例與 token 上限中的較小值。閾值內的可讀推理暫留本機，不傳給壓縮模型，成功後隨摘要作為歷史上下文帶回；超限則本機封存並回傳路徑說明。預設 20% 和 100,000 token。無法解密供應商的私有推理，原生密文壓縮輸出保持原樣。",
   "reasoningRetention.percent": "上下文視窗比例（%）",
   "reasoningRetention.tokens": "Token 上限",
   "reasoningRetention.reset": "還原預設",

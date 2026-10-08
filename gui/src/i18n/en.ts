@@ -7,7 +7,7 @@
  */
 export const en = {
   "reasoningRetention.title": "Reasoning retention",
-  "reasoningRetention.description": "For routed v1 compaction with a readable summary, reasoning within the smaller of the context-window percentage and token cap stays local during compaction, then returns as historical context alongside the summary. Above the limit, it is archived locally and replaced by a path note. Defaults: 20% and 100,000 tokens. Private provider reasoning is not decrypted; opaque compaction output stays unchanged.",
+  "reasoningRetention.description": "For routed v1/v2 compaction with a readable summary, reasoning within the smaller of the context-window percentage and token cap stays local during compaction, then returns as historical context alongside the summary. Above the limit, it is archived locally and replaced by a path note. Defaults: 20% and 100,000 tokens. Private provider reasoning is not decrypted; opaque compaction output stays unchanged.",
   "reasoningRetention.percent": "Context window (%)",
   "reasoningRetention.tokens": "Token cap",
   "reasoningRetention.reset": "Restore defaults",

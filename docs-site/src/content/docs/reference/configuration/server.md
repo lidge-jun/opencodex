@@ -735,7 +735,7 @@ input size and content. Restart the proxy after editing
 
 ### Reasoning retention during compaction
 
-For routed v1 `POST /v1/responses/compact`, readable reasoning stays local while the selected
+For routed v1 `POST /v1/responses/compact` and routed v2 `compaction_trigger` requests, readable reasoning stays local while the selected
 model summarizes other context. After a readable summary succeeds, exact retained text returns
 alongside it in framed historical context messages, not as new assistant reasoning or instructions.
 Repeated compaction withholds those messages again. Ordinary subsequent turns replay them as history.
@@ -770,7 +770,14 @@ block with a warning, keeping unrelated providers and settings.
 Private provider ciphertext and signatures are not decrypted or copied into portable retained
 messages. An upstream native opaque compaction response retains its exact output item and
 ciphertext, without added retained messages or a rewritten summary. Native compact endpoints
-and direct v2 `compaction_trigger` requests keep their existing behavior.
+keep their existing behavior.
+
+Routed v2 still returns exactly one compaction item. Its proxy-owned `ocx2:` envelope stores
+the summary and retained historical reasoning separately as JSON/Base64; this is encoding,
+not provider encryption. Subsequent requests restore separate historical messages, and
+repeated compaction withholds the reasoning again. Old `ocx1:` summaries remain supported.
+Opt-in emergency compaction recovery also preserves this separation for JSON and SSE.
+Explicit native-history recovery restores separate summary and historical reasoning messages too.
 
 ## Memory routing
 

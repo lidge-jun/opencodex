@@ -145,6 +145,8 @@ export interface OcxParsedRequest {
    * (see src/responses/compaction.ts).
    */
   _compactionRequest?: boolean;
+  /** Request-owned encoding of readable routed v2 retention; never used for native ciphertext. */
+  _compactionRetention?: { encode(summary: string): string; commit(): void };
   /** Manual compaction moved to another provider: summarize portably even on a canonical ChatGPT target. */
   _portableCompaction?: boolean;
   /**

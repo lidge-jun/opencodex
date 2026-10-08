@@ -7,7 +7,7 @@ import type { TKey } from "./en";
  */
 export const vi: Record<TKey, string> = {
   "reasoningRetention.title": "Lưu giữ suy luận",
-  "reasoningRetention.description": "Chỉ khi nén v1 qua định tuyến trả về bản tóm tắt đọc được, suy luận trong ngưỡng nhỏ hơn giữa tỷ lệ ngữ cảnh và giới hạn token được giữ cục bộ, không gửi tới mô hình nén, rồi trả lại dưới dạng ngữ cảnh lịch sử khi thành công. Vượt ngưỡng thì lưu cục bộ kèm đường dẫn. Mặc định: 20% và 100.000 token. Không giải mã suy luận riêng tư; đầu ra nén không đọc được giữ nguyên.",
+  "reasoningRetention.description": "Chỉ khi nén v1/v2 qua định tuyến trả về bản tóm tắt đọc được, suy luận trong ngưỡng nhỏ hơn giữa tỷ lệ ngữ cảnh và giới hạn token được giữ cục bộ, không gửi tới mô hình nén, rồi trả lại dưới dạng ngữ cảnh lịch sử khi thành công. Vượt ngưỡng thì lưu cục bộ kèm đường dẫn. Mặc định: 20% và 100.000 token. Không giải mã suy luận riêng tư; đầu ra nén không đọc được giữ nguyên.",
   "reasoningRetention.percent": "Cửa sổ ngữ cảnh (%)",
   "reasoningRetention.tokens": "Giới hạn token",
   "reasoningRetention.reset": "Khôi phục mặc định",

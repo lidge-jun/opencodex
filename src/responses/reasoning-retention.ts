@@ -4,6 +4,7 @@
  * Provider ciphertext and signatures are never included in the portable retained items.
  */
 
+import { expandRetainedCompactionInput } from "./retained-compaction";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { estimateTokens } from "../lib/token-estimate";
@@ -104,6 +105,8 @@ export function applyReasoningRetention(
   input: unknown,
   options: ReasoningRetentionOptions,
 ): ReasoningRetentionResult {
+  if (!Array.isArray(input)) return { input: [] };
+  input = expandRetainedCompactionInput(input);
   if (!Array.isArray(input)) return { input: [] };
   const texts = collectReasoningTexts(input);
   const retained = input.filter(item => !(isRecord(item) && (item.type === "reasoning" || retainedTextOf(item) !== undefined)));

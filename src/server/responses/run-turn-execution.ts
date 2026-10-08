@@ -773,7 +773,7 @@ export async function executeResponsesRunTurn(
           enforceDeclaredToolNames,
           toolParameterSchemas,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
-          ...(routedCompaction ? { compaction: true } : {}),
+          ...(routedCompaction ? { compaction: true, compactionRetention: parsed._compactionRetention } : {}),
           // grok-build's strict decoder dies on the typed response.heartbeat frame; its
           // eventsource layer tolerates comment keep-alives. Codex needs the opposite.
           ...(logCtx.surface === "grok" ? { heartbeatStyle: "comment" as const } : {}),
@@ -923,7 +923,7 @@ export async function executeResponsesRunTurn(
         freeformToolNames,
         bareCustomToolNames,
         toolSearchToolNames,
-        ...(routedCompaction ? { compaction: true } : {}),
+        ...(routedCompaction ? { compaction: true, compactionRetention: parsed._compactionRetention } : {}),
         onProviderState: state => { providerState = state; },
         onUsage: usage => {
           transportState.bindKeyUsageFromBridge(usage);

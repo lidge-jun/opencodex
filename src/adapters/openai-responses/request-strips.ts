@@ -1,3 +1,4 @@
+import { expandRetainedCompactionInput } from "../../responses/retained-compaction";
 import { createHash } from "node:crypto";
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
 import { debugProviderDiagnostic } from "../../lib/debug";
@@ -246,7 +247,7 @@ export function stripItemIdsWhenUnstored(
  * Normalize replayed compaction items for the destination backend.
  *
  * A compaction item carries an `encrypted_content` blob the client replays verbatim on every later
- * turn, and only the backend that minted it can decode it. Proxy-minted `ocx1:` envelopes are
+ * turn, and only the backend that minted it can decode it. Proxy-minted `ocx1:` and structured `ocx2:` envelopes are
  * transparent base64 rather than encryption, so no upstream can read them and they always become
  * plain user messages. Native blobs have multiple possible minters, so a destination's ability to
  * decode its own blobs does not make a blob from a previous serving identity portable. On a known
@@ -263,8 +264,9 @@ export function scrubOcxCompactionItems(
 ): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
-  let changed = false;
-  const input = body.input.map(item => {
+  const expanded = expandRetainedCompactionInput(body.input) as unknown[];
+  let changed = expanded !== body.input;
+  const input = expanded.map(item => {
     if (!isPlainObject(item) || !isCompactionItemType(item.type)) return item;
     const encrypted = typeof item.encrypted_content === "string" ? item.encrypted_content : undefined;
     if (encrypted === undefined) return item;

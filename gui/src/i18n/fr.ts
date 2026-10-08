@@ -5,7 +5,7 @@ import type { TKey } from "./en";
  */
 export const fr: Record<TKey, string> = {
   "reasoningRetention.title": "Conservation du raisonnement",
-  "reasoningRetention.description": "Lors d’une compression v1 routée avec résumé lisible, le raisonnement jusqu’au minimum du pourcentage de contexte et du plafond de tokens reste local, puis revient comme contexte historique. Au-delà, il est archivé localement avec une indication du chemin. Défauts : 20 % et 100 000 tokens. Le raisonnement privé du fournisseur n’est pas déchiffré ; les sorties de compression opaques restent inchangées.",
+  "reasoningRetention.description": "Lors d’une compression v1/v2 routée avec résumé lisible, le raisonnement jusqu’au minimum du pourcentage de contexte et du plafond de tokens reste local, puis revient comme contexte historique. Au-delà, il est archivé localement avec une indication du chemin. Défauts : 20 % et 100 000 tokens. Le raisonnement privé du fournisseur n’est pas déchiffré ; les sorties de compression opaques restent inchangées.",
   "reasoningRetention.percent": "Fenêtre de contexte (%)",
   "reasoningRetention.tokens": "Plafond de tokens",
   "reasoningRetention.reset": "Rétablir les valeurs par défaut",

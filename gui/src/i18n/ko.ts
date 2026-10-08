@@ -5,7 +5,7 @@ import type { TKey } from "./en";
  */
 export const ko: Record<TKey, string> = {
   "reasoningRetention.title": "추론 보존",
-  "reasoningRetention.description": "읽을 수 있는 요약을 반환하는 라우팅 v1 압축에서만 컨텍스트 비율과 토큰 한도 중 작은 값까지 추론을 로컬에 보관하고 압축 모델에 보내지 않으며, 성공 후 과거 컨텍스트로 되돌립니다. 한도 초과 시 로컬 파일로 보관하고 경로 안내로 바꿉니다. 기본값: 20% 및 100,000 토큰. 제공자의 비공개 추론을 복호화하지 않으며 불투명한 압축 출력은 그대로 유지합니다.",
+  "reasoningRetention.description": "읽을 수 있는 요약을 반환하는 라우팅 v1/v2 압축에서만 컨텍스트 비율과 토큰 한도 중 작은 값까지 추론을 로컬에 보관하고 압축 모델에 보내지 않으며, 성공 후 과거 컨텍스트로 되돌립니다. 한도 초과 시 로컬 파일로 보관하고 경로 안내로 바꿉니다. 기본값: 20% 및 100,000 토큰. 제공자의 비공개 추론을 복호화하지 않으며 불투명한 압축 출력은 그대로 유지합니다.",
   "reasoningRetention.percent": "컨텍스트 비율 (%)",
   "reasoningRetention.tokens": "토큰 한도",
   "reasoningRetention.reset": "기본값 복원",

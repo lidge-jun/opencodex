@@ -77,7 +77,7 @@ describe("Responses core module boundaries", () => {
   });
 
   test("lease transfer retains both finally owners until response construction settles", () => {
-    const ingress = readResponsesCoreModule("core.ts");
+    const ingress = readResponsesCoreModule("core-pipeline.ts");
     const native = readResponsesCoreModule("passthrough-execution.ts");
     expect(ingress).toContain("return await executePassthroughResponse(");
     // Delivery is awaited inside the try, and its direct body is wrapped before
