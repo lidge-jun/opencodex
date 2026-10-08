@@ -1,5 +1,6 @@
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxUsage } from "../../types";
+import { namespacedToolName, type AdapterEvent, type OcxMessage, type OcxParsedRequest, type OcxUsage } from "../../types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
+import { isValidCodingAgentToolNamePart } from "./tool-catalog";
 
 /**
  * Shared stream-json protocol for official coding-agent CLIs (CodeBuddy Code and Qoder CLI).
@@ -227,6 +228,8 @@ export interface StreamParseState {
   sawTerminalResult: boolean;
   /** A `message_stop` stream event arrived: the assistant message is complete. */
   sawMessageStop?: boolean;
+  /** The final complete assistant block explicitly ends a tool-use response. */
+  sawAssistantToolUseStop?: boolean;
   /**
    * Open tool_use blocks keyed by content-block index. CodeBuddy parallel tool calls arrive
    * as several tool_use blocks on ONE shared content-block index — intermediate blocks never
@@ -240,8 +243,10 @@ export interface StreamParseState {
   openToolBlocks?: Map<number, OpenToolBlock>;
   /** Shared request budget for tool identity and buffered argument fragments. */
   translatorBudget?: TranslatorBudget;
-  /** A capture bridge may impose a tighter ceiling than the shared parser limit. */
+  /** A capture bridge may impose a tighter ceiling on distinct calls and retained blocks. */
   maxToolBlockStarts?: number;
+  /** Qoder's isolated CLI names, validated at partial block start before retaining anything. */
+  toolBridgeNames?: ReadonlyMap<string, string>;
   /** Set before an over-limit block can be allocated or emitted. */
   toolCallLimitExceeded?: boolean;
   /** Synthetic decreasing keys for tool_use start frames that omit the block index. */
@@ -252,12 +257,16 @@ export interface StreamParseState {
   completedToolCalls?: number;
   /** CodeBuddy's capture-only bridge requires complete JSON and matching block indices. */
   strictToolBlockCapture?: boolean;
-  /** Tool IDs already captured through partial events, for complete-assistant deduplication. */
+  /** Retained bridge IDs; Qoder counts distinct admissions here, independently of open blocks. */
   partialToolCallIds?: Set<string>;
   /** One budget lease per ID retained by complete-assistant deduplication, released at turn cleanup. */
   partialToolCallBudgetIds?: string[];
   /** A complete assistant tool block had no matching partial capture. */
   uncapturedToolUse?: boolean;
+  /** Consume complete assistant tool_use blocks when the CLI does not stream partial tool events. */
+  completeAssistantToolUse?: boolean;
+  /** Shared complete/partial snapshots retained for exact-repeat suppression and conflicting-ID rejection. */
+  emittedToolCalls?: Map<string, { name: string; argumentsJson: string; budgetCallIds: string[] }>;
   /** Highest-seen usage snapshot from `message_delta`/assistant frames before a terminal result. */
   partialUsage?: OcxUsage;
 }
@@ -283,6 +292,7 @@ export function mapStreamMessageToEvents(message: StreamMessage, state: StreamPa
     // Fallback path: a complete assistant message. Surface text and thinking independently
     // only when the partial delta stream did not already carry them (§十二).
     const messageRecord = asRecord(message.message);
+    if (messageRecord?.stop_reason === "tool_use") state.sawAssistantToolUseStop = true;
     const content = messageRecord?.content;
     if (Array.isArray(content)) {
       for (const block of content) {
@@ -297,7 +307,45 @@ export function mapStreamMessageToEvents(message: StreamMessage, state: StreamPa
           if (thinking) events.push({ type: "thinking_delta", thinking });
         } else if (blockType === "tool_use") {
           const id = asString(part.id);
-          if (!id || !state.partialToolCallIds?.has(id)) state.uncapturedToolUse = true;
+          if (state.completeAssistantToolUse) {
+            const name = asString(part.name);
+            const input = asRecord(part.input);
+            if (!id || !name || !input) throw new CodingAgentProtocolError("Coding-agent CLI returned a tool call without structured identity and input.");
+            const argumentsJson = JSON.stringify(input);
+            if (isEmittedToolCallRepeat(state, id, name, argumentsJson)) continue;
+            const distinctIds = state.partialToolCallIds ??= new Set<string>();
+            const limit = Math.min(MAX_TOOL_BLOCK_STARTS, state.maxToolBlockStarts ?? MAX_TOOL_BLOCK_STARTS);
+            if (!distinctIds.has(id) && distinctIds.size >= limit) {
+              state.toolCallLimitExceeded = true;
+              return events;
+            }
+            const budget = state.translatorBudget;
+            const budgetCallIds: string[] = [];
+            if (budget) {
+              try {
+                // Match partial capture: ID has its own call limit; name and args share one.
+                for (const bytes of [Buffer.byteLength(id), Buffer.byteLength(name) + Buffer.byteLength(argumentsJson)]) {
+                  const leaseId = `coding-agent-complete:${++nextBudgetCallOrdinal}`;
+                  budget.openCall(leaseId);
+                  budgetCallIds.push(leaseId);
+                  budget.chargeRetained(bytes, { kind: "tool_args", callId: leaseId });
+                }
+              } catch (error) {
+                for (const leaseId of budgetCallIds) budget.closeCall(leaseId);
+                throw error;
+              }
+            }
+            // Retain snapshot bytes until turn cleanup: dedup still owns name/input after emit.
+            (state.emittedToolCalls ??= new Map()).set(id, { name, argumentsJson, budgetCallIds });
+            distinctIds.add(id); // The ledger's lease already owns this ID.
+            state.toolBlockStarts = (state.toolBlockStarts ?? 0) + 1;
+            events.push(
+              { type: "tool_call_start", id, name },
+              { type: "tool_call_delta", arguments: argumentsJson },
+              { type: "tool_call_end" },
+            );
+            state.completedToolCalls = (state.completedToolCalls ?? 0) + 1;
+          } else if (!id || !state.partialToolCallIds?.has(id)) state.uncapturedToolUse = true;
         }
       }
     }
@@ -399,6 +447,16 @@ function resolveToolBlockKey(state: StreamParseState, event: StreamMessage): num
   return state.strictToolBlockCapture && block.indexed ? undefined : key;
 }
 
+/** One emitted identity regardless of whether it arrived complete or in partial blocks. */
+function isEmittedToolCallRepeat(state: StreamParseState, id: string, name: string, argumentsJson: string): boolean {
+  const previous = state.emittedToolCalls?.get(id);
+  if (!previous) return false;
+  if (previous.name !== name || previous.argumentsJson !== argumentsJson) {
+    throw new CodingAgentProtocolError("Coding-agent CLI reused a completed tool call ID with conflicting name or input.");
+  }
+  return true;
+}
+
 /**
  * Emit a closed block atomically — start, the buffered fragments in arrival order, end —
  * so the strictly sequential downstream bridge never sees two calls open at once.
@@ -406,24 +464,41 @@ function resolveToolBlockKey(state: StreamParseState, event: StreamMessage): num
 function closeToolBlock(state: StreamParseState, key: number, events: AdapterEvent[], implicit = false): void {
   const block = state.openToolBlocks?.get(key);
   if (!block || !state.openToolBlocks) return;
-  if (state.strictToolBlockCapture && (implicit || block.argParts.length > 0)) {
+  let argumentsJson: string | undefined;
+  if (state.completeAssistantToolUse || (state.strictToolBlockCapture && (implicit || block.argParts.length > 0))) {
     // A second start on this index is an implicit stop only when the previous call's
     // arguments are already complete. Otherwise a later delta could be assigned to the
     // wrong call and still produce a superficially successful tool-use turn. An explicit
     // stop with no deltas retains the CLI's existing empty-arguments representation.
-    const argumentsJson = block.argParts.join("");
+    const rawArgumentsJson = block.argParts.join("");
     let parsedArguments: unknown;
     try {
-      parsedArguments = JSON.parse(argumentsJson);
+      parsedArguments = JSON.parse(!implicit && block.argParts.length === 0 ? "{}" : rawArgumentsJson);
     } catch {
       throw new CodingAgentProtocolError("Coding-agent CLI ended a tool call with incomplete JSON arguments.");
     }
     if (!asRecord(parsedArguments)) {
       throw new CodingAgentProtocolError("Coding-agent CLI ended a tool call with non-object JSON arguments.");
     }
+    if (state.completeAssistantToolUse) {
+      argumentsJson = JSON.stringify(parsedArguments);
+      if (isEmittedToolCallRepeat(state, block.id, block.name, argumentsJson)) {
+        state.openToolBlocks.delete(key);
+        if (block.budgetCallId) state.translatorBudget?.closeCall(block.budgetCallId);
+        state.toolBlockStarts = (state.toolBlockStarts ?? 1) - 1;
+        return;
+      }
+      // Canonical serialization can expand numeric literals; admit the retained snapshot too.
+      const extraBytes = Buffer.byteLength(argumentsJson) - Buffer.byteLength(rawArgumentsJson);
+      if (extraBytes > 0) state.translatorBudget?.chargeRetained(extraBytes, { kind: "tool_args", callId: block.budgetCallId });
+    }
   }
   state.openToolBlocks.delete(key);
-  if (block.budgetCallId) state.translatorBudget?.closeCall(block.budgetCallId);
+  if (argumentsJson !== undefined) {
+    (state.emittedToolCalls ??= new Map()).set(block.id, {
+      name: block.name, argumentsJson, budgetCallIds: block.budgetCallId ? [block.budgetCallId] : [],
+    });
+  } else if (block.budgetCallId) state.translatorBudget?.closeCall(block.budgetCallId);
   events.push({ type: "tool_call_start", id: block.id, name: block.name });
   for (const part of block.argParts) events.push({ type: "tool_call_delta", arguments: part });
   events.push({ type: "tool_call_end" });
@@ -438,6 +513,10 @@ export function releaseOpenToolBlocks(state: StreamParseState): void {
   state.openToolBlocks?.clear();
   for (const leaseId of state.partialToolCallBudgetIds ?? []) state.translatorBudget?.closeCall(leaseId);
   state.partialToolCallBudgetIds = undefined;
+  for (const call of state.emittedToolCalls?.values() ?? []) {
+    for (const leaseId of call.budgetCallIds) state.translatorBudget?.closeCall(leaseId);
+  }
+  state.emittedToolCalls?.clear();
 }
 
 /** Map a raw Anthropic SSE event (carried inside a `stream_event` frame) to AdapterEvents. */
@@ -497,8 +576,17 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
       const id = asString(block?.id) ?? "";
       const name = asString(block?.name) ?? "tool";
       if (id) {
+        if (state.completeAssistantToolUse && (!isValidCodingAgentToolNamePart(block?.name)
+          || (state.toolBridgeNames && !state.toolBridgeNames.has(name)))) {
+          throw new CodingAgentProtocolError("Coding-agent CLI started a tool block with an invalid or undeclared name.");
+        }
+        const previous = state.emittedToolCalls?.get(id);
+        if (previous && previous.name !== name) {
+          throw new CodingAgentProtocolError("Coding-agent CLI reused a completed tool call ID with conflicting name or input.");
+        }
+        const distinctIds = state.completeAssistantToolUse ? (state.partialToolCallIds ??= new Set<string>()) : undefined;
         const limit = Math.min(MAX_TOOL_BLOCK_STARTS, state.maxToolBlockStarts ?? MAX_TOOL_BLOCK_STARTS);
-        if ((state.toolBlockStarts ?? 0) >= limit) {
+        if (distinctIds ? !distinctIds.has(id) && distinctIds.size >= limit : (state.toolBlockStarts ?? 0) >= limit) {
           state.toolCallLimitExceeded = true;
           return events;
         }
@@ -510,6 +598,11 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
           // beta, B's complete args, one STOP 2). A new start implicitly closes the previous
           // block only after the capture path verifies its arguments form a complete object.
           closeToolBlock(state, key, events, true);
+        }
+        // Repeats reserve no distinct ID, but each unfinished block retains its own lease.
+        if ((state.openToolBlocks?.size ?? 0) >= limit) {
+          state.toolCallLimitExceeded = true;
+          return events;
         }
         const budget = state.translatorBudget;
         const budgetCallId = budget ? `coding-agent:${++nextBudgetCallOrdinal}` : undefined;
@@ -625,7 +718,7 @@ function imagePart(imageUrl: string): WireContentPart | undefined {
   return undefined;
 }
 
-function formatMessageForHistory(message: OcxMessage): string {
+function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: ReadonlyMap<string, string>): string {
   if (message.role === "user") {
     const text = typeof message.content === "string"
       ? message.content
@@ -640,8 +733,11 @@ function formatMessageForHistory(message: OcxMessage): string {
       } else if (part.type === "thinking" && part.thinking.trim()) {
         parts.push(`[Thinking: ${part.thinking.trim()}]`);
       } else if (part.type === "toolCall") {
+        // Without a vendor map the history keeps the bare request name, byte-for-byte as before.
+        const wireName = vendorNameByWire ? namespacedToolName(part.namespace, part.name) : part.name;
+        const name = vendorNameByWire?.get(wireName) ?? wireName;
         const args = JSON.stringify(part.arguments ?? {});
-        parts.push(`[Tool call: ${part.name} (call_id: ${part.id}) with args: ${args}]`);
+        parts.push(`[Tool call: ${name} (call_id: ${part.id}) with args: ${args}]`);
       }
     }
     return `ASSISTANT:\n${parts.join("\n") || "(empty response)"}`;
@@ -663,7 +759,10 @@ function formatMessageForHistory(message: OcxMessage): string {
  * accepts `type: "user"` frames. Writing undocumented `type: "assistant"` frames is rejected.
  * Non-user messages are therefore projected into valid user frames.
  */
-export function buildInputLines(message: OcxMessage): string[] {
+export function buildInputLines(
+  message: OcxMessage,
+  options: { vendorNameByWire?: ReadonlyMap<string, string> } = {},
+): string[] {
   if (message.role === "developer") return [];
 
   const content: WireContentPart[] = [];
@@ -684,7 +783,7 @@ export function buildInputLines(message: OcxMessage): string[] {
       }
     }
   } else {
-    const formatted = formatMessageForHistory(message);
+    const formatted = formatMessageForHistory(message, options.vendorNameByWire);
     if (formatted) content.push(textPart(formatted));
   }
 
@@ -718,14 +817,17 @@ export function buildSystemPrompt(parsed: OcxParsedRequest): string | undefined 
  * prior conversation turns are structured as bounded context text with tool results as text,
  * clearly demarcated from the current user request. Codex retains tool control; vendor tools are never invoked.
  */
-export function buildConversationInput(parsed: OcxParsedRequest, options: { maxHistoryChars?: number } = {}): string[] {
+export function buildConversationInput(
+  parsed: OcxParsedRequest,
+  options: { maxHistoryChars?: number; vendorNameByWire?: ReadonlyMap<string, string> } = {},
+): string[] {
   const nonDev = parsed.context.messages.filter(m => m.role !== "developer");
   if (nonDev.length === 0) {
     return [JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: "" }] } })];
   }
 
   if (nonDev.length === 1 && nonDev[0]!.role === "user") {
-    return buildInputLines(nonDev[0]!);
+    return buildInputLines(nonDev[0]!, { vendorNameByWire: options.vendorNameByWire });
   }
 
   // Multi-turn conversation or history with tool results:
@@ -796,13 +898,16 @@ export function buildConversationInput(parsed: OcxParsedRequest, options: { maxH
     const status = currentMessage.isError ? " (error)" : "";
     currentRequestText = `TOOL RESULT (call_id: ${currentMessage.toolCallId})${status}:\n${text}\n\nPlease proceed based on the above tool result.`;
   } else {
-    currentRequestText = formatMessageForHistory(currentMessage);
+    currentRequestText = formatMessageForHistory(currentMessage, options.vendorNameByWire);
   }
 
   const imageBlocks: WireContentPart[] = [...historyImageBlocks, ...currentImageBlocks];
 
   const maxHistoryChars = options.maxHistoryChars ?? MAX_PROJECTED_HISTORY_CHARS;
-  let historyText = historyMessages.map(formatMessageForHistory).filter(Boolean).join("\n\n");
+  let historyText = historyMessages
+    .map(msg => formatMessageForHistory(msg, options.vendorNameByWire))
+    .filter(Boolean)
+    .join("\n\n");
   if (historyText.length > maxHistoryChars) {
     historyText = `[Earlier conversation history truncated for length...]\n\n` +
       historyText.slice(historyText.length - maxHistoryChars);

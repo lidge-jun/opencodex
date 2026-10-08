@@ -2879,6 +2879,8 @@ export const en = {
   "api.key.revealHint": "Click to show the full key",
   "api.key.hideHint": "Click to hide the full key",
   "api.key.revealFailed": "Could not load the full key.",
+  "api.key.revealDenied": "Showing a stored key requires an operator-authorized session. Pair this browser to continue, or sign in through a trusted Tailscale identity.",
+  "api.key.mutationHidden": "The key was created or its rotation started, but the one-time value was hidden because the session or view changed.",
   "api.key.copyFailedShort": "Could not copy. Select the key and copy it manually.",
   "api.key.deleteRowAria": "Delete {name}",
   "api.key.deleteShort": "Delete",

@@ -24,6 +24,7 @@ interface LegacySnapshotState {
   providers?: OcxProviderContinuationState;
   conversationId?: unknown;
   cursorCheckpointUsable?: unknown;
+  unforcedStoreFalse?: unknown;
 }
 
 function isSpillRef(value: unknown): value is ResponseSpillRef {
@@ -51,6 +52,9 @@ export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoa
       ? raw as number
       : undefined;
   };
+  // Restricted retention requires proven provider output; legacy unrestricted rows stay readable.
+  if (rec.unforcedStoreFalse === true
+    && anchorFor(rec.kind === "spill" ? Number.MAX_SAFE_INTEGER : Array.isArray(rec.items) ? rec.items.length : 0) === undefined) return;
   if (rec.kind === "spill") {
     if (!isSpillRef(rec.spill)) return;
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
@@ -61,6 +65,7 @@ export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoa
       // here; the spill payload validator re-checks it against the real array.
       ...(anchorFor(Number.MAX_SAFE_INTEGER) !== undefined ? { providerOutputStart: anchorFor(Number.MAX_SAFE_INTEGER) } : {}),
       ...(rec.providers ? { providers: rec.providers } : {}),
+      ...(rec.unforcedStoreFalse === true ? { unforcedStoreFalse: true } : {}),
       spill: rec.spill,
     };
     store.replaceMapEntry(id, { ...base, sizeBytes: store.stubSize(id, base) });
@@ -88,6 +93,7 @@ export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoa
     items: rec.items,
     ...(anchorFor(rec.items.length) !== undefined ? { providerOutputStart: anchorFor(rec.items.length) } : {}),
     ...(providers ? { providers } : {}),
+    ...(rec.unforcedStoreFalse === true ? { unforcedStoreFalse: true } : {}),
   });
   if (!resident) {
     store.replaceMapEntry(id, store.tombstone(id, rec.createdAt));

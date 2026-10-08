@@ -81,6 +81,14 @@ fallback, capability JSON, and provider-specific error handling retain their exi
 
 ## Command families
 
+### `ocx message`
+
+`ocx message sessions [--json]` discovers loaded local Codex sessions.
+`ocx message send (--thread <uuid> | --name <exact-name>) --stdin [--json]`
+submits one correlated peer message, without starting a daemon or resuming a thread.
+See [Local Codex Messaging](/reference/cli/messaging/) for sender context, kinds,
+the tested runtime and `not_sent`/`queued`/`unknown` receipts. No remote transport is included.
+
 ### `ocx provider`
 
 `ocx provider`, `ocx help provider`, `ocx provider help`, `ocx provider --help`, and

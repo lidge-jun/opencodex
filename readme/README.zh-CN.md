@@ -440,8 +440,8 @@ CLI/配置/管理 API 参考 —— 由 [`docs-site/`](../docs-site) 构建，�
 
 ## 开发
 
-源码开发需要 `PATH` 上的 `bun` CLI。它与已发布 npm 包捆绑的 Bun 运行时是分开的，
-后者只给已安装的 `ocx` 命令使用。
+源码开发需要 `PATH` 上的 `bun` CLI。已发布的 npm 包为已安装的 `ocx` 命令捆绑自己的 Bun
+运行时；包脚本也可能通过这个捆绑依赖解析 Bun。
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

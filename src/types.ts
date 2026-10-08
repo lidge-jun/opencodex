@@ -16,6 +16,7 @@ export {
   resolveToolChoiceWireName,
   modelInList,
   isAllowedToolChoice,
+  requiresToolCall,
   toolChoiceToolPredicate,
   declaresCodeModeExec,
   toolRestrictsCallers,

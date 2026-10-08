@@ -64,6 +64,8 @@ test("standalone CLI pairing crosses real HTTP admission once and stops before S
     const origin = `http://127.0.0.1:${port}`;
     writeFileSync(join(ocxHome, "config.json"), JSON.stringify({
       port, hostname: "127.0.0.1", runtimeRole: "standalone", providers: {}, defaultProvider: "openai",
+      apiKeys: [{ id: "paired-read-fixture", name: "Fixture", key: "ocx_data_paired_read_fixture",
+        createdAt: "2026-10-06T00:00:00.000Z" }],
       codexAutoStart: false, syncResumeHistory: false,
       clientIntegrations: { codex: false, grok: false, "claude-desktop": false },
       claudeCode: { enabled: false, systemEnv: false },
@@ -119,6 +121,12 @@ test("standalone CLI pairing crosses real HTTP admission once and stops before S
     };
     await expectStatus(ordinary, false);
     await expectError(await joinRequest(headers(ordinary)), 403, "forbidden");
+    const reveal = (session: typeof ordinary) => request("/api/keys/reveal", {
+      method: "POST", headers: headers(session), body: JSON.stringify({ id: "paired-read-fixture" }),
+    });
+    const ordinaryReveal = await reveal(ordinary);
+    expect(ordinaryReveal.status, "automatic session cannot read a stored key").toBe(403);
+    await ordinaryReveal.body?.cancel();
 
     // A process which reads runtime-state and reproduces its HMAC still lacks CLI write intent.
     // No approved record is published here; no real user credential or external server is used.
@@ -162,6 +170,10 @@ test("standalone CLI pairing crosses real HTTP admission once and stops before S
       await refused.body?.cancel();
     }
     const paired = await bootstrap(await redeem(), origin);
+    const pairedReveal = await reveal(paired);
+    expect(pairedReveal.status, "config-write-authorized session may read a stored key").toBe(200);
+    expect(pairedReveal.headers.get("cache-control")).toBe("no-store");
+    expect(parseObject(await pairedReveal.text()).key === "ocx_data_paired_read_fixture", "exact fixture key returned").toBe(true);
     const replay = await redeem();
     expect(replay.status, "single-use grant replay refused").toBe(401);
     await replay.body?.cancel();

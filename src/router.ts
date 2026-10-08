@@ -1,3 +1,4 @@
+import { CODEX_INTERNAL_OPENAI_MODELS } from "./codex/control-plane-models";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
 import { createHash } from "node:crypto";
 import { peekAuthStore } from "./oauth/store";
@@ -564,9 +565,6 @@ export function comboRouteDecisionTrace(
   });
 }
 
-// Codex uses a small number of control-plane model ids that are not part of the public GPT/o
-// naming families. Keep this exact: a broad `codex-*` rule could capture a third-party model.
-const CODEX_INTERNAL_OPENAI_MODELS = new Set(["codex-auto-review"]);
 const MAX_BLOCKED_MODEL_REDIRECT_EDGES = 5;
 
 interface BlockedModelRedirectState {

@@ -2838,6 +2838,8 @@ export const pt: Record<TKey, string> = {
   "api.key.revealHint": "Clique para mostrar a chave completa",
   "api.key.hideHint": "Clique para ocultar a chave completa",
   "api.key.revealFailed": "Não foi possível carregar a chave completa.",
+  "api.key.revealDenied": "Mostrar uma chave armazenada exige uma sessão autorizada pelo operador. Emparelhe este navegador para continuar ou entre com uma identidade Tailscale confiável.",
+  "api.key.mutationHidden": "A chave foi criada ou sua rotação foi iniciada, mas o valor de exibição única foi ocultado porque a sessão ou a tela mudou.",
   "api.key.copyFailedShort": "Não foi possível copiar. Selecione a chave e copie-a manualmente.",
   "api.key.deleteRowAria": "Excluir {name}",
   "api.key.deleteShort": "Excluir",

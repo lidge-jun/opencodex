@@ -1,12 +1,17 @@
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
+import { fileURLToPath } from "node:url";
 import type { AdapterRequest, ProviderAdapter } from "../base";
 import { mapReasoningEffort } from "../../reasoning-effort";
-import { buildSystemPrompt } from "../coding-agent/protocol";
-import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps } from "../coding-agent/turn";
+import { buildSystemPrompt, MAX_TOOL_BLOCK_STARTS } from "../coding-agent/protocol";
+import { buildCodingAgentToolCatalog, CodingAgentToolCatalogError } from "../coding-agent/tool-catalog";
+import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type CodingAgentToolBridgeInput } from "../coding-agent/turn";
 import { QODER_PROFILES, type QoderProfile } from "./profiles";
 import { QoderScaffoldFilter, QODER_SCAFFOLD_ERROR_CODE, qoderScaffoldErrorMessage } from "./scaffold-guard";
 
 export type QoderAdapterDeps = CodingAgentDeps;
+
+const QODER_MCP_SERVER_NAME = "opencodex";
+const QODER_MCP_SERVER_PATH = fileURLToPath(new URL("../coding-agent/mcp-server.ts", import.meta.url));
 
 export function buildQoderChildEnv(profile: QoderProfile, apiKey: string, systemPrompt?: string): Record<string, string> {
   const promptEnv = profile.region === "cn" ? "QODERCN_APPEND_SYSTEM_PROMPT" : "QODER_APPEND_SYSTEM_PROMPT";
@@ -14,7 +19,7 @@ export function buildQoderChildEnv(profile: QoderProfile, apiKey: string, system
     ...(systemPrompt ? { [promptEnv]: systemPrompt } : {}) };
 }
 
-/** Single-shot, tools-disabled Qoder CLI invocation; Codex remains the tool owner. */
+/** Disable Qoder's built-in tools; only a request-scoped MCP catalog can be exposed. */
 export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderConfig): string[] {
   const args = [
     "-p",
@@ -35,8 +40,8 @@ export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderCo
 /**
  * Wrap the turn's outbound channel with the scaffolding guard (#4190).
  *
- * The vendor CLI can put its own agent layer into the text channel despite being launched
- * with tools and MCP disabled, and the shared stream-json parser forwards a text delta
+ * The vendor CLI can put its own agent layer into the text channel despite built-in tools
+ * being disabled, and the shared stream-json parser forwards a text delta
  * without inspecting it. This is the last point that is still qoder-specific, so the guard
  * sits here rather than in the parser every coding-agent CLI shares.
  *
@@ -123,7 +128,36 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
         });
         return;
       }
-      // Qoder documents QODER_APPEND_SYSTEM_PROMPT for scoped child configuration.
+      let catalog: ReturnType<typeof buildCodingAgentToolCatalog>;
+      try {
+        catalog = buildCodingAgentToolCatalog(parsed, QODER_MCP_SERVER_NAME);
+      } catch (error) {
+        if (!(error instanceof CodingAgentToolCatalogError)) throw error;
+        emit({
+          type: "error",
+          message: "Invalid Qoder tool catalog.",
+          status: 400,
+          errorType: "invalid_request_error",
+          code: "tool_catalog_invalid",
+          retryable: false,
+        });
+        return;
+      }
+      const toolBridge: CodingAgentToolBridgeInput | undefined = catalog.tools.length > 0 || catalog.requireToolCall
+        ? {
+            serverName: QODER_MCP_SERVER_NAME,
+            serverModulePath: QODER_MCP_SERVER_PATH,
+            tools: catalog.tools,
+            emittedNameMap: catalog.emittedNameMap,
+            maxTurnToolCalls: MAX_TOOL_BLOCK_STARTS,
+            projectHistoryToolNames: true,
+            completeAssistantToolUse: true,
+            toolTurnCompletionSignal: "assistant_tool_use_stop",
+            allowedToolsFlag: "--allowed-tools",
+            standaloneEntrypoint: "__qoder-mcp",
+            requireToolCall: catalog.requireToolCall,
+          }
+        : undefined;
       // Keep the folded prompt out of argv and never inherit an ambient vendor prompt.
       const system = buildSystemPrompt(parsed);
       await runCodingAgentTurn({
@@ -135,6 +169,7 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
           buildArgs: (_profile, req, prov) => buildQoderArgs(req, prov),
           buildEnv: (profile, apiKey) => buildQoderChildEnv(profile as QoderProfile, apiKey, system),
           deps,
+          ...(toolBridge ? { toolBridge } : {}),
       });
     },
   };

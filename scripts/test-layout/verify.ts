@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { basename, join } from "node:path";
 import { LAYOUT_PATH, loadLayout, scanEscapes } from "./schema";
 import { listTestFiles, parseDomainArgs, repoRootFromHere } from "./plan";
+import { getTestRunnerBun } from "../lib/test-runner-bun";
 
 /**
  * Verify one or more migrated domains:
@@ -142,7 +143,7 @@ export function runVerify(options: VerifyOptions): VerifyReport {
 
   let testExit = 0;
   if (!options.skipTests && domains.length > 0) {
-    const proc = Bun.spawnSync(["bun", "test", "--isolate", ...domains.map(d => `tests/${d}`)], { cwd: root, stdout: "inherit", stderr: "inherit" });
+    const proc = Bun.spawnSync([getTestRunnerBun(), "test", "--isolate", ...domains.map(d => `tests/${d}`)], { cwd: root, stdout: "inherit", stderr: "inherit" });
     testExit = proc.exitCode;
     log(`bun test exit ${testExit}`);
   }

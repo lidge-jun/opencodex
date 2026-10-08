@@ -5,7 +5,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import ApiKeysWorkspace, { type ApiKeysWorkspaceProps } from "../src/components/apikeys-workspace/ApiKeysWorkspace";
 import { LanguageProvider } from "../src/i18n/provider";
-import type { ApiEndpointInfo } from "../src/pages/api-keys-utils";
+import type { ApiEndpointInfo, RevealKeyResult } from "../src/pages/api-keys-utils";
 
 // The key table's own row actions: a delete that is visible without hovering
 // and confirms in place, and a key that reveals its full value on click.
@@ -61,6 +61,7 @@ async function mount(props: Partial<ApiKeysWorkspaceProps>): Promise<HTMLDivElem
   const container = document.createElement("div");
   document.body.append(container);
   const value: ApiKeysWorkspaceProps = {
+    apiBase: "",
     keys: [{
       id: "k1",
       name: "alpha",
@@ -163,7 +164,7 @@ test("cancel backs out of a row delete, and a failed one says so beside the row"
 test("clicking the key shows the full value with a copy button, and clicking again hides it", async () => {
   const asked: string[] = [];
   const full = "ocx_data_" + "a".repeat(40);
-  const container = await mount({ onRevealKey: async id => { asked.push(id); return full; } });
+  const container = await mount({ onRevealKey: async id => { asked.push(id); return { ok: true, key: full }; } });
   expect(keyButton(container).textContent).toBe("ocx_data_aaaaaaaa...");
   expect(keyButton(container).getAttribute("aria-expanded")).toBe("false");
 
@@ -181,10 +182,20 @@ test("clicking the key shows the full value with a copy button, and clicking aga
 });
 
 test("a refused reveal keeps the prefix and reports the failure", async () => {
-  const container = await mount({ onRevealKey: async () => null });
+  const container = await mount({ onRevealKey: async () => ({ ok: false, kind: "failed" }) });
   await act(async () => { keyButton(container).click(); });
   expect(keyButton(container).textContent).toBe("ocx_data_aaaaaaaa...");
   expect(container.querySelector(".awi-keylist-keycell [role=\"alert\"]")?.textContent).toBe("Could not load the full key.");
+});
+
+test("a denied reveal leaves the prefix masked and lets the panel offer pairing", async () => {
+  const container = await mount({ onRevealKey: async () => ({ ok: false, kind: "denied" }) });
+  await act(async () => { keyButton(container).click(); });
+  expect(keyButton(container).textContent).toBe("ocx_data_aaaaaaaa...");
+  // The generic load-failure alert would be a lie — the denial is answered by
+  // the panel's pairing notice, not by this row.
+  expect(container.querySelector(".awi-keylist-keycell [role=\"alert\"]")?.textContent).not.toBe("Could not load the full key.");
+  expect(container.textContent).toContain("Pair this browser to continue");
 });
 
 test("without a reveal handler the key stays plain text", async () => {
@@ -195,11 +206,11 @@ test("without a reveal handler the key stays plain text", async () => {
 
 test("a rotated key does not keep showing the value it replaced", async () => {
   const before = "ocx_data_" + "a".repeat(40);
-  const container = await mount({ onRevealKey: async () => before });
+  const container = await mount({ onRevealKey: async () => ({ ok: true, key: before }) });
   await act(async () => { keyButton(container).click(); });
   expect(keyButton(container).textContent).toBe(before);
   await rerender({
-    onRevealKey: async () => before,
+    onRevealKey: async () => ({ ok: true, key: before }),
     keys: [{ id: "k1", name: "alpha", prefix: "ocx_data_bbbbbbbb...", createdAt: "2026-01-01T00:00:00.000Z",
       usage: { requests7d: 0, totalRequests: 0 } }],
   });
@@ -208,23 +219,23 @@ test("a rotated key does not keep showing the value it replaced", async () => {
 });
 
 test("a reveal that answers after the key was deleted stays discarded", async () => {
-  let answer: (value: string) => void = () => {};
+  let answer: (value: RevealKeyResult) => void = () => {};
   const container = await mount({
-    onRevealKey: () => new Promise<string>(resolve => { answer = resolve; }),
+    onRevealKey: () => new Promise<RevealKeyResult>(resolve => { answer = resolve; }),
     onDelete: async () => true,
   });
   await act(async () => { keyButton(container).click(); });
   await act(async () => { rowDelete(container).click(); });
   await act(async () => { await wait(350); });
   await act(async () => { confirmButton(container).click(); });
-  await act(async () => { answer("ocx_data_" + "a".repeat(40)); });
+  await act(async () => { answer({ ok: true, key: "ocx_data_" + "a".repeat(40) }); });
   expect(keyButton(container).textContent).toBe("ocx_data_aaaaaaaa...");
   expect(container.querySelector(".awi-keylist-copy")).toBeNull();
 });
 
 test("a copy the clipboard refuses says so beside the key", async () => {
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => Promise.reject(new Error("denied")) } });
-  const container = await mount({ onRevealKey: async () => "ocx_data_" + "a".repeat(40) });
+  const container = await mount({ onRevealKey: async () => ({ ok: true, key: "ocx_data_" + "a".repeat(40) }) });
   await act(async () => { keyButton(container).click(); });
   await act(async () => { button(container, "Copy").click(); });
   expect(container.querySelector(".awi-keylist-keycell [role=\"alert\"]")?.textContent)
@@ -236,7 +247,7 @@ test("a successful copy shows Copied and then returns to Copy", async () => {
   const written: string[] = [];
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (v: string) => { written.push(v); } } });
   const full = "ocx_data_" + "a".repeat(40);
-  const container = await mount({ onRevealKey: async () => full });
+  const container = await mount({ onRevealKey: async () => ({ ok: true, key: full }) });
   await act(async () => { keyButton(container).click(); });
   await act(async () => { button(container, "Copy").click(); });
   expect(written).toEqual([full]);

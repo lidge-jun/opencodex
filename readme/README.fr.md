@@ -465,9 +465,9 @@ le trier, et aucun délai de première réponse n'est promis.
 
 ## Développement
 
-Le développement depuis les sources nécessite la CLI `bun` dans votre `PATH`. Elle est distincte de
-l'environnement d'exécution Bun inclus dans le paquet npm publié, lequel est uniquement utilisé par les
-commandes `ocx` installées.
+Le développement depuis les sources nécessite la CLI `bun` dans votre `PATH`. Le paquet npm publié inclut
+son propre environnement d'exécution Bun pour les commandes `ocx` installées ; les scripts du paquet peuvent
+également résoudre Bun via cette dépendance incluse.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

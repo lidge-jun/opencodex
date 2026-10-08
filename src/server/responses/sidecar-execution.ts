@@ -39,7 +39,7 @@ import {
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
-import { bindRouteReasoningReplayScope, adapterNeedsForcedContinuation } from "./core-replay";
+import { bindRouteReasoningReplayScope, adapterNeedsForcedContinuation, adapterNeedsToolCallContinuation } from "./core-replay";
 import { namespacedToolName } from "../../types";
 import { providerFetch } from "./fetch-helpers";
 import type { AttemptRecoveryKind } from "../../usage/log";
@@ -503,7 +503,10 @@ export async function executeResponsesSidecars(
           parsed._rawBody,
           response,
           continuationStateForResponse(providerState),
-          responseStateOptions(adapterNeedsForcedContinuation(transportState.adapter.name)),
+          {
+            ...responseStateOptions(adapterNeedsForcedContinuation(transportState.adapter.name)),
+            retainForToolContinuation: adapterNeedsToolCallContinuation(transportState.adapter.name),
+          },
         );
         notifyResponseComplete(response);
       },

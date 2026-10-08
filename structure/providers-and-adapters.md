@@ -17,20 +17,22 @@ through initial builds, retries, continuations, and sidecar builds.
 
 The coding-agent stream parser buffers each tool-use block by its content-block index
 and emits a complete start/delta/end sequence on closure. Distinct indices can interleave.
-For the CodeBuddy capture-only bridge, the init handshake is checked before buffering.
+For capture-only bridges, the init handshake is checked before buffering or emitting tool calls.
 The shared parser admits a valid-ID tool start before allocating its block, with a 16-call
 ceiling for CodeBuddy and Qoder and any tighter bridge ceiling applied there. IDs, names,
 and argument fragments charge the request's translator budget while buffered; closing,
-replacement, and turn cleanup release those reservations. A new start on an occupied
+replacement, and turn cleanup release reservations; Qoder shares one budgeted emitted-ID/name/input ledger across complete and partial calls until cleanup, suppressing exact repeats and rejecting conflicting reuse in either order. Its turn limit counts distinct admitted IDs separately from open/closed-block accounting; an open repeat cannot consume a slot for a new identity. Retained partial blocks independently obey the same ceiling regardless of ID, and Qoder refuses invalid/undeclared names before allocation; every retained block charges its nonempty name. A new start on an occupied
 index closes the previous block only when its arguments form a complete JSON object;
 an unindexed delta or stop cannot be attributed to an indexed block, and a nonempty
-argument delta that cannot be attributed fails immediately. Turn completion
-requires every opened block to close, preserving the downstream single-open-call contract.
+argument delta that cannot be attributed fails immediately. Tool-bridge completion requires every opened block to close, preserving the downstream single-open-call contract.
+The authoritative completion signal is adapter-selected: existing shared coding-agent bridges default to `message_stop`, while Qoder selects only the final complete assistant frame's `message.stop_reason === "tool_use"` (its last sibling only). Qoder does not treat `message_stop` as its completion signal. Silence never ends the tool leg. An incomplete call fails closed with `protocol_error`; otherwise the bridge emits one `done(tool_use)` with usage and terminates the parked CLI; the external client owns execution.
 An indexless argument delta belongs to the sole open block; with multiple blocks open,
 the parser fails the turn before releasing their buffered calls.
-The capture-only bridge checks each raw tool-use start against the init handshake before
+The capture-only bridge checks raw starts, complete tool-use frames and synthesized completion against the init handshake before
 buffering; a later init cannot authorize a call that started earlier. The 8 MiB JSONL line
 ceiling is independent of the retained tool-block budget.
+
+Qoder alone opts into restricted `store:false` function/custom-tool continuation through `adapterNeedsToolCallContinuation` in `src/server/responses/core-replay.ts`. RunTurn SSE/JSON and sidecar completion pass `retainForToolContinuation` using the serving adapter; `src/responses/state.ts` admits an unforced `store:false` response only with that opt-in and an actual `function_call` or `custom_tool_call`. Text-only Qoder responses and unforced non-opted-in providers, including CodeBuddy, are not retained. Saved entries keep the existing `unforcedStoreFalse` matching-call/output-type replay gate (any matching pending result admits a partial batch; missing/invalid provider-output boundaries and client-history-only calls never admit replay, including hydrated snapshots/spills) through TTL, snapshot, spill, reload and memory-budget controls; the admission option is not persisted. Kiro/Cursor forced continuation and passthrough `force:true` remain unchanged.
 
 Direct MCP names emitted in a verified custom code-mode catalog follow the
 [Responses restoration boundary](transports/responses-wire-shapes.md#direct-mcp-calls-in-code-mode).
@@ -61,10 +63,12 @@ Failure prevents CLI spawn and settles the bridge's private directory; the CodeB
 also settles its prompt-file directory. Catalog and MCP-config write failures cover both owners.
 In a compiled executable, the bridge launches the private `__codebuddy-mcp` CLI entrypoint;
 source execution launches the MCP module with Bun. Both paths advertise only the request's
-isolated catalog and leave tool execution to the external client. Qoder appends the folded
-system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or
-`QODERCN_APPEND_SYSTEM_PROMPT` child environment,
-never through command-line arguments or inherited vendor variables.
+isolated catalog and leave tool execution to the external client. Qoder's selected catalog projection in `src/adapters/coding-agent/tool-catalog.ts` rejects empty, control-bearing, comma-bearing, or unpaired-surrogate
+name/namespace components and wire names over 512 UTF-8 bytes before staging. It admits at most 128 selected tools,
+256 KiB per serialized definition, and 2 MiB for the serialized array (including brackets and separators); the comma-joined `--allowed-tools` argument is separately capped at 8 KiB of UTF-8, counting full
+`mcp__<server>__<tool>` names and commas. Invalid catalogs return a fixed local 400 without spawning Qoder. Valid wire identities, order and schemas are unchanged, apart from the Responses-only encrypted marker stripped during
+projection. Duplicate and ambiguous wire identities remain the Responses parser's responsibility. Qoder appends the
+folded system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or `QODERCN_APPEND_SYSTEM_PROMPT` child environment, never through command-line arguments or inherited vendor variables.
 
 Coding-agent stdout is framed as bounded JSONL directly from decoded stream segments. The framer
 tracks the current line's UTF-8 byte count incrementally, searches each decoded segment once, and
@@ -336,7 +340,7 @@ and the upstream URL through `handleResponses`.
 
 ## TypeSafe JEV decision provider
 
-The JEV Combo decision contract (TypeSafe, self-hosted System One rows, and opencodex-model
+The JEV Combo decision contract (TypeSafe, compatible HTTPS services with any endpoint path, local System One rows, and opencodex-model
 decision backends) lives in [JEV Decision Routing](providers/jev-decision.md).
 
 ## Preset notes

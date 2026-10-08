@@ -43,6 +43,7 @@ export async function handleCodexAuthAPI(
     // required by AGENTS_INSTALL.md. Raw-admin/CLI refreshes remain observational.
     return jsonResponse({ accounts: await listCodexAuthAccounts(config, true, {
       validatePending: principal === "gui-session",
+      explicitRefresh: true,
     }) });
   }
 

@@ -123,7 +123,7 @@ The sidebar exposes eight rows (`gui/src/nav-groups.ts` `NAV_GROUPS`), in order:
 | Surface | Shape |
 | --- | --- |
 | Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). |
-| API keys | Key table plus per-key detail (`gui/src/components/apikeys-workspace/`). The list payload carries masked prefixes only; each row deletes in place behind a two-step confirm, and clicking a key fetches the full value from `POST /api/keys/reveal`, which refuses every principal but a dashboard session and answers `no-store`. |
+| API keys | Key table plus per-key detail (`gui/src/components/apikeys-workspace/`). The list payload carries masked prefixes only; each row deletes in place behind a two-step confirm, and clicking a key fetches the full value from `POST /api/keys/reveal`, which requires a current pairing or trusted Tailscale-identity session and answers `no-store`; automatic loopback sessions and raw admin tokens cannot reveal stored values, and a refusal there answers with the pairing surface — on the same-origin standalone transport the local pairing form, elsewhere the explanation alone — and requires a fresh reveal click after pairing. Displayed secrets and copy feedback are cleared on shared-session loss, pairing, inactive/hidden views, or a target change; stale asynchronous completions cannot restore them. |
 | Storage | Rail plus cleanup and trash detail (`gui/src/components/storage-workspace/`). |
 | Subagents | Featured-roster selection workspace (`gui/src/components/subagents-workspace/`). |
 | Combos | Rail, detail panel, and an add flow (`gui/src/components/ComboWorkspace.tsx`). |
@@ -523,9 +523,9 @@ selection because the schema would drop the override. The model checklist is sea
 `PUT /api/settings` accepts a validated object or null to clear it; a failed save restores live settings and deletion provenance while the dashboard keeps the draft for retry.
 
 `src/server/gui-static.ts` serves the dashboard from `gui/dist`, with `OPENCODEX_GUI_DIST` taking
-priority and standalone binaries resolving the copied directory beside `ocx`. Runtime package
-metadata comes from the bundled `src/lib/package-version.ts` manifest import so compiled binaries
-do not read a source-tree `package.json`.
+priority. A standalone binary resolves the copied directory beside `ocx`, then the desktop bundle's resource directory
+(`../Resources` on macOS, `../lib/OpenCodex` on Linux), so a runtime the desktop shell did not start still serves it.
+Runtime package metadata comes from the bundled `src/lib/package-version.ts` manifest import so compiled binaries do not read a source-tree `package.json`.
 
 ## Quota-reset notifications
 
