@@ -288,6 +288,30 @@ rename replaces the destination. Handled publication failures retain the previou
 directory syncing remains best-effort. This does not make a partial permanent purge reversible:
 restore still fails closed when a recorded logical entry has no surviving file.
 
+OpenCodex config writers share `config.toml.ocx-write.lock`: feature scalar and CLI-toggle
+batches, injection, journal replay, removal, and restore/compensation read and write while
+holding it. Injection and coordinated restore take config before SQLite N; prompt writes
+take prompt-store before config. Nested writers receive an explicit live handle for the
+same config path; implicit nesting refuses fast. Async callers wait at most two seconds.
+
+`src/codex/prompt-lock-claim.ts` reserves the acquisition/takeover interval with a unique
+PID/token file and bakery ticket. A contender still choosing makes peers refuse, and a
+later contender sees an earlier published ticket. Dead reservations are removed by their
+unique filename; stale observation cannot rename a live successor's reusable lock path.
+Fresh malformed/empty lock files receive the ten-second initialization grace period.
+The last reservation removes its directory only with atomic empty-directory rmdir.
+Journal replay selects its current evidence under the config lock; automatic recovery
+also decides owner liveness there and passes the held handle to replay, so stale evidence
+cannot authorize restoration of a replacement journal owned by a live session.
+`tests/codex-integration/codex-prompt-lock.test.ts` uses separate synthetic processes to
+cover stale observation, initialization, and a killed reservation owner.
+
+This is advisory serialization among cooperating OpenCodex writers. Native Codex and
+manual writes ignore it; injection witnesses and journal byte comparisons retain their
+separate role. It is not a kernel lock, a cross-host lock, or protection against an external
+writer between byte verification and rename. A rolling mix of old writers that do not
+reserve takeover has the same cooperation limit.
+
 Windows secret-file hardening resolves the effective token SID through an absolute, trusted
 PowerShell path before granting the owner and removing inherited broad ACL entries. The normal
 path obtains System32 from `GetSystemDirectoryW`. Windows ARM64 Bun builds that cannot execute

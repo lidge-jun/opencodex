@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { atomicWriteFile } from "../config";
 import { assertCodexHomeOwner, CODEX_HOME_JOURNAL_FILE, CodexHomeOwnerRefusal, opencodexHomeForInjection, readCodexHomeJournal, type CodexHomeOwnerRefusalReason } from "./codex-home-owner";
 import { hasInjectedCodexRouting } from "./injected-marker";
+import { withConfigWriteLockHeld } from "./config-write-lock";
+import type { LockHandle } from "./config-write-lock";
 import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
 
 /**
@@ -80,6 +82,8 @@ interface Journal {
 }
 
 export interface RestoreJournalResult {
+  /** The shared config write lock was held by another opencodex writer; restore did not run. */
+  lockBusy?: true;
   /** An unchanged generated profile could not be restored; distinct from a preserved user edit. */
   profileRestoreFailed?: true;
   ownershipRefusal?: CodexHomeOwnerRefusalReason;
@@ -298,13 +302,27 @@ export function journalOwner(options: { readOnly?: boolean } = {}): JournalOwner
     : null;
 }
 
-export function restoreJournalState(): RestoreJournalResult {
+export function restoreJournalState(
+  options: { heldConfigWriteLock?: LockHandle } = {},
+): RestoreJournalResult {
   try { assertCodexHomeOwner(CODEX_HOME); }
   catch (error) {
     if (!(error instanceof CodexHomeOwnerRefusal)) throw error;
     return { configRestored: false, profileRestored: false, configRewritten: false, profileRewritten: false,
       configChanged: false, profileChanged: false, complete: false, unverified: true, ownershipRefusal: error.reason };
   }
+  if (!existsSync(JOURNAL_PATH)) {
+    return { configRestored: false, profileRestored: false, configRewritten: false, profileRewritten: false,
+      configChanged: false, profileChanged: false, complete: false, unverified: false };
+  }
+  // The whole replay — the comparison reads, the restore writes, the journal
+  // removal, including selection of the journal itself — is one section under
+  // the shared write lock. Reading the current
+  // bytes OUTSIDE it would compare against pre-foreign-write state and the
+  // replay could then rename a journaled original over a write that already
+  // landed, silently discarding it.
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, options.heldConfigWriteLock, () => {
+  assertCodexHomeOwner(CODEX_HOME);
   const journal = readJournal();
   if (!journal) {
     return { configRestored: false, profileRestored: false, configRewritten: false, profileRewritten: false,
@@ -374,6 +392,24 @@ export function restoreJournalState(): RestoreJournalResult {
     unverified: false,
     ...(profileUnchanged && !profileRestored ? { profileRestoreFailed: true as const } : {}),
   };
+  });
+  if (!locked.ok) {
+    // Busy is not a verdict on the journal — report it as its own fact so a
+    // caller cannot mistake it for a failed or unneeded restore. Nothing was
+    // read yet, so the changed-file fields cannot be computed.
+    return {
+      configRestored: false,
+      profileRestored: false,
+      configRewritten: false,
+      profileRewritten: false,
+      configChanged: false,
+      profileChanged: false,
+      complete: false,
+      unverified: false,
+      lockBusy: true,
+    };
+  }
+  return locked.value;
 }
 
 export function restoreJournal(): boolean {
@@ -396,12 +432,16 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
     console.error(error.message);
     return false;
   }
+  if (!existsSync(JOURNAL_PATH)) return false;
+  // The owner decision and replay must use the same locked journal: a live
+  // session can replace stale evidence before this section is acquired.
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, undefined, handle => {
   const journal = readJournal();
   if (!journal) return false;
   const owner = journalOwner();
   if (owner?.kind === "client") {
     if (options.activeClientApiKeyId === owner.apiKeyId) return false;
-    const restored = restoreJournalState();
+    const restored = restoreJournalState({ heldConfigWriteLock: handle });
     if (restored.unverified) {
       console.error("⚠️ Codex journal recovery was not verified; current configuration files and the journal were preserved.");
       return false;
@@ -425,7 +465,7 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
       return false;
     }
   }
-  const restored = restoreJournalState();
+  const restored = restoreJournalState({ heldConfigWriteLock: handle });
   if (restored.unverified) {
     console.error("⚠️ Codex journal recovery was not verified; current configuration files and the journal were preserved.");
     return false;
@@ -440,4 +480,6 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
   if (!restored.configRewritten && !restored.profileRewritten) { warnIfJournalRetained(); return false; }
   console.error(`⚠️  Previous session (PID ${pid}) did not shut down cleanly. Codex state restored from journal.`);
   return true;
+  });
+  return locked.ok ? locked.value : false;
 }

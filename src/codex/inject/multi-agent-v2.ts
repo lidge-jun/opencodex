@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { OcxConfig } from "../../types";
+import type { LockHandle } from "../config-write-lock";
 import { CODEX_CONFIG_PATH } from "../paths";
 
 /**
@@ -43,7 +44,11 @@ export interface PreparedV1SurfaceReconcile {
    * only — `run()` re-checks the flag on the bytes present under the lock.
    */
   readonly enabledAtPrepare: boolean;
-  run(): InjectedV1SurfaceReconcile;
+  /**
+   * `heldConfigWriteLock` is the injector's own held write-lock handle: the
+   * transition would otherwise re-acquire the same file and refuse itself.
+   */
+  run(heldConfigWriteLock?: LockHandle): InjectedV1SurfaceReconcile;
 }
 
 /**
@@ -71,13 +76,15 @@ export async function prepareInjectedV1SurfaceReconcile(
   const resolvedToggle = toggle;
   return {
     enabledAtPrepare,
-    run() {
+    run(heldConfigWriteLock) {
       // Decide on the bytes present NOW, under the lock — the prepare-time
       // answer is stale the moment another writer could have touched the file.
       if (!isMultiAgentV2Enabled()) {
         return { ok: true, content: readFileSync(CODEX_CONFIG_PATH, "utf-8"), changed: false };
       }
-      const transition = transitionMultiAgentV2(false, resolvedToggle);
+      const transition = transitionMultiAgentV2(false, resolvedToggle, {
+        ...(heldConfigWriteLock !== undefined ? { heldConfigWriteLock } : {}),
+      });
       if (!transition.ok) {
         return {
           ok: false,

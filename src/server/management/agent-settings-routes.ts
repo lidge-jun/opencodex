@@ -400,6 +400,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       getAgentsEnabled, getAgentsMaxDepth, getSubagentDeveloperInstructions,
       getMultiAgentModeHintText, probeCodexSupportsModeHint, setAgentsEnabled, setAgentsMaxDepth,
       setSubagentDeveloperInstructions, setMultiAgentModeHintText, MODE_HINT_UNSUPPORTED_ERROR,
+      activeCodexConfigPath,
     } = await import("../../codex/features");
     // Probe the capability before any combined-request mutation. The scalar writer
     // repeats this check, but doing it here prevents an earlier flag/mode/agents
@@ -419,6 +420,22 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const requestedFlag = wantsFlag
       ? body.enabled as boolean
       : modeFlag ?? (wantsKeepNative && hybridPinActive ? false : undefined);
+    /*
+     * One held section for every config.toml write this PUT makes — the
+     * feature transition plus each scalar edit. Individually-locked writers
+     * would let a foreign write land between them and leave a half-applied
+     * combination on disk; the lock is released before the post-write readers
+     * and catalog converge below.
+     */
+    const needsCodexConfigWrites = requestedFlag !== undefined || wantsThreads
+      || wantsAgentsEnabled || wantsMaxDepth || wantsSubagentInstructions || wantsModeHintText;
+    const { acquireConfigWriteLock, releaseConfigWriteLock, CONFIG_WRITE_LOCKED_MESSAGE } = await import("../../codex/config-write-lock");
+    const configWriteLock = needsCodexConfigWrites ? await acquireConfigWriteLock(activeCodexConfigPath()) : null;
+    if (configWriteLock !== null && !configWriteLock.ok) {
+      return jsonResponse({ error: CONFIG_WRITE_LOCKED_MESSAGE }, 502);
+    }
+    const heldWriteLock = configWriteLock !== null && configWriteLock.ok ? configWriteLock.handle : undefined;
+    try {
     if (requestedFlag !== undefined || wantsThreads) {
     const targetFlag = requestedFlag ?? isMultiAgentV2Enabled();
     let toggle = deps.toggleCodexMultiAgentV2;
@@ -428,6 +445,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       const result = transitionMultiAgentV2(targetFlag, toggle, {
         ...(wantsThreads ? { threadLimit: body.maxConcurrentThreadsPerSession as number } : {}),
+        heldConfigWriteLock: heldWriteLock,
       });
       if (!result.ok) return jsonResponse({ error: `multi_agent_v2 transition failed: ${result.error}` }, 502);
       if (result.changed && result.threadLimit !== null) warnings.push(`Thread limit ${result.threadLimit} preserved for ${targetFlag ? "v2" : "v1"}.`);
@@ -465,10 +483,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // asserts this route file contains no direct write primitive, and matches on the
     // symbol name even inside a comment.
     const scalarWrites: Array<{ field: string; run: () => { ok: true; changed: boolean } | { ok: false; error: string } }> = [];
-    if (wantsAgentsEnabled) scalarWrites.push({ field: "agentsEnabled", run: () => setAgentsEnabled(body.agentsEnabled as boolean | null) });
-    if (wantsMaxDepth) scalarWrites.push({ field: "agentsMaxDepth", run: () => setAgentsMaxDepth(body.agentsMaxDepth as number | null) });
-    if (wantsSubagentInstructions) scalarWrites.push({ field: "subagentDeveloperInstructions", run: () => setSubagentDeveloperInstructions(body.subagentDeveloperInstructions as string | null) });
-    if (wantsModeHintText) scalarWrites.push({ field: "multiAgentModeHintText", run: () => setMultiAgentModeHintText(body.multiAgentModeHintText as string | null) });
+    if (wantsAgentsEnabled) scalarWrites.push({ field: "agentsEnabled", run: () => setAgentsEnabled(body.agentsEnabled as boolean | null, undefined, heldWriteLock) });
+    if (wantsMaxDepth) scalarWrites.push({ field: "agentsMaxDepth", run: () => setAgentsMaxDepth(body.agentsMaxDepth as number | null, undefined, heldWriteLock) });
+    if (wantsSubagentInstructions) scalarWrites.push({ field: "subagentDeveloperInstructions", run: () => setSubagentDeveloperInstructions(body.subagentDeveloperInstructions as string | null, undefined, heldWriteLock) });
+    if (wantsModeHintText) scalarWrites.push({ field: "multiAgentModeHintText", run: () => setMultiAgentModeHintText(body.multiAgentModeHintText as string | null, undefined, heldWriteLock) });
     const landed: string[] = [];
     for (const write of scalarWrites) {
       try {
@@ -481,6 +499,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const message = err instanceof Error ? err.message : String(err);
         return jsonResponse({ error: `writing ${write.field} failed: ${message}${landed.length > 0 ? ` (already applied: ${landed.join(", ")})` : ""}` }, 502);
       }
+    }
+    } finally {
+      if (heldWriteLock) releaseConfigWriteLock(heldWriteLock);
     }
     // Derived from fresh post-write readers (readConfigText is uncached): upstream
     // lets an enabled multi_agent_v2 feature override [agents].enabled = false, so
@@ -533,12 +554,20 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     const body = parsedBody as { enabled?: unknown };
     if (typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
-    const { isDefaultModeRequestUserInputEnabled, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY } = await import("../../codex/features");
+    const { isDefaultModeRequestUserInputEnabled, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, activeCodexConfigPath } = await import("../../codex/features");
     const before = isDefaultModeRequestUserInputEnabled();
     let toggle = deps.toggleDefaultModeRequestUserInput;
     if (!toggle) {
       const { runCodexFeaturesCommand } = await import("../../cli/v2");
       toggle = (enabled: boolean) => runCodexFeaturesCommand(enabled ? "enable" : "disable", DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY);
+    }
+    // The `codex features` subprocess rewrites config.toml itself — run it
+    // under the shared write lock so it cannot interleave with an opencodex
+    // scalar edit or injection mid-write on either side.
+    const { acquireConfigWriteLock, releaseConfigWriteLock, CONFIG_WRITE_LOCKED_MESSAGE } = await import("../../codex/config-write-lock");
+    const configLock = await acquireConfigWriteLock(activeCodexConfigPath());
+    if (!configLock.ok) {
+      return jsonResponse({ error: CONFIG_WRITE_LOCKED_MESSAGE }, 502);
     }
     let toggleError: string | null = null;
     try {
@@ -550,6 +579,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         ? raw.trim()
         : raw instanceof Uint8Array ? new TextDecoder().decode(raw).trim() : "";
       toggleError = stderrText || (err.message ?? String(error));
+    } finally {
+      releaseConfigWriteLock(configLock.handle);
     }
     const enabled = isDefaultModeRequestUserInputEnabled();
     if (toggleError !== null || enabled !== body.enabled) {

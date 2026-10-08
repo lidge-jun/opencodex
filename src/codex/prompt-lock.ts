@@ -9,8 +9,9 @@
  * the lock stale, B removes it and acquires its own, then A unlinks *B's live
  * lock* and both proceed. Unlinking a path you did not verify is the bug. Here
  * the contender renames the observed stale lock to a token-quarantined name —
- * an atomic operation exactly one contender can win — and only the winner
- * creates the real lock.
+ * a serialized operation under a short, unique per-process reservation. The
+ * reservation covers observation through creation: rename alone cannot stop
+ * an old observation from moving a successor's live lock.
  *
  * RELEASE ONLY DELETES A LOCK WHOSE TOKEN IS STILL OURS. A mismatch means we
  * were superseded, and deleting it would hand the critical section to two
@@ -20,8 +21,9 @@
  * is handled by the per-target byte checks in the write path, and the rename
  * window itself is documented as irreducible from user space.
  */
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { withLockClaim } from "./prompt-lock-claim";
 
 const FILE_MODE = 0o600;
 
@@ -73,8 +75,13 @@ function readRecord(path: string): LockRecord | null {
 }
 
 /** True when the holder is gone AND the lock is older than the grace window. */
-function isStale(record: LockRecord | null, deps: LockDeps): boolean {
-  if (record === null) return true; // unparseable: treat as debris
+function isStale(path: string, record: LockRecord | null, deps: LockDeps): boolean {
+  if (record === null) {
+    // wx creates a file before writing its JSON. A fresh empty/truncated
+    // record can be an initializing writer, not abandoned debris.
+    try { return deps.now() - statSync(path).mtimeMs > STALE_AFTER_MS; }
+    catch { return false; }
+  }
   if (deps.isProcessAlive(record.pid)) return false;
   return deps.now() - record.acquiredAt > STALE_AFTER_MS;
 }
@@ -85,6 +92,11 @@ function isStale(record: LockRecord | null, deps: LockDeps): boolean {
  */
 export function tryAcquire(path: string, deps: LockDeps = defaultDeps): AcquireResult {
   const token = randomBytes(8).toString("hex");
+  const reserved = withLockClaim(path, token, defaultDeps.isProcessAlive, () => acquireReserved(path, token, deps));
+  return reserved.ok ? reserved.value : { ok: false, error: "locked" };
+}
+
+function acquireReserved(path: string, token: string, deps: LockDeps): AcquireResult {
   const record: LockRecord = { token, pid: process.pid, acquiredAt: deps.now() };
   const body = JSON.stringify(record);
 
@@ -95,9 +107,10 @@ export function tryAcquire(path: string, deps: LockDeps = defaultDeps): AcquireR
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
 
-  if (!isStale(readRecord(path), deps)) return { ok: false, error: "locked" };
+  if (!isStale(path, readRecord(path), deps)) return { ok: false, error: "locked" };
 
-  // Quarantine by rename: atomic, and exactly one contender wins it.
+  // Quarantine under the reservation; no cooperating successor can replace
+  // the observed stale record between our check and this rename.
   const quarantine = `${path}.stale-${token}`;
   try {
     renameSync(path, quarantine);

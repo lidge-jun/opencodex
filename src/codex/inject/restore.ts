@@ -44,10 +44,17 @@ import {
   type CodexHistoryJobOutcome,
 } from "../history-job";
 import {
+  CODEX_CONFIG_PATH,
   DEFAULT_CATALOG_PATH,
   getCodexHome,
   tomlString,
 } from "../paths";
+import {
+  acquireConfigWriteLock,
+  releaseConfigWriteLock,
+  withConfigWriteLockHeld,
+} from "../config-write-lock";
+import type { LockHandle } from "../config-write-lock";
 import { shouldInjectApiAuthHeader } from "../loopback-target";
 import { currentExternalCodexModelProvider } from "./config-toml";
 import {
@@ -343,20 +350,44 @@ export interface RestoreConfigOptions {
 }
 
 /** The config/profile half of a native restore, reported as one artifact. */
-function restoreCodexConfigInline(kind = "sync", options: RestoreConfigOptions = {}): CodexRestoreConfigResult {
-  assertCodexHomeOwner(getCodexHome());
-  beforeRestoreConfigForTests?.(kind);
-  assertCodexHomeOwner(getCodexHome());
-  const preImages = captureCodexPreImages();
-  const result = restoreCodexConfigInlineImpl(kind, options);
-  if (result.state === "failed") {
-    const compensated = restoreCodexPreImages(preImages);
-    if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
+function restoreCodexConfigInline(
+  kind = "sync",
+  options: RestoreConfigOptions = {},
+  heldConfigWriteLock?: LockHandle,
+): CodexRestoreConfigResult {
+  /*
+   * The whole config half — preimage capture, journal replay, removal, the
+   * provider-table re-attach, and failure compensation — is ONE section of the
+   * shared write lock. Splitting it let a foreign write land between the pieces
+   * and left preimage compensation replaying over bytes that writer committed.
+   */
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, (held) => {
+    assertCodexHomeOwner(getCodexHome());
+    beforeRestoreConfigForTests?.(kind);
+    assertCodexHomeOwner(getCodexHome());
+    const preImages = captureCodexPreImages();
+    const result = restoreCodexConfigInlineImpl(kind, options, held);
+    if (result.state === "failed") {
+      const compensated = restoreCodexPreImages(preImages);
+      if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
+    }
+    return result;
+  });
+  if (!locked.ok) {
+    // Nothing was captured or written — there is nothing to compensate.
+    return {
+      state: "failed", changed: false, action: "failed",
+      message: "Another process is writing Codex configuration right now. Retry shortly.",
+    };
   }
-  return result;
+  return locked.value;
 }
 
-function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOptions): CodexRestoreConfigResult {
+function restoreCodexConfigInlineImpl(
+  kind: string,
+  options: RestoreConfigOptions,
+  heldConfigWriteLock: LockHandle,
+): CodexRestoreConfigResult {
   try {
     const disposition = resolveRestoreHistoryDisposition(options.removeProviderTable);
     if (disposition.kind === "refuse") {
@@ -374,8 +405,16 @@ function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOption
     // The one caller that must not capture is the explicit removal flag: it is the user
     // accepting that tagged conversations stop opening.
     const capturedBlock = options.removeProviderTable === true ? null : readOcxProviderTableBlock();
-    const journal = restoreJournalState();
+    const journal = restoreJournalState({ heldConfigWriteLock });
     if (journal.ownershipRefusal) throw new CodexHomeOwnerRefusal(journal.ownershipRefusal);
+    if (journal.lockBusy) {
+      // Only reachable when this impl ran without a live held handle — the
+      // outer section takes the file lock before anything else runs.
+      return {
+        state: "failed", changed: false, action: "failed",
+        message: "Another process is writing Codex configuration right now. Retry shortly.",
+      };
+    }
     if (journal.unverified) {
       return {
         state: "failed", changed: false, action: "failed",
@@ -398,6 +437,7 @@ function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOption
           historyDisposition: disposition.kind === "stand-down"
             ? disposition.retainProviderTable ? "stand-down-retain" : "stand-down-remove"
             : "refuse-on-any",
+          heldConfigWriteLock,
         });
     let retainedLines = restored.retainedProviderTable ?? null;
     if (restored.success) {
@@ -416,7 +456,7 @@ function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOption
       // idempotent — it checks for the table before appending — so the three do not have to
       // be told apart here.
       if (settled.kind === "stand-down" && settled.retainProviderTable && capturedBlock !== null) {
-        retainedLines = retainOcxProviderTableOnDisk(capturedBlock) ?? retainedLines;
+        retainedLines = retainOcxProviderTableOnDisk(capturedBlock, heldConfigWriteLock) ?? retainedLines;
       }
       // All native work and the final migration check succeeded. A field-level
       // fallback retains its snapshot, but no longer owns this Codex home.
@@ -560,6 +600,21 @@ async function restoreNativeCodexAsyncImpl(
   let transitionReceipt: { nativeGeneration: number; currentTxId: string } | undefined;
 
   if (eligibility.kind === "coordinated" || eligibility.kind === "adopt") {
+    /*
+     * File lock BEFORE N — the same order injection takes. With the config
+     * writes living inside the journal replay under the file lock, a restore
+     * that took N first while a sibling held the file lock was the one
+     * deliberate inversion; acquiring here first removes it.
+     */
+    const configLock = await acquireConfigWriteLock(CODEX_CONFIG_PATH);
+    if (!configLock.ok) {
+      config = {
+        state: "failed",
+        changed: false,
+        action: "failed",
+        message: "Another process is writing Codex configuration right now. Retry shortly.",
+      };
+    } else try {
     // The restore has no candidate bytes to witness; freshness comes from the
     // filesystem reads and the desired-state re-read performed under the lock.
     const witness = { authoritySnapshotId: "codex-native-restore" };
@@ -595,7 +650,7 @@ async function restoreNativeCodexAsyncImpl(
         const preImages = captureCodexPreImages();
         let restored: CodexRestoreConfigResult;
         try {
-          restored = restoreCodexConfigInline(eligibility.kind, options);
+          restored = restoreCodexConfigInline(eligibility.kind, options, configLock.handle);
           // Throw inside N so the published remove transition rolls back too.
           if (restored.state === "failed") throw new CodexRestoreRefusal(restored);
         } catch (error) {
@@ -631,6 +686,9 @@ async function restoreNativeCodexAsyncImpl(
       );
       config = coordinated.value.config;
       transitionReceipt = coordinated.value.receipt;
+    }
+    } finally {
+      releaseConfigWriteLock(configLock.handle);
     }
   } else {
     // Legacy-uncoordinated (or unresolvable) homes keep the unserialized path

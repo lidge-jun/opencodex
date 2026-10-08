@@ -42,6 +42,7 @@ import {
   type JournalRecord,
 } from "./prompt-journal";
 import { release, stillHeld, tryAcquire } from "./prompt-lock";
+import { configWriteLockPath } from "./config-write-lock";
 
 // ---------------------------------------------------------------------------
 // Inventory — ONE definition, consumed by the route and the GUI alike.
@@ -682,6 +683,19 @@ function commit(
   if (!acquired.ok) return { ok: false, error: "locked" };
   const handle = acquired.handle;
 
+  // The config write lock comes SECOND (store -> config is the only order any
+  // path takes): the feature scalars, restores, and the injector all serialize
+  // their config.toml writes through it, and the byte checks below only cover
+  // writers that do not cooperate. Holding it across the whole transaction is
+  // what stops a foreign whole-file rewrite from discarding a projection that
+  // just committed.
+  const configAcquired = tryAcquire(configWriteLockPath(configPath));
+  if (!configAcquired.ok) {
+    release(handle);
+    return { ok: false, error: "locked" };
+  }
+  const configHandle = configAcquired.handle;
+
   try {
     // 1. recovery first: a journal on disk means an earlier attempt never
     //    committed, and we must not stack a second transaction on top of it.
@@ -768,7 +782,7 @@ function commit(
     if (finalConfig !== record.postConfig || finalStore !== record.postStore) {
       return { ok: false, error: "write_superseded" };
     }
-    if (!stillHeld(handle)) return { ok: false, error: "write_superseded" };
+    if (!stillHeld(handle) || !stillHeld(configHandle)) return { ok: false, error: "write_superseded" };
 
     durableDelete(journalPath);   // this deletion is the commit
     // The FULL opts, not just the two paths this transaction owns: rebuilding the
@@ -776,6 +790,7 @@ function commit(
     // successful write reported an empty variant list back to its caller.
     return { ok: true, changed: true, snapshot: readPromptLayers({ ...opts, configPath, storePath }) };
   } finally {
+    release(configHandle);
     release(handle);
   }
 }

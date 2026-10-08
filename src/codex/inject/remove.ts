@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "../toml-source-lines";
 import { atomicWriteFile } from "../../config";
+import { CONFIG_WRITE_LOCKED_MESSAGE, withConfigWriteLockHeld } from "../config-write-lock";
+import type { LockHandle } from "../config-write-lock";
 import {
   REALTIME_WS_BASE_URL_KEY,
   hasInjectedOpenaiBaseUrl,
@@ -45,13 +47,19 @@ export function readOcxProviderTableBlock(): string | null {
  * writes leaves a fully native config, which is the direction this whole change is trying
  * to reach anyway.
  */
-export function retainOcxProviderTableOnDisk(block: string): string[] | null {
+export function retainOcxProviderTableOnDisk(block: string, heldConfigWriteLock?: LockHandle): string[] | null {
   if (!existsSync(CODEX_CONFIG_PATH)) return null;
-  const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
-  const eol = dominantEol(rawContent);
-  const content = applyEol(rawContent, "\n");
-  const next = appendOcxProviderTableBlock(content, block);
-  if (next !== content) atomicWriteFile(CODEX_CONFIG_PATH, applyEol(next, eol));
+  // The read, the append, and the rename are one section under the shared
+  // write lock; an unlocked read+rename here could discard a concurrent
+  // scalar or projection write.
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, () => {
+    const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+    const eol = dominantEol(rawContent);
+    const content = applyEol(rawContent, "\n");
+    const next = appendOcxProviderTableBlock(content, block);
+    if (next !== content) atomicWriteFile(CODEX_CONFIG_PATH, applyEol(next, eol));
+  });
+  if (!locked.ok) throw new Error(CONFIG_WRITE_LOCKED_MESSAGE);
   return block.replace(/\n+$/, "").split("\n");
 }
 
@@ -162,6 +170,8 @@ export type RemoveCodexConfigHistoryDisposition =
 export interface RemoveCodexConfigOptions {
   preserveProfile?: boolean;
   historyDisposition?: RemoveCodexConfigHistoryDisposition;
+  /** Run under a config write lock this process already holds (restore's single section). */
+  heldConfigWriteLock?: LockHandle;
 }
 
 export interface RemoveCodexConfigResult {
@@ -192,6 +202,7 @@ export function removeCodexConfig(
       message: `Codex config not found; no native restore was needed${options.preserveProfile ? "." : ", and the opencodex profile was removed if present."}`,
     };
   }
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, options.heldConfigWriteLock, () => {
   const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
   // Same EOL boundary as inject: strip in LF space, write back in the file's own ending.
   // The unchanged fast path compares in LF space so an untouched file is never rewritten.
@@ -250,4 +261,7 @@ export function removeCodexConfig(
     message: removedMessage,
     ...(retainedBlock === null ? {} : { retainedProviderTable: retainedBlock.replace(/\n+$/, "").split("\n") }),
   };
+  });
+  if (!locked.ok) return { success: false, message: CONFIG_WRITE_LOCKED_MESSAGE };
+  return locked.value;
 }
