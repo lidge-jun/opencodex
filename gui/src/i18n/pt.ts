@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // Brazilian Portuguese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -6,6 +7,7 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const pt: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("pt"),
   "compactionRouting.sources": "Origens",
   "compactionRouting.sourcesAll": "Todos os modelos de conversa",
   "compactionRouting.sourcesSelected": "Somente origens selecionadas",

@@ -258,3 +258,12 @@ export function warnPlaintextV2AgentMessagesStartup(config: { plaintextV2AgentMe
   console.warn("   Eligible ChatGPT collaboration calls may carry plaintext message arguments. HTTPS remains encrypted, but task text may be retained in Codex history, selected providers, and local response/debug state.");
   console.warn("   This depends on undocumented ChatGPT and Codex behavior; it does not decrypt existing tasks.");
 }
+
+export function logProxyEndpoints(actualPort: number): void {
+  console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
+  console.log(`   POST /v1/responses → provider translation`);
+  console.log(`   POST /v1/chat/completions → OpenAI-compatible clients`);
+  console.log(`   GET  /healthz      → health check`);
+  console.log(`   GET  /api/*        → management API`);
+  console.log(`   GET  /             → GUI dashboard`);
+}

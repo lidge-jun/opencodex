@@ -1152,5 +1152,20 @@
   "web-search-run-turn-loop.test.ts": "web-search", "responses-run-turn-web-search.test.ts": "responses",
   "server-combo-cooldown-recording.test.ts": "server", "injection-routing-drift.test.ts": "codex-integration",
   "injection-routing-healer.test.ts": "codex-integration", "injection-routing-heal-apply.test.ts": "codex-integration",
-  "cli-start-routing-heal-wiring.test.ts": "cli", "cli-status-codex-routing-drift.test.ts": "cli"
+  "cli-start-routing-heal-wiring.test.ts": "cli", "cli-status-codex-routing-drift.test.ts": "cli",
+  "desktop-compatibility-authority.test.ts": "clients",
+  "desktop-compatibility-build-probe.test.ts": "clients",
+  "desktop-compatibility-certificate-service.test.ts": "clients",
+  "desktop-compatibility-connection-store.test.ts": "clients",
+  "desktop-compatibility-launch.test.ts": "clients",
+  "desktop-compatibility-native-identity.test.ts": "clients",
+  "desktop-compatibility-relay.test.ts": "clients",
+  "desktop-compatibility-routing.test.ts": "clients",
+  "desktop-compatibility-runtime.test.ts": "clients",
+  "desktop-compatibility-trust.test.ts": "clients",
+  "management-desktop-compatibility-routes.test.ts": "server",
+  "management-desktop-compatibility-runtime-routes.test.ts": "server",
+  "management-desktop-compatibility-settings.test.ts": "server",
+  "optional-desktop-upstream.test.ts": "lib",
+  "server-desktop-compatibility-startup.test.ts": "server"
 }

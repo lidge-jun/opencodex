@@ -579,6 +579,9 @@ describe("headless GUI parity CLI", () => {
       // Claude reset grants: reading is an owed CLI verb (deferred-verb in the route
       // registry) and spending is dashboard-session-only by design.
       ["/api/anthropic/reset-grants", "(none — GUI reset-grant dialog; spend requires a dashboard session)"],
+      // The registry records read-only status as an owed CLI verb; trust, launch,
+      // settings and the account-wide trial intentionally require local GUI consent.
+      ["/api/codex/desktop-compatibility", "(none — local GUI confirmation; status CLI deferred in clients/codex-desktop.md)"],
       ["/api/protocols", "ocx api protocols/explain/policy"],
       ["/api/settings", "ocx system"],
       // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
@@ -1171,13 +1174,17 @@ describe("headless GUI parity CLI", () => {
 
   test("remote connect status is headless and revoke refuses disconnected state before hub traffic", async () => {
     let requests = 0;
+    const lockRoot = mkdtempSync(join(tmpdir(), "ocx-connect-parity-lock-"));
+    const lifecycleLockDeps = { lockPath: join(lockRoot, "client-lifecycle.sqlite") };
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(await handleConnectCommand(["status", "--json"], {
+        lifecycleLockDeps,
         fetchImpl: async () => { requests += 1; return new Response(); },
       })).toBe(0);
       expect(await handleConnectCommand(["revoke", "--admin-token-stdin", "--json"], {
+        lifecycleLockDeps,
         stdinImpl: Readable.from(["ocx_admin_test\n"]),
         fetchImpl: async () => { requests += 1; return new Response(); },
       })).toBe(1);
@@ -1185,6 +1192,7 @@ describe("headless GUI parity CLI", () => {
     } finally {
       logSpy.mockRestore();
       errorSpy.mockRestore();
+      removeTreeWithRetry(lockRoot);
     }
   });
 

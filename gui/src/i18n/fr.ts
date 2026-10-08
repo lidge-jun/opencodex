@@ -1,9 +1,11 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("fr"),
   "nav.claude": "Claude",
   "claude.pageSub": "Routage et paramètres OpenCodex pour Claude Code.",
 

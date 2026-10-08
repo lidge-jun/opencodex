@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // Vietnamese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -6,6 +7,7 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const vi: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("vi"),
   "nav.claude": "Claude",
   "claude.pageSub": "Định tuyến và cài đặt OpenCodex cho Claude Code.",
 

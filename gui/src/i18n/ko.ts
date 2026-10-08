@@ -1,9 +1,11 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("ko"),
   "nav.claude": "Claude",
   "claude.pageSub": "Claude Code의 OpenCodex 라우팅과 설정을 관리합니다.",
 

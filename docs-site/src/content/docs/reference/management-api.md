@@ -88,6 +88,9 @@ route-specific results rather than repeating this table.
 | `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim. Requires a dashboard session. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
+| `GET, POST /api/codex/desktop-compatibility/certificate` | Inspect or explicitly prepare Windows compatibility certificate trust | 403 local dashboard required for POST; 409 stale, busy, or incomplete state |
+| `GET, POST /api/codex/desktop-compatibility/runtime` | Inspect or explicitly start, stop, launch, or run a bounded native compatibility trial | 403 local dashboard required for POST; 409 unsupported build, untrusted certificate, or incomplete state |
+| `GET, POST /api/codex/desktop-compatibility/settings` | Read or save the next-start observation preference with its current revision | 403 local dashboard required for POST; 409 stale, invalid, or unconfirmed configuration |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
 | `GET, PUT /api/claude-code` | Read or update Claude Code gateway, auth-mode, model-map, context, agent, and sidecar settings | 400 invalid field or shape |
 
@@ -769,6 +772,81 @@ deferred catalog attempt never rolls back the durable account mutation and never
 provider, account, path, or credential details; clients receive only the completion boolean. Deleting
 an account retains its selector binding so exact routes fail closed while the account is absent and the
 same selector is restored if that account id is added again.
+
+## Windows compatibility certificate setup
+
+`GET /api/codex/desktop-compatibility/certificate` returns public certificate status:
+support, state, fingerprint, expiry, renewal notice, trust observation and any active operation.
+It never generates a key, decrypts private material or registers OS trust. Certificate trust alone
+does not mean a compatibility relay is running or the private key has been verified in this process.
+
+POST accepts `action: "prepare" | "trust" | "remove-trust" | "renew"` and `confirmed: true`.
+Trust actions also require the exact uppercase SHA-256 `fingerprint` returned by status.
+These mutations require a GUI-session principal from trusted loopback ingress; an admin token alone
+receives 403. They are intended for a local confirmation flow, not unattended certificate enrollment.
+
+Prepare stores a constrained 30-day authority with a Windows CurrentUser-DPAPI-protected private key.
+Subsequent preparations reuse it. Trust actions never create missing state or silently replace an
+expired root. Removal refuses while Codex is running or process ownership cannot be established.
+Cancellation or uncertain OS command completion is checked against the actual certificate store.
+Unknown state remains an error rather than authorizing an automatic retry. Replies contain no PEM,
+private keys, account data or subprocess output.
+
+Renewal requires the current fingerprint and an absent Codex app. It verifies removal of
+the old certificate's trust before publishing a validated encrypted replacement. Refused
+or uncertain removal preserves the old identity. The replacement is prepared but untrusted;
+register it with a separate `trust` confirmation using its new fingerprint. A stale retry
+cannot replace the new identity again. No certificate backup chain is retained.
+
+This setup API does not enable a relay, change login, alter usage, restart Codex or install a watcher.
+CurrentUser protection does not isolate secrets from other processes running as the same OS user.
+
+## Experimental Windows compatibility runtime
+
+`GET /api/codex/desktop-compatibility/runtime` is an inert status read. POST requires a
+local GUI session and `{ action, confirmed: true }`, where action is `start`, `stop`,
+`observe`, `launch`, or `apply`. Only `apply` additionally requires `accountWideConsent: true`.
+The endpoint is experimental. The dashboard exposes it under **Codex Set → Desktop compatibility**;
+the **Resume observation when OpenCodex starts** toggle saves the optional
+`desktopCompatibility.startOnProxyStart` preference. OpenCodex managed client mode does not offer these
+local controls or forward them to the shared hub.
+
+Start requires an already prepared, trusted certificate, a freshly verified native file-based
+ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.
+HTTP/HTTPS and authenticated SOCKS5 outbound proxies use the same explicit selection for HTTP,
+identity verification and upgraded sockets. NO_PROXY is honored; failures never retry directly.
+An invalid or unsupported setting returns `egress_proxy_invalid`. Start never registers a certificate or changes
+login. Launch preserves package identity and refuses an app that is already running.
+PAC and CONNECT ports are persisted after successful first binding and reused on restart.
+`connection_unavailable` means binding failed; `connection_invalid` or `connection_changed`
+means stored endpoint identity could not be accepted. These failures never silently rotate
+ports or overwrite the existing connection record. Restart returns to Observe, not Apply.
+`native_routing_unverified` means the native root/profile routing cannot be matched to this
+process's bound OpenCodex listener. Runtime status may expose `contextFailure` for this condition
+or `build_unverified`. These states disable response correction without claiming an app repair.
+
+Apply requires a recently observed eligible exhaustion snapshot and lasts at most three minutes
+at the response layer. It changes two account-UI gate flags, not usage percentages, credits,
+spending restrictions or server limits. The usage response does not identify the selected model:
+this trial cannot promise an effect limited to external models. An accepted activation or produced
+response does not prove the app accepted the new snapshot or enabled its composer.
+An available or protected original usage record returns the controller to Observe and
+invalidates pending corrections. Later exhaustion requires another explicit Apply request.
+Changed root TOML or configured model/provider/fallback routing invalidates the runtime's
+observation context until stop/start; reverting those settings does not reactivate it.
+
+Observe disarms correction and refreshes only validated usage streams. Stop closes this runtime's
+listeners and connections; the PAC includes `DIRECT` fallback. The certificate stays installed for
+reuse. Stop the runtime and close Codex before removing trust or renewing the certificate.
+Failed cleanup reports `cleanup-required`; it does not claim that the runtime is off. OS login,
+system proxy settings and application files are not modified by these runtime commands.
+
+The separate settings endpoint returns `{ startOnProxyStart, revision }`. POST requires
+`{ startOnProxyStart: boolean, revision, confirmed: true }` from a local GUI session. A stale
+revision refuses the write; a valid update preserves unrelated config fields and verifies
+the persisted result. This preference affects the next proxy start, never current runtime
+state, app launch or an Apply trial. An uncertain response must be followed by GET, not an
+automatic POST retry. Invalid or missing configuration is preserved rather than recreated.
 
 ## Choosing a client
 

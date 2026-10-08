@@ -34,7 +34,7 @@ test("Codex Set is always present in the sidebar, never filtered by view mode", 
    */
   const groups = await Bun.file(new URL("../src/nav-groups.ts", import.meta.url)).text();
   expect(groups).toContain('{ id: "codex-set", tkey: "nav.codexSet", Icon:');
-  expect(src).toContain('{page === "codex-set" && <CodexSet apiBase={sharedBase} />}');
+  expect(src).toContain('{page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}');
 });
 
 test("the shipped #codex-auth bookmark still resolves", async () => {

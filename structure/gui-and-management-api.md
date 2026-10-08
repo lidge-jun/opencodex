@@ -1,5 +1,13 @@
 # GUI And Management API
 
+The optional Windows compatibility runtime uses confirmed local GUI-session commands; raw admin-token and remote ingress mutations are
+refused. Its start/stop/launch and three-minute account-UI trial follow the [native compatibility contract](clients/codex-desktop.md#optional-compatibility-runtime).
+The lazy Codex Set desktop tab uses the machine API target and follows the
+[dashboard consent and stale-response contract](clients/codex-desktop.md#dashboard-controls).
+Runtime management and proxy startup share a single owner and register awaited shutdown; the desktop compatibility
+settings endpoint binds each local GUI write to the displayed field revision. Saving the next-start preference
+triggers no runtime action.
+
 Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
 `autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
 `PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;
@@ -99,6 +107,8 @@ dashboard or management responses. Embedding the dashboard in an iframe is inten
 unsupported; deployments that previously relied on such embedding must open it as a top-level page.
 
 ## Authentication boundaries
+
+Codex compatibility certificate setup follows the [certificate setup API](clients/codex-desktop.md#certificate-setup-api): status is read-only; key/trust mutations require the actual local GUI-session principal, explicit confirmation and an exact fingerprint for trust changes. The endpoint does not enable a relay, change Codex login or restart the app.
 
 Kiro management login starts the native device flow only when `POST /api/oauth/login`
 supplies `method: "builder-id"`, `"google"`, or `"github"`. A method-less request retains
