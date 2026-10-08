@@ -1,0 +1,42 @@
+name: Anthropic instance contract diagnostic
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  contracts:
+    if: github.event.pull_request.head.ref == 'codex/anthropic2-account-pool'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: gui
+      - name: Isolated instance contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            tests/oauth/oauth-anthropic-instance-multiprocess.test.ts \
+            tests/oauth/oauth-anthropic-instance-refresh.test.ts \
+            tests/oauth/oauth-anthropic-instance-registration.test.ts \
+            tests/oauth/anthropic2-discovery-ownership.test.ts \
+            tests/config/config-anthropic-instance-pool.test.ts \
+            tests/providers/provider-anthropic-instance.test.ts \
+            tests/oauth/oauth-refresh.test.ts \
+            tests/oauth/oauth-store-multi.test.ts \
+            tests/oauth/oauth-anthropic-identity.test.ts \
+            tests/config/config-load-degrade.test.ts \
+            tests/providers/provider-registry-parity.test.ts \
+            tests/routing/fastwire-policy.test.ts; do
+            bun test "$file"
+          done
