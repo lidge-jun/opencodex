@@ -62,8 +62,7 @@ Generated developer guidance is placed before the current task in both parsed
 messages and saved raw history, preserving the same order when that history is replayed.
 
 Malformed, empty, opaque or incomplete envelopes still fail validation. Actual tool
-results keep their required `call_id`; native passthrough and compaction retain their
-existing raw-input handling. See [the adapter contract](/reference/adapters/#external-task-input-on-translated-responses-routes).
+results keep their required `call_id`; native passthrough and compaction apply the same user-turn mapping to their raw bodies. See [the adapter contract](/reference/adapters/#external-task-input-on-translated-responses-routes).
 
 ## How it works
 
