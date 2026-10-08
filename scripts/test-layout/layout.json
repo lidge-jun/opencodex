@@ -166,6 +166,7 @@
     "anthropic-eof-tolerance.test.ts": "adapters/anthropic",
     "anthropic-error-body.test.ts": "adapters/anthropic",
     "anthropic-error-stop-reason.test.ts": "adapters/anthropic",
+    "anthropic-thinking-usage.test.ts": "adapters/anthropic",
     "anthropic-fast-opt-in.test.ts": "adapters/anthropic",
     "anthropic-fast-speed.test.ts": "adapters/anthropic",
     "anthropic-hardening.test.ts": "adapters/anthropic",
