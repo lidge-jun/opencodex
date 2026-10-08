@@ -492,7 +492,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     let routed: OcxProviderConfig;
     try { routed = routedProviderConfig(binding.instance, provider); } catch { return false; }
     return resolveAnthropicMessagesUrl(routed) === routeTarget
-      && nativeMessagesDeclineReason({ ...route, provider }, body, config, selector) === undefined;
+      && nativeMessagesDeclineReason({ ...route, provider: routed }, body, config, selector) === undefined;
   };
 
   const send = async (recovery?: "rate-limit-429" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {

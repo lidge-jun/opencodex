@@ -452,6 +452,16 @@ describe("binding and physical dispatch await fences", () => {
       .rejects.toThrow(binding.NativeOAuthSelectionChangedError);
   });
 
+  test("a legacy primary adapter field still reaches one physical A send", async () => {
+    await seed();
+    f.config.providers.anthropic!.adapter = "openai-chat";
+    delete f.config.providers.anthropic!.authMode;
+    const before = f.ledger.sends.length;
+    const { response } = await send(`anthropic/${f.model}`);
+    expect(response.status).toBe(200);
+    expect(f.ledger.sends.slice(before).map(row => row.instance)).toEqual(["anthropic"]);
+  });
+
   for (const change of ["marker", "target", "native-off"] as const) {
     test(`${change} mutation while pacing prevents physical send`, async () => {
       await seed();
