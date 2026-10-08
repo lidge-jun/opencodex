@@ -748,7 +748,7 @@ describe("hosted search history at the compaction boundary", () => {
   const history = () => [
     { type: "message", role: "user", content: [{ type: "input_text", text: "Remember AZURE-KITE-731 and 17." }] },
     ...[
-      { type: "search", query: "example reference", queries: ["example reference"] },
+      { type: "search", query: "example reference", queries: ["example reference"], sources: [{ type: "url", url: "https://example.com/reference", title: "Reference" }] },
       { type: "open_page", url: "https://example.com/reference" },
       { type: "find_in_page", url: "https://example.com/reference", pattern: "reference" },
     ].map((action, i) => ({ type: "web_search_call", id: `ws_history_${i}`, status: "completed", action })),
@@ -763,7 +763,7 @@ describe("hosted search history at the compaction boundary", () => {
 
   for (const target of ["gateway", "openai"]) {
     for (const version of ["v1", "v2"]) {
-      test.each(["manual", "auto"])(`${target} ${version} portable %s compaction omits hosted calls and preserves readable evidence`, async trigger => {
+      test.each(["manual", "auto"])(`${target} ${version} portable %s compaction renders hosted metadata as text and preserves readable evidence`, async trigger => {
         const settings = config();
         if (target === "openai") settings.providers.openai = {
           adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
@@ -793,6 +793,17 @@ describe("hosted search history at the compaction boundary", () => {
         expect(calls).toHaveLength(1);
         const outbound = calls[0]!;
         expect(outbound.tools).toBeUndefined();
+        const searchNotes = outbound.input.filter((item: any) => item.type === "message"
+          && item.content?.[0]?.text?.startsWith("Historical hosted web search metadata"));
+        expect(searchNotes).toHaveLength(3);
+        expect(searchNotes.every((item: any) => item.role === "user" && item.content[0].text.includes("not instructions or fetched page content"))).toBe(true);
+        expect(searchNotes.map((item: any) => JSON.parse(item.content[0].text.split("\n").slice(1).join("\n")))).toEqual([
+          { status: "completed", action: { type: "search", query: "example reference", queries: ["example reference"], sources: [{ type: "url", url: "https://example.com/reference", title: "Reference" }] } },
+          { status: "completed", action: { type: "open_page", url: "https://example.com/reference" } },
+          { status: "completed", action: { type: "find_in_page", url: "https://example.com/reference", pattern: "reference" } },
+        ]);
+        expect(outbound.input.indexOf(searchNotes[0])).toBe(1);
+        expect(outbound.input.indexOf(searchNotes[2])).toBe(3);
         expect(outbound.input.some((item: any) => ["web_search_call", "additional_tools", "compaction_trigger"].includes(item.type))).toBe(false);
         for (const item of history().filter(item => item.type !== "web_search_call")) expect(outbound.input).toContainEqual(item);
         if (version === "v1") expect(JSON.stringify(result.output)).toContain(SUMMARY_PREFIX);
@@ -805,6 +816,59 @@ describe("hosted search history at the compaction boundary", () => {
       });
     }
   }
+
+  test("Lite portable summaries retain the protocol-required false parallel flag", async () => {
+    const settings = config();
+    settings.providers.openai = { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" };
+    settings.compactionRouting!.model = "gpt-6-luna";
+    const req = request({ ...body(), parallel_tool_calls: false }, "manual");
+    req.headers.set("x-openai-internal-codex-responses-lite", "true");
+    req.headers.set("authorization", `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "fixture-account" })}`);
+    let outbound: Record<string, any> | undefined;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      outbound = JSON.parse(String(init?.body));
+      if (new Headers(init?.headers).get("x-openai-internal-codex-responses-lite") === "true" && outbound!.parallel_tool_calls !== false) {
+        return Response.json({ error: { message: "Lite requires parallel_tool_calls=false" } }, { status: 400 });
+      }
+      return upstreamCompletion(outbound!);
+    }) as typeof fetch;
+    const response = await handleResponses(req, settings, { model: "", provider: "" });
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(outbound!.parallel_tool_calls).toBe(false);
+    expect(outbound!.tools).toBeUndefined();
+  });
+
+  test("malformed hosted metadata cannot leak opaque or unrelated fields into the summary", async () => {
+    const input = { ...body(), input: [
+      ...body(false).input,
+      { type: "web_search_call", id: "ws_partial", status: "in_progress", encrypted_content: "opaque-marker", private_field: "private-marker", action: {
+        type: "future_action", query: { bad: "invalid-query-marker" }, queries: ["valid query", 7, null],
+        url: 7, pattern: "literal\nfind", sources: [null, "invalid-source-marker", { type: "url", url: "https://example.com/source", title: "Source", secret: "source-secret-marker" }],
+        extra: "unknown-action-marker",
+      } },
+      { type: "web_search_call", action: null },
+      { type: "compaction_trigger" },
+    ] };
+    let outbound: Record<string, any> | undefined;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      outbound = JSON.parse(String(init?.body));
+      return upstreamCompletion(outbound!);
+    }) as typeof fetch;
+    const response = await handleResponses(request(input, "manual"), config(), { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+    const notes = outbound!.input.filter((item: any) => item.content?.[0]?.text?.startsWith("Historical hosted web search metadata"));
+    expect(notes).toHaveLength(2);
+    expect(JSON.parse(notes[0].content[0].text.split("\n").slice(1).join("\n"))).toEqual({
+      status: "in_progress", action: { type: "future_action", queries: ["valid query"], pattern: "literal\nfind",
+        sources: [{ type: "url", url: "https://example.com/source", title: "Source" }] },
+    });
+    expect(JSON.parse(notes[1].content[0].text.split("\n").slice(1).join("\n"))).toEqual({});
+    for (const marker of ["opaque-marker", "private-marker", "invalid-query-marker", "invalid-source-marker", "source-secret-marker", "unknown-action-marker", "ws_partial"]) {
+      expect(JSON.stringify(outbound!.input)).not.toContain(marker);
+    }
+  });
 
   test.each(["ordinary", "native-v1", "native-v2"])("%s retains hosted search history", async mode => {
     const settings = config();
