@@ -1,7 +1,7 @@
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
-import { loadConfig, mutatePersistedConfig, saveConfig } from "../config";
+import { getDefaultConfig, initializePersistedConfigIfMissing, loadConfig, mutatePersistedConfig, observeInitialConfigState, saveConfig } from "../config";
 import { resolveProviderApiKey } from "../providers/key-store";
 import { projectEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
@@ -1562,7 +1562,20 @@ export async function runLogin(
   if (!def) throw new UnsupportedOAuthProviderError(provider);
   const loadLatestConfig = deps.loadConfig ?? loadConfig;
   const saveLatestConfig = deps.saveConfig ?? saveConfig;
-  const preflightConfig = provider !== "chatgpt" ? loadLatestConfig() : undefined;
+  const initialBConfigState = provider === "anthropic2" ? observeInitialConfigState() : undefined;
+  let preflightConfig = provider !== "chatgpt" ? loadLatestConfig() : undefined;
+  if (provider === "anthropic2" && preflightConfig && initialBConfigState === "missing") {
+    // Explicit first-login onboarding may create the ordinary defaults, without a B row.
+    // The create-only owner never replaces a concurrent file. Reload its winner before login;
+    // once the browser starts, later deletion remains a publication refusal, not recreation.
+    if (initializePersistedConfigIfMissing(getDefaultConfig()) === "invalid") {
+      throw new OAuthProviderPublicationError(provider);
+    }
+    preflightConfig = loadLatestConfig();
+  }
+  if (provider === "anthropic2" && observeInitialConfigState() !== "exists") {
+    throw new OAuthProviderPublicationError(provider);
+  }
   if (preflightConfig) {
     assertAnthropicInstanceLoginConfig(preflightConfig, provider);
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(

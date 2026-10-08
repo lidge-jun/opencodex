@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getConfigPath, loadConfig, saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../../src/config";
+import { getConfigPath, getDefaultConfig, loadConfig, saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../../src/config";
+import * as configModule from "../../src/config";
 import { configuredAnthropicInstance, type AnthropicInstanceId } from "../../src/providers/anthropic-instance";
-import { OAUTH_PROVIDERS, reconcileOAuthProviders, resolveModelsAuthToken, runLogin, upsertOAuthProvider } from "../../src/oauth";
+import { OAUTH_PROVIDERS, OAuthProviderPublicationError, reconcileOAuthProviders, resolveModelsAuthToken, runLogin, upsertOAuthProvider } from "../../src/oauth";
 import { AnthropicOAuthFlow, loginAnthropic } from "../../src/oauth/anthropic";
 import { bindAnthropicIdentity } from "../../src/oauth/anthropic-identity";
 import { AnthropicCrossInstanceDuplicateError, AnthropicInstanceCollisionError, AnthropicLocalCliImportError } from "../../src/oauth/store-anthropic-instance";
@@ -53,6 +54,76 @@ function credential(name: string, overrides: Partial<OAuthCredentials> = {}): OA
     accountId: `synthetic-${name}-id`, source: "oauth", ...overrides };
 }
 const directions: readonly [AnthropicInstanceId, AnthropicInstanceId][] = [["anthropic", "anthropic2"], ["anthropic2", "anthropic"]];
+
+test("first B browser login creates missing defaults without selecting B as the default", async () => {
+  await saveCredential("anthropic", credential("preserved-a"));
+  const aBefore = structuredClone(getAccountSet("anthropic"));
+  unlinkSync(getConfigPath());
+  const defaults = getDefaultConfig();
+  const login = spyOn(OAUTH_PROVIDERS.anthropic2!, "login").mockImplementation(async () => {
+    expect(existsSync(getConfigPath())).toBe(true);
+    expect(loadConfig().providers.anthropic2).toBeUndefined();
+    return credential("first-b");
+  });
+  try {
+    await runLogin("anthropic2", {});
+    expect(loadConfig().defaultProvider).toBe(defaults.defaultProvider);
+    expect(loadConfig().providers.anthropic2!.anthropicOAuthInstance).toBe("anthropic2");
+    expect(getAccountSet("anthropic")).toEqual(aBefore);
+    expect(getAccountSet("anthropic2")!.accounts).toHaveLength(1);
+  } finally { login.mockRestore(); }
+});
+
+test("a concurrent initial config winner is rechecked before the B browser opens", async () => {
+  unlinkSync(getConfigPath());
+  const initialize = configModule.initializePersistedConfigIfMissing;
+  const winner = baseConfig();
+  winner.providers.anthropic2 = { adapter: "openai-chat", authMode: "key",
+    baseUrl: "https://custom.example.test/v1", apiKey: "synthetic-custom-key" };
+  const hook = spyOn(configModule, "initializePersistedConfigIfMissing").mockImplementation(candidate => {
+    saveConfig(winner);
+    return initialize(candidate);
+  });
+  const login = spyOn(OAUTH_PROVIDERS.anthropic2!, "login");
+  try {
+    await expect(runLogin("anthropic2", {})).rejects.toBeInstanceOf(AnthropicInstanceCollisionError);
+    expect(login).not.toHaveBeenCalled();
+    expect(loadConfig().providers.anthropic2!.apiKey).toBe("synthetic-custom-key");
+    expect(getAccountSet("anthropic2")).toBeNull();
+  } finally { hook.mockRestore(); login.mockRestore(); }
+});
+
+test("deleting first-login defaults while the browser runs does not recreate the config", async () => {
+  unlinkSync(getConfigPath());
+  const login = spyOn(OAUTH_PROVIDERS.anthropic2!, "login").mockImplementation(async () => {
+    expect(existsSync(getConfigPath())).toBe(true);
+    unlinkSync(getConfigPath());
+    return credential("orphan-b");
+  });
+  try {
+    await expect(runLogin("anthropic2", {})).rejects.toBeInstanceOf(OAuthProviderPublicationError);
+    expect(existsSync(getConfigPath())).toBe(false);
+    // The caller receives publication failure; the orphan is retained for explicit cleanup.
+    expect(getAccountSet("anthropic2")!.accounts).toHaveLength(1);
+  } finally { login.mockRestore(); }
+});
+
+test("an existing config deleted during preflight load is not republished from the stale snapshot", async () => {
+  const login = spyOn(OAUTH_PROVIDERS.anthropic2!, "login");
+  const initialize = spyOn(configModule, "initializePersistedConfigIfMissing");
+  try {
+    await expect(runLogin("anthropic2", {}, undefined, { loadConfig: () => {
+      const old = loadConfig();
+      unlinkSync(getConfigPath());
+      return old;
+    } })).rejects.toBeInstanceOf(OAuthProviderPublicationError);
+    expect(existsSync(getConfigPath())).toBe(false);
+    expect(initialize).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+    expect(getAccountSet("anthropic2")).toBeNull();
+  } finally { initialize.mockRestore(); login.mockRestore(); }
+});
+
 const writers = ["save", "account", "upsert"] as const;
 async function register(writer: typeof writers[number], instance: AnthropicInstanceId, value: OAuthCredentials) {
   if (writer === "save") return saveCredentialWithReceipt(instance, value);

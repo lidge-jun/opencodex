@@ -6,6 +6,33 @@ on:
 permissions:
   contents: read
 jobs:
+  old-version:
+    if: github.event.pull_request.head.ref == 'codex/anthropic2-account-pool'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner
+      - name: Checkout pinned pre-feature source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: 6a7632db2a85c359da9feac976180450ebb42c60
+          path: .tmp/anthropic-old
+      - run: bun install --frozen-lockfile
+        working-directory: .tmp/anthropic-old
+      - name: Observe old-version auth and config preservation
+        run: bun tests/fixtures/anthropic-instance-old-version.ts .tmp/anthropic-old .tmp/state11/receipt.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: anthropic2-old-version-${{ github.event.pull_request.head.sha }}
+          path: .tmp/state11/receipt.json
+          if-no-files-found: error
   contracts:
     if: github.event.pull_request.head.ref == 'codex/anthropic2-account-pool'
     runs-on: ubuntu-latest
