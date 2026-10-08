@@ -40,15 +40,26 @@ export function standaloneGuiDistCandidates(executableDir: string, platform: Nod
   return candidates;
 }
 
-export function findGuiDist(
-  standaloneDir: string | null = isStandaloneBinary() ? standaloneRoot() : null,
-  platform: NodeJS.Platform = process.platform,
-): string | null {
+/** Overrides for tests; production callers pass nothing and get this process's own layout. */
+export interface GuiDistLookup {
+  /** Directory holding a compiled `ocx`, or null when running from source. */
+  standaloneDir?: string | null;
+  platform?: NodeJS.Platform;
+  /** Directory of this module; a source checkout's `gui/dist` is resolved from it. */
+  moduleDir?: string;
+}
+
+/** Lookup only: checks for `index.html` and never creates, copies or builds anything. */
+export function findGuiDist(lookup: GuiDistLookup = {}): string | null {
+  const standaloneDir = lookup.standaloneDir === undefined
+    ? (isStandaloneBinary() ? standaloneRoot() : null)
+    : lookup.standaloneDir;
+  const moduleDir = lookup.moduleDir ?? import.meta.dir;
   const candidates = [
     process.env.OPENCODEX_GUI_DIST,
-    ...(standaloneDir === null ? [] : standaloneGuiDistCandidates(standaloneDir, platform)),
-    join(import.meta.dir, "..", "..", "gui", "dist"),
-    join(import.meta.dir, "..", "..", "..", "gui", "dist"),
+    ...(standaloneDir === null ? [] : standaloneGuiDistCandidates(standaloneDir, lookup.platform)),
+    join(moduleDir, "..", "..", "gui", "dist"),
+    join(moduleDir, "..", "..", "..", "gui", "dist"),
   ].filter((candidate): candidate is string => Boolean(candidate));
   for (const c of candidates) {
     if (existsSync(join(c, "index.html"))) return c;
