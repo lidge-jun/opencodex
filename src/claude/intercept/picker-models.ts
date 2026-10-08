@@ -7,7 +7,8 @@ import { dirname } from "node:path";
 import { nativeOpenAiContextWindow, type NativeContextLimitsInput } from "../../codex/catalog";
 import type { OcxClaudeDesktopProfile } from "../../types";
 import { aliasForRoute, claudeCodeNativeAlias } from "../alias";
-import { AUTO_CONTEXT_OFF, stripOneMillionMarker, withOneMillionMarker } from "../context-windows";
+import { AUTO_CONTEXT_OFF, stripOneMillionMarker, UNPAIRED_AUTO_CONTEXT, withOneMillionMarker } from "../context-windows";
+import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { activeDesktop3pAlias, displayModelId, resolveDesktop3pAlias, type Desktop3pRoutedModel } from "../desktop-3p";
 import { reconcileDesktopProfile, renderDesktopProfile, type DesktopProfileModel } from "../desktop-profile";
 import type { PickerModelEntry } from "./picker-bootstrap";
@@ -46,9 +47,14 @@ function splitRoute(route: string): { provider: string; id: string } {
   return { provider: route.slice(0, slash), id: route.slice(slash + 1) };
 }
 
-/** Desktop runners do not inherit the proxy's compaction env: mark only real >=1M windows. */
-function pickerSelector(alias: string, contextWindow: number | undefined): string {
-  return withOneMillionMarker(alias, contextWindow === undefined ? {} : { [alias]: contextWindow }, AUTO_CONTEXT_OFF)!;
+/**
+ * Desktop runners do not inherit the proxy's compaction env, so a long window (>= the default
+ * compact window) is marked on the strength of the `prompt is too long` recovery instead
+ * (devlog/_plan/261009_claude_1m_default/020). Anthropic rows of either pool need a real 1M.
+ */
+function pickerSelector(alias: string, contextWindow: number | undefined, provider: string): string {
+  const mode = isAnthropicInstanceId(provider) ? AUTO_CONTEXT_OFF : UNPAIRED_AUTO_CONTEXT;
+  return withOneMillionMarker(alias, contextWindow === undefined ? {} : { [alias]: contextWindow }, mode)!;
 }
 
 export function buildPickerModels(input: PickerRouteInput): PickerModelEntry[] {
@@ -61,7 +67,7 @@ export function buildPickerModels(input: PickerRouteInput): PickerModelEntry[] {
     const alias = provider === "native" ? claudeCodeNativeAlias(id) : aliasForRoute(provider, id);
     if (!alias || seen.has(alias)) continue;
     seen.add(alias);
-    out.push({ id: pickerSelector(alias, model.contextWindow), name: model.label,
+    out.push({ id: pickerSelector(alias, model.contextWindow, provider), name: model.label,
       ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }) });
   }
   return out;
@@ -81,7 +87,7 @@ export function buildCliPickerModels(input: PickerRouteInput): PickerModelEntry[
     const alias = activeDesktop3pAlias(provider, id);
     if (seen.has(alias) || resolveDesktop3pAlias(alias) !== model.route) continue;
     seen.add(alias);
-    out.push({ id: pickerSelector(alias, model.contextWindow), name: model.label,
+    out.push({ id: pickerSelector(alias, model.contextWindow, provider), name: model.label,
       description: `opencodex · ${model.route}`, route: model.route,
       ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }) });
   }

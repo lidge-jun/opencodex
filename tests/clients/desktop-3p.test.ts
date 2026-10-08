@@ -212,19 +212,18 @@ describe("Claude Desktop 3P models", () => {
   });
 
   test("an openai context cap reaches the Desktop writer, not just the dashboard", () => {
-    // No surviving native advertises a 1M window (gpt-5.4 was the last). Sol's
-    // opt-in ceiling is 922k, so even a 1M provider cap must not invent
-    // supports1m — nativeOpenAiContextWindow clamps it under the threshold.
-    // A 272k cap has to take the same path, or the written Desktop config
-    // would promise a window the proxy will not serve (#854's effective-window
+    // Sol's default window is 272k: no 1M. A 1M provider cap opts it into its 922k
+    // ceiling, a long window, so the written config now offers and prefers 1M; an
+    // overflow comes back as `prompt is too long`, which Claude compacts on (261009 020).
+    // A 272k cap has to take the same path as the default (#854's effective-window
     // contract).
     const uncapped = generateDesktop3pModels(["gpt-5.6-sol"], []);
     expect(uncapped[0]!.supports1m).toBeUndefined();
     expect(uncapped[0]!.prefer1m).toBeUndefined();
 
     const optedIn = generateDesktop3pModels(["gpt-5.6-sol"], [], undefined, 1_000_000);
-    expect(optedIn[0]!.supports1m).toBeUndefined();
-    expect(optedIn[0]!.prefer1m).toBeUndefined();
+    expect(optedIn[0]!.supports1m).toBe(true);
+    expect(optedIn[0]!.prefer1m).toBe(true);
 
     const capped = generateDesktop3pModels(["gpt-5.6-sol"], [], undefined, 272_000);
     expect(capped[0]!.supports1m).toBeUndefined();

@@ -15,8 +15,10 @@ import { desktop3pAlias } from "./desktop-3p";
 import { nativeOpenAiContextWindow, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
 import { ANTHROPIC_MODEL_CONTEXT_WINDOWS } from "../providers/registry/model-seeds";
 import type { OcxClaudeCodeConfig } from "../types";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
+import { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR, ONE_MILLION } from "./long-context";
 
-const ONE_MILLION = 1_000_000;
+export { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR } from "./long-context";
 
 /**
  * The native id each Claude Code tier alias resolves to (2.1.282: `--model opus` sends
@@ -27,21 +29,6 @@ const ONE_MILLION = 1_000_000;
  */
 const CLAUDE_CODE_NATIVE_TIERS = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5", fable: "claude-fable-5-1" } as const;
 
-/**
- * Auto-context defaults (devlog 260712 020, user-approved).
- *
- * The compact window is the token count at which Claude Code starts compacting, and it is
- * also the floor `shouldMarkOneMillion` uses — a model may only carry the marker if it can
- * host this window. 350,000 was chosen when the widest native row advertised 372,000.
- *
- * It now matches the auto-compaction limit the Codex catalog ships for the same models
- * (`nativeAutoCompactLimit`: 829,800 against the 922,000 native window). Leaving the two
- * apart meant one model compacting at 350k under Claude Code and at 829,800 under Codex.
- * The value stays clear of the measured 922,000 ceiling by ~92k, so compaction still has
- * room to run before the upstream refuses.
- */
-export const AUTO_COMPACT_WINDOW_DEFAULT = 829_800;
-export const AUTO_CONTEXT_FLOOR = 200_000;
 /** Binary-verified accepted range for CLAUDE_CODE_AUTO_COMPACT_WINDOW (2.1.207: pSo=1e5, yDs=1e6). */
 export const AUTO_COMPACT_WINDOW_MIN = 100_000;
 export const AUTO_COMPACT_WINDOW_MAX = ONE_MILLION;
@@ -62,6 +49,13 @@ export interface AutoContextMode {
 }
 
 export const AUTO_CONTEXT_OFF: AutoContextMode = { enabled: false, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT };
+
+/**
+ * Marking mode for surfaces whose runner may not inherit the compaction env (Desktop pickers,
+ * discovery, generated subagents). shouldMarkOneMillion under it equals isLongContextWindow
+ * (long-context.ts); kept as a mode so the existing marker helpers serve every surface.
+ */
+export const UNPAIRED_AUTO_CONTEXT: AutoContextMode = { enabled: true, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT };
 
 interface AutoContextConfigSlice {
   autoContext?: boolean;
@@ -191,12 +185,12 @@ export function buildClaudeContextWindows(
   }
   // Anthropic passthrough guard (audit 021 #3): canonical claude ids ride the
   // subscription passthrough — marking a sub-1M one would strap [1m]/1M-beta onto
-  // a model that cannot host it. Register anthropic rows only at >=1M.
+  // a model that cannot host it. Register anthropic rows (either pool) only at >=1M.
   const registrable = routedModels.filter(
     m =>
       typeof m.contextWindow === "number" &&
       m.contextWindow > 0 &&
-      !(m.provider === "anthropic" && m.contextWindow < ONE_MILLION),
+      !(isAnthropicInstanceId(m.provider) && m.contextWindow < ONE_MILLION),
   );
   // Bare routed ids are registered only when unambiguous across providers (audit
   // 021 #5) — natives are registered first, so a native slug always wins the bare

@@ -25,6 +25,7 @@ import {
 import { nativeOpenAiContextWindow, type NativeContextLimitsInput } from "../codex/catalog";
 import { localAdmissionToken, localInferenceDestination } from "../lib/local-destinations";
 import { assertDesktop3pModelsValid } from "./desktop-3p-guard";
+import { claudeSurfaceSupportsOneMillion, ONE_MILLION } from "./long-context";
 
 export interface Desktop3pModelEntry {
   name: string;
@@ -56,12 +57,12 @@ export interface Desktop3pRoutedModel {
 }
 
 /**
- * 1M-context eligibility, shared with the Desktop DTO so the dashboard's 1M chip can
- * never disagree with what the writer emits. The DTO imports this from here — keeping
- * the constant in this module avoids a cycle, since shared.ts already reads
- * claude/desktop-profile.
+ * The genuine-1M threshold real Anthropic rows still need. Every other row follows the
+ * long-window rule; the writer, the profile renderer and the dashboard DTO all decide through
+ * `claudeSurfaceSupportsOneMillion` (long-context.ts), so the 1M chip cannot disagree with the
+ * written config.
  */
-export const DESKTOP_SUPPORTS_1M_THRESHOLD = 1_000_000;
+export const DESKTOP_SUPPORTS_1M_THRESHOLD = ONE_MILLION;
 
 /** CLI arg parsing for `ocx claude desktop` mode flags (mutually exclusive). */
 export function parseDesktop3pModeArgs(flags: string[]): { mode: Desktop3pConfigMode } | { error: string } {
@@ -252,7 +253,7 @@ function collectDesktop3pModels(
   for (const { provider, id, contextWindow } of candidates) {
     const route = `${provider}/${id}`;
     const alias = desktop3pAlias(provider, id);
-    const supports1m = typeof contextWindow === "number" && contextWindow >= DESKTOP_SUPPORTS_1M_THRESHOLD
+    const supports1m = claudeSurfaceSupportsOneMillion(provider, contextWindow)
       ? { supports1m: true as const }
       : {};
     if (alias === id) {

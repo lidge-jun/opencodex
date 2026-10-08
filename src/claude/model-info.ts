@@ -19,7 +19,8 @@ import { orderForModelPicker, catalogModelEfforts, nativeEffortClamp, nativeOpen
 import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
 import { cursorFastIdFor } from "../adapters/cursor/catalog";
 import { desktop3pAlias } from "./desktop-3p";
-import { AUTO_CONTEXT_OFF, type AutoContextMode } from "./context-windows";
+import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, UNPAIRED_AUTO_CONTEXT, type AutoContextMode } from "./context-windows";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 
 const MODEL_INFO_CREATED_AT = "2026-01-01T00:00:00Z";
 const ANTHROPIC_EFFORT_RUNGS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -144,23 +145,25 @@ export function buildAnthropicModelInfos(
         : aliasForRoute(m.provider, m.id);
     }),
   ]);
-  // [1m] picker variant (devlog 260712 B1): Claude Code accounts exactly 1M for ids
-  // carrying the marker (2.1.207 binary: /\[1m\]/i → 1e6, compaction preserved), so
-  // ONLY models with an authoritative >=1M window get a second selectable row —
-  // the auto-context widening that let a 372K route carry the marker (and be
-  // over-filled) is the #854 defect and does not come back. Guards (audit R1#11):
-  // same dedupe set, never double-suffix.
+  // [1m] picker variant (devlog 260712 B1; widened in devlog/_plan/261009_claude_1m_default/020):
+  // Claude Code accounts exactly 1M for ids carrying the marker (2.1.207 binary: /\[1m\]/i -> 1e6,
+  // compaction preserved). A discovery client may lack CLAUDE_CODE_AUTO_COMPACT_WINDOW, so the
+  // rule is the fixed unpaired one (long-context.ts), not the configurable launch compact window:
+  // a custom 350k window must not re-admit a 372k route (#854). The server's auto mode only turns
+  // widening off (autoContext: false / maxContextTokens), falling back to >= 1M. Base and Fast
+  // rows stay unmarked: this list is a choice list. Guards (audit R1#11): same dedupe set, never
+  // double-suffix.
+  const variantMode = auto.enabled ? UNPAIRED_AUTO_CONTEXT : AUTO_CONTEXT_OFF;
   const push1mVariant = (
     base: AnthropicModelInfo,
     contextWindow: number | undefined,
     maxInputTokens?: number,
     selectorId?: string,
+    mode: AutoContextMode = variantMode,
   ) => {
-    // The [1m] marker makes Claude Code account 1e6 tokens for the row, so it
-    // may only name models whose AUTHORITATIVE effective window is >= 1M —
-    // never the auto-context widening, which would mark a 372K route and have
-    // Claude Code over-fill it (the #854 defect).
-    if (contextWindow === undefined || contextWindow < ONE_MILLION) return;
+    // A window >= 1M always earns the row; a long window earns it under the unpaired rule,
+    // because an overflow is answered as `prompt is too long`, which Claude Code compacts on.
+    if (!shouldMarkOneMillion(contextWindow, mode)) return;
     if (base.id.includes("[1m]")) return;
     const id = selectorId ?? `${base.id}[1m]`;
     if (seen.has(id)) return;
@@ -170,9 +173,9 @@ export function buildAnthropicModelInfos(
     // (measured — see devlog/_plan/260817_native_gpt56_1m_context/001_measurement_evidence.md).
     // Advertising the flat 1e6 there would invite mid-session context_length_exceeded, so the
     // variant reports whichever of the two is smaller.
-    const advertised = typeof maxInputTokens === "number" && maxInputTokens > 0
-      ? Math.min(ONE_MILLION, maxInputTokens)
-      : ONE_MILLION;
+    // A long window under 1M must not be advertised as 1e6 input either.
+    const ceiling = typeof maxInputTokens === "number" && maxInputTokens > 0 ? maxInputTokens : contextWindow;
+    const advertised = typeof ceiling === "number" && ceiling > 0 ? Math.min(ONE_MILLION, ceiling) : ONE_MILLION;
     out.push({ ...base, id, display_name: `${base.display_name} · 1M`, max_input_tokens: advertised });
   };
   /**
@@ -251,7 +254,7 @@ export function buildAnthropicModelInfos(
       && listedModelId.startsWith("claude-fable-")
       ? `${claudeCodeNativeAlias(listedModelId)}[1m]`
       : undefined;
-    push1mVariant(info, m.contextWindow, routedMaxInput, oneMillionSelector);
+    push1mVariant(info, m.contextWindow, routedMaxInput, oneMillionSelector, isAnthropicInstanceId(m.provider) ? AUTO_CONTEXT_OFF : variantMode);
     // The whole model is passed, not a (provider, id) pair: a combo row lives in its own
     // namespace with no config.providers entry, so the caller classifies it from the
     // aggregated supportsServiceTier the row already carries.
