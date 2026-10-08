@@ -841,7 +841,10 @@ export async function preparePassthroughExchange(
       }),
       route.provider.authMode === "forward",
     );
-      return (report.execute ? report.execute(run) : run()).finally(() => { if (started) report(1); report.close?.(); });
+      return (report.execute ? report.execute(run) : run()).finally(() => {
+        try { if (started) report(1); }
+        finally { report.close?.(); }
+      });
     };
     /**
      * Refuse a built body that exceeds the operator's configured ceiling, before it is sent.

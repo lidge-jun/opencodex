@@ -550,8 +550,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                 { providerName: route.providerName, provider: activeProvider },
               );
             } finally {
-              if (physicalBudget.spendEnforced) spendReport(1);
-              spendReport.close?.(); releaseFamily();
+              try { if (physicalBudget.spendEnforced) spendReport(1); }
+              finally {
+                try { spendReport.close?.(); }
+                finally { releaseFamily(); }
+              }
             }
             if (ownsBearer && snapshot) {
               try {

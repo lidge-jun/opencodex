@@ -458,39 +458,42 @@ export async function runNativeChatAttempt(
               const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
                 poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
               }), execution.comboDispatchPermit);
-              // Capture this request's spend policy at its first physical boundary, including
-              // observe-only starts; later configuration changes belong to later requests.
-              if (spendReport.beforeSend && !spendReport.beforeSend()) {
-                spendReport.close?.();
-                if ((logCtx.spendTracker as { refusals?: number } | undefined)?.refusals) throw new NativeChatSpendRefusal();
-                throw new SendBudgetExhaustedError();
-              }
-              if (!physicalBudget.spendEnforced && sendBudget) {
-                // Backstop for sends the helper cannot see coming (a reset replay). The first
-                // report settles the combo's booking; each later one is charged and booked.
-                if (physicalSends > 0 && sendBudget.remainingBaseSends(sharedSendCap) <= 0) {
-                  throw new SendBudgetExhaustedError(safeHostLabel(request.url));
-                }
-                physicalSends += 1;
-                reportDispatchSends(sendBudget, 1, execution.comboDispatchPermit);
-              } else if (!physicalBudget.spendEnforced && !spendTracker?.charge()) throw new NativeChatSpendRefusal();
-              noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
-              // A reselected provider transport is still a physical send: the connection policy
-              // and manual-redirect ownership wrap the selected implementation (#4992).
               let dispatched: Response;
-              try { dispatched = await sendWithConnectionPolicy(
-                (activeProvider as OcxProviderTransport).fetch ?? execute,
-                request.url,
-                applyUpstreamRecoveryInit({
-                  ...init, method: request.method, headers, body: request.body,
-                }, transportRecovery),
-                // Reselection can replace the provider transport and the wire shape, so the
-                // egress route is bound to the provider this send actually uses. Omitting it
-                // here would let a provider transport bypass its configured route entirely,
-                // because that transport wins over the executor that carries the binding.
-                { providerName: route.providerName, provider: activeProvider },
-              );
-              } finally { if (physicalBudget.spendEnforced) spendReport(1); spendReport.close?.(); }
+              try {
+                // Capture this request's spend policy at its first physical boundary, including
+                // observe-only starts; later configuration changes belong to later requests.
+                if (spendReport.beforeSend && !spendReport.beforeSend()) {
+                  if ((logCtx.spendTracker as { refusals?: number } | undefined)?.refusals) throw new NativeChatSpendRefusal();
+                  throw new SendBudgetExhaustedError();
+                }
+                if (!physicalBudget.spendEnforced && sendBudget) {
+                  // Backstop for sends the helper cannot see coming (a reset replay). The first
+                  // report settles the combo's booking; each later one is charged and booked.
+                  if (physicalSends > 0 && sendBudget.remainingBaseSends(sharedSendCap) <= 0) {
+                    throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+                  }
+                  physicalSends += 1;
+                  reportDispatchSends(sendBudget, 1, execution.comboDispatchPermit);
+                } else if (!physicalBudget.spendEnforced && !spendTracker?.charge()) throw new NativeChatSpendRefusal();
+                noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+                // A reselected provider transport is still a physical send: the connection policy
+                // and manual-redirect ownership wrap the selected implementation (#4992).
+                dispatched = await sendWithConnectionPolicy(
+                  (activeProvider as OcxProviderTransport).fetch ?? execute,
+                  request.url,
+                  applyUpstreamRecoveryInit({
+                    ...init, method: request.method, headers, body: request.body,
+                  }, transportRecovery),
+                  // Reselection can replace the provider transport and the wire shape, so the
+                  // egress route is bound to the provider this send actually uses. Omitting it
+                  // here would let a provider transport bypass its configured route entirely,
+                  // because that transport wins over the executor that carries the binding.
+                  { providerName: route.providerName, provider: activeProvider },
+                );
+              } finally {
+                try { if (physicalBudget.spendEnforced) spendReport(1); }
+                finally { spendReport.close?.(); }
+              }
               if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
               return dispatched;
             },

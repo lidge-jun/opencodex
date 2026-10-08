@@ -850,6 +850,12 @@ export function createSpendReservationLedger(options: {
     }
   };
 
+  // Already-sent debt owns its record before I/O, including an owner error that propagates.
+  const appendReported = (record: JournalRecord): void => {
+    pendingRecords.push(record);
+    if (pendingRecords.length === 1 && append(record)) pendingRecords.shift();
+  };
+
   const flushPending = (): boolean => {
     while (pendingRecords.length > 0) {
       if (!append(pendingRecords[0]!)) return false;
@@ -1208,16 +1214,19 @@ export function createSpendReservationLedger(options: {
       assertOwnedAccounting?.();
       const owned = seeds.get(seed);
       const send = aliasFor("send", request.sendId);
-      if (!owned || owned.abandoned || reservations.has(send) || seedBySend.has(send)
-        || owned.targets.some(ref => !scopes.has(scopeKey(ref.scope, ref.alias)))) return false;
+      if (!owned || owned.abandoned || owned.targets.some(ref => !scopes.has(scopeKey(ref.scope, ref.alias)))) return false;
       const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
+      const existing = reservations.get(send);
+      if (existing || seedBySend.has(send)) {
+        return seedBySend.get(send) === owned && existing !== undefined && isLive(existing.status) && existing.tokens === tokens;
+      }
       const at = now();
       const record: JournalRecord = { v: 1, kind: "reserve", send, targets: [...owned.targets], tokens, at };
-      // The physical send already happened. Keep its debt even if storage is temporarily unavailable.
-      if (pendingRecords.length > 0 || !append(record)) pendingRecords.push(record);
+      // Enrollment is stable before an owner error can escape the journal write.
       applyReserve(send, owned.targets, tokens, at);
       owned.sends.add(send);
       seedBySend.set(send, owned);
+      appendReported(record);
       compact(at);
       return true;
     },
@@ -1264,15 +1273,16 @@ export function createSpendReservationLedger(options: {
       let closed = false;
       return { close() {
         if (closed) return;
-        assertOwnedAccounting?.();
         closed = true;
         reporters -= 1;
         if (owner) {
           const remaining = activeReporters(owner) - 1;
           if (remaining === 0) ownerReporters.delete(owner); else ownerReporters.set(owner, remaining);
         }
-        retryCleanup();
-        if (reporters === 0) { for (const resolve of drainWaiters) resolve(); drainWaiters.clear(); }
+        try { assertOwnedAccounting?.(); retryCleanup(); }
+        finally {
+          if (reporters === 0) { for (const resolve of drainWaiters) resolve(); drainWaiters.clear(); }
+        }
       } };
     },
     deferCleanup(owner, cleanup) {
@@ -1376,14 +1386,15 @@ export function createSpendReservationLedger(options: {
       assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
+      if (reservation?.status === "dispatched" && seedForSend(send)) return true;
       if (!reservation || reservation.status !== "open") return false;
       repairReservePrefix(send, reservation);
       const at = now();
       applyDispatch(send, at);
       const record: JournalRecord = { v: 1, kind: "dispatch", send, at };
       const retained = seedForSend(send) || retainedOrdinary.has(send);
-      if (retained && pendingRecords.length > 0) pendingRecords.push(record);
-      else if (!append(record) && retained) pendingRecords.push(record);
+      if (retained) appendReported(record);
+      else append(record);
       return true;
     },
 

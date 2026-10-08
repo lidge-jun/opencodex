@@ -1026,14 +1026,21 @@ export async function handleResponsesCompact(
     // `kind === "pool"` and a main-pool credential left it false -- so 401 then 429 really did
     // reach five. The single sends spend the base allowance first and then the one shared
     // final-recovery reserve, which is the same rule the Responses path follows.
-    const sendSingleCompactAttempt = (
+    const sendSingleCompactAttempt = async (
       doFetch: () => Promise<Response>,
     ): Promise<Response> => {
       if (sendBudget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS) > 0) {
         const report = createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? route.providerName,
           identityId: logCtx.accountLogLabel }));
-        if (report.beforeSend?.() === false) { report.close?.(); return Promise.reject(new SendBudgetExhaustedError(safeHostLabel(compactUrl))); }
-        return doFetch().finally(() => { report(1); report.close?.(); });
+        let started = false;
+        try {
+          if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+          started = true;
+          return await doFetch();
+        } finally {
+          try { if (started) report(1); }
+          finally { report.close?.(); }
+        }
       }
       const decision = sendBudget.reserveDispatch({
         sendClass: "auth-recovery",

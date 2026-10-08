@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } from "../../src/lib/spend-reservation-ledger";
 import { createRequestExecutionBudget, deriveRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY, createPhysicalSendReporter } from "../../src/lib/request-execution-budget";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
@@ -21,6 +21,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 import { acquireSpendLedgerServerLifecycle } from "../../src/server/index/spend-ledger-lifecycle";
 import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { SpendLedgerOwnerError } from "../../src/lib/spend-ledger-owner";
 
 function fixture(enforced = true, capacity = 8) {
   const lines: string[] = [];
@@ -358,6 +359,51 @@ for (const kind of executorKinds) {
     const records = (await Bun.file(join(home, "spend-ledger.jsonl")).text()).trim().split("\n").map(line => JSON.parse(line));
     expect(records.filter(record => record.kind === "reserve")).toHaveLength(1);
     expect(ledger.snapshot("pool", executorPool(kind))).toMatchObject({ reserved: 0, settled: 3 });
+  }));
+}
+
+for (const kind of ["chat", "messages"] as const) {
+  for (const phase of ["admission", "report"] as const) test(`${kind} closes its shutdown reporter after an owner error during ${phase}`, async () => withExecutorHome(async (ledger, home) => {
+    const leases: Array<{ close(): void }> = [];
+    const register = ledger.registerReporter.bind(ledger);
+    const registrations = spyOn(ledger, "registerReporter").mockImplementation(owner => {
+      const lease = register(owner);
+      leases.push(lease);
+      return lease;
+    });
+    const error = new SpendLedgerOwnerError("SPEND_LEDGER_OWNER_UNAVAILABLE", "injected owner refusal");
+    const fault = phase === "admission"
+      ? spyOn(ledger, "reserveSeed").mockImplementation(() => { throw error; })
+      : spyOn(ledger, "markDispatched").mockImplementation(() => { throw error; });
+    const lifecycle = acquireSpendLedgerServerLifecycle(home);
+    const listener = lifecycle.track({ stop: async () => {} });
+    let stopping: Promise<void> | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      let wires = 0;
+      const wire = (async () => { wires++; return executorSuccess(kind); }) as typeof fetch;
+      globalThis.fetch = wire;
+      const ctx: RequestLogContext = { model: "model", provider: "P", spendPoolId: "P", spendInputEstimateTokens: 2, spendOutputCeilingTokens: 1 };
+      const outcome = await Promise.allSettled([invokeExecutor(kind, executorConfig(kind, wire), ctx)]);
+      if (outcome[0]!.status === "fulfilled") expect(outcome[0]!.value.status).toBeGreaterThanOrEqual(400);
+      expect(wires).toBe(phase === "admission" ? 0 : 1);
+      expect(leases).toHaveLength(1);
+      fault.mockRestore();
+      ledger.prune();
+      let stopped = false;
+      stopping = Promise.resolve(listener.stop()).then(() => { stopped = true; });
+      await Promise.race([stopping, new Promise<void>(resolve => { timeout = setTimeout(resolve, 100); })]);
+      expect(stopped).toBe(true);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      fault.mockRestore();
+      // Keep a failing regression from retaining the fixture's ownership. This happens only
+      // after the assertion; production closure must be what lets shutdown complete above.
+      for (const lease of leases) lease.close();
+      await stopping;
+      registrations.mockRestore();
+      lifecycle.release();
+    }
   }));
 }
 

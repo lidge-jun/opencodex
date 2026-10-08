@@ -418,3 +418,131 @@ for (const retirement of ["rebind", "refund"] as const) {
     });
   }
 }
+
+for (const phase of ["first-dispatch", "second-reserve"] as const) {
+  for (const failure of ["append", "owner"] as const) {
+    test(`physical report recovers ${phase} ${failure} failure without another settlement`, async () => {
+      const disk = spendTestJournal();
+      const append = disk.append.bind(disk);
+      let failing = false;
+      const ownerError = new SpendLedgerOwnerError("SPEND_LEDGER_OWNER_UNAVAILABLE", "injected report failure");
+      disk.append = line => {
+        const kind = JSON.parse(line).kind;
+        if (failing && kind === (phase === "first-dispatch" ? "dispatch" : "reserve")) {
+          throw failure === "owner" ? ownerError : new Error("append unavailable");
+        }
+        append(line);
+      };
+      const policy = spendTestPolicy({ canonicalProviderIds: ["P"], pool: { maxTokens: 50 }, maxTrackedSends: 1 });
+      const ledger = createSpendReservationLedger({ journal: disk, salt, policy, now: () => 2 });
+      const tracker = createRequestSpendTracker({ provider: "P", spendInputEstimateTokens: 10 }, undefined, ledger);
+      const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+      let wires = 0;
+      const sends = phase === "first-dispatch" ? 1 : 2;
+      const running = fetchWithTransientRetry(async () => {
+        wires++;
+        if (wires === sends) failing = true;
+        return new Response(null, { status: wires < sends ? 503 : 200 });
+      }, { attempts: sends, onSendsConsumed: createPhysicalSendReporter(budget, () => ({ poolId: "P" })) });
+      if (failure === "owner") await expect(running).rejects.toThrow(ownerError);
+      else await running;
+      expect(wires).toBe(sends);
+      expect(budget.used).toBe(sends);
+      expect(await Promise.race([ledger.waitForReporterDrain().then(() => true), Bun.sleep(50).then(() => false)])).toBe(true);
+      if (failure === "owner") expect(() => tracker.settle({ inputTokens: 70 })).toThrow(ownerError);
+      else tracker.settle({ inputTokens: 70 });
+      failing = false;
+      ledger.prune();
+      const expected = { settled: 70, reserved: 0, unresolved: sends === 2 ? 10 : 0 };
+      expect(ledger.snapshot("pool", "P")).toMatchObject(expected);
+      expect(ledger.reserve(request("must-refuse", { poolId: "P" }, 1)).reserved).toBe(false);
+      for (const create of [createSpendReservationLedger, createShippedSpendLedger]) {
+        expect(create({ journal: spendTestJournal(disk.lines), salt, policy, now: () => 2 }).snapshot("pool", "P")).toMatchObject(expected);
+      }
+      const records = disk.lines.map(line => JSON.parse(line));
+      expect(records.filter(record => record.kind === "reserve")).toHaveLength(sends);
+      expect(records.filter(record => record.kind === "dispatch")).toHaveLength(sends);
+      expect(records.filter(record => record.kind === "settle")).toHaveLength(1);
+      expect(records.filter(record => record.kind === "lost")).toHaveLength(sends - 1);
+      expect(new Set(records.filter(record => record.kind === "reserve").map(record => record.send)).size).toBe(sends);
+    });
+  }
+}
+
+
+test("a failed first report retains every start in the same batch and releases its lease", async () => {
+  const disk = spendTestJournal();
+  const append = disk.append.bind(disk);
+  let fail = false;
+  const ownerError = new SpendLedgerOwnerError("SPEND_LEDGER_OWNER_UNAVAILABLE", "batch report failure");
+  disk.append = line => { if (fail && JSON.parse(line).kind === "dispatch") throw ownerError; append(line); };
+  const ledger = factory(disk);
+  const tracker = createRequestSpendTracker({ provider: "P", spendInputEstimateTokens: 10 }, undefined, ledger);
+  const anchor = tracker.ensureSeed({ poolId: "P" });
+  if (!anchor) throw new Error("fixture seed denied");
+  const report = tracker.beginReporter();
+  report.start(anchor, 1); report.start(anchor, 2); report.start(anchor, 3);
+  fail = true;
+  expect(() => report.report(3)).toThrow(ownerError);
+  report.close();
+  await ledger.waitForReporterDrain();
+  expect(() => tracker.settle({ inputTokens: 70 })).toThrow(ownerError);
+  fail = false;
+  ledger.prune();
+  const expected = { settled: 70, reserved: 0, unresolved: 20 };
+  expect(ledger.snapshot("pool", "P")).toMatchObject(expected);
+  expect(createShippedSpendLedger({ journal: spendTestJournal(disk.lines), salt, now: () => 2 }).snapshot("pool", "P")).toMatchObject(expected);
+  expect(disk.lines.filter(line => JSON.parse(line).kind === "reserve")).toHaveLength(3);
+  expect(disk.lines.filter(line => JSON.parse(line).kind === "dispatch")).toHaveLength(3);
+});
+
+
+test("reporter acquisition failure and ownership loss during close cannot retain a lease", async () => {
+  let checks = 0;
+  let failAt = Infinity;
+  const ownerError = new SpendLedgerOwnerError("SPEND_LEDGER_OWNER_UNAVAILABLE", "ownership changed");
+  const ledger = createSpendReservationLedger({ journal: spendTestJournal(), salt, policy: spendTestPolicy(),
+    assertOwnedAccounting: () => { if (++checks === failAt) throw ownerError; } });
+  const tracker = createRequestSpendTracker({ provider: "P" }, undefined, ledger);
+  checks = 0; failAt = 2;
+  expect(() => tracker.beginReporter()).toThrow(ownerError);
+  failAt = Infinity;
+  expect(await Promise.race([ledger.waitForReporterDrain().then(() => true), Bun.sleep(50).then(() => false)])).toBe(true);
+  const lease = ledger.registerReporter();
+  const drained = ledger.waitForReporterDrain();
+  checks = 0; failAt = 1;
+  expect(() => lease.close()).toThrow(ownerError);
+  failAt = Infinity;
+  expect(await Promise.race([drained.then(() => true), Bun.sleep(50).then(() => false)])).toBe(true);
+});
+
+
+test("a partially enrolled ordinal retains its estimate across owner loss and changed log context", () => {
+  const disk = spendTestJournal();
+  const append = disk.append.bind(disk);
+  let failReserve = false;
+  let ownerLost = false;
+  const ownerError = new SpendLedgerOwnerError("SPEND_LEDGER_OWNER_UNAVAILABLE", "report owner lost");
+  disk.append = line => {
+    if (failReserve && JSON.parse(line).kind === "reserve") { ownerLost = true; throw ownerError; }
+    append(line);
+  };
+  const ledger = createSpendReservationLedger({ journal: disk, salt, policy: spendTestPolicy(), now: () => 2,
+    assertOwnedAccounting: () => { if (ownerLost) throw ownerError; } });
+  const context = { provider: "P", spendInputEstimateTokens: 10 };
+  const tracker = createRequestSpendTracker(context, undefined, ledger);
+  const anchor = tracker.ensureSeed({ poolId: "P" });
+  if (!anchor) throw new Error("fixture seed denied");
+  const report = tracker.beginReporter();
+  report.start(anchor, 1); report.start(anchor, 2); report.report(1);
+  failReserve = true;
+  expect(() => report.report(1)).toThrow(ownerError);
+  expect(() => report.close()).toThrow(ownerError);
+  context.spendInputEstimateTokens = 100;
+  ownerLost = false; failReserve = false;
+  tracker.settle({ inputTokens: 70 }); ledger.prune();
+  const expected = { settled: 70, reserved: 0, unresolved: 10 };
+  expect(ledger.snapshot("pool", "P")).toMatchObject(expected);
+  expect(createShippedSpendLedger({ journal: spendTestJournal(disk.lines), salt, now: () => 2 }).snapshot("pool", "P")).toMatchObject(expected);
+  expect(disk.lines.map(line => JSON.parse(line)).filter(record => record.kind === "reserve").map(record => record.tokens)).toEqual([10, 10]);
+});

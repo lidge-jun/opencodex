@@ -291,9 +291,10 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
 
   // An opaque CLI invocation is one send. Its internal retries are not observable here;
   // terminal usage still settles the complete amount, including usage above the estimate.
-  const producer = incoming.sendBudget?.beginSpendProducer?.();
+  let producer: { close(): void } | undefined;
   let permit: SingleUseDispatchPermit | undefined;
   try {
+  producer = incoming.sendBudget?.beginSpendProducer?.();
   const decision = incoming.sendBudget?.reserveDispatch({
     sendClass: "initial", targetKey: `${provider.adapter}|${profile.canonicalBaseUrl}|${parsed.modelId}`,
   });
@@ -757,9 +758,13 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     }
   }
   } finally {
-    permit?.release();
-    producer?.close();
-    if (toolBridgeDir) await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
+    try { permit?.release(); }
+    finally {
+      try { producer?.close(); }
+      finally {
+        if (toolBridgeDir) await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
   }
 }
 

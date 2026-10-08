@@ -319,12 +319,14 @@ export function createPhysicalSendReporter(
     if (closed) return;
     if (!producer) { if (observer?.enforced !== true) { reportDispatchSends(budget, sends, permit); telemetry?.(sends); } return; }
     const count = Math.min(Math.max(0, Math.trunc(sends)), started - reported);
-    producer.report(count);
-    reported += count;
-    const receipt = permit && dispatchSpendProofs.get(permit);
-    const prepaid = count > 0 && receipt && receipt.owner === counter && receipt.report() ? 1 : 0;
-    if (counter) counter.spent += count - prepaid;
-    telemetry?.(count);
+    try { producer.report(count); }
+    finally {
+      reported += count;
+      const receipt = permit && dispatchSpendProofs.get(permit);
+      const prepaid = count > 0 && receipt && receipt.owner === counter && receipt.report() ? 1 : 0;
+      if (counter) counter.spent += count - prepaid;
+      telemetry?.(count);
+    }
   };
   if (observer?.startRequest || observer?.enforced === true) report.beforeSend = () => {
     if (closed) return false;
@@ -351,9 +353,8 @@ export function createPhysicalSendReporter(
   };
   report.close = () => {
     if (closed) return;
-    if (producer) report(started - reported);
-    closed = true;
-    producer?.close();
+    try { if (producer) report(started - reported); }
+    finally { closed = true; producer?.close(); }
   };
   return report;
 }
@@ -511,7 +512,7 @@ function createRequestExecutionBudgetWithLedger(
         producer = observer.beginReporter?.();
         producer?.start(seed, ordinal);
         physicalOrdinal = ordinal;
-        if (!executing) { producer?.report(1); producer?.close(); }
+        if (!executing) { try { producer?.report(1); } finally { producer?.close(); } }
         return true;
       };
       let settled: "open" | "used" | "released" = "open";
@@ -526,8 +527,7 @@ function createRequestExecutionBudgetWithLedger(
           try { return await activePhysicalReporters.run(binding, run); }
           finally {
             executing = false;
-            producer?.report(1);
-            producer?.close();
+            try { producer?.report(1); } finally { producer?.close(); }
           }
         },
         use(): boolean {

@@ -217,6 +217,10 @@ uses the same unbound-history refusal explanation and workflow header as other R
 persists ordinary `forget` records before releasing seeds. Each tracker waits only for its own
 reporters, so overlapping traffic cannot pin a completed request. Storage-failed cleanup stays
 queued on the ledger and retries on later admission, pruning, reconfiguration or reporter closure.
+Already-started reports retain a stable send ID and estimate through partial writes. Reporting a
+batch owns every pending start before its first append; same-seed retries reconcile those records
+without admitting another send. Owner errors propagate while preserving queued liability, and
+caller finalizers still close reporter leases so shutdown can drain after a failed report.
 An abandoned seed leaves every admission lookup immediately. Its remaining cleanup obligation
 stays separate, including when durable forgetting throws an ownership or unsafe-file error.
 Send-to-seed and reference-counted scope-pin indexes avoid scanning all seeds on admission.

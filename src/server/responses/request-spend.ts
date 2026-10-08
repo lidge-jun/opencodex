@@ -84,7 +84,7 @@ export function createRequestSpendTracker(
   const retiredSeeds = new Set<SpendSeed>();
   const resolvedSendIds = new Set<string>();
   const completedSeeds = new Set<SpendSeed>();
-  const physical = new Map<number, { seed: SpendSeed; sendId?: string }>();
+  const physical = new Map<number, { seed: SpendSeed; sendId?: string; reportPending?: boolean; reportComplete?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
   const selectedScopes = (target: SpendTargetIdentity = {}): SpendScopes => ({
     ...(rootId !== undefined ? { rootId } : {}),
     ...(target.identityId ?? logCtx.accountLogLabel ? { identityId: target.identityId ?? logCtx.accountLogLabel } : {}),
@@ -105,6 +105,7 @@ export function createRequestSpendTracker(
     return retiredSeeds.size === 0;
   };
   const tryFinalizeSeeds = (): boolean => {
+    retryPhysicalReports();
     // All starts are booked before producers close. Ordinal, never callback order, owns usage.
     const entries = [...physical.entries()].sort((a, b) => a[0] - b[0]);
     const terminal = entries.at(-1)?.[1].sendId;
@@ -134,8 +135,15 @@ export function createRequestSpendTracker(
     resolved = true;
     return true;
   };
-  const deferCleanup = (): void => ledger().deferCleanup(tracker, () => resolved
-    || (finalRequested && reporters === 0 ? tryFinalizeSeeds() : cleanupRetiredSeeds()));
+  const retryPhysicalReports = (): void => {
+    for (const [ordinal, entry] of physical) if (entry.reportPending && !entry.reportComplete) tracker.reportFromSeed(entry.seed, ordinal);
+  };
+  const deferCleanup = (): void => ledger().deferCleanup(tracker, () => {
+    if (resolved) return true;
+    retryPhysicalReports();
+    if (finalRequested && reporters === 0) return tryFinalizeSeeds();
+    return cleanupRetiredSeeds() && reporters === 0;
+  });
   const finalizeSeeds = (): void => {
     if (!finalRequested || reporters !== 0 || resolved || !seededAccounting) return;
     // Own terminal retry before an append can throw; propagation must not orphan the debt.
@@ -259,6 +267,7 @@ export function createRequestSpendTracker(
     },
     beginReporter() {
       if (resolved || finalRequested && reporters === 0) throw new Error("Spend reporter registered after final closure");
+      deferCleanup();
       const lease = ledger().registerReporter(tracker);
       reporters++;
       let closed = false;
@@ -292,34 +301,40 @@ export function createRequestSpendTracker(
         report(sends) {
           if (closed) return;
           const count = Number.isFinite(sends) ? Math.max(0, Math.trunc(sends)) : 0;
+          // Own the whole reported batch before the first append can interrupt its cursor.
+          for (const start of starts.slice(reported, reported + count)) physical.get(start.ordinal)!.reportPending = true;
           for (let i = 0; i < count && reported < starts.length; i++) {
-            const entry = starts[reported++]!;
+            const entry = starts[reported]!;
             tracker.reportFromSeed(entry.seed, entry.ordinal);
+            reported++;
           }
         },
         close() {
           if (closed) return;
           // Cancellation still books every claimed start conservatively.
-          this.report(starts.length - reported);
-          closed = true;
-          reporters--;
-          lease.close();
-          finalizeSeeds();
+          try { this.report(starts.length - reported); }
+          finally {
+            closed = true;
+            reporters--;
+            try { lease.close(); } finally { finalizeSeeds(); }
+          }
         },
       };
     },
     reportFromSeed(seed, ordinal) {
       const entry = physical.get(ordinal);
       const state = seedState(seed);
-      if (!entry || entry.seed !== seed || entry.sendId || !state) return;
+      if (!entry || entry.seed !== seed || entry.reportComplete || !state) return;
+      entry.reportPending = true;
       const firstOrdinal = [...physical.entries()].filter(([, send]) => send.seed === seed).map(([order]) => order).sort((a, b) => a - b)[0];
-      const sendId = ordinal === firstOrdinal ? seed.sendId : randomUUID();
-      if (sendId !== seed.sendId && !ledger().reserveReportedFromSeed(seed, { sendId, ...estimates() })) {
+      const sendId = entry.sendId ??= ordinal === firstOrdinal ? seed.sendId : randomUUID();
+      const estimate = entry.estimate ??= estimates();
+      if (sendId !== seed.sendId && !ledger().reserveReportedFromSeed(seed, { sendId, ...estimate })) {
         throw new Error("Already-sent spend could not be persisted");
       }
       state.reported = true;
       if (!ledger().markDispatched(sendId)) throw new Error("Already-sent spend dispatch could not be persisted");
-      entry.sendId = sendId;
+      entry.reportComplete = true;
     },
     requestFinalSettlement(usage) {
       if (!finalRequested) { finalRequested = true; finalUsage = usage; }
