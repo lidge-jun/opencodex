@@ -1,6 +1,6 @@
 /**
  * Detection of Codex-based omo (LazyCodex), the variant that reads Codex role files and
- * `codex.agents.<role>.model` in `~/.omo/omo.jsonc`.
+ * `"[codex]".agents.<role>.model` in `~/.omo/omo.jsonc`.
  *
  * "omo" names three products. Pi-based omo (senpi) owns `~/.omo/agent` and is the omo file
  * integration in `src/integrations/registry.ts`; OpenCode-based omo (oh-my-opencode) keeps its
