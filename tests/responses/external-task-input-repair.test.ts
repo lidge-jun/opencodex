@@ -40,10 +40,10 @@ describe("external task input in raw-body repairs (#6764)", () => {
   });
 
   test("structured output keeps its images and order", () => {
-    const image = { type: "input_image", image_url: "data:image/png;base64,AAAA", detail: "high" };
+    const image = { type: "input_image", image_url: "data:image/png;base64,AAAA", detail: "original" };
     const output = [{ type: "output_text", text: "look" }, image, { type: "text", text: "then act" }];
     expect(externalTaskInputResponsesContent(seed({ output }))).toEqual([
-      { type: "input_text", text: "look" }, image, { type: "input_text", text: "then act" },
+      { type: "input_text", text: "look" }, { ...image, detail: "high" }, { type: "input_text", text: "then act" },
     ]);
   });
 

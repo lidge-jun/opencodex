@@ -68,6 +68,6 @@ export function externalTaskInputResponsesContent(item: unknown): Record<string,
   const output = (item as { output: string | TaskInputBlock[] }).output;
   if (typeof output === "string") return [{ type: "input_text", text: output }];
   return output.map(block => block.type === "input_image"
-    ? { type: "input_image", image_url: block.image_url, ...(block.detail ? { detail: block.detail } : {}) }
+    ? { type: "input_image", image_url: block.image_url, ...(block.detail ? { detail: block.detail === "original" ? "high" : block.detail } : {}) }
     : { type: "input_text", text: block.text });
 }
