@@ -68,6 +68,7 @@ let previewResponse: (body: Record<string, unknown>, signal?: AbortSignal | null
  * unknown path can be driven.
  */
 let failExtraSources = false;
+let lazycodexRoles: Record<string, unknown>;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -141,6 +142,7 @@ beforeEach(() => {
     }));
   };
   failExtraSources = false;
+  lazycodexRoles = { lazycodex: { detected: false }, omoJsonc: null, roles: [] };
 
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -213,6 +215,8 @@ beforeEach(() => {
     if (url.includes("/api/grok")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ present: false, models: [] });
     }
+    if (url.endsWith("/api/codex-agent-roles")) return json(lazycodexRoles);
+    if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.6-sol"] });
     if (method === "PUT") return putResponse(request);
     if (url.includes("/restore")) return json({ ok: true, clientId: "hermes", changed: true, state: "current", message: "restored" });
     return stateResponse();
@@ -1797,6 +1801,46 @@ test("the tab strip marks every client tab and leaves the two non-client tabs ba
   // The label lost its "CLI": the mark carries that identity now, and the row
   // covers the app and SDK too.
   expect(codexTab.textContent).toBe("Codex");
+});
+
+test("the LazyCodex role section sits on the omo tab and only when LazyCodex is detected", async () => {
+  const [{ createRoot }, { LanguageProvider }, { default: Integrations }] = await Promise.all([
+    import("react-dom/client"),
+    import("../src/i18n/provider"),
+    import("../src/pages/Integrations"),
+  ]);
+  const render = async (hash: string) => {
+    testWindow.location.hash = hash;
+    mountCount += 1;
+    apiBase = `http://ocx-test-${mountCount}.invalid`;
+    await act(async () => {
+      root?.unmount();
+      root = createRoot(container);
+      root.render(
+        <LanguageProvider>
+          <Integrations apiBase={apiBase} />
+        </LanguageProvider>,
+      );
+    });
+    await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  };
+  const section = (tab: string) => container.querySelector(`#integrations-panel-${tab} #lazycodex-role-models`);
+
+  // Pi-based omo alone: the omo tab shows nothing of LazyCodex.
+  await render("#integrations/omo");
+  expect(section("omo")).toBeNull();
+
+  lazycodexRoles = {
+    lazycodex: { detected: true, pluginEnabled: true, pluginInstalled: true },
+    omoJsonc: { state: "present" },
+    roles: [{ role: "explorer", model: "gpt-5.6-sol", omoJsoncModel: null }],
+  };
+  await render("#integrations/omo");
+  expect(section("omo")?.textContent).toContain("explorer");
+
+  await render("#integrations/codex");
+  expect(container.querySelector("#integrations-panel-codex")).not.toBeNull();
+  expect(section("codex")).toBeNull();
 });
 
 test("Droid target changes discard the draft and its confirmation", async () => {
