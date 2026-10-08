@@ -65,7 +65,7 @@ describe("ocx sync fans out to enabled native clients and owned file integration
 
     expect(fn).toContain("grokIntegrationEnabled(config)");
     expect(fn).toContain("claudeDesktopIntegrationEnabled(config)");
-    expect(fn).toContain('["mcode", "pi", "aside", "raycast", "omo", "cline", "droid", "opencode", "kilo"]');
+    expect(fn).toContain('["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo"]');
     expect(fn).toContain("refreshOwnedCatalogIntegrations");
     // Native clients keep their catches; the owned catalog helper isolates file clients.
     expect(fn.match(/catch \(error\)/g)?.length).toBe(2);
