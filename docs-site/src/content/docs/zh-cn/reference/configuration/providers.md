@@ -301,7 +301,7 @@ Pool 2 账户只能通过浏览器 OAuth 添加。与 `anthropic` 不同，Pool 
 | `"anthropic"` | 始终使用主账户池。 |
 | `"anthropic2"` | 始终使用 Pool 2。 |
 
-该字段仅在辅助功能的后端解析为 Anthropic 时生效。与其他后端一起设置会导致校验错误；由于网页搜索默认使用 OpenAI，请同时设置 `"backend": "anthropic"`。以另一个账户池限定的辅助模型（例如 `anthropic/claude-sonnet-5` 搭配 `"anthropicInstance": "anthropic2"`）同样会被拒绝。如果所选账户池没有可用账户，辅助功能会在发送任何内容之前失败，不会切换到另一个账户池。未设置的选择会保存为缺省，而不是 `"anthropic"`。
+该字段仅在辅助功能的后端解析为 Anthropic 时生效。与其他后端一起设置会导致校验错误；由于网页搜索默认使用 OpenAI，请同时设置 `"backend": "anthropic"`。以另一个账户池限定的辅助模型（例如 `anthropic/claude-sonnet-5` 搭配 `"anthropicInstance": "anthropic2"`）同样会被拒绝。如果所选账户池没有可用账户，辅助功能会在发送任何内容之前失败，不会切换到另一个账户池。此时主请求会在没有该辅助功能的情况下照常进行。未设置的选择会保存为缺省，而不是 `"anthropic"`。
 
 ```json
 {

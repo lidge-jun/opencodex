@@ -1,22 +1,27 @@
 import { loadConfig } from "../../config";
+import type { OcxConfig } from "../../types";
 import { getAccountSet } from "../../oauth/store";
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../../lib/state-store-sweeper";
 import { configuredAnthropicInstance, type AnthropicInstanceId } from "../anthropic-instance";
 import { ACCOUNT_QUOTA_TTL_MS } from "../quota-wire";
 import { fetchAnthropicUsageQuotaForInstance } from "./vendor-probes-oauth";
-import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor } from "./anthropic-cooldown-recovery";
+import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor, type AnthropicQuotaRecoveryResult } from "./anthropic-cooldown-recovery";
 import {
   accountCacheKey, accountQuotaCache, accountQuotaInflight, captureProviderAccountQuotaEpoch,
   getTokenForAccountQuotaProbe, hydrateAccountQuotaCache, mayCommitAccountQuotaKey,
   normalizeAnthropicQuota, type AccountQuotaCacheEntry,
 } from "./account-cache";
 
-/** Resolve renewal first: a flight always belongs to the credential actually dispatched. */
+/**
+ * Resolve renewal first: a flight always belongs to the credential actually dispatched.
+ * `config` is the caller's live object. Currency re-reads that one object, never a fresh file
+ * load, so memory/disk drift cannot refuse every probe; commit authority stays with the
+ * captured writer generation.
+ */
 export async function fetchAnthropicAccountQuota(
-  instance: AnthropicInstanceId, accountId: string, force: boolean,
+  instance: AnthropicInstanceId, accountId: string, force: boolean, config: OcxConfig = loadConfig(),
 ): Promise<AccountQuotaCacheEntry> {
   const unavailable = (): AccountQuotaCacheEntry => ({ ts: Date.now(), quota: null, unavailable: true });
-  const config = loadConfig();
   const target = config.providers[instance];
   if (target?.disabled || target && target.authMode !== "oauth" || configuredAnthropicInstance(config, instance) !== instance) return unavailable();
   const targetIdentity = JSON.stringify(target);
@@ -26,11 +31,10 @@ export async function fetchAnthropicAccountQuota(
   const recovery = anthropicCooldownRecoveryFor(instance);
   const incarnation = recovery.reserveAnthropicAccountIncarnation(accountId);
   const ownerCurrent = () => {
-    const live = loadConfig();
     const row = getAccountSet(instance)?.accounts.find(row => row.id === accountId);
     return epoch === captureProviderAccountQuotaEpoch(instance)
-      && configuredAnthropicInstance(live, instance) === instance
-      && JSON.stringify(live.providers[instance]) === targetIdentity
+      && configuredAnthropicInstance(config, instance) === instance
+      && JSON.stringify(config.providers[instance]) === targetIdentity
       && recovery.anthropicAccountIncarnation(accountId) === incarnation
       && !!row && row.loginId === initialRow.loginId && row.addedAt === initialRow.addedAt;
   };
@@ -54,6 +58,21 @@ export async function fetchAnthropicAccountQuota(
     return ownerCurrent() && (joined.isCurrent?.() ?? flightCurrent()) ? joined : unavailable();
   }
   const writerGeneration = captureConfigGeneration();
+  // One publication path for a result and for a failed dispatch. A null result (HTTP refusal)
+  // and a thrown read (network failure) both record the unavailable row over the retained
+  // in-flight observations, as the pre-instance A path did, so joined callers and later cached
+  // reads agree and windows that expired during the shared probe are normalized away.
+  const publish = (result: AnthropicQuotaRecoveryResult | null): AccountQuotaCacheEntry => {
+    const previous = accountQuotaCache.get(key);
+    const retained = previous?.isCurrent?.() === false ? undefined : previous;
+    const isCurrent = result?.isCurrent ?? flightCurrent;
+    const entry: AccountQuotaCacheEntry = {
+      ts: Date.now(), quota: normalizeAnthropicQuota(result?.quota ?? retained?.quota, Date.now()),
+      ...(!result ? { unavailable: true as const } : {}), isCurrent,
+    };
+    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) { accountQuotaCache.set(key, entry); sweepExpiredOnWrite(entry.ts); }
+    return entry;
+  };
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
     try {
       const result = await recovery.probeAnthropicQuotaWithRecovery(accountId, token, fresh => {
@@ -63,19 +82,10 @@ export async function fetchAnthropicAccountQuota(
       }, () => ownerCurrent() && mayCommitAccountQuotaKey(key, writerGeneration));
       if (result && !result.isCurrent()) return unavailable();
       if (!result && !flightCurrent()) return unavailable();
-      const previous = accountQuotaCache.get(key);
-      const retained = previous?.isCurrent?.() === false ? undefined : previous;
-      const isCurrent = result?.isCurrent ?? flightCurrent;
-      const entry: AccountQuotaCacheEntry = {
-        ts: Date.now(), quota: normalizeAnthropicQuota(result?.quota ?? retained?.quota, Date.now()),
-        ...(!result ? { unavailable: true as const } : {}), isCurrent,
-      };
-      if (isCurrent()) { accountQuotaCache.set(key, entry); sweepExpiredOnWrite(entry.ts); }
-      return entry;
+      return publish(result);
     } catch (error) {
       if (error instanceof AnthropicQuotaProbeOwnershipError || !flightCurrent()) return unavailable();
-      const previous = accountQuotaCache.get(key);
-      return { ...unavailable(), quota: previous?.isCurrent?.() === false ? null : normalizeAnthropicQuota(previous?.quota, Date.now()), isCurrent: flightCurrent };
+      return publish(null);
     }
   })().finally(() => { if (accountQuotaInflight.get(flightKey) === probe) accountQuotaInflight.delete(flightKey); });
   accountQuotaInflight.set(flightKey, probe);

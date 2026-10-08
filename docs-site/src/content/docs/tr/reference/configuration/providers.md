@@ -331,7 +331,7 @@ Web arama ve görsel yardımcıları, genel `webSearchSidecar` ve `visionSidecar
 | `"anthropic"` | Her zaman birincil havuzu kullanır. |
 | `"anthropic2"` | Her zaman Pool 2'yi kullanır. |
 
-Alan yalnızca yardımcının arka ucu Anthropic olarak çözümlendiğinde uygulanır. Başka bir arka uçla ayarlamak doğrulama hatasıdır; web arama varsayılan olarak OpenAI kullandığından `"backend": "anthropic"` da ayarlayın. Diğer havuzla nitelenmiş bir yardımcı model, örneğin `"anthropicInstance": "anthropic2"` ile birlikte `anthropic/claude-sonnet-5`, de reddedilir. Seçilen havuzda kullanılabilir hesap yoksa yardımcı hiçbir şey göndermeden başarısız olur; diğer havuza geçmez. Ayarlanmamış bir seçim `"anthropic"` olarak değil, yok olarak kaydedilir.
+Alan yalnızca yardımcının arka ucu Anthropic olarak çözümlendiğinde uygulanır. Başka bir arka uçla ayarlamak doğrulama hatasıdır; web arama varsayılan olarak OpenAI kullandığından `"backend": "anthropic"` da ayarlayın. Diğer havuzla nitelenmiş bir yardımcı model, örneğin `"anthropicInstance": "anthropic2"` ile birlikte `anthropic/claude-sonnet-5`, de reddedilir. Seçilen havuzda kullanılabilir hesap yoksa yardımcı hiçbir şey göndermeden başarısız olur; diğer havuza geçmez. Ana istek bu durumda o yardımcı olmadan devam eder. Ayarlanmamış bir seçim `"anthropic"` olarak değil, yok olarak kaydedilir.
 
 ```json
 {

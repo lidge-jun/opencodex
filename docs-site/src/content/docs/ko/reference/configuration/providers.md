@@ -277,7 +277,7 @@ Pool 2 계정은 브라우저 OAuth로만 추가합니다. `anthropic`과 달리
 | `"anthropic"` | 항상 기본 풀을 사용합니다. |
 | `"anthropic2"` | 항상 Pool 2를 사용합니다. |
 
-이 필드는 보조 기능의 백엔드가 Anthropic으로 결정될 때만 적용됩니다. 다른 백엔드와 함께 설정하면 검증 오류입니다. 웹 검색의 기본 백엔드는 OpenAI이므로 `"backend": "anthropic"`도 함께 설정하십시오. `anthropic/claude-sonnet-5`에 `"anthropicInstance": "anthropic2"`를 지정하는 것처럼 다른 풀로 한정된 보조 모델도 거부됩니다. 고른 풀에 쓸 수 있는 계정이 없으면 보조 기능은 아무것도 보내기 전에 실패하며, 다른 풀로 바꾸지 않습니다. 설정하지 않은 선택은 `"anthropic"`이 아니라 값 없음으로 저장됩니다.
+이 필드는 보조 기능의 백엔드가 Anthropic으로 결정될 때만 적용됩니다. 다른 백엔드와 함께 설정하면 검증 오류입니다. 웹 검색의 기본 백엔드는 OpenAI이므로 `"backend": "anthropic"`도 함께 설정하십시오. `anthropic/claude-sonnet-5`에 `"anthropicInstance": "anthropic2"`를 지정하는 것처럼 다른 풀로 한정된 보조 모델도 거부됩니다. 고른 풀에 쓸 수 있는 계정이 없으면 보조 기능은 아무것도 보내기 전에 실패하며, 다른 풀로 바꾸지 않습니다. 이때 본 요청은 그 보조 기능 없이 그대로 진행됩니다. 설정하지 않은 선택은 `"anthropic"`이 아니라 값 없음으로 저장됩니다.
 
 ```json
 {

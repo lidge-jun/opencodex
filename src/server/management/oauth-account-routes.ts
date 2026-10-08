@@ -39,7 +39,7 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/ke
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderApiKeyQuotas, fetchProviderQuotaReports, providerOAuthAccountQuotaMode, providerApiKeyQuotaMode, readPassiveProviderAccountQuotas } from "../../providers/quota";
+import { clearAccountQuotaCache, clearProviderQuotaCache, clearProviderQuotaCacheFor, fetchProviderAccountQuotas, fetchProviderApiKeyQuotas, fetchProviderQuotaReports, providerOAuthAccountQuotaMode, providerApiKeyQuotaMode, readPassiveProviderAccountQuotas } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import {
@@ -99,6 +99,21 @@ import { codexAccountNamespaceProviderCollisionError } from "../../codex/account
  */
 function isDevinCloudDirectProvider(provider: string): boolean {
   return provider === "devin" || provider === "devin-cli";
+}
+
+/**
+ * Quota invalidation after an account mutation. A B mutation retires only B's provider-level
+ * report, routing row and per-account rows; A's cache, epochs and in-flight probes survive.
+ * Other providers keep the global clear; `accountRows` also drops that provider's account rows.
+ */
+function clearQuotaCachesAfterAccountMutation(provider: string, accountRows: boolean): void {
+  if (provider === "anthropic2") {
+    clearProviderQuotaCacheFor(provider);
+    clearAccountQuotaCache(provider);
+    return;
+  }
+  clearProviderQuotaCache();
+  if (accountRows) clearAccountQuotaCache(provider);
 }
 
 async function clearDevinCloudDirectCaches(): Promise<void> {
@@ -385,10 +400,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     clearModelCache(provider);
     clearGatherRoutedModelsInflight();
     // Drop cached/last-good quota rows tied to the removed credential.
-    const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
-    if (provider === "anthropic2") clearAccountQuotaCache(provider);
-    else clearProviderQuotaCache();
-    clearAccountQuotaCache(provider);
+    clearQuotaCachesAfterAccountMutation(provider, true);
     // The cached user_jwt's payload contains the api_key, and the catalog is
     // keyed by that key. Without this they outlive the credential in process
     // memory until the JWT's own ~24 minute expiry. `devin-cli` is a deprecated
@@ -453,7 +465,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // from the post-probe store so the response is not stale.
     const rows = passiveQuota
       ? readPassiveProviderAccountQuotas(provider)
-      : await fetchProviderAccountQuotas(provider, forceRefresh, quotaProvider);
+      : await fetchProviderAccountQuotas(provider, forceRefresh, quotaProvider, config);
     const byId = new Map(rows.map(row => [row.accountId, row]));
     const projected = projectAccounts();
     return jsonResponse({
@@ -505,9 +517,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
     clearGatherRoutedModelsInflight();
-    const { clearProviderQuotaCache } = await import("../../providers/quota");
-    if (provider === "anthropic2") clearAccountQuotaCache(provider);
-    else clearProviderQuotaCache();
+    clearQuotaCachesAfterAccountMutation(provider, false);
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
@@ -545,9 +555,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
       clearModelCache(provider);
       clearGatherRoutedModelsInflight();
-      const { clearProviderQuotaCache } = await import("../../providers/quota");
-      if (provider === "anthropic2") clearAccountQuotaCache(provider);
-      else clearProviderQuotaCache();
+      clearQuotaCachesAfterAccountMutation(provider, false);
     }
 
     return jsonResponse({
@@ -906,9 +914,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
         clearModelCache(provider);
         clearGatherRoutedModelsInflight();
-        if (provider === "anthropic2") clearAccountQuotaCache(provider);
-        else clearProviderQuotaCache();
-        clearAccountQuotaCache(provider);
+        clearQuotaCachesAfterAccountMutation(provider, true);
       }
       if (!imported.ok) return jsonResponse({ code: imported.code }, imported.status);
       return jsonResponse(imported.result);
@@ -950,10 +956,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
     clearGatherRoutedModelsInflight();
-    const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
-    if (provider === "anthropic2") clearAccountQuotaCache(provider);
-    else clearProviderQuotaCache();
-    clearAccountQuotaCache(provider);
+    clearQuotaCachesAfterAccountMutation(provider, true);
     // Same reasoning as logout. Removing the last account for a provider used to
     // leave the JWT and catalog in memory, because only the logout route cleared
     // them.

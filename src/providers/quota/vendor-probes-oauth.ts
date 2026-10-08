@@ -363,17 +363,14 @@ export async function fetchAnthropicUsageQuotaForInstance(
   return probe;
 }
 
-export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaReport | null> {
-  const config = loadConfig();
+/** `config` is the caller's live object; currency re-reads it instead of reloading the file. */
+export async function fetchAnthropicQuota(provider: string, config: OcxConfig = loadConfig()): Promise<ProviderQuotaReport | null> {
   const instance = configuredAnthropicInstance(config, provider);
   const target = config.providers[provider];
   if (!instance || target?.disabled || target && target.authMode !== "oauth") return null;
   const targetIdentity = JSON.stringify(target);
-  const targetCurrent = () => {
-    const live = loadConfig();
-    return configuredAnthropicInstance(live, provider) === instance
-      && JSON.stringify(live.providers[provider]) === targetIdentity;
-  };
+  const targetCurrent = () => configuredAnthropicInstance(config, provider) === instance
+    && JSON.stringify(config.providers[provider]) === targetIdentity;
   const recovery = anthropicCooldownRecoveryFor(instance);
   // Capture the account we intend to probe before awaiting — a mid-flight active
   // switch must not seed the wrong account's cache with this response.

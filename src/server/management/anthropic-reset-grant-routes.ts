@@ -14,7 +14,6 @@
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 import { getValidAccessSnapshotForAccount } from "../../oauth";
-import { loadConfig } from "../../config";
 import { configuredAnthropicInstance, isAnthropicInstanceId, type AnthropicInstanceId } from "../../providers/anthropic-instance";
 import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent } from "../../oauth/anthropic-send-ownership";
 import { anthropicCooldownRecoveryFor } from "../../providers/quota/anthropic-cooldown-recovery";
@@ -33,7 +32,7 @@ import {
   AnthropicResetLedgerError,
   anthropicOrgDigest,
   anthropicResetOperationExists,
-  anthropicResetLedgerOptionsForInstance,
+  anthropicResetJournalPathForInstance,
   beginAnthropicResetOperation,
   pendingAnthropicResetOperation,
   releaseAnthropicResetLease,
@@ -78,16 +77,18 @@ export interface AnthropicResetGrantRouteDeps {
 }
 
 function defaultDepsFor(ctx: ManagementContext, provider: AnthropicInstanceId): AnthropicResetGrantRouteDeps | null {
-  const target = ctx.config.providers?.[provider];
-  if (!target || target.disabled || target.authMode !== "oauth" || configuredAnthropicInstance(ctx.config, provider) !== provider) return null;
-  const identity = JSON.stringify(target);
+  // One source: the live management config. A keeps its legacy reach without a providers row;
+  // B requires its configured builtin row. A fresh file load here would refuse on any drift.
+  const live = ctx.config;
+  const target = live.providers?.[provider];
+  if (target?.disabled || target && target.authMode !== "oauth" || configuredAnthropicInstance(live, provider) !== provider) return null;
+  const identity = JSON.stringify(target ?? null);
   let owner: ReturnType<typeof captureAnthropicPhysicalSendOwnership> = null;
-  const targetCurrent = () => {
-    const live = loadConfig();
-    return configuredAnthropicInstance(live, provider) === provider && JSON.stringify(live.providers[provider]) === identity;
-  };
+  const targetCurrent = () => configuredAnthropicInstance(live, provider) === provider
+    && JSON.stringify(live.providers?.[provider] ?? null) === identity;
   return {
-    provider, ...anthropicResetLedgerOptionsForInstance(provider),
+    // Only the journal path: the ledger's numeric `now` option is not the deps clock function.
+    provider, journalPath: anthropicResetJournalPathForInstance(provider),
     listAccountIds: () => listAccounts(provider).map(account => account.id),
     activeAccountId: () => captureOAuthAccountSelection(provider)?.accountId ?? null,
     isCurrent: () => {
@@ -117,7 +118,7 @@ function selectDeps(ctx: ManagementContext, requested: unknown, deps?: Anthropic
   const selected = deps?.forProvider?.(provider) ?? deps;
   // Legacy injected dependencies are A-only; B must explicitly bind its own journal.
   if (selected) return (selected.provider ?? "anthropic") === provider
-    ? { ...anthropicResetLedgerOptionsForInstance(provider), ...selected, provider } : null;
+    ? { journalPath: anthropicResetJournalPathForInstance(provider), ...selected, provider } : null;
   return defaultDepsFor(ctx, provider);
 }
 

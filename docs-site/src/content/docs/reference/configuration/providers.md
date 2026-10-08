@@ -1026,7 +1026,8 @@ backend is a validation error; because web search defaults to OpenAI, set
 `"backend": "anthropic"` as well. A helper model qualified with the other pool, such as
 `anthropic/claude-sonnet-5` with `"anthropicInstance": "anthropic2"`, is also rejected. If the chosen
 pool has no usable account, the helper fails before sending anything; it does not switch to the other
-pool. An unset choice is saved as absent, never as `"anthropic"`.
+pool. The main request then continues without that helper. An unset choice is saved as absent, never
+as `"anthropic"`.
 
 ```json
 {

@@ -488,7 +488,9 @@ export async function getTokenForAccountQuotaProbe(provider: string, accountId: 
   const row = getAccountCredentialWithStatus(provider, accountId);
   if (!row) throw new Error("account credential missing");
   // An operator-paused account is excluded from every automatic upstream use, quota reads included.
-  if (row.paused || row.needsReauth) throw new Error("account is unavailable; quota probe skipped");
+  // Anthropic instances also skip a needs-reauth row; other providers keep their probe behavior.
+  if (row.paused) throw new Error("account is paused; quota probe skipped");
+  if (row.needsReauth && isAnthropicInstanceId(provider)) throw new Error("account needs sign-in; quota probe skipped");
   const stored = row.credential;
   if (stored.expires > Date.now() + ACCOUNT_TOKEN_SKEW_MS) return stored.access;
   const activeId = getAccountSet(provider)?.activeAccountId;

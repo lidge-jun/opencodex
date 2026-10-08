@@ -300,7 +300,7 @@ Les assistants de recherche web et de vision acceptent un champ facultatif `anth
 | `"anthropic"` | Toujours le pool principal. |
 | `"anthropic2"` | Toujours le Pool 2. |
 
-Le champ ne s'applique que si le backend de l'assistant se résout en Anthropic. Le définir avec un autre backend est une erreur de validation ; comme la recherche web utilise OpenAI par défaut, définissez aussi `"backend": "anthropic"`. Un modèle d'assistant qualifié par l'autre pool, par exemple `anthropic/claude-sonnet-5` avec `"anthropicInstance": "anthropic2"`, est également rejeté. Si le pool choisi n'a aucun compte utilisable, l'assistant échoue avant tout envoi ; il ne passe pas à l'autre pool. Un choix non défini est enregistré comme absent, jamais comme `"anthropic"`.
+Le champ ne s'applique que si le backend de l'assistant se résout en Anthropic. Le définir avec un autre backend est une erreur de validation ; comme la recherche web utilise OpenAI par défaut, définissez aussi `"backend": "anthropic"`. Un modèle d'assistant qualifié par l'autre pool, par exemple `anthropic/claude-sonnet-5` avec `"anthropicInstance": "anthropic2"`, est également rejeté. Si le pool choisi n'a aucun compte utilisable, l'assistant échoue avant tout envoi ; il ne passe pas à l'autre pool. La requête principale se poursuit alors sans cet assistant. Un choix non défini est enregistré comme absent, jamais comme `"anthropic"`.
 
 ```json
 {

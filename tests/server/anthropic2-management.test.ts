@@ -5,6 +5,9 @@ import { saveConfig, loadConfig } from "../../src/config";
 import { handleOauthAccountRoutes } from "../../src/server/management/oauth-account-routes";
 import { writeAnthropicPoolSettings } from "../../src/server/management/anthropic-pool-settings";
 import { poolSettingsCapability } from "../../src/oauth/pool-settings-capability";
+import { getCachedProviderAccountQuota, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
+import { getProviderQuotaReportCache, setProviderQuotaReportCache, type ProviderQuotaReport } from "../../src/providers/quota/report-cache";
+import { getCachedProviderQuota, replaceCachedProviderQuotas } from "../../src/providers/quota-routing-cache";
 import type { OcxConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 let home: TempHome;
@@ -76,4 +79,37 @@ test("a concurrent B row removal is not recreated by settings publication", asyn
   expect(loadConfig().providers.anthropic2).toBeUndefined();
   expect(loadConfig().anthropicAccountPool).toEqual(a);
   expect(config.providers.anthropic2!.anthropicAccountPool?.autoSwitchThreshold).toBe(37);
+});
+
+test("a stale live B row after a durable save answers saved with the bookkeeping warning", async () => {
+  setPersistedConfigMutationBeforeCommitForTests(() => {
+    setPersistedConfigMutationBeforeCommitForTests(null);
+    config.providers.anthropic2 = { ...config.providers.anthropic2!, disabled: true };
+  });
+  const response = await route("/api/pool/settings", "PUT", { provider: "anthropic2", autoSwitchThreshold: 22 });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ warning: "config_bookkeeping_failed" });
+  expect(loadConfig().providers.anthropic2!.anthropicAccountPool?.autoSwitchThreshold).toBe(22);
+});
+
+test("B account mutations retire only B provider-level, routing and account quota rows", async () => {
+  const now = Date.now();
+  const report = (provider: string, fiveHourPercent: number): ProviderQuotaReport => ({
+    provider, label: provider, source: "anthropic:oauth-usage", quota: { fiveHourPercent, updatedAt: now }, updatedAt: now,
+  });
+  const reports = [report("anthropic", 11), report("anthropic2", 22)];
+  for (const [path, method, body] of [
+    ["/api/oauth/accounts/active", "PUT", { provider: "anthropic2", accountId: "same" }],
+    ["/api/oauth/accounts?provider=anthropic2&id=same", "DELETE", undefined],
+  ] as const) {
+    setProviderQuotaReportCache({ key: "fixture", ts: now, response: { generatedAt: now, reports } });
+    replaceCachedProviderQuotas(reports);
+    for (const provider of ["anthropic", "anthropic2"]) setCachedProviderAccountQuotaForTests(provider, "same", { fiveHourPercent: 5, updatedAt: now });
+    expect((await route(path, method, body)).status).toBe(200);
+    expect(getProviderQuotaReportCache()?.response.reports.map(row => row.provider)).toEqual(["anthropic"]);
+    expect(getCachedProviderQuota("anthropic", now)?.fiveHourPercent).toBe(11);
+    expect(getCachedProviderQuota("anthropic2", now)).toBeNull();
+    expect(getCachedProviderAccountQuota("anthropic", "same")?.fiveHourPercent).toBe(5);
+    expect(getCachedProviderAccountQuota("anthropic2", "same")).toBeNull();
+  }
 });

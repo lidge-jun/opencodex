@@ -20,6 +20,7 @@ import {
   accountReportCurrent,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
+  captureProviderReportEpochs, providerReportEpochChanged,
   cacheKeyWithAggregationState,
   getProviderQuotaReportCache,
   hasCodexPoolProvider,
@@ -72,7 +73,7 @@ import { kiroProbeCurrent, kiroProbeIdentity } from "./quota/kiro-account-probe"
 export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
 export { QUOTA_RESPONSE_MAX_BYTES } from "./quota-wire";
 export {
-  clearProviderQuotaCache,
+  clearProviderQuotaCache, clearProviderQuotaCacheFor,
   publishKeyReportForTests,
   readProviderQuotaJsonForTests,
   setProviderQuotaBeforePublishForTests,
@@ -121,7 +122,7 @@ async function maybeFetchProviderQuota(
       return fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);
     }
     if (provider.authMode === "oauth" && explicitAccountReader(name)) return await fetchExplicitCurrentQuota(name, provider, config);
-    if (provider.authMode === "oauth" && configuredAnthropicInstance(config, name)) return fetchAnthropicQuota(name);
+    if (provider.authMode === "oauth" && configuredAnthropicInstance(config, name)) return fetchAnthropicQuota(name, config);
     if (provider.authMode === "oauth" && name === "google-antigravity") return await fetchAntigravityQuota(name);
     if (provider.authMode === "oauth" && name === "kiro") return fetchKiroQuota(name);
     // meta-muse: a device-logged-in account can be probed at the key endpoint; an
@@ -236,6 +237,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const keyCandidate = cacheKeyWithAggregationState(config, prefetchedCodexSnapshot);
   const key = typeof keyCandidate === "string" ? keyCandidate : await keyCandidate;
   const writerGeneration = captureConfigGeneration();
+  const providerEpochs = captureProviderReportEpochs();
   const now = Date.now();
   // The cache fast path must not extend a preserved last-good row past its 30-minute bound:
   // a row preserved at age 29:59 plus a full 5-minute TTL would otherwise serve until ~35min.
@@ -312,6 +314,8 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       byProvider.delete(provider);
       generationMismatchedProviders.delete(provider);
     }
+    // A provider-scoped clear during this probe retires only that provider's row.
+    for (const provider of [...byProvider.keys()]) if (providerReportEpochChanged(providerEpochs, provider)) byProvider.delete(provider);
 
     const response = { generatedAt: Date.now(), reports: [...byProvider.values()] };
     // Commit only when this probe still holds authority (no clear/force superseded it).
@@ -415,9 +419,10 @@ async function fetchAccountQuota(
   accountId: string,
   forceRefresh: boolean,
   providerConfig?: OcxProviderConfig,
+  liveConfig?: OcxConfig,
 ): Promise<AccountQuotaCacheEntry> {
   if (accountQuotaProbeSkip(provider, accountId)) return accountQuotaProbeSkip(provider, accountId)!;
-  if (isAnthropicInstanceId(provider)) return fetchAnthropicAccountQuota(provider, accountId, forceRefresh);
+  if (isAnthropicInstanceId(provider)) return fetchAnthropicAccountQuota(provider, accountId, forceRefresh, liveConfig);
   if (explicitAccountReader(provider)) return fetchExplicitAccountQuota(provider, accountId, forceRefresh, providerConfig);
   if (provider === "kiro") hydrateAccountQuotaCache();
   const key = accountCacheKey(provider, accountId);
@@ -515,12 +520,13 @@ export async function fetchProviderAccountQuotas(
   provider: string,
   forceRefresh = false,
   providerConfig?: OcxProviderConfig,
+  liveConfig?: OcxConfig,
 ): Promise<ProviderAccountQuota[]> {
   if (!supportsPerAccountQuota(provider)) return [];
   const set = getAccountSet(provider);
   if (!set) return [];
   return mapQuotaRoster(set.accounts, async account => {
-    const entry = await fetchAccountQuota(provider, account.id, forceRefresh, providerConfig);
+    const entry = await fetchAccountQuota(provider, account.id, forceRefresh, providerConfig, liveConfig);
     const result: ProviderAccountQuota = {
       accountId: account.id,
       quota: isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry.quota, Date.now()) : entry.quota,

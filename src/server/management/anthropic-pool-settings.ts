@@ -18,7 +18,11 @@ export function writeAnthropicPoolSettings(config: OcxConfig, instance: Anthropi
   }
 }
 
-/** Both Anthropic writers share publication-aware recovery from the atomic mutation owner. */
+/**
+ * Both Anthropic writers share publication-aware recovery from the atomic mutation owner.
+ * Recovery covers only the durable write. Once the file holds the new value, a stale live row
+ * or a failed reconcile is reported as saved with the fixed bookkeeping warning, never a 500.
+ */
 export function persistAnthropicPoolPatch(
   config: OcxConfig,
   instance: AnthropicInstanceId,
@@ -29,6 +33,13 @@ export function persistAnthropicPoolPatch(
     error: "Pool settings save state is unknown; reload settings before editing again",
     code: "config_save_state_unknown",
   }, 409) });
+  const publish = (value: AnthropicAccountPoolConfig, warned: boolean): { status: "saved"; warning?: "config_bookkeeping_failed" } => {
+    let warning = warned;
+    try { writeAnthropicPoolSettings(config, instance, value); } catch { warning = true; }
+    try { reconcileLiveStateStores(); } catch { warning = true; }
+    return warning ? { status: "saved", warning: "config_bookkeeping_failed" } : { status: "saved" };
+  };
+  let durable: AnthropicAccountPoolConfig | undefined;
   try {
     const saved = mutatePersistedConfig(target => {
       if (instance === "anthropic2" && !configuredAnthropicInstance(target, instance)) {
@@ -37,9 +48,7 @@ export function persistAnthropicPoolPatch(
       return patch(target);
     });
     if (saved.status === "unavailable") return unknown();
-    writeAnthropicPoolSettings(config, instance, saved.value);
-    reconcileLiveStateStores();
-    return { status: "saved" };
+    durable = saved.value;
   } catch (error) {
     const persisted = readConfigFileSnapshot();
     if (persisted.diagnostics.source !== "file" || persisted.raw === undefined) return unknown();
@@ -53,14 +62,11 @@ export function persistAnthropicPoolPatch(
     let expected: AnthropicAccountPoolConfig;
     try { expected = patch(structuredClone(current)).value; } catch { return unknown(); }
     const matches = JSON.stringify(rawAnthropicAccountPool(current, instance)) === JSON.stringify(expected);
-    if (matches) {
-      writeAnthropicPoolSettings(config, instance, resolveAnthropicAccountPoolConfig(current, instance));
-      // A failed reconcile must not turn confirmed publication back into a rollback.
-      try { reconcileLiveStateStores(); } catch { /* Fixed warning covers bookkeeping failure. */ }
-      return { status: "saved", warning: "config_bookkeeping_failed" };
-    }
+    // A failed live write or reconcile must not turn confirmed publication back into a rollback.
+    if (matches) return publish(resolveAnthropicAccountPoolConfig(current, instance), true);
     if (error instanceof ConfigWritePublishedError || persisted.raw !== before.raw) return unknown();
     return { status: "failed", response: jsonResponse({ error: "Pool settings could not be saved" }, 500) };
   }
+  if (durable === undefined) return unknown();
+  return publish(durable, false);
 }
-

@@ -91,17 +91,30 @@ web search defaults to OpenAI and vision keeps its automatic order.
 Only an Anthropic family result consults a pool. `resolveAnthropicHelperInstance` in
 `src/sidecar/auth.ts` takes the explicit `anthropicInstance` of `webSearchSidecar`,
 `visionSidecar` or the matching `claudeCode` override, then the parent request's
-builtin instance. An explicit or inherited target that is not configured and usable
-raises `AnthropicHelperUnavailableError` (`anthropic_helper_unavailable`); executors
-keep that refusal and never discover another pool. With neither target, legacy
-discovery keeps its order and never adds Pool 2. `resolveAnthropicSidecarAuth` is an
-exact instance lookup with no fallback.
+builtin instance, resolved through `configuredAnthropicInstance` so a custom unmarked
+`anthropic2` row is never inherited as Pool 2. A target is available when it is
+configured and holds any account that is neither paused nor awaiting reauth; which
+account sends is decided at snapshot time. An explicit or inherited target that is
+unavailable raises `AnthropicHelperUnavailableError` (`anthropic_helper_unavailable`).
+The planners (`planWebSearch`, `planVisionSidecar`, the passthrough bridge) convert
+that refusal into "no helper plan" through `withAnthropicHelperRefusal`, so the main
+request proceeds exactly as it does when no helper is configured, and nothing
+discovers another pool. With neither target, legacy discovery keeps its order and
+never adds Pool 2. `resolveAnthropicSidecarAuth` is an exact instance lookup with no
+fallback.
 
 `src/sidecar/anthropic-binding.ts` gives builtin helpers the selected instance's
-model-route admission, account selection and committed snapshot through
-`resolveAnthropicHelperSnapshot`. `fetchAnthropicHelper` rechecks the configured row,
-captured target, live account and bearer before each physical send, so a removed,
-paused or replaced account refuses rather than sending. Custom helper providers keep
+model-route admission, account selection and credential snapshot through
+`resolveAnthropicHelperSnapshot`. Like the legacy helper token path, it reads the
+pool's selection without promoting the active account, so a helper never moves the
+active pointer or spends a one-dispatch manual preference. `fetchAnthropicHelper`
+rechecks the configured row, captured target, live account and bearer before each
+physical send, so a removed, paused or replaced account refuses rather than sending.
+Callers and the send fence build the Messages URL with the same
+`anthropicHelperMessagesUrl`, so a trailing slash on `baseUrl` cannot split them.
+Generated image descriptions are cached per resolved pool, model and reasoning;
+settings that do not change the description (`enabled`, `timeoutMs`) leave the
+cache intact. Custom helper providers keep
 their own credential path. `src/vision/plan.ts`, `src/vision/anthropic-describe.ts`
 and `src/web-search/` consume this binding; account-refusal recovery in
 `src/web-search/loop.ts` and `src/images/loop.ts` stays within the sending instance.
@@ -109,7 +122,8 @@ and `src/web-search/` consume this binding; account-refusal recovery in
 `src/config/schema/anthropic-account-pool.ts` accepts `anthropicInstance` only as
 `anthropic` or `anthropic2`, only with an Anthropic backend, and rejects a
 provider-qualified helper model naming the other instance. Claude Code overrides are
-validated after inheriting the global helper fields. In
+validated after inheriting the global helper fields; an inherited pool is checked only
+while the merged backend is Anthropic. In
 `src/server/management/config-routes.ts` and `agent-settings-routes.ts` a missing field
 preserves, `null` deletes and an instance sets; an unset choice is never written as
 `anthropic`. The option DTOs in `web-search-sidecar-options.ts` and
