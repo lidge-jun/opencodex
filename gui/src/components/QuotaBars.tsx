@@ -147,6 +147,7 @@ export function maxQuotaUtilisation(quota: AccountQuota | null): number {
   const vals = [quota.fiveHourPercent, quota.weeklyPercent, quota.monthlyPercent]
     .filter((n): n is number => typeof n === "number");
   for (const w of quota.customWindows ?? []) {
+    if (w.modelId !== undefined) continue;
     if (typeof w.percent === "number") vals.push(w.percent);
   }
   const hasSubscriptionCreditsCustom = quota.customWindows?.some(

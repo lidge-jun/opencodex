@@ -13,7 +13,7 @@ export interface AccountQuota {
   shortObservedAt?: number;
   shortWindowSeconds?: number;
   monthlyResetAt?: number;
-  customWindows?: { label: string; percent: number; resetAt?: number }[];
+  customWindows?: { label: string; percent: number; resetAt?: number; modelId?: string }[];
   creditsUsd?: {
     used: number;
     limit: number;

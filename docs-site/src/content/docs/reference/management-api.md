@@ -626,6 +626,10 @@ setting interacts with `claudeCode.enabled` across upgrades and downgrades.
 | `GET, PUT /api/provider-context-caps` | Read or update global, all-provider, or one-provider context caps | 400 invalid request; 404 unknown provider |
 | `GET /api/provider-presets` | Return GUI provider presets derived from the runtime registry | — |
 
+When Antigravity's quota-summary endpoint has no usable response, quota reports may also include
+per-model Cloud Code Assist usage windows when the model-discovery response provides them. These
+measurements are diagnostic; an absent model window does not establish that the model is unavailable.
+
 The provider context-cap response includes `caps` (active limits) and `values` (last selected
 values, retained while disabled). Enabling a provider without `value` restores its selection,
 or uses the global `contextCapValue` on first enable. This also applies to OpenAI: the switch

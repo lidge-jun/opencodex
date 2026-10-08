@@ -587,6 +587,8 @@ Antigravity catalog rows carry the observed complete effort map from `src/provid
 
 Known Claude Sonnet and Opus 5.5 base and low/medium/high IDs share a deterministic usage identity in `src/providers/antigravity-models.ts`, independently of live discovery. This accounting map does not migrate saved routing selections; Claude 4.6 and unknown suffix identities remain unchanged.
 
+When the `retrieveUserQuotaSummary` endpoint has no usable result, `src/providers/quota/antigravity.ts` preserves bounded per-model `quotaInfo` measurements from `fetchAvailableModels` alongside the existing first-seen Gem/Cla family summaries. Model windows carry the exact CCA wire ID for display and diagnostics; account and provider routing ignore these rows and continue to use family summaries. A missing model row or failed probe is unknown evidence, not a model eligibility verdict. Per-account cache entries are bound to the current credential and project identity.
+
 
 ## Combo model refusal evidence
 

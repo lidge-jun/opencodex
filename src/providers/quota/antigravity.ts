@@ -71,19 +71,34 @@ function antigravityWindowsFromModels(body: Record<string, unknown> | null): Pro
   if (!models) return [];
 
   const windows = new Map<string, ProviderQuotaWindow>();
+  const modelWindows: ProviderQuotaWindow[] = [];
   for (const [modelId, rawModelInfo] of Object.entries(models)) {
+    if (!modelId.trim() || modelId.length > 128) continue;
     const modelInfo = asRecord(rawModelInfo);
     if (!modelInfo) continue;
     for (const quotaInfo of quotaInfoEntries(modelInfo)) {
       const label = classifyAntigravityFamily(modelId, modelInfo, quotaInfo);
-      if (!label || windows.has(label)) continue;
       const percent = antigravityUsedPercent(quotaInfo);
       if (percent === undefined) continue;
-      windows.set(label, {
-        label,
-        percent,
-        ...(normalizeResetAt(quotaInfo.resetTime) !== undefined ? { resetAt: normalizeResetAt(quotaInfo.resetTime) } : {}),
-      });
+      const resetAt = normalizeResetAt(quotaInfo.resetTime);
+      if (label && !windows.has(label)) {
+        windows.set(label, { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
+      }
+      // Keep model measurements as display/diagnostic evidence. They are deliberately
+      // separate from the family summaries above; routing must not infer eligibility
+      // from one model's counter or from a missing row.
+      if (modelWindows.length < 256) {
+        const tier = typeof quotaInfo.tier === "string" && quotaInfo.tier.length <= 64
+          ? quotaInfo.tier.trim().slice(0, Math.max(0, 125 - modelId.length))
+          : "";
+        const modelLabel = `${modelId}${tier ? ` · ${tier}` : ""}`;
+        modelWindows.push({
+          label: modelLabel,
+          modelId,
+          percent,
+          ...(resetAt !== undefined ? { resetAt } : {}),
+        });
+      }
     }
   }
 
@@ -91,7 +106,7 @@ function antigravityWindowsFromModels(body: Record<string, unknown> | null): Pro
     const window = windows.get(label);
     return window ? [window] : [];
   });
-  return customWindows;
+  return [...customWindows, ...modelWindows];
 }
 
 /**

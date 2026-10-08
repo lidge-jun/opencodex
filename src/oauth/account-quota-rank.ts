@@ -96,7 +96,7 @@ function headroomOf(provider: string, accountId: string, requestedModelId?: stri
   const family = classifyModelFamilyForQuota(provider, requestedModelId);
   if (family) {
     const percents = (quota.customWindows ?? [])
-      .filter(window => windowMatchesFamily(window.label, family))
+      .filter(window => window.modelId === undefined && windowMatchesFamily(window.label, family))
       .map(window => window.percent)
       .filter((value): value is number => typeof value === "number");
     if (percents.length === 0) return null;
@@ -106,7 +106,7 @@ function headroomOf(provider: string, accountId: string, requestedModelId?: stri
     quota.fiveHourPercent,
     quota.weeklyPercent,
     quota.monthlyPercent,
-    ...(quota.customWindows ?? []).map(window => window.percent),
+    ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.percent),
   ].filter((value): value is number => typeof value === "number");
   if (percents.length === 0) return null;
   return 100 - Math.max(...percents);

@@ -424,7 +424,8 @@ async function fetchAccountQuota(
   const kiroIdentity = provider === "kiro" ? kiroProbeIdentity(accountId) : undefined;
   const cachedCandidate = accountQuotaCache.get(key);
   const cached = (provider !== "kiro" || cachedCandidate?.identity === kiroIdentity)
-    && (provider !== "anthropic" || cachedCandidate?.isCurrent?.() !== false) ? cachedCandidate : undefined;
+    && (provider !== "anthropic" || cachedCandidate?.isCurrent?.() !== false)
+    && (provider !== "google-antigravity" || cachedCandidate?.isCurrent?.() !== false) ? cachedCandidate : undefined;
   if (!forceRefresh && cached && Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS) {
     if (provider === "google-antigravity" && cached.quotaFailure && cached.quotaFailureIsCurrent?.() !== true) return { ...cached, quotaFailure: undefined };
     return provider === "anthropic" ? { ...cached, quota: normalizeAnthropicQuota(cached.quota, Date.now()) } : cached;
@@ -447,6 +448,7 @@ async function fetchAccountQuota(
       try { return epoch === explicitAccountEpoch && diagnosticIdentity !== undefined && diagnosticIdentity === antigravityQuotaDiagnosticIdentity(accountId); }
       catch { return false; }
     };
+    const antigravityIsCurrent = () => quotaFailureIsCurrent();
     const diagnosticFields = () => quotaFailure && quotaFailureIsCurrent() ? { quotaFailure, quotaFailureIsCurrent } : {};
     const unavailable = (): AccountQuotaCacheEntry => {
       if (!flightCurrent()) return { ts: Date.now(), quota: null, unavailable: true };
@@ -458,9 +460,11 @@ async function fetchAccountQuota(
         unavailable: true,
         ...(provider === "anthropic" && retained?.isCurrent ? { isCurrent: retained.isCurrent } : {}),
         ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
+        ...(provider === "google-antigravity" ? { isCurrent: antigravityIsCurrent } : {}),
         ...diagnosticFields(),
       };
-      if (mayCommitAccountQuotaKey(key, writerGeneration) && (provider !== "kiro" || kiroProbeCurrent(accountId, kiroIdentity))) {
+      if (entry.isCurrent?.() !== false && mayCommitAccountQuotaKey(key, writerGeneration)
+        && (provider !== "kiro" || kiroProbeCurrent(accountId, kiroIdentity))) {
         accountQuotaCache.set(key, entry);
         if (provider === "kiro") persistKiroAccountState();
         sweepExpiredOnWrite(entry.ts);
@@ -499,13 +503,16 @@ async function fetchAccountQuota(
           return { ts: Date.now(), quota: null, unavailable: true };
         }
       }
+      if (provider === "google-antigravity" && !antigravityIsCurrent()) return { ts: Date.now(), quota: null, unavailable: true };
       if (!quota) return unavailable();
       const entry: AccountQuotaCacheEntry = {
         ts: Date.now(), quota: provider === "anthropic" ? normalizeAnthropicQuota(quota, Date.now()) : quota,
         ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
+        ...(provider === "google-antigravity" ? { isCurrent: antigravityIsCurrent } : {}),
         ...(anthropicCurrent ? { isCurrent: anthropicCurrent } : {}),
       };
       if (mayCommitAccountQuotaKey(key, writerGeneration)
+        && entry.isCurrent?.() !== false
         && (provider !== "kiro" || kiroProbeCurrent(accountId, kiroIdentity))) {
         accountQuotaCache.set(key, entry);
         if (provider === "kiro") { commitKiroAccountUsageState(key, kiroSnapshot, kiroIdentity); persistKiroAccountState(); }
