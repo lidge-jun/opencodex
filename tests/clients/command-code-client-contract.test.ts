@@ -32,6 +32,7 @@ import {
   type ExportContext,
 } from "../../src/clients/config-export";
 import { setPath } from "../../src/integrations/merge";
+import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
 import { OPENCODE_PROVIDER_ID } from "../../src/clients/config-export/constants";
 import { MANAGED_PATH_TEMPLATES } from "../../src/integrations/mutation-plan";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
@@ -225,6 +226,38 @@ describe("Command Code real integration writer root-precedence and lifecycle", (
     const storeRoot = join(base, "store", "integrations");
     mkdirSync(home, { recursive: true });
     store = createIntegrationStateStore(storeRoot);
+  });
+
+  test("default catalog refresh replaces an enabled Command Code model roster", async () => {
+    const configPath = setupConfig('{"providers":{}}');
+    const initial = input();
+    expect(applyIntegration(initial).ok).toBe(true);
+    const before = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(Object.keys(before.providers[OPENCODE_PROVIDER_ID].models)).toEqual(["openai/gpt-5.6-sol"]);
+
+    const rosterB = [CONTEXT.models[0]!];
+    const { config, port } = initial;
+    const outcomes = await refreshOwnedCatalogIntegrations({ models: rosterB, config, port, env: {}, home, store });
+
+    const after = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(Object.keys(after.providers[OPENCODE_PROVIDER_ID].models)).toEqual(["anthropic/claude-opus-5"]);
+    expect(outcomes.find(outcome => outcome.client === "commandcode"))
+      .toEqual({ client: "commandcode", ok: true, changed: true });
+  });
+
+  test("default catalog refresh leaves unowned Command Code bytes untouched without loading models", async () => {
+    const original = '{\n  "providers": {"opencodex": {"models": {"personal/model": {}}}}\n}\n';
+    const configPath = setupConfig(original);
+    let loads = 0;
+    const { config, port } = input();
+    const outcomes = await refreshOwnedCatalogIntegrations({
+      models: async () => { loads++; return CONTEXT.models; },
+      config, port, env: {}, home, store,
+    });
+
+    expect(outcomes).toEqual([]);
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect(loads).toBe(0);
   });
 
   test("refuses when singular provider root is a string, leaves file untouched, appends no journal entry", async () => {

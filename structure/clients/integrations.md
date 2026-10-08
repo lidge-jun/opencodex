@@ -214,8 +214,8 @@ their existing visibility rules.
 
 ## Owned catalog convergence
 
-Visibility, selected-model and preset writes refresh already-owned catalog contributions (including OpenCode and Kilo) after
-persisting the selection. Explicit sync also refreshes owned OpenCode and Kilo blocks. The shared catalog-refresh
+Visibility, selected-model and preset writes refresh already-owned catalog contributions (including OpenCode, Kilo and
+Command Code) after persisting the selection. Explicit sync also refreshes owned OpenCode, Kilo and Command Code blocks. The shared catalog-refresh
 fan-out loads the filtered roster lazily once, leaves unowned clients alone, and reports each
 refusal independently. Existing coordinated writers retain all no-clobber and ownership checks.
 Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy
