@@ -98,7 +98,7 @@ const PAGES = [
     path: "readme/README.ru.md",
     retained: /(\d+) удерживаемых хранилищ/,
     observed: /(\d+) наблюдаемых буфера/,
-    stateStores: /(\d+) регистраций state-store/,
+    stateStores: /(\d+) регистрация state-store/,
     totalSentence: "удерживаемое процессом",
   },
   {
