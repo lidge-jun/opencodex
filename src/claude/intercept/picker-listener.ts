@@ -208,11 +208,11 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     // Refusals answer with an empty response and a fixed log line that carries no request data.
     const refuse = (status: 400 | 503) => {
       // Do not leave a refused, still-uploading stream behind after delivering its empty reply.
-      if (uploading) {
+      if (uploading && !req.complete) {
         req.once("error", () => res.destroy());
         responseWritable.once("finish", () => closeInput(true));
       }
-      res.writeHead(status, { "Content-Length": "0", ...(!h2 && uploading ? { Connection: "close" } : {}) });
+      res.writeHead(status, { "Content-Length": "0", ...(!h2 && uploading && !req.complete ? { Connection: "close" } : {}) });
       res.end();
       options.log?.(`picker request refused ${status}`);
     };
@@ -236,7 +236,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       if (clientGone) return;
       if (res.headersSent) res.destroy();
       else {
-        res.writeHead(502, { "Content-Length": "0", ...(!h2 && uploading ? { Connection: "close" } : {}) });
+        res.writeHead(502, { "Content-Length": "0", ...(!h2 && uploading && !req.complete ? { Connection: "close" } : {}) });
         res.end(); log(502);
       }
     };

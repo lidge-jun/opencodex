@@ -145,6 +145,37 @@ for (const protocol of ["h1", "h2"] as const) {
   }
 }
 
+bounded("h1 completed upload keeps the same connection alive after an upstream failure", async wait => {
+  const body = "complete";
+  let received = "";
+  let complete = false;
+  const f = await fixture((req, res) => {
+    req.on("error", () => res.destroy());
+    if (req.url === "/failed") {
+      req.on("data", chunk => { received += chunk.toString(); });
+      req.once("end", () => { complete = req.complete; req.socket.destroy(); });
+    } else { req.resume(); res.end("ordinary"); }
+  }, { maxActiveUpstreams: 1 });
+  try {
+    const upload = f.h1("/failed", "POST", { "Content-Length": String(body.length) });
+    const firstSocket = Promise.withResolvers<Duplex>();
+    upload.once("socket", firstSocket.resolve);
+    let connection: string | undefined;
+    upload.once("response", res => { connection = res.headers.connection; });
+    const result = h1Result(upload); upload.end(body);
+    expect(await wait(result)).toEqual({ status: 502, text: "" });
+    expect(received).toBe(body);
+    expect(complete).toBe(true);
+    expect(connection).toBe("keep-alive");
+    const next = f.h1("/next");
+    const nextSocket = Promise.withResolvers<Duplex>();
+    next.once("socket", nextSocket.resolve);
+    const nextResult = h1Result(next); next.end();
+    expect(await wait(nextResult)).toEqual({ status: 200, text: "ordinary" });
+    expect(await wait(nextSocket.promise)).toBe(await wait(firstSocket.promise));
+  } finally { await wait(f.close()); }
+});
+
 for (const protocol of ["h1", "h2"] as const) {
   bounded(`${protocol} completed upload preserves SSE while a sibling upload is cancelled`, async wait => {
     const events = Promise.withResolvers<void>();
