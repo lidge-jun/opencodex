@@ -4,6 +4,15 @@ import type { TKey } from "./en";
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  "nativeReasoningRetention.title": "OpenAI 네이티브 추론 보존",
+  "nativeReasoningRetention.description": "공식 ChatGPT 백엔드로 보내는 네이티브 요청에만 적용되며 Combo 및 계정 풀의 실제 대상 변경도 포함합니다. 이전 암호화 추론을 다시 보낼 수 있지만 재사용 여부는 백엔드에 따라 달라집니다. 두 옵션은 기본적으로 꺼져 있습니다.",
+  "nativeReasoningRetention.modelSwitch": "모델 전환 시 암호화 추론 보존",
+  "nativeReasoningRetention.accountSwitch": "계정 전환 시 암호화 추론 보존 (실험적)",
+  "nativeReasoningRetention.accountHint": "암호문을 보존해도 다른 계정이 이전 응답 ID나 파일에 접근할 수 있는 것은 아닙니다. 요청 성공은 추론 재사용을 입증하지 않습니다. 네이티브 압축 처리는 변경되지 않습니다.",
+  "nativeReasoningRetention.reset": "기본값 복원",
+  "nativeReasoningRetention.loadFailed": "네이티브 추론 설정을 불러올 수 없습니다.",
+  "nativeReasoningRetention.saveFailed": "네이티브 추론 설정을 저장할 수 없습니다.",
+  "nativeReasoningRetention.saved": "네이티브 추론 설정을 저장했습니다.",
   "nav.claude": "Claude",
   "claude.pageSub": "Claude Code의 OpenCodex 라우팅과 설정을 관리합니다.",
 

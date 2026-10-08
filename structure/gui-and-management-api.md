@@ -34,7 +34,7 @@ preferences, while `src/server/management/companion-routes.ts` exposes those set
 usage timeline assembled by `src/usage/timeline.ts` to local clients. Query, filter-echo and
 missing-measurement behavior follows the [companion usage contract](companion.md).
 
-Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+Native reasoning controls follow [the shared retention contract](transports/native-reasoning-retention.md#configuration-and-management). Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation is a local CLI surface, not a management API or GUI update permission. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
 
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.

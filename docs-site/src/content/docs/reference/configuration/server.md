@@ -23,6 +23,7 @@ runs helper features around provider requests.
 | `websockets?` | `boolean` | `false` | Advertise and admit the client-facing Responses WebSocket path. False keeps clients on HTTP/SSE; it does not disable an eligible canonical ChatGPT upstream WS optimization. Complete-input requests may reuse an upstream connection within the same selected credential, account, thread and turn; changed handshake policy or missing identity keeps requests on separate connections. This does not trim HTTP input or create previous-response IDs. |
 | `codexNativeSteering?` | `boolean` | `false` | Experimental, native-only mid-turn steering on the Responses WebSocket endpoint. Requires `websockets: true`, a compatible upstream/client, and a pinned account/model/tool surface. Validated generation settings can change in explicit saved-result continuations. Does not enable translated models or HTTP fallback. See [native steering](/guides/codex-integration/#experimental-native-mid-turn-steering). |
 | `codexNativeInjection?` | `boolean` | `false` | Experimental saved function-result injection on compatible native multi-agent WebSocket turns. Requires `websockets: true`, explicit `multi_agent.enabled`, and an eligible provider. Separate from steering; no automatic tool rerun or recovery create. See [native injection](/guides/codex-integration/#experimental-native-function-result-injection). |
+| `nativeReasoningRetention?` | `{ modelSwitch?: boolean; accountSwitch?: boolean }` | both `false` | Permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT backend. Account retention is experimental. See [Native reasoning retention](#native-reasoning-retention). |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` data-plane admission credentials on non-loopback binds. They do not authorize management APIs; management access uses the separate credential documented in the [management reference](/reference/management-api/). Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
@@ -47,6 +48,27 @@ runs helper features around provider requests.
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
+
+## Native reasoning retention
+
+The dashboard overview exposes two independent opt-ins: retain reasoning when switching models, and retain it when switching accounts. Both default off. The same policy can be saved in `config.json`:
+
+```jsonc
+{
+  "nativeReasoningRetention": {
+    "modelSwitch": true,
+    "accountSwitch": false
+  }
+}
+```
+
+This example retains reasoning `encrypted_content` on a known model switch within the same native ChatGPT destination and credential. Set `accountSwitch` to `true` only to opt into experimental cross-account forwarding. When both model and account change, both switches must be enabled. The policy applies to each actual native Combo target and pool retry; it does not grant retention to third-party or API-key destinations.
+
+Retention means that OpenCodex may forward the carried ciphertext. It cannot confirm that the upstream accepts or reuses that reasoning. A detected decrypt rejection still enters the existing bounded cleanup recovery, and the rejection memo takes precedence over either switch. Response and conversation references, foreign reasoning item ids, uploaded-file account restrictions and cache isolation continue using their own ownership rules. Native compaction blocks keep their existing cleanup behavior; direct native `/v1/responses/compact` sanitization is unchanged.
+
+Use `GET /api/native-reasoning-retention` to read the resolved booleans and `PUT` with a partial boolean object to update them. `PUT` with JSON `null` restores both defaults. Invalid fields or unknown keys are rejected; a malformed file block disables retention with a warning. Dashboard/API changes apply to subsequent requests. Local `ocx config set/unset` edits require a restart to converge the running proxy.
+
+## Upstream transport recovery
 
 While the canonical ChatGPT upstream WebSocket waits for the first Responses event after
 sending the create frame, it watches for liveness rather than a fixed deadline. When the socket

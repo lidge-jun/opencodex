@@ -5,6 +5,15 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  "nativeReasoningRetention.title": "OpenAI yerel akıl yürütmesini koruma",
+  "nativeReasoningRetention.description": "Yalnızca resmi ChatGPT arka ucuna yapılan yerel isteklerde, Combo ve hesap havuzlarındaki gerçek hedef değişiklikleri dahil uygulanır. Önceki şifreli akıl yürütme yeniden gönderilebilir; yeniden kullanım arka uca bağlıdır. İki seçenek de varsayılan olarak kapalıdır.",
+  "nativeReasoningRetention.modelSwitch": "Model değiştirirken şifreli akıl yürütmeyi koru",
+  "nativeReasoningRetention.accountSwitch": "Hesap değiştirirken şifreli akıl yürütmeyi koru (deneysel)",
+  "nativeReasoningRetention.accountHint": "Şifreli içeriği korumak, başka hesaplara eski yanıt kimliklerine veya dosyalara erişim vermez. Başarılı bir istek, akıl yürütmenin yeniden kullanıldığını kanıtlamaz. Yerel bağlam sıkıştırma işlemi değişmez.",
+  "nativeReasoningRetention.reset": "Varsayılanları geri yükle",
+  "nativeReasoningRetention.loadFailed": "Yerel akıl yürütme ayarları yüklenemedi.",
+  "nativeReasoningRetention.saveFailed": "Yerel akıl yürütme ayarları kaydedilemedi.",
+  "nativeReasoningRetention.saved": "Yerel akıl yürütme ayarları kaydedildi.",
   "nav.claude": "Claude",
   "claude.pageSub": "Claude Code için OpenCodex yönlendirmesi ve ayarları.",
 

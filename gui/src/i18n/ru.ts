@@ -4,6 +4,15 @@ import type { TKey } from "./en";
  * Russian i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ru: Record<TKey, string> = {
+  "nativeReasoningRetention.title": "Сохранение нативных рассуждений OpenAI",
+  "nativeReasoningRetention.description": "Только для нативных запросов к официальному бэкенду ChatGPT, включая смену фактической цели в Combo и пулах аккаунтов. Позволяет повторно передавать прежние зашифрованные рассуждения; их использование зависит от бэкенда. Оба параметра по умолчанию выключены.",
+  "nativeReasoningRetention.modelSwitch": "Сохранять зашифрованные рассуждения при смене модели",
+  "nativeReasoningRetention.accountSwitch": "Сохранять зашифрованные рассуждения при смене аккаунта (экспериментально)",
+  "nativeReasoningRetention.accountHint": "Сохранение шифротекста не даёт другим аккаунтам доступа к прежним ID ответов или файлам. Успешный запрос не доказывает повторное использование рассуждений. Обработка нативного сжатия остаётся прежней.",
+  "nativeReasoningRetention.reset": "Восстановить значения",
+  "nativeReasoningRetention.loadFailed": "Не удалось загрузить настройки нативных рассуждений.",
+  "nativeReasoningRetention.saveFailed": "Не удалось сохранить настройки нативных рассуждений.",
+  "nativeReasoningRetention.saved": "Настройки нативных рассуждений сохранены.",
   "nav.claude": "Claude",
   "claude.pageSub": "Маршрутизация и настройки OpenCodex для Claude Code.",
 

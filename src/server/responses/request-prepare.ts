@@ -77,6 +77,7 @@ import {
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { resolveNativeReasoningRetention } from "../../config/schema/native-reasoning-retention";
 import { isThreadSpawnRequest } from "../effort-policy";
 import {
   resolveSubagentFallbackChain,
@@ -379,6 +380,7 @@ export async function prepareResponsesRequest(
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
     parsed = parseRequest(body);
+    parsed._nativeReasoningRetention = resolveNativeReasoningRetention(config);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound
@@ -639,6 +641,7 @@ export async function prepareResponsesRequest(
       // This is the same condition an account change already reports (account-change-state.ts),
       // and the serializer turns a stored summary into readable text instead of dropping it.
       parsed._stripReasoningEncryptedContent = true;
+      parsed._stripNativeCompactionEncryptedContent = true;
       if (parsed._compactionRequest === true) parsed._portableCompaction = true;
     }
     logCtx.routeDecision = route.routeDecision;
@@ -937,6 +940,7 @@ export async function prepareResponsesRequest(
             "_promptCacheKeyIsSharedCohort",
             "_cursorClientThreadId",
             "_reasoningReplayScope",
+            "_nativeReasoningRetention",
             "_cursorIsolateConversation",
           ];
           for (const key of kept) {
@@ -1396,6 +1400,8 @@ export async function prepareResponsesRequest(
       applyAccountChangeConversationStateScrub({
         body: parsed._rawBody,
         parsed,
+        preserveReasoningEncryptedContent: isCanonicalOpenAiForwardProvider(route.provider)
+          && parsed._nativeReasoningRetention?.accountSwitch === true,
         bindingKey: binding.bindingKey,
         servingAccountId: binding.accountId,
         logCtx,

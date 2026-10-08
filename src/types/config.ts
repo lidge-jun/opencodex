@@ -760,6 +760,8 @@ export interface OcxConfig {
   };
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
+  /** Canonical ChatGPT reasoning replay allowances; both default off. */
+  nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean };
   /**
    * Destination model for Codex's own memory pipeline, per phase
    * (src/server/responses/memory-models.ts).

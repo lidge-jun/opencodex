@@ -264,6 +264,7 @@ See [Codex prompt layers](/guides/codex-prompt/) for the layer model and the key
 | `GET /api/config` | Return the redacted, management-safe configuration DTO | — |
 | `PUT /api/config` | Disabled full-config replacement guard | 405; use focused endpoints instead |
 | `GET, PUT /api/settings` | Read runtime/startup settings or update auto-start, stream mode, app-owned memory budget, and `codexAccountPickerEnabled` | 400 invalid, non-object, or empty update |
+| `GET, PUT /api/native-reasoning-retention` | Read resolved model/account reasoning-retention booleans; partial PUT preserves omitted fields, JSON `null` restores defaults. See [native reasoning retention](/reference/configuration/server/#native-reasoning-retention). | 400 unknown field, invalid type or non-object/non-null body |
 | `GET /api/startup-health` | Read cached service/shim startup health | — |
 | `POST /api/startup-action` | Install or repair the service or Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |

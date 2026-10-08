@@ -68,6 +68,8 @@ const RUNTURN_WS_ROUTE_STATE_KEYS = [
   "_providerContinuationOwner",
   "_providerContinuationCandidate",
   "_stripReasoningEncryptedContent",
+  "_stripNativeCompactionEncryptedContent",
+  "_nativeReasoningRetention",
   "_dropForeignReasoningItemIds",
   "_reasoningReplayScope",
 ] as const;

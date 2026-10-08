@@ -4,6 +4,15 @@ import type { TKey } from "./en";
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  "nativeReasoningRetention.title": "OpenAI 原生推理保留",
+  "nativeReasoningRetention.description": "仅适用于官方 ChatGPT 后端的原生请求，包括 Combo 和账号池中的实际目标切换。允许透传旧推理密文；能否复用由后端决定。两个选项默认关闭。",
+  "nativeReasoningRetention.modelSwitch": "切换模型时保留推理密文",
+  "nativeReasoningRetention.accountSwitch": "切换账号时保留推理密文（实验性）",
+  "nativeReasoningRetention.accountHint": "保留密文不会让其他账号获得旧响应 ID 或文件的访问权限。请求成功也不能证明推理已被复用。 原生压缩的处理方式保持不变。",
+  "nativeReasoningRetention.reset": "恢复默认",
+  "nativeReasoningRetention.loadFailed": "无法加载原生推理设置。",
+  "nativeReasoningRetention.saveFailed": "无法保存原生推理设置。",
+  "nativeReasoningRetention.saved": "原生推理设置已保存。",
   "nav.claude": "Claude",
   "claude.pageSub": "管理 Claude Code 的 OpenCodex 路由和设置。",
 

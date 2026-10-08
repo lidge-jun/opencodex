@@ -480,6 +480,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         }
       }
       const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
+      const stripNativeCompaction = parsed._stripNativeCompactionEncryptedContent === true
+        || threadServingIdentityChanged;
       // Providers with the strict plaintext tool-continuation contract cannot consume any
       // encrypted reasoning blob, including one whose provenance is unknown. Combo routing
       // separately refuses a proven cross-route replay when no plaintext exists; this final
@@ -492,7 +494,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                 scrubOcxCompactionItems(
                   outBody,
                   destinationDecodesNativeCompactionBlob(provider),
-                  threadServingIdentityChanged,
+                  stripNativeCompaction,
                 ),
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,

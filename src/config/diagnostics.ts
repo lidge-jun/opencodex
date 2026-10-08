@@ -5,6 +5,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-retention";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import type { OcxConfig } from "../types";
 import { parseAnthropicModelRoutes } from "../oauth/anthropic-model-routes";
@@ -117,6 +118,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
   warnings.push(...degradedListenerWarnings(rawParsed, normalized));
   if (blockedModelRedirectsError(rawParsed)) warnings.push("blockedModelRedirects ignored: expected a map of nonempty model keys to nonempty string targets");
+  if (nativeReasoningRetentionConfigError(rawParsed)) warnings.push("nativeReasoningRetention ignored: expected only optional boolean modelSwitch and accountSwitch fields; both remain off");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
   if (quotaAutoRefreshWarning) warnings.push(quotaAutoRefreshWarning);
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
@@ -669,6 +671,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     if (!parsed.ok) return { ok: false, error: `schema_invalid: anthropicAccountPool.routes: ${parsed.error}` };
   }
   const boundaryError = blockedModelRedirectsError(value)
+    ?? nativeReasoningRetentionConfigError(value)
     ?? compactionRecoveryConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? (rawSubagentModelForce(value) !== undefined && !isSubagentModelEntry(rawSubagentModelForce(value)) ? "schema_invalid: claudeCode.subagentModelForce: expected a safe roster-style model id" : null)

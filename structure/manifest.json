@@ -185,6 +185,20 @@
       ]
     },
     {
+      "path": "transports/native-reasoning-retention.md",
+      "tier": 3,
+      "title": "Native Reasoning Retention",
+      "scope": "Optional native reasoning ciphertext forwarding on model/account switches, configuration and management controls.",
+      "documents": [
+        "src/config/",
+        "src/types/",
+        "src/responses/",
+        "src/server/",
+        "src/adapters/",
+        "gui/"
+      ]
+    },
+    {
       "path": "transports/responses-wire-shapes.md",
       "tier": 3,
       "title": "Responses Wire Shapes",
@@ -209,16 +223,16 @@
       ]
     },
     {
-        "path": "transports/policy-fallback.md",
-        "tier": 3,
-        "title": "Policy Candidate Fallback",
-        "scope": "Original policy authorization, concrete candidate retries and physical destination deduplication.",
-        "documents": [
-          "src/server/"
-        ]
-      },
-      {
-        "path": "transports/responses-spend.md",
+      "path": "transports/policy-fallback.md",
+      "tier": 3,
+      "title": "Policy Candidate Fallback",
+      "scope": "Original policy authorization, concrete candidate retries and physical destination deduplication.",
+      "documents": [
+        "src/server/"
+      ]
+    },
+    {
+      "path": "transports/responses-spend.md",
       "tier": 3,
       "title": "Responses Spend Reservations",
       "scope": "Credential-hop and durable spend reservations, and what a spent budget tells the client.",
@@ -291,7 +305,9 @@
       "tier": 4,
       "title": "Anthropic Account Thresholds",
       "scope": "Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes.",
-      "documents": ["src/oauth/"]
+      "documents": [
+        "src/oauth/"
+      ]
     },
     {
       "path": "providers-and-adapters.md",

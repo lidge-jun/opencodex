@@ -1,6 +1,9 @@
 {
+  "config-native-reasoning-retention.test.ts": "config",
+  "server-native-reasoning-retention.test.ts": "server",
   "claude-picker-upload.test.ts": "claude-integration",
-  "messages-native-scope.test.ts": "claude-integration", "catalog-auto-review-row.test.ts": "codex-integration",
+  "messages-native-scope.test.ts": "claude-integration",
+  "catalog-auto-review-row.test.ts": "codex-integration",
   "cli-log-view-filter.test.ts": "cli",
   "cli-usage-model-search.test.ts": "cli",
   "cli-companion-usage.test.ts": "cli",

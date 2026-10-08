@@ -87,11 +87,15 @@ export interface OcxParsedRequest {
   _cursorClientThreadId?: string;
   /** Conversation/provider/account/model-bound namespace for reasoning replay state. */
   _reasoningReplayScope?: OcxReasoningReplayScopeRef;
+  /** Trusted configuration snapshot; never read from the client's request body. */
+  _nativeReasoningRetention?: Readonly<{ modelSwitch: boolean; accountSwitch: boolean }>;
   /**
    * Set by bindRouteReasoningReplayScope after a proven serving-identity change, or by
    * prepareOpaqueBlobRecovery after an authoritative rejection; consumers strip replayed blobs.
    */
   _stripReasoningEncryptedContent?: boolean;
+  /** Native compaction remains nonportable even when reasoning-only retention is enabled. */
+  _stripNativeCompactionEncryptedContent?: boolean;
   /**
    * Set when replayed reasoning item ids name items in a store this destination cannot read: by
    * prepareOpaqueBlobRecovery before the one recovery rebuild, and by bindRouteReasoningReplayScope

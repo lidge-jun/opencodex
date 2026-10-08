@@ -13,6 +13,7 @@ import {
   reasoningReplayOpaqueBlobRejectionMemoized,
   reasoningReplayOAuthCredentialIdentity,
   reasoningReplayServingIdentityChanged,
+  reasoningReplayServingIdentityChange,
   rememberReasoningForCall,
   rememberReasoningReplayOpaqueBlobRejection,
 } from "../../src/responses/reasoning-replay-cache";
@@ -143,6 +144,22 @@ describe("reasoning replay provider and credential identity", () => {
       ...scope({ modelId: "different-model" }),
       clientThreadId: destinationThreadId,
     })).toBe(false);
+  });
+
+  test("known serving deltas separate model compatibility from credential and destination ownership", () => {
+    commitReasoningReplayServingIdentity(scope());
+    expect(reasoningReplayServingIdentityChange(scope())).toBeUndefined();
+    expect(reasoningReplayServingIdentityChange(scope({ modelId: "other-model" }))).toEqual({
+      providerChanged: false, destinationChanged: false, adapterChanged: false,
+      modelChanged: true, credentialChanged: false,
+    });
+    expect(reasoningReplayServingIdentityChange(scope({
+      modelId: "other-model", credentialDurableIdentity: "credential:other-slot",
+    }))).toMatchObject({ modelChanged: true, credentialChanged: true, destinationChanged: false });
+    expect(reasoningReplayServingIdentityChange(scope({
+      providerDestinationDurableIdentity: "destination:other-backend",
+    }))).toMatchObject({ destinationChanged: true, modelChanged: false, credentialChanged: false });
+    expect(reasoningReplayServingIdentityChange({ clientThreadId: "unknown-thread" })).toBeUndefined();
   });
 
   test("opaque-blob rejection memos use the durable serving identity and refuse incomplete scopes", () => {
