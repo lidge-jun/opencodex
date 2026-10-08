@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
@@ -13,18 +13,35 @@ import { pickerCaCertPath, pickerCaFingerprints } from "../../src/claude/interce
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { memoryPickerCaStore } from "../helpers/picker-ca-store";
 import { saveConfig } from "../../src/config";
+import { flushConfigDirHardeningAndReaps, hardenConfigDir } from "../../src/config/paths";
+import { resetHardenedStateForTests, setAsyncIcaclsRunnerForTests, setPlatformForTests } from "../../src/lib/windows-secret-acl";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
 
 const roots: string[] = [];
 const handles: Array<Awaited<ReturnType<typeof startClaudeIntercept>>> = [];
 const priorHome = process.env.OPENCODEX_HOME;
 const priorDesktop = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
-afterEach(async () => {
-  for (const handle of handles.splice(0)) await handle?.stop();
-  for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
-  if (priorHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = priorHome;
-  if (priorDesktop === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR; else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = priorDesktop;
-});
+// loadConfig() starts an optional Windows ACL hardening flight (icacls) on the config root that
+// intercept stop() does not drain; removing the root under it raised EBUSY on a Windows shard
+// (run 37735258668). Drain every root's hardening and reaps first, then remove with the shared
+// release-race retry, and restore the environment even when a stop or removal throws.
+async function cleanupPickerStartup(): Promise<void> {
+  try {
+    for (const handle of handles.splice(0)) await handle?.stop();
+  } finally {
+    try {
+      for (const dir of roots.splice(0)) {
+        await flushConfigDirHardeningAndReaps(dir);
+        removeTreeWithRetry(dir);
+      }
+    } finally {
+      if (priorHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = priorHome;
+      if (priorDesktop === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR; else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = priorDesktop;
+    }
+  }
+}
+afterEach(cleanupPickerStartup);
 const routes = async () => ({ nativeSlugs: [], routedModels: [] });
 function setup() {
   const root = mkdtempSync(join(tmpdir(), "ocx-picker-startup-")); roots.push(root);
@@ -40,6 +57,52 @@ function setup() {
 // flat 10 s bound in three dev/PR runs (37360604391, 37443819560, 37449564955). spawnSync
 // blocks the loop, so each multi-child test's own bound covers all of its children.
 const PICKER_CHILD_TIMEOUT_MS = watchdogMs(10_000);
+
+test("fixture cleanup waits for pending Windows config-directory hardening", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const { root } = setup();
+  resetHardenedStateForTests();
+  setPlatformForTests("win32");
+  setAsyncIcaclsRunnerForTests(async () => {
+    started();
+    await blocked;
+    return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+  });
+  let cleanup: Promise<void> | undefined;
+  try {
+    hardenConfigDir();
+    await entered;
+    cleanup = cleanupPickerStartup();
+    await Promise.resolve();
+    expect(existsSync(root)).toBe(true);
+    release();
+    await cleanup;
+    expect(existsSync(root)).toBe(false);
+    expect(process.env.OPENCODEX_HOME).toBe(priorHome);
+  } finally {
+    release();
+    try {
+      await flushConfigDirHardeningAndReaps(root);
+      await cleanup;
+    } finally {
+      setAsyncIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+    }
+  }
+});
+
+test("fixture cleanup removes roots and restores env when a handle stop throws", async () => {
+  const { root } = setup();
+  handles.push({ stop: async () => { throw new Error("stop failed"); } } as unknown as Awaited<ReturnType<typeof startClaudeIntercept>>);
+  await expect(cleanupPickerStartup()).rejects.toThrow("stop failed");
+  expect(existsSync(root)).toBe(false);
+  expect(process.env.OPENCODEX_HOME).toBe(priorHome);
+  expect(process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR).toBe(priorDesktop);
+});
 
 test("Windows and Linux skip all picker effects while still discarding legacy key", async () => {
   for (const platform of ["linux", "win32"] as const) {
