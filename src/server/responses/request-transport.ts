@@ -2,7 +2,8 @@ import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { resolveAnthropicMessagesUrl } from "../../adapters/anthropic";
-import { bindAnthropicRefusalCredential } from "../../oauth/anthropic-account-refusal";
+import { bindAnthropicRefusalCredentialForSend } from "../../oauth/anthropic-account-refusal";
+import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent, type AnthropicPhysicalSendOwnership } from "../../oauth/anthropic-send-ownership";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { OAuthAccessSnapshot } from "../../oauth";
@@ -575,9 +576,15 @@ export async function prepareResponsesTransport(
           const releaseFamily = snapshot ? anthropicQuota!.claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
           if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
           let response: Response;
+          let physicalOwner: AnthropicPhysicalSendOwnership | null = null;
           try {
             requireAnthropicAdmission();
             if (snapshot) {
+              // Reserve the incarnation at this synchronous send boundary, never on return.
+              physicalOwner = captureAnthropicPhysicalSendOwnership(snapshot);
+              if (!physicalOwner || !anthropicPhysicalSendOwnershipIsCurrent(physicalOwner)) {
+                throw new OAuthLoginRequiredError(anthropicInstance!);
+              }
               sentOAuthSnapshot = snapshot;
               passiveQuotaWriterGeneration = writerGeneration;
             }
@@ -592,13 +599,14 @@ export async function prepareResponsesTransport(
           // Observe each physical response before retries replace it. The binding belongs to
           // this dispatch, so a manual switch cannot file A's headers against B. Header
           // overrides and credential replacement make ownership unprovable: skip those writes.
-          if (ownsBearer && snapshot) {
+          if (ownsBearer && snapshot && physicalOwner) {
             try {
               const current = getAccountCredentialWithStatus(anthropicInstance!, snapshot.accountId);
-              if (snapshot.provider === anthropicInstance && current && !current.needsReauth
+              if (anthropicPhysicalSendOwnershipIsCurrent(physicalOwner)
+                && snapshot.provider === anthropicInstance && current && !current.needsReauth
                 && current.credential.access === snapshot.accessToken
                 && credentialGeneration(current.credential) === snapshot.generation) {
-                bindAnthropicRefusalCredential(response, snapshot);
+                bindAnthropicRefusalCredentialForSend(response, physicalOwner);
                 recordAnthropicAccountQuotaFromHeadersForInstance(anthropicInstance!, snapshot.accountId, response.headers, writerGeneration, response.status, route.modelId);
               }
             } catch { /* best-effort observation cannot fail the response */ }

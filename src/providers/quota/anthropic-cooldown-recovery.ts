@@ -38,6 +38,10 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
   let cooldownGenerationByAccount: Map<string, number> | undefined;
   let emptyGeneration = 0;
   let nextCooldownGeneration = 1;
+  // Account lifetime is distinct from refusal/probe mutations; a valid refusal must not revoke itself.
+  let accountIncarnations: Map<string, number> | undefined;
+  let emptyAccountIncarnation = 0;
+  let nextAccountIncarnation = 1;
   let afterSettlementForTests: (() => void) | undefined;
 
   function setAnthropicQuotaAfterSettlementForTests(hook: (() => void) | undefined): void {
@@ -72,9 +76,23 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     return generation;
   }
 
+  function anthropicAccountIncarnation(accountId: string): number {
+    return accountIncarnations?.get(accountId) ?? emptyAccountIncarnation;
+  }
+
+  function reserveAnthropicAccountIncarnation(accountId: string): number {
+    const existing = accountIncarnations?.get(accountId);
+    if (existing !== undefined) return existing;
+    const incarnation = nextAccountIncarnation++;
+    (accountIncarnations ??= new Map()).set(accountId, incarnation);
+    return incarnation;
+  }
+
   function clearAnthropicCooldownGenerations(): void {
     emptyGeneration = nextCooldownGeneration++;
     cooldownGenerationByAccount = undefined;
+    emptyAccountIncarnation = nextAccountIncarnation++;
+    accountIncarnations = undefined;
   }
 
   /**
@@ -168,10 +186,14 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     for (const id of cooldownGenerationByAccount?.keys() ?? []) {
       if (!context.oauthAccountKeys.has(`${instance}\0${id}`)) noteAnthropicCooldownMutation(id);
     }
+    for (const id of accountIncarnations?.keys() ?? []) {
+      if (!context.oauthAccountKeys.has(`${instance}\0${id}`)) accountIncarnations!.set(id, nextAccountIncarnation++);
+    }
     return 0; // Tombstones are retained, never reclaimed into an older generation.
   }
   return Object.freeze({ instance, assertAnthropicQuotaSendAllowed, setAnthropicQuotaAfterSettlementForTests,
     anthropicCooldownGeneration, anthropicCooldownFlightKey, anthropicCredentialQuotaFlightKey, noteAnthropicCooldownMutation,
+    anthropicAccountIncarnation, reserveAnthropicAccountIncarnation,
     clearAnthropicCooldownGenerations, captureAnthropicCooldownRecoveryProbe,
     probeAnthropicQuotaWithRecovery, reconcileAnthropicCooldownGenerations });
 }

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
@@ -97,11 +97,16 @@ export async function createAnthropicInstanceFixture(
     accessToken: "synthetic-unused-cli-access", refreshToken: "synthetic-unused-cli-refresh", expiresAt: Date.now() + 3_600_000,
   } }));
   globalThis.fetch = (async () => { throw new Error("unexpected network in isolated Anthropic fixture"); }) as typeof fetch;
-  const [store, routing, quota, modelQuota, ratePolicy, identity, configStore, kernel, cleanup] = await Promise.all([
+  const [store, routing, quota, modelQuota, ratePolicy, identity, configStore, kernel, cleanup, history, health] = await Promise.all([
     import("../../src/oauth/store"), import("../../src/oauth/anthropic-routing"), import("../../src/providers/quota"),
     import("../../src/oauth/anthropic-model-quota"), import("../../src/oauth/anthropic-rate-limit-policy"),
-    import("../../src/oauth/anthropic-identity"), import("../../src/config"), import("../../src/oauth/pool-kernel"), import("./remove-tree"),
+    import("../../src/oauth/anthropic-identity"), import("../../src/config"), import("../../src/oauth/pool-kernel"), import("../../src/lib/test-home-guard"),
+    import("../../src/routing/history/indexer"), import("../../src/routing/health"),
   ]);
+  // These process-local owners are shared by serial fixtures. Start each fixture
+  // without a previous home's connection or provider/model health-cache entry.
+  history.closeRequestHistoryIndex();
+  health.clearHealthHistoryCacheForTests();
   const config = anthropicInstanceConfig(pools);
   function publishConfig(next: OcxConfig = config): void { configStore.saveConfig(next); }
   publishConfig();
@@ -154,8 +159,15 @@ export async function createAnthropicInstanceFixture(
     // fixture HOME still owns their target, before removing it or restoring the environment.
     quota.clearAccountQuotaCache();
     globalThis.fetch = originalFetch;
-    // Remove while the protected-tree guard still observes only this fixture's roots.
-    try { cleanup.removeTreeWithRetry(home); }
+    try {
+      // The assembled management dry-run opens this cached SQLite connection for
+      // historical route health. Windows retains its file lock until it is closed.
+      history.closeRequestHistoryIndex();
+      health.clearHealthHistoryCacheForTests();
+      cleanup.assertRemovalOutsideProtectedTrees(home);
+      // One attempt after releasing owned resources; EBUSY remains a test failure.
+      rmSync(home, { recursive: true, force: true, maxRetries: 0 });
+    }
     finally {
       for (const [key, value] of Object.entries(originalEnv)) {
         if (value === undefined) delete process.env[key]; else process.env[key] = value;

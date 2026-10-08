@@ -64,6 +64,7 @@ import type { OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
 import { parseRequest } from "../../responses/parser";
 import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
+import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
 import { observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
@@ -522,6 +523,23 @@ export async function prepareResponsesRequest(
   // or a subagent fallback rewrites it, so a refusal names the client's own
   // request rather than a destination it never asked for.
   const inboundSelector = parsed.modelId;
+  const selectorTargetsSecondary = (selector: string): boolean => {
+    const slash = selector.indexOf("/");
+    if (slash <= 0) return false;
+    const qualifier = selector.slice(0, slash);
+    // Match router precedence: exact custom keys (including uppercase names) win over aliases.
+    if (Object.hasOwn(config.providers, qualifier)) return qualifier === "anthropic2";
+    return qualifier === "anthropic2"
+      || config.providers.anthropic2?.alias?.trim().toLowerCase() === qualifier.toLowerCase();
+  };
+  const explicitlyRequestsSecondary = selectorTargetsSecondary(inboundSelector);
+  const secondaryProvider = config.providers.anthropic2;
+  // Reserve an explicit B selector before an absent row can default-route it to A.
+  // Combo parents have already dispatched above; concrete children retain their own target.
+  if (explicitlyRequestsSecondary && (!secondaryProvider || secondaryProvider.disabled === true
+    || secondaryProvider.authMode === "oauth" && configuredAnthropicInstance(config, "anthropic2") !== "anthropic2")) {
+    return formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider");
+  }
   const admissionScope = resolveAdmissionModelScope(config, options.admission);
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
     // Every route this request path produces passes through here: the direct
@@ -553,11 +571,17 @@ export async function prepareResponsesRequest(
     // no canonical OpenAI route for (#2901). Only the initial compaction route
     // may fall back to the configured default provider; combo attempts and the
     // later fallback/recovery re-routes keep the ordinary reservation.
-    const routeInbound = (modelId: string) => concreteSelection
-      ? routeConcreteModel(config, modelId)
-      : parsed._compactionRequest === true
-        ? routeCompactionModel(config, modelId, evidenceFromBody(parsed._rawBody))
-        : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
+    const routeInbound = (modelId: string) => {
+      const resolved = concreteSelection
+        ? routeConcreteModel(config, modelId)
+        : parsed._compactionRequest === true
+          ? routeCompactionModel(config, modelId, evidenceFromBody(parsed._rawBody))
+          : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
+      if (selectorTargetsSecondary(modelId) && resolved.providerName !== "anthropic2") {
+        throw new Error("Anthropic Pool 2 selector cannot use the default provider");
+      }
+      return resolved;
+    };
     const resolveRoute = (modelId: string) => captureInboundRoutePolicy(routeInbound(modelId));
     // The phase's destination. Resolved through the admission-scoped resolver every other route
     // uses, and it fails closed exactly like the shadow target: falling back to the native model

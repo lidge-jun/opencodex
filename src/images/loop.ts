@@ -16,6 +16,7 @@ import { pathToFileURL } from "node:url";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxProviderOpaqueToolCallMetadata, OcxRequestOptions, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
@@ -688,7 +689,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       }
       // 429 key-failover parity with web-search / normal routed path.
       while ((prepared.response.status === 429
-        || (prepared.response.status === 403 && deps.incomingMeta?.providerName === "anthropic")
+        || (prepared.response.status === 403 && isAnthropicInstanceId(deps.incomingMeta?.providerName))
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import type { AnthropicInstanceId } from "../../src/providers/anthropic-instance-id";
 import type { OcxConfig } from "../../src/types";
+import type { RouteResult } from "../../src/router";
+import type { GenerationContext } from "../../src/lib/state-store-sweeper";
 import {
   anthropicInstanceBarrier, createAnthropicInstanceFixture, instanceFixtureCredential, instanceFixtureUuid,
   type AnthropicInstanceFixture,
@@ -10,7 +12,7 @@ import {
 type Rec = Record<string, unknown>;
 type Sent = { instance: AnthropicInstanceId; url: string; headers: Headers; body: Rec };
 const INSTANCES = ["anthropic", "anthropic2"] as const;
-const CALLER = "sk-ant-synthetic-caller-never-forward";
+const CALLER = "sk-ant-fixture-caller";
 let f: AnthropicInstanceFixture;
 let sent: Sent[];
 let ingress: typeof import("../../src/server/claude-messages");
@@ -62,6 +64,22 @@ function answer(model: string): Rec {
     usage: { input_tokens: 9, output_tokens: 3 } };
 }
 
+/** Responses forces streaming upstream even for a non-streaming Messages caller. */
+function answerForWire(send: Sent): Response {
+  if (send.body.stream !== true) return Response.json(answer(f.model));
+  const frames: Rec[] = [
+    { type: "message_start", message: { ...answer(f.model), content: [], stop_reason: null,
+      usage: { input_tokens: 9, output_tokens: 0 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "fixture reply" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 3 } },
+    { type: "message_stop" },
+  ];
+  return new Response(frames.map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(""),
+    { headers: { "content-type": "text/event-stream" } });
+}
+
 function transport(instance: AnthropicInstanceId, response?: (send: Sent) => Response | Promise<Response>): typeof fetch {
   return (async (input, init) => {
     const headers = new Headers(init?.headers);
@@ -76,7 +94,7 @@ function transport(instance: AnthropicInstanceId, response?: (send: Sent) => Res
     expect(token).not.toBe(CALLER);
     const entry = { instance, url: String(input), headers, body: parsedBody };
     sent.push(entry);
-    return response ? await response(entry) : Response.json(answer(f.model));
+    return response ? await response(entry) : answerForWire(entry);
   }) as typeof fetch;
 }
 
@@ -86,12 +104,15 @@ function body(model = `anthropic2/${f.model}`, extra: Rec = {}): Rec {
     messages: [{ role: "user", content: "fixture question" }], ...extra };
 }
 
-async function send(model = `anthropic2/${f.model}`, extra: Rec = {}) {
+async function send(model = `anthropic2/${f.model}`, extra: Rec = {}, options: { nativeCaller?: boolean } = {}) {
   const requestId = crypto.randomUUID();
   const logCtx = { model: "", provider: "" };
   const response = await ingress.handleClaudeMessages(new Request("http://localhost/v1/messages", {
-    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${CALLER}`,
-      "x-api-key": CALLER, "x-session-id": f.sessionKey },
+    // Managed parity cases use ordinary admission fixtures. Caller-forward exclusion cases
+    // explicitly supply a classified Anthropic caller bearer while passthrough stays enabled.
+    method: "POST", headers: { "content-type": "application/json",
+      authorization: `Bearer ${options.nativeCaller ? CALLER : "fixture-admission-token"}`,
+      "x-api-key": options.nativeCaller ? CALLER : "fixture-caller-key", "x-session-id": f.sessionKey },
     body: JSON.stringify(body(model, extra)),
   }), f.config, logCtx, { requestId, start: Date.now() });
   const text = await response.text();
@@ -112,7 +133,7 @@ describe("B managed native Messages and caller-forward exclusion", () => {
       f.publishConfig();
       const selector = qualified === "raw" ? `anthropic2/${f.model}`
         : qualified === "provider-alias" ? `claude-pool-b/${f.model}` : "claude-pool-selector";
-      const { response, text, rows } = await send(selector);
+      const { response, text, rows } = await send(selector, {}, { nativeCaller: true });
       expect(response.status, text).toBe(200);
       expect(sent).toHaveLength(1);
       expect(sent[0]!.instance).toBe("anthropic2");
@@ -195,7 +216,9 @@ describe("B managed native Messages and caller-forward exclusion", () => {
       for (const instance of INSTANCES) {
         const { response, text, rows } = await send(`${instance}/${f.model}`);
         expect(response.status, text).toBe(200);
+        expect(JSON.parse(text).content).toEqual([{ type: "text", text: "fixture reply" }]);
         expect(rows[0]?.protocolTrace).toMatchObject({ mode: "legacy-bridge" });
+        expect(sent.at(-1)!.body.stream).toBe(true);
         expect(sent.at(-1)!.instance).toBe(instance);
       }
     });
@@ -208,7 +231,7 @@ describe("B managed native Messages and caller-forward exclusion", () => {
       if (kind === "disabled") f.config.providers.anthropic2!.disabled = true;
       if (kind === "orphan") delete f.config.providers.anthropic2;
       f.publishConfig();
-      const { response } = await send();
+      const { response } = await send(`anthropic2/${f.model}`, {}, { nativeCaller: true });
       expect(response.status).toBeGreaterThanOrEqual(400);
       expect(sent).toHaveLength(0);
       expect(f.ledger.sends).toHaveLength(0);
@@ -222,6 +245,54 @@ describe("B managed native Messages and caller-forward exclusion", () => {
 });
 
 describe("pure native settings, count and preview parity", () => {
+  for (const customName of ["ANTHROPIC2", "CLAUDE-POOL-B", "anthropic-custom"]) {
+    test(`exact custom ${customName} precedes B aliases and keeps caller-forward preview`, async () => {
+      const selectors = await import("../../src/server/messages-native-selector");
+      const before = existsSync(f.store.getAuthStorePath()) ? readFileSync(f.store.getAuthStorePath(), "utf8") : null;
+      f.config.providers.anthropic2!.alias = customName.toLowerCase();
+      f.config.providers[customName] = { adapter: "anthropic", authMode: "key", baseUrl: "https://custom.example",
+        apiKey: "fixture-custom-key", models: [f.model] };
+      const model = `${customName}/${f.model}`;
+      expect(selectors.messagesSelectorTargetsSecondaryInstance(f.config, model)).toBe(false);
+      expect(selectors.messagesSecondaryInstanceUnavailable(f.config, model)).toBe(false);
+      const custom = planner.buildProtocolPlanSnapshot(f.config, { model, inbound: "messages", features: [] });
+      expect(custom.candidates[0]).toMatchObject({ provider: customName, nativeEligible: true });
+      expect(custom.reasonCodes).toContain("caller-credential-required");
+      expect(selectors.messagesSelectorTargetsSecondaryInstance(f.config, `anthropic2/${f.model}`)).toBe(true);
+
+      // A disabled exact key still owns its spelling; an alias cannot adopt that selector.
+      f.config.providers[customName]!.disabled = true;
+      expect(selectors.messagesSelectorTargetsSecondaryInstance(f.config, model)).toBe(false);
+      expect(selectors.messagesSecondaryInstanceUnavailable(f.config, model)).toBe(false);
+      const disabled = planner.buildProtocolPlanSnapshot(f.config, { model, inbound: "messages", features: [] });
+      expect(disabled.candidates).toHaveLength(0);
+      expect(disabled.reasonCodes).toContain("caller-credential-required");
+
+      // Without an exact key, the existing case-insensitive provider-alias rule reaches B.
+      delete f.config.providers[customName];
+      expect(selectors.messagesSelectorTargetsSecondaryInstance(f.config, model)).toBe(true);
+      const aliased = planner.buildProtocolPlanSnapshot(f.config, { model, inbound: "messages", features: [] });
+      expect(aliased.candidates[0]).toMatchObject({ provider: "anthropic2", nativeEligible: true });
+      expect(aliased.reasonCodes).not.toContain("caller-credential-required");
+      expect(existsSync(f.store.getAuthStorePath()) ? readFileSync(f.store.getAuthStorePath(), "utf8") : null).toBe(before);
+      expect(sent).toHaveLength(0);
+    });
+  }
+
+  test("orphan lowercase B does not reserve a configured uppercase custom provider", async () => {
+    const selectors = await import("../../src/server/messages-native-selector");
+    delete f.config.providers.anthropic2;
+    f.config.providers.ANTHROPIC2 = { adapter: "anthropic", authMode: "key", baseUrl: "https://custom.example",
+      apiKey: "fixture-custom-key", models: [f.model] };
+    const upper = `ANTHROPIC2/${f.model}`;
+    expect(selectors.messagesSelectorTargetsSecondaryInstance(f.config, upper)).toBe(false);
+    expect(selectors.messagesSecondaryInstanceUnavailable(f.config, upper)).toBe(false);
+    const preview = planner.buildProtocolPlanSnapshot(f.config, { model: upper, inbound: "messages", features: [] });
+    expect(preview.candidates[0]?.provider).toBe("ANTHROPIC2");
+    expect(preview.reasonCodes).toContain("caller-credential-required");
+    expect(selectors.messagesSecondaryInstanceUnavailable(f.config, `anthropic2/${f.model}`)).toBe(true);
+  });
+
   test("B pool never inherits A native preference and revision tracks ownership/raw policy", () => {
     delete f.config.protocols;
     f.config.anthropicAccountPool = { enabled: true, nativeMessages: false };
@@ -269,13 +340,23 @@ describe("pure native settings, count and preview parity", () => {
 
   test("first-party wire eligibility is identical for marked overrides and A", () => {
     for (const baseUrl of ["https://api.anthropic.com/v1", "https://compatible.example", "http://api.anthropic.com", "https://api.anthropic.com:8443"]) {
-      const candidates = INSTANCES.map(instance => {
+      const plans = INSTANCES.map(instance => {
         f.config.providers[instance]!.baseUrl = baseUrl;
-        return planner.buildProtocolPlanSnapshot(f.config, { model: `${instance}/${f.model}`, inbound: "messages", features: [] }).candidates[0]!;
+        const route = { providerName: instance, provider: f.config.providers[instance]!, modelId: f.model,
+          routeKind: "direct", routeReason: "fixture" } as RouteResult;
+        expect(native.nativeMessagesDeclineReason(route, body(), f.config)).toBe(
+          baseUrl === "https://api.anthropic.com/v1" ? undefined : "auth-mode-not-native");
+        return planner.buildProtocolPlanSnapshot(f.config, { model: `${instance}/${f.model}`, inbound: "messages", features: [] });
       });
-      expect(candidates[1]!.nativeEligible).toBe(candidates[0]!.nativeEligible);
-      expect(candidates[1]!.declineReasons).toEqual(candidates[0]!.declineReasons);
-      expect(candidates[1]!.nativeEligible).toBe(baseUrl === "https://api.anthropic.com/v1");
+      // Public cleartext OAuth targets are refused by the router before eligibility planning.
+      if (baseUrl.startsWith("http:")) {
+        for (const plan of plans) { expect(plan.routeKind).toBe("unknown"); expect(plan.candidates).toHaveLength(0); }
+      } else {
+        for (const plan of plans) expect(plan.candidates).toHaveLength(1);
+        expect(plans[1]!.candidates[0]!.nativeEligible).toBe(plans[0]!.candidates[0]!.nativeEligible);
+        expect(plans[1]!.candidates[0]!.declineReasons).toEqual(plans[0]!.candidates[0]!.declineReasons);
+        expect(plans[1]!.candidates[0]!.nativeEligible).toBe(baseUrl === "https://api.anthropic.com/v1");
+      }
     }
   });
 });
@@ -418,7 +499,9 @@ describe("native recovery stays in the sending instance", () => {
         ? Response.json({ type: "error", error: status === 403
           ? { type: "permission_error", message: "Your account does not have access to Claude Code" }
           : { type: "rate_limit_error", message: "fixture quota" } }, {
-          status, headers: status === 429 ? { "anthropic-ratelimit-unified-5h-status": "rejected", "retry-after": "30" } : {},
+          status, headers: status === 429 ? { "anthropic-ratelimit-unified-5h-status": "rejected",
+            "anthropic-ratelimit-unified-5h-utilization": "1",
+            "anthropic-ratelimit-unified-5h-reset": String(Math.ceil(Date.now() / 1000) + 3600), "retry-after": "30" } : {},
         }) : Response.json(answer(f.model)));
       const aSelection = f.store.captureOAuthAccountSelection("anthropic");
       const { response, text, rows } = await send();
@@ -434,7 +517,7 @@ describe("native recovery stays in the sending instance", () => {
       expect(f.routing.anthropicRoutingFor("anthropic2").getAnthropicAccountHealthSnapshot(f.ids[0])).not.toBeNull();
       if (status === 429) {
         expect(f.quota.getCachedProviderAccountQuota("anthropic", f.ids[0])).toBeNull();
-        expect(f.quota.getCachedProviderAccountQuota("anthropic2", f.ids[0])).not.toBeNull();
+        expect(f.quota.getCachedProviderAccountQuota("anthropic2", f.ids[0])).toMatchObject({ fiveHourPercent: 100 });
       }
     });
   }
@@ -456,6 +539,136 @@ describe("native recovery stays in the sending instance", () => {
     expect(sent).toHaveLength(1);
     expect(f.routing.anthropicRoutingFor("anthropic2").getAnthropicAccountHealthSnapshot(f.ids[0])).toBeNull();
   });
+});
+
+describe("native physical response incarnation ownership", () => {
+  for (const instance of INSTANCES) for (const reserved of [false, true]) for (const status of [200, 403, 429] as const) {
+    test(`${instance}: pending ${status}, prior reservation=${reserved}, identical re-add cannot own the old response`, async () => {
+      await seed();
+      const [recovery, cache, sweeper] = await Promise.all([
+        import("../../src/providers/quota/anthropic-cooldown-recovery"),
+        import("../../src/providers/quota/account-cache"),
+        import("../../src/lib/state-store-sweeper"),
+      ]);
+      const other = instance === "anthropic" ? "anthropic2" : "anthropic";
+      const id = f.ids[0];
+      const original = structuredClone(f.store.getAccountSet(instance)!.accounts.find(row => row.id === id)!);
+      const ownRecovery = recovery.anthropicCooldownRecoveryFor(instance);
+      const siblingRecovery = recovery.anthropicCooldownRecoveryFor(other);
+      const family = f.modelQuota.anthropicModelQuotaFor(instance);
+      const ownRouting = f.routing.anthropicRoutingFor(instance);
+      const siblingRouting = f.routing.anthropicRoutingFor(other);
+      if (reserved) {
+        ownRecovery.anthropicCooldownFlightKey("fixture-existing-reservation", id);
+        ownRecovery.reserveAnthropicAccountIncarnation(id);
+      }
+      const priorIncarnation = ownRecovery.anthropicAccountIncarnation(id);
+      const siblingGeneration = siblingRecovery.anthropicCooldownGeneration(id);
+      const siblingSelection = f.store.captureOAuthAccountSelection(other);
+      const siblingCredential = structuredClone(f.store.getAccountCredential(other, id)!);
+      const entered = anthropicInstanceBarrier();
+      const resume = anthropicInstanceBarrier();
+      const freshEntered = anthropicInstanceBarrier();
+      const freshResume = anthropicInstanceBarrier();
+      f.config.providers[instance]!.fetch = transport(instance, async () => {
+        if (sent.length > 1) {
+          freshEntered.release();
+          await freshResume.wait;
+          return Response.json(answer(f.model), { headers: { "anthropic-ratelimit-unified-5h-utilization": "0.42" } });
+        }
+        entered.release();
+        await resume.wait;
+        const headers = { "anthropic-ratelimit-unified-5h-utilization": "0.81",
+          ...(status === 429 ? { "anthropic-ratelimit-unified-5h-status": "rejected", "retry-after": "30" } : {}) };
+        return status === 200 ? Response.json(answer(f.model), { headers }) : Response.json({ type: "error", error: status === 403
+          ? { type: "permission_error", message: "Your account does not have access to Claude Code" }
+          : { type: "rate_limit_error", message: "fixture retired quota" } }, { status, headers });
+      });
+      let contextGeneration = sweeper.captureConfigGeneration() + 100;
+      const reconcile = () => {
+        const context: GenerationContext = { generation: ++contextGeneration,
+          providerNames: new Set(INSTANCES), oauthAccountKeys: new Set(INSTANCES.flatMap(pool =>
+            f.store.getAccountSet(pool)!.accounts.map(row => cache.accountCacheKey(pool, row.id)))),
+          comboIds: new Set(), comboTargets: new Set(), codexAccountIds: new Set(), configRoots: new Set() };
+        f.modelQuota.reconcileAllAnthropicFamilyQuota(context);
+        f.ratePolicy.reconcileAllAnthropicRatePauses(context);
+        recovery.reconcileAllAnthropicCooldownGenerations(context);
+        cache.reconcileProviderAccountQuotaRows(context);
+        f.routing.reconcileAnthropicRoutingState(context, f.config);
+      };
+      const oldWriterGeneration = sweeper.captureConfigGeneration();
+      let freshPending: ReturnType<typeof send> | undefined;
+      const pending = send(`${instance}/${f.model}`);
+      try {
+        await Promise.race([entered.wait, pending.then(() => { throw new Error("native request ended before physical fetch barrier"); })]);
+        try {
+          expect(sent).toHaveLength(1);
+          expect(sent[0]!.instance).toBe(instance);
+          if (reserved) expect(ownRecovery.anthropicAccountIncarnation(id)).toBe(priorIncarnation);
+          else expect(ownRecovery.anthropicAccountIncarnation(id)).toBeGreaterThan(priorIncarnation);
+          await f.store.removeAccount(instance, id);
+          reconcile();
+          expect(ownRecovery.anthropicAccountIncarnation(id)).toBeGreaterThan(priorIncarnation);
+          // Copy the complete original row so credential bytes, UUID, login metadata and expiry
+          // all match; the response must be rejected by the send incarnation rather than hashes.
+          await f.store.mutateStore(auth => {
+            auth[instance]!.accounts.unshift(structuredClone(original));
+            auth[instance]!.activeAccountId = id;
+          });
+          reconcile();
+          expect(f.store.getAccountCredential(instance, id)).toEqual(original.credential);
+          expect(cache.mayCommitAccountQuotaKey(cache.accountCacheKey(instance, id), oldWriterGeneration)).toBe(true);
+          cache.setCachedProviderAccountQuotaForTests(instance, id, { fiveHourPercent: 17, updatedAt: Date.now() });
+          cache.setCachedProviderAccountQuotaForTests(other, id, { fiveHourPercent: 23, updatedAt: Date.now() });
+          family.observeAnthropicFamilyQuota(id, [{ label: "Sonnet", scope: "model", percent: 100,
+            rejected: true, resetAt: Date.now() + 60_000 }], Date.now());
+        } finally { resume.release(); }
+        const familyGeneration = family.anthropicFamilyQuotaGeneration(id);
+        const ownGeneration = ownRecovery.anthropicCooldownGeneration(id);
+        const replacementSelection = f.store.captureOAuthAccountSelection(instance);
+        const { response, text } = await pending;
+        expect(response.status, text).toBe(status);
+        expect(sent).toHaveLength(1);
+        expect(cache.getCachedProviderAccountQuota(instance, id)?.fiveHourPercent).toBe(17);
+        expect(family.anthropicFamilyRejected(id, f.model)).toBe(true);
+        expect(family.anthropicFamilyQuotaGeneration(id)).toBe(familyGeneration);
+        expect(ownRecovery.anthropicCooldownGeneration(id)).toBe(ownGeneration);
+        expect(ownRouting.getAnthropicAccountHealthSnapshot(id)).toBeNull();
+        expect(f.ratePolicy.anthropicRatePolicyFor(instance).anthropicRatePauseUntil(id)).toBeUndefined();
+        expect(f.store.captureOAuthAccountSelection(instance)).toEqual(replacementSelection);
+        expect(cache.getCachedProviderAccountQuota(other, id)?.fiveHourPercent).toBe(23);
+        expect(siblingRecovery.anthropicCooldownGeneration(id)).toBe(siblingGeneration);
+        expect(siblingRouting.getAnthropicAccountHealthSnapshot(id)).toBeNull();
+        expect(f.ratePolicy.anthropicRatePolicyFor(other).anthropicRatePauseUntil(id)).toBeUndefined();
+        expect(f.store.captureOAuthAccountSelection(other)).toEqual(siblingSelection);
+        expect(f.store.getAccountCredential(other, id)).toEqual(siblingCredential);
+
+        // A newly dispatched response still has publication authority for the replacement.
+        family.clearAnthropicRequestedFamilyQuota(id, f.model);
+        freshPending = send(`${instance}/${f.model}`);
+        try {
+          await Promise.race([freshEntered.wait, freshPending.then(() => { throw new Error("fresh native request ended before fetch barrier"); })]);
+          family.observeAnthropicFamilyQuota(id, [{ label: "Sonnet", scope: "model", percent: 100,
+            rejected: true, resetAt: Date.now() + 60_000 }], Date.now());
+        } finally { freshResume.release(); }
+        const fresh = await freshPending;
+        expect(fresh.response.status, fresh.text).toBe(200);
+        expect(sent).toHaveLength(2);
+        expect(sent[1]!.headers.get("authorization")).toBe(sent[0]!.headers.get("authorization"));
+        expect(sent[1]!.body.metadata).toEqual(sent[0]!.body.metadata);
+        expect(cache.getCachedProviderAccountQuota(instance, id)?.fiveHourPercent).toBe(42);
+        expect(family.anthropicFamilyRejected(id, f.model)).toBe(false);
+        expect(cache.getCachedProviderAccountQuota(other, id)?.fiveHourPercent).toBe(23);
+        f.ledger.assertNoCrossSend();
+      } finally {
+        resume.release();
+        freshResume.release();
+        await pending.catch(() => {});
+        await freshPending?.catch(() => {});
+        cache.resetProviderQuotaReconcileStateForTests();
+      }
+    });
+  }
 });
 
 describe("A/B native wire features", () => {
@@ -497,7 +710,9 @@ describe("A/B native wire features", () => {
         f.publishConfig();
         const { response, text } = await send(`${instance}/${f.model}`, feature.extra);
         expect(response.status, text).toBe(200);
+        expect(JSON.parse(text).content).toEqual([{ type: "text", text: "fixture reply" }]);
         const wire = sent.at(-1)!.body;
+        expect(wire.stream).toBe(!nativeLane);
         const normalized = structuredClone(wire);
         const metadata = normalized.metadata as { user_id?: string } | undefined;
         if (metadata?.user_id) {

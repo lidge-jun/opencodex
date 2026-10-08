@@ -68,6 +68,18 @@ generation is separate from the credential-generation string and preserves the
 existing live-roster exception. Explicit combos retain their declared targets;
 direct Pool 2 account recovery never selects the primary pool.
 
+`src/oauth/anthropic-send-ownership.ts` captures the account incarnation and
+login identity before the physical fetch. Header publication and refusal binding
+retain that same owner after the await; response arrival cannot adopt a newly
+registered row with identical credentials. Ordinary cooldown observations do not
+invalidate the send incarnation. Numeric config generation remains a separate
+roster fence.
+
+`src/server/responses/request-prepare.ts` preserves explicit Pool 2 intent before
+default routing can discard an unavailable qualifier. Exact configured provider
+keys precede aliases; unrelated uppercase custom keys retain their own meaning.
+Messages ingress and protocol preview share the corresponding selector rule.
+
 ## Anthropic account pause
 
 Anthropic OAuth shares `ProviderAccount.paused` in the protected auth store with generic

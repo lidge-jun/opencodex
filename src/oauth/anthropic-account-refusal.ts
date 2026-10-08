@@ -9,19 +9,26 @@ import type { OcxConfig } from "../types";
 import type { AnthropicRouteDecision } from "./anthropic-model-routes";
 import { anthropicRoutingFor } from "./anthropic-routing";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
-import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
-import { anthropicCooldownRecoveryFor } from "../providers/quota/anthropic-cooldown-recovery";
+import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
+import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent,
+  type AnthropicPhysicalSendOwnership } from "./anthropic-send-ownership";
 
-const responseCredentials = new WeakMap<Response, Pick<OAuthAccessSnapshot, "provider" | "accountId" | "generation" | "accessToken"> & { providerAccountUuid?: string; checkProviderUuid: boolean; incarnation?: string }>();
+const responseCredentials = new WeakMap<Response, AnthropicPhysicalSendOwnership & { providerAccountUuid?: string; checkProviderUuid: boolean }>();
 type RetryState = { firstAccountId: string; sameAccount: boolean; detour: boolean };
 const retryStatesByInstance = new Map<AnthropicInstanceId, WeakMap<object, RetryState>>();
 const verdicts = new WeakMap<Response, Promise<boolean>>();
 
-/** Called only when the outgoing headers prove ownership of the selected stored bearer. */
+/** Legacy compatibility only; physical callers must capture ownership before fetch and use ForSend. */
 export function bindAnthropicRefusalCredential(response: Response, snapshot: OAuthAccessSnapshot, providerAccountUuid?: string): void {
-  const incarnation = isAnthropicInstanceId(snapshot.provider)
-    ? anthropicCooldownRecoveryFor(snapshot.provider).anthropicCooldownFlightKey("refusal", snapshot.accountId) : undefined;
-  responseCredentials.set(response, { provider: snapshot.provider, accountId: snapshot.accountId, accessToken: snapshot.accessToken, generation: snapshot.generation, providerAccountUuid, checkProviderUuid: arguments.length >= 3, incarnation });
+  const owner = captureAnthropicPhysicalSendOwnership(snapshot);
+  if (!owner) { responseCredentials.delete(response); return; }
+  if (arguments.length >= 3) bindAnthropicRefusalCredentialForSend(response, owner, providerAccountUuid);
+  else bindAnthropicRefusalCredentialForSend(response, owner);
+}
+
+/** Retain the pre-send owner even when stale; binding a returned response cannot renew its authority. */
+export function bindAnthropicRefusalCredentialForSend(response: Response, owner: AnthropicPhysicalSendOwnership, providerAccountUuid?: string): void {
+  responseCredentials.set(response, Object.freeze({ ...owner, providerAccountUuid, checkProviderUuid: arguments.length >= 3 }));
 }
 
 async function isAccountRefusal(response: Response, signal?: AbortSignal): Promise<boolean> {
@@ -77,10 +84,10 @@ export async function rotateAnthropicAccountOnResponseForInstance(
   const { recordAnthropicAccountRefusal, rotateAnthropicAccountOnRefusal,
     hasAnthropicFailoverQuorum, isAnthropicAccountPoolEnabled, pickAlternateAnthropicAccount } = routing;
   const ownedCurrent = () => {
-    if (configuredAnthropicInstance(options.config, instance) !== instance) return undefined;
+    if (configuredAnthropicInstance(options.config, instance) !== instance
+      || !anthropicPhysicalSendOwnershipIsCurrent(sent)) return undefined;
     const row = getAccountCredentialWithStatus(instance, sent.accountId);
     return row && !row.needsReauth && row.credential.access === sent.accessToken
-      && anthropicCooldownRecoveryFor(instance).anthropicCooldownFlightKey("refusal", sent.accountId) === sent.incarnation
       && credentialGeneration(row.credential) === sent.generation
       && (!sent.checkProviderUuid || row.credential.accountId === sent.providerAccountUuid) ? row : undefined;
   };

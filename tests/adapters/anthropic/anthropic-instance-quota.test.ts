@@ -15,21 +15,229 @@ let refusal: typeof import("../../../src/oauth/anthropic-account-refusal");
 let familyHeaders: typeof import("../../../src/providers/quota/anthropic-family-headers");
 let sweeper: typeof import("../../../src/lib/state-store-sweeper");
 let retry: typeof import("../../../src/lib/upstream-retry");
+let sendOwnership: typeof import("../../../src/oauth/anthropic-send-ownership");
+
+type PendingOutcome<T> = { kind: "value"; value: T } | { kind: "error"; error: unknown };
+function observePending<T>(pending: Promise<T>): Promise<PendingOutcome<T>> {
+  // Plain handlers keep the test in control of releasing its dispatch barrier.
+  return pending.then(value => ({ kind: "value" as const, value }), error => ({ kind: "error" as const, error }));
+}
+async function waitForDispatch<T>(started: ReturnType<typeof anthropicInstanceBarrier>, outcome: Promise<PendingOutcome<T>>): Promise<void> {
+  const first = await Promise.race([
+    started.wait.then(() => ({ kind: "started" as const })),
+    outcome.then(settled => ({ kind: "settled" as const, settled })),
+  ]);
+  if (first.kind === "settled") {
+    if (first.settled.kind === "error") throw first.settled.error;
+    throw new Error("pending operation completed before the controlled dispatch barrier");
+  }
+}
+function pendingValue<T>(outcome: PendingOutcome<T>): T {
+  if (outcome.kind === "error") throw outcome.error;
+  return outcome.value;
+}
 
 beforeEach(async () => {
   // The shared fixture creates every configured root before importing runtime owners.
   f = await createAnthropicInstanceFixture();
-  [cache, recovery, refusal, familyHeaders, sweeper, retry] = await Promise.all([
+  [cache, recovery, refusal, familyHeaders, sweeper, retry, sendOwnership] = await Promise.all([
     import("../../../src/providers/quota/account-cache"),
     import("../../../src/providers/quota/anthropic-cooldown-recovery"),
     import("../../../src/oauth/anthropic-account-refusal"),
     import("../../../src/providers/quota/anthropic-family-headers"),
     import("../../../src/lib/state-store-sweeper"),
     import("../../../src/lib/upstream-retry"),
+    import("../../../src/oauth/anthropic-send-ownership"),
   ]);
   cache.clearAccountQuotaCache();
   cache.resetProviderQuotaReconcileStateForTests();
   await f.seed();
+});
+
+describe("pre-send Anthropic ownership fences physical response ABA", () => {
+  for (const instance of INSTANCE_FIXTURE_INSTANCES) for (const priorReservation of [false, true]) {
+    for (const status of [200, 403, 429]) {
+      test(`${instance}: ${priorReservation ? "reserved" : "fresh"} account rejects old ${status} after identical row re-add`, async () => {
+        const id = f.ids[0];
+        const other = sibling(instance);
+        const own = recovery.anthropicCooldownRecoveryFor(instance);
+        const original = structuredClone(f.store.getAccountSet(instance)!.accounts.find(row => row.id === id)!);
+        const snapshot = { provider: instance, accountId: id, accessToken: original.credential.access,
+          generation: f.store.credentialGeneration(original.credential) };
+        const initialIncarnation = own.anthropicAccountIncarnation(id);
+        if (priorReservation) own.reserveAnthropicAccountIncarnation(id);
+        const owner = sendOwnership.captureAnthropicPhysicalSendOwnership(snapshot)!;
+        expect(owner).not.toBeNull();
+        expect(owner.accountIncarnation).toBeGreaterThan(initialIncarnation);
+        expect(Object.isFrozen(owner)).toBe(true);
+        const writerGeneration = sweeper.captureConfigGeneration();
+        const started = anthropicInstanceBarrier();
+        const finish = anthropicInstanceBarrier();
+        const observedHeaders = new Headers({
+          "anthropic-ratelimit-unified-5h-utilization": status === 429 ? "1" : "0.91",
+          "anthropic-ratelimit-unified-7d_oi-utilization": "0.14",
+          ...(status === 429 ? { "anthropic-ratelimit-unified-5h-status": "rejected" } : {}),
+        });
+        globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+          const headers = new Headers(init?.headers);
+          f.ledger.record({ instance, accountId: id, token: headers.get("authorization")!.slice("Bearer ".length),
+            uuid: original.credential.accountId, model: "claude-fable-5" });
+          started.release(); await finish.wait;
+          return Response.json({ error: { type: "permission_error", message: "Your account does not have an active subscription." } },
+            { status, headers: observedHeaders });
+        }) as typeof fetch;
+        const pending = (async () => {
+          const response = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST", headers: { authorization: `Bearer ${owner.accessToken}` },
+          });
+          // The same owner captured before fetch governs both publication and recovery.
+          const current = sendOwnership.anthropicPhysicalSendOwnershipIsCurrent(owner);
+          refusal.bindAnthropicRefusalCredentialForSend(response, owner, original.credential.accountId);
+          if (current) cache.recordAnthropicAccountQuotaFromHeadersForInstance(instance, id, response.headers,
+            writerGeneration, status, "claude-fable-5");
+          const next = await refusal.rotateAnthropicAccountOnResponseForInstance(instance, response, {
+            config: f.config, accountId: id, canRetry: true, requestKey: {}, model: "claude-fable-5",
+          });
+          return { current, next };
+        })();
+        const outcome = observePending(pending);
+        let replacementCache: ReturnType<typeof cache.accountQuotaCache.get> = undefined;
+        let siblingCache: ReturnType<typeof cache.accountQuotaCache.get> = undefined;
+        let ownFamilyGeneration = 0;
+        let siblingFamilyGeneration = 0;
+        let siblingIncarnation = 0;
+        try {
+          await waitForDispatch(started, outcome);
+          await f.store.mutateStore(auth => {
+            auth[instance]!.accounts = auth[instance]!.accounts.filter(row => row.id !== id);
+            auth[instance]!.activeAccountId = f.ids[1];
+          });
+          reconcile(context());
+          // Keep loginId, addedAt, UUID and all credential bytes identical. Only the captured
+          // pre-send incarnation can detect this legacy/raw-row ABA, even when binding is late.
+          await f.store.mutateStore(auth => { auth[instance]!.accounts.unshift(original); });
+          reconcile(context());
+          const replacement = f.store.getAccountSet(instance)!.accounts.find(row => row.id === id)!;
+          expect(replacement.loginId).toBe(owner.loginId);
+          expect(replacement.addedAt).toBe(owner.addedAt);
+          expect(f.store.credentialGeneration(replacement.credential)).toBe(owner.generation);
+          const headers = new Headers({ "anthropic-ratelimit-unified-5h-utilization": "0.45",
+            "anthropic-ratelimit-unified-7d_oi-status": "rejected" });
+          cache.recordAnthropicAccountQuotaFromHeadersForInstance(instance, id, headers, sweeper.captureConfigGeneration(), 429, "claude-fable-5");
+          cache.recordAnthropicAccountQuotaFromHeadersForInstance(other, id,
+            new Headers({ "anthropic-ratelimit-unified-5h-utilization": "0.63", "anthropic-ratelimit-unified-7d_oi-status": "rejected" }),
+            sweeper.captureConfigGeneration(), 429, "claude-fable-5");
+          replacementCache = cache.accountQuotaCache.get(cache.accountCacheKey(instance, id));
+          siblingCache = cache.accountQuotaCache.get(cache.accountCacheKey(other, id));
+          ownFamilyGeneration = f.modelQuota.anthropicModelQuotaFor(instance).anthropicFamilyQuotaGeneration(id);
+          siblingFamilyGeneration = f.modelQuota.anthropicModelQuotaFor(other).anthropicFamilyQuotaGeneration(id);
+          siblingIncarnation = recovery.anthropicCooldownRecoveryFor(other).anthropicAccountIncarnation(id);
+        } finally { finish.release(); await outcome; }
+        expect(pendingValue(await outcome)).toEqual({ current: false, next: null });
+        expect(cache.accountQuotaCache.get(cache.accountCacheKey(instance, id))).toBe(replacementCache);
+        expect(cache.accountQuotaCache.get(cache.accountCacheKey(other, id))).toBe(siblingCache);
+        expect(f.modelQuota.anthropicModelQuotaFor(instance).anthropicFamilyQuotaGeneration(id)).toBe(ownFamilyGeneration);
+        expect(f.modelQuota.anthropicModelQuotaFor(other).anthropicFamilyQuotaGeneration(id)).toBe(siblingFamilyGeneration);
+        expect(recovery.anthropicCooldownRecoveryFor(other).anthropicAccountIncarnation(id)).toBe(siblingIncarnation);
+        for (const pool of INSTANCE_FIXTURE_INSTANCES) {
+          expect(f.modelQuota.anthropicModelQuotaFor(pool).anthropicFamilyRejected(id, "claude-fable-5")).toBe(true);
+          expect(f.routing.anthropicRoutingFor(pool).getAnthropicAccountHealthSnapshot(id)).toBeNull();
+          expect(f.ratePolicy.anthropicRatePolicyFor(pool).anthropicRatePauseUntil(id)).toBeUndefined();
+        }
+        expect(f.ledger.sends).toHaveLength(1); // A retired refusal has no replacement-send proposal.
+
+        // A newly sent turn with the identical bearer owns the replacement and may publish.
+        const currentOwner = sendOwnership.captureAnthropicPhysicalSendOwnership(snapshot)!;
+        expect(currentOwner.accountIncarnation).toBeGreaterThan(owner.accountIncarnation);
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST", headers: { authorization: `Bearer ${currentOwner.accessToken}` },
+        });
+        expect(sendOwnership.anthropicPhysicalSendOwnershipIsCurrent(currentOwner)).toBe(true);
+        cache.recordAnthropicAccountQuotaFromHeadersForInstance(instance, id, response.headers,
+          sweeper.captureConfigGeneration(), status, "claude-fable-5");
+        refusal.bindAnthropicRefusalCredentialForSend(response, currentOwner, original.credential.accountId);
+        const next = await refusal.rotateAnthropicAccountOnResponseForInstance(instance, response, {
+          config: f.config, accountId: id, canRetry: true, requestKey: {}, model: "claude-fable-5",
+        });
+        expect(next).toBe(status === 200 ? null : f.ids[1]);
+        expect(sendOwnership.anthropicPhysicalSendOwnershipIsCurrent(currentOwner)).toBe(true);
+        expect(f.quota.getCachedProviderAccountQuota(instance, id)?.fiveHourPercent).toBe(status === 429 ? 100 : 91);
+        expect(cache.accountQuotaCache.get(cache.accountCacheKey(other, id))).toBe(siblingCache);
+        expect(f.ledger.sends).toHaveLength(2);
+        if (status === 200) expect(f.modelQuota.anthropicModelQuotaFor(instance).anthropicFamilyRejected(id, "claude-fable-5")).toBe(false);
+        else expect(f.routing.anthropicRoutingFor(instance).getAnthropicAccountHealthSnapshot(id)).not.toBeNull();
+        f.ledger.assertNoCrossSend();
+      });
+    }
+  }
+
+  for (const instance of INSTANCE_FIXTURE_INSTANCES) {
+    test(`${instance}: a same-byte explicit login revokes a send without a roster gap`, async () => {
+      const id = f.ids[0];
+      const row = f.store.getAccountSet(instance)!.accounts.find(account => account.id === id)!;
+      const owner = sendOwnership.captureAnthropicPhysicalSendOwnership({ provider: instance, accountId: id,
+        accessToken: row.credential.access, generation: f.store.credentialGeneration(row.credential) })!;
+      await f.store.saveCredential(instance, structuredClone(row.credential));
+      const live = f.store.getAccountSet(instance)!.accounts.find(account => account.id === id)!;
+      expect(f.store.credentialGeneration(live.credential)).toBe(owner.generation);
+      expect(live.loginId).not.toBe(owner.loginId);
+      expect(sendOwnership.anthropicPhysicalSendOwnershipIsCurrent(owner)).toBe(false);
+      const response = Response.json({ error: { type: "permission_error", message: "Your account does not have an active subscription." } }, { status: 403 });
+      refusal.bindAnthropicRefusalCredentialForSend(response, owner, live.credential.accountId);
+      expect(await refusal.rotateAnthropicAccountOnResponseForInstance(instance, response, {
+        config: f.config, accountId: id, canRetry: true,
+      })).toBeNull();
+      expect(f.routing.anthropicRoutingFor(instance).getAnthropicAccountHealthSnapshot(id)).toBeNull();
+    });
+
+    test(`${instance}: clear invalidates copied send owners and a late binder never reserves a new fence`, async () => {
+      const id = f.ids[0];
+      const credential = f.store.getAccountCredential(instance, id)!;
+      const snapshot = { provider: instance, accountId: id, accessToken: credential.access,
+        generation: f.store.credentialGeneration(credential) };
+      const owner = sendOwnership.captureAnthropicPhysicalSendOwnership(snapshot)!;
+      snapshot.accessToken = "synthetic-mutated-caller-snapshot";
+      expect(owner.accessToken).toBe(credential.access);
+      const own = recovery.anthropicCooldownRecoveryFor(instance);
+      own.clearAnthropicCooldownGenerations();
+      const clearedIncarnation = own.anthropicAccountIncarnation(id);
+      expect(clearedIncarnation).toBeGreaterThan(owner.accountIncarnation);
+      const response = new Response(null, { status: 429, headers: sharedRejection() });
+      refusal.bindAnthropicRefusalCredentialForSend(response, owner);
+      expect(own.anthropicAccountIncarnation(id)).toBe(clearedIncarnation);
+      expect(sendOwnership.anthropicPhysicalSendOwnershipIsCurrent(owner)).toBe(false);
+      expect(await refusal.rotateAnthropicAccountOnResponseForInstance(instance, response, {
+        config: f.config, accountId: id, canRetry: true,
+      })).toBeNull();
+      expect(own.anthropicAccountIncarnation(id)).toBe(clearedIncarnation);
+      expect(f.routing.anthropicRoutingFor(instance).getAnthropicAccountHealthSnapshot(id)).toBeNull();
+      const fresh = sendOwnership.captureAnthropicPhysicalSendOwnership({ ...snapshot, accessToken: credential.access })!;
+      expect(sendOwnership.anthropicPhysicalSendOwnershipIsCurrent(fresh)).toBe(true);
+      cache.clearAccountQuotaCache(instance);
+      expect(sendOwnership.anthropicPhysicalSendOwnershipIsCurrent(fresh)).toBe(false);
+    });
+
+    test(`${instance}: valid headerless recovery keeps its send owner and retry budget`, async () => {
+      const id = f.ids[0];
+      const credential = f.store.getAccountCredential(instance, id)!;
+      const owner = sendOwnership.captureAnthropicPhysicalSendOwnership({ provider: instance, accountId: id,
+        accessToken: credential.access, generation: f.store.credentialGeneration(credential) })!;
+      const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
+        queueMicrotask(callback); return 0;
+      }) as typeof setTimeout);
+      const requestKey = {};
+      try {
+        for (const next of [id, null]) {
+          const response = new Response(null, { status: 429 });
+          refusal.bindAnthropicRefusalCredentialForSend(response, owner);
+          expect(await refusal.rotateAnthropicAccountOnResponseForInstance(instance, response, {
+            config: f.config, accountId: id, canRetry: true, requestKey,
+          })).toBe(next);
+          expect(sendOwnership.anthropicPhysicalSendOwnershipIsCurrent(owner)).toBe(true);
+        }
+      } finally { timers.mockRestore(); }
+    });
+  }
 });
 
 afterEach(() => {
@@ -40,6 +248,23 @@ afterEach(() => {
   f.dispose();
   // dispose's provider-only clears schedule writes; the all-cache clear only cancels them.
   cache.clearAccountQuotaCache();
+});
+
+test("controlled dispatch reports premature settlement instead of orphaning its started barrier", async () => {
+  for (const kind of ["value", "error"] as const) {
+    const started = anthropicInstanceBarrier();
+    const failure = new Error("synthetic early ownership failure");
+    const settled = observePending(kind === "error" ? Promise.reject(failure) : Promise.resolve(null));
+    const wait = observePending(waitForDispatch(started, settled));
+    try {
+      const result = await wait;
+      expect(result.kind).toBe("error");
+      if (result.kind === "error") {
+        if (kind === "error") expect(result.error).toBe(failure);
+        else expect((result.error as Error).message).toBe("pending operation completed before the controlled dispatch barrier");
+      }
+    } finally { started.release(); await wait; }
+  }
 });
 
 function sibling(instance: AnthropicInstanceId): AnthropicInstanceId {
@@ -198,13 +423,15 @@ describe("Anthropic quota namespace isolation", () => {
       const pending = refusal.rotateAnthropicAccountOnResponseForInstance(instance, response, {
         config: f.config, accountId: f.ids[0], canRetry: true,
       });
-      await started.wait;
-      await f.store.saveAccountCredential(instance, f.ids[0], { ...original,
-        access: `synthetic-${instance}-replaced-access`, refresh: `synthetic-${instance}-replaced-refresh`,
-        anthropicIdentity: undefined,
-      });
-      finish.release();
-      expect(await pending).toBeNull();
+      const outcome = observePending(pending);
+      try {
+        await waitForDispatch(started, outcome);
+        await f.store.saveAccountCredential(instance, f.ids[0], { ...original,
+          access: `synthetic-${instance}-replaced-access`, refresh: `synthetic-${instance}-replaced-refresh`,
+          anthropicIdentity: undefined,
+        });
+      } finally { finish.release(); await outcome; }
+      expect(pendingValue(await outcome)).toBeNull();
       for (const pool of INSTANCE_FIXTURE_INSTANCES) expect(f.routing.anthropicRoutingFor(pool).getAnthropicAccountHealthSnapshot(f.ids[0])).toBeNull();
     });
 
@@ -298,13 +525,15 @@ describe("Anthropic quota namespace isolation", () => {
           started.release(); await finish.wait;
           return { fiveHourPercent: 0, updatedAt: Date.now() };
         }, () => true);
-        // Attach rejection handling before releasing the deterministic fake upstream.
-        const rejected = expect(pending).rejects.toBeInstanceOf(recovery.AnthropicQuotaProbeOwnershipError);
-        await started.wait;
-        if (invalidation === "429") f.routing.anthropicRoutingFor(instance).recordAnthropicAccountRefusal(f.config, id, 429, null, Date.now(), sharedRejection());
-        else cache.clearAccountQuotaCache(instance);
-        finish.release();
-        await rejected;
+        const outcome = observePending(pending);
+        try {
+          await waitForDispatch(started, outcome);
+          if (invalidation === "429") f.routing.anthropicRoutingFor(instance).recordAnthropicAccountRefusal(f.config, id, 429, null, Date.now(), sharedRejection());
+          else cache.clearAccountQuotaCache(instance);
+        } finally { finish.release(); await outcome; }
+        const settled = await outcome;
+        expect(settled.kind).toBe("error");
+        if (settled.kind === "error") expect(settled.error).toBeInstanceOf(recovery.AnthropicQuotaProbeOwnershipError);
       }
     });
 
@@ -319,12 +548,14 @@ describe("Anthropic quota namespace isolation", () => {
           started.release(); await finish.wait;
           return familyHeaders.markAnthropicFamilyEnumeration({ fiveHourPercent: 12, updatedAt: Date.now() }, true);
         }, () => true);
-      await started.wait;
-      cache.recordAnthropicAccountQuotaFromHeadersForInstance(instance, id,
-        new Headers({ "anthropic-ratelimit-unified-7d_oi-status": "rejected" }),
-        sweeper.captureConfigGeneration(), 429, "claude-fable-5");
-      finish.release();
-      const result = await pending;
+      const outcome = observePending(pending);
+      try {
+        await waitForDispatch(started, outcome);
+        cache.recordAnthropicAccountQuotaFromHeadersForInstance(instance, id,
+          new Headers({ "anthropic-ratelimit-unified-7d_oi-status": "rejected" }),
+          sweeper.captureConfigGeneration(), 429, "claude-fable-5");
+      } finally { finish.release(); await outcome; }
+      const result = pendingValue(await outcome);
       expect(result?.isCurrent()).toBe(true);
       expect(result?.quota.customWindows).toMatchObject([{ label: "Fable", percent: 100, rejected: true }]);
       expect(f.modelQuota.anthropicModelQuotaFor(instance).anthropicFamilyRejected(id, "claude-fable-5")).toBe(true);

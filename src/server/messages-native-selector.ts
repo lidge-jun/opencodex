@@ -2,6 +2,7 @@
 import { resolveInboundModel } from "../claude/inbound-model-options";
 import { routeConcreteModel } from "../router";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
+import { hasOwnProvider } from "../config/provider-name";
 import type { OcxConfig } from "../types";
 
 export function messagesSelectorTargetsSecondaryInstance(
@@ -10,15 +11,18 @@ export function messagesSelectorTargetsSecondaryInstance(
   cc: OcxConfig["claudeCode"] = config.claudeCode,
 ): boolean {
   const selector = resolveInboundModel(model, cc);
+  const slash = selector.indexOf("/");
+  if (slash <= 0) return false;
+  const qualifier = selector.slice(0, slash);
   // An orphan or unmarked B selector must also never forward a caller's credential.
-  if (/^anthropic2\//i.test(selector)) return true;
-  if (!selector.includes("/")) return false;
+  if (qualifier === "anthropic2") return true;
+  // Provider keys are case-sensitive and outrank aliases, including when disabled.
+  if (hasOwnProvider(config.providers, qualifier)) return false;
   try {
     // Concrete resolution handles configured provider aliases without picking a combo/account.
     return routeConcreteModel(config, selector).providerName === "anthropic2";
   } catch {
-    const qualifier = selector.slice(0, selector.indexOf("/")).toLowerCase();
-    return config.providers.anthropic2?.alias?.trim().toLowerCase() === qualifier;
+    return config.providers.anthropic2?.alias?.trim().toLowerCase() === qualifier.toLowerCase();
   }
 }
 

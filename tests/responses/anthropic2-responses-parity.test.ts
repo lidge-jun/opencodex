@@ -1,6 +1,6 @@
 /** Both instances enter the real translated handlers and preserve one canonical Anthropic wire. */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { createAnthropicInstanceFixture, type AnthropicInstanceFixture } from "../helpers/anthropic-instance-fixture";
+import { createAnthropicInstanceFixture, instanceFixtureUuid, type AnthropicInstanceFixture } from "../helpers/anthropic-instance-fixture";
 import type { AnthropicInstanceId } from "../../src/providers/anthropic-instance-id";
 import type { RequestLogContext } from "../../src/server/request-log";
 
@@ -33,7 +33,9 @@ beforeEach(async () => {
         const token = headers.get("authorization")!.replace(/^Bearer /, "");
         const row = f.store.getAccountSet(instance)!.accounts.find(account => account.credential.access === token)!;
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        f.ledger.record({ instance, accountId: row.id, token, uuid: row.credential.anthropicIdentity?.accountUuid, model: String(body.model) });
+        // This checks stored identity, not wire UUID ownership: translated sends carry only the bearer.
+        expect(row.credential.anthropicIdentity?.accountUuid).toBe(instanceFixtureUuid(instance, f.ids.indexOf(row.id as typeof f.ids[number]) + 1));
+        f.ledger.record({ instance, accountId: row.id, token, model: String(body.model) });
         seen.push({ instance, body, headers, url: String(input) });
         const message = { id: "msg_parity", type: "message", role: "assistant", model: body.model,
           content: toolReply ? [{ type: "tool_use", id: "toolu_reply", name: "custom_lookup", input: { value: "done" } }]
@@ -71,7 +73,7 @@ type Surface = "responses" | "chat" | "messages";
 async function send(surface: Surface, instance: AnthropicInstanceId, body: Record<string, unknown>, model = f.model) {
   const path = surface === "responses" ? "/v1/responses" : surface === "chat" ? "/v1/chat/completions" : "/v1/messages";
   const req = new Request(`http://localhost${path}`, { method: "POST", headers: {
-    "content-type": "application/json", "session-id": f.sessionKey, authorization: "Bearer synthetic-caller-excluded",
+    "content-type": "application/json", "session-id": f.sessionKey, authorization: "Bearer access-token-value-test-caller-excluded",
   }, body: JSON.stringify({ model: `${instance}/${model}`, stream: false, ...body }) });
   const log: RequestLogContext = { model: "", provider: "" };
   const response = surface === "responses" ? await responses.handleResponses(req, f.config, log)

@@ -18,7 +18,9 @@
  * Loaded lazily by `claude-messages.ts` only when the switch is on and a route is eligible.
  */
 import { resolveAnthropicModelRouteForInstance } from "../oauth/anthropic-model-routes";
-import { bindAnthropicRefusalCredential, rotateAnthropicAccountOnResponseForInstance } from "../oauth/anthropic-account-refusal";
+import { bindAnthropicRefusalCredentialForSend, rotateAnthropicAccountOnResponseForInstance } from "../oauth/anthropic-account-refusal";
+import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent,
+  type AnthropicPhysicalSendOwnership } from "../oauth/anthropic-send-ownership";
 import { anthropicModelQuotaFor } from "../oauth/anthropic-model-quota";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
 import { recordAnthropicAccountQuotaFromHeadersForInstance } from "../providers/quota";
@@ -536,8 +538,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             const headers = new Headers(wire.headers);
             const encoding = new Headers(init.headers).get("accept-encoding");
             if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
-            const snapshot = oauthBinding?.snapshot;
-            const providerAccountUuid = oauthBinding?.providerAccountUuid;
+            const sendingBinding = oauthBinding;
+            const snapshot = sendingBinding?.snapshot;
+            const providerAccountUuid = sendingBinding?.providerAccountUuid;
             const writerGeneration = snapshot ? captureConfigGeneration() : 0;
             const ownsBearer = snapshot && snapshot.provider === nativeInstance
               && headers.get("authorization") === `Bearer ${snapshot.accessToken}` && !headers.has("x-api-key");
@@ -548,10 +551,15 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             const releaseFamily = snapshot && oauthBinding ? anthropicModelQuotaFor(oauthBinding.instance).claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
             if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
             let dispatched: Response;
+            let sendOwner: AnthropicPhysicalSendOwnership | null = null;
             try {
               if (init.signal?.aborted) throw init.signal.reason;
               if (!spendTracker.charge()) throw new NativeMessagesSpendRefusal();
               noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+              // Last synchronous ownership reservation before the physical fetch. Retain this
+              // exact incarnation across its await; a returned response can never reserve one.
+              sendOwner = snapshot ? captureAnthropicPhysicalSendOwnership(snapshot) : null;
+              if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
               dispatched = await sendWithConnectionPolicy(
                 (activeProvider as OcxProviderTransport).fetch ?? execute,
                 wire.url,
@@ -559,13 +567,14 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                 { providerName: route.providerName, provider: activeProvider },
               );
             } finally { releaseFamily(); }
-            if (ownsBearer && snapshot) {
+            if (ownsBearer && snapshot && sendOwner && sendingBinding) {
               try {
                 const current = getAccountCredentialWithStatus(snapshot.provider, snapshot.accountId);
-                if (current && !current.needsReauth && current.credential.access === snapshot.accessToken
+                if (anthropicPhysicalSendOwnershipIsCurrent(sendOwner) && nativeOAuthRouteIsCurrent(sendingBinding)
+                  && current && !current.needsReauth && current.credential.access === snapshot.accessToken
                   && credentialGeneration(current.credential) === snapshot.generation
                   && current.credential.accountId === providerAccountUuid) {
-                  bindAnthropicRefusalCredential(dispatched, snapshot, providerAccountUuid);
+                  bindAnthropicRefusalCredentialForSend(dispatched, sendOwner, providerAccountUuid);
                   recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId);
                 }
               } catch { /* Passive observation must not fail the response. */ }

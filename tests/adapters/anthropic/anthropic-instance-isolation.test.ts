@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { createAnthropicInstanceFixture, INSTANCE_FIXTURE_INSTANCES, instanceFixtureUuid, type AnthropicInstanceFixture } from "../../helpers/anthropic-instance-fixture";
 import type { GenerationContext, StateStoreRegistration } from "../../../src/lib/state-store-sweeper";
 
@@ -176,9 +177,17 @@ test("management account-ref dry-run attributes B quota using explicit config", 
   expect(bound.candidates[1]!.quota?.headroom).toBeCloseTo(0.8);
   // Assembly runs before an exact account is bound; it must preserve unknown rather than guess the active account.
   expect((await preview(f.config, false)).candidates.map(candidate => candidate.quota)).toEqual([{ known: false }, { known: false }]);
+  const { requestHistoryDb } = await import("../../../src/routing/history/indexer");
+  const ownedHistory = requestHistoryDb();
+  expect(ownedHistory.query("SELECT 1 AS live").get()).toEqual({ live: 1 });
   const unmarked = structuredClone(f.config);
   delete unmarked.providers.anthropic2!.anthropicOAuthInstance;
   expect((await preview(unmarked)).candidates[1]!.quota).toEqual({ known: false });
+  // Exercise the real retained handle and one-shot removal, including on Windows.
+  f.dispose();
+  expect(() => requestHistoryDb()).toThrow("request-history index is not open");
+  expect(() => ownedHistory.query("SELECT 1 AS live").get()).toThrow();
+  expect(existsSync(f.home)).toBe(false);
 });
 
 test("registered all-bucket hooks retire non-admitted B state while retaining live A", async () => {

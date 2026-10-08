@@ -1,6 +1,6 @@
 /** Anthropic fast opt-in and downgrade use the same bridge for both OAuth instances. */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { createAnthropicInstanceFixture, type AnthropicInstanceFixture } from "../../helpers/anthropic-instance-fixture";
+import { createAnthropicInstanceFixture, instanceFixtureUuid, type AnthropicInstanceFixture } from "../../helpers/anthropic-instance-fixture";
 import type { AnthropicInstanceId } from "../../../src/providers/anthropic-instance-id";
 import type { RequestLogContext } from "../../../src/server/request-log";
 
@@ -25,7 +25,9 @@ beforeEach(async () => {
         const token = sentHeaders.get("authorization")!.replace(/^Bearer /, "");
         const row = f.store.getAccountSet(instance)!.accounts.find(account => account.credential.access === token)!;
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        f.ledger.record({ instance, accountId: row.id, token, uuid: row.credential.anthropicIdentity?.accountUuid, model: String(body.model) });
+        // This checks stored identity, not wire UUID ownership: translated sends carry only the bearer.
+        expect(row.credential.anthropicIdentity?.accountUuid).toBe(instanceFixtureUuid(instance, f.ids.indexOf(row.id as typeof f.ids[number]) + 1));
+        f.ledger.record({ instance, accountId: row.id, token, model: String(body.model) });
         bodies.push(body); headers.push(sentHeaders);
         if (declineFirst && bodies.length === 1) return Response.json({ type: "error", error: {
           type: "rate_limit_error", message: "Usage credits are required for fast mode.",
