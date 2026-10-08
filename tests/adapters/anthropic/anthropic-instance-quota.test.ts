@@ -16,6 +16,7 @@ let familyHeaders: typeof import("../../../src/providers/quota/anthropic-family-
 let sweeper: typeof import("../../../src/lib/state-store-sweeper");
 let retry: typeof import("../../../src/lib/upstream-retry");
 let sendOwnership: typeof import("../../../src/oauth/anthropic-send-ownership");
+let reconciliationGeneration = 0;
 
 type PendingOutcome<T> = { kind: "value"; value: T } | { kind: "error"; error: unknown };
 function observePending<T>(pending: Promise<T>): Promise<PendingOutcome<T>> {
@@ -51,6 +52,7 @@ beforeEach(async () => {
   ]);
   cache.clearAccountQuotaCache();
   cache.resetProviderQuotaReconcileStateForTests();
+  reconciliationGeneration = sweeper.captureConfigGeneration();
   await f.seed();
 });
 
@@ -112,17 +114,21 @@ describe("pre-send Anthropic ownership fences physical response ABA", () => {
             auth[instance]!.accounts = auth[instance]!.accounts.filter(row => row.id !== id);
             auth[instance]!.activeAccountId = f.ids[1];
           });
-          reconcile(context());
+          const removedContext = context();
+          reconcile(removedContext);
           // Keep loginId, addedAt, UUID and all credential bytes identical. Only the captured
           // pre-send incarnation can detect this legacy/raw-row ABA, even when binding is late.
           await f.store.mutateStore(auth => { auth[instance]!.accounts.unshift(original); });
-          reconcile(context());
+          const readdedContext = context();
+          expect(readdedContext.generation).toBeGreaterThan(removedContext.generation);
+          reconcile(readdedContext);
           const replacement = f.store.getAccountSet(instance)!.accounts.find(row => row.id === id)!;
           expect(replacement.loginId).toBe(owner.loginId);
           expect(replacement.addedAt).toBe(owner.addedAt);
           expect(f.store.credentialGeneration(replacement.credential)).toBe(owner.generation);
           const headers = new Headers({ "anthropic-ratelimit-unified-5h-utilization": "0.45",
             "anthropic-ratelimit-unified-7d_oi-status": "rejected" });
+          expect(cache.mayCommitAccountQuotaKey(cache.accountCacheKey(instance, id), sweeper.captureConfigGeneration())).toBe(true);
           cache.recordAnthropicAccountQuotaFromHeadersForInstance(instance, id, headers, sweeper.captureConfigGeneration(), 429, "claude-fable-5");
           cache.recordAnthropicAccountQuotaFromHeadersForInstance(other, id,
             new Headers({ "anthropic-ratelimit-unified-5h-utilization": "0.63", "anthropic-ratelimit-unified-7d_oi-status": "rejected" }),
@@ -132,6 +138,12 @@ describe("pre-send Anthropic ownership fences physical response ABA", () => {
           ownFamilyGeneration = f.modelQuota.anthropicModelQuotaFor(instance).anthropicFamilyQuotaGeneration(id);
           siblingFamilyGeneration = f.modelQuota.anthropicModelQuotaFor(other).anthropicFamilyQuotaGeneration(id);
           siblingIncarnation = recovery.anthropicCooldownRecoveryFor(other).anthropicAccountIncarnation(id);
+          // Establish the precondition before release: identity equality must compare real rows.
+          expect(replacementCache?.quota?.fiveHourPercent).toBe(45);
+          expect(siblingCache?.quota?.fiveHourPercent).toBe(63);
+          for (const pool of INSTANCE_FIXTURE_INSTANCES) {
+            expect(f.modelQuota.anthropicModelQuotaFor(pool).anthropicFamilyRejected(id, "claude-fable-5")).toBe(true);
+          }
         } finally { finish.release(); await outcome; }
         expect(pendingValue(await outcome)).toEqual({ current: false, next: null });
         expect(cache.accountQuotaCache.get(cache.accountCacheKey(instance, id))).toBe(replacementCache);
@@ -271,8 +283,10 @@ function sibling(instance: AnthropicInstanceId): AnthropicInstanceId {
   return instance === "anthropic" ? "anthropic2" : "anthropic";
 }
 function context(keys?: ReadonlySet<string>): GenerationContext {
+  // These direct owner calls bypass reconcileStateGeneration; each published roster still needs a fresh generation.
+  reconciliationGeneration = Math.max(reconciliationGeneration, sweeper.captureConfigGeneration()) + 1;
   return {
-    generation: sweeper.captureConfigGeneration() + 100,
+    generation: reconciliationGeneration,
     providerNames: new Set(INSTANCE_FIXTURE_INSTANCES),
     oauthAccountKeys: keys ?? new Set(INSTANCE_FIXTURE_INSTANCES.flatMap(instance =>
       f.store.getAccountSet(instance)!.accounts.map(row => cache.accountCacheKey(instance, row.id)))),

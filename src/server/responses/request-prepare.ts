@@ -75,6 +75,7 @@ import {
   routeCompactionModel,
   routeModel,
   NoEligiblePolicyCandidateError,
+  AnthropicSecondaryInstanceUnavailableError,
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -668,6 +669,9 @@ export async function prepareResponsesRequest(
     logCtx.routeDecision = route.routeDecision;
     logCtx.policyEligibility = route.policyEligibility;
   } catch (err) {
+    if (err instanceof AnthropicSecondaryInstanceUnavailableError) {
+      return formatErrorResponse(401, "authentication_error", err.message);
+    }
     const policyRefusal = policyCandidateRefusalResponse(err);
     if (policyRefusal) return policyRefusal;
     if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);

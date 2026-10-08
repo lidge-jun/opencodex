@@ -79,6 +79,10 @@ roster fence.
 default routing can discard an unavailable qualifier. Exact configured provider
 keys precede aliases; unrelated uppercase custom keys retain their own meaning.
 Messages ingress and protocol preview share the corresponding selector rule.
+`src/router.ts` also reserves unavailable literal Pool 2 selectors before the
+default-provider path. Its dedicated refusal maps to authentication errors in Chat
+and Responses ingress, including native Chat, which may bypass the Responses
+preparation pipeline. The router uses the import-free identity leaf.
 
 ## Anthropic account pause
 

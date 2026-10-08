@@ -42,6 +42,7 @@ function post(instance: AnthropicInstanceId, options: HandleResponsesOptions = {
 
 beforeEach(async () => {
   fixture = await createAnthropicInstanceFixture({ anthropic: { enabled: false }, anthropic2: { enabled: false } });
+  fixture.quota.resetProviderQuotaReconcileStateForTests();
   await fixture.seed();
   ({ store, routing, config } = fixture);
   resolver = await import("../../../src/server/adapter-resolve");
@@ -74,7 +75,10 @@ afterEach(async () => {
     releaseSpend?.(); releaseSpend = undefined;
     const { clearResponseStateForTests } = await import("../../../src/responses/state");
     clearResponseStateForTests();
-  } finally { fixture.dispose(); }
+  } finally {
+    try { fixture.dispose(); }
+    finally { fixture.quota.resetProviderQuotaReconcileStateForTests(); }
+  }
 });
 
 for (const instance of instances) {
@@ -393,12 +397,16 @@ for (const instance of instances) {
 }
 
 /** The management removal boundary reconciles every account-qualified bucket before re-add. */
-async function reconcileLiveAccounts(): Promise<void> {
+let syntheticReconcileGeneration = 0;
+async function reconcileLiveAccounts(): Promise<import("../../../src/lib/state-store-sweeper").GenerationContext> {
   const cache = await import("../../../src/providers/quota/account-cache");
   const recovery = await import("../../../src/providers/quota/anthropic-cooldown-recovery");
   const sweeper = await import("../../../src/lib/state-store-sweeper");
+  // Direct hook calls do not publish a lifecycle generation. Advance this fixture's own
+  // epoch on EVERY reconciliation, including re-add, instead of presenting the same epoch twice.
+  syntheticReconcileGeneration = Math.max(syntheticReconcileGeneration, sweeper.captureConfigGeneration()) + 1;
   const context: import("../../../src/lib/state-store-sweeper").GenerationContext = {
-    generation: sweeper.captureConfigGeneration() + 1, providerNames: new Set(instances),
+    generation: syntheticReconcileGeneration, providerNames: new Set(instances),
     oauthAccountKeys: new Set(instances.flatMap(instance => store.getAccountSet(instance)!.accounts.map(row => cache.accountCacheKey(instance, row.id)))),
     comboIds: new Set(), comboTargets: new Set(), codexAccountIds: new Set(), configRoots: new Set(),
   };
@@ -407,6 +415,15 @@ async function reconcileLiveAccounts(): Promise<void> {
   recovery.reconcileAllAnthropicCooldownGenerations(context);
   cache.reconcileProviderAccountQuotaRows(context);
   routing.reconcileAnthropicRoutingState(context, config);
+  return context;
+}
+
+async function expectLiveQuotaWriterAdmission(instance: AnthropicInstanceId, id: string): Promise<void> {
+  const cache = await import("../../../src/providers/quota/account-cache");
+  const sweeper = await import("../../../src/lib/state-store-sweeper");
+  // Real sends still capture the lifecycle's numeric writer generation. A restored live key
+  // admits that writer through the production live-key exception, even below the fixture epoch.
+  expect(cache.mayCommitAccountQuotaKey(cache.accountCacheKey(instance, id), sweeper.captureConfigGeneration())).toBe(true);
 }
 for (const instance of instances) {
   const other = instance === "anthropic" ? "anthropic2" : "anthropic";
@@ -428,12 +445,12 @@ for (const instance of instances) {
         const pending = post(instance, {}, { model: `${instance}/${model}` });
         await entered.promise;
         expect(await store.removeAccount(instance, id)).toBe(true);
-        await reconcileLiveAccounts();
+        const removedContext = await reconcileLiveAccounts();
         // Restore every credential byte, UUID and login ID. The reconciled send incarnation
         // must still reject the retired response; a hash/UUID comparison alone cannot do so.
         await store.mutateStore(auth => { auth[instance]!.accounts.unshift(original); });
         await store.setActiveAccount(instance, id);
-        await reconcileLiveAccounts();
+        const restoredContext = await reconcileLiveAccounts();
         expect(store.credentialGeneration(store.getAccountCredential(instance, id)!)).toBe(store.credentialGeneration(original.credential));
         const family = fixture.modelQuota.anthropicModelQuotaFor(instance);
         if (status === 200) family.observeAnthropicFamilyQuota(id, [
@@ -461,9 +478,13 @@ for (const instance of instances) {
         expect(fixture.quota.getCachedProviderAccountQuota(other, id)).toBeNull();
         expect(routing.anthropicRoutingFor(other).getAnthropicAccountHealthSnapshot(id)).toBeNull();
         expect(fixture.modelQuota.anthropicModelQuotaFor(other).anthropicFamilyRejected(id, model)).toBe(false);
+        expect(restoredContext.generation).toBeGreaterThan(removedContext.generation);
+        await expectLiveQuotaWriterAdmission(instance, id);
         reply = () => { const fresh = answer(); fresh.headers.set("anthropic-ratelimit-unified-5h-utilization", "0.23"); return fresh; };
         const fresh = await post(instance); await fresh.text();
         expect(fresh.status).toBe(200); expect(sends).toHaveLength(2);
+        expect(fixture.ledger.sends[1]!.accountId).toBe(id);
+        expect(sends[1]!.token).toBe(`Bearer ${original.credential.access}`);
         expect(fixture.quota.getCachedProviderAccountQuota(instance, id)?.fiveHourPercent).toBe(23);
         expect(fixture.ledger.sends.every(send => send.instance === instance)).toBe(true);
         expect(fixture.quota.getCachedProviderAccountQuota(other, id)).toBeNull();
@@ -486,9 +507,12 @@ for (const instance of instances) {
     expect(response.status).toBe(403); expect(sends).toHaveLength(1);
     expect(fixture.quota.getCachedProviderAccountQuota(instance, original.id)).toBeNull();
     expect(routing.anthropicRoutingFor(instance).getAnthropicAccountHealthSnapshot(original.id)).toBeNull();
+    await expectLiveQuotaWriterAdmission(instance, original.id);
     reply = () => { const fresh = answer(); fresh.headers.set("anthropic-ratelimit-unified-5h-utilization", "0.23"); return fresh; };
     const fresh = await post(instance); await fresh.text();
     expect(fresh.status).toBe(200); expect(sends).toHaveLength(2);
+    expect(fixture.ledger.sends[1]!.accountId).toBe(original.id);
+    expect(sends[1]!.token).toBe(`Bearer ${original.credential.access}`);
     expect(fixture.quota.getCachedProviderAccountQuota(instance, original.id)?.fiveHourPercent).toBe(23);
   });
 }
@@ -535,4 +559,67 @@ for (const surface of ["responses", "chat"] as const) {
       } finally { activeResolver.mockRestore(); accountResolver.mockRestore(); }
     });
   }
+}
+
+for (const unavailable of ["absent-row", "unmarked-oauth", "unmarked-chat-oauth"] as const) {
+  test(`native Chat key default cannot replace explicit unavailable B (${unavailable})`, async () => {
+    if (unavailable === "absent-row") delete config.providers.anthropic2;
+    else {
+      delete config.providers.anthropic2!.anthropicOAuthInstance;
+      delete config.providers.anthropic2!.anthropicAccountPool;
+      if (unavailable === "unmarked-chat-oauth") config.providers.anthropic2!.adapter = "openai-chat";
+    }
+    const defaultKey = "access-token-value-test-native-gateway";
+    const defaultSends: Array<{ model: unknown; stream: unknown; headers: Headers }> = [];
+    config.defaultProvider = "gateway";
+    config.providers.gateway = {
+      adapter: "openai-chat", authMode: "key", apiKey: defaultKey, baseUrl: "https://native-gateway.example.test/v1",
+      fetch: (async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        defaultSends.push({ model: body.model, stream: body.stream, headers: new Headers(init?.headers) });
+        return Response.json({ id: "chatcmpl_gateway", object: "chat.completion", model: body.model,
+          choices: [{ index: 0, message: { role: "assistant", content: "The answer is complete." }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 8, completion_tokens: 6, total_tokens: 14 },
+        });
+      }) as typeof fetch,
+    } as OcxProviderConfig & { fetch: typeof fetch };
+    fixture.publishConfig();
+    expect(store.getAccountSet("anthropic")!.accounts).toHaveLength(2);
+    expect(store.getAccountSet("anthropic2")!.accounts).toHaveLength(2);
+    const { handleChatCompletions } = await import("../../../src/server/chat-completions");
+    const { routeModel, routeConcreteModel } = await import("../../../src/router");
+    const oauth = await import("../../../src/oauth");
+    const activeResolver = spyOn(oauth, "getValidAccessTokenSnapshot");
+    const accountResolver = spyOn(oauth, "getValidAccessSnapshotForAccount");
+    const send = (model: string) => handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: "Answer briefly" }], stream: false }),
+    }), config, { model: "", provider: "" });
+    try {
+      const selector = `anthropic2/${fixture.model}`;
+      expect(() => routeModel(config, selector)).toThrow("Anthropic Pool 2");
+      expect(() => routeConcreteModel(config, selector)).toThrow("Anthropic Pool 2");
+      if (unavailable !== "absent-row") {
+        // Invalid B OAuth also refuses when selected as a default, without a qualifier.
+        expect(() => routeModel({ ...config, defaultProvider: "anthropic2" }, "unknown-bare-model")).toThrow("Anthropic Pool 2");
+      }
+      const refusal = await send(selector);
+      expect(refusal.status).toBe(401);
+      expect(await refusal.json()).toMatchObject({ error: { type: "authentication_error" } });
+      expect(defaultSends).toHaveLength(0); expect(sends).toHaveLength(0); expect(fixture.ledger.sends).toHaveLength(0);
+      expect(activeResolver).not.toHaveBeenCalled(); expect(accountResolver).not.toHaveBeenCalled();
+      // The same gateway and request shape must actually enter native Chat for an unrelated
+      // slash-containing model. This prevents a bridge-only fixture from hiding the bypass.
+      const { nativeChatDeclineReason } = await import("../../../src/server/chat-native-eligibility");
+      const controlModel = "vendor/ordinary-slash-model";
+      const controlBody = { model: controlModel, messages: [{ role: "user", content: "Answer briefly" }], stream: false };
+      expect(nativeChatDeclineReason(routeModel(config, controlModel), controlBody, config)).toBeUndefined();
+      const control = await send(controlModel);
+      expect(control.status).toBe(200); expect(await control.text()).toContain("The answer is complete.");
+      expect(defaultSends).toHaveLength(1); expect(defaultSends[0]!.model).toBe(controlModel);
+      expect(defaultSends[0]!.stream).toBe(false);
+      expect(defaultSends[0]!.headers.get("authorization")).toBe(`Bearer ${defaultKey}`);
+      expect(activeResolver).not.toHaveBeenCalled(); expect(accountResolver).not.toHaveBeenCalled();
+    } finally { activeResolver.mockRestore(); accountResolver.mockRestore(); }
+  });
 }
