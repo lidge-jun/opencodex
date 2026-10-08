@@ -8,6 +8,10 @@ gigabytes of RSS during long streaming sessions (reported as issue
 [#314](https://github.com/lidge-jun/opencodex/issues/314)). This page explains
 what is actually happening and what you can do about it, honestly.
 
+## Model-list liveness
+
+Model-list reads use the selected runtime's last confirmed bundled catalog while version and bundled-model checks refresh asynchronously. A cold or changed selection temporarily uses the existing catalog/cache or native fallback. Slow launchers and descendants holding stdout therefore do not block unrelated health checks in this path. This does not identify or fix every historical memory-growth or unresponsive-listener report in [#6671](https://github.com/lidge-jun/opencodex/issues/6671), and it does not add automatic request replay or service restart.
+
 ## Root cause: upstream Bun runtime issues
 
 opencodex bundles the Bun runtime (currently **1.3.14**). The memory growth is

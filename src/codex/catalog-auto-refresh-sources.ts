@@ -34,10 +34,9 @@ export async function refreshCatalogAutoRefreshSources(
   current: () => boolean,
 ): Promise<void> {
   // Runtime selection also supplies the roster's trusted client version after an upgrade.
-  await bestEffortSource(async active => {
-    const { loadBundledCodexCatalog } = await import("./catalog/bundled");
-    if (active() && current()) loadBundledCodexCatalog();
-    // The synchronous loader bounds its selected-runtime subprocess probes itself.
+  await bestEffortSource(async (active, signal) => {
+    const { loadBundledCodexCatalogAsync } = await import("./catalog/bundled");
+    if (active() && current()) await loadBundledCodexCatalogAsync({}, () => active() && current(), signal);
   });
   if (!current()) return;
   await bestEffortSource(async active => {

@@ -364,7 +364,9 @@ export function supportedCodexReasoningEffortsFromObservedCatalog(
 }
 
 export function codexSupportedReasoningEfforts(deps: BundledCatalogDeps = {}): ReadonlySet<string> | null {
-  return supportedCodexReasoningEffortsFromObservedCatalog(loadBundledCodexCatalog(deps));
+  return supportedCodexReasoningEffortsFromObservedCatalog(
+    deps.observedCatalog !== undefined ? deps.observedCatalog : loadBundledCodexCatalog(deps),
+  );
 }
 
 export function clampedDefaultEffort(original: string, surviving: readonly string[]): string {

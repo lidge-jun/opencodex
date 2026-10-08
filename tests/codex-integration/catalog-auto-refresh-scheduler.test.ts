@@ -76,7 +76,7 @@ beforeEach(() => {
   resetCatalogAutoRefreshForTests();
   resetCatalogAutoRefreshStatusForTests();
   sourceSpies = [
-    spyOn(bundled, "loadBundledCodexCatalog").mockReturnValue(null),
+    spyOn(bundled, "loadBundledCodexCatalogAsync").mockResolvedValue(null),
     spyOn(entitlements, "ensureCodexEntitlementFreshness").mockResolvedValue(undefined),
     spyOn(entitlements, "discoverCodexNativeRoster").mockResolvedValue("unavailable"),
     spyOn(appServerProcesses, "listCodexAppServerProcesses").mockReturnValue([]),
@@ -204,7 +204,7 @@ describe("catalog auto-refresh scheduler", () => {
   test.each(["none", "bundled", "roster", "discovery"])("sources settle before converge despite %s failure", async failure => {
     writeCatalogAutoRefreshConfig();
     const steps: string[] = [];
-    spyOn(bundled, "loadBundledCodexCatalog").mockImplementation(() => {
+    spyOn(bundled, "loadBundledCodexCatalogAsync").mockImplementation(async () => {
       steps.push("bundled");
       if (failure === "bundled") throw new Error("private source failure");
       return null;
@@ -227,7 +227,7 @@ describe("catalog auto-refresh scheduler", () => {
 
   test("stopping during source refresh prevents roster warm and convergence", async () => {
     writeCatalogAutoRefreshConfig();
-    spyOn(bundled, "loadBundledCodexCatalog").mockImplementation(() => {
+    spyOn(bundled, "loadBundledCodexCatalogAsync").mockImplementation(async () => {
       stopCatalogAutoRefresh();
       return null;
     });
@@ -316,7 +316,7 @@ describe("catalog auto-refresh scheduler", () => {
     await runCatalogAutoRefreshTickForTests();
     expect(catalogAutoRefreshTickCountForTests()).toBe(0);
     expect(convergeFactoryCalls).toBe(0);
-    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(bundled.loadBundledCodexCatalogAsync).not.toHaveBeenCalled();
     expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
     expect(lastCatalogAutoRefreshOutcome()).toBeNull();
   });
@@ -844,7 +844,7 @@ describe("catalog auto-refresh without a managed Codex client", () => {
     writeIntegrationOffConfig();
     await runCatalogAutoRefreshTickForTests();
     expect(convergeFactoryCalls).toBe(0);
-    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(bundled.loadBundledCodexCatalogAsync).not.toHaveBeenCalled();
     expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
     expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
     expect(catalogAutoRefreshTickCountForTests()).toBe(0);
@@ -854,7 +854,7 @@ describe("catalog auto-refresh without a managed Codex client", () => {
     writeIntegrationOffConfig({ enabled: true, intervalMinutes: 60 });
     await runCatalogAutoRefreshTickForTests();
     expect(convergeFactoryCalls).toBe(1);
-    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(bundled.loadBundledCodexCatalogAsync).not.toHaveBeenCalled();
     expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
     expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
   });

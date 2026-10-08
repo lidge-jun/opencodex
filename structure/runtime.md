@@ -1,6 +1,6 @@
 # Runtime
 
-The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Catalog requests and scheduled source refreshes follow the [nonblocking catalog observation contract](catalog.md#shared-catalog). Async runtime persistence rejects observed selection/epoch changes and returns detached frozen results; bounded exec settles and releases output readers on deadline or abort.
 
 ## Resolved static model policy
 
