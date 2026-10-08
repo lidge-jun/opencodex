@@ -77,7 +77,7 @@ describe("Anthropic pool configuration locations", () => {
     const { handleProviderCommand } = await import("../../src/cli/provider");
     const print = spyOn(console, "log").mockImplementation(() => {});
     const error = spyOn(console, "error").mockImplementation(() => {});
-    const exitCode = process.exitCode;
+    const exitCode = process.exitCode ?? 0;
     try {
       const before = loadConfig().defaultProvider;
       await handleProviderCommand(["add", "anthropic2", "--json"]);
