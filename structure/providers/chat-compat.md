@@ -554,7 +554,7 @@ Claude Opus 5.5, Fable 5.1 and Sonnet 5.5 are upstream exceptions to the forced-
 adaptive thinking, for all three. The adapter sends `{type:"auto"}` for those choices so the
 request succeeds, but the caller's forced-tool guarantee cannot be preserved; the prompt
 must provide any required tool-use instruction. Other Claude model families retain the
-normal forced-choice mapping unless their own upstream contract says otherwise.
+normal forced-choice mapping: Haiku 5.5 retains `any`/named tools, uses adaptive thinking for low..max, and reasoning none sends `disabled` without effort. Its non-default sampling fields are dropped on every path.
 ## Unmapped modalities are recorded, not dropped
 
 The translated Chat route has no video mapping — this adapter does not implement one.

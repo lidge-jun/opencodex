@@ -138,7 +138,7 @@
   "anthropic-fast-speed.test.ts": "adapters/anthropic", "anthropic-hardening.test.ts": "adapters/anthropic",
   "anthropic-image-guard.test.ts": "adapters/anthropic", "anthropic-image-normalize.test.ts": "adapters/anthropic",
   "anthropic-image-retry-e2e.test.ts": "adapters/anthropic", "anthropic-image-retry.test.ts": "adapters/anthropic",
-  "anthropic-sonnet-5-5-contract.test.ts": "adapters/anthropic",
+  "anthropic-sonnet-5-5-contract.test.ts": "adapters/anthropic", "anthropic-haiku-5-5-contract.test.ts": "adapters/anthropic",
   "anthropic-output-maxima.test.ts": "adapters/anthropic",
   "anthropic-parallel-tool-disable.test.ts": "adapters/anthropic",
   "anthropic-pool-toggle-copy.test.ts": "adapters/anthropic", "anthropic-quorum-cache.test.ts": "routing",
