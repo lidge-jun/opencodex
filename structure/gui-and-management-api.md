@@ -1,5 +1,10 @@
 # GUI And Management API
 
+Provider connection probes preserve the configured authentication mode and use
+the [catalog's Pool 2 discovery ownership](catalog.md#anthropic-pool-discovery-ownership)
+rule. The probe captures its provider row and checks live OAuth ownership again
+before sending. Custom key rows retain their own key.
+
 Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
 `autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
 `PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;

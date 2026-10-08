@@ -32,6 +32,7 @@ import {
   type OAuthActiveTokenObservation,
 } from "../../oauth";
 import { getAccountSet } from "../../oauth/store";
+import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -393,11 +394,11 @@ export function captureProviderGather(
   // reads the live store.
   const oauthApiBaseUrl = observedAuth
     ? observedAuth.oauthApiBaseUrl
-    : authResolver.kind === "refreshing" && provider.authMode === "oauth"
+    : authResolver.kind === "refreshing" && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider)
       ? getOAuthCredentialApiBaseUrl(name)
       : undefined;
   const request = captureModelsRequest(name, provider, oauthApiBaseUrl);
-  const refreshingOAuthAccountId = !observedAuth && authResolver.kind === "refreshing" && provider.authMode === "oauth"
+  const refreshingOAuthAccountId = !observedAuth && authResolver.kind === "refreshing" && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider)
     ? getAccountSet(name)?.activeAccountId
     : undefined;
   const resolved = resolveProviderModelDiscovery(name, provider);

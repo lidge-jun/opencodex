@@ -28,11 +28,12 @@ import {
 } from "../model-cache";
 import {
   buildModelsRequest,
-  getValidAccessTokenSnapshot,
+  getModelsOAuthAccessSnapshot,
   observeActiveOAuthAccessToken,
   resolveModelsAuthToken,
   type OAuthActiveTokenObservation,
 } from "../../oauth";
+import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -145,7 +146,8 @@ export function observedModelsAuthResolver(
         return { apiKey: resolveProviderApiKey(provider.apiKey), observed: true };
       }
 
-      const observation = observeActiveOAuthAccessToken(name, authStoreBuffer);
+      const observation: OAuthActiveTokenObservation = mayResolveModelsOAuth(name, provider)
+        ? observeActiveOAuthAccessToken(name, authStoreBuffer) : { kind: "missing" };
       outcomes.push({ provider: name, state: observation.kind });
       if (observation.kind !== "available") return { apiKey: undefined, observed: true };
       return {
@@ -257,9 +259,11 @@ export async function fetchProviderModelsWithAuth(
     }
     return observed(configured, "authoritative");
   }
-  const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"
+  const auth: ModelsAuthResolution = prov.authMode === "oauth" && !mayResolveModelsOAuth(name, prov)
+    ? { apiKey: undefined, observed: resolveAuth.kind === "observed" }
+    : captured.observedAuth ?? (resolveAuth.kind === "refreshing"
     ? prov.authMode === "oauth"
-      ? await getValidAccessTokenSnapshot(name)
+      ? await getModelsOAuthAccessSnapshot(name, prov)
         .then(snapshot => ({
           apiKey: snapshot.accessToken,
           observed: false,

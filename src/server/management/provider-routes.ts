@@ -40,6 +40,7 @@ import { commitProviderPatch } from "./provider-patch-transaction";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import { canonicalAutoReviewModelKey, mergeModelPinnedEfforts, modelPinnedEffortsConfigError, pinnedReasoningEffortConfigError } from "../../config/provider-validation";
 import { replaceProviderAccountSet } from "../../oauth/store";
+import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
@@ -1621,7 +1622,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
       return jsonResponse({ error: "unknown provider" }, 404);
     }
-    const prov = config.providers[name]!;
+    const prov = { ...config.providers[name]! };
     if (prov.disabled) {
       return jsonResponse({ ok: false, error: "Provider is disabled", latencyMs: 0 });
     }
@@ -1646,10 +1647,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // credential resolution/network access for providers such as Antigravity.
       return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
     }
-    const { buildModelsRequest, getValidAccessTokenSnapshot, resolveModelsAuthToken } = await import("../../oauth");
+    const { buildModelsRequest, getModelsOAuthAccessSnapshot, resolveModelsAuthToken } = await import("../../oauth");
     const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
-    const snapshot = prov.authMode === "oauth"
-      ? await getValidAccessTokenSnapshot(name).catch(() => undefined)
+    const snapshot = prov.authMode === "oauth" && mayResolveModelsOAuth(name, config.providers[name])
+      ? await getModelsOAuthAccessSnapshot(name, prov).catch(() => undefined)
       : undefined;
     const apiKey = prov.authMode === "oauth" ? snapshot?.accessToken : await resolveModelsAuthToken(name, prov);
     if (prov.authMode === "oauth" && !apiKey) {
@@ -1735,7 +1736,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // Same canonical-URL TUN transparency as catalog discovery: the registry's
       // own fixed discovery URL survives purely-benchmark (Clash/Surge/Mihomo
       // fake-IP) DNS without proxy env.
-      const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl };
+      const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
+        beforeSend: () => prov.authMode !== "oauth" || mayResolveModelsOAuth(name, config.providers[name]) };
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,

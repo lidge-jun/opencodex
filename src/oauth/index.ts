@@ -32,6 +32,7 @@ import {
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError } from "./anthropic";
 import { isAnthropicOAuthInstance, anthropicInstanceRowShapeMatches } from "../providers/anthropic-instance";
+import { guardModelsOAuthRequest, mayResolveModelsOAuth } from "./model-discovery-auth";
 import { anthropicOAuthDefinition, assertAnthropicInstanceLoginConfig, AnthropicInstanceCollisionError,
   clearAnthropicRefreshIntentBestEffort, clearAnthropicRefreshIntentForKnownFailure,
   resumeAnthropicRefreshIntentCleanup, clearObservedAnthropicRefreshIntent } from "./anthropic-oauth-definitions";
@@ -1061,17 +1062,18 @@ async function refreshAndPersistAccessToken(
   return refreshGenericAccountWithLock(provider, accountId, def, cred, { signal });
 }
 
-/**
- * Shared bearer-token resolver for /models listing — used by BOTH server.ts:fetchAllModels and
- * codex-catalog.ts:fetchProviderModels so OAuth providers' models are listed once logged in.
- * Returns undefined for forward-mode or oauth-not-logged-in (caller skips).
- */
+/** Resolve discovery credentials only for the caller-owned configured OAuth row. */
+export async function getModelsOAuthAccessSnapshot(name: string, prov: OcxProviderConfig | undefined): Promise<OAuthAccessSnapshot> {
+  if (!mayResolveModelsOAuth(name, prov)) throw new OAuthLoginRequiredError(name);
+  return getValidAccessTokenSnapshot(name);
+}
+
+/** Shared /models auth resolver; custom key rows keep their own key, including omitted authMode. */
 export async function resolveModelsAuthToken(name: string, prov: OcxProviderConfig): Promise<string | undefined> {
-  if (name === "anthropic2" && (prov.disabled === true || !anthropicInstanceRowShapeMatches(name, prov))) return undefined;
   if (prov.authMode === "forward") return undefined;
   if (prov.authMode === "oauth") {
     try {
-      return await getValidAccessToken(name);
+      return (await getModelsOAuthAccessSnapshot(name, prov)).accessToken;
     } catch {
       return undefined;
     }
@@ -1116,6 +1118,7 @@ export function buildModelsRequest(
   providerName = "",
   observedAuth?: ModelsRequestObservedAuth,
 ): { method?: "POST"; url: string; headers: Record<string, string> } {
+  if (prov.authMode === "oauth" && !mayResolveModelsOAuth(providerName, prov)) apiKey = undefined;
   const transportSeed = modelDiscoveryTransportSeed(providerName, prov);
   const copilotApiBaseUrl = observedAuth === undefined
     ? (providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined)
@@ -1142,16 +1145,18 @@ export function buildModelsRequest(
     effectiveProvider.baseUrl,
     defaultUrl,
   );
+  const guarded = <T extends { url: string; headers: Record<string, string> }>(request: T): T =>
+    guardModelsOAuthRequest(providerName, prov, request);
   if (effectiveGoogleMode(providerName, effectiveProvider) === "cloud-code-assist") {
     headers.Accept = "application/json";
     headers["Content-Type"] = "application/json";
     headers["User-Agent"] = ANTIGRAVITY_REQUEST_UA;
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-    return {
-      method: "POST",
+    return guarded({
+      method: "POST" as const,
       url: discoveryUrl(`${effectiveProvider.baseUrl.replace(/\/+$/, "")}/v1internal:fetchAvailableModels`),
       headers,
-    };
+    });
   }
   if (effectiveGoogleMode(providerName, effectiveProvider) === "ai-studio") {
     // Generative Language API: API key goes in x-goog-api-key (never Authorization: Bearer),
@@ -1159,7 +1164,7 @@ export function buildModelsRequest(
     // enough to list everything without a pageToken loop. Vertex/antigravity keep the
     // generic branch (they fall back to their static model lists).
     if (apiKey) headers["x-goog-api-key"] = apiKey;
-    return { url: discoveryUrl(`${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`), headers };
+    return guarded({ url: discoveryUrl(`${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`), headers });
   }
   if (effectiveProvider.adapter === "anthropic") {
     const base = effectiveProvider.baseUrl.replace(/\/v1\/?$/, "");
@@ -1171,10 +1176,10 @@ export function buildModelsRequest(
       if (effectiveProvider.apiKeyTransport === "bearer") headers["Authorization"] = `Bearer ${apiKey}`;
       else headers["x-api-key"] = apiKey;
     }
-    return { url: discoveryUrl(`${base}/v1/models?limit=1000`), headers };
+    return guarded({ url: discoveryUrl(`${base}/v1/models?limit=1000`), headers });
   }
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  return { url: discoveryUrl(providerModelsUrl(effectiveProvider.baseUrl)), headers };
+  return guarded({ url: discoveryUrl(providerModelsUrl(effectiveProvider.baseUrl)), headers });
 }
 
 /**
