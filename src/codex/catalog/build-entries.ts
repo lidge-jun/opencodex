@@ -308,10 +308,10 @@ export function buildCatalogEntriesFromObservedState({
       delete entry.prefer_websockets;
     }
   }
-  return withCodexControlPlaneRows(applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled, {
+  return applyMultiAgentMode(withCodexControlPlaneRows(out, template ? [template] : [], true, wsEnabled), multiAgentMode, multiAgentV2Enabled, {
     keepNativeChatGptOnV1,
     preserveDefaultMultiAgentVersion: isReserveCatalogProjection,
-  }), template ? [template] : [], gptSlugs.length > 0, wsEnabled);
+  });
 }
 
 export function resetCatalogRuntimeStateForTests(): void {
@@ -926,7 +926,10 @@ export function mergeCatalogEntriesFromObservedState({
   // clobber a hide flag back to list. Bare ids disable every account clone; qualified ids disable
   // only their generated account row.
   const versionedEntries = applyMultiAgentMode(
-    applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
+    withCodexControlPlaneRows(
+      applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
+      [...catalogModels, ...baselineCatalogModels, ...routedEntries], includeNativeOpenAi, wsEnabled,
+    ),
     multiAgentMode,
     multiAgentV2Enabled,
     { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection, nativeDefaults: nativeMultiAgentDefaults },
@@ -953,7 +956,7 @@ export function mergeCatalogEntriesFromObservedState({
     delete entry.opencodex_catalog_kind;
     entry.opencodex_catalog_kind = kind;
   }
-  return withCodexControlPlaneRows(versionedEntries, [...catalogModels, ...baselineCatalogModels, ...routedEntries], includeNativeOpenAi, wsEnabled);
+  return versionedEntries;
 }
 
 /** Merge retained-sync rows using the process-observed Codex feature state. */

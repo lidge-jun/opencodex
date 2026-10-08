@@ -5,14 +5,17 @@ import { join } from "node:path";
 import {
   applyFullModelPickerOrder, buildCatalogEntriesFromObservedState,
   CANONICAL_NATIVE_CATALOG_CONTENT_POLICY, mergeCatalogEntriesFromObservedState,
-  mergeCatalogModelsWithNativeRecovery, type ObservedCatalogMergeInput,
+  mergeCatalogModelsWithNativeRecovery, type ObservedCatalogMergeInput, type ObservedCatalogEntryBuildInput,
 } from "../../src/codex/catalog/build-entries";
 import { applyAutoReviewModelOverride, applyConfiguredAutoReviewModelOverride } from "../../src/codex/catalog/auto-review";
 import { clampCatalogModelsToObservedCodexSupport } from "../../src/codex/catalog/effort";
 import { filterSupportedNativeSlugs, type RawEntry } from "../../src/codex/catalog/parsing";
 import { desktopVisibleNativeSlugs, upstreamNativeEntry, visibleNativeSlugs } from "../../src/codex/catalog/metadata";
-import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../src/codex/catalog/native-models";
+import { NATIVE_RESERVE_MODEL, SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../src/codex/catalog/native-models";
 import { effectiveSubagentRoster, SPAWN_PRIORITY_FIELD } from "../../src/codex/catalog/subagent-roster";
+import { CODEX_ACCOUNT_BOUND_CATALOG_KIND } from "../../src/codex/catalog/account-models";
+import { RESERVE_METADATA_SOURCE_FIELD } from "../../src/codex/catalog/reserve";
+import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "../../src/codex/catalog/kinds";
 import snapshot from "../../src/codex/data/upstream-models.json";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { CODEX_INTERNAL_OPENAI_MODELS } from "../../src/codex/control-plane-models";
@@ -40,6 +43,62 @@ function merge(catalogModels: RawEntry[] = [], includeNativeOpenAi = true, extra
     policy: { ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY, warningPolicy: "suppress" }, ...extra,
   });
 }
+function build(extra: Partial<ObservedCatalogEntryBuildInput> = {}): RawEntry[] {
+  return buildCatalogEntriesFromObservedState({
+    template: null, gptSlugs: ["gpt-5.5"], goModels: [], wsEnabled: false,
+    multiAgentMode: "v2", multiAgentV2Enabled: true, exactComboSlugs: new Set(),
+    accountSelectors: [], suppressedBareNativeSlugs: new Set(), disabledNativeAccountSlugs: new Set(),
+    ...extra,
+  });
+}
+const reserve: RawEntry = {
+  slug: `personal/${NATIVE_RESERVE_MODEL}`, visibility: "list",
+  opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+  [RESERVE_METADATA_SOURCE_FIELD]: NATIVE_RESERVE_MODEL,
+  supported_reasoning_levels: [{ effort: "xhigh", description: "Only xhigh" }],
+  default_reasoning_level: "xhigh",
+};
+
+test.each(["v1", "v2"] as const)("reviewer receives explicit %s mode in build and merge", mode => {
+  expect(reviewRow(build({ multiAgentMode: mode })).multi_agent_version).toBe(mode);
+  expect(reviewRow(merge([], true, { multiAgentMode: mode })).multi_agent_version).toBe(mode);
+});
+
+test("reviewer follows the native v1 exception to explicit v2 mode", () => {
+  expect(reviewRow(build({ keepNativeChatGptOnV1: true })).multi_agent_version).toBe("v1");
+  expect(reviewRow(merge([], true, { keepNativeChatGptOnV1: true })).multi_agent_version).toBe("v1");
+});
+
+test("Reserve-only or native-less final catalogs omit persisted reviewers in both writers", () => {
+  for (const gptSlugs of [[], [NATIVE_RESERVE_MODEL], [reviewer], ["gpt-5.5"]]) {
+    const rows = build({ gptSlugs, suppressedBareNativeSlugs: new Set(["gpt-5.5"]) });
+    expect(rows.some(row => row.slug === reviewer)).toBe(false);
+  }
+  for (const catalogModels of [[], [{ slug: NATIVE_RESERVE_MODEL }], [{ slug: "user-native" }],
+    [{ slug: "gpt-5.5", opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND }]]) {
+    const rows = merge([...catalogModels, structuredClone(upstream)], true, {
+      accountBoundEntries: [reserve],
+      policy: { nativeBackfillSlugs: [], unsupportedNativeEntries: "drop", warningPolicy: "suppress" },
+    });
+    expect(rows.some(row => row.slug === reviewer)).toBe(false);
+  }
+});
+
+test("hidden ordinary bare native rows qualify while account-only rows do not", () => {
+  const policy = { nativeBackfillSlugs: [], unsupportedNativeEntries: "drop" as const, warningPolicy: "suppress" as const };
+  const rows = merge([{ slug: "gpt-5.5", visibility: "hide" }], true, { disabledModels: new Set(["gpt-5.5"]), policy });
+  expect(reviewRow(rows).visibility).toBe("hide");
+  const accountOnly = merge([], true, { policy, accountBoundEntries: [{ slug: "personal/gpt-5.5", visibility: "list" }] });
+  expect(accountOnly.some(row => row.slug === reviewer)).toBe(false);
+});
+
+test("final effort clamp removes an orphan reviewer when its only native-looking row is Reserve", () => {
+  const rows = [{ slug: "external/model", visibility: "list" }, structuredClone(reserve), structuredClone(upstream)];
+  const diagnostic = clampCatalogModelsToObservedCodexSupport(rows, new Set(["medium"]));
+  expect(rows.map(row => row.slug)).toEqual(["external/model"]);
+  expect(diagnostic.affectedModels).toContain(reserve.slug);
+});
+
 function reviewRow(rows: RawEntry[]): RawEntry {
   const matches = rows.filter(row => row.slug === reviewer);
   expect(matches).toHaveLength(1);
@@ -58,7 +117,7 @@ test("build backfills the hidden reviewer with its exact upstream ladder and no 
   expect(row.supported_reasoning_levels).toEqual(upstream.supported_reasoning_levels);
   expect(row.supported_reasoning_levels).toEqual(expect.arrayContaining([expect.objectContaining({ effort: "low" })]));
   expect(row.default_reasoning_level).toBe(upstream.default_reasoning_level);
-  expect(row.multi_agent_version).toBe(upstream.multi_agent_version);
+  expect(row.multi_agent_version).toBe("v2");
   expect(row.priority).toBe(upstream.priority);
   expect(rows.some(entry => entry.slug === `account/${reviewer}`)).toBe(false);
   applyFullModelPickerOrder(rows, [reviewer, "gpt-5.5"]);
@@ -92,7 +151,7 @@ test("merge preserves the first live row over duplicate persisted/generated rows
     baselineCatalogModels: [{ ...structuredClone(upstream), display_name: "Baseline" }],
     routedEntries: [structuredClone(upstream)],
   });
-  const expected = { ...before, visibility: "hide" };
+  const expected = { ...before, visibility: "hide", multi_agent_version: "v2", opencodex_multi_agent_version_origin: "v1" };
   delete expected.prefer_websockets;
   expect(reviewRow(rows)).toEqual(expected);
   expect(live).toEqual(before);
