@@ -99,46 +99,49 @@ function normalH2(session: ClientHttp2Session, path = "/ok") {
 
 for (const protocol of ["h1", "h2"] as const) {
   for (const status of [400, 503] as const) {
-    bounded(`${protocol} ${status} refusal closes a headers-only upload without body completion`, async wait => {
-      const held = Promise.withResolvers<void>();
-      const left = Promise.withResolvers<void>();
-      let relayed = 0;
-      const f = await fixture((req, res) => {
-        req.on("error", () => res.destroy()); req.resume();
-        if (req.url === "/held") {
-          req.once("close", () => left.resolve()); held.resolve();
-        } else { relayed++; res.end("ordinary"); }
-      }, { maxActiveUpstreams: 1 });
-      try {
-        const session = f.h2();
-        let blocker: ClientHttp2Stream | undefined;
-        let blockerClosed: Promise<void> | undefined;
-        if (status === 503) {
-          blocker = session.request({ ":method": "POST", ":path": "/held", ":authority": "claude.ai" });
-          blockerClosed = observeClose(blocker); blocker.write("x"); await wait(held.promise);
-        }
-        const path = status === 400 ? "//[" : "/refused";
-        const upload = protocol === "h2"
-          ? session.request({ ":method": "POST", ":path": path, ":authority": "claude.ai" }, { endStream: false })
-          : f.h1(path, "POST", { "Content-Length": "100" });
-        const result = protocol === "h2" ? h2Result(upload as ClientHttp2Stream) : h1Result(upload as ClientRequest);
-        const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest);
-        let connection: string | undefined;
-        if (protocol === "h1") {
-          (upload as ClientRequest).once("response", res => { connection = res.headers.connection; });
-          (upload as ClientRequest).flushHeaders();
-        }
-        expect(await wait(result)).toEqual({ status, text: "" });
-        if (protocol === "h1") expect(connection).toBe("close");
-        await wait(closed);
-        if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_CANCEL);
-        expect(relayed).toBe(0);
-        if (blocker) {
-          blocker.close(constants.NGHTTP2_CANCEL); await wait(blockerClosed!); await wait(left.promise);
-        }
-        expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
-      } finally { await wait(f.close()); }
-    });
+    for (const input of ["headers-only", "buffered"] as const) {
+      bounded(`${protocol} ${status} refusal closes a ${input} upload without body completion`, async wait => {
+        const held = Promise.withResolvers<void>();
+        const left = Promise.withResolvers<void>();
+        let relayed = 0;
+        const f = await fixture((req, res) => {
+          req.on("error", () => res.destroy()); req.resume();
+          if (req.url === "/held") {
+            req.once("close", () => left.resolve()); held.resolve();
+          } else { relayed++; res.end("ordinary"); }
+        }, { maxActiveUpstreams: 1 });
+        try {
+          const session = f.h2();
+          let blocker: ClientHttp2Stream | undefined;
+          let blockerClosed: Promise<void> | undefined;
+          if (status === 503) {
+            blocker = session.request({ ":method": "POST", ":path": "/held", ":authority": "claude.ai" });
+            blockerClosed = observeClose(blocker); blocker.write("x"); await wait(held.promise);
+          }
+          const path = status === 400 ? "//[" : "/refused";
+          const upload = protocol === "h2"
+            ? session.request({ ":method": "POST", ":path": path, ":authority": "claude.ai" }, { endStream: false })
+            : f.h1(path, "POST", { "Content-Length": String(32 * 1024 * 1024) });
+          const result = protocol === "h2" ? h2Result(upload as ClientHttp2Stream) : h1Result(upload as ClientRequest);
+          const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest);
+          let connection: string | undefined;
+          if (protocol === "h1") {
+            (upload as ClientRequest).once("response", res => { connection = res.headers.connection; });
+            if (input === "headers-only") (upload as ClientRequest).flushHeaders();
+          }
+          if (input === "buffered") upload.write(Buffer.alloc(4 * 1024 * 1024, 0x61));
+          expect(await wait(result)).toEqual({ status, text: "" });
+          if (protocol === "h1") expect(connection).toBe("close");
+          await wait(closed);
+          if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_NO_ERROR);
+          expect(relayed).toBe(0);
+          if (blocker) {
+            blocker.close(constants.NGHTTP2_CANCEL); await wait(blockerClosed!); await wait(left.promise);
+          }
+          expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
+        } finally { await wait(f.close()); }
+      });
+    }
   }
 }
 
@@ -170,6 +173,7 @@ for (const protocol of ["h1", "h2"] as const) {
       const secondClosed = observeClose(second); second.write("x"); await wait(admitted.promise);
       expect(sse!.writableEnded).toBe(false);
       second.close(constants.NGHTTP2_CANCEL); await wait(secondClosed); await wait(upstreamClosed.promise);
+      expect(second.rstCode).toBe(constants.NGHTTP2_CANCEL);
       expect(sse!.writableEnded).toBe(false);
       expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
       sse!.end("data: last\n\n");
@@ -191,6 +195,7 @@ for (const protocol of ["h1", "h2"] as const) {
       const result = protocol === "h2" ? h2Result(upload as ClientHttp2Stream) : h1Result(upload as ClientRequest);
       upload.write("x");
       expect(await wait(result)).toEqual({ status: 502, text: "" }); await wait(closed);
+      if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_NO_ERROR);
       const next = session.request({ ":method": "POST", ":path": "/next", ":authority": "claude.ai" });
       const nextResult = h2Result(next); next.end("complete");
       expect(await wait(nextResult)).toEqual({ status: 200, text: "ordinary" });
@@ -220,20 +225,32 @@ for (const protocol of ["h1", "h2"] as const) {
     // Exceed the h2 receive window and the h1 socket buffers, including a non-text tail.
     const body = Buffer.alloc(8 * 1024 * 1024);
     for (let i = 0; i < body.length; i++) body[i] = i % 251;
+    const uploadBody = Buffer.alloc(4 * 1024 * 1024, 0x61);
     const sent = Promise.withResolvers<void>();
+    let inputBytes = 0;
+    const backpressured = Promise.withResolvers<void>();
     const f = await fixture((req, res) => {
-      req.on("error", () => res.destroy());
+      req.on("error", () => res.destroy()); req.resume();
       if (req.url === "/early-large") {
-        res.writeHead(413, { "Content-Length": String(body.length) });
-        res.end(body, () => sent.resolve());
+        // Consume the known prefix before replying, so the fixture itself has no queued input
+        // when its HTTP/1.1 connection closes. The client's request body is still unfinished.
+        req.on("data", chunk => {
+          inputBytes += chunk.length;
+          if (inputBytes !== uploadBody.length) return;
+          res.writeHead(413, { "Content-Length": String(body.length) });
+          expect(res.write(body)).toBe(false);
+          expect(res.writableNeedDrain).toBe(true);
+          backpressured.resolve();
+          res.end(() => sent.resolve());
+        });
       } else res.end("ordinary");
     });
-    let resumeTimer: ReturnType<typeof setTimeout> | undefined;
+    const buffered = Promise.withResolvers<{ response: IncomingMessage | ClientHttp2Stream; resume(): void }>();
     try {
       const session = f.h2();
       const upload = protocol === "h2"
         ? session.request({ ":method": "POST", ":path": "/early-large", ":authority": "claude.ai" })
-        : f.h1("/early-large", "POST", { "Content-Length": "100" });
+        : f.h1("/early-large", "POST", { "Content-Length": String(32 * 1024 * 1024) });
       const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest);
       const result = Promise.withResolvers<{ status: number; body: Buffer }>();
       void result.promise.catch(() => {});
@@ -243,22 +260,35 @@ for (const protocol of ["h1", "h2"] as const) {
         response.once("end", () => result.resolve({ status, body: Buffer.concat(chunks) }));
         response.once("error", result.reject);
         response.pause();
-        resumeTimer = setTimeout(() => response.resume(), 150);
+        // Resume only when the paused reader has a full readable buffer, not after a delay.
+        const onReadable = () => {
+          if (response.readableLength < response.readableHighWaterMark) return;
+          buffered.resolve({ response, resume() { response.off("readable", onReadable); response.resume(); } });
+        };
+        response.on("readable", onReadable);
+        onReadable();
       };
       if (protocol === "h2") {
         const stream = upload as ClientHttp2Stream;
         stream.once("response", headers => collect(stream, Number(headers[":status"])));
       } else (upload as ClientRequest).once("response", res => collect(res, res.statusCode!));
       upload.once("error", result.reject);
-      upload.write("x");
+      upload.write(uploadBody);
+      await wait(backpressured.promise);
+      const { response, resume } = await wait(buffered.promise);
+      expect(response.readableLength).toBeGreaterThanOrEqual(response.readableHighWaterMark);
+      if (protocol === "h1") expect((response as IncomingMessage).headers.connection).toBe("close");
+      resume();
       const received = await wait(result.promise);
       await wait(sent.promise);
+      expect(inputBytes).toBe(uploadBody.length);
       expect(received.status).toBe(413);
       expect(received.body.length).toBe(body.length);
       expect(received.body.equals(body)).toBe(true);
       await wait(closed);
+      if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_NO_ERROR);
       expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
-    } finally { clearTimeout(resumeTimer); await wait(f.close()); }
+    } finally { await wait(f.close()); }
   });
 }
 
@@ -301,6 +331,7 @@ for (const protocol of ["h1", "h2"] as const) {
       const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest); upload.write("x");
       expect(await wait(result)).toEqual({ status: 413, text: "early" });
       await wait(closed);
+      if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_NO_ERROR);
       expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
     } finally { await wait(f.close()); }
   });
