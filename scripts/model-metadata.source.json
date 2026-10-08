@@ -4035,6 +4035,156 @@
 				"minLevel": "minimal",
 				"maxLevel": "high"
 			}
+		},
+		"anthropic.claude-haiku-5-5": {
+			"id": "anthropic.claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-budget-effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"au.anthropic.claude-haiku-5-5": {
+			"id": "au.anthropic.claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5 (AU)",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.11,
+				"output": 0.55,
+				"cacheRead": 0.011,
+				"cacheWrite": 0.1375
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-budget-effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"eu.anthropic.claude-haiku-5-5": {
+			"id": "eu.anthropic.claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5 (EU)",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.11,
+				"output": 0.55,
+				"cacheRead": 0.011,
+				"cacheWrite": 0.1375
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-budget-effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"global.anthropic.claude-haiku-5-5": {
+			"id": "global.anthropic.claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5 (Global)",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-budget-effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"jp.anthropic.claude-haiku-5-5": {
+			"id": "jp.anthropic.claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5 (JP)",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.11,
+				"output": 0.55,
+				"cacheRead": 0.011,
+				"cacheWrite": 0.1375
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-budget-effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"us.anthropic.claude-haiku-5-5": {
+			"id": "us.anthropic.claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5 (US)",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.11,
+				"output": 0.55,
+				"cacheRead": 0.011,
+				"cacheWrite": 0.1375
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-budget-effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
 		}
 	},
 	"anthropic": {
@@ -4736,7 +4886,7 @@
 			"cost": {
 				"input": 2,
 				"output": 10,
-				"cacheRead": 0.2,
+				"cacheRead": 0.1,
 				"cacheWrite": 2.5
 			},
 			"contextWindow": 1000000,
@@ -4763,6 +4913,31 @@
 				"output": 10,
 				"cacheRead": 0.2,
 				"cacheWrite": 2.5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"claude-haiku-5-5": {
+			"id": "claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "anthropic-messages",
+			"provider": "anthropic",
+			"baseUrl": "https://api.anthropic.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
@@ -6213,6 +6388,31 @@
 				"mode": "budget",
 				"minLevel": "minimal",
 				"maxLevel": "xhigh"
+			}
+		},
+		"anthropic/claude-haiku-5-5": {
+			"id": "anthropic/claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "anthropic-messages",
+			"provider": "cloudflare-ai-gateway",
+			"baseUrl": "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "high"
 			}
 		}
 	},
@@ -10726,7 +10926,7 @@
 			"cost": {
 				"input": 2,
 				"output": 10,
-				"cacheRead": 0.2,
+				"cacheRead": 0.1,
 				"cacheWrite": 2.5
 			},
 			"contextWindow": 1000000,
@@ -11657,6 +11857,39 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
+			"maxTokens": 128000,
+			"headers": {
+				"User-Agent": "opencode/1.3.15"
+			},
+			"compat": {
+				"supportsStore": false,
+				"supportsDeveloperRole": false,
+				"supportsReasoningEffort": false
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"claude-haiku-5-5": {
+			"id": "claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "openai-completions",
+			"provider": "github-copilot",
+			"baseUrl": "https://api.githubcopilot.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"headers": {
 				"User-Agent": "opencode/1.3.15"
@@ -15656,7 +15889,7 @@
 			"cost": {
 				"input": 2,
 				"output": 10,
-				"cacheRead": 0.2,
+				"cacheRead": 0.1,
 				"cacheWrite": 2.5
 			},
 			"contextWindow": 1000000,
@@ -24693,6 +24926,31 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 200000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"anthropic/claude-haiku-5.5": {
+			"id": "anthropic/claude-haiku-5.5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"thinking": {
 				"mode": "effort",
@@ -62127,6 +62385,31 @@
 			],
 			"contextWindow": 262144,
 			"maxTokens": 131072
+		},
+		"claude-haiku-5-5": {
+			"id": "claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "openai-completions",
+			"provider": "opencode-go",
+			"baseUrl": "https://opencode.ai/zen/go/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
 		}
 	},
 	"opencode-zen": {
@@ -64198,6 +64481,31 @@
 			},
 			"contextWindow": 131072,
 			"maxTokens": 131072
+		},
+		"claude-haiku-5-5": {
+			"id": "claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "anthropic-messages",
+			"provider": "opencode-zen",
+			"baseUrl": "https://opencode.ai/zen",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
 		}
 	},
 	"openrouter": {
@@ -65270,7 +65578,7 @@
 			"cost": {
 				"input": 2,
 				"output": 10,
-				"cacheRead": 0.2,
+				"cacheRead": 0.1,
 				"cacheWrite": 2.5
 			},
 			"contextWindow": 1000000,
@@ -73184,6 +73492,31 @@
 				"minLevel": "minimal",
 				"maxLevel": "high"
 			}
+		},
+		"anthropic/claude-haiku-5.5": {
+			"id": "anthropic/claude-haiku-5.5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "openai-completions",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
 		}
 	},
 	"qianfan": {
@@ -74369,10 +74702,10 @@
 				"image"
 			],
 			"cost": {
-				"input": 3.75,
-				"output": 18.75,
-				"cacheRead": 0.375,
-				"cacheWrite": 4.6875
+				"input": 2.5,
+				"output": 12.5,
+				"cacheRead": 0.125,
+				"cacheWrite": 3.125
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
@@ -77023,6 +77356,34 @@
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
+		},
+		"claude-haiku-5-5": {
+			"id": "claude-haiku-5-5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.125,
+				"output": 0.625,
+				"cacheRead": 0.0125,
+				"cacheWrite": 0.15625
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"compat": {
+				"supportsUsageInStreaming": false
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
 		}
 	},
 	"vercel-ai-gateway": {
@@ -78191,7 +78552,7 @@
 			"cost": {
 				"input": 2,
 				"output": 10,
-				"cacheRead": 0.2,
+				"cacheRead": 0.1,
 				"cacheWrite": 2.5
 			},
 			"contextWindow": 1000000,
@@ -82614,6 +82975,31 @@
 				"mode": "budget",
 				"minLevel": "minimal",
 				"maxLevel": "xhigh"
+			}
+		},
+		"anthropic/claude-haiku-5.5": {
+			"id": "anthropic/claude-haiku-5.5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "high"
 			}
 		}
 	},
@@ -88434,6 +88820,31 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "xhigh"
+			}
+		},
+		"anthropic/claude-haiku-5.5": {
+			"id": "anthropic/claude-haiku-5.5",
+			"name": "Anthropic Haiku 5.5",
+			"api": "anthropic-messages",
+			"provider": "zenmux",
+			"baseUrl": "https://zenmux.ai/api/anthropic",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "high"
 			}
 		}
 	}

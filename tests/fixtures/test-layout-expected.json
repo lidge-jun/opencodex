@@ -1061,7 +1061,7 @@
   "upstream-retry-zero-output.test.ts": "lib", "upstream-transient-retry.test.ts": "providers",
   "url-normalization.test.ts": "config", "usage-aggregate-cache.test.ts": "usage",
   "usage-anthropic-fast-pricing.test.ts": "usage", "usage-cursor-fast-pricing.test.ts": "usage",
-  "usage-attempt-delivery.test.ts": "usage", "usage-cost.test.ts": "usage",
+  "usage-attempt-delivery.test.ts": "usage", "usage-cost.test.ts": "usage", "usage-haiku-5-5-pricing.test.ts": "usage",
   "usage-debug.test.ts": "usage", "usage-failure-fingerprint.test.ts": "usage",
   "usage-failure-persistence.test.ts": "usage", "usage-failure-projection.test.ts": "usage",
   "usage-ledger-retention.test.ts": "usage", "usage-ledger-scanner.test.ts": "usage",

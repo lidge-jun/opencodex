@@ -143,6 +143,14 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
   // 260929 Claude Sonnet 5.5: cursor.com/docs/models/claude-sonnet-5-5 lists it (1M max context),
   // but the live GetUsableModels roster does not yet. Shaped like Opus 5.5 (flat effort ids, no
   // thinking variant); re-shape from the roster once it appears.
+  // 261008 Haiku 5.5: cursor.com/docs/models/claude-haiku-5-5, 1M and low..max.
+  // Preemptive regular-only shape until GetUsableModels confirms a thinking variant.
+  "claude-haiku-5-5": {
+    displayName: "Claude Haiku 5.5",
+    window: CONTEXT_1M,
+    defaultVariant: "regular",
+    variants: { regular: { levels: FULL } },
+  },
   "claude-sonnet-5-5": {
     displayName: "Claude Sonnet 5.5",
     window: CONTEXT_1M,

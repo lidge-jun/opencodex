@@ -1818,7 +1818,7 @@
     "usage-anthropic-fast-pricing.test.ts": "usage",
     "usage-cursor-fast-pricing.test.ts": "usage",
     "usage-attempt-delivery.test.ts": "usage",
-    "usage-cost.test.ts": "usage",
+    "usage-cost.test.ts": "usage", "usage-haiku-5-5-pricing.test.ts": "usage",
     "usage-debug.test.ts": "usage",
     "usage-failure-fingerprint.test.ts": "usage",
     "usage-failure-persistence.test.ts": "usage",
