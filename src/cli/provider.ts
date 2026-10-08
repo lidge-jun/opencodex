@@ -8,11 +8,12 @@
  *   show <name>   Show provider config details (secrets masked)
  *   set-default <name>  Change the default provider
  */
-import { hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
+import { hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
 import { apiKeyTransportConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../config/provider-validation";
 import { hasHelpFlag, printSubcommandUsage } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
+import { assertAnthropicInstanceLoginConfig } from "../oauth/store-anthropic-instance";
 import { dropProviderCustomModels } from "../providers/provider-id-rewrite";
 import type { OcxProviderConfig } from "../types";
 import { findLiveProxy } from "../server/proxy-liveness";
@@ -249,6 +250,17 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
 
   if (responsesPath !== undefined) provConfig.responsesPath = responsesPath;
   if (authMode !== undefined) provConfig.authMode = authMode as OcxProviderConfig["authMode"];
+  if (name === "anthropic2") {
+    if (provConfig.adapter !== "anthropic" || provConfig.authMode !== "oauth") delete provConfig.anthropicOAuthInstance;
+    if (provConfig.anthropicOAuthInstance) {
+      try { assertAnthropicInstanceLoginConfig(config, name); }
+      catch {
+        console.error("Error: cannot add Pool 2 over an existing custom or unreadable provider configuration; resolve it first.");
+        process.exitCode = 2;
+        return;
+      }
+    }
+  }
   if (name === "openai" && (authMode !== undefined || responsesPath !== undefined)
     && !isCanonicalOpenAiForwardProvider(provConfig)) {
     console.error("Error: Canonical OpenAI must keep its built-in forward destination and authentication. Use a separate provider name for a custom endpoint.");
@@ -315,11 +327,22 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
     return;
   }
   const { initializeProviderModelSelection } = await import("../providers/initial-model-selection");
-  initializeProviderModelSelection(name, provConfig, existingProvider, config);
-  config.providers[name] = provConfig;
-  if (setDefault) config.defaultProvider = name;
-
-  validateAndSave(config);
+  let markerCollision = false;
+  withConfigMutationLockSync(() => {
+    if (provConfig.anthropicOAuthInstance) {
+      try { assertAnthropicInstanceLoginConfig(config, name); }
+      catch { markerCollision = true; return; }
+    }
+    initializeProviderModelSelection(name, provConfig, existingProvider, config);
+    config.providers[name] = provConfig;
+    if (setDefault) config.defaultProvider = name;
+    validateAndSave(config);
+  });
+  if (markerCollision) {
+    console.error("Error: provider configuration changed while adding Pool 2; resolve the ownership collision first.");
+    process.exitCode = 2;
+    return;
+  }
 
   let sync: LocalSyncResult | undefined;
   if (wantsSync) {

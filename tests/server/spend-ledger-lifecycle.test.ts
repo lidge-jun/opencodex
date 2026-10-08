@@ -4,12 +4,14 @@
  * ownership exists to prevent, and it cannot be observed from a passing startup.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireSpendLedgerServerLifecycle } from "../../src/server/index/spend-ledger-lifecycle";
 import { spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
-import { resetSharedSpendLedgerForTest } from "../../src/lib/spend-reservation-ledger";
+import { resetSharedSpendLedgerForTest, sharedSpendLedger } from "../../src/lib/spend-reservation-ledger";
+import { getDefaultConfig, reconcileLiveConfigFromDisk, saveConfig } from "../../src/config";
+import { reconcileLiveStateStores, setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let root = "";
@@ -102,4 +104,61 @@ test("a listener whose stop rejects still stops the rest and still returns the d
   // rejected stop cannot prove the listener released its socket.
   lifecycle.release();
   expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
+});
+
+test("live provider mutations and disk adoption refresh spend policy from the active roster", () => {
+  const lifecycle = acquireSpendLedgerServerLifecycle(home);
+  const config = { ...getDefaultConfig(), defaultProvider: "stable", spend: { pool: { maxTokens: 100 } },
+    providers: { stable: { adapter: "openai-chat" as const, baseUrl: "https://example.test/v1", apiKey: "fixture-key" } } };
+  setLiveStateStoreConfig(config);
+  lifecycle.configure(config.spend, undefined, Object.keys(config.providers));
+  try {
+    const ledger = sharedSpendLedger();
+    expect(ledger.reserve({ sendId: "retained", scopes: { poolId: "stable" }, inputTokens: 20, outputCeilingTokens: 0 }).reserved).toBe(true);
+    ledger.markDispatched("retained");
+    ledger.settle("retained", { inputTokens: 20, outputTokens: 0 });
+    expect(ledger.reserve({ sendId: "unassigned", scopes: { poolId: "added" }, inputTokens: 10, outputCeilingTokens: 0 }).reserved).toBe(true);
+    ledger.markDispatched("unassigned");
+    ledger.settle("unassigned", { inputTokens: 10, outputTokens: 0 });
+    expect(ledger.snapshot("pool", "stable")?.settled).toBe(30);
+    const added = { ...config.providers.stable };
+    Object.assign(config.providers, { added });
+    config.spend.pool.maxTokens = 120;
+    reconcileLiveStateStores();
+    expect(ledger.policy.canonicalProviderIds).toEqual(["stable", "added"]);
+    expect(ledger.policy.pool.maxTokens).toBe(120);
+    expect(ledger.snapshot("pool", "stable")?.settled).toBe(20);
+
+    Reflect.deleteProperty(config.providers, "added");
+    reconcileLiveStateStores();
+    expect(ledger.policy.canonicalProviderIds).toEqual(["stable"]);
+    expect(ledger.snapshot("pool", "stable")?.settled).toBe(30);
+    saveConfig(config);
+    const baseline = structuredClone(config);
+    saveConfig({ ...baseline, providers: { ...baseline.providers, fromdisk: added }, spend: { pool: { maxTokens: 140 } } });
+    // Detached reads/writes do not make disk-only providers live.
+    expect(ledger.policy.canonicalProviderIds).toEqual(["stable"]);
+    reconcileLiveConfigFromDisk(config, baseline);
+    reconcileLiveStateStores();
+    expect(ledger.policy.canonicalProviderIds).toEqual(["stable", "fromdisk"]);
+    expect(ledger.policy.pool.maxTokens).toBe(140);
+    expect(ledger.snapshot("pool", "stable")?.settled).toBe(30);
+  } finally {
+    lifecycle.release();
+  }
+});
+
+test("live refresh with no spend ceiling creates neither journal nor salt", () => {
+  const lifecycle = acquireSpendLedgerServerLifecycle(home);
+  const config = getDefaultConfig();
+  delete config.spend;
+  delete config.spendPoolAliases;
+  setLiveStateStoreConfig(config);
+  try {
+    reconcileLiveStateStores();
+    expect(existsSync(join(home, "spend-ledger.jsonl"))).toBe(false);
+    expect(existsSync(join(home, "spend-ledger.salt"))).toBe(false);
+  } finally {
+    lifecycle.release();
+  }
 });

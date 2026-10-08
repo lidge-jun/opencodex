@@ -34,7 +34,7 @@ export function createInferenceSendBudget(
 export function expandInferenceOAuthSendBudget(budget: TransientSendBudget | undefined, accounts: number): void {
   if (!budget) return;
   const policy = ingressPolicies.get(budget);
-  if (!policy || budget.used !== 0) return;
+  if (!policy || budget.used !== 0 || ("physicalStarted" in budget && Number(budget.physicalStarted) > 0)) return;
   ingressPolicies.delete(budget);
   if (accounts < 2 || !Number.isSafeInteger(accounts)) return;
   const sends = Math.min(accounts, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) * TRANSIENT_RETRY_MAX_ATTEMPTS;

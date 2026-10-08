@@ -32,7 +32,11 @@ import {
   reconcileOAuthFlowState,
   sweepExpiredXaiPermanentFailureVerdicts,
 } from "../oauth";
-import { sweepExpiredAnthropicRoutingHealth } from "../oauth/anthropic-routing";
+import { sweepAllAnthropicRoutingHealth, reconcileAnthropicRoutingState } from "../oauth/anthropic-routing";
+import { reconcileAllAnthropicFamilyQuota } from "../oauth/anthropic-model-quota";
+import { reconcileAllAnthropicRatePauses, sweepExpiredAllAnthropicRatePauses } from "../oauth/anthropic-rate-limit-policy";
+import { reconcileAllAnthropicCooldownGenerations } from "../providers/quota/anthropic-cooldown-recovery";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { listLiveOAuthAccountKeys, reconcileOAuthReauthState } from "../oauth/store";
 import { reconcileGuardianBackoff } from "../oauth/token-guardian";
 import { sweepExpiredApiKeyCooldowns } from "../providers/key-failover";
@@ -41,6 +45,7 @@ import { sweepAbandonedResponseStateTemps, sweepExpiredResponseStates, sweepOrph
 import { sweepExpiredAntigravityReplay } from "../adapters/google-antigravity-replay";
 import { reconcileProviderAccountQuotaRows } from "../providers/quota";
 import { reconcileRouterWarningMemos } from "../router";
+import { configureSharedSpendLedger, spendPolicyFromConfig } from "./spend-reservation-ledger";
 import type { OcxConfig } from "../types";
 import {
   type GenerationContext,
@@ -58,19 +63,27 @@ export function setLiveStateStoreConfig(config: OcxConfig): void {
 
 export function reconcileLiveStateStores() {
   if (!liveServerConfig) return { storesVisited: 0, rowsRemoved: 0 };
+  // Only adopted live providers own canonical pools; detached disk snapshots may
+  // contain providers the routing instance deliberately has not activated yet.
+  configureSharedSpendLedger(spendPolicyFromConfig(liveServerConfig.spend,
+    liveServerConfig.spendPoolAliases, Object.keys(liveServerConfig.providers)));
   return reconcileStateGeneration(buildGenerationContext());
 }
 
 export function buildGenerationContext(): GenerationContext {
   if (!liveServerConfig) throw new Error("live server config is not installed");
   const providerNames = new Set(Object.keys(liveServerConfig.providers));
+  const oauthAccountKeys = new Set(listLiveOAuthAccountKeys(providerNames));
+  if (configuredAnthropicInstance(liveServerConfig, "anthropic2") !== "anthropic2") {
+    for (const key of oauthAccountKeys) if (key.startsWith("anthropic2\0")) oauthAccountKeys.delete(key);
+  }
   return {
     generation: 0,
     providerNames,
     comboIds: new Set(Object.keys(liveServerConfig.combos ?? {})),
     comboTargets: listLiveComboTargetKeys(liveServerConfig),
     codexAccountIds: listLiveCodexAccountIds(liveServerConfig),
-    oauthAccountKeys: listLiveOAuthAccountKeys(providerNames),
+    oauthAccountKeys,
     configRoots: listLiveConfigOwnershipRoots(getConfigDir()),
   };
 }
@@ -84,7 +97,11 @@ export const STATE_STORE_REGISTRATIONS = [
     sweepExpired: sweepExpiredComboTargetCooldowns,
     reconcileGeneration: reconcileComboTargetCooldowns,
   },
-  { name: "anthropic-routing-health", sweepExpired: sweepExpiredAnthropicRoutingHealth },
+  { name: "anthropic-routing-health", sweepExpired: sweepAllAnthropicRoutingHealth,
+    reconcileGeneration: context => reconcileAnthropicRoutingState(context, liveServerConfig ?? undefined) },
+  { name: "anthropic-family-quota", reconcileGeneration: reconcileAllAnthropicFamilyQuota },
+  { name: "anthropic-rate-pauses", sweepExpired: sweepExpiredAllAnthropicRatePauses, reconcileGeneration: reconcileAllAnthropicRatePauses },
+  { name: "anthropic-cooldown-generations", reconcileGeneration: reconcileAllAnthropicCooldownGenerations },
   { name: "xai-refresh-verdicts", sweepExpired: sweepExpiredXaiPermanentFailureVerdicts },
   {
     name: "codex-quota-401-recovery",

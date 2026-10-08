@@ -3,6 +3,7 @@ import { normalizeAnthropicIdentity, resolveAnthropicAccountIdentity, type Anthr
 import { credentialGeneration, type AuthStore } from "./store";
 import { REFRESH_SKEW_MS } from "./refresh-policy";
 import type { OAuthCredentials, ProviderAccountSet } from "./types";
+import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 
 export type ClaudeCredentialObservation =
   | { kind: "absent" }
@@ -13,6 +14,14 @@ export async function newerClaudeCredential(
   stored: OAuthCredentials, now: number, signal?: AbortSignal,
   resolveIdentity: AnthropicIdentityResolver = resolveAnthropicAccountIdentity,
 ): Promise<ClaudeCredentialObservation> {
+  return newerClaudeCredentialForInstance("anthropic", stored, now, signal, resolveIdentity);
+}
+
+export async function newerClaudeCredentialForInstance(
+  instance: AnthropicInstanceId, stored: OAuthCredentials, now: number, signal?: AbortSignal,
+  resolveIdentity: AnthropicIdentityResolver = resolveAnthropicAccountIdentity,
+): Promise<ClaudeCredentialObservation> {
+  if (instance === "anthropic2") return { kind: "absent" };
   if (stored.source !== "local-cli") return { kind: "absent" };
   const disk = detectClaudeCodeToken();
   if (!disk || !Number.isFinite(disk.expires) || disk.expires <= now + REFRESH_SKEW_MS
@@ -39,6 +48,10 @@ export async function newerClaudeCredential(
 
 /** Capture primitives before network awaits; check them again inside the serialized writer. */
 export function captureAnthropicCredentialOwner(set: ProviderAccountSet, accountId: string) {
+  return captureAnthropicCredentialOwnerForInstance("anthropic", set, accountId);
+}
+
+export function captureAnthropicCredentialOwnerForInstance(instance: AnthropicInstanceId, set: ProviderAccountSet, accountId: string) {
   const row = set.accounts.find(account => account.id === accountId)!;
   const loginId = row.loginId;
   const generation = credentialGeneration(row.credential);
@@ -46,12 +59,13 @@ export function captureAnthropicCredentialOwner(set: ProviderAccountSet, account
   const needsReauth = row.needsReauth;
   const selection = { id: set.activeAccountId, revision: set.selectionRevision };
   return (store: AuthStore, diskGeneration?: string, allowPaused = false): boolean => {
-    const current = store["anthropic"];
+    const current = store[instance];
     const account = current?.accounts.find(candidate => candidate.id === accountId);
     if (!account || (!allowPaused && account.paused) || account.loginId !== loginId
       || account.needsReauth !== needsReauth || credentialGeneration(account.credential) !== generation
       || identityMetadata(account.credential) !== metadata) return false;
     if (diskGeneration !== undefined) {
+      if (instance === "anthropic2") return false;
       if (current?.activeAccountId !== selection.id || current?.selectionRevision !== selection.revision) return false;
       const disk = detectClaudeCodeToken();
       if (!disk || disk.expires <= Date.now() + REFRESH_SKEW_MS || credentialGeneration(disk) !== diskGeneration) return false;

@@ -1,3 +1,4 @@
+import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { protocolConfigSchema } from "./schema/config-schema";
 import { createHash } from "node:crypto";
@@ -7,13 +8,13 @@ import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import type { OcxConfig } from "../types";
-import { parseAnthropicModelRoutes } from "../oauth/anthropic-model-routes";
+import { anthropicAccountPoolConfigError, anthropicOAuthInstanceConfigError, anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import { loopbackCompanionAllowed } from "../codex/loopback-target";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../codex/upstream-host-health";
 import { MAX_APP_OWNED_MEMORY_BUDGET_MB, MIN_APP_OWNED_MEMORY_BUDGET_MB } from "../lib/app-owned-memory";
 import { isMissingPathError } from "./atomic-write";
-import { getConfigPath } from "./paths";
+import { getConfigDir, getConfigPath } from "./paths";
 import { getDefaultConfig } from "./proxy-env";
 import { salvageConfigCandidate } from "./salvage";
 import {
@@ -81,6 +82,23 @@ export type ConfigDiagnostics = {
   warnings?: string[];
 };
 
+function rawPoolAliasesError(value: unknown): string | undefined {
+  const record = rawConfigRecord(value);
+  if (!record) return undefined;
+  const aliases = record.spendPoolAliases;
+  const shapeError = spendPoolAliasesError(aliases);
+  if (shapeError) return shapeError;
+  const mapping = rawConfigRecord(aliases);
+  if (!mapping || Object.keys(mapping).length === 0) return undefined;
+  const providers = rawConfigRecord(record.providers ?? {});
+  if (!providers) return "providers must be an object to validate spendPoolAliases";
+  const targetError = spendPoolAliasesError(aliases, Object.keys(providers));
+  if (targetError) return targetError;
+  const salt = readExistingSpendSalt(getConfigDir());
+  if (!salt) return "spendPoolAliases requires a safely readable existing spend salt";
+  return validatePoolAliasOwners(aliases, salt, Object.keys(providers));
+}
+
 export type ConfigFileSnapshot = {
   diagnostics: ConfigDiagnostics;
   /** Exact file contents, including a possible BOM, used as the optimistic revision. */
@@ -145,6 +163,9 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (codexPoolWarning) warnings.push(codexPoolWarning);
   const spendWarning = malformedSpendWarning(rawParsed);
   if (spendWarning) warnings.push(spendWarning);
+  if (rawPoolAliasesError(rawParsed)) {
+    warnings.push("spendPoolAliases invalid: configured pool admission is refused until the mapping is corrected");
+  }
   const plaintextWarning = malformedPlaintextV2AgentMessagesWarning(rawParsed);
   if (plaintextWarning) warnings.push(plaintextWarning);
   if (syncDisabledReason) {
@@ -153,7 +174,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   return {
     config: normalized,
     source: "file",
-    error: null,
+    error: anthropicOAuthInstanceConfigError(rawParsed) ?? anthropicAccountPoolConfigError(rawParsed) ?? anthropicSidecarConfigError(rawParsed) ?? null,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
@@ -655,19 +676,8 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   if (protocols !== undefined && !protocolConfigSchema.safeParse(protocols).success) {
     return { ok: false, error: "schema_invalid: protocols: expected valid protocol policy and boolean rollout flags" };
   }
-  const rawAnthropicPool = rawConfigRecord(value)?.anthropicAccountPool;
-  const anthropicPool = rawConfigRecord(rawAnthropicPool);
-  if (rawAnthropicPool !== undefined && !anthropicPool) {
-    return { ok: false, error: "schema_invalid: anthropicAccountPool: must be an object" };
-  }
-  if (anthropicPool && Object.hasOwn(anthropicPool, "nativeMessages") && typeof anthropicPool.nativeMessages !== "boolean") {
-    return { ok: false, error: "schema_invalid: anthropicAccountPool.nativeMessages: must be a boolean" };
-  }
-  const routeValue = anthropicPool?.routes;
-  if (routeValue !== undefined) {
-    const parsed = parseAnthropicModelRoutes(routeValue);
-    if (!parsed.ok) return { ok: false, error: `schema_invalid: anthropicAccountPool.routes: ${parsed.error}` };
-  }
+  const anthropicError = anthropicOAuthInstanceConfigError(value) ?? anthropicAccountPoolConfigError(value) ?? anthropicSidecarConfigError(value);
+  if (anthropicError) return { ok: false, error: anthropicError };
   const boundaryError = blockedModelRedirectsError(value)
     ?? compactionRecoveryConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
@@ -679,6 +689,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
     ?? catalogAutoRefreshError(value)
+    ?? (rawPoolAliasesError(value) ? "schema_invalid: spendPoolAliases: invalid pool identity mapping" : null)
     ?? spendError(value)
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)

@@ -6,7 +6,7 @@
  * or service is reached.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
@@ -18,6 +18,7 @@ import type { AdmissionLease } from "../../src/lib/admission";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startTruncatedSseUpstream } from "../helpers/truncated-sse-upstream";
+import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 
 interface Seen {
   path: string;
@@ -191,6 +192,50 @@ async function settledRowFor(requestId: string) {
 }
 
 describe("managed native Messages", () => {
+  for (const initiallyEnforced of [false, true]) test(`freezes ${initiallyEnforced ? "enforced" : "observe-only"} policy across retries`, async () => {
+    const config = fixtureConfig(startUpstream((_entry, index) => {
+      if (index === 0) configureSharedSpendLedger(spendPolicyFromConfig(
+        initiallyEnforced ? {} : { pool: { maxTokens: 1 } }, undefined, ["anth"]));
+      return Response.json({ type: "error", error: { type: "rate_limit_error", message: "temporary" } }, { status: 429 });
+    }));
+    config.providers.anth!.retryOn429 = { attempts: 5, intervalMs: 1, maxIntervalMs: 1, respectRetryAfter: false };
+    configureSharedSpendLedger(spendPolicyFromConfig(initiallyEnforced ? { pool: { maxTokens: 100_000 } } : {}, undefined, ["anth"]));
+    const body = { model: "anth/claude-x", messages: [{ role: "user", content: "hello" }], max_tokens: 1 };
+    const { response, requestId } = await send(config, body);
+    expect(rowFor(requestId).protocolTrace?.mode).toBe("native");
+    expect(seen).toHaveLength(initiallyEnforced ? 4 : 6);
+    expect(response.status).toBe(429);
+    const records = readFileSync(join(testDir, "spend-ledger.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(records.filter(record => record.kind === "reserve")).toHaveLength(seen.length);
+    if (!initiallyEnforced) {
+      const next = await send(config, body);
+      expect(next.response.status).toBe(429);
+      expect(next.response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+      expect(seen).toHaveLength(6);
+    }
+  }, 20_000);
+
+  for (const change of ["disable", "raise"] as const) test(`retains its initial ceiling when ${change} occurs before key failover`, async () => {
+    const body = { model: "anth/claude-x", messages: [{ role: "user", content: "hello" }], max_tokens: 1 };
+    const config = fixtureConfig(startUpstream((entry, index) => {
+      if (index === 0) {
+        configureSharedSpendLedger(spendPolicyFromConfig(change === "disable" ? {} : { pool: { maxTokens: 100_000 } }, undefined, ["anth"]));
+        return Response.json({ type: "error", error: { type: "rate_limit_error", message: "key rate limited" } },
+          { status: 429, headers: { "retry-after": "30" } });
+      }
+      return ok(entry);
+    }), { pool: true });
+    configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: estimateClaudeRequestTokens(body, body.model) + 1 } }, undefined, ["anth"]));
+    const { response, requestId } = await send(config, body);
+    expect(rowFor(requestId).protocolTrace?.mode).toBe("native");
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+    expect(seen).toHaveLength(1);
+    const next = await send(config, body);
+    expect(next.response.status).toBe(200);
+    expect(seen).toHaveLength(2);
+  });
+
   test("sends exactly the allowlisted source body with the provider key and no caller credential", async () => {
     const config = fixtureConfig(startUpstream());
     const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: false }, {

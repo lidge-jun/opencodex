@@ -52,6 +52,7 @@ import { planWebSearch } from "../../web-search";
 import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
 import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
 import { orderDevinMessagesOutput } from "../../claude/devin-output-order";
+import { unboundPoolSpendRefusalMessage } from "../workflow-refusal";
 
 // LOCAL PATCH (runturn-websearch): top-level fields route binding or the
 // adapter itself may write during a turn. Iteration-local `turnParsed` objects
@@ -331,7 +332,7 @@ export async function executeResponsesRunTurn(
                 status: 429,
                 errorType: "rate_limit_error",
                 code: SEND_BUDGET_EXHAUSTED_CODE,
-                message: err.message,
+                message: unboundPoolSpendRefusalMessage(logCtx) ?? err.message,
               }
             : {
                 type: "error",

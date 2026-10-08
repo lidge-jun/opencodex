@@ -13,6 +13,7 @@ import { credentialDomainFor } from "../protocols/opaque-state";
 import { resolveProtocolSettings } from "../protocols/settings";
 import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { requiresVisionPreprocessing } from "../vision";
 import { resolvePinnedEffort } from "./effort-policy";
 
@@ -94,7 +95,7 @@ function bridgeOnlyPolicyApplies(
 /**
  * The credential rule. A proxy-managed key is native since PF-08. An Anthropic OAuth account
  * is native only with `managedMessagesNativeOAuth` on (itself effective only with
- * `managedMessagesNative`), only for the `anthropic` provider the OAuth store serves, and only
+ * `managedMessagesNative`), only for a configured Anthropic OAuth instance, and only
  * to `api.anthropic.com`. Pool selection and recovery are resolved at native dispatch. `forward`
  * belongs to the caller.
  */
@@ -107,7 +108,7 @@ function credentialDeclineReason(
   if (provider.authMode === undefined || provider.authMode === "key") return undefined;
   if (provider.authMode !== "oauth") return "auth-mode-not-native";
   if (!resolveProtocolSettings(config, route.providerName).rollout.managedMessagesNativeOAuth) return "auth-mode-not-native";
-  if (route.providerName !== "anthropic") return "auth-mode-not-native";
+  if (!configuredAnthropicInstance(config, route.providerName)) return "auth-mode-not-native";
   if (!credentialDomainFor(provider)?.firstPartyAnthropic) return "auth-mode-not-native";
   return undefined;
 }

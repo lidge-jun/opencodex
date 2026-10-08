@@ -4,6 +4,7 @@ import { createAnthropicAdapter } from "./anthropic";
 import { createGoogleAdapter } from "./google";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
+import { createAdapterPhysicalSend } from "./physical-send";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { createTranslatorBudget, releaseTranslatedEvent, retainTranslatedEvent, type TranslatorBudget } from "../lib/translator-budget";
 import { releaseCompactionCiphertextLease } from "../responses/compaction";
@@ -13,6 +14,7 @@ import {
   resolveZedModels,
   scrubZedCredentials,
   zedLlmFetch,
+  ZED_CLOUD_BASE_URL,
   ZED_HEADERS,
   type ZedCredentials,
 } from "../providers/zed";
@@ -340,8 +342,21 @@ export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
     async fetchResponse(request, ctx) {
       if (!credentials) throw new Error("Zed request credentials were not initialized");
       const fetchFn = ctx?.executor ?? globalThis.fetch;
+      const send = createAdapterPhysicalSend(ctx);
+      let completionAttempts = 0;
       return zedLlmFetch(credentials, "/completions", {
-        fetchFn,
+        fetchFn: (async (input, init) => {
+          const url = input instanceof Request ? input.url : new URL(String(input)).href;
+          // Token exchange/account lookup are support traffic; both completion attempts
+          // share admission and physical ordinals, including the provider's 401 replay.
+          if (url === `${ZED_CLOUD_BASE_URL}/client/users/me`
+            || url === `${ZED_CLOUD_BASE_URL}/client/llm_tokens`) return fetchFn(input, init);
+          const recovery = completionAttempts++ > 0;
+          return send({ url, sendClass: recovery ? "auth-recovery" : "initial",
+            ...(recovery ? { recovery: "oauth-401" } : {}),
+            dispatch: executor => executor(input, init),
+          });
+        }) as typeof globalThis.fetch,
         signal: ctx?.abortSignal,
         baseUrl: provider.baseUrl,
         fetchInit: {

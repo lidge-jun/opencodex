@@ -1,3 +1,6 @@
+import { resolveAnthropicHelperSnapshot, fetchAnthropicHelper, anthropicHelperMessagesUrl } from "../sidecar/anthropic-binding";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
+import type { OAuthAccessSnapshot } from "../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { getAnthropicSidecarAccessToken } from "../oauth/anthropic-routing";
@@ -167,11 +170,17 @@ export async function runAnthropicWebSearch(
   abortSignal?: AbortSignal,
   config?: OcxConfig,
 ): Promise<SidecarOutcome> {
-  const base = provider.baseUrl.replace(/\/v1\/?$/, "");
-  const url = `${base}/v1/messages`;
+  const url = anthropicHelperMessagesUrl(provider.baseUrl);
   let token: string;
+  let snapshot: OAuthAccessSnapshot | undefined;
+  const capturedTarget = provider.baseUrl;
   try {
-    token = await getAnthropicSidecarAccessToken(providerName, settings.model, config);
+    if (config && isAnthropicInstanceId(providerName)) {
+      snapshot = await resolveAnthropicHelperSnapshot(config, providerName, settings.model);
+      token = snapshot.accessToken;
+    } else {
+      token = await getAnthropicSidecarAccessToken(providerName, settings.model, config);
+    }
   } catch (e) {
     return { text: "", sources: [], error: `anthropic sidecar auth failed: ${publicOAuthAuthenticationErrorMessage(e)}` };
   }
@@ -205,6 +214,9 @@ export async function runAnthropicWebSearch(
     stream: true,
   };
 
+  const dispatch = (target: string, init: RequestInit) => snapshot && config
+    ? fetchAnthropicHelper(config, snapshot, settings.model, capturedTarget, target, init)
+    : fetch(target, init);
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("web-search");
   const t0 = Date.now();
@@ -212,7 +224,7 @@ export async function runAnthropicWebSearch(
     const res = await fetchWithResetRetry(
       // The replay needs `keepalive: false` to leave the half-closed pooled socket; Bun has
       // ignored a bare `Connection: close` (oven-sh/bun#20492).
-      recovery => fetch(url, applyUpstreamRecoveryInit({
+      recovery => dispatch(url, applyUpstreamRecoveryInit({
         method: "POST",
         redirect: "manual",
         headers,

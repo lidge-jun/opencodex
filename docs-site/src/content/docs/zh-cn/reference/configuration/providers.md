@@ -254,6 +254,65 @@ affinity。这些策略不能规避 provider enforcement。
 除非你理解 Anthropic 账户策略风险，否则请保持关闭。若不确定，优先手动使用 `ocx account use anthropic <id>` 切换。
 :::
 
+### Anthropic · Pool 2 (`anthropic2`)
+
+`anthropic2`（“Anthropic · Pool 2”）是第二个内置的 Anthropic OAuth 提供者，拥有自己的账户池。它与 `anthropic` 使用同一套 Anthropic 实现：相同的登录流程、线路格式、原生 Messages 与 Responses 桥接以及模型元数据。只有账户及其所在的账户池是分开的。通过模型前缀选择账户池：`anthropic/claude-sonnet-5` 使用主账户池，`anthropic2/claude-sonnet-5` 使用 Pool 2。
+
+在你添加之前，Pool 2 处于休眠状态。使用 `ocx login anthropic2` 登录，或在控制面板的提供者页面添加 **Anthropic · 账户池 2**。首次登录成功后会创建带有标记 `"anthropicOAuthInstance": "anthropic2"` 的 `providers.anthropic2`。Pool 2 永远不会成为默认提供者：不带前缀的 `claude-*` 模型名、默认模型以及 Claude Code 调用方转发仍解析到 `anthropic`。你此前自行创建、没有标记的 `anthropic2` 条目保持其自定义含义；登录会拒绝该名称冲突，既不改写该条目，也不改写你的凭据。
+
+Pool 2 从自己的提供者条目读取账户池设置。键、默认值和行为与上文的顶层 `anthropicAccountPool` 相同，且不从主账户池继承任何内容。`providers.anthropic.anthropicAccountPool`，以及任何其他提供者上的该字段，都会被拒绝。
+
+```json
+{
+  "anthropicAccountPool": { "enabled": true, "strategy": "quota" },
+  "providers": {
+    "anthropic2": {
+      "adapter": "anthropic",
+      "authMode": "oauth",
+      "baseUrl": "https://api.anthropic.com",
+      "anthropicOAuthInstance": "anthropic2",
+      "anthropicAccountPool": { "enabled": true, "strategy": "round-robin" }
+    }
+  }
+}
+```
+
+两个账户池在 opencodex 内部相互隔离：
+
+- **凭据：** Pool 2 账户以独立的 `anthropic2` 键保存在受保护的凭据存储中。若登录的令牌或已验证的 Anthropic 账户已保存在另一个账户池中，该登录会被拒绝。
+- **账户池设置与运行时状态：** 选择、会话亲和性、冷却、暂停、模型路由和按账户阈值都只属于一个账户池。路由的 `fallback: true` 只在同一账户池内放宽。
+- **配额与用量：** 用量探测、配额缓存和用量归属按账户池分别记录，因此同一个账户 ID 同时出现在两个账户池中时，会有两条独立记录。
+- **重置额度：** Pool 2 使用自己的日志（`anthropic2-reset-grant-ledger.json`），与保持不变的主账户池日志并存。
+- **恢复：** 直接的 `anthropic2/<model>` 请求绝不会回退到主账户池，Pool 2 的速率限制或拒绝也绝不会让主账户池的账户进入冷却。显式指定两个账户池的组合（combo）保留你声明的目标。
+
+这种分离是 opencodex 内部的路由边界。它不会改变 Anthropic 对待你账户的方式，也不会消除上文所述的账户策略风险。
+
+Pool 2 账户只能通过浏览器 OAuth 添加。与 `anthropic` 不同，Pool 2 从不导入、接管或回写 Claude Code CLI 令牌；这一差异是有意为之。Pool 2 初始为空；没有可用 Pool 2 账户的 Pool 2 请求会以认证错误失败，而不会借用主账户池或 Claude Code 的凭据。
+
+账户命令和管理 API 按名称指定账户池：`ocx account pool anthropic2 …`、`ocx account auto-switch anthropic2 …`、`ocx account routes anthropic2 …` 以及 `ocx account anthropic-reset-grants --provider anthropic2`。账户池设置和重置额度端点接受 `provider: "anthropic2"`；省略时仍使用主账户池。
+
+#### 辅助功能的账户池选择（`anthropicInstance`）
+
+网页搜索和视觉辅助功能在全局 `webSearchSidecar`、`visionSidecar` 设置以及 Claude Code 覆盖项 `claudeCode.webSearchSidecar`、`claudeCode.visionSidecar` 中接受可选的 `anthropicInstance`。当辅助功能的后端为 Anthropic 时，控制面板将其显示为 **账户池** 选择项。
+
+| 值 | 行为 |
+| --- | --- |
+| 未设置（默认） | 跟随当前请求的账户池：`anthropic2/<model>` 请求使用 Pool 2，`anthropic/<model>` 请求使用主账户池。来自其他提供者的请求保留现有的辅助功能发现逻辑，该逻辑从不选择 Pool 2。 |
+| `"anthropic"` | 始终使用主账户池。 |
+| `"anthropic2"` | 始终使用 Pool 2。 |
+
+该字段仅在辅助功能的后端解析为 Anthropic 时生效。与其他后端一起设置会导致校验错误；由于网页搜索默认使用 OpenAI，请同时设置 `"backend": "anthropic"`。以另一个账户池限定的辅助模型（例如 `anthropic/claude-sonnet-5` 搭配 `"anthropicInstance": "anthropic2"`）同样会被拒绝。如果所选账户池没有可用账户，辅助功能会在发送任何内容之前失败，不会切换到另一个账户池。此时主请求会在没有该辅助功能的情况下照常进行。未设置的选择会保存为缺省，而不是 `"anthropic"`。
+
+```json
+{
+  "webSearchSidecar": { "backend": "anthropic", "anthropicInstance": "anthropic2" }
+}
+```
+
+:::caution[降级]
+不包含 Pool 2 的版本无法识别 `anthropic2` 条目。安装旧版本之前，请停止代理，备份 `config.json` 和 `auth.json`，并从 `config.json` 中删除 `providers.anthropic2`。Pool 2 从不移动或改写主账户池的凭据。不支持在 Pool 2 处于启用状态时原地降级。
+:::
+
 ### 托管记录形状
 
 `apiKeys[]` 条目包含 `id`、`name`、生成的 `key` 以及 ISO 格式的 `createdAt` 字符串。`codexAccounts[]` 条目要求有 `id`、`email` 和 `isMain`，并可选 `plan`、`chatgptAccountId` 和具备隐私安全性的 `logLabel`。这些记录通常由仪表板管理。

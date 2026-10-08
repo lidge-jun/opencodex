@@ -9,6 +9,7 @@ import { readJsonOrThrow } from "../fetch-json";
 import type { TKey } from "../i18n/shared";
 import type { StartupHealthStatus } from "../startup-health-ui";
 import { shadowSourceModelList } from "./shadow-call-source";
+import type { AnthropicInstanceId, AnthropicPoolOptions } from "./claude-manual-env";
 
 export type DashboardSection = "overview" | "providers" | "models";
 
@@ -78,6 +79,8 @@ export type VisionReasoning = "low" | "medium" | "high" | "xhigh" | "max";
 export interface SidecarSetting {
   // Shared by the web-search and vision cards; vision may carry "routed".
   backend?: VisionBackend;
+  anthropicInstance?: AnthropicInstanceId;
+  anthropicPool?: AnthropicPoolOptions;
   model: string;
   reasoning?: VisionReasoning;
   streamRoutedModelOutput?: boolean;
@@ -123,9 +126,10 @@ export interface SidecarCodexApply {
   detail?: string;
 }
 export interface SidecarPatch {
-  webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean; enabled?: boolean };
+  webSearch?: { backend?: SidecarBackend | null; anthropicInstance?: AnthropicInstanceId | null; model?: string; streamRoutedModelOutput?: boolean; enabled?: boolean };
   vision?: {
     backend?: VisionBackend | null;
+    anthropicInstance?: AnthropicInstanceId | null;
     model?: string;
     reasoning?: VisionReasoning;
     enabled?: boolean;
@@ -219,6 +223,7 @@ export function mergeSidecarSetting(
   current: SidecarSetting,
   update?: {
     backend?: VisionBackend | null;
+    anthropicInstance?: AnthropicInstanceId | null;
     model?: string;
     reasoning?: VisionReasoning;
     streamRoutedModelOutput?: boolean;
@@ -231,6 +236,9 @@ export function mergeSidecarSetting(
   if (update?.model !== undefined) merged.model = update.model;
   if (update?.backend === null) delete merged.backend;
   else if (update?.backend !== undefined) merged.backend = update.backend;
+  if (update?.anthropicInstance === null) delete merged.anthropicInstance;
+  else if (update?.anthropicInstance !== undefined) merged.anthropicInstance = update.anthropicInstance;
+  if (update?.backend !== undefined && update.backend !== "anthropic") delete merged.anthropicInstance;
   if (update?.reasoning !== undefined) merged.reasoning = update.reasoning;
   if (update?.streamRoutedModelOutput !== undefined) merged.streamRoutedModelOutput = update.streamRoutedModelOutput;
   if (update?.enabled !== undefined) merged.enabled = update.enabled;
@@ -459,7 +467,22 @@ export function shadowCallModelOptions(models: ModelInfo[], current: string | un
 }
 
 export function sidecarBackendForModel(models: ModelInfo[], modelId: string): SidecarBackend {
-  return models.find(model => model.id === modelId)?.provider === "anthropic" ? "anthropic" : "openai";
+  const provider = models.find(model => model.id === modelId)?.provider;
+  return provider === "anthropic" || provider === "anthropic2" ? "anthropic" : "openai";
+}
+
+/** Backend transitions must remove an old explicit pool in the same PATCH. */
+export function sidecarPatchForSave(current: SidecarData, patch: SidecarPatch): SidecarPatch {
+  function clearPool<T extends { backend?: string | null; anthropicInstance?: AnthropicInstanceId | null }>(
+    setting: SidecarSetting, update: T,
+  ): T {
+    return update.backend !== undefined && update.backend !== "anthropic" && setting.anthropicInstance !== undefined
+      ? { ...update, anthropicInstance: null } : update;
+  }
+  return { ...patch,
+    ...(patch.webSearch ? { webSearch: clearPool(current.webSearch, patch.webSearch) } : {}),
+    ...(patch.vision ? { vision: clearPool(current.vision, patch.vision) } : {}),
+  };
 }
 
 /** Server provenance wins; catalog inference supports only legacy option rows. */

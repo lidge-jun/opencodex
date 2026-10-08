@@ -24,6 +24,7 @@ macro_rules! svg {
 
 const ALIASES: &[(&str, &str)] = &[
     ("anthropic", "claude-color.svg"),
+    ("anthropic2", "claude-green.svg"),
     ("anthropic-apikey", "claude-color.svg"),
     ("claude-cli", "claude-color.svg"),
     ("azure-openai", "openai.svg"),
@@ -152,6 +153,7 @@ fn svg(file: &str) -> Option<&'static str> {
         "bizrouter.svg" => svg!("bizrouter.svg"),
         "cerebras.svg" => svg!("cerebras.svg"),
         "claude-color.svg" => svg!("claude-color.svg"),
+        "claude-green.svg" => svg!("claude-green.svg"),
         "cline-color.svg" => svg!("cline-color.svg"),
         "cloudflare-ai-gateway-color.svg" => svg!("cloudflare-ai-gateway-color.svg"),
         "commandcode-color.svg" => svg!("commandcode-color.svg"),

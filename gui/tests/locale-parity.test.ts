@@ -43,6 +43,8 @@ function carriesTranslatableWords(value: string): boolean {
 const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // The Codex sidebar row is the product name, kept in every locale like Claude.
   "nav.codexSet",
+  // The primary Anthropic pool is labelled by the vendor name alone, kept in every locale.
+  "sidecar.poolA",
   // A bare em dash: the "no Reasoning control" marker is a symbol, not copy.
   "integrations.cursor.noControl",
   // API protocol/endpoint names

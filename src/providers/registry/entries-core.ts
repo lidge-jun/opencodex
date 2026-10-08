@@ -14,6 +14,7 @@ import { cursorFastCapableBases } from "../../adapters/cursor/catalog";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
 import { isCanonicalOpenRouterTarget } from "../openrouter-routing";
 import type { ProviderRegistryEntry } from "./types";
+import type { AnthropicInstanceId } from "../anthropic-instance-id";
 import { ANTHROPIC_FAST_MODE_BETA } from "../anthropic-fast";
 import {
   ANTHROPIC_MODELS,
@@ -108,6 +109,37 @@ const ANTHROPIC_FAST_MODELS: Readonly<Record<string, boolean>> = Object.freeze({
 });
 const ANTHROPIC_FAST_TIER_DESCRIPTION =
   "Claude fast mode: faster output at 2x price; needs usage credits (subscription) or fast-mode access (API)";
+
+/** Each instance owns its entire seed, including nested model lists and Fast wire maps. */
+function anthropicOAuthEntry(id: AnthropicInstanceId, label: string): ProviderRegistryEntry {
+  return structuredClone<ProviderRegistryEntry>({
+    id,
+    label,
+    adapter: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    authKind: "oauth",
+    allowBaseUrlOverride: true,
+    featured: true,
+    oauthId: id,
+    oauthFamily: "anthropic",
+    jawcodeBundle: "anthropic",
+    note: id === "anthropic" ? "Log in with your Claude account"
+      : "Independent Claude account pool — log in with a separate Claude account",
+    models: [...ANTHROPIC_MODELS],
+    modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
+    modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
+    // Codex omits max_output_tokens; the fallback 8192 truncates long answers.
+    defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
+    defaultModel: "claude-sonnet-5",
+    // Subscription /fast remains opt-in: it draws usage credits at 2x price.
+    fastWire: ANTHROPIC_FAST_WIRE,
+    modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },
+    fastTierDescription: ANTHROPIC_FAST_TIER_DESCRIPTION,
+    fastOptIn: true,
+  });
+}
 
 export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   {
@@ -490,35 +522,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: ORCAROUTER_MODEL_REASONING_EFFORTS,
     note: "Connect your OrcaRouter account with OAuth 2.0 + PKCE; the issued API key is stored in OpenCodex's existing credential store.",
   },
-  {
-    id: "anthropic",
-    label: "Anthropic Claude",
-    adapter: "anthropic",
-    baseUrl: "https://api.anthropic.com",
-    authKind: "oauth",
-    allowBaseUrlOverride: true,
-    featured: true,
-    oauthId: "anthropic",
-    jawcodeBundle: "anthropic",
-    note: "Log in with your Claude account",
-    models: [...ANTHROPIC_MODELS],
-    modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
-    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
-    modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
-    // Codex omits max_output_tokens; without a provider budget the Anthropic adapter
-    // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
-    defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
-    defaultModel: "claude-sonnet-5",
-    // Claude fast mode on the subscription lane (Claude Code `/fast`): the OAuth route accepts
-    // `speed` and gates it on account entitlement (usage credits / org enablement), probed live
-    // 2026-09-23 (devlog/_plan/260923_anthropic_fast_speed/020_probe-evidence.md).
-    // Off until the operator opts in: fast mode draws usage credits at 2x price.
-    fastWire: ANTHROPIC_FAST_WIRE,
-    modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },
-    fastTierDescription: ANTHROPIC_FAST_TIER_DESCRIPTION,
-    fastOptIn: true,
-  },
+  anthropicOAuthEntry("anthropic", "Anthropic Claude"),
+  anthropicOAuthEntry("anthropic2", "Anthropic · Pool 2"),
   {
     id: "anthropic-apikey",
     label: "Anthropic (API key)",

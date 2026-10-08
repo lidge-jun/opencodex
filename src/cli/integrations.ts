@@ -13,6 +13,7 @@ import {
   type RuntimeApiDeps,
 } from "./runtime-api";
 import { clientIntegrationPath, validateAsideProfile } from "./integration-input";
+import type { IntegrationClientId } from "../integrations/registry";
 
 const CLAUDE_USAGE = `Usage:
   ocx claude config [status] [--json]
@@ -215,7 +216,11 @@ function singleClientStatusLines(result: unknown): string[] {
 export async function handleClientIntegrationCommand(
   argv: string[],
   deps: RuntimeApiDeps = {},
+  expectedClientId?: IntegrationClientId,
 ): Promise<number> {
+  if (expectedClientId !== undefined && argv.some(arg => ["--client", "--profile"].some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {
+    return runCliAction(async () => { throw new CliUsageError("client-specific restore does not accept --client or --profile", CLIENT_USAGE); });
+  }
   if ((argv[0] === "history" || argv[0] === "journal") && argv[1] === "remove") {
     const { handleIntegrationJournalRemove } = await import("./integration-journal");
     return handleIntegrationJournalRemove(argv.slice(2), deps);
@@ -227,7 +232,7 @@ export async function handleClientIntegrationCommand(
   if (argv[0] === "preview" || argv.some(arg => ["--preview", "--plan-fingerprint", "--reasoning-default", "--clear-reasoning-defaults"]
     .some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {
     const { handleIntegrationPreviewCommand } = await import("./integration-preview");
-    return handleIntegrationPreviewCommand(argv, deps);
+    return handleIntegrationPreviewCommand(argv, deps, expectedClientId);
   }
   return runCliAction(async () => {
     const args = [...argv];
@@ -289,9 +294,12 @@ export async function handleClientIntegrationCommand(
       if (client !== undefined && profile === undefined) throw new CliUsageError("restore --client requires --profile", CLIENT_USAGE);
       rejectArgs(args, CLIENT_USAGE);
       if (!opId) throw new CliUsageError("--op <opId> is required", CLIENT_USAGE);
-      const result = await runtimeRequest(profile === undefined ? "/api/client-integrations/restore" : `${clientIntegrationPath("aside", profile)}/restore`, {
+      const restorePath = expectedClientId !== undefined ? `${clientIntegrationPath(expectedClientId)}/restore`
+        : profile === undefined ? "/api/client-integrations/restore" : `${clientIntegrationPath("aside", profile)}/restore`;
+      const result = await runtimeRequest(restorePath, {
         method: "POST",
-        body: JSON.stringify({ opId, confirmDrift }),
+        ...(expectedClientId === undefined ? {} : { redirect: "error" as const }),
+        body: JSON.stringify({ opId, confirmDrift, ...(expectedClientId === undefined ? {} : { expectedClientId }) }),
       }, deps);
       printData(result, wantsJson, [String((result as Record<string, unknown>).message ?? "Restored.")]);
       return;
@@ -402,7 +410,7 @@ export async function handleCommandcodeCommand(argv: string[], deps: RuntimeApiD
   }
   const rest = verbIndex === -1 ? args : [...args.slice(0, verbIndex), ...args.slice(verbIndex + 1)];
   const forwarded = action === "restore" ? [action, ...rest] : [action, ...rest, "--client", "commandcode"];
-  const code = await handleClientIntegrationCommand(forwarded, deps);
+  const code = await handleClientIntegrationCommand(forwarded, deps, action === "restore" ? "commandcode" : undefined);
   if (code === 0 && (action === "enable" || action === "disable")) {
     console.error("Command Code reads providers on startup.");
   }

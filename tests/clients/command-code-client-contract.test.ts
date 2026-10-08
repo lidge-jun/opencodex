@@ -18,11 +18,12 @@
  * (`grep -c COMMANDCODE_HOME dist/cli.mjs` → 0), which is why the path resolver
  * takes no override.
  */
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   buildClientContribution,
   buildCommandCodeClientConfig,
@@ -148,21 +149,25 @@ describe("Command Code client contract (published command-code@1.66.0)", () => {
 
   test("a before/after write through the real path leaves the file parseable by the client", () => {
     const dir = mkdtempSync(join(tmpdir(), "cc-contract-"));
-    const path = join(dir, "providers.json");
-    const before = { providers: { acme: { name: "Acme", api: "openai-completions", baseURL: "https://api.acme.test/v1", apiKey: "secret", models: { "acme/large": {} } } } };
-    writeFileSync(path, JSON.stringify(before, null, 2), "utf8");
+    try {
+      const path = join(dir, "providers.json");
+      const before = { providers: { acme: { name: "Acme", api: "openai-completions", baseURL: "https://api.acme.test/v1", apiKey: "secret", models: { "acme/large": {} } } } };
+      writeFileSync(path, JSON.stringify(before, null, 2), "utf8");
 
-    const onDisk = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    const contribution = buildClientContribution("commandcode", { ...CONTEXT, document: onDisk });
-    const after = contribution.fragments.reduce((doc, f) => setPath(doc, f.path, f.value), onDisk);
-    writeFileSync(path, JSON.stringify(after, null, 2), "utf8");
+      const onDisk = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      const contribution = buildClientContribution("commandcode", { ...CONTEXT, document: onDisk });
+      const after = contribution.fragments.reduce((doc, f) => setPath(doc, f.path, f.value), onDisk);
+      writeFileSync(path, JSON.stringify(after, null, 2), "utf8");
 
-    // Re-read exactly as the client does, and confirm nothing the user configured
-    // was lost or shadowed.
-    const reloaded = publishedCommandCodeRoot(JSON.parse(readFileSync(path, "utf8")));
-    expect(reloaded).toBeDefined();
-    expect(reloaded!.acme).toEqual(before.providers.acme);
-    expect(reloaded![OPENCODE_PROVIDER_ID]).toBeDefined();
+      // Re-read exactly as the client does, and confirm nothing the user configured
+      // was lost or shadowed.
+      const reloaded = publishedCommandCodeRoot(JSON.parse(readFileSync(path, "utf8")));
+      expect(reloaded).toBeDefined();
+      expect(reloaded!.acme).toEqual(before.providers.acme);
+      expect(reloaded![OPENCODE_PROVIDER_ID]).toBeDefined();
+    } finally {
+      removeTreeWithRetry(dir);
+    }
   });
 });
 
@@ -194,6 +199,7 @@ describe("commandCodeProviderRoot nullish precedence (published command-code@1.6
 });
 
 describe("Command Code real integration writer root-precedence and lifecycle", () => {
+  let base: string;
   let home: string;
   let store: IntegrationStateStore;
 
@@ -221,12 +227,14 @@ describe("Command Code real integration writer root-precedence and lifecycle", (
   }
 
   beforeEach(() => {
-    const base = mkdtempSync(join(tmpdir(), "cc-real-writer-"));
+    base = mkdtempSync(join(tmpdir(), "cc-real-writer-"));
     home = join(base, "home");
     const storeRoot = join(base, "store", "integrations");
     mkdirSync(home, { recursive: true });
     store = createIntegrationStateStore(storeRoot);
   });
+
+  afterEach(() => removeTreeWithRetry(base));
 
   test("default catalog refresh replaces an enabled Command Code model roster", async () => {
     const configPath = setupConfig('{"providers":{}}');

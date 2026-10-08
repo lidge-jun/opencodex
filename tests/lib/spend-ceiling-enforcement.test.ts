@@ -70,6 +70,7 @@ const watched = (inner: SpendReservationLedger, asked: string[]): SpendReservati
   markLost: (sendId) => inner.markLost(sendId),
   snapshot: (scope, scopeId) => inner.snapshot(scope, scopeId),
   exhausted: (scope, scopeId) => { asked.push("exhausted"); return inner.exhausted(scope, scopeId); },
+  hasUnboundPositivePoolHistory: () => inner.hasUnboundPositivePoolHistory(),
   prune: (at) => inner.prune(at),
   knows: (sendId) => inner.knows(sendId),
   reconfigure: (next) => inner.reconfigure(next),
@@ -261,7 +262,7 @@ describe("a token refusal is legible on the wire", () => {
     expect(summary.message).toContain("account token ceiling of 100,000");
     expect(summary.message).toContain("112,500");
     expect(summary.message).toContain("spend.identity.maxTokens");
-    expect(summary.message).toContain("no provider was contacted");
+    expect(summary.message).toContain("this send was refused before contacting a provider");
   });
 
   test("without a denial in hand the sentence is the one it always was", () => {

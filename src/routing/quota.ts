@@ -1,3 +1,5 @@
+import type { OcxConfig } from "../types";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 /**
  * Quota-aware policy scoring (RI-07).
  *
@@ -98,7 +100,7 @@ export function codexPoolQuotaEvidence(accounts: readonly CodexPoolQuotaAccount[
   };
 }
 
-export function quotaEvidenceForCandidate(input: QuotaEvidenceInput): RouteQuotaEvidence {
+export function quotaEvidenceForCandidate(input: QuotaEvidenceInput, config?: Pick<OcxConfig, "providers">): RouteQuotaEvidence {
   if (input.provider === "openai" && input.codexAccountId) {
     // listAccountQuotas() is the reconciled quota snapshot: config-generation
     // reconciliation prunes removed accounts. Other eligibility dimensions
@@ -113,8 +115,10 @@ export function quotaEvidenceForCandidate(input: QuotaEvidenceInput): RouteQuota
     return codexAccountQuotaEvidence(input.codexAccountId, input.codexAccountPlan);
   }
 
-  if (input.provider === "anthropic" && input.accountRef) {
-    const quota = getCachedProviderAccountQuota("anthropic", input.accountRef);
+  const instance = config ? configuredAnthropicInstance(config, input.provider)
+    : input.provider === "anthropic" ? "anthropic" : undefined;
+  if (instance && input.accountRef) {
+    const quota = getCachedProviderAccountQuota(instance, input.accountRef);
     if (quota) {
       const family = anthropicFamilyWindow(input.model, quota.customWindows ?? []);
       const percents = [quota.fiveHourPercent, quota.weeklyPercent, quota.monthlyPercent, family?.percent]

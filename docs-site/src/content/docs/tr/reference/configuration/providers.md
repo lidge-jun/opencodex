@@ -284,6 +284,65 @@ Anthropic hesap politikası riskini anlamadığınız sürece bunu devre dışı
 Emin olmadığınızda manuel `ocx account use anthropic <id>` geçişini tercih edin.
 :::
 
+### Anthropic · Pool 2 (`anthropic2`)
+
+`anthropic2` ("Anthropic · Pool 2"), kendi hesap havuzuna sahip ikinci yerleşik Anthropic OAuth sağlayıcısıdır. `anthropic` ile aynı Anthropic uygulamasını çalıştırır: aynı giriş akışı, istek biçimi, yerel Messages ve Responses köprüsü ile aynı model meta verileri. Yalnızca hesaplar ve onları çevreleyen havuz ayrıdır. Havuzu model önekiyle seçersiniz: `anthropic/claude-sonnet-5` birincil havuzu, `anthropic2/claude-sonnet-5` ise Pool 2'yi kullanır.
+
+Pool 2 siz ekleyene kadar etkin değildir. `ocx login anthropic2` ile giriş yapın veya dashboard Sağlayıcılar sayfasında **Anthropic · Havuz 2** ekleyin. İlk başarılı giriş, `"anthropicOAuthInstance": "anthropic2"` işaretiyle `providers.anthropic2` oluşturur. Pool 2 hiçbir zaman varsayılan sağlayıcı olmaz: öneksiz `claude-*` model adları, varsayılan model ve Claude Code çağıran yönlendirmesi `anthropic` olarak çözümlenmeye devam eder. Daha önce kendiniz oluşturduğunuz işaretsiz bir `anthropic2` girdisi özel anlamını korur; giriş ad çakışmasını reddeder ve ne girdiyi ne de kimlik bilgilerinizi yeniden yazar.
+
+Pool 2 havuz ayarlarını kendi sağlayıcı girdisinden okur. Anahtarlar, varsayılanlar ve davranış yukarıdaki üst düzey `anthropicAccountPool` ile aynıdır ve birincil havuzdan hiçbir şey devralınmaz. `providers.anthropic.anthropicAccountPool` veya bu alanın başka herhangi bir sağlayıcıdaki karşılığı reddedilir.
+
+```json
+{
+  "anthropicAccountPool": { "enabled": true, "strategy": "quota" },
+  "providers": {
+    "anthropic2": {
+      "adapter": "anthropic",
+      "authMode": "oauth",
+      "baseUrl": "https://api.anthropic.com",
+      "anthropicOAuthInstance": "anthropic2",
+      "anthropicAccountPool": { "enabled": true, "strategy": "round-robin" }
+    }
+  }
+}
+```
+
+İki havuz opencodex içinde yalıtılmıştır:
+
+- **Kimlik bilgileri:** Pool 2 hesapları korumalı kimlik bilgisi deposunda kendi `anthropic2` anahtarı altında saklanır. Belirteci veya doğrulanmış Anthropic hesabı diğer havuzda zaten saklı olan bir giriş reddedilir.
+- **Havuz ayarları ve çalışma durumu:** seçim, oturum bağlılığı, soğuma süreleri, duraklatmalar, model rotaları ve hesap başına eşikler tek bir havuza aittir. Rotadaki `fallback: true` yalnızca aynı havuz içinde genişletir.
+- **Kota ve kullanım:** kullanım yoklamaları, kota önbellekleri ve kullanım atfı havuz başına kaydedilir; bu yüzden iki havuzda da bulunan bir hesap kimliğinin iki ayrı kaydı olur.
+- **Sıfırlama hakları:** Pool 2, birincil havuzun değişmeyen günlüğünün yanında kendi günlüğünü (`anthropic2-reset-grant-ledger.json`) tutar.
+- **Kurtarma:** doğrudan bir `anthropic2/<model>` isteği hiçbir zaman birincil havuza düşmez ve Pool 2'deki bir hız sınırı veya ret birincil havuzdaki bir hesabı soğumaya almaz. İki havuzu da adlandıran açık bir combo, bildirdiğiniz hedefleri korur.
+
+Bu ayrım opencodex içindeki bir yönlendirme sınırıdır. Anthropic'in hesaplarınıza nasıl davrandığını ve yukarıda açıklanan hesap politikası riskini değiştirmez.
+
+Pool 2 hesapları yalnızca tarayıcı OAuth ile eklenir. `anthropic` sağlayıcısından farklı olarak Pool 2, Claude Code CLI belirtecini hiçbir zaman içe aktarmaz, benimsemez veya geri yazmaz; bu fark kasıtlıdır. Pool 2 boş başlar ve kullanılabilir Pool 2 hesabı olmayan bir Pool 2 isteği, birincil havuzdan veya Claude Code'dan kimlik bilgisi ödünç almak yerine kimlik doğrulama hatasıyla başarısız olur.
+
+Hesap komutları ve yönetim API'leri havuzu adıyla belirtir: `ocx account pool anthropic2 …`, `ocx account auto-switch anthropic2 …`, `ocx account routes anthropic2 …` ve `ocx account anthropic-reset-grants --provider anthropic2`. Havuz ayarları ve sıfırlama hakları uç noktaları `provider: "anthropic2"` kabul eder; belirtilmezse birincil havuz kullanılmaya devam eder.
+
+#### Yardımcı havuz seçimi (`anthropicInstance`)
+
+Web arama ve görsel yardımcıları, genel `webSearchSidecar` ve `visionSidecar` ayarlarında ve Claude Code geçersiz kılmaları `claudeCode.webSearchSidecar` ile `claudeCode.visionSidecar` içinde isteğe bağlı bir `anthropicInstance` alanı kabul eder. Yardımcının arka ucu Anthropic olduğunda dashboard bunu **Hesap havuzu** seçimi olarak gösterir.
+
+| Değer | Davranış |
+| --- | --- |
+| ayarlanmamış (varsayılan) | Geçerli isteğin havuzunu izler: bir `anthropic2/<model>` isteği Pool 2'yi, bir `anthropic/<model>` isteği birincil havuzu kullanır. Başka bir sağlayıcıdan gelen istek mevcut yardımcı keşfini korur ve bu keşif Pool 2'yi hiçbir zaman seçmez. |
+| `"anthropic"` | Her zaman birincil havuzu kullanır. |
+| `"anthropic2"` | Her zaman Pool 2'yi kullanır. |
+
+Alan yalnızca yardımcının arka ucu Anthropic olarak çözümlendiğinde uygulanır. Başka bir arka uçla ayarlamak doğrulama hatasıdır; web arama varsayılan olarak OpenAI kullandığından `"backend": "anthropic"` da ayarlayın. Diğer havuzla nitelenmiş bir yardımcı model, örneğin `"anthropicInstance": "anthropic2"` ile birlikte `anthropic/claude-sonnet-5`, de reddedilir. Seçilen havuzda kullanılabilir hesap yoksa yardımcı hiçbir şey göndermeden başarısız olur; diğer havuza geçmez. Ana istek bu durumda o yardımcı olmadan devam eder. Ayarlanmamış bir seçim `"anthropic"` olarak değil, yok olarak kaydedilir.
+
+```json
+{
+  "webSearchSidecar": { "backend": "anthropic", "anthropicInstance": "anthropic2" }
+}
+```
+
+:::caution[Sürüm düşürme]
+Pool 2 içermeyen sürümler `anthropic2` girdisini anlamaz. Daha eski bir sürümü kurmadan önce proxy'yi durdurun, `config.json` ve `auth.json` dosyalarını yedekleyin ve `providers.anthropic2` girdisini `config.json` dosyasından kaldırın. Pool 2, birincil havuzun kimlik bilgilerini hiçbir zaman taşımaz veya yeniden yazmaz. Pool 2 etkinken yerinde sürüm düşürme desteklenmez.
+:::
+
 ### Yönetilen kayıt biçimleri
 
 `apiKeys[]` girdileri `id`, `name`, oluşturulan `key` ve ISO `createdAt`

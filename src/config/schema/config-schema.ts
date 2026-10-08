@@ -1,5 +1,6 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import * as z from "zod/v4";
+import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import {
@@ -327,7 +328,7 @@ export const configSchema = z.object({
   blockedModelRedirects: blockedModelRedirectsSchema.optional().catch(undefined),
   // Degrade malformed hand edits locally; candidate writes reject them before parsing.
   // An invalid native preference retains the legacy route instead of enabling native by default.
-  anthropicAccountPool: z.object({ nativeMessages: z.boolean().optional().catch(false) }).passthrough().optional().catch(undefined),
+  anthropicAccountPool: anthropicAccountPoolSchema,
   // Same degrade-don't-reject rationale as the fields above: a hand-edited
   // non-string must not trip the backup-and-defaults repair path. Unset then
   // takes the canonical sideband path (src/server/live.ts normalizeSidebandRoot).
@@ -350,6 +351,11 @@ export const configSchema = z.object({
       .map(row => apiKeyEntrySchema.parse(row) as OcxApiKeyEntry);
   }),
 }).passthrough().superRefine((config, ctx) => {
+  // Helper `anthropicInstance` is deliberately not refined here. A document-level issue would send
+  // loadConfig through salvage (which refuses pathless issues) to the backup-and-defaults path, so
+  // one hand-edited helper preference would hide every provider. Writes reject it explicitly in
+  // validateConfigCandidate, diagnostics report it from the raw file, and loadConfig drops only the
+  // offending key (sanitizeAnthropicSidecarInstanceForLoad).
   const claudeCode = (config as { claudeCode?: unknown }).claudeCode;
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });

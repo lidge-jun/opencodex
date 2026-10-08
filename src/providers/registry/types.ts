@@ -361,6 +361,8 @@ export interface ProviderRegistryEntry {
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
   oauthId?: string;
+  /** OAuth implementation family; instance identity remains the exact id/oauthId. */
+  oauthFamily?: "anthropic";
   virtualModels?: Record<string, { wireModelId: string; reasoningMode: "pro" }>;
   modelMaxInputTokens?: Record<string, number>;
   jawcodeBundle?: string;
@@ -373,6 +375,7 @@ export interface ProviderRegistryEntry {
 
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
+  "anthropicOAuthInstance" |
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "chatCompletionsPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelDisplayNames"

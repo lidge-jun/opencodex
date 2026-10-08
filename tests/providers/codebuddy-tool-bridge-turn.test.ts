@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { existsSync, readdirSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -11,6 +11,12 @@ import { buildCodeBuddyToolBridge } from "../../src/adapters/codebuddy/tool-brid
 import { CODEBUDDY_GLOBAL_PROFILE, clearCodeBuddyBinaryCache } from "../../src/adapters/codebuddy/profiles";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+
+import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
+import { createSpendReservationLedger } from "../../src/lib/spend-reservation-ledger";
+import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { SpendLedgerOwnerError } from "../../src/lib/spend-ledger-owner";
+import { spendTestJournal, spendTestPolicy, testSpendSalt } from "../helpers/shipped-spend-ledger";
 
 const enc = new TextEncoder();
 
@@ -93,6 +99,50 @@ const BLOCK_STOP = { type: "stream_event", event: { type: "content_block_stop" }
 const MESSAGE_STOP = { type: "stream_event", event: { type: "message_stop" } };
 
 describe("CodeBuddy capture-only tool bridge turn", () => {
+  test.each(["acquire", "release", "close"])("owner error during %s still closes the producer and removes the tool bridge", async phase => {
+    const ledger = createSpendReservationLedger({ journal: spendTestJournal(), salt: testSpendSalt,
+      policy: spendTestPolicy({ pool: { maxTokens: 50 } }) });
+    const tracker = createRequestSpendTracker({ provider: "codebuddy", spendInputEstimateTokens: 1 }, undefined, ledger);
+    const budget = createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY }, undefined, tracker);
+    const error = new SpendLedgerOwnerError("SPEND_LEDGER_OWNER_UNAVAILABLE", "injected cleanup owner refusal");
+    const begin = budget.beginSpendProducer!.bind(budget);
+    let close: (() => void) | undefined;
+    let closed = false;
+    spyOn(budget, "beginSpendProducer").mockImplementation(() => {
+      if (phase === "acquire") throw error;
+      const producer = begin()!;
+      close = producer.close.bind(producer);
+      return { close() { close!(); closed = true; if (phase === "close") throw error; } };
+    });
+    const reserve = budget.reserveDispatch.bind(budget);
+    spyOn(budget, "reserveDispatch").mockImplementation(intent => {
+      const decision = reserve(intent);
+      if (decision.allowed && phase === "release") {
+        const release = decision.permit.release.bind(decision.permit);
+        decision.permit.release = () => { release(); throw error; };
+      }
+      return decision;
+    });
+    let bridgeDir: string | undefined;
+    let spawns = 0;
+    const adapter = createCodeBuddyAdapter(provider(), {
+      which: () => "/usr/bin/codebuddy",
+      spawn: () => { spawns++; return fakeChild(frameLines([INIT_OK, { type: "result", subtype: "success", is_error: false }])) as unknown as ChildProcess; },
+      writeToolBridgeFile: async (path, data, options) => { bridgeDir = dirname(String(path)); await writeFile(path, data, options); },
+    });
+    try {
+      await expect(adapter.runTurn!(parsed([tool("exec")]), { ...incoming(), sendBudget: budget }, () => {})).rejects.toBe(error);
+      expect(spawns).toBe(phase === "acquire" ? 0 : 1);
+      expect(closed).toBe(phase !== "acquire");
+      expect(bridgeDir).toBeDefined();
+      expect(existsSync(bridgeDir!)).toBe(false);
+      await ledger.waitForReporterDrain();
+    } finally {
+      close?.();
+      if (bridgeDir) await rm(bridgeDir, { recursive: true, force: true });
+    }
+  });
+
   test("active bridge continuation keeps prior tool calls under the bare request name", async () => {
     const p = parsed([tool("probe_echo")]);
     const callId = "cb_prior_call";

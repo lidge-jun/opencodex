@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ManagementContext } from "../../src/server/management/context";
+import type { OcxConfig } from "../../src/types";
+import { createTempHome } from "../helpers/temp-home";
 import {
   handleAnthropicResetGrantRoutes,
   type AnthropicResetGrantRouteDeps,
@@ -240,5 +242,94 @@ describe("POST /api/anthropic/reset-grants/consume", () => {
     mkdirSync(journalPath);
     expect((await consume(deps(up))).status).toBe(503);
     expect(up.claims).toEqual([]);
+  });
+
+  test("equal account, grant and operation IDs spend independently in A and B journals", async () => {
+    const a = upstream();
+    const b = upstream();
+    const bDeps = deps(b, { provider: "anthropic2", journalPath: join(dir, "anthropic2-reset-grant-ledger.json") });
+    expect(await consume(deps(a))).toMatchObject({ status: 200, json: { provider: "anthropic", replayed: false } });
+    const body = { provider: "anthropic2", accountId: "acct-1", grantId: GRANT, operationId: OP };
+    expect(await consume(bDeps, body)).toMatchObject({ status: 200, json: { provider: "anthropic2", replayed: false } });
+    expect(await consume(bDeps, body)).toMatchObject({ status: 200, json: { provider: "anthropic2", replayed: true } });
+    expect(a.claims).toHaveLength(1);
+    expect(b.claims).toHaveLength(1);
+  });
+
+  test("B unknown outcomes remain in B and cannot block A", async () => {
+    const a = upstream();
+    const b = upstream();
+    b.claim = () => { throw new TypeError("synthetic lost answer"); };
+    const bDeps = deps(b, { provider: "anthropic2", journalPath: join(dir, "anthropic2-reset-grant-ledger.json") });
+    expect(await consume(bDeps, { provider: "anthropic2", accountId: "acct-1", grantId: GRANT, operationId: OP }))
+      .toMatchObject({ status: 502, json: { error: { provider: "anthropic2", operationId: OP } } });
+    expect((await call("GET", "/api/anthropic/reset-grants?provider=anthropic2", bDeps)).json)
+      .toMatchObject({ provider: "anthropic2", pendingOperation: { operationId: OP } });
+    expect((await call("GET", "/api/anthropic/reset-grants", deps(a))).json.pendingOperation).toBeNull();
+    expect((await consume(deps(a))).status).toBe(200);
+  });
+
+  test("ownership revoked during status await prevents claim and journal reservation", async () => {
+    const up = upstream();
+    let current = true;
+    up.status = () => { current = false; return Response.json({ cedar_ember: grantBlock() }); };
+    expect(await consume(deps(up, { isCurrent: () => current }))).toMatchObject({ status: 401 });
+    expect(up.claims).toHaveLength(0);
+    expect((await call("GET", "/api/anthropic/reset-grants", deps(up))).json.pendingOperation).toBeNull();
+  });
+
+  test("B cannot use legacy A dependencies and admin tokens cannot spend B resets", async () => {
+    const up = upstream();
+    const body = { provider: "anthropic2", accountId: "acct-1", grantId: GRANT, operationId: OP };
+    expect(await consume(deps(up), body)).toMatchObject({ status: 400, json: { error: { code: "invalid_provider" } } });
+    const bDeps = deps(up, { provider: "anthropic2", journalPath: join(dir, "anthropic2-reset-grant-ledger.json") });
+    expect(await consume(bDeps, body, "admin-token")).toMatchObject({ status: 403, json: { error: { code: "session_required" } } });
+    expect(up.claims).toHaveLength(0);
+  });
+});
+
+describe("default dependencies (no injected route deps)", () => {
+  const B_ROW = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth", anthropicOAuthInstance: "anthropic2" } as const;
+  const access = (provider: string) => `synthetic-default-${provider}-access`;
+
+  async function read(config: OcxConfig, provider?: string) {
+    const url = new URL(`http://127.0.0.1:10100/api/anthropic/reset-grants${provider ? `?provider=${provider}` : ""}`);
+    const ctx = { req: new Request(url), url, config, deps: {}, principal: "gui-session" } as unknown as ManagementContext;
+    const response = await handleAnthropicResetGrantRoutes(ctx);
+    if (!response) throw new Error("route not handled");
+    const text = await response.text();
+    responses.push(text);
+    return { status: response.status, json: JSON.parse(text) as Record<string, any> };
+  }
+
+  test("A without a providers row and B read from the live config even when the file drifts", async () => {
+    const home = createTempHome("ocx-reset-default-deps-");
+    const originalFetch = globalThis.fetch;
+    const bearers: string[] = [];
+    try {
+      // Auth only: the config file is absent, so a disk reload would disagree with the live object.
+      writeFileSync(home.path("auth.json"), JSON.stringify(Object.fromEntries(["anthropic", "anthropic2"].map(provider => [provider, {
+        activeAccountId: "same",
+        accounts: [{ id: "same", credential: { access: access(provider), refresh: `synthetic-default-${provider}-refresh`, expires: Date.now() + 3_600_000 } }],
+      }]))), { mode: 0o600 });
+      const up = upstream();
+      globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        bearers.push(new Headers(init.headers).get("authorization") ?? "");
+        return up.fetchFn(input, init);
+      }) as typeof globalThis.fetch;
+      const live = { providers: { anthropic2: { ...B_ROW } } } as unknown as OcxConfig;
+      expect(await read(live)).toMatchObject({ status: 200, json: { provider: "anthropic", accountId: "same", pendingOperation: null } });
+      expect(await read(live, "anthropic2")).toMatchObject({ status: 200, json: { provider: "anthropic2", accountId: "same", pendingOperation: null } });
+      expect(bearers.map(value => value === `Bearer ${access("anthropic")}`)).toEqual([true, false]);
+      expect(bearers.map(value => value === `Bearer ${access("anthropic2")}`)).toEqual([false, true]);
+
+      // Currency still binds to that same live object: B disabled during the read is refused.
+      up.status = () => { (live.providers.anthropic2 as { disabled?: boolean }).disabled = true; return Response.json({ cedar_ember: grantBlock() }); };
+      expect(await read(live, "anthropic2")).toMatchObject({ status: 401, json: { error: { code: "auth_failed", provider: "anthropic2" } } });
+      expect(await read(live, "anthropic2")).toMatchObject({ status: 400, json: { error: { code: "invalid_provider" } } });
+    } finally {
+      globalThis.fetch = originalFetch;
+      home.remove();
+    }
   });
 });

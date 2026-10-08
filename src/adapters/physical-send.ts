@@ -36,11 +36,14 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
     const physicalExecutor = (async (input, init) => {
       if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       if (init?.signal?.aborted) throw abortError(init.signal);
-      if (dispatched || (permit && !permit.use())) throw new SendBudgetExhaustedError(options.url);
-      dispatched = true;
-      ordinal += 1;
-      ctx.onPhysicalSend?.({ ordinal, ...(options.recovery ? { recovery: options.recovery } : {}) });
-      return (executor.unpacedFetch ?? executor)(input, init);
+      const run = async (): Promise<Response> => {
+        if (dispatched || (permit && !permit.use())) throw new SendBudgetExhaustedError(options.url);
+        dispatched = true;
+        ordinal += 1;
+        ctx.onPhysicalSend?.({ ordinal, ...(options.recovery ? { recovery: options.recovery } : {}) });
+        return (executor.unpacedFetch ?? executor)(input, init);
+      };
+      return permit?.execute ? permit.execute(run) : run();
     }) as typeof globalThis.fetch;
     let slot: ProviderRequestSlot | undefined;
     try {

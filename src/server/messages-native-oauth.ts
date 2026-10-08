@@ -19,17 +19,11 @@
  * No token, account id or body content is logged or returned in an error message.
  */
 import type { OAuthAccessSnapshot } from "../oauth";
-import {
-  commitAnthropicSelectionRouting,
-  captureAnthropicManualSelectionGeneration,
-  getAnthropicPoolAccessSnapshot,
-  getAnthropicAccountHealthSnapshot,
-  resolveAnthropicDispatchAccountId,
-  resolveAnthropicAccountForSession,
-  getEligibleAnthropicAccounts,
-  isAnthropicAccountPoolEnabled,
-} from "../oauth/anthropic-routing";
-import { resolveAnthropicModelRoute, routeCandidates, type AnthropicRouteDecision } from "../oauth/anthropic-model-routes";
+import { anthropicRoutingFor } from "../oauth/anthropic-routing";
+import { resolveAnthropicModelRouteForInstance, routeCandidates, type AnthropicRouteDecision } from "../oauth/anthropic-model-routes";
+import { configuredAnthropicInstance, type AnthropicInstanceId } from "../providers/anthropic-instance";
+import { resolveAnthropicMessagesUrl } from "../adapters/anthropic";
+import { routedProviderConfig } from "../router";
 import {
   captureOAuthAccountSelection,
   commitOAuthAccountSelection,
@@ -40,7 +34,6 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 import type { OcxConfig } from "../types";
 import { relaySseWithPayloadRewrite } from "./sse-payload-rewrite";
 
-const PROVIDER = "anthropic";
 const MAX_SELECTION_ATTEMPTS = 3;
 
 type Selection = NonNullable<ReturnType<typeof captureOAuthAccountSelection>>;
@@ -52,6 +45,9 @@ function isRec(value: unknown): value is Rec {
 
 /** The committed selection and the credential snapshot one native request is served with. */
 export interface NativeOAuthBinding {
+  readonly instance: AnthropicInstanceId;
+  /** Config-authorized physical destination, captured before any credential await. */
+  readonly routeTarget: string;
   readonly selection: Selection;
   readonly snapshot: OAuthAccessSnapshot;
   /** Anthropic account UUID from the same stored generation, distinct from snapshot.accountId. */
@@ -74,17 +70,43 @@ export class NativeOAuthSelectionChangedError extends Error {
 /** Invalid operator route configuration remains a request refusal, not an auth failure. */
 export class NativeOAuthModelRouteError extends Error {}
 
-function currentRoute(config: OcxConfig, model?: string): AnthropicRouteDecision | null {
-  const resolved = model ? resolveAnthropicModelRoute(config, model) : { decision: null };
+/**
+ * Current configured ownership and target; a revoked B never resolves orphan credentials.
+ *
+ * Adapter, auth mode and destination are read from the routed provider, the same normalization the
+ * settled route used to compute its target. Routing canonicalizes the primary row's adapter and auth
+ * mode from the registry, so a raw-field comparison would refuse an existing Pool 1 row the route
+ * already accepted. B's own raw-row shape is still enforced through `configuredAnthropicInstance`.
+ */
+function nativeOAuthRouteTarget(instance: AnthropicInstanceId, config: OcxConfig): string {
+  const provider = config.providers[instance];
+  if (configuredAnthropicInstance(config, instance) !== instance || !provider || provider.disabled === true) {
+    throw new NativeOAuthSelectionChangedError();
+  }
+  let routed: ReturnType<typeof routedProviderConfig>;
+  try {
+    routed = routedProviderConfig(instance, provider);
+  } catch {
+    // A destination the router now refuses is a moved route, not a different failure class.
+    throw new NativeOAuthSelectionChangedError();
+  }
+  if (routed.authMode !== "oauth" || routed.adapter !== "anthropic") throw new NativeOAuthSelectionChangedError();
+  return resolveAnthropicMessagesUrl(routed);
+}
+
+function currentRoute(instance: AnthropicInstanceId, config: OcxConfig, model?: string): AnthropicRouteDecision | null {
+  const resolved = model ? resolveAnthropicModelRouteForInstance(instance, config, model) : { decision: null };
   if (resolved.error) throw new NativeOAuthModelRouteError(`Invalid Anthropic model routes: ${resolved.error}`);
   return resolved.decision ? { ...resolved.decision, accounts: [...resolved.decision.accounts] } : null;
 }
 
-function routeIsCurrent(config: OcxConfig, model: string | undefined, decision: AnthropicRouteDecision | null): boolean {
-  return JSON.stringify(currentRoute(config, model)) === JSON.stringify(decision);
+function routeIsCurrent(instance: AnthropicInstanceId, config: OcxConfig, model: string | undefined, decision: AnthropicRouteDecision | null): boolean {
+  return JSON.stringify(currentRoute(instance, config, model)) === JSON.stringify(decision);
 }
 
 export interface NativeOAuthBindingOptions {
+  /** Settled route destination; retries may never authorize a replacement destination. */
+  routeTarget?: string;
   sessionKey?: string | null;
   model?: string;
   /** An account proposed by the shared pre-output refusal recovery policy. */
@@ -94,21 +116,34 @@ export interface NativeOAuthBindingOptions {
   expectedRecoveryRouteDecision?: AnthropicRouteDecision | null;
 }
 
+/** Compatibility entrypoint: the original instance only. */
+export function resolveNativeOAuthBinding(config: OcxConfig, options: NativeOAuthBindingOptions = {}): Promise<NativeOAuthBinding> {
+  return resolveNativeOAuthBindingForInstance("anthropic", config, options);
+}
+
 /** Resolve the shared pool selector and commit its exact credential generation for dispatch. */
-export async function resolveNativeOAuthBinding(
+export async function resolveNativeOAuthBindingForInstance(
+  instance: AnthropicInstanceId,
   config: OcxConfig,
   options: NativeOAuthBindingOptions = {},
 ): Promise<NativeOAuthBinding> {
+  const routeTarget = options.routeTarget ?? nativeOAuthRouteTarget(instance, config);
+  const routing = anthropicRoutingFor(instance);
+  const assertOwner = () => {
+    if (nativeOAuthRouteTarget(instance, config) !== routeTarget) throw new NativeOAuthSelectionChangedError();
+  };
   const sessionKey = options.sessionKey ?? null;
   const model = options.model;
   for (let attempt = 0; attempt < MAX_SELECTION_ATTEMPTS; attempt++) {
-    const routeDecision = currentRoute(config, model);
-    const manualSelectionGeneration = captureAnthropicManualSelectionGeneration();
-    const selection = captureOAuthAccountSelection(PROVIDER);
+    assertOwner();
+    const routeDecision = currentRoute(instance, config, model);
+    const manualSelectionGeneration = routing.captureAnthropicManualSelectionGeneration();
+    const selection = captureOAuthAccountSelection(instance);
     // Always ask admission first so pause/login/cooldown retains its typed local refusal.
-    const admittedId = await resolveAnthropicDispatchAccountId(config, sessionKey, routeDecision, model);
-    if (!routeIsCurrent(config, model, routeDecision)) continue;
-    const proposed = resolveAnthropicAccountForSession(sessionKey, config, Date.now(), routeDecision, model);
+    const admittedId = await routing.resolveAnthropicDispatchAccountId(config, sessionKey, routeDecision, model);
+    assertOwner();
+    if (!routeIsCurrent(instance, config, model, routeDecision)) continue;
+    const proposed = routing.resolveAnthropicAccountForSession(sessionKey, config, Date.now(), routeDecision, model);
     // A lost selection commit discards a recovery proposal: a newer manual/policy choice wins.
     const recoverySelectionMatches = !!options.expectedRecoverySelection
       && selection?.accountId === options.expectedRecoverySelection.accountId
@@ -118,27 +153,30 @@ export async function resolveNativeOAuthBinding(
     const accountId = attempt === 0 && options.candidateAccountId && recoverySelectionMatches && recoveryRouteMatches
       ? options.candidateAccountId : admittedId;
     if (!selection) continue;
-    if (!routeCandidates(getEligibleAnthropicAccounts(Date.now(), model), routeDecision).includes(accountId)) {
+    if (!routeCandidates(routing.getEligibleAnthropicAccounts(Date.now(), model), routeDecision).includes(accountId)) {
       throw new NativeOAuthSelectionChangedError();
     }
-    const candidate = await getAnthropicPoolAccessSnapshot(accountId);
-    if (!routeIsCurrent(config, model, routeDecision)) continue;
-    const committed = await commitOAuthAccountSelection(PROVIDER, candidate.accountId, {
+    const candidate = await routing.getAnthropicPoolAccessSnapshot(accountId);
+    assertOwner();
+    if (candidate.provider !== instance) throw new NativeOAuthSelectionChangedError();
+    if (!routeIsCurrent(instance, config, model, routeDecision)) continue;
+    const committed = await commitOAuthAccountSelection(instance, candidate.accountId, {
       expectedSelection: selection,
       expectedCredentialGeneration: candidate.generation,
       requireUsableAccount: true,
     });
+    assertOwner();
     if (committed) {
-      if (!routeIsCurrent(config, model, routeDecision)
-        || manualSelectionGeneration !== captureAnthropicManualSelectionGeneration()) continue;
-      if (!commitAnthropicSelectionRouting(candidate.accountId, selection, committed, {
+      if (!routeIsCurrent(instance, config, model, routeDecision)
+        || manualSelectionGeneration !== routing.captureAnthropicManualSelectionGeneration()) continue;
+      if (!routing.commitAnthropicSelectionRouting(candidate.accountId, selection, committed, {
         config, sessionKey, model, routeDecision,
         reason: accountId === proposed.accountId ? proposed.reason : undefined,
         expectedCredentialGeneration: candidate.generation,
       })) continue;
-      const row = getAccountCredentialWithStatus(PROVIDER, candidate.accountId);
-      if (!row || credentialGeneration(row.credential) !== candidate.generation) continue;
-      const binding = { selection: committed, snapshot: candidate, providerAccountUuid: row.credential.accountId, routeDecision, sessionKey, model, config, manualSelectionGeneration };
+      const row = getAccountCredentialWithStatus(instance, candidate.accountId);
+      if (!row || row.credential.access !== candidate.accessToken || credentialGeneration(row.credential) !== candidate.generation) continue;
+      const binding: NativeOAuthBinding = { instance, routeTarget, selection: committed, snapshot: candidate, providerAccountUuid: row.credential.accountId, routeDecision, sessionKey, model, config, manualSelectionGeneration };
       if (nativeOAuthBindingIsCurrent(binding)) return binding;
     }
   }
@@ -150,12 +188,18 @@ export async function resolveNativeOAuthBinding(
  * selection, plus the same usable credential generation. Checked before every physical send.
  */
 export function nativeOAuthBindingIsCurrent(binding: NativeOAuthBinding): boolean {
-  if (binding.manualSelectionGeneration !== captureAnthropicManualSelectionGeneration()
-    || !routeIsCurrent(binding.config, binding.model, binding.routeDecision)) return false;
-  const selected = captureOAuthAccountSelection(PROVIDER);
-  const row = getAccountCredentialWithStatus(PROVIDER, binding.snapshot.accountId);
-  const sessionRoute = isAnthropicAccountPoolEnabled(binding.config) && binding.sessionKey
-    ? resolveAnthropicAccountForSession(binding.sessionKey, binding.config, Date.now(), binding.routeDecision, binding.model) : null;
+  const { instance } = binding;
+  const routing = anthropicRoutingFor(instance);
+  try {
+    if (nativeOAuthRouteTarget(instance, binding.config) !== binding.routeTarget) return false;
+  } catch { return false; }
+  if (binding.snapshot.provider !== instance) return false;
+  if (binding.manualSelectionGeneration !== routing.captureAnthropicManualSelectionGeneration()
+    || !routeIsCurrent(instance, binding.config, binding.model, binding.routeDecision)) return false;
+  const selected = captureOAuthAccountSelection(instance);
+  const row = getAccountCredentialWithStatus(instance, binding.snapshot.accountId);
+  const sessionRoute = routing.isAnthropicAccountPoolEnabled(binding.config) && binding.sessionKey
+    ? routing.resolveAnthropicAccountForSession(binding.sessionKey, binding.config, Date.now(), binding.routeDecision, binding.model) : null;
   // Another conversation may move the automatic active pointer without revoking this
   // session's affinity. Manual selection clears affinity and precedes it in the selector.
   const selectionCurrent = sessionRoute?.reason === "affinity"
@@ -163,8 +207,9 @@ export function nativeOAuthBindingIsCurrent(binding: NativeOAuthBinding): boolea
     || (selected?.accountId === binding.selection.accountId && selected?.revision === binding.selection.revision);
   return selectionCurrent
     && !!row && !row.paused && !row.needsReauth && row.credential.expires > Date.now()
-    && !getAnthropicAccountHealthSnapshot(binding.snapshot.accountId)
-    && routeCandidates(getEligibleAnthropicAccounts(Date.now(), binding.model), binding.routeDecision).includes(binding.snapshot.accountId)
+    && !routing.getAnthropicAccountHealthSnapshot(binding.snapshot.accountId)
+    && routeCandidates(routing.getEligibleAnthropicAccounts(Date.now(), binding.model), binding.routeDecision).includes(binding.snapshot.accountId)
+    && row.credential.access === binding.snapshot.accessToken
     && credentialGeneration(row.credential) === binding.snapshot.generation
     && row.credential.accountId === binding.providerAccountUuid;
 }

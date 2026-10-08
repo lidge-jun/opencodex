@@ -29,7 +29,7 @@ runs helper features around provider requests.
 | `usageLedgerMaxBytes?` | `number` | unset | Opt-in ceiling in bytes for `usage.jsonl`. Absent means the request history grows without limit, which stays the default. See [usage history size](#usage-history-size). |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Cap in MiB for evictable app-owned logs, caches, blobs, and continuation payloads. Range 64–4096; not an RSS cap. |
 | `metricsExport.enabled?` | `boolean` | `false` | Enable process-local aggregate request metrics at authenticated `GET /api/metrics`. Restart required; disabled mode returns 404 and starts no exporter activity. |
-| `spend?` | `{ root?: { maxTokens?: number }; identity?: { maxTokens?: number }; pool?: { maxTokens?: number }; retentionDays?: number }` | unset | Durable token ceilings, off unless you write one. Each scope bounds settled spend plus in-flight reservations plus unresolved spend: `root` is one task including its whole fan-out, `identity` is one account across every task it serves, and `pool` is one provider pool. They intersect, so a request is admitted only when all three have room — which is what holds a ceiling against a client that mints a new task id per request. A reservation is the request's whole input plus its enforceable output ceiling, counted as if every cached prefix misses. Observe-only mode still journals, so every server owns the state directory's single-writer lease; an explicit sibling must use a separate `OPENCODEX_HOME`. Spend survives an ordinary process restart when its writes reached the filesystem, but the journal does not promise survival across host power loss because each append is not fsynced. Raising or removing the value is what grants more. `maxTokens` must be a positive integer (0 would refuse everything), `retentionDays` is 1–365 and defaults to 7, and an unknown key in this section is rejected rather than ignored. A refusal is a local HTTP 429 carrying `x-opencodex-local-refusal: workflow_spend_exhausted`, and its message names the scope and the ceiling; no provider is contacted. With an applicable ceiling, dispatch is also refused if its token reservation cannot be booked, including full tracking capacity. Requests without an applicable ceiling remain observe-only. |
+| `spend?` | `{ root?: { maxTokens?: number }; identity?: { maxTokens?: number }; pool?: { maxTokens?: number }; retentionDays?: number }` | unset | Durable token ceilings, off unless you write one. Each scope bounds settled spend plus in-flight reservations plus unresolved spend: `root` is one task including its whole fan-out, `identity` is one account across every task it serves, and `pool` is one provider pool. They intersect, so a request is admitted only when all three have room — which is what holds a ceiling against a client that mints a new task id per request. A reservation is the request's whole input plus its enforceable output ceiling, counted as if every cached prefix misses. Observe-only mode still journals, so every server owns the state directory's single-writer lease; an explicit sibling must use a separate `OPENCODEX_HOME`. Spend survives an ordinary process restart when its writes reached the filesystem, but the journal does not promise survival across host power loss because each append is not fsynced. Raising or removing a ceiling changes the allowance for requests started afterward; requests already running keep their starting policy. `maxTokens` must be a positive integer (0 would refuse everything), `retentionDays` is 1–365 and defaults to 7, and an unknown key in this section is rejected rather than ignored. A refusal is a local HTTP 429 carrying `x-opencodex-local-refusal: workflow_spend_exhausted`, and its message names the scope and the ceiling; no provider is contacted. With an applicable ceiling, dispatch is also refused if its token reservation cannot be booked, including full tracking capacity. Requests without an applicable ceiling remain observe-only. |
 
 | `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. False makes ensure a no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
@@ -42,6 +42,7 @@ runs helper features around provider requests.
 | `codexMainAccountHardLockThresholds?` | `{ short?: number; long?: number }` | `{ short: 90, long: 98 }` | Independent 5h and weekly/monthly thresholds. Integers 80–100, with `short <= long`. Invalid persisted fields fall back to defaults; the settings API rejects invalid writes before mutation. |
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Servers sharing this configuration directory coordinate reservations and settlements so one process does not replace another's request record. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
+| `spendPoolAliases?` | `Record<string, string>` | unset | Explicit historical salted pool-alias to canonical provider mappings. Keep this key at the top level, outside `spend`. See [Historical pool continuity](#historical-pool-continuity). |
 | `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefixes are `gpt-6-luna` and `gpt-5.6-luna`; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
 | `memoryModels?` | `{ extract?: { model: string; reasoningEffort?: string }; consolidation?: { model: string; reasoningEffort?: string } }` | off | Route Codex's two memory phases to a chosen model, with an optional reasoning effort per phase. See [Memory routing](#memory-routing). |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
@@ -940,3 +941,90 @@ This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+## Historical pool continuity
+
+Provider-pool ceilings use the canonical routed provider. For every currently configured provider
+`P`, OpenCodex automatically binds its salted pool alias, `h(pool, P)`, to `P` when reading
+balances. No manual self-mapping or salt calculation is needed for independent
+provider ceilings. This rule also applies to retained historical balances with that exact alias.
+
+Request logs still use account-specific display labels. A different historical label, including an
+account ordinal, does not establish provider ownership. With `spend.pool.maxTokens`, each original
+balance contributes once to its bound provider group or, when still unbound and positive, to every
+candidate pool. Settled, reserved and unresolved usage all count; unknown usage is not a refund.
+Unbound history may therefore restrict an otherwise unused pool. Current account order and display
+names do not resolve that history. Root and identity ceilings remain independent.
+
+For distinct historical labels whose ownership you have verified, add mappings to the top-level
+`spendPoolAliases` object in `config.json`. Each key is an exact 32-character lowercase hexadecimal
+pool alias from this installation's journal; each value is the exact ID of a verified, currently
+configured canonical provider, with no surrounding whitespace.
+Keep evidence for the mapping and keep the journal and salt private.
+
+Automatic self-bindings and explicit mappings apply only when balances are read. They do not move
+original balances or persist identity links in the journal. Removing an explicit historical mapping
+makes that history unbound again unless its alias is a currently configured provider's own alias.
+Keep `spendPoolAliases` outside `spend`, because older versions reject unknown fields inside that
+strict section. Invalid mappings are rejected on writes; invalid hand edits retain ceilings and
+refuse pool admission. A configured provider's own salted pool alias cannot map to another provider.
+This is checked again when the provider set changes. Validation reads an existing salt without
+creating one.
+
+Dormant unbound history expires only after its last activity is strictly older than
+`spend.retentionDays`. Capacity pressure cannot shorten that interval for positive unknown history.
+Live reservations and seed targets remain protected, even at zero tokens. Cleanup persists a normal
+journal deletion record before admission uses the reduced total. Known groups keep the ordinary
+active/exhausted protections. No automatic tool reconstructs unverifiable mappings.
+
+### Token reservations and reporting
+
+When a root, identity or pool ceiling applies, the first physical send for each selected target/key
+requires a normal-capacity reservation. If that cannot be recorded, the send is refused before it
+reaches upstream. Stable retries reuse that reservation's scopes; a different target/key needs a
+new one. `L` is the request-wide physical-send limit, frozen when the request starts
+(default four; the existing bounded OAuth request profile allows up to eighteen).
+Every additional physical send shares this finite limit.
+
+The enforcement state, applicable root/identity/pool token ceilings, and `L` are captured when each
+request starts. Configuration changes apply only to requests started after the change. Requests
+already running keep their starting policy for all retries and continuations: enabling or lowering
+a ceiling does not tighten them, and raising or removing a ceiling does not relax them. A request
+that started in observe-only mode remains observe-only until it finishes.
+
+Delayed reports retain already-started usage. Terminal settlement waits for reporters, and send IDs
+are forgotten only after their accounting is durable; forgetting an ID does not remove its balance.
+The limit bounds retries, not the final bill: actual usage or already-started retries can exceed a
+token estimate, and their full liability remains counted. With no applicable ceiling, behavior stays
+observe-only, including omitted bookings when tracking capacity is full. No identity checkpoints are
+added for unconfigured traffic.
+
+Claude CLI, CodeBuddy and Qoder count each CLI invocation as one send. Their first invocation
+still needs a normal reservation and is refused if that reservation cannot be obtained. Internal
+CLI retries and tool turns do not separately consume this request-wide send limit; their cost
+settles from actual reported usage, including amounts above the initial estimate. This exception preserves CLI use with configured
+spend ceilings while limiting the number of child invocations.
+
+### Rollback to 2.80.0: contract C
+
+New records use the existing v1 format and `pool` alias domain. **Unmodified 2.80.0 reads them using
+its own per-label rules**, including ordinary compaction and retention. There is no required
+backport, launcher fence or reconciliation command. Keep the current journal and salt: restoring
+an older copy loses the spend recorded since that copy.
+
+This does not preserve canonical aggregation after downgrade, nor promise the same remaining
+allowance that 2.80.0 would have calculated for identical traffic without the upgrade. It may book
+new traffic under account labels. On re-upgrade, current configured-provider self-bindings and explicit
+alias mappings apply to the original balances still retained by 2.80.0. New checkpoints contain no identity-link metadata that
+an older reader must preserve.
+
+Journals written by unpublished experimental builds with `pool-current` aliases or `poolContinuity`
+metadata are excluded from this compatibility contract, including later checkpoints carrying those
+aliases. Their original balances and send targets remain conservative unbound history until normal
+retention expires them; they are not converted or immediately deleted.
+
+A complete invalid journal record (including a final `null`) causes configured admission to refuse.
+Compaction can still preserve valid accounting in a clean checkpoint; the live refusal remains until
+a clean restart replays it. A torn, unparseable final line keeps the existing recovery behavior.
+Storage/corruption denials use `workflow_spend_undurable`; unsafe files and ownership failures remain
+storage errors. Alias validation failures use `workflow_pool_history_unresolved`.

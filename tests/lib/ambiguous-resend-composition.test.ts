@@ -5,6 +5,8 @@ import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
   deriveRequestExecutionBudget,
+  reportDispatchSends,
+  type SingleUseDispatchPermit,
   type RequestExecutionBudget,
   type SendClass,
 } from "../../src/lib/request-execution-budget";
@@ -96,23 +98,23 @@ function oneLogicalRequest() {
    * What src/server/responses/request-send-budget.ts hands a recovery leg: the base allowance
    * while it lasts, then the single final-recovery reserve, and nothing after that.
    */
-  const recoveryAttempts = (sendClass: SendClass, targetKey: string): number => {
+  const recoveryAllowance = (sendClass: SendClass, targetKey: string): { attempts: number; permit?: SingleUseDispatchPermit } => {
     const base = budget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS);
-    if (base > 0) return base;
+    if (base > 0) return { attempts: base };
     const decision = budget.reserveDispatch({ sendClass, targetKey, countedExternally: true });
-    return decision.allowed ? 1 : 0;
+    return decision.allowed ? { attempts: 1, permit: decision.permit } : { attempts: 0 };
   };
 
   return {
     budget,
     get physicalSends(): number { return counts.physical; },
     get ambiguousSends(): number { return counts.ambiguous; },
-    recoveryAttempts,
+    recoveryAllowance,
     /** A leg that fails before any response head, through the real reset ladder. */
-    preHeader: (outcomes: Array<Response | Error>, row: ProviderRow, attempts?: number): Promise<Response> =>
+    preHeader: (outcomes: Array<Response | Error>, row: ProviderRow, allowance?: { attempts: number; permit?: SingleUseDispatchPermit }): Promise<Response> =>
       fetchWithResetRetry(dispatcher(outcomes), {
-        attempts: attempts ?? budget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS),
-        onSendsConsumed: sends => { budget.used += sends; },
+        attempts: allowance?.attempts ?? budget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS),
+        onSendsConsumed: sends => reportDispatchSends(budget, sends, allowance?.permit),
         claimAmbiguousResend: () => authorize("pre-header", row).allowed,
       }),
     /** A stream that died after the head while carrying only control events. */
@@ -191,9 +193,9 @@ describe("one resend budget across composed recovery legs", () => {
     //    the account it moves to is a row the operator tuned HIGHER. A ceiling read from the
     //    asking leg let that row buy a second duplicate inference on the way out; the ceiling
     //    is the smallest any leg presented, so it buys nothing.
-    const attempts = request.recoveryAttempts("account-failover", "other-account");
-    expect(attempts).toBe(1);
-    const lastSend = await request.preHeader([reset(), new Response("duplicate")], MORE_PERMISSIVE, attempts);
+    const allowance = request.recoveryAllowance("account-failover", "other-account");
+    expect(allowance.attempts).toBe(1);
+    const lastSend = await request.preHeader([reset(), new Response("duplicate")], MORE_PERMISSIVE, allowance);
     expect(isNonReplayableResponse(lastSend)).toBe(true);
 
     expect(request.ambiguousSends).toBe(GRANT);
