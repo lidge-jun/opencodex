@@ -50,6 +50,12 @@ afterEach(() => {
 // because an unknown one is relayed to the real Anthropic host instead of the configured upstream.
 const CLI_UA = { "user-agent": "claude-cli/2.1.282 (external, cli)" };
 
+// These cases exercise local request routing. Installed service ownership is covered
+// separately; querying the real Windows service manager can outlast the server watchdog.
+function startInterceptServer(port: number) {
+  return startServer(port, { inspectNativeCodexOwnership: () => ({ ownership: "owned", reason: "isolated test home" }) });
+}
+
 async function waitForIntercept(): Promise<NonNullable<ReturnType<typeof getClaudeInterceptState>>> {
   for (let i = 0; i < 100; i++) {
     const state = getClaudeInterceptState();
@@ -84,7 +90,7 @@ test("Messages through CONNECT reach the router; other paths relay to the config
       intercept: { port: interceptPort },
     },
   } as unknown as OcxConfig);
-  const server = startServer(publicPort);
+  const server = startInterceptServer(publicPort);
   try {
     const state = await waitForIntercept();
     expect(state.proxyPort).toBe(interceptPort);
@@ -163,7 +169,7 @@ test("a first-party binding routes a picker id on the intercept only; the public
       intercept: { port: interceptPort, modelMap: { "claude-sonnet-4-6": "bindtarget/fake-model" } },
     },
   } as unknown as OcxConfig);
-  const server = startServer(publicPort);
+  const server = startInterceptServer(publicPort);
   try {
     const state = await waitForIntercept();
     const ca = readFileSync(state.caCertPath, "utf8");
@@ -216,7 +222,7 @@ test("an owned legacy unauthenticated env is migrated on start; nothing else is 
     },
     claudeCode: { intercept: { port: interceptPort } },
   } as unknown as OcxConfig);
-  const server = startServer(publicPort);
+  const server = startInterceptServer(publicPort);
   try {
     const state = await waitForIntercept();
     const token = readClaudeInterceptProxyToken(testDir);
@@ -238,7 +244,7 @@ test("an ephemeral public port starts no proxy unless intercept.port is explicit
     },
   };
   saveConfig({ ...base, port: 10100 } as unknown as OcxConfig);
-  const implicit = startServer(0);
+  const implicit = startInterceptServer(0);
   try {
     await Bun.sleep(100);
     expect(getClaudeInterceptState()).toBeNull();
@@ -248,7 +254,7 @@ test("an ephemeral public port starts no proxy unless intercept.port is explicit
 
   const proxyPort = await findAvailablePort(0, "127.0.0.1");
   saveConfig({ ...base, port: 10100, claudeCode: { intercept: { port: proxyPort } } } as unknown as OcxConfig);
-  const explicit = startServer(0);
+  const explicit = startInterceptServer(0);
   try {
     const state = await waitForIntercept();
     expect(state.proxyPort).toBe(proxyPort);
@@ -268,7 +274,7 @@ test("intercept.enabled=false starts no proxy", async () => {
     },
     claudeCode: { intercept: { enabled: false } },
   } as unknown as OcxConfig);
-  const server = startServer(publicPort);
+  const server = startInterceptServer(publicPort);
   try {
     await Bun.sleep(100);
     expect(getClaudeInterceptState()).toBeNull();

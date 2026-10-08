@@ -1,5 +1,5 @@
 {
-  "claude-picker-upload.test.ts": "claude-integration",
+  "claude-picker-upload.test.ts": "claude-integration", "claude-picker-trust-windows.test.ts": "claude-integration",
   "messages-native-scope.test.ts": "claude-integration", "catalog-auto-review-row.test.ts": "codex-integration",
   "cli-log-view-filter.test.ts": "cli",
   "cli-usage-model-search.test.ts": "cli",
@@ -255,7 +255,7 @@
   "claude-picker-listener.test.ts": "claude-integration", "claude-picker-models.test.ts": "claude-integration",
   "claude-picker-recovery.test.ts": "claude-integration", "claude-picker-runtime.test.ts": "claude-integration",
   "claude-picker-startup.test.ts": "claude-integration",
-  "claude-picker-trust.test.ts": "claude-integration", "claude-desktop-remote-hub.test.ts": "claude-integration",
+  "claude-picker-trust.test.ts": "claude-integration", "claude-picker-windows.test.ts": "claude-integration", "claude-desktop-remote-hub.test.ts": "claude-integration",
   "claude-dotenv-provenance-transport.test.ts": "claude-integration",
   "claude-estimate-projection.test.ts": "claude-integration",
   "claude-first-party-agent-sync.test.ts": "claude-integration",

@@ -98,7 +98,7 @@ test("sends the persisted toggle and renders a reported proxy refusal", async ()
   expect(container.querySelector(".notice-err")).toBeNull();
   response = { status: 200, body: { ok: true, picker: { ...basePicker, reason: "trust_pending", hint: "ocx claude desktop picker trust" } } };
   await act(async () => { (container.querySelector("[role=switch]") as HTMLButtonElement).click(); });
-  expect(container.querySelector(".claude-picker-state")?.textContent).toContain("Waiting for the keychain step");
+  expect(container.querySelector(".claude-picker-state")?.textContent).toContain("Waiting for certificate trust");
   expect(container.querySelector(".claude-picker-state code")?.textContent).toBe("ocx claude desktop picker trust");
 });
 

@@ -634,7 +634,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [],
     mutates: true,
     json: "none",
-    details: ["Needs a running proxy, first-party mode and macOS. The first time, macOS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.","Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards."],
+    details: ["Needs a running proxy, first-party mode and macOS or Windows. The first time, the OS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.","Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards."],
     usage: "ocx claude desktop picker on",
   },
   {
@@ -649,7 +649,7 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["claude","desktop","picker","trust"],
-    summary: "Run the macOS keychain step for picker mode in this terminal, then ask the server to finish enabling it.",
+    summary: "Run the OS certificate trust step for picker mode in this terminal, then ask the server to finish enabling it.",
     routes: [{"method":"GET","path":"/api/claude-desktop/picker"},{"method":"PUT","path":"/api/claude-desktop/picker"}],
     flags: [],
     mutates: true,

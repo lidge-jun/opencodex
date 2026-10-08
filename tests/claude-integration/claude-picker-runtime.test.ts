@@ -102,11 +102,11 @@ afterEach(async () => {
 });
 
 describe("pickerDesired", () => {
-  test("needs macOS, first-party, Desktop intent and no explicit picker off", () => {
+  test("needs a supported platform, first-party, Desktop intent and no explicit picker off", () => {
     expect(pickerDesired(firstParty(), "first-party", "darwin")).toBe(true);
     expect(pickerDesired(firstParty(), "gateway", "darwin")).toBe(false);
     expect(pickerDesired(firstParty(), "first-party", "linux")).toBe(false);
-    expect(pickerDesired(firstParty(), "first-party", "win32")).toBe(false);
+    expect(pickerDesired(firstParty(), "first-party", "win32")).toBe(true);
     expect(pickerDesired(firstParty({ claudeCode: { desktopMode: "first-party", intercept: { picker: false } } }), "first-party", "darwin")).toBe(false);
     expect(pickerDesired(firstParty({ claudeCode: { desktopMode: "first-party", intercept: { picker: true } } }), "first-party", "darwin")).toBe(true);
   });

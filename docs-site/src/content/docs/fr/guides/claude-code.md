@@ -168,24 +168,24 @@ unknown signifie qu’opencodex ne peut pas déterminer si les réglages pointen
 
 ### Mode picker : modèles opencodex dans le sélecteur Code first-party
 
-Le mode picker fait partie du mode first-party. Sur macOS, il est activé par défaut lorsque first-party
+Le mode picker fait partie du mode first-party. Sur macOS et Windows, il est activé par défaut lorsque first-party
 est sélectionné, sauf si `claudeCode.intercept.picker: false` est défini. Il modifie le sélecteur de
 modèles de l'onglet Code de Desktop first-party pour y afficher les modèles opencodex disponibles par
 leur nom. Lors de la première activation, macOS peut demander l'autorisation d'une autorité de certification
-locale dans le trousseau de connexion. Cette autorité est limitée à `claude.ai` et à ses sous-domaines.
+locale dans le trousseau de connexion, et Windows dans le magasin racine de l'utilisateur actuel. Cette autorité est limitée à `claude.ai` et à ses sous-domaines.
 Son identité de signature exportable est protégée par le magasin d'identifiants du système et réutilisée
 lors des redémarrages ordinaires. Aucune clé de signature picker en clair n'est enregistrée dans le
 répertoire de configuration OpenCodex. La validation complète de l'autorité contrainte et la vérification
-de la confiance du système restent obligatoires. Avec la même identité approuvée et un magasin accessible,
-un redémarrage n'ajoute ni ne supprime de réglages de confiance des certificats. La restauration au démarrage
-n'installe jamais la confiance : si elle manque, est révoquée ou inconnue, le picker reste en attente.
-Exécutez explicitement `ocx claude desktop picker on` ou `ocx claude desktop picker trust` pour l'accorder.
+de la confiance du système restent obligatoires, avec sur Windows la correspondance exacte de l'empreinte et une feuille vérifiée. Avec la même identité approuvée et un magasin accessible,
+un redémarrage n'ajoute ni ne supprime de réglages de confiance des certificats macOS. La restauration au démarrage
+ou la vérification d'état n'installe jamais la confiance : si elle manque, est révoquée ou inconnue, le picker reste en attente.
+Exécutez explicitement `ocx claude desktop picker on` ou `ocx claude desktop picker trust` pour l'accorder, y compris la confirmation Windows si nécessaire.
 
 Une migration unique depuis une ancienne identité peut demander votre consentement pour supprimer sa
 confiance. Si ce nettoyage échoue, le picker reste indisponible et le profil appliqué utilise un relais
 sans déchiffrement jusqu'à sa réussite. macOS peut aussi demander de déverrouiller le trousseau ou
-d'autoriser l'accès d'une application aux identifiants, y compris après un redémarrage ou une mise à jour.
-Le picker reste non pris en charge sous Windows et Linux : aucun travail de CA, de magasin d'identifiants
+d'autoriser l'accès d'une application aux identifiants, y compris après un redémarrage ou une mise à jour. Sur Windows, `on` ou `trust` explicite peut afficher une confirmation d'ajout de la racine.
+Le picker reste non pris en charge sous Linux : aucun travail de CA, de magasin d'identifiants
 ou de proxy picker n'y démarre. L'interception Claude principale reste disponible ; ses fichiers CA locaux
 sont protégés par des vérifications du propriétaire, des liens symboliques, des permissions et des ACL Windows.
 

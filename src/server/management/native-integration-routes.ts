@@ -665,7 +665,7 @@ function pickerStateNote(picker: DesktopPickerStatus): string {
     return "Picker mode is on: fully quit and reopen Claude Desktop to see OpenCodex models in the Code tab.";
   }
   if (picker.reason === "trust_pending" || picker.reason === "trust_declined") {
-    return `Picker mode is waiting for the keychain step: run ${picker.hint ?? "ocx claude desktop picker trust"}.`;
+    return `Picker mode is waiting for certificate trust: run ${picker.hint ?? "ocx claude desktop picker trust"}.`;
   }
   return `Picker mode is off (${picker.reason}).`;
 }

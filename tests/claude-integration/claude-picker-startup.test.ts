@@ -41,8 +41,8 @@ function setup() {
 // blocks the loop, so each multi-child test's own bound covers all of its children.
 const PICKER_CHILD_TIMEOUT_MS = watchdogMs(10_000);
 
-test("Windows and Linux skip all picker effects while still discarding legacy key", async () => {
-  for (const platform of ["linux", "win32"] as const) {
+test("Linux skips all picker effects while still discarding legacy key", async () => {
+  for (const platform of ["linux"] as const) {
     const { root, config } = setup();
     config.claudeCode!.desktopMode = "first-party";
     mkdirSync(join(root, "claude-picker"));

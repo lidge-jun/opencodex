@@ -117,7 +117,7 @@ and the auto-detect (WPAD) flag in `Connections\DefaultConnectionSettings`, and 
 a bypass, no covering proxy, or an undecidable PAC script or WPAD. A failed registry read is
 reported as unreadable, never as an absent value, and a stale settings env never earns an `ok`. It
 never prints the proxy value and never records a doctor failure, because the CLI and other clients
-still route.
+still route. When picker mode is armed, Desktop uses its app-owned fixed egress proxy instead of this system-proxy path; the manual bypass observation above remains for picker-off or picker-pending installs.
 
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
 `ocx claude config set --first-party on|off` and the Claude Code page switch control the CLI intent; `ocx ensure` refreshes a stale or absent env while it is on.
@@ -182,14 +182,14 @@ Existing Claude consumers omit this option and retain blind forwarding; it enabl
 Windows local-CA publication in `src/claude/intercept/local-ca-files.ts` hardens legacy inherited DACLs only after verifying the current owner and exclusively current-user, SYSTEM or Administrators grants; already private directories skip hardening. Newly created exclusive files and directories are hardened before strict owner/ACL verification and before CA access. ACL verification, including inherited SQLite sidecar ACLs, is memoized by bigint device/inode/birthtime within one publication; birthtime distinguishes recycled file IDs while preserving same-volume rename identity. Path and descriptor identity checks remain active on every access, and removed or replaced entries retire their memo.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
 
-On macOS, when the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
+On macOS and Windows, when the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
 port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
 also hands that proxy to the Claude Code processes it spawns, and the two trust different CAs, so
 the tunnel is chosen per client from the CONNECT head: a tunnel without a browser User-Agent (Claude
 Code, trusting only the intercept CA) gets the `api.anthropic.com` intercept and every other target
 blind, never the picker; a tunnel with Chromium's `Mozilla/` User-Agent (the app, trusting only the
-login keychain) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
+login keychain on macOS or the current-user Root store on Windows) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
 blind-tunnels every target except `claude.ai:443`.
 Production always uses the configured adjacent ports. Lifecycle tests inject only the CONNECT
 factory and bind the real handlers on kernel-assigned ports; this preserves request handling while
@@ -200,9 +200,9 @@ any local process already reaches (the `api.anthropic.com` intercept is on the C
 too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
 because each terminator presents a certificate only its intended client trusts. `claude.ai:443` is
 intercepted only while the runtime's cached
-decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop intent on,
+decision is armed: macOS or Windows, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
-trusted in the login keychain (`picker-trust.ts`). A loopback TCP front in `picker-listener.ts`
+trusted in the OS store (`picker-trust.ts`): the login keychain on macOS, the current-user Root store on Windows by exact fingerprint with a verified leaf. A loopback TCP front in `picker-listener.ts`
 reads ClientHello ALPN through `src/claude/intercept/client-hello.ts`, reassembling across TCP
 splits and up to 16 TLS records within 64 KiB of wire bytes and a 10-second deadline. It splices
 the untouched connection to an HTTP/2 server when the client offers `h2`, or to the native
@@ -239,11 +239,11 @@ name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 a
 signing identity is protected by the OS credential store and scoped to the canonical config directory;
 normal restarts reuse the same validated certificate and key. No plaintext picker signing key is
 stored in that directory; public certificates and non-secret identity metadata remain under
-`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Windows and Linux skip picker CA, credential-store and proxy construction entirely; the main intercept pair remains available.
+`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Linux skips picker CA, credential-store and proxy construction entirely; the main intercept pair remains available.
 On restart the lifecycle keeps the applied profile and restores through the controller with
 `allowTrustPrompt: false`. An unchanged approved identity with an available credential store needs
-no Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the
-picker pending; restore never installs trust. Explicit `on` or `trust` completes the trust step.
+no macOS Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the
+picker pending; restart and status never install trust. Explicit `on`, `trust`, or first-party apply completes the trust step, including the Windows current-user Root confirmation when needed.
 Legacy predecessor cleanup may still require consent during migration. Native keychain unlock and
 application-access dialogs are controlled by macOS; restart or upgrade does not guarantee their absence.
 `picker-ca-store.ts` owns the versioned OS credential service, canonical-config identity namespace,
@@ -254,13 +254,13 @@ predecessor before writing the credential, verifies readback, then commits metad
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
 Gateway/off startup does not read or initialize an OS picker credential unless an applied picker
-profile needs recovery. Its dormant macOS runtime/controller remains available for later explicit
+profile needs recovery. Its dormant macOS or Windows runtime/controller remains available for later explicit
 activation, which uses the same persistent authority path.
-Trust is added without a policy string: Chromium
+On macOS trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
 trust settings carry `kSecTrustSettingsPolicyString` as untrusted and an explicit trust step replaces it; an
-export it cannot read makes trust `unknown`, which never arms. A rotated-out picker certificate is
-removed from the login keychain as its replacement is published, and a failed removal stops the
+export it cannot read makes trust `unknown`, which never arms. On Windows trust is the current-user Root store entry matching the exact fingerprint with a verified leaf. The PowerShell runner terminates its child on timeout or output-read failure and preserves the failure category. A rotated-out picker certificate is
+removed from the login keychain on macOS or the current-user Root store on Windows as its replacement is published, and a failed removal stops the
 picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
 `ca.lock.sqlite` lock (`picker-ca.ts`): lock acquisition is reported separately from the
 callback, so a busy lock publishes nothing, and a missing or mismatched owner record for our own
@@ -323,11 +323,11 @@ enable attempt added trust and a later check or profile write fails, it removes 
 an earlier successful picker profile keeps the trust it needs. The owned profile helpers in
 `src/claude/desktop-picker-profile.ts` use the standard row `opencodex-picker`, whose file contains
 only `egressProxyUrl`. The previous Desktop selection is stored in
-`<configDir>/claude-picker/profile-state.json`, never in Desktop's `_meta.json`.
+`<configDir>/claude-picker/profile-state.json`, never in Desktop's `_meta.json`. On Windows the same row is written through the existing `%LOCALAPPDATA%` configLibrary writer.
 
-The local controls are `ocx claude desktop picker on|off|status|trust`. With a live server, `on`,
-`off`, and transition cleanup use the controller; `trust` performs the operator's local keychain
-step and then reports the result to the server. Before installing the root, the CLI independently
+The local controls are `ocx claude desktop picker on|off|status|trust`; CLI help, toggle messages and GUI trust states use OS-neutral certificate-trust wording. With a live server, `on`,
+`off`, and transition cleanup use the controller; `trust` performs the operator's local OS trust
+step (login keychain on macOS, current-user Root confirmation on Windows) and then reports the result to the server. Before installing the root, the CLI independently
 requires the picker common name on a self-signed CA and the exact critical `claude.ai`-only DNS
 and all-IP exclusion constraints, plus the full minted extension profile — critical `CA:TRUE`
 basicConstraints, a `keyCertSign|cRLSign`-only keyUsage, a non-critical subjectKeyIdentifier, and

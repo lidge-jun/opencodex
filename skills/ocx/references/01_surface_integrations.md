@@ -153,7 +153,7 @@ State-changing: yes.
 
 JSON mode: `none`.
 
-- Needs a running proxy, first-party mode and macOS. The first time, macOS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.
+- Needs a running proxy, first-party mode and macOS or Windows. The first time, the OS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.
 - Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards.
 
 ### `ocx claude desktop picker off`
@@ -176,7 +176,7 @@ JSON mode: `none`.
 
 Usage: `ocx claude desktop picker trust`
 
-Run the macOS keychain step for picker mode in this terminal, then ask the server to finish enabling it.
+Run the OS certificate trust step for picker mode in this terminal, then ask the server to finish enabling it.
 
 State-changing: yes.
 

@@ -240,7 +240,7 @@ Claude Desktop first-party routes its Code tab and subagents through OpenCodex. 
 When a Windows system proxy is on, Claude Desktop hands it to the Code tab as `HTTPS_PROXY`, and
 that value takes precedence over the OpenCodex proxy in `~/.claude/settings.json`. The Code tab
 then goes around OpenCodex and routed models fail there, while the standalone CLI keeps working.
-Add `api.anthropic.com` to your proxy client's system-proxy bypass list (in Clash Verge,
+Once picker mode is active, Desktop uses its app-owned fixed egress proxy instead of the system proxy. Add `api.anthropic.com` to your proxy client's system-proxy bypass list (in Clash Verge,
 `system_proxy_bypass`), then fully quit and reopen Claude Desktop. `ocx doctor` reports this
 under "Claude Desktop first-party vs Windows system proxy". It cannot evaluate a PAC script or
 automatic proxy detection (WPAD, "Automatically detect settings"), so it reports those as unknown;
@@ -271,17 +271,17 @@ hub, so `ocx claude desktop apply` there uses the gateway profile.
 
 ### Picker mode: opencodex models in the first-party Code-tab picker
 
-Picker mode is part of first-party mode. On macOS it is on by default when first-party is selected,
+Picker mode is part of first-party mode. On macOS and Windows it is on by default when first-party is selected,
 unless `claudeCode.intercept.picker: false` is set. It changes the first-party Desktop Code-tab picker
 so it lists available opencodex models by name. The first time it is enabled, macOS may ask you to
-trust a local certificate authority in the login keychain. That authority is constrained to `claude.ai`
+trust a local certificate authority in the login keychain, and Windows may ask you to trust it in the current-user Root store. That authority is constrained to `claude.ai`
 and its subdomains. OpenCodex protects its exportable signing identity in the OS credential store
 and reuses the same validated certificate and key across normal restarts. No plaintext picker signing
 key is stored in the OpenCodex config directory. The full constrained CA validation and OS trust
-verification still apply. With the same approved identity and an available credential store, restarting
-OpenCodex does not add or remove Certificate Trust Settings. Startup restore never installs trust:
+verification still apply, including the exact fingerprint with a verified leaf on Windows. With the same approved identity and an available credential store, restarting
+OpenCodex does not add or remove macOS Certificate Trust Settings. Restart and status never install trust:
 if trust is missing, revoked or unknown, the picker stays pending. Run `ocx claude desktop picker on`
-or `ocx claude desktop picker trust` explicitly to grant trust.
+or `ocx claude desktop picker trust` explicitly to grant trust, including the Windows confirmation when needed.
 Startup also attempts to remove a legacy on-disk picker signing key before checking whether
 interception is enabled. Cleanup is best-effort and does not enable interception or block startup.
 
@@ -289,9 +289,9 @@ One-time migration from an older picker identity may require consent to remove i
 If cleanup cannot finish, the picker stays unavailable and the applied profile uses a blind relay
 until cleanup succeeds; `ocx claude desktop picker status` reports that state. macOS may separately
 ask you to unlock the keychain or approve an application's access to stored credentials. These native
-access prompts can still occur on restart or upgrade.
+access prompts can still occur on restart or upgrade. On Windows, explicit `on` or `trust` may show a confirmation to add the root.
 
-Picker mode remains unsupported on Windows and Linux: OpenCodex starts no picker CA, credential-store
+Picker mode remains unsupported on Linux: OpenCodex starts no picker CA, credential-store
 or proxy work there. The main Claude intercept remains available with ownership, symlink, file-permission
 and Windows ACL checks protecting its local CA files.
 

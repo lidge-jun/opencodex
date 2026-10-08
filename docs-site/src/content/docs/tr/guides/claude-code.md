@@ -190,22 +190,22 @@ unknown, ayarların hâlâ opencodex vekiline işaret edip etmediğinin belirlen
 
 ### Picker modu: first-party Code sekmesinde opencodex modelleri
 
-Picker modu first-party modunun bir parçasıdır. macOS'ta first-party seçildiğinde varsayılan olarak
+Picker modu first-party modunun bir parçasıdır. macOS ve Windows'ta first-party seçildiğinde varsayılan olarak
 açıktır; `claudeCode.intercept.picker: false` ayarlanırsa kapalı kalır. First-party Desktop'ın Code
 sekmesindeki model seçiciyi değiştirerek kullanılabilir opencodex modellerini adlarıyla listeler.
-İlk etkinleştirmede macOS, giriş anahtar zincirinde yerel bir sertifika yetkilisine güvenmenizi isteyebilir.
+İlk etkinleştirmede macOS, giriş anahtar zincirinde, Windows ise geçerli kullanıcının kök deposunda yerel bir sertifika yetkilisine güvenmenizi isteyebilir.
 Bu yetkili `claude.ai` ve alt alan adlarıyla sınırlıdır. Dışa aktarılabilir imzalama kimliği işletim sisteminin
 kimlik bilgisi deposunda korunur ve normal yeniden başlatmalarda aynı sertifika ve anahtar yeniden kullanılır.
 OpenCodex yapılandırma dizininde düz metin picker imza anahtarı saklanmaz. Kısıtlı CA'nın tam doğrulaması ve
-sistemdeki güven denetimi devam eder. Onaylanmış kimlik aynıysa ve depo erişilebilirse yeniden başlatma,
-sertifika güven ayarlarını eklemez veya kaldırmaz. Başlangıçta geri yükleme hiçbir zaman güven yüklemez:
+sistemdeki güven denetimi devam eder (Windows'ta tam parmak izi ve doğrulanmış yaprak ile). Onaylanmış kimlik aynıysa ve depo erişilebilirse yeniden başlatma,
+macOS sertifika güven ayarlarını eklemez veya kaldırmaz. Başlangıçta geri yükleme ve durum denetimi hiçbir zaman güven yüklemez:
 güven eksik, iptal edilmiş veya bilinmiyorsa picker beklemede kalır. Güven vermek için açıkça
-`ocx claude desktop picker on` veya `ocx claude desktop picker trust` komutunu çalıştırın.
+`ocx claude desktop picker on` veya `ocx claude desktop picker trust` komutunu çalıştırın, gerekiyorsa Windows onayıyla birlikte.
 
 Eski bir kimlikten bir defalık geçişte önceki güveni kaldırmak için onay gerekebilir. Temizlik tamamlanana
 kadar picker kullanılamaz ve uygulanmış profil şifre çözmeyen bir aktarma kullanır. macOS ayrıca anahtar
 zincirinin kilidini açmanızı veya uygulamanın kimlik bilgilerine erişimini onaylamanızı isteyebilir;
-bu istemler yeniden başlatma veya güncelleme sonrasında da çıkabilir. Windows ve Linux'ta picker desteklenmez:
+bu istemler yeniden başlatma veya güncelleme sonrasında da çıkabilir. Windows'ta açık `on` veya `trust` kök ekleme onayını gösterebilir. Linux'ta picker desteklenmez:
 picker CA, kimlik bilgisi deposu veya proxy işlemleri başlatılmaz. Ana Claude yakalama işlevi kullanılabilir;
 yerel CA dosyaları için sahiplik, sembolik bağlantı, dosya izinleri ve Windows ACL denetimleri uygulanır.
 

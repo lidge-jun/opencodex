@@ -2,6 +2,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "./picker-ca";
+import {
+  inspectPickerTrustWindows,
+  trustPickerCaWindows,
+  untrustPickerCaWindows,
+} from "./picker-trust-windows";
 
 /** Trust is scoped to the current root fingerprint and a verified persisted leaf. */
 export type PickerTrustState = "trusted" | "untrusted" | "unsupported" | "unknown";
@@ -61,6 +66,11 @@ export async function inspectPickerTrust(
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
 ): Promise<PickerTrustState> {
+  if (platform === "win32") {
+    // The macOS default runner is never passed down: only an explicitly injected
+    // runner crosses over, otherwise the Windows default powershell.exe runner runs.
+    return inspectPickerTrustWindows(leafPath, caSha1, run === defaultSecurityRunner ? undefined : run);
+  }
   if (platform !== "darwin") return "unsupported";
   const keychain = loginKeychainPath();
   try {
@@ -86,6 +96,9 @@ export async function trustPickerCa(
   platform: NodeJS.Platform = process.platform,
   cert?: { pem?: string },
 ): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }> {
+  if (platform === "win32") {
+    return trustPickerCaWindows(caPath, run === defaultSecurityRunner ? undefined : run, cert);
+  }
   if (platform !== "darwin") return { ok: false, reason: "unsupported" };
   // `cert.pem` is the caller-verified certificate bytes: the shared on-disk ca.pem is writable by
   // same-user processes and could be swapped between fingerprint inspection and this install, so
@@ -117,6 +130,9 @@ export async function untrustPickerCa(
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
 ): Promise<{ ok: boolean }> {
+  if (platform === "win32") {
+    return untrustPickerCaWindows(fingerprintSha1, run === defaultSecurityRunner ? undefined : run);
+  }
   if (platform !== "darwin") return { ok: false };
   const keychain = loginKeychainPath();
   // Listed means the current picker CA is in the login keychain; unlisted means nothing to remove,

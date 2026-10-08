@@ -1,4 +1,5 @@
 import type { Server } from "bun";
+import { supportsDesktopPicker } from "../desktop-picker-platform";
 import type { OcxConfig } from "../../types";
 import { getConfigDir } from "../../config/paths";
 import type { DesktopPickerController } from "../desktop-picker";
@@ -28,7 +29,7 @@ import { buildClaudeInterceptEnv, migrateClaudeInterceptSettings } from "./setti
  * proxy. Desktop also hands that proxy to the Claude Code processes it spawns, so the choice is per
  * client: Claude Code (no User-Agent on CONNECT) trusts only the intercept CA and gets the
  * api.anthropic.com intercept and nothing else; the app itself (a browser User-Agent) trusts only
- * the login keychain and never meets the api.anthropic.com intercept, and only its claude.ai
+ * the OS root store and never meets the api.anthropic.com intercept, and only its claude.ai
  * tunnels may be terminated by the picker runtime (src/claude/intercept/picker-runtime.ts).
  */
 
@@ -144,7 +145,7 @@ export interface StartClaudeInterceptOptions<T> {
   createPicker?: (options: CreatePickerRuntimeOptions) => PickerRuntime;
   /** Test seam: bind real CONNECT handlers on kernel-assigned ports without probe-and-release races. */
   startProxy?: typeof startConnectProxy;
-  /** Test seams: the macOS `security` runner and platform for the picker runtime and controller. */
+  /** Test seams: the platform trust runner and platform for the picker runtime and controller. */
   pickerCaStore?: PickerCaStore;
   pickerSecurity?: SecurityRunner;
   pickerPlatform?: NodeJS.Platform;
@@ -211,7 +212,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   let pickerReason: ClaudeInterceptState["pickerReason"] = null;
   let pickerFailurePort: number | undefined;
   try {
-    if (options.loadPickerRoutes && (options.pickerPlatform ?? process.platform) === "darwin") {
+    if (options.loadPickerRoutes && supportsDesktopPicker(options.pickerPlatform ?? process.platform)) {
       // Remove any legacy plaintext key before inspecting or activating picker state.
       discardPickerCaKey(configDir);
       const { inspectDesktopPickerProfile } = await import("../desktop-picker-profile");
