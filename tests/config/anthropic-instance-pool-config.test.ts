@@ -3,7 +3,6 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  configDiagnosticsFromRaw,
   getConfigPath,
   getDefaultConfig,
   loadConfig,
@@ -11,6 +10,7 @@ import {
   saveConfig,
   validateConfigCandidate,
 } from "../../src/config";
+import { configDiagnosticsFromRaw } from "../../src/config/diagnostics";
 import {
   isAnthropicPoolEnabledFor,
   rawAnthropicAccountPool,
