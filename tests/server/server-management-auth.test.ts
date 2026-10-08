@@ -92,6 +92,7 @@ import {
   createGuiPairingGrant,
 } from "../../src/server/gui-session";
 import { setSystemRestartIoForTests } from "../../src/server/management/system-restart";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const previousHome = process.env.OPENCODEX_HOME;
@@ -201,6 +202,10 @@ afterEach(async () => {
   // Flush all homes before restoring environment variables, including startup
   // rollback flights that no successfully returned server could have awaited.
   await flushConfigDirHardeningForTests();
+  // The process-wide routing-history index keeps its SQLite under this home open
+  // after stop; close it before the reaps barrier or the removal below meets a
+  // delete-pending handle for the whole retry budget.
+  closeRequestHistoryIndex();
   // The caller-facing ACL timeout may settle before icacls actually exits.
   // Deletion waits for actual reaps, after every producer above has settled.
   await flushWindowsSecretAclReapsBeforeRemoval(testHome);
