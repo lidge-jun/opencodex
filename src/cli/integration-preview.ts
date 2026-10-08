@@ -193,6 +193,7 @@ export async function handleIntegrationPreviewCommand(argv: string[], deps: Runt
     if (expectedClientId !== undefined && intent.operation === "restore") {
       if (intent.client !== undefined || intent.profile !== undefined) throw new CliUsageError("client-specific restore does not accept --client or --profile", USAGE);
       intent.client = expectedClientId;
+      intent.path = `${clientIntegrationPath(expectedClientId)}/restore${intent.preview ? "/preview" : ""}`;
       intent.body.expectedClientId = expectedClientId;
     }
     const result = await runtimeRequest(intent.path, {

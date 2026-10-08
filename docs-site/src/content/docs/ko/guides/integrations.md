@@ -132,7 +132,8 @@ ocx integration client restore --op <opId> [--confirm-drift]
 
 `ocx commandcode restore --op <opId>`는 Command Code 작업만 복원합니다.
 `--preview`와 `--plan-fingerprint`에도 같은 조건이 적용되며, 클라이언트나
-프로필을 바꾸는 옵션은 받지 않습니다. 일반 작업 기록은 위의
+프로필을 바꾸는 옵션은 받지 않습니다. 실행 중인 프록시가 이 전용 복원 경로를
+지원하지 않으면 일반 복원으로 재시도하지 않고 오류를 반환합니다. 일반 작업 기록은 위의
 `ocx integration client restore`를, Aside 작업은 아래의 프로필 전용 명령을 사용하세요.
 
 `--overwrite-conflict`는 **Replace**의 터미널 명령입니다.

@@ -777,6 +777,8 @@ ocx export --client commandcode --out ./providers.json
 
 `ocx commandcode restore --op <opId>` accepts only Command Code operations, including
 `--preview` and `--plan-fingerprint` requests. It rejects client/profile overrides.
+The running proxy must support client-scoped restore; older proxies return an error
+without falling back to the generic restore endpoint.
 Use `ocx integration client restore` for the generic journal and the explicit Aside
 profile commands above for Aside operations.
 

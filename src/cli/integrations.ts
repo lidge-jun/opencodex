@@ -294,8 +294,11 @@ export async function handleClientIntegrationCommand(
       if (client !== undefined && profile === undefined) throw new CliUsageError("restore --client requires --profile", CLIENT_USAGE);
       rejectArgs(args, CLIENT_USAGE);
       if (!opId) throw new CliUsageError("--op <opId> is required", CLIENT_USAGE);
-      const result = await runtimeRequest(profile === undefined ? "/api/client-integrations/restore" : `${clientIntegrationPath("aside", profile)}/restore`, {
+      const restorePath = expectedClientId !== undefined ? `${clientIntegrationPath(expectedClientId)}/restore`
+        : profile === undefined ? "/api/client-integrations/restore" : `${clientIntegrationPath("aside", profile)}/restore`;
+      const result = await runtimeRequest(restorePath, {
         method: "POST",
+        ...(expectedClientId === undefined ? {} : { redirect: "error" as const }),
         body: JSON.stringify({ opId, confirmDrift, ...(expectedClientId === undefined ? {} : { expectedClientId }) }),
       }, deps);
       printData(result, wantsJson, [String((result as Record<string, unknown>).message ?? "Restored.")]);
