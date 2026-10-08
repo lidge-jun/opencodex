@@ -7,14 +7,14 @@ import { applyGithubCopilotContextTier } from "../../providers/github-copilot-co
 import { Buffer } from "node:buffer";
 import type { IncomingMeta, ProviderAdapter } from "../base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
-import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_ROUTING_HINT_HEADER } from "../../codex/forward-transport-headers";
+import { applyCodexRoutingHint, CODEX_ROUTING_HINT_HEADER } from "../../codex/forward-transport-headers";
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType, transferCompactionCiphertextLease } from "../../responses/compaction";
 import { decodeServerSentEvents } from "../../lib/sse-decoder";
 import {
-  CODEX_FORWARD_BASE_URL,
   destinationDecodesNativeCompactionBlob,
   isCanonicalOpenAiForwardProvider,
   isOpenAiOperatedResponsesDestination,
+  supportsNativeResponsesCompactionTrigger,
 } from "../../providers/openai-tiers";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream, validateFinalCustomToolCompatibility } from "../../responses/custom-tool-compat";
@@ -23,7 +23,8 @@ import { rewriteRoutedNamespaceToolsForUpstream } from "../../responses/namespac
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
 import { preparePlaintextV2AgentMessages } from "../../responses/plaintext-v2-agent-messages";
 import { isMetaAiResponsesDestination, rewriteMuseToolNamesForUpstream } from "../../responses/muse-tool-name-alias";
-import { openaiResponsesUrl } from "../openai-responses-url";
+import { buildResponsesTransport } from "./transport";
+export { FORWARD_HEADERS } from "./transport";
 import { normalizeResponsesCodeMode } from "../responses-code-mode";
 import { injectXaiResponsesXSearch, normalizeXaiResponsesWebSearch } from "../xai-web-search";
 import {
@@ -46,7 +47,7 @@ import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuation
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
 import { observeOutbound } from "../../usage/cache-diagnostic";
-import { normalizeForwardedClientHeaderName } from "../../lib/provider-client-headers";
+
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
 
 /**
@@ -62,55 +63,6 @@ export function requiresPlaintextReasoningReplay(provider: OcxProviderConfig): b
     && provider.requiresAdjacentResponsesToolResults === true;
 }
 
-// Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
-// Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
-export const FORWARD_HEADERS = [
-  "authorization",
-  "chatgpt-account-id",
-  "openai-beta",
-  "originator",
-  "session_id",
-  "session-id",
-  "thread-id",
-  "x-client-request-id",
-  "x-codex-beta-features",
-  "x-codex-installation-id",
-  "x-codex-parent-thread-id",
-  "x-codex-turn-metadata",
-  "x-codex-turn-state",
-  "x-codex-window-id",
-  "x-oai-attestation",
-  "x-openai-subagent",
-  "x-responsesapi-include-timing-metrics",
-  CODEX_RESPONSES_LITE_HEADER,
-];
-
-/** Preserve the caller fingerprint unless the provider explicitly owns that header. */
-function applyCallerUserAgentFallback(
-  headers: Record<string, string>,
-  incoming: IncomingMeta,
-): void {
-  if (Object.keys(headers).some(name => name.toLowerCase() === "user-agent")) return;
-  const userAgent = incoming.headers.get("user-agent");
-  if (userAgent) headers["User-Agent"] = userAgent;
-}
-
-/** Copy only explicitly opted-in caller metadata; provider-owned headers remain authoritative. */
-function applyConfiguredClientHeaderForwarding(
-  headers: Record<string, string>,
-  incoming: IncomingMeta,
-  provider: OcxProviderConfig,
-): void {
-  if (!Array.isArray(provider.forwardClientHeaders)) return;
-  for (const rawName of provider.forwardClientHeaders.slice(0, 64)) {
-    const name = normalizeForwardedClientHeaderName(rawName);
-    if (name === null) continue;
-    if (Object.keys(headers).some(existing => existing.toLowerCase() === name)) continue;
-    const value = incoming.headers.get(name);
-    if (value) headers[name] = value;
-  }
-}
-
 /** Replace every `input_image` part under a routed-compaction body with a short marker. */
 function stripInputImagesDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripInputImagesDeep);
@@ -124,9 +76,9 @@ function stripInputImagesDeep(value: unknown): unknown {
 }
 
 /**
- * Rewrite a compaction turn for an upstream that does not speak Codex's private
- * `compaction_trigger` item: drop the trigger and the whole tool surface, and ask
- * for the handoff summary in plain terms instead (#422).
+ * Rewrite a compaction turn without native v2 capability, or a forced portable
+ * handoff: drop the trigger and the whole tool surface, and ask for the handoff
+ * summary in plain terms instead (#422). Native v1 capability is independent.
  *
  * The adapter builds from `parsed._rawBody`, so the summarizer prompt that
  * handleResponses() pushed onto `parsed.context` never reaches the wire — it has to
@@ -218,61 +170,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
 
     buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
       const translatorBudget = incoming.translatorBudget;
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      let url: string;
-
-      if (provider.authMode === "forward") {
-        const mayForwardCallerCredentials = isCanonicalOpenAiForwardProvider(provider);
-        // OAuth passthrough: ChatGPT backend path is `${baseUrl}/responses` (no /v1).
-        const baseUrl = mayForwardCallerCredentials
-          ? CODEX_FORWARD_BASE_URL
-          : provider.baseUrl.replace(/\/+$/, "");
-        url = `${baseUrl}/responses`;
-        if (provider.headers) Object.assign(headers, provider.headers); // static headers first…
-        const runtimeProvider = provider as {
-          _codexAccountOverride?: { accessToken: string; chatgptAccountId: string };
-          _codexAccountRequired?: boolean;
-        };
-        if (
-          mayForwardCallerCredentials
-          && runtimeProvider._codexAccountRequired
-          && !runtimeProvider._codexAccountOverride
-        ) {
-          throw new Error("Codex pool account auth is required but unavailable");
-        }
-        if (mayForwardCallerCredentials) {
-          for (const h of FORWARD_HEADERS) {
-            const v = incoming?.headers.get(h);
-            if (v) {
-              if (h === CODEX_RESPONSES_LITE_HEADER) {
-                for (const name of Object.keys(headers)) {
-                  if (name.toLowerCase() === h) delete headers[name];
-                }
-              }
-              headers[h] = v; // …so genuine forwarded fields win.
-            }
-          }
-        }
-        const override = runtimeProvider._codexAccountOverride;
-        if (override && mayForwardCallerCredentials) {
-          headers["authorization"] = `Bearer ${override.accessToken}`;
-          headers["chatgpt-account-id"] = override.chatgptAccountId;
-        }
-      } else {
-        if (provider.responsesPath === undefined) {
-          url = openaiResponsesUrl(provider.baseUrl);
-        } else {
-          const base = provider.baseUrl.replace(/\/$/, "");
-          url = `${base}${provider.responsesPath}`;
-        }
-        if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
-        if (provider.headers) Object.assign(headers, provider.headers);
-      }
-      // Some Responses-compatible gateways select their Codex compatibility path from the real
-      // client fingerprint. Additional caller metadata is opt-in; static provider headers remain
-      // authoritative in either auth mode.
-      applyConfiguredClientHeaderForwarding(headers, incoming, provider);
-      applyCallerUserAgentFallback(headers, incoming);
+      const { url, headers } = buildResponsesTransport(provider, incoming);
 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
@@ -397,12 +295,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         }
         // The same class of private field, one level up, but keyed on the DESTINATION rather than
         // on the canonical surface alone. `src/server/responses/compact.ts` spreads the caller's
-        // raw body into the native `/responses/compact` request without passing through this
-        // adapter, and that endpoint is offered only to OpenAI-operated destinations
-        // (supportsNativeResponsesCompactEndpoint). Stripping on the canonical predicate here
-        // would make the two paths disagree for `openai-apikey`; stripping on the destination
-        // keeps every OpenAI-operated route byte-identical and removes the field exactly where it
-        // is known to break, which is a gateway this proxy does not operate.
+        // raw body into native `/responses/compact` without this adapter, and applies the same
+        // destination boundary for opted-in custom gateways. Native endpoint capability does not
+        // grant OpenAI-private fields. Stripping on the canonical predicate here would make the
+        // two paths disagree for `openai-apikey`; stripping on the destination keeps every
+        // OpenAI-operated route byte-identical and removes the field exactly where it is known
+        // to break, which is a gateway this proxy does not operate.
         //
         // Placed before the routed compaction body is built and before serialization, so the HTTP,
         // routed-compaction and WebSocket outbounds are all covered by this one call.
@@ -459,13 +357,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (!forward) {
         outBody = normalizeOpenCodeGoAdditionalTools(outBody, url, parsed._replayPrefixLen);
       }
-      // Same predicate as the routedCompaction gate in handleResponses(): an authMode check would
-      // let a noncanonical custom forward provider skip this rewrite while the server still routes
-      // it as a summarizer turn (#422). The compaction body build removes the tool surface and must
+      // Same native-v2/portable predicate as the routedCompaction gate in handleResponses():
+      // neither forward auth nor native v1 endpoint support implies trigger support. The
+      // compaction body build removes the tool surface and must
       // therefore be the last routed transform that may depend on those declarations. Structural
       // sanitizers below can still run after it.
       outBody = normalizeResponsesCodeMode(outBody, parsed, provider);
-      if (parsed._compactionRequest === true && (!isCanonicalOpenAiForwardProvider(provider) || parsed._portableCompaction === true)) {
+      if (parsed._compactionRequest === true && (!supportsNativeResponsesCompactionTrigger(provider) || parsed._portableCompaction === true)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
       // Run after routed compaction so nested input_image parts are replaced before a malformed

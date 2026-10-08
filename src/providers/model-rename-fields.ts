@@ -35,6 +35,8 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   modelReasoningEffortsAuthoritative: "none",
   dropResponsesReasoningItems: "none",
   decodesNativeCompactionBlobs: "none",
+  supportsNativeCompactionTrigger: "none",
+  supportsNativeCompactEndpoint: "none",
   allowEncryptedV2AgentTasks: "none",
   allowPrivateNetwork: "none",
   proxy: "none",

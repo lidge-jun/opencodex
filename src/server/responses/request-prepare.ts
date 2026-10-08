@@ -641,6 +641,11 @@ export async function prepareResponsesRequest(
       parsed._stripReasoningEncryptedContent = true;
       if (parsed._compactionRequest === true) parsed._portableCompaction = true;
     }
+    // A v1 fallback needs an ocx1 summary for replacement-history decoding, even when this
+    // custom destination separately accepts native v2 triggers. Legacy defaults stay intact.
+    if (options.compactionRecoveryKind === "compaction-v1" && parsed._compactionRequest === true
+      && route.provider.adapter === "openai-responses" && route.provider.supportsNativeCompactionTrigger === true
+      && !isCanonicalOpenAiForwardProvider(route.provider)) parsed._portableCompaction = true;
     logCtx.routeDecision = route.routeDecision;
     logCtx.policyEligibility = route.policyEligibility;
   } catch (err) {

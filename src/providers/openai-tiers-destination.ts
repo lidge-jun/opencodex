@@ -67,17 +67,24 @@ function isOfficialOpenAiResponsesDestination(provider: OcxProviderConfig): bool
 /**
  * Whether this provider can serve `POST /responses/compact`. The canonical ChatGPT
  * backend can, and so can the official OpenAI API — but an arbitrary gateway that
- * merely speaks the Responses wire cannot, and calling it there fails compaction
- * with an unhelpful error instead of falling back to a routed summary (#422).
+ * merely speaks the Responses wire cannot without an explicit capability opt-in (#422).
+ * This is a protocol claim, not OpenAI identity or permission to forward caller credentials.
  */
 export function supportsNativeResponsesCompactEndpoint(
   providerName: string,
   provider: OcxProviderConfig,
 ): boolean {
   if (isCanonicalOpenAiForwardProvider(provider)) return true;
+  if (provider.adapter === "openai-responses" && provider.supportsNativeCompactEndpoint === true) return true;
   return providerName === OPENAI_API_PROVIDER_ID
     && provider.adapter === "openai-responses"
     && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL;
+}
+
+/** Native v2 is independent of the v1 endpoint and ciphertext replay capabilities. */
+export function supportsNativeResponsesCompactionTrigger(provider: OcxProviderConfig): boolean {
+  return isCanonicalOpenAiForwardProvider(provider)
+    || (provider.adapter === "openai-responses" && provider.supportsNativeCompactionTrigger === true);
 }
 
 /**

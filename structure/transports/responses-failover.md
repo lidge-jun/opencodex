@@ -14,7 +14,7 @@ and translation budgets. Physical-send receipts and explicit retry-helper report
 fetch sends without double charging external reservations; one prepaid emergency permit is shared
 with adapter dispatch, and only additional retries draw from the remainder. The emergency target's configured initial allowance is intersected with that shared remainder plus its prepaid send; source-provider sends are not deducted from the emergency target's allowance a second time. Adapter observers retain partial-output and structured denial evidence
 before response projection. Native encrypted compaction, uploaded files, stored continuations,
-and policy/combo routes are excluded. Emergency output must contain one readable portable
+and policy/combo routes are excluded; native capability is checked independently for v1 endpoints and v2 triggers, including explicitly opted-in custom gateways. Emergency output must contain one readable portable
 compaction item; recent original user messages are retained verbatim, and recovery failure keeps
 the original failure. A source Kiro account lease is returned before the emergency child is
 admitted: the child shares its holder and may select the same account, so replacing that holder
@@ -340,9 +340,9 @@ endpoint. A mismatch marks the credential domain as rewritten, exactly like a sh
 intercept, and forces the portable summarizer even for a native-capable target: `compact.ts`
 skips `/responses/compact`, and `request-prepare.ts` sets `parsed._portableCompaction`, which
 `request-sidecar-auth.ts` (`routedCompaction`) and the passthrough adapter's compaction body
-build both honor for canonical ChatGPT destinations. Native ciphertext is replayable only by the
+build both honor for canonical ChatGPT and explicitly native-capable custom destinations. Native ciphertext is replayable only by the
 backend that minted it; the conversation model would otherwise resume with an omission marker
-in place of its history.
+in place of its history. Native v1 key-auth compact reads `transientRetryPolicyFor` and `transientSendCapFor` like ordinary Responses: configured attempts count total physical sends including prior legs, intersected with the shared request remainder; absent/disabled policies and canonical forward retain their existing ladder. `tests/responses/native-compaction-gateway.test.ts` pins the counts.
 
 `tests/responses/responses-compaction-override.test.ts` covers source filtering, trigger selection, config
 validation, native and routed handlers, credential retention, portable summaries and replay, and combo failover.

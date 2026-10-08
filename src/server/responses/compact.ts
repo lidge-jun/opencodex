@@ -123,6 +123,11 @@ import {
 import type { DataPlaneAdmission } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
+import { buildResponsesTransport, copyResponsesClientMetadata } from "../../adapters/openai-responses/transport";
+import { scrubOcxCompactionItems, stripCanonicalOnlyTopLevelFields } from "../../adapters/openai-responses/request-strips";
+import { destinationDecodesNativeCompactionBlob, isOpenAiOperatedResponsesDestination } from "../../providers/openai-tiers-destination";
+import { bindRouteReasoningReplayScope } from "./core-replay";
+import { commitReasoningReplayServingIdentity } from "../../responses/reasoning-replay-cache";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
   isCodexReserveOptInMissing,
@@ -147,7 +152,8 @@ import {
   UnsupportedContentEncodingError,
 } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport } from "../../providers/key-failover";
+import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
+import { transientSendCapFor } from "./request-send-budget";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
@@ -197,7 +203,7 @@ import {
 } from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
-import { linkRequestSessionLane, sessionLaneIdFromRequest } from "../request-log-conversation";
+import { linkRequestSessionLane, sessionLaneIdFromRequest, reasoningReplayConversationIdFromResponsesRequest, sessionIdHeaderFromRequest } from "../request-log-conversation";
 import { recallComboForLane } from "./combo-session-recall";
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
 
@@ -714,7 +720,8 @@ export async function handleResponsesCompact(
   // reads the account namespace as a routed provider prefix — so keying on `raw.model` sent
   // exactly the selector form back down the native compact endpoint this guard exists to avoid.
   // `route.modelId` is the same value `applyCodexAccountGatedWireNormalization` uses in core.ts.
-  const accountGatedCompactWireModel = codexAccountGatedCanonicalWireModel(selectedModelId);
+  const accountGatedCompactWireModel = isCanonicalOpenAiForwardProvider(route.provider)
+    ? codexAccountGatedCanonicalWireModel(selectedModelId) : undefined;
   logCtx.requestedModel = compactRequestedModel;
   logCtx.model = selectedModelId;
   logCtx.routeDecision = route.routeDecision;
@@ -793,8 +800,8 @@ export async function handleResponsesCompact(
   }
 
   // Native /responses/compact exists on the canonical ChatGPT backend and on the
-  // official OpenAI API. Any other Responses-shaped gateway must take the routed
-  // summarizer path below, or compaction fails against an endpoint it never had (#422).
+  // official OpenAI API, or a gateway explicitly declaring the native endpoint. Other
+  // Responses-shaped gateways still take the routed summarizer path (#422).
   // Combo-resolved targets skip native compact so failover can advance through the
   // combo target list when the picked model returns 429/5xx — the routed path below
   // dispatches through handleResponses → handleComboResponses with full failover.
@@ -833,7 +840,7 @@ export async function handleResponsesCompact(
       compactHostAdmissionLease = admission.lease;
     }
     try {
-    // Native ChatGPT/OpenAI model: forward the compact request verbatim to the real backend.
+    // Native-capable destination: forward the compact request to its configured backend.
     // Resolve the SAME pool/thread auth context as /v1/responses — forwarding the caller's raw
     // headers would run compaction on the wrong account (or 401) whenever a pool account is
     // active for this thread while normal turns succeed.
@@ -939,7 +946,28 @@ export async function handleResponsesCompact(
         });
       }
     }
-    const compactUrl = `${base}/responses/compact`;
+    // Gateway protocol capability never grants official credential authority. Reuse the normal
+    // Responses transport for custom paths, static auth and explicitly forwarded client metadata.
+    const gatewayTransport = !isCanonicalOpenAiForwardProvider(compactProvider)
+      && compactProvider.supportsNativeCompactEndpoint === true
+      ? buildResponsesTransport({ ...compactProvider, apiKey: compactProvider.apiKey ? resolveProviderApiKey(compactProvider.apiKey) : undefined }, { headers: req.headers })
+      : undefined;
+    if (gatewayTransport) headers = new Headers(gatewayTransport.headers);
+    // Native v1 bypasses the adapter serializer. Bind the same replay provenance as ordinary
+    // turns, but leave canonical compact's established account-state handling unchanged.
+    const gatewayReplayParsed = gatewayTransport ? parseRequest(raw) : undefined;
+    if (gatewayReplayParsed) {
+      gatewayReplayParsed.modelId = route.modelId;
+      gatewayReplayParsed._clientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+      const clientThreadId = reasoningReplayConversationIdFromResponsesRequest({
+        clientThreadId: gatewayReplayParsed._clientThreadId,
+        threadIdHeader: req.headers.get("thread-id"),
+        cursorConversationId: gatewayReplayParsed._cursorConversationId,
+        sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
+      });
+      if (clientThreadId) gatewayReplayParsed._reasoningReplayScope = { clientThreadId };
+    }
+    const compactUrl = gatewayTransport ? `${gatewayTransport.url.replace(/\/+$/, "")}/compact` : `${base}/responses/compact`;
     const compactTargetKey = `${route.providerName}|${route.modelId}|compact`;
     const actualCompactHostKey = upstreamHostHealthKey(
       route.providerName,
@@ -1043,12 +1071,25 @@ export async function handleResponsesCompact(
       recovery: "normal" | "single",
       sendAuthCtx: CodexAuthContext,
     ): Promise<Response> => {
+      if (gatewayReplayParsed) bindRouteReasoningReplayScope({
+        parsed: gatewayReplayParsed, providerName: route.providerName, provider: sendProvider,
+        adapterName: sendProvider.adapter, codexAuthContext: sendAuthCtx, forwardHeaders: sendHeaders,
+      });
+      const replayBody = gatewayReplayParsed ? sanitizeReasoningInputContent(scrubOcxCompactionItems(
+        compactBody, destinationDecodesNativeCompactionBlob(sendProvider),
+        gatewayReplayParsed._stripReasoningEncryptedContent === true,
+      ), {
+        stripEncryptedContent: gatewayReplayParsed._stripReasoningEncryptedContent === true,
+        dropForeignItemId: gatewayReplayParsed._dropForeignReasoningItemIds === true,
+      }) : compactBody;
+      const sendBody = isOpenAiOperatedResponsesDestination(sendProvider)
+        ? replayBody : stripCanonicalOnlyTopLevelFields(replayBody);
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,
         applyUpstreamRecoveryInit({
           method: "POST",
           headers: sendHeaders,
-          body: JSON.stringify({ ...compactBody, model: route.modelId }),
+          body: JSON.stringify({ ...sendBody as typeof compactBody, model: route.modelId }),
         }, upstreamRecovery),
         req.signal,
         connectMs,
@@ -1073,9 +1114,11 @@ export async function handleResponsesCompact(
         : fetchWithTransientRetry(doFetch, {
           abortSignal: req.signal,
           label: safeHostLabel(compactUrl),
-          // Draws the shared remainder instead of a fresh three. Compact is a native endpoint
-          // of the same logical turn, so its sends belong to the same cap.
-          attempts: sendBudget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS),
+          // Key-auth policy is a logical-request total; canonical forward keeps its default
+          // ladder. Both intersect the same shared base remainder as ordinary Responses.
+          attempts: sendBudget.remainingBaseSends(transientSendCapFor(
+            transientRetryPolicyFor(sendProvider)?.attempts, sendBudget.used,
+          )),
           onSendsConsumed: (used: number) => { sendBudget.used += Math.max(0, used); },
         });
     };
@@ -1398,6 +1441,7 @@ export async function handleResponsesCompact(
     // request log; the routed branch gets the same through handleResponses. The
     // synthetic buffer errors are not upstream bodies and stay uninspected.
     if (buffered.ok) {
+      commitReasoningReplayServingIdentity(gatewayReplayParsed?._reasoningReplayScope);
       inspectResponseLogJson(logCtx, await buffered.clone().text());
       if (!options.compactionRoutingOverride) forgetCompactHandoffRoute(req, admission);
       rememberServingConversationStateIssuer(outcomeCtx, codexPoolAffinityKey(req.headers));
@@ -1442,8 +1486,8 @@ export async function handleResponsesCompact(
   const inputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
   const internalBody = {
     ...raw,
-    // Canonical ChatGPT Responses rejects non-streaming turns. Daybreak cannot use the
-    // native compact endpoint either, so run its synthetic compaction as SSE and collapse
+    // Canonical ChatGPT Responses rejects non-streaming turns. Its Daybreak route cannot use
+    // the native compact endpoint either, so run its synthetic compaction as SSE and collapse
     // the completed event back into the v1 compact JSON contract below. Combo-dispatched
     // turns also go out as SSE: failover can land on a canonical child that rejects a
     // non-streaming turn, and every combo-capable provider already serves streaming traffic.
@@ -1455,6 +1499,9 @@ export async function handleResponsesCompact(
     const value = req.headers.get(name);
     if (value) internalHeaders.set(name, value);
   }
+  // Preserve the client's fingerprint across the native-404 handoff. This internal copy does
+  // not grant credential forwarding: the selected adapter still owns the outbound auth gate.
+  copyResponsesClientMetadata(internalHeaders, req.headers, route.provider);
   const internalReq = new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: internalHeaders,

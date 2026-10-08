@@ -1509,6 +1509,7 @@
     "responses-compaction-override.test.ts": "responses",
     "responses-compaction-policy-identity.test.ts": "responses",
     "responses-compaction-routing.test.ts": "responses",
+    "native-compaction-gateway.test.ts": "responses",
     "responses-compaction.test.ts": "responses",
     "responses-console-go-upload-retry.test.ts": "responses",
     "responses-context-overflow.test.ts": "responses",

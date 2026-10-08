@@ -153,6 +153,35 @@ with `forwardClientHeaders`; provider `headers` win for this option, and credent
 names are refused. Canonical ChatGPT forward auth retains its separate fixed header allowlist.
 Only `originator`, `x-client-request-id`, `x-codex-app-version`, and `user-agent` are supported by `forwardClientHeaders`; arbitrary names are rejected on load/write and ignored at runtime.
 
+### Native compaction on custom gateways
+
+Responses compatibility alone is not evidence of native compaction support. Custom gateways
+continue using portable text summaries unless the operator declares the relevant capability:
+
+- `supportsNativeCompactionTrigger: true` preserves v2 `compaction_trigger` requests and native output.
+- `supportsNativeCompactEndpoint: true` opts into the separate v1 compact endpoint. A gateway can
+  support v2 without implementing this endpoint; do not enable it just because v2 succeeds.
+- `decodesNativeCompactionBlobs: true` preserves native blobs on subsequent turns when there is
+  no known serving-provider mismatch. Neither generation flag implies this replay capability.
+
+For a gateway whose **v2 generation and replay** have both been verified, merge these fields into
+its existing provider configuration, retaining its real URL and configured authentication:
+
+```json
+{
+  "adapter": "openai-responses",
+  "supportsNativeCompactionTrigger": true,
+  "decodesNativeCompactionBlobs": true
+}
+```
+
+These flags do not make the gateway an official OpenAI destination, forward caller credentials,
+change account selection, or bypass normal compatibility sanitization. Validate an actual compact
+response and continued conversation, not just HTTP 200. Keep blobs on the backend that minted them;
+cross-provider compaction routing overrides still use portable summaries. V1 fallback summaries
+remain portable even when the destination separately accepts v2 triggers. Native-capable routes
+are excluded from portable emergency compaction recovery for their respective protocol.
+
 Adapter selection does not select the upstream transport. Eligible requests can use the
 [upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
 WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses the

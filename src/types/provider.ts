@@ -448,6 +448,10 @@ export interface OcxProviderConfig {
    * compaction blobs. Absent or false degrades foreign blobs to an opaque note.
    */
   decodesNativeCompactionBlobs?: boolean;
+  /** Accept native Responses v2 `input` compaction_trigger items. Responses adapter only. */
+  supportsNativeCompactionTrigger?: boolean;
+  /** Serve native Responses v1 /responses/compact. Responses adapter only; no auth authority. */
+  supportsNativeCompactEndpoint?: boolean;
   /**
    * Trust this direct key-auth Responses provider to consume or relay opaque encrypted
    * V2 agent tasks. OpenCodex does not decrypt, translate, or recover an eligible task.
