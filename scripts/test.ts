@@ -371,6 +371,10 @@ export const SERIAL_FULL_SUITE_FILES = [
   "providers/cursor/cursor-native-exec-shell.test.ts",
   "codex-integration/issue-452-empty-503.test.ts",
   "adapters/openai/openai-provider-option-e2e.test.ts",
+  // Three Linux runs in a row timed out mid-file inside a 12-file batch while
+  // every case passed alone (37730984813, 37732846946, 37735238354, all test
+  // 1/4 batch 4): the same multi-file process-state class as the entries below.
+  "ci-workflows/ci-gui-typecheck-gate.test.ts",
   "ci-workflows/release-helper.test.ts",
   // The full macOS isolate pool stalled in the structure gate's synchronous Git
   // child after earlier files; fresh-process execution retains the same assertions.
