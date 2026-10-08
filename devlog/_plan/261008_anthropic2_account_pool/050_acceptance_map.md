@@ -64,7 +64,7 @@ UUID each physical send carried). No suite is copied with a string replace.
 
 | IDs | WP | Test file |
 |---|---|---|
-| AUX-01 … AUX-06, AUX-08, AUX-11 … AUX-14 | wp4 | `tests/vision/anthropic-instance-sidecar.test.ts`, `tests/web-search/anthropic-instance-search.test.ts` |
+| AUX-01 … AUX-06, AUX-08, AUX-11 … AUX-14 | wp4 | `tests/vision/vision-anthropic-instance-sidecar.test.ts`, `tests/web-search/web-search-anthropic-instance.test.ts` |
 | AUX-09, AUX-10 | wp4 | `tests/server/anthropic2-management.test.ts` |
 | STATE-04 | wp4 | same file (unknown save outcome on B pool settings, A untouched) |
 | STATE-06, STATE-07, STATE-08 | wp4 | `tests/usage/anthropic2-usage-attribution.test.ts` |
