@@ -1,10 +1,10 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Connect** page writes opencodex's provider block into a client's own config
-file, and removes it again. Seventeen clients work this way, each with a switch:
+file, and removes it again. Eighteen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -24,6 +24,7 @@ file, and removes it again. Seventeen clients work this way, each with a switch:
 | omo (Pi / senpi) | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (on Windows: `%HOME%` if set, otherwise `%USERPROFILE%`, under `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 
 "omo" names three products that share the `~/.omo` folder. The **omo** tab manages Pi-based omo
@@ -763,6 +764,8 @@ client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.
 it does not consult that variable. An override this integration honoured but the
 client ignored would make Apply report success at a path Command Code never opens, so
 the path is always `~/.commandcode/providers.json`.
+On Windows, the integration follows the same HOME-then-USERPROFILE order as the
+client, so a HOME set by Git for Windows or MSYS2 is honoured.
 
 Paste the key yourself if you later move the provider off loopback: Command Code
 stores keys in `~/.commandcode/auth.json` (via `/connect`), not in `providers.json`.

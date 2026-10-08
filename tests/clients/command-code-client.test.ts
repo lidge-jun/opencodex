@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   ClientPathError,
@@ -99,6 +100,55 @@ describe("Command Code client config", () => {
     expect(spec.filename).toBe("providers.json");
     expect(spec.format).toBe("json");
     expect(spec.loopbackOnly).toBe(true);
+  });
+});
+
+describe("Command Code user home resolution", () => {
+  const envHome = "C:\\commandcode-home";
+  const userProfile = "D:\\commandcode-profile";
+
+  test("uses absolute HOME before USERPROFILE on Windows with the default home", () => {
+    const env = { HOME: envHome, USERPROFILE: userProfile };
+    expect(commandCodeHomeDir(env, undefined, "win32")).toBe(join(envHome, ".commandcode"));
+    expect(commandCodeConfigPath(env, homedir(), "win32")).toBe(join(envHome, ".commandcode", "providers.json"));
+  });
+
+  test("uses USERPROFILE on Windows when HOME is unset", () => {
+    const env = { USERPROFILE: userProfile };
+    expect(commandCodeHomeDir(env, homedir(), "win32")).toBe(join(userProfile, ".commandcode"));
+    expect(commandCodeConfigPath(env, undefined, "win32")).toBe(join(userProfile, ".commandcode", "providers.json"));
+  });
+
+  for (const HOME of ["relative", "", " \t "]) {
+    test(`falls back to the default home for invalid HOME ${JSON.stringify(HOME)}`, () => {
+      // A present but invalid HOME must not fall through to USERPROFILE.
+      expect(commandCodeConfigPath({ HOME, USERPROFILE: userProfile }, homedir(), "win32"))
+        .toBe(join(homedir(), ".commandcode", "providers.json"));
+    });
+  }
+
+  test("falls back to the default home when both environment homes are unset", () => {
+    expect(commandCodeHomeDir({}, homedir(), "win32")).toBe(join(homedir(), ".commandcode"));
+  });
+
+  test("preserves an injected home on Windows even with HOME set", () => {
+    const injectedHome = join(homedir(), "commandcode-sandbox");
+    expect(commandCodeConfigPath({ HOME: envHome, USERPROFILE: userProfile }, injectedHome, "win32"))
+      .toBe(join(injectedHome, ".commandcode", "providers.json"));
+  });
+
+  test("preserves home on non-Windows platforms regardless of HOME", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      expect(commandCodeConfigPath({ HOME: envHome, USERPROFILE: userProfile }, homedir(), platform))
+        .toBe(join(homedir(), ".commandcode", "providers.json"));
+    }
+  });
+
+  test("ignores COMMANDCODE_HOME on Windows with the default home", () => {
+    expect(commandCodeConfigPath({ COMMANDCODE_HOME: envHome }, homedir(), "win32"))
+      .toBe(join(homedir(), ".commandcode", "providers.json"));
+    expect(commandCodeConfigPath({ HOME: envHome, COMMANDCODE_HOME: userProfile }, homedir(), "win32"))
+      .toBe(join(envHome, ".commandcode", "providers.json"));
   });
 });
 

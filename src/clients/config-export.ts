@@ -21,7 +21,7 @@
  */
 import { homedir } from "node:os";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
@@ -487,27 +487,40 @@ export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
 }
 
 /**
- * Command Code's provider store directory — `~/.commandcode`, with no override.
+ * The home directory Command Code itself resolves: `env.HOME ?? env.USERPROFILE`
+ * (`homeDir15` in the published `command-code@1.66.0` bundle).
  *
- * There is deliberately no `COMMANDCODE_HOME` here, unlike the other clients in this
- * file. The published client (`command-code@1.66.0`) resolves its store as
- * `homeDir15() + "/.commandcode/providers.json"`, and `homeDir15` is exactly
- * `env.HOME ?? env.USERPROFILE` — `grep -c COMMANDCODE_HOME` over the shipped
- * `dist/cli.mjs` and `dist/index.mjs` returns 0.
- *
- * An override we honour but the client ignores is worse than none: `enable` would
- * report success and write a provider block at a path no Command Code process ever
- * opens, and the user would see an empty model list with no error anywhere. Every
- * other client in this file earns its override because that client documents it;
- * this one does not, so an apply against a relocated home is refused by `detectDir`
- * simply not existing rather than being silently written to the wrong place.
+ * On POSIX `os.homedir()` already reads `$HOME`, so the two agree and `home` is
+ * returned as is. On Windows `os.homedir()` reads `%USERPROFILE%` and ignores
+ * `HOME`, which Git for Windows, MSYS2 and Cygwin set, so a user whose `HOME` differs
+ * would get a provider block in a store Command Code never opens. Only the OS-default
+ * home is replaced: a caller that injects a different root (a test, the writer's
+ * `input.home`) keeps it, and a blank or relative value falls back to `home`.
  */
-export function commandCodeHomeDir(_env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  return join(home, ".commandcode");
+export function commandCodeUserHome(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32" || home !== homedir()) return home;
+  const value = env.HOME ?? env.USERPROFILE;
+  return typeof value === "string" && value.trim() && win32.isAbsolute(value) ? value : home;
 }
 
-export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  return join(commandCodeHomeDir(env, home), "providers.json");
+/**
+ * Command Code's provider store directory — `.commandcode` under the home the client
+ * resolves (see {@link commandCodeUserHome}), with no override.
+ *
+ * There is deliberately no `COMMANDCODE_HOME` here, unlike the other clients in this
+ * file: `grep -c COMMANDCODE_HOME` over the shipped `dist/cli.mjs` and
+ * `dist/index.mjs` returns 0. An override we honour but the client ignores is worse
+ * than none: `enable` would report success and write a provider block at a path no
+ * Command Code process ever opens, and the user would see an empty model list with no
+ * error anywhere. An apply against a relocated home is instead refused by `detectDir`
+ * not existing.
+ */
+export function commandCodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  return join(commandCodeUserHome(env, home, platform), ".commandcode");
+}
+
+export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  return join(commandCodeHomeDir(env, home, platform), "providers.json");
 }
 
 /**

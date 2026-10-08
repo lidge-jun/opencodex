@@ -563,7 +563,7 @@ disable it.
 
 Command Code owns one block in `~/.commandcode/providers.json`. Shipped `command-code@1.66.0`
 resolves `env.HOME ?? env.USERPROFILE` plus that path with no relocation variable, so
-`commandCodeHomeDir` takes no override. Reader `e.provider ?? e.providers` prefers singular:
+`commandCodeHomeDir` takes no override. On Windows, `commandCodeUserHome` resolves the default home as `HOME ?? USERPROFILE` (non-blank and Windows-absolute) to match the client, preserving an injected home (tests or writer `input.home`). Reader `e.provider ?? e.providers` prefers singular:
 `commandCodeProviderRoot` mirrors that against the target and writes under the existing root
 (singular for fresh files); both roots are in `CLIENT_MANAGED_PATHS` so Disable removes either.
 Uses keyless `apiKey: false`; no service-token is read. Contract: `tests/clients/command-code-client-contract.test.ts`.

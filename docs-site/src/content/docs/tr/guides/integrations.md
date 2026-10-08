@@ -1,10 +1,10 @@
 ---
 title: Entegrasyonlar
-description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo ve Factory Droid'u opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
+description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code ve Factory Droid'u opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
 ---
 
 **Bağlantı** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
-yapılandırma dosyasına yazar ve tekrar kaldırır. On yedi istemci bu şekilde
+yapılandırma dosyasına yazar ve tekrar kaldırır. On sekiz istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
@@ -25,6 +25,7 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. On yedi istemci bu şekild
 | omo | `~/.omo/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | kapatıp yeniden başlattıktan sonra | yalnızca loopback |
 | Kilo | `~/.config/kilo` altında ilk bulunan `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` veya `config.json` (`XDG_CONFIG_HOME` bu dizini taşır; hiçbiri yoksa `kilo.jsonc` oluşturulur) | JSONC | yeni oturumlarda | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (Windows'ta: ayarlanmışsa `%HOME%`, aksi halde `%USERPROFILE%` altında `.commandcode\providers.json`) | JSON | Command Code'un sonraki başlatılmasında | yok — anahtarsız geri döngü (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows'ta) | JSON | dosya değişince hemen | anahtarsız geri döngü |
 
 Desteklenen akıl yürütme düzeylerine sahip GJC modelleri, GJC'nin düzey seçimi sunabilmesi için `reasoning: true`, `thinking.levels` ve `compat.supportsReasoningEffort` alanlarını dışa aktarır. Yerel Codex modelleri, katalogda belirtilmese bile standart düzeylerini alır. Bilinen düzeyi olmayan modellerde bu alanlar bulunmaz. `none` düzey göndermez ve `ultra` gönderimde `max` düzeyine dönüşür; bu yüzden seçeneklerde yer almazlar. Model seçeneklerini güncellemek için entegrasyonu yenileyin.
