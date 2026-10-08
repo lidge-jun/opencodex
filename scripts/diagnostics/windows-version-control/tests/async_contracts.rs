@@ -84,7 +84,7 @@ fn bundled_snapshot_keeps_native_source_priority_and_rejects_changed_inputs() {
 fs.writeFileSync(paths.DEFAULT_CATALOG_PATH, JSON.stringify({models:[row('gpt-5.5')]}));
 bundled.setBundledCatalogCacheForTests(selected, catalog, {expiresAt:Date.now()+60000});
 const first = bundled.readCurrentCatalogOrCache();
-try { first.models[0].slug = 'changed'; } catch {}
+Reflect.set(first.models[0], 'slug', 'changed');
 const stable = bundled.readCurrentCatalogOrCache();
 bundled.setBundledCatalogCacheForTests(selected, catalog, {expiresAt:0});
 const stale = bundled.readCurrentCatalogOrCache();
