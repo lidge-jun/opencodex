@@ -54,3 +54,20 @@ export function externalTaskInputContent(item: unknown): string | OcxContentPart
     block.type === "output_text" ? { ...block, type: "input_text" } : block,
   ));
 }
+
+/**
+ * The same recognition, emitted as Responses-wire user content for the raw-body repairs (#6764).
+ *
+ * The passthrough and routed-compaction paths never read the parsed context, so they used to
+ * send this envelope through the generic orphan repair, which prefixes
+ * "[tool output for unknown call]". A summarizer then read an authorized handover as a stray tool
+ * result. Recognition is shared with the parser so both paths agree on what is task input.
+ */
+export function externalTaskInputResponsesContent(item: unknown): Record<string, unknown>[] | undefined {
+  if (externalTaskInputContent(item) === undefined) return undefined;
+  const output = (item as { output: string | TaskInputBlock[] }).output;
+  if (typeof output === "string") return [{ type: "input_text", text: output }];
+  return output.map(block => block.type === "input_image"
+    ? { type: "input_image", image_url: block.image_url, ...(block.detail ? { detail: block.detail } : {}) }
+    : { type: "input_text", text: block.text });
+}

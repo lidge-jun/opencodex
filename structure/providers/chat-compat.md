@@ -103,8 +103,8 @@ nonblank `id`/`name`/`namespace`, and fully representable nonempty text/image ou
 existing continuation conversation-boundary calculation. The metadata is structural,
 not authentication. Unknown/opaque/malformed parts reject the entire conversion;
 ordinary missing/empty tool call ids retain the existing translated-route 400 guard.
-Native passthrough and compaction retain raw-body handling. The leaf reuses the input
-content converter after validation and imports no optional subsystem.
+Raw-body passthrough/compaction repairs emit it as a plain user turn before the orphan marker
+(`externalTaskInputResponsesContent`, #6764). The leaf imports no optional subsystem.
 Stateful developer-guidance injection reuses that validator for its raw insertion
 boundary, so parsed messages and stored raw history retain the same task/guidance order.
 

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../empty-tool-output-annotation";
 import { isPlainObject } from "./internal";
 import { peekBridgeSearchReplay } from "../../responses/bridge-search-replay-cache";
+import { externalTaskInputResponsesContent } from "../../responses/task-input";
 
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
 
@@ -168,6 +169,13 @@ export function repairUnidentifiedToolOutputItems(body: unknown): unknown {
       || (item.type !== "function_call_output" && item.type !== "custom_tool_call_output")
       || (typeof item.call_id === "string" && item.call_id.length > 0)) {
       return item;
+    }
+    // #6764: an external task envelope is user input, not an orphaned result. Recognize it
+    // before the generic repair so the summarizer and the destination see a plain user turn.
+    const taskInput = externalTaskInputResponsesContent(item);
+    if (taskInput) {
+      changed = true;
+      return { type: "message", role: "user", content: taskInput };
     }
     if (!isRepairableToolOutput(item.output)) return item;
     changed = true;
@@ -380,6 +388,12 @@ export function repairOrphanedInputItems(
     const isCustomOutput = item.type === "custom_tool_call_output";
     if (isFnOutput || isCustomOutput) {
       flushPendingSyntheticOutputs();
+      const taskInput = isFnOutput ? externalTaskInputResponsesContent(item) : undefined;
+      if (taskInput) {
+        changed = true;
+        repaired.push({ type: "message", role: "user", content: taskInput });
+        continue;
+      }
       const callId = typeof item.call_id === "string" ? item.call_id : "";
       const paired = isFnOutput ? functionCallIds.has(callId) : customCallIds.has(callId);
       const usableOutput = isRepairableToolOutput(item.output);
