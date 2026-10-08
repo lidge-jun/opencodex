@@ -153,7 +153,13 @@ export interface RequestSendObserver {
   /** Confirm the exact reservation once its dispatch is known. */
   readonly enforced?: boolean;
   ensureSeed?(target: SpendScopes & { targetKey?: string }, proof?: SpendReservationProof): SpendSeed | undefined;
-  beginReporter?(): { start(seed: SpendSeed, ordinal: number): void; rebindTarget(target: SpendScopes & { targetKey?: string }, ordinal: number): boolean; report(sends: number): void; close(): void };
+  beginReporter?(): {
+    start(seed: SpendSeed, ordinal: number): void;
+    startObserved?(target: SpendScopes & { targetKey?: string }, ordinal: number, proof?: SpendReservationProof): void;
+    rebindTarget(target: SpendScopes & { targetKey?: string }, ordinal: number): boolean;
+    report(sends: number): void;
+    close(): void;
+  };
   dispatch?(proof: SpendReservationProof): void;
   /** Give back a booking whose send never happened. */
   refund(proof?: SpendReservationProof | null): void;
@@ -292,7 +298,7 @@ export type PhysicalSendReporter = ((sends: number) => void) & {
 const activePhysicalReporters = new AsyncLocalStorage<PhysicalSendReporter>();
 /** Selection owners rebind this helper's current start before invoking the executor. */
 export function rebindPhysicalSend(budget: TransientSendBudget | undefined, target: SpendScopes & { targetKey?: string }): boolean {
-  if (!(budget as RequestExecutionBudget | undefined)?.spendEnforced) return true;
+  if (!budget) return true;
   return activePhysicalReporters.getStore()?.bind?.(target) ?? true;
 }
 export function createPhysicalSendReporter(
@@ -319,24 +325,27 @@ export function createPhysicalSendReporter(
     if (counter) counter.spent += count - prepaid;
     telemetry?.(count);
   };
-  if (observer?.enforced === true) report.beforeSend = () => {
+  if (observer?.beginReporter) report.beforeSend = () => {
     if (closed) return false;
-    if (observer?.enforced !== true) return true;
     producer ??= observer.beginReporter?.();
     const receipt = permit && dispatchSpendProofs.get(permit);
     const proof = receipt?.owner === counter ? receipt?.claim() : undefined;
-    const seed = observer.ensureSeed?.(target(), proof);
-    if (!seed) return false;
+    const selected = target();
+    const enforced = observer.enforced === true;
+    const seed = enforced ? observer.ensureSeed?.(selected, proof) : undefined;
+    if (enforced && !seed) return false;
     const ordinal = (budget as RequestExecutionBudget).claimPhysicalSend?.();
     if (ordinal === undefined) return false;
-    producer?.start(seed, ordinal);
+    if (seed) producer?.start(seed, ordinal);
+    else producer?.startObserved?.(selected, ordinal, proof);
     currentOrdinal = ordinal;
     started++;
     return true;
   };
   report.execute = run => activePhysicalReporters.run(report, run);
   report.bind = (selected: SpendScopes & { targetKey?: string }) => {
-    if (!producer || currentOrdinal === undefined || observer?.enforced !== true) return true;
+    if (!producer || currentOrdinal === undefined) return true;
+    if (observer?.enforced && (counter?.physicalLimit === undefined || currentOrdinal > counter.physicalLimit)) return false;
     return producer.rebindTarget(selected, currentOrdinal);
   };
   report.close = () => {
@@ -397,12 +406,11 @@ function createRequestExecutionBudgetWithLedger(
     get spendEnforced(): boolean { return observer?.enforced === true; },
     beginSpendProducer() { return observer?.enforced ? observer.beginReporter?.() : undefined; },
     claimPhysicalSend(): number | undefined {
-      if (observer?.enforced !== true) return undefined;
       if (counter.physicalLimit === undefined) {
-        if (!Number.isSafeInteger(policy.maxTotalModelSends) || policy.maxTotalModelSends <= 0) return undefined;
-        counter.physicalLimit = policy.maxTotalModelSends;
+        if (Number.isSafeInteger(policy.maxTotalModelSends) && policy.maxTotalModelSends > 0) counter.physicalLimit = policy.maxTotalModelSends;
+        else if (observer?.enforced === true) return undefined;
       }
-      if (counter.physicalStarted >= counter.physicalLimit) return undefined;
+      if (observer?.enforced === true && (counter.physicalLimit === undefined || counter.physicalStarted >= counter.physicalLimit)) return undefined;
       return ++counter.physicalStarted;
     },
     get used(): number { return counter.spent; },
@@ -487,13 +495,15 @@ function createRequestExecutionBudgetWithLedger(
       let executing = false;
       let physicalOrdinal: number | undefined;
       const startPhysical = (): boolean => {
-        if (observer?.enforced !== true) return true;
-        const seed = observer.ensureSeed?.({ targetKey: intent.targetKey }, spendProof);
-        if (!seed) return false;
+        if (!observer?.beginReporter) return true;
+        const enforced = observer.enforced === true;
+        const seed = enforced ? observer.ensureSeed?.({ targetKey: intent.targetKey }, spendProof) : undefined;
+        if (enforced && !seed) return false;
         const ordinal = budget.claimPhysicalSend?.();
         if (ordinal === undefined) return false;
         producer = observer.beginReporter?.();
-        producer?.start(seed, ordinal);
+        if (seed) producer?.start(seed, ordinal);
+        else producer?.startObserved?.({ targetKey: intent.targetKey }, ordinal, spendProof);
         physicalOrdinal = ordinal;
         if (!executing) { producer?.report(1); producer?.close(); }
         return true;
@@ -505,8 +515,11 @@ function createRequestExecutionBudgetWithLedger(
           if (executing) throw new Error("Dispatch permit executor already active");
           executing = true;
           const binding: PhysicalSendReporter = () => {};
-          binding.bind = (target: SpendScopes & { targetKey?: string }) => physicalOrdinal === undefined || !producer
-            ? true : producer.rebindTarget(target, physicalOrdinal);
+          binding.bind = (target: SpendScopes & { targetKey?: string }) => {
+            if (physicalOrdinal === undefined || !producer) return true;
+            if (observer?.enforced && (counter.physicalLimit === undefined || physicalOrdinal > counter.physicalLimit)) return false;
+            return producer.rebindTarget(target, physicalOrdinal);
+          };
           try { return await activePhysicalReporters.run(binding, run); }
           finally {
             executing = false;

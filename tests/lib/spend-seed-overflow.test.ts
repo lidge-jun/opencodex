@@ -5,9 +5,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireSpendLedgerServerLifecycle } from "../../src/server/index/spend-ledger-lifecycle";
-import { spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
+import { SpendLedgerOwnerError, spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { createRequestExecutionBudget, createPhysicalSendReporter } from "../../src/lib/request-execution-budget";
+import { fetchWithTransientRetry } from "../../src/lib/upstream-retry";
 const request = (sendId: string, scopes = {poolId:"P"}, tokens=0) => ({sendId,scopes,inputTokens:tokens,outputCeilingTokens:0});
 const seed = (ledger: SpendReservationLedger, id="seed", scopes={poolId:"P"}, tokens=0): SpendSeed => {
   const decision=ledger.reserveSeed(request(id,scopes,tokens)); expect(decision.reserved).toBe(true);
@@ -290,3 +292,129 @@ test("seed cleanup checks the owning reporter count and rejects another owner", 
   unrelated.close();
   expect(ledger.reserveSeed(request("owned"), foreign)).toMatchObject({ reserved: true });
 });
+
+for (const lookup of ["exact", "prepaid", "scope"] as const) test(`abandoned seeds cannot be reused through ${lookup} lookup after failed forgetting`, () => {
+  const disk = spendTestJournal();
+  const append = disk.append.bind(disk);
+  let failForget = true;
+  disk.append = line => {
+    if (failForget && JSON.parse(line).kind === "forget") throw new Error("forget unavailable");
+    append(line);
+  };
+  const ledger = createSpendReservationLedger({ journal: disk, salt, now: () => 2,
+    policy: spendTestPolicy({ canonicalProviderIds: ["P", "Q"], maxTrackedSends: 2 }) });
+  const tracker = createRequestSpendTracker({ provider: "P", spendInputEstimateTokens: 10 }, undefined, ledger);
+  const original = tracker.ensureSeed({ poolId: "P", targetKey: "original" });
+  if (!original) throw new Error("seed denied");
+  expect(tracker.ensureSeed({ poolId: "Q", targetKey: "other" })).toBeDefined();
+  expect(ledger.snapshot("pool", "P")?.reserved).toBe(0);
+  const target = { poolId: "P", ...(lookup === "exact" ? { targetKey: "original" } : lookup === "prepaid" ? { targetKey: "next" } : {}) };
+  const proof = lookup === "prepaid" ? { ledger, sendId: original.sendId } : undefined;
+  // Both retired anchors remain pinned while forgetting fails: no new NORMAL admission fits.
+  expect(tracker.ensureSeed(target, proof)).toBeUndefined();
+  const reporter = tracker.beginReporter();
+  expect(() => reporter.start(original, 1)).toThrow("Invalid spend reporter start");
+  failForget = false;
+  const fresh = tracker.ensureSeed(target, proof);
+  expect(fresh).toBeDefined();
+  expect(fresh).not.toBe(original);
+  if (!fresh) throw new Error("recovered seed denied");
+  expect(ledger.knows(original.sendId)).toBe(false);
+  expect(ledger.snapshot("pool", "P")?.reserved).toBe(10);
+  reporter.start(fresh, 1);
+  reporter.report(1);
+  reporter.close();
+  tracker.settle({ inputTokens: 70, outputTokens: 0 });
+  expect(ledger.snapshot("pool", "P")).toMatchObject({ settled: 70, reserved: 0, unresolved: 0 });
+  expect(createShippedSpendLedger({ journal: disk, salt, now: () => 2 }).snapshot("pool", "P")?.settled).toBe(70);
+});
+
+test("refunded seed with failed forgetting refuses the retry helper before fetch and recovers NORMAL admission", async () => {
+  const disk = spendTestJournal();
+  const append = disk.append.bind(disk);
+  let failForget = true;
+  disk.append = line => {
+    if (failForget && JSON.parse(line).kind === "forget") throw new Error("forget unavailable");
+    append(line);
+  };
+  const ledger = factory(disk);
+  const tracker = createRequestSpendTracker({ provider: "P", spendInputEstimateTokens: 10 }, undefined, ledger);
+  const anchor = tracker.ensureSeed({ poolId: "P" });
+  if (!anchor) throw new Error("seed denied");
+  tracker.refund({ ledger, sendId: anchor.sendId });
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  let wires = 0;
+  const send = () => fetchWithTransientRetry(async () => { wires++; return new Response(); }, {
+    attempts: 1, onSendsConsumed: createPhysicalSendReporter(budget, () => ({ poolId: "P" })),
+  });
+  await expect(send()).rejects.toThrow();
+  expect(wires).toBe(0);
+  expect(ledger.knows(anchor.sendId)).toBe(true);
+  failForget = false;
+  await send();
+  expect(wires).toBe(1);
+  expect(ledger.knows(anchor.sendId)).toBe(false);
+  tracker.settle({ inputTokens: 70, outputTokens: 0 });
+  expect(createShippedSpendLedger({ journal: disk, salt, now: () => 2 }).snapshot("pool", "P")?.settled).toBe(70);
+});
+
+test("retired seed cleanup failure cannot postpone active terminal liability", () => {
+  const disk = spendTestJournal();
+  const append = disk.append.bind(disk);
+  let failForget = true;
+  disk.append = line => {
+    if (failForget && JSON.parse(line).kind === "forget") throw new Error("forget unavailable");
+    append(line);
+  };
+  const ledger = createSpendReservationLedger({ journal: disk, salt, now: () => 2,
+    policy: spendTestPolicy({ canonicalProviderIds: ["P", "Q"], maxTrackedSends: 2 }) });
+  const tracker = createRequestSpendTracker({ provider: "P", spendInputEstimateTokens: 1 }, undefined, ledger);
+  const retired = tracker.ensureSeed({ poolId: "P" });
+  const active = tracker.ensureSeed({ poolId: "Q" });
+  if (!retired || !active) throw new Error("seed denied");
+  const reporter = tracker.beginReporter();
+  reporter.start(active, 1);
+  reporter.close();
+  tracker.settle({ inputTokens: 70, outputTokens: 0 });
+  expect(ledger.snapshot("pool", "Q")).toMatchObject({ settled: 70, reserved: 0, unresolved: 0 });
+  expect(ledger.knows(retired.sendId)).toBe(true);
+  expect(ledger.knows(active.sendId)).toBe(true);
+  failForget = false;
+  expect(ledger.reserveSeed(request("after-recovery", { poolId: "Q" }, 1))).toMatchObject({ reserved: true });
+  expect(ledger.knows(retired.sendId)).toBe(false);
+  expect(ledger.knows(active.sendId)).toBe(false);
+  expect(createShippedSpendLedger({ journal: disk, salt, now: () => 2 }).snapshot("pool", "Q")?.settled).toBe(70);
+});
+
+for (const retirement of ["rebind", "refund"] as const) {
+  for (const recovery of ["settle", "prune"] as const) {
+    test(`${retirement} retains seed cleanup after owner error until ${recovery} recovery`, () => {
+      const disk = spendTestJournal();
+      const append = disk.append.bind(disk);
+      const ownerError = new SpendLedgerOwnerError("SPEND_LEDGER_OWNER_UNAVAILABLE", "injected unsafe journal");
+      let failForget = true;
+      disk.append = line => {
+        if (failForget && JSON.parse(line).kind === "forget") throw ownerError;
+        append(line);
+      };
+      const ledger = createSpendReservationLedger({ journal: disk, salt, now: () => 2,
+        policy: spendTestPolicy({ canonicalProviderIds: ["P", "Q"], maxTrackedSends: 1 }) });
+      const tracker = createRequestSpendTracker({ provider: "P", spendInputEstimateTokens: 1 }, undefined, ledger);
+      const anchor = tracker.ensureSeed({ poolId: "P" });
+      if (!anchor) throw new Error("seed denied");
+      expect(() => retirement === "rebind" ? tracker.ensureSeed({ poolId: "Q" })
+        : tracker.refund({ ledger, sendId: anchor.sendId })).toThrow(ownerError);
+      expect(disk.lines.map(line => JSON.parse(line).kind)).toEqual(["reserve", "abandon"]);
+      expect(ledger.knows(anchor.sendId)).toBe(true);
+      expect(ledger.snapshot("pool", "P")).toMatchObject({ settled: 0, reserved: 0, unresolved: 0 });
+      failForget = false;
+      if (recovery === "settle") tracker.settle(undefined);
+      ledger.prune();
+      expect(ledger.knows(anchor.sendId)).toBe(false);
+      expect(ledger.reserveSeed(request("next", { poolId: "Q" }, 1))).toMatchObject({ reserved: true });
+      expect(disk.lines.filter(line => JSON.parse(line).kind === "forget")).toHaveLength(1);
+      expect(createShippedSpendLedger({ journal: disk, salt, now: () => 2 }).snapshot("pool", "P"))
+        .toMatchObject({ settled: 0, reserved: 0, unresolved: 0 });
+    });
+  }
+}

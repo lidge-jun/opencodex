@@ -225,7 +225,7 @@ test("checking an unconfigured ingress budget does not open its journal", async 
   const { createPhysicalSendReporter } = await import("../../src/lib/request-execution-budget");
   const budget = createInferenceSendBudget(new Request("http://localhost/v1/responses"), { model: "m", provider: "p" });
   expect(budget.spendEnforced).toBe(false);
-  expect(createPhysicalSendReporter(budget, () => ({ poolId: "p" })).beforeSend).toBeUndefined();
+  expect(createPhysicalSendReporter(budget, () => ({ poolId: "p" })).beforeSend).toBeFunction();
   expect(existsSync(join(home, "spend-ledger.salt"))).toBe(false);
   expect(existsSync(join(home, "spend-ledger.jsonl"))).toBe(false);
 });

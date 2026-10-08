@@ -116,9 +116,21 @@ caller is `request-spend.ts`, installed on the execution budget at genuine ingre
 and parked on the log context so `addFinalRequestLog` can settle it. Native Chat installs the same tracker before its independent physical-send ladder and charges it immediately before each dispatch, so that fast path cannot bypass root, identity or provider-pool ceilings.
 
 Unconfigured requests preserve the legacy counter observer: reservations increment the send
-counter, refunds decrement it, and named reports reconcile prepaid sends. Enforced requests use
-the seed and physical-start protocol below across Responses, native Messages and native Chat.
+counter, refunds decrement it, and named reports reconcile prepaid sends. Physical helpers retain
+their start order even while observing, without creating seed capabilities or imposing a new
+observe-only send limit. Enforced requests use the seed protocol below across Responses, native Messages and native Chat.
 Each transport claims immediately before inference I/O and retains a producer through completion.
+
+Enabling a ceiling during an in-flight call preserves that call's accounting and the request's
+existing physical-start count. Subsequent starts require normal seed admission under the current
+policy; a prepaid reservation from before activation is not an enforced admission. Selection-time
+rebinding checks the current policy even when the target stays the same. Terminal usage follows
+the last actual start across both modes. Once enforcement is observed, an earlier omitted booking
+remains pending debt and must obtain normal capacity before another enforced start is admitted;
+it never becomes an overflow capability. Requests that remain observe-only retain capacity omission.
+After activation, ordinary observed terminal records also retain failed writes in the ledger's
+ordered retry queue. This persistence intent grants no admission capacity. Cleanup is registered
+before terminal writes can throw, so later ledger activity retries without another settlement call.
 
 Provider-pool accounting uses the canonical routed provider identity, not the mutable display label
 that may identify an OAuth account in request logs. Responses final-route normalization captures
@@ -200,6 +212,8 @@ uses the same unbound-history refusal explanation and workflow header as other R
 persists ordinary `forget` records before releasing seeds. Each tracker waits only for its own
 reporters, so overlapping traffic cannot pin a completed request. Storage-failed cleanup stays
 queued on the ledger and retries on later admission, pruning, reconfiguration or reporter closure.
+An abandoned seed leaves every admission lookup immediately. Its remaining cleanup obligation
+stays separate, including when durable forgetting throws an ownership or unsafe-file error.
 Send-to-seed and reference-counted scope-pin indexes avoid scanning all seeds on admission.
 Forgotten send IDs do not subtract scope totals. Shutdown drains all reporters before
 releasing ledger ownership; restart resolves orphan reservations conservatively without reviving
