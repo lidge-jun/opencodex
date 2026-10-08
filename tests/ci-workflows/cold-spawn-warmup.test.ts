@@ -55,6 +55,14 @@ type Disposition = WarmupDisposition;
  * `tests/helpers/cold-spawn-warmup.ts`. `warmed: false` needs a reason that survives review.
  */
 const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
+  "tests/ci-workflows/ci-gui-typecheck-gate.test.ts": {
+    warmed: false,
+    why:
+      "Its children run scripts/typecheck-gui-if-changed.ts, which imports only node builtins, "
+      + "or git itself, so an import scan has no repository module graph to warm and a registered "
+      + "warm-up would fail closed. The spawnSync bounds exist because an unbounded child pinned "
+      + "Linux test 1/4 batch 4 until the 120s shard deadline cut it (run 37730984813).",
+  },
   "tests/ci-workflows/test-runner.test.ts": {
     warmed: true,
     why: "one throwaway lane pays Bun's test-runner bootstrap before the captured-output lane is timed",
