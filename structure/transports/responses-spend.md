@@ -42,8 +42,10 @@ pre-output stated-reset replay — reserves once per physical send instead, so n
 arrives. Those ladders are handed
 `adapterDispatchBudget`, a live delegating view of the same budget that spends a permit passed down
 through `pendingHopPermit` on the adapter's first reservation and closes the booking through
-`permit.assumeCharge()`. Letting both charge is how one physical send became two charges, and how a
-spent allowance answered a 429 with a synthetic error instead of the rate limit it was recovering
+`permit.assumeCharge()`. The Antigravity fetch web-search path opts into `refundableAdapterDispatchBudget`:
+its booking stays refundable until executor invocation confirms it through `permit.use()` or
+`permit.assumeCharge()`, and failed admission releases it. Other callers keep early settlement.
+Letting both charge is how one physical send became two charges, and how a spent allowance answered a 429 with a synthetic error instead of the rate limit it was recovering
 from (#4709).
 
 `run-turn-execution.ts` passes the same physical-send and recovery-withheld observers used by the

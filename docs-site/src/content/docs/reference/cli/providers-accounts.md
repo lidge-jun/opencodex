@@ -246,6 +246,12 @@ when account failover is enabled, the request can retry on another eligible acco
 Google's account verification, then run `ocx login google-antigravity`. Silent token refresh
 does not clear this verification requirement. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
 
+For fetch-based web-search requests, automatic sibling rotation accepts only a complete, bounded
+Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"`. Verification
+wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
+without persisting a `needs-reauth` mark; cancellation, committed output, budget exhaustion or an
+unavailable sibling preserves the failure.
+
 A proxy that is already running picks up the new credential without a restart: the CLI asks it to
 reload that one provider from disk, and the request carries no credential of its own. If the
 running proxy cannot accept that request — most often because it started from a build that predates

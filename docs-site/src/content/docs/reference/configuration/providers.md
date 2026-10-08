@@ -478,9 +478,18 @@ optional pin in a hand-edited file is ignored on load without discarding the res
 
 Codex reads `auto_review_model_override` from the catalog row of the current turn's model to
 choose the model that reviews approval requests. The root `auto_review_model` setting in
-`$CODEX_HOME/config.toml` applies one reviewer to every catalog row; the provider-scoped fields
+`$CODEX_HOME/config.toml` applies one reviewer to task catalog rows; the provider-scoped fields
 below override it per provider. The [provider guide](/guides/providers/#approval-reviewer-per-provider)
 has the operator workflow and a worked example.
+
+When native OpenAI rows are included and the final catalog has an ordinary bare native row
+other than Reserve (hidden rows count), OpenCodex keeps the hidden `codex-auto-review` row so
+Codex can select its preferred approval reviewer when no override is configured. It stays out
+of model pickers, subagent choices, Desktop lists and public `/v1/models` lists. Provider and
+root reviewer overrides retain their precedence and do not stamp this internal row. Catalogs
+without an ordinary bare native row, including Reserve-only catalogs, omit it and preserve
+Codex's fallback to the task model. The reviewer receives the same multi-agent mode projection
+as ordinary native rows.
 
 `autoReviewModel` is the provider-wide reviewer target. A value can be a bare model id of that same
 provider (the catalog row is normalized to the `provider/model` slug) or a full public catalog
@@ -1019,7 +1028,15 @@ The same main dispatch may also switch once on a 403 when Google's bounded error
 finds a complete structured `VALIDATION_REQUIRED` reason. The 401 and 403 paths share one sibling
 attempt per request; an unrelated or incomplete 403 keeps its original error. A rejected sibling,
 cancellation or exhausted send budget does not cause another upstream send.
-Continuations, native Responses passthrough, image and web-search sidecars, and output already sent
+The fetch-based web-search loop also rotates once on this structured 403 reason, using the sibling's
+OAuth token and matching Cloud Code Assist project. It accepts only complete, bounded Google error
+envelopes with `error.details[].reason === "VALIDATION_REQUIRED"`; verification wording alone does
+not authorize rotation, and this path does not persist a reauthentication mark. Each physical send,
+including a 429 retry, consumes the same request budget exactly once. A disabled pool, cancellation,
+exhausted budget or unavailable sibling preserves the failure. If sibling request construction or
+dispatch fails, the original bounded 403 remains the error; a replay rejected before physical
+dispatch returns its unused send allowance.
+Continuations, native Responses passthrough, image sidecars, and output already sent
 to the client do not use this rotation.
 
 Current scope is the ordinary Responses request paths. Cursor reports rate limits as adapter

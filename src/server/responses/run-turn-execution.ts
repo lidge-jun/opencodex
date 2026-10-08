@@ -10,6 +10,7 @@ import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventPrefl
 import {
   bindRouteReasoningReplayScope,
   adapterNeedsForcedContinuation,
+  adapterNeedsToolCallContinuation,
   adapterResponseReachedServingTerminal,
 } from "./core-replay";
 import { noteAttemptRecoveryWithheld, sealRequestAttemptIdentity, recordAttemptCredentialSource } from "../request-log";
@@ -790,7 +791,10 @@ export async function executeResponsesRunTurn(
                 parsed._rawBody,
                 response,
                 continuationStateForResponse(providerState),
-                responseStateOptions(adapterNeedsForcedContinuation(transportState.adapter.name)),
+                {
+                  ...responseStateOptions(adapterNeedsForcedContinuation(transportState.adapter.name)),
+                  retainForToolContinuation: adapterNeedsToolCallContinuation(transportState.adapter.name),
+                },
               );
             }
             notifyResponseComplete(response);
@@ -935,7 +939,10 @@ export async function executeResponsesRunTurn(
           parsed._rawBody,
           json,
           continuationStateForResponse(providerState),
-          responseStateOptions(adapterNeedsForcedContinuation(transportState.adapter.name)),
+          {
+            ...responseStateOptions(adapterNeedsForcedContinuation(transportState.adapter.name)),
+            retainForToolContinuation: adapterNeedsToolCallContinuation(transportState.adapter.name),
+          },
         );
       }
       // #1926 gap 2: the buffered path queued its signature persists inside

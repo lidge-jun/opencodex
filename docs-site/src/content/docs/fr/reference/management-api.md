@@ -345,6 +345,8 @@ lui-même s'il souhaite ajouter une étoile au dépôt.
 
 ### Cycle de vie du système
 
+`POST /api/system/restart` conserve par défaut un délai de 60 secondes lorsque le corps est absent ou vaut `{}`. Une session de gestion ou un jeton administrateur peut choisir explicitement un délai plus court avec `{"drainGraceMs":2000}` : la valeur doit être un entier compris entre 1 et 60000 millisecondes. Un corps ou une valeur invalide renvoie 400 sans lancer le redémarrage ; la capacité locale liée à la cible ne permet pas cette option (403). `drainTimeoutMs` indique le délai accepté, fixé par le premier appel et inchangé lors des appels suivants. Il inclut le temps de transmission de la réponse ; les budgets de nettoyage et de préparation du processus de remplacement restent respectivement de 60 et 70 secondes. Une requête interrompue peut déjà avoir été exécutée : vérifiez son résultat avant de la renvoyer, sans répétition automatique.
+
 | Méthode et chemin | Objectif | Erreurs notables |
 | --- | --- | --- |
 | `GET /api/system/memory` | Renvoyer les mesures scalaires du processus, du tas, des flux, de l'état des réponses, du mécanisme de surveillance et des tours actifs | — |

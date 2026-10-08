@@ -19,7 +19,7 @@ const DOMAINS = [
   { name: "lifecycle", roots: ["chatgpt", "status", "resolve", "capabilities", "sync", "start", "stop", "restart", "service", "gui"] },
   { name: "providers-models", roots: ["provider", "models", "alias"] },
   { name: "accounts", roots: ["account", "auth", "login", "logout"] },
-  { name: "agents-routing", roots: ["agent", "combo", "route", "v2", "effort", "memory"] },
+  { name: "agents-routing", roots: ["agent", "combo", "route", "v2", "effort", "memory", "message"] },
   { name: "integrations", roots: ["claude", "integration", "grok", "codex-shim"] },
   { name: "observe-system", roots: ["companion", "usage", "logs", "storage", "inspect", "system", "observe", "debug", "export", "import", "cost", "update", "config", "tray"] },
   { name: "access-remote", roots: ["link", "remote-workspace", "hub", "connect", "api", "access"] },

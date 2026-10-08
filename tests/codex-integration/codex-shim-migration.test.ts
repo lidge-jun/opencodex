@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { autoRestoreCodexShim, buildUnixCodexShim, codexShimStatus, diagnoseCodexShim, installCodexShim, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, uninstallCodexShim } from "../../src/codex/shim";
 import { readState, type ShimState } from "../../src/codex/shim-state-file";
 
-function fixture(run: (f: { root: string; home: string; native: string; backup: string; quarantine: string; wrapper: string; statePath: string; state: ShimState; legacyBytes: string; version: (name: string) => string }) => void): void {
+function fixture(run: (f: { root: string; home: string; native: string; backup: string; quarantine: string; wrapper: string; statePath: string; state: ShimState; legacyBytes: string; version: (name: string) => string }) => void, homeName = "home"): void {
   const root = fs.mkdtempSync(join(tmpdir(), "ocx-overlay-migration-"));
-  const home = join(root, "home");
+  const home = join(root, homeName);
   const bin = join(root, "manager");
   fs.mkdirSync(home, { mode: 0o700 });
   fs.mkdirSync(bin);
@@ -79,6 +79,41 @@ describe.skipIf(process.platform === "win32")("legacy Unix shim migration", () =
     expect(diagnoseCodexShim().summary).not.toContain("Legacy Unix");
     expect(installCodexShim()).toMatchObject({ installed: false, runnable: true });
   }));
+
+  test("group-writable legacy state (umask 002) refuses with the path and the chmod that unblocks migration", () => fixture(f => {
+    fs.chmodSync(f.statePath, 0o664);
+    const raw = fs.readFileSync(f.statePath, "utf8");
+    const refused = installCodexShim();
+    expect(refused).toMatchObject({ installed: false, refused: true });
+    expect(refused.message).toContain(`Private Codex artifact is not an owned regular file: ${f.statePath}`);
+    expect(refused.message).toContain("group- or world-writable (mode 0664)");
+    expect(refused.message).toContain(`run chmod 600 '${f.statePath}' and retry`);
+    expect(fs.readFileSync(f.statePath, "utf8")).toBe(raw);
+    expect(fs.readFileSync(f.native, "utf8")).toBe(f.legacyBytes);
+    fs.chmodSync(f.statePath, 0o600);
+    const installed = installCodexShim();
+    expect(installed.installed, installed.message).toBe(true);
+    expect(readState()).toMatchObject({ schema: 2, launcherPath: f.native });
+  }));
+
+  test("printed chmod hint handles spaces and apostrophes and permits legacy migration", () => fixture(f => {
+    fs.chmodSync(f.statePath, 0o664);
+    const raw = fs.readFileSync(f.statePath, "utf8");
+    const refused = installCodexShim();
+    expect(refused).toMatchObject({ installed: false, refused: true });
+    expect(refused.message).toContain(`run chmod 600 '${f.root}/owner'\\''s home/codex-shim.json' and retry`);
+    expect(fs.readFileSync(f.statePath, "utf8")).toBe(raw);
+    expect(fs.lstatSync(f.statePath).mode & 0o777).toBe(0o664);
+    const hint = refused.message.match(/run (chmod 600 .+) and retry/)?.[1];
+    expect(hint).toBeDefined();
+    const result = Bun.spawnSync(["/bin/sh", "-c", hint!]);
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(fs.lstatSync(f.statePath).mode & 0o777).toBe(0o600);
+    const installed = installCodexShim();
+    expect(installed.installed, installed.message).toBe(true);
+    expect(readState()).toMatchObject({ schema: 2, launcherPath: f.native });
+    expect(fs.lstatSync(f.statePath).mode & 0o777).toBe(0o600);
+  }, "owner's home"));
 
   test("regular backup restoration retains its inode", () => fixture(f => {
     fs.unlinkSync(f.backup);

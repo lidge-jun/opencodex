@@ -10,6 +10,7 @@ import { startConnectProxy } from "../../src/claude/intercept/connect-proxy";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "../../src/claude/intercept/picker-ca";
 import { pickerCaCertPath, pickerCaFingerprints } from "../../src/claude/intercept/picker-ca";
+import { watchdogMs } from "../helpers/ci-watchdog";
 import { memoryPickerCaStore } from "../helpers/picker-ca-store";
 import { saveConfig } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
@@ -33,6 +34,12 @@ function setup() {
     claudeCode: { desktopMode: "gateway", intercept: { port: 10200 } } } as OcxConfig;
   return { root, config };
 }
+
+// Each restart child cold-imports the intercept runtime and the first one mints the picker
+// CA. A neighbouring case takes 8.5 s on a Windows shard, and the first child here passed a
+// flat 10 s bound in three dev/PR runs (37360604391, 37443819560, 37449564955). spawnSync
+// blocks the loop, so each multi-child test's own bound covers all of its children.
+const PICKER_CHILD_TIMEOUT_MS = watchdogMs(10_000);
 
 test("Windows and Linux skip all picker effects while still discarding legacy key", async () => {
   for (const platform of ["linux", "win32"] as const) {
@@ -134,7 +141,7 @@ test("fresh production restarts retain fingerprint and issue no trust mutations,
       await handle.stop();
       process.stdout.write(JSON.stringify({ fingerprint, mutations, effective: status.effective, reason: status.reason }));
     `], env: { ...process.env, HOME: root, OPENCODEX_HOME: root, CLAUDE_CONFIG_DIR: join(root, "claude"),
-      OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(root, "desktop") }, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+      OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(root, "desktop") }, stdout: "pipe", stderr: "pipe", timeout: PICKER_CHILD_TIMEOUT_MS });
     expect(child.exitCode, child.stderr.toString()).toBe(0);
     return JSON.parse(child.stdout.toString()) as { fingerprint: string; mutations: string[]; effective: boolean; reason: string };
   };
@@ -143,7 +150,7 @@ test("fresh production restarts retain fingerprint and issue no trust mutations,
   expect(second).toEqual(first);
   expect(lost).toMatchObject({ fingerprint: first.fingerprint, mutations: [], effective: false, reason: "trust_pending" });
   expect(first.mutations).toEqual([]);
-});
+}, PICKER_CHILD_TIMEOUT_MS * 3 + 5_000);
 
 test("late first-party enable migrates a dead ephemeral predecessor before persistent activation", () => {
   const { root } = setup();
@@ -153,7 +160,7 @@ test("late first-party enable migrates a dead ephemeral predecessor before persi
   const prior = Bun.spawnSync({ cmd: [process.execPath, "-e", `
     import { ensurePickerCa } from ${JSON.stringify(caUrl)};
     process.stdout.write(ensurePickerCa(${JSON.stringify(root)}).fingerprint);
-  `], stdout: "pipe", stderr: "pipe" });
+  `], stdout: "pipe", stderr: "pipe", timeout: PICKER_CHILD_TIMEOUT_MS });
   expect(prior.exitCode, prior.stderr.toString()).toBe(0);
   const child = Bun.spawnSync({ cmd: [process.execPath, "-e", `
     import { readFileSync } from "node:fs";
@@ -181,14 +188,14 @@ test("late first-party enable migrates a dead ephemeral predecessor before persi
     await controller.enable({ persist: false, context: "server", allowTrustPrompt: false });
     process.stdout.write(JSON.stringify({ removed, oldSha, writes: fake.writes, pending: readPendingPickerCaUntrust(root),
       fingerprint: pickerCaFingerprints(readFileSync(pickerCaCertPath(root), "utf8")).sha256 }));
-  `], stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+  `], stdout: "pipe", stderr: "pipe", timeout: PICKER_CHILD_TIMEOUT_MS });
   expect(child.exitCode, child.stderr.toString()).toBe(0);
   const result = JSON.parse(child.stdout.toString());
   expect(result.removed).toEqual([result.oldSha]);
   expect(result.writes).toBe(1);
   expect(result.pending).toBeNull();
   expect(result.fingerprint).not.toBe(prior.stdout.toString());
-});
+}, PICKER_CHILD_TIMEOUT_MS * 2 + 5_000);
 
 test("default, off, and disabled integration remain credential-free through status, refresh, and off", async () => {
   for (const claudeCode of [undefined, { desktopMode: "first-party", intercept: { picker: false } }, { desktopMode: "first-party" }]) {

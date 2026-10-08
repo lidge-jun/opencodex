@@ -630,6 +630,9 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
   const account: ProviderAccount = { id: candidate.id, credential };
   if (typeof candidate.alias === "string" && candidate.alias.trim()) account.alias = candidate.alias.trim();
   if (candidate.needsReauth === true) account.needsReauth = true;
+  if (candidate.refreshAttentionGeneration === credentialGeneration(credential)) {
+    account.refreshAttentionGeneration = candidate.refreshAttentionGeneration;
+  }
   if (candidate.paused === true) account.paused = true;
   const threshold = parseAnthropicAccountThreshold(candidate.autoSwitchThresholdOverride);
   if (threshold !== null) account.autoSwitchThresholdOverride = threshold;
@@ -892,6 +895,7 @@ export async function saveCredentialWithReceipt(
         set.selectionRevision = previousSelectionRevision;
         delete existing.needsReauth;
         delete existing.needsReauthReason;
+        delete existing.refreshAttentionGeneration;
         accountId = existing.id;
       } else {
         const id = distinctAccountId(safe, set.accounts);
@@ -905,6 +909,7 @@ export async function saveCredentialWithReceipt(
         existing.credential = safe;
         delete existing.needsReauth;
         delete existing.needsReauthReason;
+        delete existing.refreshAttentionGeneration;
         if (existing.paused !== true) set.activeAccountId = existing.id;
         accountId = existing.id;
       } else {
@@ -917,6 +922,7 @@ export async function saveCredentialWithReceipt(
           active.credential = safe;
           delete active.needsReauth;
           delete active.needsReauthReason;
+          delete active.refreshAttentionGeneration;
           accountId = active.id;
         } else {
           const id = distinctAccountId(safe, set.accounts);
@@ -937,6 +943,7 @@ export async function saveCredentialWithReceipt(
         active.credential = safe;
         delete active.needsReauth;
         delete active.needsReauthReason;
+        delete active.refreshAttentionGeneration;
         accountId = active.id;
       } else {
         const id = distinctAccountId(safe, set.accounts);
@@ -1086,6 +1093,7 @@ export async function upsertCredentialByIdentity(
       existing.credential = safe;
       delete existing.needsReauth;
       delete existing.needsReauthReason;
+      delete existing.refreshAttentionGeneration;
       set.activeAccountId ??= existing.id;
       return "updated";
     }
@@ -1189,6 +1197,7 @@ export async function saveAccountCredential(
     if (opts.rotateLoginId) account.loginId = randomUUID();
     delete account.needsReauth;
     delete account.needsReauthReason;
+    delete account.refreshAttentionGeneration;
     // A pause that found no usable fallback leaves the active id on a paused row. Once this
     // reauthentication makes an unpaused account usable, hand the selection to it.
     const active = set.accounts.find(a => a.id === set.activeAccountId);
@@ -1403,6 +1412,7 @@ export async function replaceProviderAccountSet(
         credential: { ...account.credential, ...(account.credential.kiro ? { kiro: { ...account.credential.kiro } } : {}) },
         ...(account.alias ? { alias: account.alias } : {}),
         ...(account.needsReauth ? { needsReauth: true } : {}),
+        ...(account.refreshAttentionGeneration ? { refreshAttentionGeneration: account.refreshAttentionGeneration } : {}),
         ...(account.paused ? { paused: true } : {}),
         ...(account.autoSwitchThresholdOverride !== undefined ? { autoSwitchThresholdOverride: account.autoSwitchThresholdOverride } : {}),
         ...(account.needsReauthReason === "verify_account" ? { needsReauthReason: account.needsReauthReason } : {}),
@@ -1468,7 +1478,28 @@ export async function markAccountNeedsReauth(
   }, [provider, accountId]);
 }
 
-export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>;assertOwnership?: (store: AuthStore) => void}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};opts.assertOwnership?.(store);account.credential=safe;if(account.needsReauthReason!=="verify_account"){delete account.needsReauth;delete account.needsReauthReason;}return{superseded:false};},[provider,accountId,safe,opts.expectedGeneration]);}
+export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>;assertOwnership?: (store: AuthStore) => void}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};opts.assertOwnership?.(store);account.credential=safe;delete account.refreshAttentionGeneration;if(account.needsReauthReason!=="verify_account"){delete account.needsReauth;delete account.needsReauthReason;}return{superseded:false};},[provider,accountId,safe,opts.expectedGeneration]);}
 // A late refresh failure must not change an operator-paused account's health. Check under
 // the mutation lock, not before awaiting it, so a concurrent pause cannot be overwritten.
 export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string,writerGeneration=captureConfigGeneration(),reason?:"verify_account"):Promise<boolean>{const key=oauthAccountKey(provider,accountId);if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||account.paused||credentialGeneration(account.credential)!==generation)return false;if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;account.needsReauth=true;if(reason==="verify_account")account.needsReauthReason=reason;return true;},[provider,accountId,generation]);}
+
+/** Attention is projected only; refresh selection continues to use the stored terminal flag. */
+export function accountNeedsReauthForStatus(provider: string, account: ProviderAccount, now = Date.now()): boolean {
+  return account.needsReauth === true || (provider === "kiro" && account.credential.expires <= now
+    && account.refreshAttentionGeneration === credentialGeneration(account.credential));
+}
+
+/** Record refresh evidence under the same generation/config/pause fences as terminal health. */
+export async function markAccountRefreshAttentionIfGeneration(
+  provider: string, accountId: string, generation: string, writerGeneration = captureConfigGeneration(),
+): Promise<boolean> {
+  if (provider !== "kiro") return false;
+  const key = oauthAccountKey(provider, accountId);
+  return await mutateStore(store => {
+    const account = store[provider]?.accounts.find(a => a.id === accountId);
+    if (!account || account.paused || credentialGeneration(account.credential) !== generation) return false;
+    if (writerGeneration < lastReconciledGeneration && !liveOAuthAccountKeys.has(key)) return false;
+    account.refreshAttentionGeneration = generation;
+    return true;
+  }, [provider, accountId, generation]);
+}

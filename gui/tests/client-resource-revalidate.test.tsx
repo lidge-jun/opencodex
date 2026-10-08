@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test as bunTest } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
-import { clearClientResourceStoresForTests, useClientResource } from "../src/client-resource";
+import { clearClientResourceStoresForTests, invalidateClientResource, useClientResource } from "../src/client-resource";
 import { classifyDataSurface } from "../src/data-surface";
 import {
   readSessionListCache,
@@ -160,4 +160,39 @@ test("session cache entries round-trip their age and read legacy values", () => 
   const legacy = readSessionListCacheEntry<{ rows: number[] }>(legacyKey);
   expect(legacy?.data.rows).toEqual([9]);
   expect(legacy?.cachedAt).toBeNull();
+});
+
+for (const mode of ["without a store", "before eviction", "after eviction"] as const) {
+  test("explicit invalidation revalidates a fresh seed " + mode, async () => {
+    const key = "invalidated-fresh-seed";
+    if (mode !== "without a store") {
+      const first = await mountSeeded({ key, fetcher: async () => "unused", seed: "old", cachedAt: Date.now(), staleAfterMs: 60_000 });
+      await act(async () => first.root.unmount());
+      if (mode === "before eviction") invalidateClientResource(key);
+      // Flush the resource's documented deferred store eviction.
+      await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 0)); });
+    }
+    if (mode !== "before eviction") invalidateClientResource(key);
+    let fetches = 0;
+    const { probe, root } = await mountSeeded({ key, fetcher: async () => { fetches++; return "new"; },
+      seed: "old", cachedAt: Date.now(), staleAfterMs: 60_000 });
+    expect(fetches).toBe(1);
+    expect(probe.current?.data).toBe("new");
+    await act(async () => root.unmount());
+  });
+}
+
+test("active invalidation sequences its fetch ahead of a delayed older refresh", async () => {
+  let releaseOld!: (value: string) => void;
+  let reads = 0;
+  const { probe, root } = await mountSeeded({ key: "invalidated-active", fetcher: () => {
+    if (++reads === 1) return new Promise<string>(resolve => { releaseOld = resolve; });
+    return Promise.resolve("new");
+  }, seed: "seed", cachedAt: Date.now(), staleAfterMs: 60_000 });
+  await act(async () => probe.current!.refresh());
+  await act(async () => invalidateClientResource("invalidated-active"));
+  expect(probe.current?.data).toBe("new");
+  await act(async () => releaseOld("old"));
+  expect(probe.current?.data).toBe("new");
+  await act(async () => root.unmount());
 });

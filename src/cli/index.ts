@@ -152,6 +152,7 @@ import {
   grokSyncFailureMessage,
   reconcileEnsureDesiredIntegrations,
 } from "./ensure-desired-integrations";
+import { ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting, waitForLiveProxy } from "./ensure-readiness";
 import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
 import { loadExportModels } from "../server/management/model-rows";
 
@@ -209,11 +210,17 @@ initializeNodeLauncherContext();
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
 if (process.argv[2] === "__keyring-load-check") { console.log(JSON.stringify((await import("../lib/keyring-native")).inspectKeyringBinding())); process.exit(0); }
-if (process.argv[2] === "__codebuddy-mcp") {
-  const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
-  await runCodeBuddyMcpServer(process.argv[3] ?? "");
-  // The MCP stdio loop owns this process until stdin closes; do not fall through
-  // to ordinary CLI dispatch or exit after the handshake completes.
+
+// The compiled executable also launches the isolated MCP servers.
+// Handle these private entrypoints before CLI preflight or command dispatch.
+if (process.argv[2] === "__codebuddy-mcp" || process.argv[2] === "__qoder-mcp") {
+  if (process.argv[2] === "__codebuddy-mcp") {
+    const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
+    await runCodeBuddyMcpServer(process.argv[3] ?? "");
+  } else {
+    const { runCodingAgentMcpServer } = await import("../adapters/coding-agent/mcp-server");
+    await runCodingAgentMcpServer(process.argv[3] ?? "");
+  }
   await new Promise<never>(() => {});
 }
 
@@ -235,16 +242,10 @@ function parseStartCliOptions(): ReturnType<typeof parseStartOptions> {
   }
 }
 
-async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    // Runtime-state-first with identity: finds the proxy even when it started on a
-    // fallback port, and never mistakes a foreign 200 for our proxy.
-    const live = await findLiveProxy();
-    if (live) return live;
-    await new Promise(resolve => setTimeout(resolve, 150));
-  }
-  return null;
+async function waitForProxy(timeoutMs = 8_000, keepWaiting?: () => boolean): Promise<LiveProxy | null> {
+  // Runtime-state-first with identity: finds the proxy even when it started on a
+  // fallback port, and never mistakes a foreign 200 for our proxy.
+  return waitForLiveProxy({ find: findLiveProxy, timeoutMs, keepWaiting });
 }
 
 class StartCommandExit extends Error {
@@ -846,9 +847,13 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
     env: detachedStartEnvironment(),
   });
   options.onSpawn?.(child);
+  const spawnedAt = Date.now();
+  let childExited = false;
+  child.once("exit", () => { childExited = true; });
   child.unref();
 
-  const port = (await waitForProxy())?.port;
+  // A cold start can outlast 8 s on a busy Windows host; see ensure-readiness.ts.
+  const port = (await waitForProxy(ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting(spawnedAt, () => childExited)))?.port;
   if (!port) {
     console.error("❌ Proxy did not become healthy after starting.");
     process.exitCode = 1;

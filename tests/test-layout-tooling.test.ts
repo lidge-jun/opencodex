@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -7,6 +7,7 @@ import { repoPath, repoRoot } from "./helpers/repo-root";
 import { listTestFiles, planMoves } from "../scripts/test-layout/plan";
 import { runMove } from "../scripts/test-layout/move";
 import { runVerify } from "../scripts/test-layout/verify";
+import { testRunnerBun } from "../package.json";
 import {
   anchors,
   currentPath,
@@ -425,6 +426,30 @@ describe("move end to end", () => {
       // Renamed in the index, then rewritten in the worktree: git reports "RM".
       expect(status).toContain("RM tests/server-a.test.ts -> tests/server/server-a.test.ts");
       expect(status).toContain("RM tests/cursor-b.test.ts -> tests/providers/cursor/cursor-b.test.ts");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("domain verification launches isolate tests through the pinned runner", () => {
+    const { root, cleanup } = scratchRepo();
+    const layoutPath = join(root, "scripts", "test-layout", "layout.json");
+    try {
+      runMove({ root, domains: ["server", "providers"], dryRun: false, layoutPath, skipVerify: true, log: () => {} });
+      const spawn = spyOn(Bun, "spawnSync").mockReturnValue({
+        exitCode: 0, stdout: Buffer.from(""), stderr: Buffer.from(""),
+      } as ReturnType<typeof Bun.spawnSync>);
+      try {
+        const report = runVerify({ root, domains: ["server", "providers"], layoutPath, log: () => {} });
+        expect(report.testExit).toBe(0);
+        // The test itself runs on the required pin, so its executable is the resolver's first choice.
+        expect(Bun.version).toBe(testRunnerBun);
+        expect(spawn.mock.calls.at(-1)?.[0]).toEqual([
+          process.execPath, "test", "--isolate", "tests/server", "tests/providers",
+        ]);
+      } finally {
+        spawn.mockRestore();
+      }
     } finally {
       cleanup();
     }

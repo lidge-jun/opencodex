@@ -48,11 +48,19 @@ function lexical(path: string): Stats | null {
   try { return lstatSync(path); }
   catch (error) { if (fileErrorCode(error) === "ENOENT") return null; throw error; }
 }
+/** Name the path and the failed check; a group/world-writable owned file gets the chmod that fixes it. */
+function untrustedArtifact(path: string, stat: Stats): Error {
+  const prefix = `Private Codex artifact is not an owned regular file: ${path}`;
+  if (stat.isSymbolicLink() || !stat.isFile()) return new Error(`${prefix} is not a regular file`);
+  if (stat.uid !== process.getuid?.()) return new Error(`${prefix} is owned by uid ${stat.uid}`);
+  const mode = (stat.mode & 0o777).toString(8).padStart(4, "0");
+  return new Error(`${prefix} is group- or world-writable (mode ${mode}); run chmod 600 ${shQuote(path)} and retry`);
+}
 function snapshot(path: string): Snapshot | null {
   const before = lexical(path);
   if (!before) return null;
   if (!before.isFile() || before.isSymbolicLink() || before.uid !== process.getuid?.() || (before.mode & 0o022)) {
-    throw new Error("Private Codex artifact is not an owned regular file");
+    throw untrustedArtifact(path, before);
   }
   const bounded = readBoundedRegularFile(path, PRIVATE_FILE_MAX_BYTES);
   if (!bounded || "warning" in bounded) throw new Error("Private Codex artifact is unreadable or changed");

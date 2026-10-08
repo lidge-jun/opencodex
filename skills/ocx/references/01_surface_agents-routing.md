@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 48.
+Declared capabilities: 50.
 
 ### `ocx agent subagents force`
 
@@ -153,6 +153,45 @@ State-changing: no.
 JSON mode: `payload`.
 
 - Read-only: nothing is probed and no provider row is created.
+
+### `ocx message sessions`
+
+Discover already-loaded local Codex sessions without reading conversation history.
+
+State-changing: no.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit a versioned local session directory. |
+
+JSON mode: `envelope`.
+
+- Linux/macOS Unix socket only. Uses effective CODEX_HOME; starts no daemon and returns no partial directory.
+
+### `ocx message send`
+
+Submit one correlated peer message to an exact loaded local Codex destination.
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--thread` | string | Exact loaded UUID; choose this or --name. |
+| `--name` | string | Unique exact loaded name; choose this or --thread. |
+| `--stdin` | boolean | Read at most 16 KiB of UTF-8 message text. |
+| `--kind` | string | request (default), response or notification. |
+| `--in-reply-to` | string | Request message UUID; required only for a response. |
+| `--json` | boolean | Emit a receipt with not_sent, queued or unknown status. |
+
+JSON mode: `envelope`.
+
+- Requires daemon support for experimental thread/queue/add. Sender context comes from CODEX_THREAD_ID, not an authentication claim.
+- queued means submitted, not processed. unknown must not be replayed; no automatic retry, daemon start or thread resume.
+- Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No remote/Claude transport or skill installation.
 
 ### `ocx agent status`
 

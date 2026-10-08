@@ -6,7 +6,7 @@ import type { PersistedUsageEntry } from "../../src/usage/log";
 import { summarizeUsage } from "../../src/usage/summary";
 
 const families = [
-  { base: "claude-sonnet-5-5", cost4: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }, total: 0.012 },
+  { base: "claude-sonnet-5-5", cost4: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }, total: 0.012 },
   { base: "claude-opus-5-5", cost4: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 }, total: 0.024 },
 ];
 const now = Date.UTC(2026, 9, 3, 12);
@@ -36,6 +36,10 @@ describe("Antigravity Claude 5.5 usage", () => {
           const estimate = estimateRequestCost({ provider, model: id, usageStatus: "reported", usage: { inputTokens: 1000, outputTokens: 100 } });
           expect(estimate?.estimated).toBe(true);
           expect(estimate?.cost.total).toBeCloseTo(total / 4, 10);
+          const cached = estimateRequestCost({ provider, model: id, usageStatus: "reported", usage: { inputTokens: 1000, outputTokens: 100, cacheReadInputTokens: 200 } });
+          expect(cached?.estimated).toBe(true);
+          expect(cached?.cost.cacheRead).toBeCloseTo(200 * cost4.cacheRead / 1e6, 12);
+          expect(cached?.cost.total).toBeCloseTo((800 * cost4.input + 100 * cost4.output + 200 * cost4.cacheRead) / 1e6, 12);
         }
       }
     });

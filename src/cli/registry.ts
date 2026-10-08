@@ -9,6 +9,12 @@ export interface CliCommandEntry {
 
 export const CLI_COMMANDS: CliCommandEntry[] = [
   {
+    name: "message",
+    usage: "ocx message <sessions|send> [options]",
+    summary: "Discover loaded local Codex sessions and submit one queued peer message.",
+    details: ["Local Unix transport only; starts no daemon. queued is submission, not processing; never replay an unknown send."],
+  },
+  {
     name: "chatgpt",
     usage: "ocx chatgpt <launch|restore|status>",
     summary: "Experimental ChatGPT app-server shim (macOS only, default off).",
@@ -467,8 +473,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "export",
-    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|droid> [--json] [--out <path>] [--force]",
-    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid) wired to the running proxy.",
+    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|commandcode|prime|aside|raycast|omo|cline|kilo|droid> [--json] [--out <path>] [--force]",
+    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Command Code, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid) wired to the running proxy.",
     details: [
       "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
       "--out <path> writes the native config there and refuses to replace an existing file without --force.",
@@ -597,6 +603,22 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "ZCode reads its config at startup — restart ZCode after enable/disable.",
       "Select OpenCodex Proxy/<provider>/<model> from ZCode's model picker.",
     ],
+  },
+  {
+    name: "commandcode",
+    usage: "ocx commandcode [status|show|list|enable|disable|history|restore --op <opId>] [--json]",
+    summary: "Connect Command Code CLI to the proxy via its managed provider.",
+    details: [
+      "Alias of ocx integration client <sub> --client commandcode.",
+      "enable writes the managed provider.opencodex block into ~/.commandcode/providers.json; disable removes only that block.",
+      "Command Code reads providers on startup.",
+      "`restore --op <opId>` replays the exact previous managed block; take the id from `ocx commandcode history`.",
+    ],
+  },
+  {
+    name: "cmd",
+    usage: "ocx cmd [status|show|list|enable|disable|history|restore --op <opId>] [--json]",
+    summary: "Alias of ocx commandcode.",
   },
   {
     name: "restart",

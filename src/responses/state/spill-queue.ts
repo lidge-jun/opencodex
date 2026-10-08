@@ -191,6 +191,7 @@ function spillPayloadForResident(candidate: ResidentResponseState): Parameters<t
     items: candidate.items,
     ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
     ...(candidate.providers ? { providers: candidate.providers } : {}),
+    ...(candidate.unforcedStoreFalse ? { unforcedStoreFalse: candidate.unforcedStoreFalse } : {}),
   };
 }
 

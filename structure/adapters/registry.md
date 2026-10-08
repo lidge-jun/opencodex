@@ -276,7 +276,11 @@ A [compaction routing override](../transports/responses-failover.md#compaction-r
 tool results with the same call ID into one history prompt. Chunks retain arrival order, image
 parts and each in-band error marker; any failed chunk sets the combined prompt's error flag.
 Any intervening message, including one omitted by mapping, or a different call ID ends the run,
-so later results keep their chronological slots. The parsed request remains unchanged.
+so later results keep their chronological slots. The parsed request remains unchanged. Structured
+parts append to mapper-owned arrays; text-only runs join once at their boundary or first
+structured transition. Accumulation does not re-copy its growing prefix. The signed send reuses
+the initially mapped history; signature-withheld retries still build their separate variant.
+This is linear accumulation, not a global request-memory or execution-time bound.
 `tests/providers/devin-chat-wire-fixes.test.ts` covers these boundaries and protobuf fields #7,
 #9 and #10. This normalization addresses duplicate consecutive tool prompts, not every
 upstream `invalid_argument`.

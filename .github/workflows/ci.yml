@@ -63,6 +63,20 @@ on:
         type: choice
         default: all
         options: [all, release-gates, macos-control]
+  # Nightly safety net. The Windows shards run on a pull request only when the
+  # changes job judges it Windows-sensitive, so anything that slips past that
+  # filter must still be caught within a day: a scheduled run requests the full
+  # lane=all matrix (nine Windows shards and the macOS control included).
+  #
+  # GitHub runs schedules from the DEFAULT branch, which is main, so this
+  # trigger activates only once this file reaches main by promotion, and the
+  # workflow definition is main's. Every test checkout reads
+  # needs.changes.outputs.checkout_ref, which the changes job resolves to ONE
+  # dev commit on a schedule, so the run tests dev and every job tests the same
+  # SHA. Its check runs attach to main's head commit; release.yml accepts only a
+  # push-event run, so a scheduled run can never qualify a release.
+  schedule:
+    - cron: "17 18 * * *"
 
 permissions:
   contents: read
@@ -88,8 +102,12 @@ concurrency:
   # `github.run_id` is unique per run, so each dispatch is a group of one: it
   # cancels nothing and nothing cancels it, including a second dispatch of the
   # same ref.
-  group: cross-platform-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  #
+  # A scheduled run is keyed the same way. Keyed on the ref it would share
+  # refs/heads/main with a promotion push and, with cancel-in-progress, cancel
+  # the very run release.yml waits for.
+  group: cross-platform-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'schedule' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' }}
 
 jobs:
   # Which Windows runner this run is allowed to use.
@@ -118,6 +136,8 @@ jobs:
   #
   # `push` on main/preview requires the push permission, and
   # `workflow_dispatch` requires write access, so both carry a trusted author.
+  # A schedule runs main's workflow against a dev commit that already merged
+  # through review, the same trust as a push.
   # A trusted author is not audited code: merging a contributor PR into `dev`
   # fires `push`, and its dependencies and postinstall hooks then run here.
   select-windows-runner:
@@ -141,7 +161,7 @@ jobs:
           set -euo pipefail
           trusted=no
           case "$EVENT_NAME" in
-            push|workflow_dispatch) trusted=yes ;;
+            push|workflow_dispatch|schedule) trusted=yes ;;
           esac
 
           # Repository variable OCX_SELF_HOSTED_WINDOWS is an OPERATIONAL switch,
@@ -188,15 +208,26 @@ jobs:
       # shape-checked by the same validation step as `native`.
       keyring_matrix: ${{ steps.matrices.outputs.keyring_matrix }}
       npm_global_matrix: ${{ steps.matrices.outputs.npm_global_matrix }}
-      gui: ${{ steps.filter.outputs.gui }}
-      packaging: ${{ steps.filter.outputs.packaging }}
-      docs: ${{ steps.filter.outputs.docs }}
-      structure: ${{ steps.filter.outputs.structure }}
+      # A scheduled run starts from main, so its path filter diffs main and would
+      # scope jobs by the wrong commit. The nightly safety net selects every scope
+      # instead, here and in the validation steps below, so it is the full matrix.
+      gui: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.gui }}
+      packaging: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.packaging }}
+      docs: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.docs }}
+      structure: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.structure }}
       # Narrow scopes for two paths the ci filter leaves out on purpose. Both are re-emitted by the
       # validation step below, so a malformed filter output fails this job instead of silently
       # skipping the check it selects.
       setup_action: ${{ steps.narrow.outputs.setup_action }}
       remote_helper: ${{ steps.narrow.outputs.remote_helper }}
+      # Whether this pull request needs the nine Windows shards: the windows path
+      # filter below OR an added src/tests line naming a Windows marker. Computed
+      # by scripts/ci/windows-sensitive-diff.sh, which validates its input and
+      # treats the diff as data.
+      windows: ${{ steps.windows.outputs.windows }}
+      # The commit every test job checks out. Empty (the event's own commit)
+      # except on a schedule, where it is the one dev SHA resolved below.
+      checkout_ref: ${{ steps.nightly.outputs.checkout_ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -205,6 +236,9 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          # The pull request merge commit plus its first parent, the base tip,
+          # so the Windows marker scan can diff exactly this pull request.
+          fetch-depth: 2
 
       - name: Detect changed areas
         id: filter
@@ -341,6 +375,32 @@ jobs:
             # real only on macOS and Windows, so its job lints and tests the crate on all three.
             remote_helper:
               - 'native/remote-workspace-helper/**'
+            # Paths whose change selects the nine Windows suite shards on a pull
+            # request. These carry the Windows service, update, shim, intercept,
+            # ACL and process code, and the harness every Windows shard runs.
+            # scripts/ci/windows-sensitive-diff.sh adds the content markers.
+            windows:
+              - 'src/lib/windows-*'
+              - 'src/lib/*acl*'
+              - 'src/service/**'
+              - 'src/update/**'
+              - 'src/claude/intercept/**'
+              - 'src/codex/shim*'
+              - 'src/codex/app-server-processes.ts'
+              - 'src/codex/desktop-app/**'
+              - 'src/config/process-state.ts'
+              - 'src/cli/update-restart*'
+              - 'src/server/local-management-read-client.ts'
+              - 'src/server/startup-health-cache.ts'
+              - 'src/tray/**'
+              - 'scripts/test.ts'
+              - 'scripts/test-*.ts'
+              - 'scripts/ci/**'
+              - 'tests/preload.ts'
+              - 'tests/helpers/**'
+              - '.github/workflows/ci.yml'
+              - 'package.json'
+              - 'bun.lock'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
             # bin/ocx.mjs executes it: without that entry an ordinary source PR
@@ -366,8 +426,8 @@ jobs:
         id: scope
         shell: bash
         env:
-          CI_SCOPE: ${{ steps.filter.outputs.ci }}
-          DESKTOP_SCOPE: ${{ steps.filter.outputs.desktop }}
+          CI_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.ci }}
+          DESKTOP_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.desktop }}
         run: |
           set -euo pipefail
           case "$CI_SCOPE" in
@@ -393,7 +453,7 @@ jobs:
         id: matrices
         shell: bash
         env:
-          NATIVE_SELECTED: ${{ steps.filter.outputs.native }}
+          NATIVE_SELECTED: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.native }}
         run: |
           set -euo pipefail
           case "$NATIVE_SELECTED" in
@@ -441,8 +501,8 @@ jobs:
         id: narrow
         shell: bash
         env:
-          SETUP_ACTION: ${{ steps.filter.outputs.setup_action }}
-          REMOTE_HELPER: ${{ steps.filter.outputs.remote_helper }}
+          SETUP_ACTION: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.setup_action }}
+          REMOTE_HELPER: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.remote_helper }}
         run: |
           set -euo pipefail
           for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER"; do
@@ -457,6 +517,43 @@ jobs:
             esac
           done
 
+      - name: Decide whether the Windows shards run
+        id: windows
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PATH_SELECTED: ${{ steps.filter.outputs.windows }}
+        run: bash scripts/ci/windows-sensitive-diff.sh
+
+      # A scheduled run starts from main's head. Resolve dev ONCE so the nine
+      # Windows shards, the macOS control and every other job test one commit,
+      # however long the queue between them. contents: read already covers it.
+      - name: Resolve the commit a scheduled run tests
+        id: nightly
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo 'checkout_ref=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/dev" --jq .sha)"
+          if ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
+            printf '::error::could not resolve dev to a commit SHA\n'
+            exit 1
+          fi
+          printf 'checkout_ref=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+          printf 'Scheduled run: workflow from %s, testing dev at %s\n' "$GITHUB_SHA" "$sha" >> "$GITHUB_STEP_SUMMARY"
+          printf 'scheduled run tests dev at %s (workflow %s)\n' "$sha" "$GITHUB_SHA"
+
+  # Bun roles (#6713): runtime 1.4.2 fixes #6684's Windows Bun.fetch streaming;
+  # test-runner 1.4.0 avoids 1.4.2's multi-file --isolate preload segfault (#4821
+  # reverted #4064; run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9).
+  # Rejoin after the upstream runner crash is fixed and a green lane=all dispatch
+  # proves the unified version, then delete testRunnerBun and the action's role input.
   # The suite, split by file across four Linux runners.
   #
   # `scripts/ci/run-bun-test-batches.sh` assigns files to shards by the per-file
@@ -496,6 +593,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
@@ -510,6 +608,8 @@ jobs:
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       # The GUI install is NOT optional here, however unrelated it looks to a
       # test shard. Several files under tests/ import JSX-bearing modules from
@@ -552,9 +652,12 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -591,9 +694,12 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -626,9 +732,12 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -713,6 +822,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
@@ -727,6 +837,8 @@ jobs:
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -764,8 +876,9 @@ jobs:
     needs: changes
     # Diagnostic-only lanes stay off the ordinary release gates: list every lane
     # that should run this job, so a new lane defaults to skipping the diagnostic.
+    # The nightly schedule is the full lane=all matrix, so it runs this job too.
     if: >-
-      github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')
     runs-on: macos-latest
     # Unsharded full-membership control, one worker in sequential fresh batches.
     # Long-lived Bun isolate pools repeatedly wedged while synchronously reaping
@@ -780,6 +893,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
@@ -794,6 +908,8 @@ jobs:
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -826,7 +942,9 @@ jobs:
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
 
-  # Windows runs only when a maintainer asks for it by hand.
+  # Windows runs on a Windows-sensitive pull request, on the nightly schedule,
+  # and on a lane=all (or default) dispatch. It is never part of the push run
+  # release.yml gates on.
   #
   # It left the PR lane first (16m23s against a 6-minute Linux critical path;
   # the ceiling was raised twice rather than the gap closed — #711 vs #653,
@@ -842,11 +960,18 @@ jobs:
   # release.yml gates on a successful push-event run of this workflow, which
   # now means Linux + macOS + the gates; Windows re-enters the gate when the
   # tracked failures are fixed, not before.
+  #
+  # Dispatch-only proved too late. #6639, #6556, #6605 and #6606 each landed with
+  # green pull-request CI while breaking Windows, and the breakage surfaced days
+  # later on a manual dispatch. So a pull request whose changes job reports
+  # windows=true (a Windows path, or an added src/tests line naming a Windows
+  # marker; see scripts/ci/windows-sensitive-diff.sh) now runs the nine shards,
+  # and the daily schedule catches whatever that filter misses.
   platform-windows:
     name: windows ${{ matrix.shard }}/9
-    needs: select-windows-runner
+    needs: [changes, select-windows-runner]
     if: >-
-      github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all') || github.event_name == 'pull_request' && needs.changes.outputs.windows == 'true'
     runs-on: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
     # Sharded like the Linux legs. The single-leg run reached 30 minutes on a
     # green suite and was killed in cleanup; four shards put each leg inside the
@@ -919,6 +1044,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # Same reason as the Linux shards and the macOS control: this leg runs the
           # whole suite, and tests/ci-workflows/release-version-line.test.ts reads release tags.
           # Without tags the check sees an empty set and cannot fail.
@@ -926,6 +1052,8 @@ jobs:
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -998,6 +1126,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1051,6 +1180,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1080,6 +1210,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1116,6 +1247,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1127,8 +1259,8 @@ jobs:
         run: bun run structure:check
 
   # The composite Bun setup, run on each runner family it serves, when a change touches only the
-  # action (see the setup_action filter). One step past the action proves it installed the runtime
-  # package.json declares; nothing else runs, so this never grows into a suite.
+  # action (see the setup_action filter). Each role proves its resolved and installed
+  # version matches package.json; nothing else runs, so this never grows into a suite.
   setup-action:
     name: setup action ${{ matrix.os }}
     needs: changes
@@ -1144,6 +1276,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         id: bun
@@ -1160,6 +1293,26 @@ jobs:
           echo "declared=$declared resolved=$RESOLVED installed=$installed"
           if [ "$RESOLVED" != "$declared" ] || [ "$installed" != "$declared" ]; then
             echo "::error::setup-project-bun resolved '$RESOLVED' and installed '$installed', but package.json declares '$declared'"
+            exit 1
+          fi
+
+      - name: Setup project Bun test runner
+        id: bun-test-runner
+        uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner
+
+      - name: Require the test runner package.json declares
+        shell: bash
+        env:
+          RESOLVED: ${{ steps.bun-test-runner.outputs.version }}
+        run: |
+          set -euo pipefail
+          declared="$(node -p "require('./package.json').testRunnerBun")"
+          installed="$(bun --version)"
+          echo "declared=$declared resolved=$RESOLVED installed=$installed"
+          if [ "$RESOLVED" != "$declared" ] || [ "$installed" != "$declared" ]; then
+            echo "::error::setup-project-bun resolved '$RESOLVED' and installed '$installed', but package.json testRunnerBun declares '$declared'"
             exit 1
           fi
 
@@ -1181,6 +1334,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -1214,6 +1368,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1257,6 +1412,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       # Deliberately NO setup-bun: prove `npm install -g` works without a
       # separately-installed Bun. The launcher uses the bundled `bun` dependency.
@@ -1313,11 +1469,10 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
 
       - name: Install dependencies
         run: |
@@ -1390,6 +1545,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Install Tauri Linux dependencies
         run: |
@@ -1534,6 +1690,7 @@ jobs:
           CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
           CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
           CHANGES_DESKTOP: ${{ needs.changes.outputs.desktop }}
+          CHANGES_WINDOWS: ${{ needs.changes.outputs.windows }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1597,7 +1754,11 @@ jobs:
           fi
           dispatch=not-requested
           windows=not-requested
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            # The nightly safety net is the full lane=all matrix.
+            dispatch=requested
+            windows=requested
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             # Mirror the diagnostic job allowlist; release-gates requests neither suite.
             if [ -z "$LANE" ] || [ "$LANE" = "all" ] || [ "$LANE" = "macos-control" ]; then
               dispatch=requested
@@ -1606,6 +1767,11 @@ jobs:
             if [ -z "$LANE" ] || [ "$LANE" = "all" ]; then
               windows=requested
             fi
+          elif [ "$EVENT_NAME" = "pull_request" ] && [ "${CHANGES_WINDOWS:-}" = "true" ]; then
+            # A Windows-sensitive pull request (path filter or added-line marker) runs the
+            # nine shards and requires them, exactly as dispatch and the schedule do. A
+            # shard that only fails on a pull request is a regression in that pull request.
+            windows=requested
           fi
 
           # One line per job, mirroring that job's own `if:`. Adding a job to this workflow

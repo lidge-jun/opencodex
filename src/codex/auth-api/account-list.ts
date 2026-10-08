@@ -252,6 +252,13 @@ export function reconcileFreshPoolAccountPlans(runtimeConfig: OcxConfig, updates
   }
 }
 
+export interface CodexAuthAccountsListOptions {
+  /** Finish deferred registration; only a dashboard session carries that inference consent. */
+  validatePending?: boolean;
+  /** An operator's explicit refresh command, which may retry a grant already recorded as dead. */
+  explicitRefresh?: boolean;
+}
+
 export interface CodexAuthAccountsSnapshot {
   accounts: CodexAuthAccountDto[];
   mainIdentityGeneration: number;
@@ -260,7 +267,7 @@ export interface CodexAuthAccountsSnapshot {
 export async function listCodexAuthAccountsSnapshot(
   config: OcxConfig,
   forceRefresh = false,
-  options: { validatePending?: boolean } = {},
+  options: CodexAuthAccountsListOptions = {},
 ): Promise<CodexAuthAccountsSnapshot> {
   const runtimeConfig = getRuntimeConfig(config);
   const poolAccounts = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
@@ -281,7 +288,8 @@ export async function listCodexAuthAccountsSnapshot(
         // identity when the switch is on and nothing has been observed yet.
         const creditsIdentity = runtimeConfig.showCodexCredits === true ? poolQuotaHistoryIdentity(account.id) ?? null : null;
         const creditsUnobserved = creditsIdentity !== null && !hasCodexCreditsObservation(account.id, creditsIdentity);
-        quotaResult = await fetchPoolAccountQuota(account.id, forceRefresh || creditsUnobserved, account.plan, getValidCodexToken, options.validatePending === true);
+        quotaResult = await fetchPoolAccountQuota(account.id, forceRefresh || creditsUnobserved, account.plan, getValidCodexToken,
+          options.validatePending === true, undefined, undefined, options.explicitRefresh === true);
       } catch (error) {
         if (!(error instanceof PoolQuotaProbeBusyError)) throw error;
         quotaResult = {
@@ -447,7 +455,7 @@ export async function refreshCodexQuotaForActivation(config: OcxConfig, accountI
 export async function listCodexAuthAccounts(
   config: OcxConfig,
   forceRefresh = false,
-  options: { validatePending?: boolean } = {},
+  options: CodexAuthAccountsListOptions = {},
 ): Promise<CodexAuthAccountDto[]> {
   return (await listCodexAuthAccountsSnapshot(config, forceRefresh, options)).accounts;
 }

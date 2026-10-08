@@ -1,3 +1,4 @@
+import { isCodexControlPlaneModel } from "../control-plane-models";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -700,7 +701,7 @@ export function catalogEntryIsNativeChatGpt(entry: RawEntry): boolean {
     && entry.use_responses_lite === true
     && hasNativeOpenAiCapabilityMetadata(routedNativeSlug)
   ) return true;
-  if (UPSTREAM_NATIVE_ENTRIES.has(slug) || SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) return true;
+  if (isCodexControlPlaneModel(slug) || UPSTREAM_NATIVE_ENTRIES.has(slug) || SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) return true;
   return false;
 }
 

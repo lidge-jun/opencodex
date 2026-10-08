@@ -28,6 +28,7 @@ export const RESPONSES_CORE_MODULES = [
   "core-auth.ts",
   "core-normalize.ts",
   "core-combo.ts",
+  "combo-requested-effort.ts",
   "core-combo-native.ts",
   // Reached from core-combo.ts: the JEV model backend's internal decision turn.
   "jev-model-invoke.ts",

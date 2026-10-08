@@ -14,6 +14,7 @@ import { buildGetChatMessageRequestForTests, type ChatHistoryItem } from "../../
 import { normalizeDevinToolParameters } from "../../src/adapters/devin/cloud-direct/tool-schema";
 import { isDevinHistoryOverflow } from "../../src/adapters/devin/context-overflow";
 import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
+import { parseRequest } from "../../src/responses/parser";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxToolResultMessage } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -168,6 +169,89 @@ describe("consecutive Devin tool results", () => {
       { type: "text", text: "\n\n" }, { type: "text", text: "finished" },
       { type: "image", mimeType: "image/png", base64Data: "Yg==" },
     ] }]);
+  });
+
+  test("structured results append without repeatedly traversing their accumulated prefix", () => {
+    const followups = 128;
+    const initialParts = 1_024;
+    const request = parseRequest({ model: "swe-1-6", stream: true, input: [
+      { type: "function_call", call_id: "a", name: "read", arguments: "{}" },
+      { type: "function_call_output", call_id: "a", output: [
+        { type: "input_image", image_url: "data:image/png;base64,YQ==" },
+        ...Array.from({ length: initialParts }, () => ({ type: "input_text", text: "x" })),
+      ] },
+      ...Array.from({ length: followups }, () => ({ type: "function_call_output", call_id: "a", output: "" })),
+    ] });
+    const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)!;
+    let visits = 0;
+    let mapped: ChatHistoryItem[];
+    try {
+      Object.defineProperty(Array.prototype, Symbol.iterator, { ...descriptor,
+        value: function(this: unknown[]) {
+          const iterator = descriptor.value.call(this) as IterableIterator<unknown>;
+          const first = this[0] as { type?: unknown; base64Data?: unknown } | undefined;
+          // Input parts use imageUrl; this sentinel matches only mapper-owned wire arrays.
+          if (first?.type === "image" && first.base64Data === "YQ==") {
+            const next = iterator.next.bind(iterator);
+            iterator.next = () => {
+              const item = next();
+              if (!item.done) visits += 1;
+              return item;
+            };
+          }
+          return iterator;
+        },
+      });
+      mapped = mapOcxMessagesToDevin(request);
+    } finally { Object.defineProperty(Array.prototype, Symbol.iterator, descriptor); }
+    const tools = mapped!.filter(item => item.role === "tool");
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.content).toHaveLength(1 + initialParts + 2 * followups);
+    expect(visits).toBeLessThanOrEqual(3 * (1 + initialParts + 2 * followups));
+  });
+
+  test("text runs join once at their structured transition and retain empty chunks", () => {
+    const chunks = Array.from({ length: 512 }, (_, i) => i % 2 ? "" : String(i));
+    const request = parsed([
+      ...chunks.map(chunk => result("a", chunk)),
+      result("a", [{ type: "image", imageUrl: "data:image/png;base64,YQ==" }]),
+      result("a", "", true), result("a", "tail"),
+      result("b", "separate"), result("b", ""),
+    ]);
+    const mapped = mapOcxMessagesToDevin(request);
+    expect(mapped).toEqual([
+      { role: "tool", tool_call_id: "a", is_error: true, content: [
+        { type: "text", text: chunks.join("\n\n") }, { type: "text", text: "\n\n" },
+        { type: "image", mimeType: "image/png", base64Data: "YQ==" },
+        { type: "text", text: "\n\n" }, { type: "text", text: "ERROR: " },
+        { type: "text", text: "\n\n" }, { type: "text", text: "tail" },
+      ] },
+      { role: "tool", tool_call_id: "b", content: "separate\n\n" },
+    ]);
+  });
+
+  test("each mapping owns its structured arrays even when the input is frozen", () => {
+    const request = parsed([
+      result("a", [{ type: "image", imageUrl: "data:image/png;base64,YQ==" }]),
+      result("a", [{ type: "text", text: "later" }]), result("a", "last"),
+    ]);
+    for (const message of request.context.messages) {
+      if (Array.isArray(message.content)) {
+        for (const part of message.content) Object.freeze(part);
+        Object.freeze(message.content);
+      }
+      Object.freeze(message);
+    }
+    Object.freeze(request.context.messages); Object.freeze(request.context); Object.freeze(request);
+    const snapshot = JSON.stringify(request);
+    const first = mapOcxMessagesToDevin(request);
+    const second = mapOcxMessagesToDevin(request);
+    expect(first).toEqual(second);
+    expect(first[0]!.content).not.toBe(second[0]!.content);
+    if (typeof first[0]!.content === "string") throw new Error("expected structured content");
+    first[0]!.content.push({ type: "text", text: "owned-only" });
+    expect(first).not.toEqual(second);
+    expect(JSON.stringify(request)).toBe(snapshot);
   });
 
   test("consolidation leaves the parsed request unchanged", () => {

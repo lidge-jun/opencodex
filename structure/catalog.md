@@ -47,7 +47,7 @@ provider-wide fallback. Exact model output limits precede the provider default o
 
 - preserves native OpenAI entries from the live catalog or static fallback, and emits
   gpt-5.6 natives from the pinned upstream models.json snapshot
-  (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra);
+  (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra); When native OpenAI rows are included and the final catalog has an ordinary bare native row other than Reserve (hidden rows count), `src/codex/catalog/control-plane.ts` separately preserves exactly one hidden `codex-auto-review` row or backfills its pinned metadata, including Low and the exact upstream ladder. It receives the ordinary native multi-agent projection but bypasses native synthesis, account cloning, picker/featured ordering, reasoning-ladder clamps and reviewer override stamps; Reserve-only/native-less catalogs omit it, and the final effort clamp removes persisted orphan reviewers; public lists and subagent rosters exclude it. The dependency-free `src/codex/control-plane-models.ts` shares the exact id set with the router without expanding visible native replacement authority;
 - reads pinned native rows only through `pinnedNativeModelRows()`
   (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
   `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds

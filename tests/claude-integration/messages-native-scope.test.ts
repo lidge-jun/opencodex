@@ -6,6 +6,7 @@ import { saveConfig } from "../../src/config";
 import { saveCredential } from "../../src/oauth/store";
 import { clearAnthropicAccountPoolState, forgetAnthropicFailoverQuorum } from "../../src/oauth/anthropic-routing";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
+import { nativeMessagesToolScopeDenial } from "../../src/server/messages-native-scope";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -166,5 +167,74 @@ describe("managed native Messages billed tool scope", () => {
     const { response, text } = await send(body);
     expect(response.status, text).toBe(403);
     expect(sent).toHaveLength(0);
+  });
+});
+
+
+// Count prefix traversal instead of timing a busy shared CI runner.
+describe("temporary native tool declaration accumulation", () => {
+  const scope = { providers: [], models: [EXECUTOR] };
+  const blocks = (name: string, count: number) => Array.from({ length: count }, () => ({
+    type: "tool_addition", tool: { type: "tool_definition", definition: { name } },
+  }));
+
+  test("same-name temporary additions do not rewalk the accumulated prefix", () => {
+    const seed = Object.freeze({ name: "lookup" });
+    const additions = blocks(seed.name, 1_024);
+    const body = { tools: Object.freeze([seed]), messages: [{
+      role: "system", clear_at: "next_user_message", content: additions,
+    }] };
+    const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)!;
+    let visits = 0;
+    let denial: ReturnType<typeof nativeMessagesToolScopeDenial>;
+    try {
+      Object.defineProperty(Array.prototype, Symbol.iterator, { ...descriptor,
+        value: function(this: unknown[]) {
+          const iterator = descriptor.value.call(this) as IterableIterator<unknown>;
+          if (this[0] === seed) {
+            const next = iterator.next.bind(iterator);
+            iterator.next = () => {
+              const item = next();
+              if (!item.done) visits += 1;
+              return item;
+            };
+          }
+          return iterator;
+        },
+      });
+      denial = nativeMessagesToolScopeDenial(scope, "operator-anth", EXECUTOR, body);
+    } finally { Object.defineProperty(Array.prototype, Symbol.iterator, descriptor); }
+    expect(denial).toBeUndefined();
+    expect(visits).toBeLessThanOrEqual(3 * (additions.length + 1));
+    expect(body.tools).toEqual([seed]);
+  });
+
+  test("large temporary chains retain a denied shadow without changing frozen inputs", () => {
+    const denied = Object.freeze(advisor());
+    const content = blocks("advisor", 2_048);
+    for (const block of content) {
+      Object.freeze(block.tool.definition); Object.freeze(block.tool); Object.freeze(block);
+    }
+    const temporary = Object.freeze({ role: "system", clear_at: "next_user_message", content: Object.freeze(content) });
+    const body = Object.freeze({ tools: Object.freeze([denied]), messages: Object.freeze([temporary]) });
+    const snapshot = JSON.stringify(body);
+    expect(nativeMessagesToolScopeDenial(scope, "operator-anth", EXECUTOR, body)?.deniedModel).toBe(ADVISOR);
+    expect(JSON.stringify(body)).toBe(snapshot);
+    // A permanent replacement may remove that shadow; a temporary one may not.
+    const permanent = { ...body, messages: [...body.messages, addition({ ...custom, name: "advisor" })] };
+    expect(nativeMessagesToolScopeDenial(scope, "operator-anth", EXECUTOR, permanent)).toBeUndefined();
+  });
+
+  test("the production native handler preserves dense additions and rejects a denied tail", async () => {
+    const content: Rec[] = blocks("lookup", 2_048);
+    const message = { role: "system", clear_at: "next_user_message", content };
+    const allowed = await send({ tools: [custom], messages: [user, message] });
+    expect(allowed.response.status, allowed.text).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.messages).toEqual([user, message]);
+    content.push({ type: "tool_addition", tool: { type: "tool_definition", definition: advisor() } });
+    const denied = await send({ tools: [custom], messages: [user, message] });
+    expect(denied.response.status, denied.text).toBe(403);
+    expect(sent).toHaveLength(1);
   });
 });

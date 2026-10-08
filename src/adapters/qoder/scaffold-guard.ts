@@ -1,9 +1,8 @@
 /**
  * Vendor-scaffolding guard for the qoder route (#4190).
  *
- * The qoder route is contractually a text and reasoning surface: the CLI is spawned with
- * `--tools "" --strict-mcp-config --setting-sources ""`, and Codex keeps tool ownership.
- * The vendor CLI does not always honour that. It has been observed emitting its own agent
+ * Even with built-in tools disabled and strict MCP isolation, Codex keeps tool execution
+ * ownership. The vendor CLI does not always honour that. It has been observed emitting its own agent
  * layer into the assistant text channel — an MCP lazy-loading `<system-reminder>` block
  * listing the local machine's configured MCP servers, and framework tool-call markup with a
  * mismatched closer. Both reached the client verbatim, because the shared stream-json parser

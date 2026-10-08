@@ -149,6 +149,13 @@ const CLIENT_MANAGED_PATHS = {
     [...ZCODE_STORE_PROVIDER_RULES_PATH, `[providerId=${OPENCODE_PROVIDER_ID}]`],
     [...ZCODE_STORE_MODEL_RULES_PATH, DYNAMIC_SEGMENT],
   ],
+  /*
+   * Both roots, because the client picks between them rather than reading both:
+   * `document.provider ?? document.providers` in `command-code@1.66.0`. The
+   * builder chooses the one the target already uses, and a block we wrote under
+   * either root has to be removable from either root afterwards.
+   */
+  commandcode: [["provider", OPENCODE_PROVIDER_ID], ["providers", OPENCODE_PROVIDER_ID]],
   prime: [["providers", OPENCODE_PROVIDER_ID]],
   aside: [["providers", OPENCODE_PROVIDER_ID]],
   raycast: [["providers", `[id=${OPENCODE_PROVIDER_ID}]`]],

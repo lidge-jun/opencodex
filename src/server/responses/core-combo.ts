@@ -106,6 +106,7 @@ import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
 import { settleOperatorReplacement } from "../../lib/upstream-retry";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
 import { createJevModelInvoker } from "./jev-model-invoke";
+import { comboRequestedEffortLabel } from "./combo-requested-effort";
 import { clientWireOf } from "../inference/client-wire";
 
 /**
@@ -656,13 +657,9 @@ export async function executeComboResponses(
     && isDeclaredReasoningEffort(originalRequestedEffortValue)
     ? originalRequestedEffortValue
     : undefined;
-  const restoreOriginalRequestedEffort = (childLog: RequestLogContext): void => {
+  const restoreOriginalRequestedEffort = (childLog: RequestLogContext, forcedEffort?: string | null): void => {
     if (originalRequestedEffort === undefined) return;
-    const normalizedRequestedEffort = childLog.requestedEffort;
-    const transitionIndex = normalizedRequestedEffort?.indexOf("->") ?? -1;
-    childLog.requestedEffort = transitionIndex >= 0
-      ? `${originalRequestedEffort}${normalizedRequestedEffort!.slice(transitionIndex)}`
-      : originalRequestedEffort;
+    childLog.requestedEffort = comboRequestedEffortLabel(originalRequestedEffort, childLog.requestedEffort, forcedEffort);
     recordAttemptRequestedEffort(childLog);
   };
 
@@ -907,7 +904,8 @@ export async function executeComboResponses(
         onNativePassthroughCancel: callbackGate.onCancel,
         onResponseComplete: callbackGate.onResponseComplete,
       });
-      restoreOriginalRequestedEffort(childLog);
+      // Native Chat rebuilds its own body and does not apply the initial JEV effort.
+      restoreOriginalRequestedEffort(childLog, nativeChild ? undefined : initialJevDecision?.effort);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {
