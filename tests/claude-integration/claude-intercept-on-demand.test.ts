@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClaudeInterceptLifecycle } from "../../src/server/index/claude-intercept-lifecycle";
 import { startConnectProxy } from "../../src/claude/intercept/connect-proxy";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { saveConfig, loadConfig } from "../../src/config";
+import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { initializeManagementAuthState, requireManagementAuth } from "../../src/server/management-auth";
 import type { OcxConfig } from "../../src/types";
 
@@ -25,10 +27,11 @@ beforeEach(() => {
 });
 afterEach(async () => {
   for (const owner of owners.splice(0)) await owner.stop();
+  await flushConfigDirHardeningAndReaps(root);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
   if (previousClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previousClaude;
   if (previousDesktop === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR; else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktop;
-  rmSync(root, { recursive: true, force: true });
+  removeTreeWithRetry(root);
 });
 function config(): OcxConfig {
   return { port: 10100, providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: ["test"], liveModels: false } }, defaultProvider: "mock", claudeCode: { enabled: false } } as OcxConfig;

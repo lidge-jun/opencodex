@@ -68,9 +68,10 @@ enumeration twice made a measured 12.3-second fallback cost roughly 25 seconds b
 ## Windows config-directory handle release
 
 `src/server/index.ts` resolves `server.stop(true)` only after the config-directory hardening flight
-and any `icacls.exe` child that outlived its deadline have reaped. `src/config/paths.ts` owns the
+and every async ACL hardening flight and deadline-surviving `icacls.exe` runner under that home have settled. `src/config/paths.ts` owns the
 barrier: a timeout verdict alone does not make the home removable. The contract is exercised by
 `tests/server/server-stop-config-hardening.test.ts`.
+`src/lib/windows-secret-acl.ts` retains removal ownership for an entire async harden, including principal lookup, successive ACL commands, retries and diagnostics, as well as tracking runners that outlive their deadlines. The exact-path timeout indicator keeps its existing meaning for atomic-file fallback. The portable Rust contract in `scripts/diagnostics/windows-version-control/tests/async_contracts.rs` holds two successive normal commands and verifies that removal waits across the gap between them.
 
 ## Service-manager probe
 

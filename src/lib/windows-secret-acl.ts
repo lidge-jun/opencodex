@@ -83,6 +83,7 @@ export const TIMEOUT_MEMO_REARM_MS = 5 * 60_000;
 /** Compatibility slack before the outer belt releases a caller whose killed child has not reaped. */
 const ASYNC_ICACLS_BELT_MARGIN_MS = 250;
 const pendingAsyncIcaclsReaps = new Map<string, Set<Promise<void>>>();
+const activeAsyncAclWork = new Map<string, Set<Promise<void>>>();
 
 const scheduleAsyncIcaclsBelt: SubprocessDeadlineScheduler = (callback, milliseconds) => {
   const timer = setTimeout(callback, milliseconds);
@@ -418,6 +419,9 @@ function awaitAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<Icac
       result => { finish(result); },
       () => { finish(spawnFailedResult()); },
     );
+    // A normal in-flight runner holds the same path as one that outlived its belt.
+    // Register before yielding so a removal barrier cannot overlook that child.
+    if (args[0]) registerPendingAsyncIcaclsReap(args[0], runner, activeAsyncAclWork);
     // The belt has to outlast the runner it is guarding, or it is not a belt -- it is the
     // deadline. The runner may now legitimately outlive it while a killed child is reaped. The
     // caller is still released, but the target is registered so removal can wait for the distinct
@@ -433,16 +437,20 @@ function awaitAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<Icac
   });
 }
 
-function registerPendingAsyncIcaclsReap(targetPath: string, reap: Promise<void>): void {
-  let pending = pendingAsyncIcaclsReaps.get(targetPath);
+function registerPendingAsyncIcaclsReap(
+  targetPath: string,
+  reap: Promise<void>,
+  registry = pendingAsyncIcaclsReaps,
+): void {
+  let pending = registry.get(targetPath);
   if (!pending) {
     pending = new Set();
-    pendingAsyncIcaclsReaps.set(targetPath, pending);
+    registry.set(targetPath, pending);
   }
   pending.add(reap);
   void reap.finally(() => {
     pending!.delete(reap);
-    if (pending!.size === 0) pendingAsyncIcaclsReaps.delete(targetPath);
+    if (pending!.size === 0) registry.delete(targetPath);
   });
 }
 
@@ -458,12 +466,12 @@ export function windowsSecretAclReapPendingForPath(targetPath: string): boolean 
 
 /** Non-blocking removal guard for callers that must refuse rather than wait for a stuck child. */
 export function windowsSecretAclReapPendingAtOrBelow(rootPath: string): boolean {
-  return [...pendingAsyncIcaclsReaps.keys()]
+  return [...activeAsyncAclWork.keys(), ...pendingAsyncIcaclsReaps.keys()]
     .some(targetPath => pathIsAtOrBelow(targetPath, rootPath));
 }
 
 /**
- * Removal barrier for a file or tree that may still be held by a timed-out icacls child.
+ * Removal barrier for a file or tree held by a normal or timed-out async icacls child.
  *
  * This wait is deliberately separate from ordinary startup and shutdown: a genuinely stuck child
  * must not defeat the caller-facing belt. Code that chooses to remove the target has the stricter
@@ -471,7 +479,7 @@ export function windowsSecretAclReapPendingAtOrBelow(rootPath: string): boolean 
  */
 export async function flushWindowsSecretAclReapsBeforeRemoval(rootPath: string): Promise<void> {
   while (true) {
-    const pending = [...pendingAsyncIcaclsReaps]
+    const pending = [...activeAsyncAclWork, ...pendingAsyncIcaclsReaps]
       .filter(([targetPath]) => pathIsAtOrBelow(targetPath, rootPath))
       .flatMap(([, reaps]) => [...reaps]);
     if (pending.length === 0) return;
@@ -1058,17 +1066,29 @@ function hardenEntry(
   return { ok: false, diagnostics };
 }
 
-/** Async counterpart of hardenEntry — yields while waiting on icacls (#612). */
-async function hardenEntryAsync(
+/** Retain removal ownership across principal lookup, every ACL command and diagnostics. */
+function hardenEntryAsync(
   targetPath: string,
   directory: boolean,
   opts: HardenOptions,
   cache: Map<string, HardenedIdentity>,
   extraReadAces: readonly string[],
 ): Promise<HardenResult> {
-  if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
-  if (effectivePlatform() !== "win32") return { ok: true };
-  if (memoSatisfied(cache, targetPath)) return { ok: true };
+  if (!existsSync(targetPath)) { cache.delete(targetPath); return Promise.resolve({ ok: true }); }
+  if (effectivePlatform() !== "win32" || memoSatisfied(cache, targetPath)) return Promise.resolve({ ok: true });
+  const work = runHardenEntryAsync(targetPath, directory, opts, cache, extraReadAces);
+  registerPendingAsyncIcaclsReap(targetPath, work.then(() => undefined, () => undefined), activeAsyncAclWork);
+  return work;
+}
+
+/** Async counterpart of hardenEntry — yields while waiting on icacls (#612). */
+async function runHardenEntryAsync(
+  targetPath: string,
+  directory: boolean,
+  opts: HardenOptions,
+  cache: Map<string, HardenedIdentity>,
+  extraReadAces: readonly string[],
+): Promise<HardenResult> {
   const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
   if (extraReadAces.length === 0 && await existingAclAlreadyCompliantAsync(targetPath, directory, deadline)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);

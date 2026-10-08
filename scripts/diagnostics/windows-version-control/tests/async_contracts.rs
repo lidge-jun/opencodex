@@ -1,6 +1,59 @@
 use serde_json::Value;
 use std::{env, fs, path::PathBuf, process::Command};
 
+#[test]
+fn removal_barrier_waits_for_a_normal_acl_runner_before_its_belt_fires() {
+    let result = contract(
+        "normal-acl-runner",
+        r#"
+const acl=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/lib/windows-secret-acl.ts')).href);
+const principal=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/lib/windows-user-principal.ts')).href);
+const target=join(root,'normal-acl-child'); fs.mkdirSync(target);
+let release, releaseSecond, announce, announceSecond, calls=0;
+const held=new Promise(resolve=>{release=resolve});
+const started=new Promise(resolve=>{announce=resolve});
+const secondHeld=new Promise(resolve=>{releaseSecond=resolve});
+const secondStarted=new Promise(resolve=>{announceSecond=resolve});
+acl.setPlatformForTests('win32');
+principal.setAsyncWindowsPrincipalRunnerForTests(async()=>({success:true,exitCode:0,timedOut:false,stdout:'S-1-5-21-1-2-3-1001\nTEST\\user\n'}));
+acl.setAsyncIcaclsBeltSchedulerForTests(()=>()=>{});
+acl.setAsyncIcaclsRunnerForTests(async()=>{
+ calls++;
+ if(calls===1){announce(); await held}
+ if(calls===2){announceSecond(); await secondHeld}
+ return {success:true,exitCode:0,timedOut:false,stdout:''};
+});
+try {
+ const harden=acl.hardenSecretDirAsync(target,{required:true,deadlineMs:5000});
+ await started;
+ const timedOutOnly=acl.windowsSecretAclReapPendingForPath(target);
+ const activeGuard=acl.windowsSecretAclReapPendingAtOrBelow(root);
+ let settled=false;
+ const barrier=acl.flushWindowsSecretAclReapsBeforeRemoval(root).then(()=>{settled=true});
+ await Bun.sleep(20);
+ const early=settled;
+ release(); await secondStarted; await Bun.sleep(20);
+ const middle=settled;
+ releaseSecond(); const [outcome]=await Promise.all([harden,barrier]);
+ const beforeMemo=calls;
+ const memo=acl.hardenSecretDirAsync(target,{required:true,deadlineMs:5000});
+ const memoBusy=acl.windowsSecretAclReapPendingAtOrBelow(root);
+ await memo;
+ return {early,middle,timedOutOnly,activeGuard,calls,ok:outcome.ok,memoBusy,memoProbes:calls-beforeMemo,remaining:acl.windowsSecretAclReapPendingAtOrBelow(root)};
+} finally { release(); releaseSecond(); await acl.flushWindowsSecretAclReapsBeforeRemoval(root); }
+"#,
+    );
+    assert!(result["calls"].as_u64().unwrap() >= 3);
+    assert_eq!(result["early"], false, "removal overtook a live normal runner");
+    assert_eq!(result["middle"], false, "removal overtook the next ACL command");
+    assert_eq!(result["timedOutOnly"], false);
+    assert_eq!(result["activeGuard"], true);
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["memoBusy"], false);
+    assert_eq!(result["memoProbes"], 0);
+    assert_eq!(result["remaining"], false);
+}
+
 struct OwnedRoot(PathBuf);
 impl Drop for OwnedRoot {
     fn drop(&mut self) {
