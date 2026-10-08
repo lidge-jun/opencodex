@@ -1,3 +1,5 @@
+import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicFamilyRejected, claimAnthropicFamilyRevalidation } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePauseUntil } from "../../oauth/anthropic-rate-limit-policy";
 import { bindAnthropicRefusalCredential } from "../../oauth/anthropic-account-refusal";
@@ -459,6 +461,9 @@ export async function prepareResponsesTransport(
     selectedAdapter: ProviderAdapter,
     ...[requestParsed, incoming, emit]: Parameters<NonNullable<ProviderAdapter["runTurn"]>>
   ): Promise<void> => {
+    const producer = options.sendBudget && "beginSpendProducer" in options.sendBudget
+      ? (options.sendBudget as import("../../lib/request-execution-budget").RequestExecutionBudget).beginSpendProducer?.() : undefined;
+    try {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!selectionIsCurrent(adapterBindings.get(selectedAdapter))) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
       const binding = adapterBindings.get(selectedAdapter);
@@ -499,6 +504,7 @@ export async function prepareResponsesTransport(
       selectedAdapter = await refreshRunTurnAdapter(requestParsed);
     }
     throw new Error("Account selection changed repeatedly before turn dispatch");
+    } finally { producer?.close(); }
   };
   const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed): ProviderFetchOptions["dispatchOverride"] => {
     if (route.provider.authMode === "forward") return undefined;
@@ -527,6 +533,8 @@ export async function prepareResponsesTransport(
           if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
           let response: Response;
           try {
+            if (!rebindPhysicalSend(options.sendBudget, { poolId: logCtx.spendPoolId ?? route.providerName,
+              identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError();
             commitKeyAttemptSend();
             response = await sendWithConnectionPolicy(
               fetchImpl,

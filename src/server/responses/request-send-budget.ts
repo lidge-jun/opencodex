@@ -1,5 +1,6 @@
+import { createInferenceSendBudget } from "../inference/context";
 import type { ResponsesRequestContext } from "./core-options";
-import { claimDispatchSpendProof, createRequestExecutionBudget, isRequestExecutionBudget, reportDispatchSends } from "../../lib/request-execution-budget";
+import { claimDispatchSpendProof, createPhysicalSendReporter, createRequestExecutionBudget, isRequestExecutionBudget, reportDispatchSends } from "../../lib/request-execution-budget";
 import {
   chargeWorkflowSends,
   workflowSendCeilingReached,
@@ -52,7 +53,7 @@ export function createResponsesSendBudget(
   // fresh default of 3. It is now a holder carried on options, so a combo child inherits the
   // parent's spend instead of starting over per target -- both halves of the measured
   // amplification in #4546.
-  const sendBudget = options.sendBudget ?? createRequestExecutionBudget();
+  const sendBudget = options.sendBudget ?? createInferenceSendBudget(req, logCtx);
   // The root workflow is the user-visible task. A per-request cap cannot bound a fan-out that
   // sends once per child seven hundred times, so every send charged to the request is charged
   // to the root as well (#4546).
@@ -68,7 +69,11 @@ export function createResponsesSendBudget(
   const noteTransientSends = (used: number): void => recordTransientSends(used, pendingHopPermit ?? inheritedPermit);
   // Capture at helper creation, before another leg can replace the pending handoff.
   const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit) =>
-    (used: number): void => recordTransientSends(used, permit);
+    createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? logCtx.provider,
+      identityId: logCtx.accountLogLabel }), permit, charged => {
+      options.onCompactionRecoverySendsReported?.(charged);
+      chargeWorkflowSends(workflowRootId, charged);
+    });
   // Refused before any dispatch, and deliberately not by evicting the root's ledger entry:
   // dropping the record to make room would hand the fan-out a fresh allowance, which is the
   // laundering this ceiling exists to stop. The client is told the task needs a new grant
@@ -333,6 +338,11 @@ function adapterDispatchBudgetView(
   refundableHop = false,
 ): RequestExecutionBudget {
   return {
+    get physicalStarted() { return budget.physicalStarted; },
+    get physicalLimit() { return budget.physicalLimit; },
+    get spendEnforced() { return budget.spendEnforced; },
+    claimPhysicalSend: () => budget.claimPhysicalSend?.(),
+    beginSpendProducer: () => budget.beginSpendProducer?.(),
     get used(): number { return budget.used; },
     set used(next: number) { budget.used = next; },
     logicalRequestId: budget.logicalRequestId,

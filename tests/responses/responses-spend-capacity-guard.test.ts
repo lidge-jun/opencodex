@@ -59,11 +59,11 @@ describe("configured spend cannot dispatch without a capacity booking", () => {
     });
   }
 
-  test("an already-sent capacity failure preserves physical count without a false refusal", () => {
+  test("unclaimed enforced numeric reports cannot bypass normal seed capacity", () => {
     const f = fixture({ pool: { maxTokens: 1000 }, maxTrackedSends: 1 });
     f.ledger.reserve({ sendId: "busy", scopes: { poolId: "fixture-pool" }, inputTokens: 1, outputCeilingTokens: 0 });
     f.budget.used += 1;
-    expect(f.budget.used).toBe(1);
+    expect(f.budget.used).toBe(0);
     expect(f.tracker.refusals).toBe(0);
     expect(f.context.errorCode).toBeUndefined();
     expect(f.context.localTerminalReason).toBeUndefined();
@@ -104,6 +104,7 @@ for (const [denial, code] of [
         // and actual journal failures/corruption are covered by the ledger regression suite.
         const ledger = Object.create(f.ledger) as typeof f.ledger;
         ledger.reserve = () => ({ reserved: false, denial });
+        ledger.reserveSeed = () => ({ reserved: false, denial });
         const tracker = createRequestSpendTracker(f.context, undefined, ledger);
         expect(tracker.charge({ alreadySent })).toBe(alreadySent || !enforced);
         expect(tracker.refusals).toBe(enforced && !alreadySent ? 1 : 0);

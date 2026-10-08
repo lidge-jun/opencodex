@@ -125,7 +125,7 @@ test("native Chat refuses a physical send that exceeds the configured pool spend
   }
 });
 
-test("native Chat reports a spend refusal on a transient retry leg as local 429", async () => {
+test("native Chat reuses its normal seed on a stable transient retry and retains both liabilities", async () => {
   const messages = [{ role: "user", content: "hello" }];
   let upstreamSends = 0;
   const upstream = Bun.serve({
@@ -148,11 +148,11 @@ test("native Chat reports a spend refusal on a transient retry leg as local 429"
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "mock/test-model", messages, max_tokens: 1 }),
   });
-  expect(response.status).toBe(429);
-  expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
-  expect(upstreamSends).toBe(1);
+  expect(response.status).toBe(503);
+  expect(response.headers.get("x-opencodex-local-refusal")).toBeNull();
+  expect(upstreamSends).toBe(2);
   expect(getRequestLogEntries().findLast(row => row.inboundProtocol === "chat")).toMatchObject({
-    status: 429, errorCode: "workflow_spend_exhausted",
+    status: 503,
   });
 });
 

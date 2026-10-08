@@ -121,7 +121,7 @@ export function unboundPoolSpendRefusalResponse(logCtx: RequestLogContext): Resp
  * children. A request that names a parent is treated as that fan-out; a top-level request is
  * the conversation and may use the reserved slots.
  */
-/** Keep storage/integrity failures distinct from unresolved identity evidence. */
+/** Read-only alias validation: keep replay corruption distinct from conflicting pool owners. */
 export function poolContinuityRefusalReason(): WorkflowDenial | undefined {
   const denial = sharedPoolContinuityDenial();
   if (!denial) return undefined;

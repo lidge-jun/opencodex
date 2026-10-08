@@ -1,3 +1,5 @@
+import { createPhysicalSendReporter } from "../../lib/request-execution-budget";
+import { createInferenceSendBudget } from "../inference/context";
 import { capturePoolQuotaWriter } from "../../codex/account-store";
 import { previewXaiOauthWireModel } from "./core-normalize";
 import {
@@ -722,6 +724,7 @@ export async function handleResponsesCompact(
   logCtx.provider = route.codexAccountNamespace
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : route.providerName;
+  logCtx.spendPoolId = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
   // #4940, and the same refusal the ordinary Responses path makes in request-prepare.ts. Compact has
   // to repeat it rather than inherit it: the native branch below dispatches straight to
@@ -804,7 +807,7 @@ export async function handleResponsesCompact(
   // failure that hands off, continues here. The routed turn used to call handleResponses with
   // no budget at all, so `handleResponsesInner` minted a fresh four after the native attempt
   // had already spent some of the first one.
-  const sendBudget: RequestExecutionBudget = options.sendBudget ?? createRequestExecutionBudget();
+  const sendBudget: RequestExecutionBudget = options.sendBudget ?? createInferenceSendBudget(req, logCtx);
   // A manual override onto another backend must not mint ciphertext the conversation model cannot replay.
   const manualOverrideCrossesProvider = options.compactionRoutingOverride
     ? !compactionRoutingKeepsProviderIdentity(config, options.compactionRoutingOverride, route)
@@ -1026,8 +1029,10 @@ export async function handleResponsesCompact(
       doFetch: () => Promise<Response>,
     ): Promise<Response> => {
       if (sendBudget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS) > 0) {
-        sendBudget.used += 1;
-        return doFetch();
+        const report = createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? route.providerName,
+          identityId: logCtx.accountLogLabel }));
+        if (report.beforeSend?.() === false) { report.close?.(); return Promise.reject(new SendBudgetExhaustedError(safeHostLabel(compactUrl))); }
+        return doFetch().finally(() => { report(1); report.close?.(); });
       }
       const decision = sendBudget.reserveDispatch({
         sendClass: "auth-recovery",
@@ -1076,7 +1081,8 @@ export async function handleResponsesCompact(
           // Draws the shared remainder instead of a fresh three. Compact is a native endpoint
           // of the same logical turn, so its sends belong to the same cap.
           attempts: sendBudget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS),
-          onSendsConsumed: (used: number) => { sendBudget.used += Math.max(0, used); },
+          onSendsConsumed: createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? route.providerName,
+            identityId: logCtx.accountLogLabel })),
         });
     };
 

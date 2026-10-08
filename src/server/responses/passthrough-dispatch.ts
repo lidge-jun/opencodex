@@ -797,7 +797,10 @@ export async function preparePassthroughExchange(
      */
     const sendAmbiguousReplacement = (
       signal: AbortSignal = upstream.signal,
-    ): Promise<Response> => fetchWithHeaderTimeout(
+    ): Promise<Response> => {
+      const report = transientSendReporter();
+      let started = false;
+      const run = () => fetchWithHeaderTimeout(
       request.url,
       applyUpstreamRecoveryInit({
         method: request.method,
@@ -832,11 +835,14 @@ export async function preparePassthroughExchange(
           // Charged to the SAME request counter every other send goes through. The
           // replacement is bought here rather than by a nested retry helper, so there is
           // one charge for one send and no per-layer counter to reconcile.
-          noteTransientSends(1);
+          if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+          started = true;
         },
       }),
       route.provider.authMode === "forward",
     );
+      return (report.execute ? report.execute(run) : run()).finally(() => { if (started) report(1); report.close?.(); });
+    };
     /**
      * Refuse a built body that exceeds the operator's configured ceiling, before it is sent.
      *

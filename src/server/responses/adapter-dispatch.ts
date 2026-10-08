@@ -158,6 +158,7 @@ export async function prepareAdapterExchange(
     | "noteAdapterPhysicalSend"
     | "noteAdapterRecoveryWithheld"
     | "remainingTransientSendBudget"
+    | "adapterSendBudget"
     | "transientSendReporter"
     | "recoverySendAllowance"
     | "recoveryClassFor"
@@ -334,6 +335,8 @@ export async function prepareAdapterExchange(
   try {
     if (transportState.activeAdapter.fetchResponse) {
       transportState.noteRoutedAttemptSend(inputTokenEstimate);
+      const producer = adapterDispatchBudget?.beginSpendProducer?.();
+      try {
       upstreamResponse = await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot =>
         transportState.activeAdapter.fetchResponse!(builtInitialRequest, {
           kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
@@ -353,6 +356,7 @@ export async function prepareAdapterExchange(
               ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
           }),
         }));
+      } finally { producer?.close(); }
     } else {
       // #1851 scope guard: transient-5xx retry on this generic adapter path is opt-in for
       // direct Google AI Studio only (Vertex/Antigravity use fetchResponse above). Other
@@ -400,7 +404,7 @@ export async function prepareAdapterExchange(
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
-          ...(options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid
+          ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid
             ? {
               // A pending compaction permit already booked this leg's first physical send.
               ...(transientPolicy || resetPolicy || compactPrepaid
@@ -590,7 +594,7 @@ export async function prepareAdapterExchange(
           const refetchWithPolicy = (route.provider.adapter === "google" || refetchTransientPolicy)
             ? fetchWithTransientRetry
             : fetchWithResetRetry;
-          const helperCountsSends = refetchTransientPolicy !== null || resetReplayPolicyFor(route.provider) !== null;
+          const helperCountsSends = sendBudgetState.adapterSendBudget?.spendEnforced === true || refetchTransientPolicy !== null || resetReplayPolicyFor(route.provider) !== null;
           const prepaid = sendBudgetState.pendingHopPermit;
           const configuredTotal = refetchTransientPolicy?.attempts;
           const refetchCap = transientSendCapFor(configuredTotal,

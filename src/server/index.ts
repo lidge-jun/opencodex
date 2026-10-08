@@ -302,7 +302,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(config.appOwnedMemoryBudgetMb));
   enforceAppOwnedMemoryBudget();
   // Observe-only mode still journals physical sends, so every server owns before configuring.
-  spendLedgerLifecycle.configure(config.spend, config.spendPoolAliases);
+  spendLedgerLifecycle.configure(config.spend, config.spendPoolAliases, Object.keys(config.providers));
   // After ownership: a second server on the same home is refused above, so the process running
   // this line is the only one appending to usage.jsonl and the only one that may compact it.
   setUsageLedgerRetention(config.usageLedgerMaxBytes);

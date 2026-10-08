@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
-import { sharedSpendLedger, type SpendReservationLedger, type SpendScopes } from "../../lib/spend-reservation-ledger";
+import { sharedSpendLedger, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof } from "../../lib/spend-reservation-ledger";
 import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
 import { recordWorkflowRefusalEvent, workflowDenialSummary, type WorkflowDenial } from "../../lib/workflow-budget";
@@ -16,9 +16,22 @@ export interface RequestSpendSettlement {
   settle(usage: TerminalSpendUsage | undefined): void;
 }
 
+export interface SpendTargetIdentity extends SpendScopes { readonly targetKey?: string }
+export interface RequestSpendReporter {
+  start(seed: SpendSeed, ordinal: number): void;
+  rebindTarget(target: SpendTargetIdentity, ordinal: number): boolean;
+  report(sends: number): void;
+  close(): void;
+}
+
 export interface RequestSpendTracker extends RequestSendObserver, RequestSpendSettlement {
   /** Dispatches this request lost to a ledger ceiling. Zero on every ordinary request. */
   readonly refusals: number;
+  readonly enforced: boolean;
+  ensureSeed(target: SpendTargetIdentity, prepaidProof?: SpendReservationProof): SpendSeed | undefined;
+  beginReporter(): RequestSpendReporter;
+  reportFromSeed(seed: SpendSeed, ordinal: number): void;
+  requestFinalSettlement(usage: TerminalSpendUsage | undefined): void;
 }
 
 /**
@@ -60,6 +73,73 @@ export function createRequestSpendTracker(
   let refusals = 0;
   let resolved = false;
   let terminalProcessed = false;
+  let seededAccounting = false;
+  let finalRequested = false;
+  let finalUsage: TerminalSpendUsage | undefined;
+  let reporters = 0;
+  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean }>();
+  const resolvedSendIds = new Set<string>();
+  let awaitingDrain = false;
+  const completedSeeds = new Set<SpendSeed>();
+  const physical = new Map<number, { seed: SpendSeed; sendId?: string }>();
+  const selectedScopes = (target: SpendTargetIdentity = {}): SpendScopes => ({
+    ...(rootId !== undefined ? { rootId } : {}),
+    ...(target.identityId ?? logCtx.accountLogLabel ? { identityId: target.identityId ?? logCtx.accountLogLabel } : {}),
+    ...(target.poolId ?? logCtx.spendPoolId ?? logCtx.provider ? { poolId: target.poolId ?? logCtx.spendPoolId ?? logCtx.provider } : {}),
+  });
+  const applicable = (scopes: SpendScopes): boolean => {
+    const policy = ledger().policy;
+    return seededAccounting || (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
+      || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
+      || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
+  };
+  const estimates = () => ({ inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
+    outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0 });
+  const seedState = (seed: SpendSeed) => [...seeds.values()].find(state => state.seed === seed);
+  const finalizeSeeds = (): void => {
+    if (!finalRequested || reporters !== 0 || resolved || !seededAccounting) return;
+    // All starts are booked before producers close. Ordinal, never callback order, owns usage.
+    const entries = [...physical.entries()].sort((a, b) => a[0] - b[0]);
+    const terminal = entries.at(-1)?.[1].sendId;
+    const ids: string[] = [];
+    for (const [, entry] of entries) {
+      if (!entry.sendId) return;
+      const reported = entry.sendId === terminal && (typeof finalUsage?.inputTokens === "number" || typeof finalUsage?.outputTokens === "number");
+      if (!resolvedSendIds.has(entry.sendId)) {
+        const ok = reported ? ledger().settle(entry.sendId, { inputTokens: finalUsage?.inputTokens ?? 0, outputTokens: finalUsage?.outputTokens ?? 0 })
+          : ledger().markLost(entry.sendId);
+        if (!ok) return;
+        resolvedSendIds.add(entry.sendId);
+      }
+      ids.push(entry.sendId);
+    }
+    for (const state of seeds.values()) if (!state.started && !completedSeeds.has(state.seed)) {
+      if (!resolvedSendIds.has(state.seed.sendId) && !ledger().abandon(state.seed.sendId)) return;
+      resolvedSendIds.add(state.seed.sendId);
+      ids.push(state.seed.sendId);
+    }
+    if (!ledger().forgetResolved(ids)) {
+      if (!awaitingDrain) {
+        awaitingDrain = true;
+        void ledger().waitForReporterDrain().then(() => {
+          awaitingDrain = false;
+          // One retry after the installation producer barrier; storage failure keeps debt.
+          if (!ledger().forgetResolved(ids)) return;
+          for (const state of seeds.values()) if (!completedSeeds.has(state.seed)) {
+            if (!ledger().finishSeed(state.seed)) return;
+            completedSeeds.add(state.seed);
+          }
+          resolved = true;
+        });
+      }
+      return;
+    }
+    for (const state of seeds.values()) if (!completedSeeds.has(state.seed)) {
+            if (!ledger().finishSeed(state.seed)) return;
+            completedSeeds.add(state.seed);
+          }
+    resolved = true;
+  };
   /**
    * Confirm the sends this request has already moved past.
    *
@@ -74,7 +154,156 @@ export function createRequestSpendTracker(
       if (!pendingDispatch.has(sendId)) ledger().markDispatched(sendId);
     }
   };
-  return {
+  const refusal = (denial: import("../../lib/spend-reservation-ledger").SpendDenial): void => {
+        refusals += 1;
+        // Preserve the PR's explicit unresolved-history refusal and its distinct operator code.
+        if (denial.reason === "pool-history-unresolved") {
+          const summary = workflowDenialSummary("workflow-pool-history-unresolved");
+          markLocalRequestLogRefusal(logCtx, summary.code);
+          logCtx.errorCode = summary.code;
+          recordWorkflowRefusalEvent(rootId, "workflow-pool-history-unresolved", Date.now());
+          return;
+        }
+        const reason: WorkflowDenial = denial.reason === "duplicate-send-id"
+          ? "workflow-send-replayed"
+          : denial.reason === "reserve-not-durable" || denial.reason === "journal-corrupt"
+            ? "workflow-spend-undurable"
+            : denial.reason === "tracking-capacity-exhausted"
+              ? "workflow-tracking-exhausted"
+              : "workflow-spend-exhausted";
+        const detail = denial.reason === "spend-limit-exceeded"
+          ? {
+            scope: denial.scope,
+            limit: denial.limit,
+            projected: denial.projected,
+            ...(denial.includesUnboundPoolHistory ? { includesUnboundPoolHistory: true } : {}),
+          }
+          : undefined;
+        const summary = workflowDenialSummary(reason, detail);
+        markLocalRequestLogRefusal(logCtx, summary.code);
+        logCtx.errorCode = summary.code;
+        if (detail?.includesUnboundPoolHistory) logCtx.spendRefusalDetail = detail;
+        recordWorkflowRefusalEvent(rootId, reason, Date.now(), detail);
+        return;
+  };
+  const tracker: RequestSpendTracker = {
+    get enforced(): boolean { return applicable(selectedScopes()); },
+    ensureSeed(target, prepaidProof) {
+      if (resolved || finalRequested && reporters === 0) return undefined;
+      const scopes = selectedScopes(target);
+      if (!applicable(scopes)) return undefined;
+      const key = JSON.stringify([scopes.rootId, scopes.identityId, scopes.poolId, target.targetKey]);
+      const existing = seeds.get(key);
+      if (existing) return existing.seed;
+      if (prepaidProof?.ledger === ledger()) {
+        const prepaid = [...seeds.entries()].find(([, state]) => state.seed.sendId === prepaidProof.sendId);
+        if (prepaid && !prepaid[1].started) {
+          // The proof was reserved against the selected scopes by this tracker.
+          const oldIdentity = JSON.parse(prepaid[0]) as Array<string | undefined>;
+          if (oldIdentity[0] === (scopes.rootId ?? null) && oldIdentity[1] === (scopes.identityId ?? null) && oldIdentity[2] === (scopes.poolId ?? null)) {
+            seeds.delete(prepaid[0]); seeds.set(key, prepaid[1]); return prepaid[1].seed;
+          }
+        }
+      }
+      if (target.targetKey === undefined) {
+        const same = [...seeds.entries()].find(([candidate]) => {
+          const identity = JSON.parse(candidate) as Array<string | undefined>;
+          return identity[0] === (scopes.rootId ?? null) && identity[1] === (scopes.identityId ?? null) && identity[2] === (scopes.poolId ?? null);
+        });
+        if (same) return same[1].seed;
+      }
+      // Rebind an unused provisional anchor before selection changes. Dispatched anchors stay live.
+      for (const [oldKey, state] of seeds) if (!state.started) {
+        if (!ledger().abandon(state.seed.sendId)) return undefined;
+        // The ledger pins abandoned anchors until its reporter drain. Keep the capability
+        // for final cleanup if another producer is currently registered.
+        if (!ledger().finishSeed(state.seed)) continue;
+        seeds.delete(oldKey);
+        const index = live.indexOf(state.seed.sendId);
+        if (index >= 0) live.splice(index, 1);
+        pendingDispatch.delete(state.seed.sendId);
+      }
+      // Exact prepaid proofs originate from this tracker and are found above; foreign receipts
+      // cannot enroll arbitrary scopes. Normal reservation remains the only initial admission.
+      if (prepaidProof && prepaidProof.ledger !== ledger()) return undefined;
+      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...estimates() });
+      if (!decision.reserved) {
+        // Use the established denial mapping without making another reservation.
+        refusal(decision.denial);
+        return undefined;
+      }
+      seededAccounting = true;
+      seeds.set(key, { seed: decision.seed, started: false, reported: false });
+      return decision.seed;
+    },
+    beginReporter() {
+      if (resolved || finalRequested && reporters === 0) throw new Error("Spend reporter registered after final closure");
+      const lease = ledger().registerReporter();
+      reporters++;
+      let closed = false;
+      let reported = 0;
+      const starts: Array<{ seed: SpendSeed; ordinal: number }> = [];
+      return {
+        start(seed, ordinal) {
+          if (closed || !seedState(seed) || physical.has(ordinal)) throw new Error("Invalid spend reporter start");
+          const state = seedState(seed)!;
+          state.started = true;
+          starts.push({ seed, ordinal });
+          physical.set(ordinal, { seed });
+
+        },
+        rebindTarget(target, ordinal) {
+          const entry = physical.get(ordinal);
+          const owned = starts.find(start => start.ordinal === ordinal);
+          if (closed || !entry || !owned || entry.sendId) throw new Error("Invalid spend reporter rebind");
+          const old = seedState(entry.seed)!;
+          // A helper start is provisional until selection reaches the executor. If this is
+          // the first start on its seed, abandon/rebind at NORMAL capacity before the wire.
+          physical.delete(ordinal);
+          old.started = [...physical.values()].some(start => start.seed === old.seed);
+          const seed = tracker.ensureSeed(target);
+          if (!seed) { starts.splice(starts.indexOf(owned), 1); return false; }
+          physical.set(ordinal, { seed });
+          owned.seed = seed;
+          seedState(seed)!.started = true;
+          return true;
+        },
+        report(sends) {
+          if (closed) return;
+          const count = Number.isFinite(sends) ? Math.max(0, Math.trunc(sends)) : 0;
+          for (let i = 0; i < count && reported < starts.length; i++) {
+            const entry = starts[reported++]!;
+            tracker.reportFromSeed(entry.seed, entry.ordinal);
+          }
+        },
+        close() {
+          if (closed) return;
+          // Cancellation still books every claimed start conservatively.
+          this.report(starts.length - reported);
+          closed = true;
+          reporters--;
+          lease.close();
+          finalizeSeeds();
+        },
+      };
+    },
+    reportFromSeed(seed, ordinal) {
+      const entry = physical.get(ordinal);
+      const state = seedState(seed);
+      if (!entry || entry.seed !== seed || entry.sendId || !state) return;
+      const firstOrdinal = [...physical.entries()].filter(([, send]) => send.seed === seed).map(([order]) => order).sort((a, b) => a - b)[0];
+      const sendId = ordinal === firstOrdinal ? seed.sendId : randomUUID();
+      if (sendId !== seed.sendId && !ledger().reserveReportedFromSeed(seed, { sendId, ...estimates() })) {
+        throw new Error("Already-sent spend could not be persisted");
+      }
+      state.reported = true;
+      if (!ledger().markDispatched(sendId)) throw new Error("Already-sent spend dispatch could not be persisted");
+      entry.sendId = sendId;
+    },
+    requestFinalSettlement(usage) {
+      if (!finalRequested) { finalRequested = true; finalUsage = usage; }
+      finalizeSeeds();
+    },
     charge(options?: Parameters<RequestSendObserver["charge"]>[0]): boolean {
       // A send that has already left is RECORDED, never refused: the tokens are spent, and a
       // booking the ledger drops is a booking the ceiling can never see. This is the reporting
@@ -82,6 +311,12 @@ export function createRequestSpendTracker(
       // fetch -- so without it a root ceiling on the canonical Codex path would sit one send
       // short of its limit forever and refuse nothing.
       const alreadySent = options?.alreadySent === true;
+      if (!alreadySent && tracker.enforced) {
+        const seed = tracker.ensureSeed({ targetKey: options?.targetKey });
+        if (!seed) return false;
+        options?.onReserved?.({ ledger: ledger(), sendId: seed.sendId });
+        return true;
+      }
       const sendId = randomUUID();
       const bookedLedger = ledger();
       const scopes: SpendScopes = {
@@ -109,36 +344,7 @@ export function createRequestSpendTracker(
         // capacity is full. Unconfigured/nonapplicable requests remain observe-only, and a
         // physical send reported after dispatch cannot be refused retroactively.
         if (alreadySent || !enforced) return true;
-        refusals += 1;
-        const denial = decision.denial;
-        // Preserve the PR's explicit unresolved-history refusal and its distinct operator code.
-        if (denial.reason === "pool-history-unresolved") {
-          const summary = workflowDenialSummary("workflow-pool-history-unresolved");
-          markLocalRequestLogRefusal(logCtx, summary.code);
-          logCtx.errorCode = summary.code;
-          recordWorkflowRefusalEvent(rootId, "workflow-pool-history-unresolved", Date.now());
-          return false;
-        }
-        const reason: WorkflowDenial = denial.reason === "duplicate-send-id"
-          ? "workflow-send-replayed"
-          : denial.reason === "reserve-not-durable" || denial.reason === "journal-corrupt"
-            ? "workflow-spend-undurable"
-            : denial.reason === "tracking-capacity-exhausted"
-              ? "workflow-tracking-exhausted"
-              : "workflow-spend-exhausted";
-        const detail = denial.reason === "spend-limit-exceeded"
-          ? {
-            scope: denial.scope,
-            limit: denial.limit,
-            projected: denial.projected,
-            ...(denial.includesUnboundPoolHistory ? { includesUnboundPoolHistory: true } : {}),
-          }
-          : undefined;
-        const summary = workflowDenialSummary(reason, detail);
-        markLocalRequestLogRefusal(logCtx, summary.code);
-        logCtx.errorCode = summary.code;
-        if (detail?.includesUnboundPoolHistory) logCtx.spendRefusalDetail = detail;
-        recordWorkflowRefusalEvent(rootId, reason, Date.now(), detail);
+        refusal(decision.denial);
         return false;
       }
       if (!alreadySent) options?.onReserved?.({ ledger: bookedLedger, sendId });
@@ -151,6 +357,7 @@ export function createRequestSpendTracker(
       return true;
     },
     dispatch(proof): void {
+      if (seededAccounting && proof.ledger === ledgerRef) return;
       if (proof.ledger !== ledgerRef || !pendingDispatch.has(proof.sendId)) return;
       ledger().markDispatched(proof.sendId);
       pendingDispatch.delete(proof.sendId);
@@ -159,6 +366,11 @@ export function createRequestSpendTracker(
       if (index >= 0) live.push(...live.splice(index, 1));
     },
     refund(proof): void {
+      if (proof && proof.ledger === ledgerRef && seededAccounting) {
+        const match = [...seeds.entries()].find(([, state]) => state.seed.sendId === proof.sendId);
+        if (match && !match[1].started && ledger().abandon(proof.sendId) && ledger().finishSeed(match[1].seed)) seeds.delete(match[0]);
+        return;
+      }
       // null is an exact budget reservation that obtained no durable booking.
       if (proof === null || (proof && proof.ledger !== ledgerRef)) return;
       const index = proof ? live.indexOf(proof.sendId) : live.length - 1;
@@ -172,6 +384,7 @@ export function createRequestSpendTracker(
     },
     settle(usage: TerminalSpendUsage | undefined): void {
       if (resolved) return;
+      if (seededAccounting) { tracker.requestFinalSettlement(usage); return; }
       try {
         if (!terminalProcessed && live.length > 0) {
           const terminal = live[live.length - 1] as string;
@@ -204,6 +417,7 @@ export function createRequestSpendTracker(
     },
     get refusals(): number { return refusals; },
   };
+  return tracker;
 }
 
 /**
@@ -217,7 +431,8 @@ export function attachRequestSpendTracker(
   req: Pick<Request, "headers">,
   logCtx: RequestLogContext,
   ledger?: SpendReservationLedger,
-): RequestSendObserver {
+): RequestSpendTracker {
+  if (logCtx.spendTracker && "ensureSeed" in logCtx.spendTracker) return logCtx.spendTracker as RequestSpendTracker;
   const rootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const tracker = ledger === undefined
     ? createRequestSpendTracker(logCtx, rootId)

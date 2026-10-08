@@ -759,6 +759,7 @@ export function workflowSpendCeilingReached(
   if (!rootId && !poolId) return undefined;
   const ledger = spendLedger ?? (spendCeilingsConfigured() ? sharedSpendLedger() : undefined);
   if (!ledger) return undefined;
+  // This reads the current alias partition; it never publishes continuity metadata.
   const excludingSendId = reservation?.ledger === ledger ? reservation.sendId : undefined;
   const root = rootId ? spentRootCeiling(rootId, ledger, excludingSendId) : undefined;
   if (root) return root;

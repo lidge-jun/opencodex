@@ -1,3 +1,5 @@
+import { createPhysicalSendReporter } from "../lib/request-execution-budget";
+import { createInferenceSendBudget } from "./inference/context";
 /**
  * Managed native Messages lane (PF-08, behind `protocols.rollout.managedMessagesNative`).
  *
@@ -43,6 +45,7 @@ import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/t
 import {
   applyReplayRefusalClientHeaders,
   applyUpstreamRecoveryInit,
+  SendBudgetExhaustedError,
   fetchWithResetRetry,
   fetchWithTransientRetry,
   isNonReplayableResponse,
@@ -412,6 +415,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
   if (oauthBinding) logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
   const spendTracker = attachRequestSpendTracker(req, logCtx);
+  const physicalBudget = createInferenceSendBudget(req, logCtx);
   let activeRequest: AnthropicMessagesPassthroughRequest;
   let retainedRequestBytes = 0;
   const releaseRetainedRequest = () => {
@@ -527,9 +531,17 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             const releaseFamily = snapshot ? claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
             if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
             let dispatched: Response;
+            const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
+              poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
+            }));
             try {
               if (init.signal?.aborted) throw init.signal.reason;
-              if (!spendTracker.charge()) throw new NativeMessagesSpendRefusal();
+              if (physicalBudget.spendEnforced) {
+                if (!spendReport.beforeSend?.()) {
+                  if (spendTracker.refusals) throw new NativeMessagesSpendRefusal();
+                  throw new SendBudgetExhaustedError();
+                }
+              } else if (!spendTracker.charge()) throw new NativeMessagesSpendRefusal();
               noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
               dispatched = await sendWithConnectionPolicy(
                 (activeProvider as OcxProviderTransport).fetch ?? execute,
@@ -537,7 +549,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                 applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body }, transportRecovery),
                 { providerName: route.providerName, provider: activeProvider },
               );
-            } finally { releaseFamily(); }
+            } finally {
+              if (physicalBudget.spendEnforced) spendReport(1);
+              spendReport.close?.(); releaseFamily();
+            }
             if (ownsBearer && snapshot) {
               try {
                 const current = getAccountCredentialWithStatus("anthropic", snapshot.accountId);
@@ -653,6 +668,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
     if (sendError instanceof NativeMessagesSpendRefusal) {
       const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);
       finishLog(429);
