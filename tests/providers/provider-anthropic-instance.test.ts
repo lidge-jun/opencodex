@@ -211,14 +211,20 @@ describe("REG-02 bare model inference never selects the marked Pool 2 row", () =
     expect(routeModel(config, "anthropic2/claude-sonnet-5").providerName).toBe("anthropic2");
   });
 
-  test("shared default model aliases are not ambiguous and stay on A; B keeps its qualified alias", () => {
-    const config = pools(next => { next.defaultModelAliases = true; });
-    expect(routeModel(config, "haiku")).toMatchObject({
+  test("an alias both pools declare is not ambiguous and stays on A; B keeps its qualified alias", () => {
+    // A user alias on both rows: built-in aliases step aside whenever a catalog carries two matching
+    // models (two Haiku generations, for example), so they cannot pin this contract reliably.
+    const aliased = (next: OcxConfig) => {
+      next.providers.anthropic!.modelAliases = { "claude-haiku-4-5": "quick" };
+      next.providers.anthropic2!.modelAliases = { "claude-haiku-4-5": "quick" };
+    };
+    const config = pools(aliased);
+    expect(routeModel(config, "quick")).toMatchObject({
       providerName: "anthropic", modelId: "claude-haiku-4-5", routeReason: "model-alias",
     });
-    expect(routeModel(config, "anthropic2/haiku")).toMatchObject({ providerName: "anthropic2", modelId: "claude-haiku-4-5" });
-    const onlyB = pools(next => { next.defaultModelAliases = true; next.providers.anthropic!.disabled = true; });
-    expect(routeModel(onlyB, "haiku").providerName).not.toBe("anthropic2");
+    expect(routeModel(config, "anthropic2/quick")).toMatchObject({ providerName: "anthropic2", modelId: "claude-haiku-4-5" });
+    const onlyB = pools(next => { aliased(next); next.providers.anthropic!.disabled = true; });
+    expect(routeModel(onlyB, "quick").providerName).not.toBe("anthropic2");
   });
 
   test("an explicit B default provider and an unmarked custom anthropic2 row keep their behaviour", () => {
