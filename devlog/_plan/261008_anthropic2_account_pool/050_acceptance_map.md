@@ -70,14 +70,16 @@ UUID each physical send carried). No suite is copied with a string replace.
 | STATE-06, STATE-07, STATE-08 | wp4 | `tests/usage/anthropic2-usage-attribution.test.ts` |
 | account health DTO (A/B same ID, different cooldown) | wp3 | `tests/oauth/oauth-anthropic-instance-health.test.ts` |
 
-## Explicitly not covered here
+## Compatibility evidence and exclusions
 
-- STATE-11 old-version half: a pinned old-binary CI artifact is not built in this unit, so old-version
-  preservation of a B auth key is treated as unverified. Following PRD §8 for that case, the docs-site reference
-  (wp4) documents the downgrade procedure: in-place downgrade with an active B is unsupported; stop B work, back
-  up the protected auth file, remove the `anthropic2` provider and helper `anthropicInstance` settings, remove
-  the B accounts, and log in again after upgrading; A credentials are never moved or deleted. The PR states this
-  residual explicitly.
+- STATE-11 pinned pre-feature source at `6a7632db2a85c359da9feac976180450ebb42c60`
+  executed under Bun 1.4.0 in [hosted run 37752878337](https://github.com/lidge-jun/opencodex/actions/runs/37752878337).
+  Its receipt confirms orphan B read preservation, preservation after A and B
+  writes, and selective config salvage without auth mutation. The uploaded artifact
+  is named `anthropic2-old-version-<tested-head>`; only synthetic data was used.
+  This establishes the narrow old-store compatibility check, not supported in-place
+  downgrade with active B. Downgrade instructions retain stop/backup/remove-B-config
+  requirements and never move or delete A credentials.
 - Section 9 live-account smoke: needs separate owner approval and real accounts; not run.
 
 ## Release blockers (PRD §11) → evidence

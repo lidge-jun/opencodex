@@ -1573,9 +1573,6 @@ export async function runLogin(
     }
     preflightConfig = loadLatestConfig();
   }
-  if (provider === "anthropic2" && observeInitialConfigState() !== "exists") {
-    throw new OAuthProviderPublicationError(provider);
-  }
   if (preflightConfig) {
     assertAnthropicInstanceLoginConfig(preflightConfig, provider);
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(
@@ -1583,6 +1580,9 @@ export async function runLogin(
       provider,
     );
     if (namespaceCollision) throw new Error(namespaceCollision);
+  }
+  if (provider === "anthropic2" && observeInitialConfigState() !== "exists") {
+    throw new OAuthProviderPublicationError(provider);
   }
   // loginKiro keys its pending CLI-session transaction by object identity. Keep this exact object
   // for settlement even when source normalization below creates a derived credential object.
