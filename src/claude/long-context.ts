@@ -41,10 +41,23 @@ export function isLongContextWindow(window: number | undefined): boolean {
 }
 
 /**
- * Desktop 3P / dashboard 1M eligibility. Real Anthropic routes (either pool) ride the native
- * passthrough and need a genuine 1M window; everything else follows isLongContextWindow.
+ * A real Anthropic model on an Anthropic route. Its windows are 200k or a genuine 1M, and a bare
+ * id rides the native passthrough, so the long-window rule never widens it. The model id is part
+ * of the test on purpose: a configured gateway that merely shares the name `anthropic2` and
+ * serves other models is not an Anthropic pool.
  */
-export function claudeSurfaceSupportsOneMillion(provider: string, window: number | undefined): boolean {
-  if (isAnthropicInstanceId(provider)) return typeof window === "number" && window >= ONE_MILLION;
+export function isAnthropicClaudeRoute(provider: string, modelId: string): boolean {
+  return isAnthropicInstanceId(provider) && modelId.startsWith("claude-");
+}
+
+/** Desktop 3P / picker / discovery / dashboard 1M eligibility for one provider route. */
+export function claudeSurfaceSupportsOneMillion(provider: string, modelId: string, window: number | undefined): boolean {
+  if (isAnthropicClaudeRoute(provider, modelId)) return typeof window === "number" && window >= ONE_MILLION;
   return isLongContextWindow(window);
+}
+
+/** Same, for a `provider/id` route string. */
+export function routeSupportsOneMillion(route: string, window: number | undefined): boolean {
+  const slash = route.indexOf("/");
+  return claudeSurfaceSupportsOneMillion(route.slice(0, slash), route.slice(slash + 1), window);
 }

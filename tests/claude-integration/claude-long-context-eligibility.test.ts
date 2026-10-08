@@ -4,7 +4,7 @@
  * 1M (devlog/_plan/261009_claude_1m_default/020_long_context_eligibility.md).
  */
 import { describe, expect, test } from "bun:test";
-import { claudeSurfaceSupportsOneMillion, isLongContextWindow } from "../../src/claude/long-context";
+import { claudeSurfaceSupportsOneMillion, isLongContextWindow, routeSupportsOneMillion } from "../../src/claude/long-context";
 import { AUTO_CONTEXT_OFF, buildClaudeContextWindows, UNPAIRED_AUTO_CONTEXT } from "../../src/claude/context-windows";
 import { buildAnthropicModelInfos } from "../../src/claude/model-info";
 import { generateDesktop3pModels } from "../../src/claude/desktop-3p";
@@ -18,12 +18,14 @@ describe("isLongContextWindow / claudeSurfaceSupportsOneMillion", () => {
     for (const window of [829_800, 872_000, 922_000, 1_000_000, 2_000_000]) expect(isLongContextWindow(window)).toBe(true);
   });
 
-  test("Anthropic rows of either pool need a genuine 1M", () => {
-    expect(claudeSurfaceSupportsOneMillion("anthropic", 872_000)).toBe(false);
-    expect(claudeSurfaceSupportsOneMillion("anthropic2", 872_000)).toBe(false);
-    expect(claudeSurfaceSupportsOneMillion("anthropic2", 1_000_000)).toBe(true);
-    expect(claudeSurfaceSupportsOneMillion("native", 872_000)).toBe(true);
-    expect(claudeSurfaceSupportsOneMillion("kimi", 262_144)).toBe(false);
+  test("Claude models on either Anthropic pool need a genuine 1M; a gateway that shares the name does not", () => {
+    expect(claudeSurfaceSupportsOneMillion("anthropic", "claude-sonnet-5", 872_000)).toBe(false);
+    expect(claudeSurfaceSupportsOneMillion("anthropic2", "claude-sonnet-5", 872_000)).toBe(false);
+    expect(claudeSurfaceSupportsOneMillion("anthropic2", "claude-sonnet-5", 1_000_000)).toBe(true);
+    // A configured gateway named anthropic2 serving another vendor's model is not an Anthropic pool.
+    expect(claudeSurfaceSupportsOneMillion("anthropic2", "kimi-k3", 900_000)).toBe(true);
+    expect(routeSupportsOneMillion("native/gpt-6-astra", 872_000)).toBe(true);
+    expect(routeSupportsOneMillion("kimi/k3", 262_144)).toBe(false);
   });
 });
 
@@ -69,13 +71,15 @@ describe("Desktop 3P", () => {
 });
 
 describe("launch window map", () => {
-  test("a sub-1M Pool 2 row is not registered, like a Pool 1 row", () => {
+  test("a sub-1M Claude row on Pool 2 is not registered, like a Pool 1 row; other models on that name are", () => {
     const windows = buildClaudeContextWindows([], [
       { provider: "anthropic2", id: "claude-short", contextWindow: 872_000 },
       { provider: "anthropic2", id: "claude-long", contextWindow: 1_000_000 },
+      { provider: "anthropic2", id: "kimi-k3", contextWindow: 900_000 },
     ] as Parameters<typeof buildClaudeContextWindows>[1]);
     expect(windows["anthropic2/claude-short"]).toBeUndefined();
     expect(windows["anthropic2/claude-long"]).toBe(1_000_000);
+    expect(windows["anthropic2/kimi-k3"]).toBe(900_000);
   });
 });
 
@@ -86,5 +90,13 @@ describe("generated subagent markers", () => {
     expect(withSubagentContextMarker(alias, { [alias]: 872_000 })).toBe(`${alias}[1m]`);
     expect(withSubagentContextMarker(alias, { [alias]: 262_144 })).toBe(alias);
     expect(withSubagentContextMarker(`${alias}[1m]`, { [alias]: 262_144 })).toBe(alias);
+  });
+
+  test("a capped Claude row on Pool 2 stays unmarked even when a connected window map lists it", () => {
+    // Connected launches read the published catalog, which keeps capped Anthropic rows.
+    const pool2 = "ocx-claude-anthropic2--claude-sonnet-5";
+    expect(withSubagentContextMarker(pool2, { [pool2]: 900_000 })).toBe(pool2);
+    expect(withSubagentContextMarker(`${pool2}[1m]`, { [pool2]: 900_000 })).toBe(pool2);
+    expect(withSubagentContextMarker(pool2, { [pool2]: 1_000_000 })).toBe(`${pool2}[1m]`);
   });
 });

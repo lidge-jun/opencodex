@@ -253,7 +253,7 @@ function collectDesktop3pModels(
   for (const { provider, id, contextWindow } of candidates) {
     const route = `${provider}/${id}`;
     const alias = desktop3pAlias(provider, id);
-    const supports1m = claudeSurfaceSupportsOneMillion(provider, contextWindow)
+    const supports1m = claudeSurfaceSupportsOneMillion(provider, id, contextWindow)
       ? { supports1m: true as const }
       : {};
     if (alias === id) {

@@ -20,7 +20,7 @@ import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
 import { cursorFastIdFor } from "../adapters/cursor/catalog";
 import { desktop3pAlias } from "./desktop-3p";
 import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, UNPAIRED_AUTO_CONTEXT, type AutoContextMode } from "./context-windows";
-import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
+import { isAnthropicClaudeRoute } from "./long-context";
 
 const MODEL_INFO_CREATED_AT = "2026-01-01T00:00:00Z";
 const ANTHROPIC_EFFORT_RUNGS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -254,7 +254,7 @@ export function buildAnthropicModelInfos(
       && listedModelId.startsWith("claude-fable-")
       ? `${claudeCodeNativeAlias(listedModelId)}[1m]`
       : undefined;
-    push1mVariant(info, m.contextWindow, routedMaxInput, oneMillionSelector, isAnthropicInstanceId(m.provider) ? AUTO_CONTEXT_OFF : variantMode);
+    push1mVariant(info, m.contextWindow, routedMaxInput, oneMillionSelector, isAnthropicClaudeRoute(m.provider, m.id) ? AUTO_CONTEXT_OFF : variantMode);
     // The whole model is passed, not a (provider, id) pair: a combo row lives in its own
     // namespace with no config.providers entry, so the caller classifies it from the
     // aggregated supportsServiceTier the row already carries.

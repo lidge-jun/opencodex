@@ -1,7 +1,7 @@
 import type { OcxConfig } from "../types";
 import { claudeCodeAlias, claudeCodeNativeAlias, resolveAlias } from "./alias";
-import { shouldMarkOneMillion, stripOneMillionMarker, UNPAIRED_AUTO_CONTEXT, withOneMillionMarker } from "./context-windows";
-import { isLongContextWindow } from "./long-context";
+import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, stripOneMillionMarker, UNPAIRED_AUTO_CONTEXT, withOneMillionMarker, type AutoContextMode } from "./context-windows";
+import { isAnthropicClaudeRoute } from "./long-context";
 import { hasOwnProvider } from "../config";
 import { knownModelIdsForProvider } from "../router";
 import { decodeRoutedModelIdOrThrow } from "../providers/slug-codec";
@@ -23,14 +23,30 @@ export { SAFE_AGENT_MODEL_ID } from "../config/subagent-models";
  * was. Genuine routed [1m] ids are preserved through the canonical-exact lookup.
  * (#854; devlog/_plan/261009_claude_1m_default/020)
  */
+/**
+ * The marking mode a subagent selector gets: real Anthropic models (a bare `claude-*` passthrough
+ * id, or a Claude row on either Anthropic pool) need a genuine 1M; everything else follows the
+ * unpaired long-context rule. Connected launches read windows from the published catalog, which
+ * does not drop capped Anthropic rows, so this cannot rely on the window map alone.
+ */
+function subagentSelectorMode(bare: string): AutoContextMode {
+  const route = resolveAlias(bare) ?? resolveDesktop3pAlias(bare) ?? bare;
+  const slash = route.indexOf("/");
+  const anthropic = slash < 0
+    ? route.startsWith("claude-")
+    : isAnthropicClaudeRoute(route.slice(0, slash), route.slice(slash + 1));
+  return anthropic ? AUTO_CONTEXT_OFF : UNPAIRED_AUTO_CONTEXT;
+}
+
 export function withSubagentContextMarker(selector: string, windows: Record<string, number>): string {
   const bare = stripOneMillionMarker(selector);
   const wasMarked = selector !== bare;
   const canonicalExact = wasMarked ? `${bare}[1m]` : selector;
   const authoritativeWindow = windows[selector] ?? windows[canonicalExact] ?? windows[bare];
   if (typeof authoritativeWindow === "number" && authoritativeWindow > 0) {
-    return shouldMarkOneMillion(authoritativeWindow, UNPAIRED_AUTO_CONTEXT)
-      ? (withOneMillionMarker(selector, windows, UNPAIRED_AUTO_CONTEXT) ?? selector)
+    const mode = subagentSelectorMode(bare);
+    return shouldMarkOneMillion(authoritativeWindow, mode)
+      ? (withOneMillionMarker(selector, windows, mode) ?? selector)
       : bare;
   }
   return wasMarked ? selector : bare;
@@ -80,7 +96,7 @@ export function resolveSubagentForceModel(config: OcxConfig, windows: Record<str
     const window = windows[parts.alias] ?? windows[`${bare}[1m]`] ?? windows[bare];
     // Identity admission must not let an appended context promise ride on an
     // ordinary exposed model. Exact catalog ids such as kimi/k3[1m] remain literal.
-    if (requestedMarker && !exactMarkedExposure && !(typeof window === "number" && Number.isFinite(window) && isLongContextWindow(window))) return null;
+    if (requestedMarker && !exactMarkedExposure && !(typeof window === "number" && Number.isFinite(window) && shouldMarkOneMillion(window, subagentSelectorMode(bare)))) return null;
     const marked = exactMarkedExposure ? parts.alias : withSubagentContextMarker(parts.alias, windows);
     // Bare Anthropic names are indistinguishable from the old CLI's fallback.
     // Encode only the force selector; handlers restore native identity before

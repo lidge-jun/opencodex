@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { claudeSurfaceSupportsOneMillion } from "./long-context";
+import { routeSupportsOneMillion } from "./long-context";
 import type {
   OcxClaudeDesktopAssignment,
   OcxClaudeDesktopFamily,
@@ -360,7 +360,7 @@ export function renderDesktopProfile(
       name: isRealAnthropicRoute(route) ? assignment.alias : desktopProfileWireAlias(assignment.alias),
       family: assignment.family,
       isFamilyDefault: effectiveDefaults[assignment.family] === route,
-      supports1m: claudeSurfaceSupportsOneMillion(route.slice(0, route.indexOf("/")), model.contextWindow),
+      supports1m: routeSupportsOneMillion(route, model.contextWindow),
     };
   });
 }

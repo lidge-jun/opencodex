@@ -99,10 +99,10 @@ test("picker marks windows from the default compact floor up and leaves smaller 
     { provider: "example", id: "floor", contextWindow: 829_800 },
     { provider: "example", id: "exact", contextWindow: 1_000_000 },
     { provider: "example", id: "larger", contextWindow: 2_000_000 },
-    { provider: "anthropic2", id: "pool-two", contextWindow: 872_000 },
+    { provider: "anthropic2", id: "claude-pool-two", contextWindow: 872_000 },
   ] });
   expect(rows.map(row => row.id)).toEqual([
     "ocx-claude-example--short", "ocx-claude-example--below", "ocx-claude-example--floor[1m]",
-    "ocx-claude-example--exact[1m]", "ocx-claude-example--larger[1m]", "ocx-claude-anthropic2--pool-two",
+    "ocx-claude-example--exact[1m]", "ocx-claude-example--larger[1m]", "ocx-claude-anthropic2--claude-pool-two",
   ]);
 });
