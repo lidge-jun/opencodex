@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -314,6 +314,36 @@ describe("explicit Anthropic helper instance preferences", () => {
 
   test("an explicit search instance cannot use the default OpenAI backend", () => {
     expectRejected(withSidecar("global", "webSearchSidecar", { anthropicInstance: "anthropic2" }), "webSearchSidecar.anthropicInstance");
+  });
+
+  test("a hand-edited invalid helper pool drops only that key at load and keeps every provider", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const config = configWithBothInstances();
+      const validVision = { backend: "anthropic", model: "claude-sonnet-5", anthropicInstance: "anthropic2" };
+      const raw = {
+        ...config,
+        webSearchSidecar: { backend: "anthropic", model: "claude-sonnet-5", anthropicInstance: "anthropic3" },
+        visionSidecar: validVision,
+        // The override's own pool conflicts with its own OpenAI backend.
+        claudeCode: { visionSidecar: { backend: "openai", model: "gpt-5.6-luna", anthropicInstance: "anthropic2" } },
+      };
+      expectRejected(raw, "webSearchSidecar.anthropicInstance");
+      writeFileSync(getConfigPath(), JSON.stringify(raw));
+      const loaded = loadConfig();
+      expect(loaded.providers.unrelated.apiKey).toBe("fixture-preserved");
+      expect(configuredAnthropicInstance(loaded, "anthropic2")).toBe("anthropic2");
+      expect(loaded.webSearchSidecar).toEqual({ backend: "anthropic", model: "claude-sonnet-5" });
+      expect(loaded.visionSidecar).toEqual(validVision);
+      expect(loaded.claudeCode?.visionSidecar).toEqual({ backend: "openai", model: "gpt-5.6-luna" });
+      // Degraded in place: no backup-and-defaults repair ran.
+      expect(readdirSync(home).some(name => name.includes(".invalid-"))).toBe(false);
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("file");
+      expect(diagnostics.error).toContain("webSearchSidecar.anthropicInstance");
+      expect(diagnostics.config.providers.unrelated.apiKey).toBe("fixture-preserved");
+    } finally { warn.mockRestore(); error.mockRestore(); }
   });
 
   for (const scope of ["global", "claude"] as const) {

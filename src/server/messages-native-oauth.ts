@@ -23,6 +23,7 @@ import { anthropicRoutingFor } from "../oauth/anthropic-routing";
 import { resolveAnthropicModelRouteForInstance, routeCandidates, type AnthropicRouteDecision } from "../oauth/anthropic-model-routes";
 import { configuredAnthropicInstance, type AnthropicInstanceId } from "../providers/anthropic-instance";
 import { resolveAnthropicMessagesUrl } from "../adapters/anthropic";
+import { routedProviderConfig } from "../router";
 import {
   captureOAuthAccountSelection,
   commitOAuthAccountSelection,
@@ -69,14 +70,28 @@ export class NativeOAuthSelectionChangedError extends Error {
 /** Invalid operator route configuration remains a request refusal, not an auth failure. */
 export class NativeOAuthModelRouteError extends Error {}
 
-/** Current configured ownership and target; a revoked B never resolves orphan credentials. */
+/**
+ * Current configured ownership and target; a revoked B never resolves orphan credentials.
+ *
+ * Adapter, auth mode and destination are read from the routed provider, the same normalization the
+ * settled route used to compute its target. Routing canonicalizes the primary row's adapter and auth
+ * mode from the registry, so a raw-field comparison would refuse an existing Pool 1 row the route
+ * already accepted. B's own raw-row shape is still enforced through `configuredAnthropicInstance`.
+ */
 function nativeOAuthRouteTarget(instance: AnthropicInstanceId, config: OcxConfig): string {
   const provider = config.providers[instance];
-  if (configuredAnthropicInstance(config, instance) !== instance || !provider
-    || provider.disabled === true || provider.authMode !== "oauth" || provider.adapter !== "anthropic") {
+  if (configuredAnthropicInstance(config, instance) !== instance || !provider || provider.disabled === true) {
     throw new NativeOAuthSelectionChangedError();
   }
-  return resolveAnthropicMessagesUrl(provider);
+  let routed: ReturnType<typeof routedProviderConfig>;
+  try {
+    routed = routedProviderConfig(instance, provider);
+  } catch {
+    // A destination the router now refuses is a moved route, not a different failure class.
+    throw new NativeOAuthSelectionChangedError();
+  }
+  if (routed.authMode !== "oauth" || routed.adapter !== "anthropic") throw new NativeOAuthSelectionChangedError();
+  return resolveAnthropicMessagesUrl(routed);
 }
 
 function currentRoute(instance: AnthropicInstanceId, config: OcxConfig, model?: string): AnthropicRouteDecision | null {

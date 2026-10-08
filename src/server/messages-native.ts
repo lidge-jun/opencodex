@@ -75,7 +75,7 @@ import { resolveProtocolSettings } from "../protocols/settings";
 import { addProtocolEntryReason, markProtocolBlocked } from "../protocols/trace";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import { preservesPhysicalComboProvider, resolveComboId } from "../combos";
-import { captureRouteStaticPolicy, routeModel, type RouteResult } from "../router";
+import { captureRouteStaticPolicy, routedProviderConfig, routeModel, type RouteResult } from "../router";
 import { POLICY_NAMESPACE, resolvePolicyProfileId } from "../routing/profile";
 import type { AnthropicClientIdentity } from "../adapters/anthropic/client-identity";
 import type { OcxConfig, OcxProviderConfig, OcxUsage } from "../types";
@@ -487,8 +487,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const selector: NativeMessagesSelector = options.selector ?? {};
   const nativeOAuthRouteIsCurrent = (binding: NativeOAuthBinding): boolean => {
     const provider = config.providers[binding.instance];
-    return configuredAnthropicInstance(config, binding.instance) === binding.instance
-      && !!provider && resolveAnthropicMessagesUrl(provider) === routeTarget
+    if (configuredAnthropicInstance(config, binding.instance) !== binding.instance || !provider) return false;
+    // Same normalization as the bound target (nativeOAuthRouteTarget): compare routed destinations.
+    let routed: OcxProviderConfig;
+    try { routed = routedProviderConfig(binding.instance, provider); } catch { return false; }
+    return resolveAnthropicMessagesUrl(routed) === routeTarget
       && nativeMessagesDeclineReason({ ...route, provider }, body, config, selector) === undefined;
   };
 

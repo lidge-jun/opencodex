@@ -578,7 +578,11 @@ export async function prepareResponsesRequest(
         : parsed._compactionRequest === true
           ? routeCompactionModel(config, modelId, evidenceFromBody(parsed._rawBody))
           : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
-      if (selectorTargetsSecondary(modelId) && resolved.providerName !== "anthropic2") {
+      // A Pool 2 selector may leave Pool 2 only through an operator-configured cross-provider
+      // blocked-model redirect, which the router marks as a credential-domain rewrite. Any other
+      // destination means the selector fell through to default resolution, which stays refused.
+      const operatorRedirect = resolved.routeReason === "blocked-model-redirect" && resolved.credentialDomainRewrite === true;
+      if (selectorTargetsSecondary(modelId) && resolved.providerName !== "anthropic2" && !operatorRedirect) {
         throw new Error("Anthropic Pool 2 selector cannot use the default provider");
       }
       return resolved;

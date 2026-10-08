@@ -531,9 +531,18 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   return resolved;
 }
 
+/**
+ * Rows eligible for bare-model inference (configured default model, model list, model alias).
+ *
+ * The marked builtin Pool 2 row is excluded: it seeds the same catalog as `anthropic`, so letting it
+ * compete would move a bare `claude-*` request onto Pool 2 by insertion order, or make a shared alias
+ * ambiguous. Pool 2 is reached only through `anthropic2/<model>`, its provider alias, or an explicit
+ * `defaultProvider`. An unmarked custom row named `anthropic2` keeps its ordinary custom meaning.
+ */
 function activeProviderEntries(config: OcxConfig): [string, OcxProviderConfig][] {
   return Object.entries(config.providers)
-    .filter(([name, provider]) => name !== LEGACY_CHATGPT_PROVIDER_ID && provider.disabled !== true);
+    .filter(([name, provider]) => name !== LEGACY_CHATGPT_PROVIDER_ID && provider.disabled !== true
+      && !(name === "anthropic2" && anthropicInstanceRowShapeMatches(name, provider)));
 }
 
 export class NoEnabledOpenAiProviderError extends Error {

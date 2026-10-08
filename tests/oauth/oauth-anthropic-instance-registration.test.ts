@@ -101,7 +101,9 @@ test("deleting first-login defaults while the browser runs does not recreate the
     return credential("orphan-b");
   });
   try {
-    await expect(runLogin("anthropic2", {})).rejects.toBeInstanceOf(OAuthProviderPublicationError);
+    const error = await runLogin("anthropic2", {}).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(OAuthProviderPublicationError);
+    expect((error as Error).message).toContain("credential was saved as an orphan auth row");
     expect(existsSync(getConfigPath())).toBe(false);
     // The caller receives publication failure; the orphan is retained for explicit cleanup.
     expect(getAccountSet("anthropic2")!.accounts).toHaveLength(1);
@@ -112,11 +114,15 @@ test("an existing config deleted during preflight load is not republished from t
   const login = spyOn(OAUTH_PROVIDERS.anthropic2!, "login");
   const initialize = spyOn(configModule, "initializePersistedConfigIfMissing");
   try {
-    await expect(runLogin("anthropic2", {}, undefined, { loadConfig: () => {
+    const error = await runLogin("anthropic2", {}, undefined, { loadConfig: () => {
       const old = loadConfig();
       unlinkSync(getConfigPath());
       return old;
-    } })).rejects.toBeInstanceOf(OAuthProviderPublicationError);
+    } }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(OAuthProviderPublicationError);
+    // Refused before the browser flow: the message must not claim an orphan credential exists.
+    expect((error as Error).message).toContain("no credential was saved");
+    expect((error as Error).message).not.toContain("orphan");
     expect(existsSync(getConfigPath())).toBe(false);
     expect(initialize).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled();

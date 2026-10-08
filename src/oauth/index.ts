@@ -442,10 +442,10 @@ export class OAuthAccountPausedError extends Error {
 }
 
 export class OAuthProviderPublicationError extends Error {
-  constructor(provider?: string) {
-    super(provider === "anthropic2"
-      ? "Anthropic Pool 2 credential was saved as an orphan auth row, but the provider entry was not written. Repair the persisted config or resolve the provider/account namespace collision, then retry login."
-      : "OAuth credential was saved, but the provider entry was not written. Resolve the account namespace collision, then retry login.");
+  constructor(provider?: string, credentialWritten = true) {
+    super(provider !== "anthropic2" ? "OAuth credential was saved, but the provider entry was not written. Resolve the account namespace collision, then retry login."
+      : credentialWritten ? "Anthropic Pool 2 credential was saved as an orphan auth row, but the provider entry was not written. Repair the persisted config or resolve the provider/account namespace collision, then retry login."
+      : "Anthropic Pool 2 login did not start because the config file is missing or could not be written; no credential was saved. Repair the persisted config, then retry login.");
     this.name = "OAuthProviderPublicationError";
   }
 }
@@ -1569,7 +1569,7 @@ export async function runLogin(
     // The create-only owner never replaces a concurrent file. Reload its winner before login;
     // once the browser starts, later deletion remains a publication refusal, not recreation.
     if (initializePersistedConfigIfMissing(getDefaultConfig()) === "invalid") {
-      throw new OAuthProviderPublicationError(provider);
+      throw new OAuthProviderPublicationError(provider, false);
     }
     preflightConfig = loadLatestConfig();
   }
@@ -1582,7 +1582,7 @@ export async function runLogin(
     if (namespaceCollision) throw new Error(namespaceCollision);
   }
   if (provider === "anthropic2" && observeInitialConfigState() !== "exists") {
-    throw new OAuthProviderPublicationError(provider);
+    throw new OAuthProviderPublicationError(provider, false);
   }
   // loginKiro keys its pending CLI-session transaction by object identity. Keep this exact object
   // for settlement even when source normalization below creates a derived credential object.

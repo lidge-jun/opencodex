@@ -170,6 +170,17 @@ test("options resolve B exactly, report mixed only with known parent, and refuse
   expect(sidecarAnthropicPoolOptions(config, { backend: "anthropic" }, "anthropic2").code).toBe("anthropic_helper_unavailable");
 });
 
+test("Claude vision options resolve the pool inherited from the Claude model, as the runtime planner does", async () => {
+  // Only Pool 2 is usable; no explicit helper pool or backend is configured.
+  const config = anthropicInstanceConfig(); login("anthropic2");
+  config.claudeCode = { model: "anthropic2/claude-haiku-4-5" };
+  const body = await (await request(config, "/api/claude-code")).json() as {
+    sidecarPools: { visionSidecar: Record<string, unknown> };
+  };
+  expect(body.sidecarPools.visionSidecar).toMatchObject({ backend: "anthropic", parent: "anthropic2", resolved: "anthropic2", mixed: false });
+  expect(Object.hasOwn(body.sidecarPools.visionSidecar, "code")).toBe(false);
+});
+
 test("changing explicit pool validates candidates from the submitted pool, never the old pool", async () => {
   const config = anthropicInstanceConfig(); login("anthropic"); login("anthropic2");
   config.webSearchSidecar = { backend: "anthropic", model: "claude-sonnet-4-6", anthropicInstance: "anthropic" };

@@ -45,6 +45,13 @@ Coverage: `tests/oauth/anthropic2-discovery-ownership.test.ts`.
 
 ## Instance-scoped runtime
 
+Pool 2 is reached only by an explicit `anthropic2/<model>` selector, its alias, or
+`defaultProvider: "anthropic2"`. `activeProviderEntries` in `src/router.ts` leaves the marked
+builtin row out of bare-model fallback (configured default model, model lists, model
+aliases), so a bare `claude-*` never resolves to Pool 2 whatever the row order or the
+primary row's state; an unmarked custom `anthropic2` row keeps ordinary fallback. A
+Pool 2 selector leaves `anthropic2` only through an operator blocked-model redirect.
+
 `anthropicRoutingFor(instance)` in `src/oauth/anthropic-routing.ts` binds account
 selection, affinity, quorum, manual preference, cooldown and rotation to one
 instance. Legacy named exports mean the primary pool. Model routes widen only

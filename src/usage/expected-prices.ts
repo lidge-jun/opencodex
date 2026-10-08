@@ -1,4 +1,14 @@
 import { normalizeCursorClaudeId } from "../adapters/cursor/claude-id";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
+
+/**
+ * Provider key the compiled price catalogs are written under. Both Anthropic OAuth instances run
+ * the same models at the same published prices, so Pool 2 reads Pool 1's rows. Callers apply this
+ * only to the built-in catalogs; operator-supplied overlays and tiers stay keyed exactly.
+ */
+export function pricingFamilyProvider(provider: string): string {
+  return isAnthropicInstanceId(provider) ? "anthropic" : provider;
+}
 
 /**
  * Expected-price overlay for models whose jawcode cost rows are missing or all-zero
@@ -811,7 +821,7 @@ export function findContextTier(
   modelId: string,
   tiers: readonly ContextTier[] = CONTEXT_TIERS,
 ): ContextTier | undefined {
-  const familyProvider = provider === "anthropic2" && tiers === CONTEXT_TIERS ? "anthropic" : provider;
+  const familyProvider = tiers === CONTEXT_TIERS ? pricingFamilyProvider(provider) : provider;
   return tiers.find(tier => tier.provider === familyProvider && tier.modelId === modelId);
 }
 

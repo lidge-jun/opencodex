@@ -438,6 +438,20 @@ describe("binding and physical dispatch await fences", () => {
     expect(binding.nativeOAuthBindingIsCurrent(a)).toBe(true);
   });
 
+  test("A binding follows routed adapter/auth normalization while B keeps its raw row shape", async () => {
+    await seed();
+    const canonical = await binding.resolveNativeOAuthBinding(f.config, { model: f.model });
+    // Routing canonicalizes the primary row from the registry, so a legacy adapter/auth field is not a lane change.
+    f.config.providers.anthropic!.adapter = "openai-chat";
+    delete f.config.providers.anthropic!.authMode;
+    const legacy = await binding.resolveNativeOAuthBinding(f.config, { model: f.model, routeTarget: canonical.routeTarget });
+    expect(legacy.instance).toBe("anthropic");
+    expect(legacy.routeTarget).toBe(canonical.routeTarget);
+    f.config.providers.anthropic2!.adapter = "openai-chat";
+    await expect(binding.resolveNativeOAuthBindingForInstance("anthropic2", f.config, { model: f.model }))
+      .rejects.toThrow(binding.NativeOAuthSelectionChangedError);
+  });
+
   for (const change of ["marker", "target", "native-off"] as const) {
     test(`${change} mutation while pacing prevents physical send`, async () => {
       await seed();

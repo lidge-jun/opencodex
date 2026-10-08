@@ -356,8 +356,9 @@ a genuine client identity retains per-credential synthesized session ids.
 and account switch, destination isolation, bounded parsing and credential exclusion.
 
 OAuth. Behind `managedMessagesNativeOAuth`, which `resolveProtocolSettings` treats as off unless
-`managedMessagesNative` is on. The two builtin Anthropic OAuth instances use their own store namespace, only to
-`api.anthropic.com` (the builder refuses any other host for an OAuth token). Native dispatch uses
+`managedMessagesNative` is on. The two builtin Anthropic OAuth instances each use their own store namespace,
+and their OAuth tokens are sent only to `api.anthropic.com` (the builder refuses any other host for an
+OAuth token). Native dispatch uses
 shared Anthropic strategy, model-route restrictions and session affinity. A shared Desktop system
 cache cohort never supplies affinity. `src/server/messages-native-oauth.ts` resolves and commits
 an exact credential generation and rechecks the current route and binding before each physical send.

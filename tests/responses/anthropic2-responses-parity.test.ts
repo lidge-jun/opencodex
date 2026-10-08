@@ -190,3 +190,12 @@ test("native-ineligible Messages preserves thinking signatures and redacted stat
   const wire = JSON.stringify(seen[0]!.body);
   expect(wire).toContain(SIGNATURE); expect(wire).toContain(REDACTED); expect(wire).toContain("Synthetic prior reasoning");
 });
+
+test("an operator cross-provider redirect may move a Pool 2 selector; the send uses the target's own pool", async () => {
+  f.config.blockedModelRedirects = { [`anthropic2/${f.model}`]: `anthropic/${f.model}` };
+  f.publishConfig();
+  const { text, log } = await send("responses", "anthropic2", { input: "Answer briefly", max_output_tokens: 64 });
+  expect(text).toContain("The answer is complete.");
+  expect(seen.map(row => row.instance)).toEqual(["anthropic"]);
+  expect(log.provider).not.toStartWith("anthropic2");
+});

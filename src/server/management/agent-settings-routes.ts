@@ -79,6 +79,7 @@ import {
   type WebSearchBackend,
 } from "./web-search-sidecar-options";
 import { drainAndShutdown } from "../lifecycle";
+import { inheritedAnthropicInstance } from "../../sidecar/auth";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
@@ -1375,7 +1376,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const visionOverride = config.claudeCode?.visionSidecar;
     const helperParent = config.claudeCode?.model?.includes("/") ? config.claudeCode.model.split("/")[0] : undefined;
     const helperVision = { ...config.visionSidecar, ...visionOverride };
-    const helperVisionBackend = helperVision.backend ?? (sidecarOptionsAuth(config, helperVision.anthropicInstance).isAnthropicAuth ? "anthropic" : "openai");
+    // Same pool the runtime picks (vision/plan.ts preferredVisionBackend): explicit, else inherited
+    // from the Claude model's instance, so a usable inherited Pool 2 reports the Anthropic backend.
+    const helperVisionInstance = helperVision.anthropicInstance ?? inheritedAnthropicInstance(config, helperParent);
+    const helperVisionBackend = helperVision.backend ?? (sidecarOptionsAuth(config, helperVisionInstance).isAnthropicAuth ? "anthropic" : "openai");
     const { firstPartyDesired, readFirstPartyProxyStatus } = await import("../../claude/first-party-settings");
     const { observeClaudeDesktopMode } = await import("../../claude/desktop-first-party");
     const { claudeInterceptEnabled, getClaudeInterceptState } = await import("../../claude/intercept/runtime");

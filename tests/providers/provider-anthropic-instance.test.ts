@@ -18,7 +18,8 @@ import {
 } from "../../src/providers/derive";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../src/providers/registry";
 import { resolveMetadataProvider } from "../../src/generated/model-metadata";
-import type { OcxProviderConfig } from "../../src/types";
+import { routeModel } from "../../src/router";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const builtin: OcxProviderConfig = {
   adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", anthropicOAuthInstance: "anthropic2",
@@ -178,5 +179,57 @@ describe("Anthropic registry seeds", () => {
     });
     expect(deriveJawcodeAliases().anthropic2).toBe("anthropic");
     expect(resolveMetadataProvider("anthropic2")).toBe("anthropic");
+  });
+});
+
+describe("REG-02 bare model inference never selects the marked Pool 2 row", () => {
+  const catalog = { models: ["claude-sonnet-5", "claude-haiku-4-5"], defaultModel: "claude-sonnet-5" };
+  /** Pool 2 is inserted first so insertion order alone would have picked it. */
+  function pools(mutate?: (config: OcxConfig) => void): OcxConfig {
+    const config = getDefaultConfig();
+    config.providers = {
+      openai: config.providers.openai!,
+      anthropic2: { ...builtin, ...catalog, models: [...catalog.models] },
+      anthropic: { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", ...catalog, models: [...catalog.models] },
+    };
+    mutate?.(config);
+    return config;
+  }
+
+  test("configured default model and model list resolve to A even when B is inserted first", () => {
+    for (const model of ["claude-sonnet-5", "claude-haiku-4-5"]) {
+      expect(routeModel(pools(), model).providerName).toBe("anthropic");
+    }
+    expect(routeModel(pools(), "anthropic2/claude-sonnet-5")).toMatchObject({
+      providerName: "anthropic2", modelId: "claude-sonnet-5", routeReason: "explicit-provider-namespace",
+    });
+  });
+
+  test("with A disabled a bare Claude model falls to the default provider instead of B", () => {
+    const config = pools(next => { next.providers.anthropic!.disabled = true; });
+    expect(routeModel(config, "claude-sonnet-5")).toMatchObject({ providerName: "openai", routeReason: "default-provider" });
+    expect(routeModel(config, "anthropic2/claude-sonnet-5").providerName).toBe("anthropic2");
+  });
+
+  test("shared default model aliases are not ambiguous and stay on A; B keeps its qualified alias", () => {
+    const config = pools(next => { next.defaultModelAliases = true; });
+    expect(routeModel(config, "haiku")).toMatchObject({
+      providerName: "anthropic", modelId: "claude-haiku-4-5", routeReason: "model-alias",
+    });
+    expect(routeModel(config, "anthropic2/haiku")).toMatchObject({ providerName: "anthropic2", modelId: "claude-haiku-4-5" });
+    const onlyB = pools(next => { next.defaultModelAliases = true; next.providers.anthropic!.disabled = true; });
+    expect(routeModel(onlyB, "haiku").providerName).not.toBe("anthropic2");
+  });
+
+  test("an explicit B default provider and an unmarked custom anthropic2 row keep their behaviour", () => {
+    const defaultB = pools(next => { next.defaultProvider = "anthropic2"; next.providers.anthropic!.disabled = true; });
+    expect(routeModel(defaultB, "claude-sonnet-5")).toMatchObject({ providerName: "anthropic2", routeReason: "default-provider" });
+    const custom = pools(next => {
+      next.providers.anthropic2 = {
+        adapter: "anthropic", authMode: "key", baseUrl: "https://gateway.example/v1", apiKey: "sk-fixture-gateway",
+        models: ["gateway-model"],
+      };
+    });
+    expect(routeModel(custom, "gateway-model")).toMatchObject({ providerName: "anthropic2", routeReason: "configured-model-list" });
   });
 });
