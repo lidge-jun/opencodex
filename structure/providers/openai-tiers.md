@@ -435,6 +435,9 @@ an identical caller-owned credential. Materialization captures a process-local d
 publication rechecks identity and credential generations, including after an awaited HTTP import
 and for every WebSocket frame. A replaced credential, unmatched workspace, or custom destination
 cannot publish main usage. Pool health/failover handling stays scoped to Pool contexts.
+The dispatch additionally fences the process-wide credential mutation epoch, so native main
+refresh and same-account reauth commits reject an older response before quota observation catches
+up. Publications for other credentials also conservatively drop the main update.
 `src/codex/auth-api/main-account-probe.ts` re-reads the bounded stored main credential and
 rechecks its writer, bearer and generation after body/retry awaits, before publishing main usage,
 credits, plan, reauth or Reserve state, including terminal 401/403 mutations. An unreadable file

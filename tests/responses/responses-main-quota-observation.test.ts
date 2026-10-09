@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import * as mainCache from "../../src/codex/main-account-cache";
 import {
-  materializeCodexUpstreamAuth, materializeCodexUpstreamAuthAsync, resolveCodexAuthContext,
+  CodexReserveUnavailableError, materializeCodexUpstreamAuth, materializeCodexUpstreamAuthAsync, resolveCodexAuthContext,
   type CodexAuthContext,
 } from "../../src/codex/auth-context";
+import { beginNativeMainReauth, forceRefreshMainAccountToken } from "../../src/codex/main-account";
+import { codexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
 import { resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -20,7 +22,13 @@ import { codexAccountSelectionForTurn, tryAdmitTurn } from "../../src/server/lif
 import { deliverPassthroughResponse } from "../../src/server/responses/passthrough-delivery";
 import { codexWsQuotaObserver, retryCodexPoolOnAlternateAccount } from "../../src/server/responses/core-codex-account";
 import { CodexWsMetadata } from "../../src/server/responses/codex-ws-metadata";
-import { markCodexWsResponse, isCodexWsQuotaObservedResponse } from "../../src/server/responses/codex-ws-wire";
+import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
+import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
+import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
+import { NATIVE_RESERVE_MODEL } from "../../src/codex/catalog/native-models";
+import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
+import { isCodexWsRejectionResponse } from "../../src/server/responses/ws-upstream";
+import { markCodexWsResponse, isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse } from "../../src/server/responses/codex-ws-wire";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -96,7 +104,7 @@ async function deliver(ctx: CodexAuthContext, response = quotaResponse(), select
         responseCompletionCancelled: () => false } as Args[5],
       { upstreamResponse: response, upstream: new AbortController(), connectMs: 1000 } as Args[6],
     );
-    expect(result.status).toBe(307);
+    expect(result.status).toBe(response.status);
     await result.body?.cancel();
   } finally { budget.dispose(); }
 }
@@ -208,6 +216,51 @@ describe("credential-bound plain-main Responses quota", () => {
     expect(getMainPolicyQuota()).toBeNull();
   });
 
+  for (const commit of ["refresh", "reauth"] as const) {
+    for (const transport of ["HTTP", "WS"] as const) {
+      test(`real native main ${commit} commit fences an older ${transport} quota dispatch`, async () => {
+        writeFileSync(join(root, "auth.json"), JSON.stringify({ tokens: {
+          access_token: bearer, refresh_token: "fixture-main-before-publication", account_id: ACCOUNT,
+        } }));
+        observe();
+        const ctx = materialized();
+        expect(ctx.mainQuotaDispatch).toBeDefined();
+        const observer = transport === "WS" ? codexWsQuotaObserver(ctx, provider, "gpt-5.5") : undefined;
+        if (transport === "WS") expect(observer).toBeDefined();
+        const epoch = codexCredentialMutationEpoch();
+        expect(ctx.mainQuotaDispatch!.credentialMutationEpoch).toBe(epoch);
+        const generation = mainCache.getMainQuotaCredentialGeneration();
+        const replacement = fakeChatGptJwt(ACCOUNT, { fixture_publication: commit });
+        if (commit === "refresh") {
+          let refreshes = 0;
+          const result = await forceRefreshMainAccountToken(bearer, {
+            refreshToken: async () => {
+              refreshes++;
+              return { access: replacement, refresh: "fixture-main-after-refresh", expires: Date.now() + 3600_000, accountId: ACCOUNT };
+            },
+          });
+          expect(refreshes).toBe(1);
+          expect(result?.accessToken === replacement).toBe(true);
+        } else {
+          const result = await beginNativeMainReauth().commit({ accessToken: replacement,
+            refreshToken: "fixture-main-after-reauth", idToken: "fixture-main-identity-token", chatgptAccountId: ACCOUNT });
+          expect(result.chatgptAccountId).toBe(ACCOUNT);
+        }
+        const stored = JSON.parse(readFileSync(join(root, "auth.json"), "utf8"));
+        expect(stored.tokens.access_token === replacement).toBe(true);
+        expect(codexCredentialMutationEpoch()).toBeGreaterThan(epoch);
+        // No subsequent credential observation warmed the main quota generation.
+        expect(mainCache.getMainQuotaCredentialGeneration()).toBe(generation);
+        expect(mainCache.isMainQuotaWriterLive(ctx.mainQuotaDispatch!.writer)).toBe(true);
+        if (transport === "HTTP") await deliver(ctx);
+        else observer!(quotaHeaders());
+        expect(getAccountQuota(MAIN)).toBeNull();
+        expect(getMainPolicyQuota()).toBeNull();
+        expect(mainCache.isMainQuotaDispatchLive(ctx.mainQuotaDispatch!)).toBe(false);
+      });
+    }
+  }
+
   test("5: non-canonical, key-auth and other-adapter providers cannot publish", async () => {
     observe();
     const ctx = materialized();
@@ -236,6 +289,97 @@ describe("credential-bound plain-main Responses quota", () => {
     expect(getAccountQuota(MAIN)).toEqual(quota);
     expect(getMainPolicyQuota()?.weeklyPercent).toBe(19);
     metadata.finish();
+  });
+
+  test("a WS-marked unobserved refusal cannot overwrite newer main display or policy quota", async () => {
+    observe();
+    const ctx = materialized();
+    const metadata = new CodexWsMetadata(codexWsQuotaObserver(ctx, provider, "gpt-5.5"));
+    frame(metadata, 17);
+    frame(metadata, 99);
+    const display = getAccountQuota(MAIN);
+    const policy = getMainPolicyQuota();
+    const refusal = Response.json({ error: { type: "invalid_request_error", message: "fixture refused create" } },
+      { status: 400, headers: quotaHeaders("17") });
+    markCodexWsResponse(refusal, false);
+    expect(isCodexWsUpstreamResponse(refusal)).toBe(true);
+    expect(isCodexWsQuotaObservedResponse(refusal)).toBe(false);
+    await deliver(ctx, refusal);
+    expect(getAccountQuota(MAIN)).toEqual(display);
+    expect(getMainPolicyQuota()).toEqual(policy);
+    expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
+    metadata.finish();
+  });
+
+  test("WS precommit refusal through the real exchange cannot republish stale prelude quota", async () => {
+    observe();
+    const ctx = materialized();
+    const observer = codexWsQuotaObserver(ctx, provider, "gpt-5.5");
+    expect(observer).toBeDefined();
+    const originalSocket = globalThis.WebSocket;
+    class RefusalSocket extends EventTarget {
+      readyState = 0;
+      constructor() {
+        super();
+        queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event("open")); });
+      }
+      send(_text: string): void {
+        queueMicrotask(() => {
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+            type: "codex.rate_limits", rate_limits: { primary: { used_percent: 17, window_minutes: 10080 } },
+          }) }));
+          expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+          // A concurrent main response publishes newer usage before this exchange refuses.
+          observer!(quotaHeaders("99"));
+          expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+          expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+            type: "error", status_code: 400, error: { type: "invalid_request_error", message: "fixture refused create" },
+          }) }));
+        });
+      }
+      close(): void {
+        if (this.readyState === 3) return;
+        this.readyState = 3;
+        this.dispatchEvent(new Event("close"));
+      }
+    }
+    globalThis.WebSocket = RefusalSocket as unknown as typeof WebSocket;
+    const session = new CodexWsSession(CODEX_RESPONSES_WS_URL, {});
+    try {
+      expect(session.reserve()).toBe(true);
+      const init = { method: "POST", headers: caller(), body: JSON.stringify({ model: "gpt-5.5", stream: true, input: "hi" }) };
+      const prepared = prepareCodexWsRequest(CODEX_RESPONSES_HTTP_URL, init);
+      expect(prepared).not.toBeNull();
+      const refusal = await codexWsExchange({ session, url: CODEX_RESPONSES_HTTP_URL, init, prepared: prepared!,
+        sseFallback: globalThis.fetch, onQuota: observer, bunVersion: "1.4.0" });
+      expect(refusal.status).toBe(400);
+      expect(isCodexWsRejectionResponse(refusal)).toBe(true);
+      expect(isCodexWsUpstreamResponse(refusal)).toBe(false);
+      expect(isCodexWsRejectionResponse(quotaResponse())).toBe(false);
+      expect(isCodexWsQuotaObservedResponse(refusal)).toBe(false);
+      expect(refusal.headers.get("x-codex-primary-used-percent")).toBe("17");
+      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
+      await deliver(ctx, refusal);
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+      expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
+    } finally {
+      session.dispose();
+      globalThis.WebSocket = originalSocket;
+    }
+  });
+
+  test("async Reserve admission failure clears a reused main dispatch proof", async () => {
+    observe();
+    const ctx = materialized();
+    expect(ctx.mainQuotaDispatch).toBeDefined();
+    expect(mainCache.isMainQuotaDispatchLive(ctx.mainQuotaDispatch!)).toBe(true);
+    await expect(materializeCodexUpstreamAuthAsync(caller(), ctx, {
+      config: { ...config, codexDesktopAuthless: true, pausedCodexAccountIds: [MAIN] },
+      modelId: NATIVE_RESERVE_MODEL, admission: { source: "loopback" },
+    })).rejects.toBeInstanceOf(CodexReserveUnavailableError);
+    expect(ctx.mainQuotaDispatch).toBeUndefined();
   });
 
   test("7: stored pool HTTP and WS still update only their pool row", async () => {
@@ -329,7 +473,7 @@ describe("credential-bound plain-main Responses quota", () => {
     expect(persisted.quotas[MAIN].weeklyPercent).toBe(23);
     expect(persisted.quotas[MAIN].updatedAt).toBeGreaterThanOrEqual(before);
     expect(persisted.quotas[MAIN].updatedAt).toBeLessThanOrEqual(Date.now());
-    for (const forbidden of [bearer, ACCOUNT, "bearerHmac", "mainQuotaDispatch", "credentialGeneration", "configGeneration", "identityGeneration"])
+    for (const forbidden of [bearer, ACCOUNT, "bearerHmac", "mainQuotaDispatch", "credentialGeneration", "credentialMutationEpoch", "configGeneration", "identityGeneration"])
       expect(body.includes(forbidden)).toBe(false);
     expect(Object.keys(persisted.mainPolicyQuota).sort()).toEqual(["identityKey", "quota"]);
   });

@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { codexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import type { StoredAccountQuota } from "./quota-types";
 import { truncateRetainedUtf8 } from "../lib/admission";
 
@@ -77,6 +78,7 @@ export function isMainQuotaWriterLive(writer: MainQuotaWriter): boolean {
 export type MainQuotaDispatch = Readonly<{
   writer: MainQuotaWriter;
   credentialGeneration: number;
+  credentialMutationEpoch: number;
   configGeneration: number;
 }>;
 
@@ -85,12 +87,16 @@ export function captureMainQuotaDispatch(
 ): MainQuotaDispatch | undefined {
   if (!accountId || !matchesMainQuotaCredential(accessToken, accountId)) return undefined;
   const writer = captureMainQuotaWriter(accountId);
-  return writer ? { writer, credentialGeneration: mainQuotaCredentialGeneration, configGeneration } : undefined;
+  return writer ? { writer, credentialGeneration: mainQuotaCredentialGeneration,
+    credentialMutationEpoch: codexCredentialMutationEpoch(), configGeneration } : undefined;
 }
 
 export function isMainQuotaDispatchLive(dispatch: MainQuotaDispatch): boolean {
+  // Other OpenCodex-owned credential publications also advance this epoch;
+  // dropping a main quota update after any such publication is the intended safe direction.
   return isMainQuotaWriterLive(dispatch.writer)
-    && dispatch.credentialGeneration === mainQuotaCredentialGeneration;
+    && dispatch.credentialGeneration === mainQuotaCredentialGeneration
+    && dispatch.credentialMutationEpoch === codexCredentialMutationEpoch();
 }
 
 export function getObservedMainQuotaIdentityKey(): string | undefined {
