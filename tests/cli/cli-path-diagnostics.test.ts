@@ -1,10 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectCliPathDiagnostics, formatCliCommandLine, formatCliStatusHealthLabel, cliCommandDoctorChecks, type CliPathDiagnosticOptions, type CliPathObservation } from "../../src/cli/cli-path-diagnostics";
-import { readDesktopCliRecord, desktopCliRecordPath, DESKTOP_CLI_RECORD_MAX_BYTES, type DesktopCliRecordRead } from "../../src/lib/desktop-cli-record.mjs";
+import { readDesktopCliRecord, desktopCliRecordPath, DESKTOP_CLI_RECORD_MAX_BYTES, type DesktopCliRecordDeps, type DesktopCliRecordRead } from "../../src/lib/desktop-cli-record.mjs";
 import { repoPath } from "../helpers/repo-root";
+
+// The pending-cleanup case reads a macOS record on every CI host. NTFS reports POSIX
+// owner/mode bits the reader rejects, and only macOS ships the `ls -lde` ACL probe,
+// so non-mac hosts substitute the safe stats a real macOS record directory would have.
+const macRecordOnHost: DesktopCliRecordDeps = {
+  ...(process.platform === "win32" ? {
+    euid: 0,
+    lstat: (path: string) => { const stat = lstatSync(path); stat.uid = 0; stat.mode = stat.isDirectory() ? 0o40700 : 0o100600; return stat; },
+    fstat: (fd: number) => { const stat = fstatSync(fd); stat.uid = 0; stat.mode = 0o100600; return stat; },
+  } : {}),
+  ...(process.platform === "darwin" ? {} : { checkAcl: () => true }),
+};
 
 function record(platform: NodeJS.Platform, target: string): DesktopCliRecordRead {
   if (platform !== "darwin" && platform !== "linux" && platform !== "win32") throw new Error("Unsupported fixture platform");
@@ -90,10 +102,10 @@ describe("observed ocx PATH selection", () => {
         ["first-pending", "record-pending", "FAIL"],
       ] as const) {
         writeFileSync(path, readFileSync(repoPath("tests", "fixtures", "desktop-cli-record", `${name}.json`)), { mode: 0o600 });
-        const read = readDesktopCliRecord({ platform: "darwin", home: root });
+        const read = readDesktopCliRecord({ platform: "darwin", home: root, recordPath: path }, macRecordOnHost);
         if (issue === "cleanup-pending") expect(read).toEqual({ state: "disabled", path, cleanupPending: true });
         else expect(read).toEqual({ state: "invalid", path, issue });
-        const row = collectCliPathDiagnostics({ platform: "darwin", home: root, cwd: root, env: { PATH: "" }, observe: () => ({ kind: "missing" }) });
+        const row = collectCliPathDiagnostics({ platform: "darwin", home: root, cwd: root, env: { PATH: "" }, observe: () => ({ kind: "missing" }), recordRead: process.platform === "darwin" ? undefined : read });
         expect(row.configured).toBe(false);
         expect(row.handoffTarget).toBeNull();
         expect(row.expectedExecutable).toBeNull();
@@ -108,7 +120,8 @@ describe("observed ocx PATH selection", () => {
         } else expect(check.message).toContain("finish terminal-command cleanup");
       }
       writeFileSync(path, "x".repeat(DESKTOP_CLI_RECORD_MAX_BYTES + 1), { mode: 0o600 });
-      const tooLarge = collectCliPathDiagnostics({ platform: "darwin", home: root, cwd: root, env: {}, observe: () => ({ kind: "missing" }) });
+      const tooLargeRead = process.platform === "darwin" ? undefined : readDesktopCliRecord({ platform: "darwin", home: root, recordPath: path }, macRecordOnHost);
+      const tooLarge = collectCliPathDiagnostics({ platform: "darwin", home: root, cwd: root, env: {}, observe: () => ({ kind: "missing" }), recordRead: tooLargeRead });
       expect(tooLarge.issues).toEqual(["record-too-large"]);
       expect(cliCommandDoctorChecks(tooLarge)[0]!.message).toContain(`${DESKTOP_CLI_RECORD_MAX_BYTES} bytes`);
     } finally { rmSync(root, { recursive: true, force: true }); }
