@@ -244,7 +244,7 @@ function listDirectChildren(parentPid: number, targetBasename: string): readonly
       stdout: "pipe", stderr: "pipe", timeout: DIAGNOSTIC_TIMEOUT_MS, windowsHide: true,
     },
   );
-  if (result.exitCode !== 0) return undefined;
+  if (result.exitCode !== 0 || !Number.isSafeInteger(result.pid)) return undefined;
   const children: LockedTempChild[] = [];
   for (const line of decode(result.stdout).split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -254,13 +254,24 @@ function listDirectChildren(parentPid: number, targetBasename: string): readonly
     if (!Number.isSafeInteger(pid) || !Number.isSafeInteger(parent) || !name) return undefined;
     children.push({ pid, parentPid: parent, name, referencesTarget: referenced === "1" });
   }
-  return children;
+  // The probe is a direct child while it asks, and its command line does not name the
+  // temp directory. Leaving it in the list makes every quarantine refuse.
+  return omitProbeProcess(children, result.pid);
+}
+
+/** Drop the probe itself. Any other direct child still blocks the move. */
+export function omitProbeProcess(
+  children: readonly LockedTempChild[],
+  probePid: number,
+): readonly LockedTempChild[] {
+  return children.filter(child => child.pid !== probePid);
 }
 
 const CHILD_PROBE = [
   "$parent = [int]$env:OCX_LOCK_PARENT_PID",
   "$leaf = $env:OCX_LOCK_BASENAME",
-  "Get-CimInstance Win32_Process -Filter \"ParentProcessId = $parent\" | ForEach-Object {",
+  "Get-CimInstance Win32_Process -Filter \"ParentProcessId = $parent\" |",
+  "  Where-Object { $_.ProcessId -ne $PID } | ForEach-Object {",
   "  $hit = 0",
   "  if ($leaf -and $_.CommandLine -and $_.CommandLine.Contains($leaf)) { $hit = 1 }",
   "  \"$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.Name)`t$hit\"",

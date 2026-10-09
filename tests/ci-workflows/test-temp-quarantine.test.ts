@@ -6,6 +6,7 @@ import { exitCodeAfterTempSweep, settleIsolatedTestRoot } from "../../scripts/te
 import { removeTestTempTree } from "../../scripts/test-temp";
 import {
   describeLockedTemp,
+  omitProbeProcess,
   quarantineFinalEperm,
   type LockedTempChild,
   type LockedTempDiagnostic,
@@ -95,6 +96,13 @@ describe("final EPERM quarantine", () => {
     });
     expect(attempts).toBe(2);
     expect(seen.warnings).toEqual([]);
+  });
+
+  test("the child probe does not count itself as the lock holder", () => {
+    const probe: LockedTempChild = { pid: 5144, parentPid: 2, name: "powershell.exe", referencesTarget: false };
+    const holder: LockedTempChild = { pid: 9, parentPid: 2, name: "icacls.exe", referencesTarget: true };
+    expect(omitProbeProcess([probe], probe.pid)).toEqual([]);
+    expect(omitProbeProcess([probe, holder], probe.pid)).toEqual([holder]);
   });
 
   test("a live child keeps the original error", () => {
