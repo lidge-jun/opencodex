@@ -48,6 +48,10 @@ describe("observed ocx PATH selection", () => {
     expect(result.pathFirst?.extension).toBe(".cmd"); expect(result.expectedExecutable).toBe("C:\\App\\ocx.exe"); expect(result.issues).toContain("path-first-not-desktop");
     const selected = fixture("win32", { PATH: "c:\\app", PATHEXT: ".EXE;.CMD" }, ["C:\\App\\ocx.exe"]).result;
     expect(selected.desktopFirstOnPath).toBe(true);
+    expect(selected.packageHandoff).toBe("disabled-on-windows");
+    expect(selected.handoffTarget).toBeNull();
+    expect(formatCliCommandLine(selected)).toContain("package handoff=disabled on Windows");
+    expect(formatCliCommandLine(selected)).toContain("PATH first=c:\\app\\ocx.exe");
   });
   test("Windows empty entry and cmd cwd candidate remain distinct from PATH first", () => {
     const row = fixture("win32", { PATH: "C:\\App", PATHEXT: ".EXE" }, ["C:\\App\\ocx.exe", "C:\\work\\ocx.exe"]).result;
@@ -68,7 +72,7 @@ describe("observed ocx PATH selection", () => {
       const row = fixture("linux", { PATH: "/npm" }, ["/npm/ocx"], { recordRead: state === "disabled" ? { state, path: "fixture", cleanupPending: false } : { state, path: "fixture" } }).result;
       expect(row.desktopFirstOnPath).toBeNull(); expect(cliCommandDoctorChecks(row)[0]!.level).toBe("OK");
     }
-    for (const issue of ["record-invalid", "record-too-large", "record-pending", "record-unreadable"] as const) {
+    for (const issue of ["record-invalid", "record-too-large", "record-pending", "record-unreadable", "record-unsafe"] as const) {
       const row = fixture("linux", {}, [], { recordRead: { state: issue === "record-unreadable" ? "unreadable" : "invalid", path: "fixture", issue } }).result;
       expect(row.issues).toContain(issue); expect(cliCommandDoctorChecks(row)[0]!.level).toBe("FAIL");
     }
@@ -78,14 +82,14 @@ describe("observed ocx PATH selection", () => {
   test("disabled pending cleanup warns without selecting a target; enabled pending fails", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-path-pending-"));
     try {
-      const path = desktopCliRecordPath({ platform: "darwin", home: root });
-      mkdirSync(join(root, ".opencodex-desktop"));
+      const path = desktopCliRecordPath({ platform: process.platform, home: root });
+      mkdirSync(join(root, ".opencodex-desktop"), { mode: 0o700 });
       for (const [name, issue, level] of [
         ["disabled-with-pending", "cleanup-pending", "WARN"],
         ["pending-enabled", "record-pending", "FAIL"],
         ["first-pending", "record-pending", "FAIL"],
       ] as const) {
-        writeFileSync(path, readFileSync(repoPath("tests", "fixtures", "desktop-cli-record", `${name}.json`)));
+        writeFileSync(path, readFileSync(repoPath("tests", "fixtures", "desktop-cli-record", `${name}.json`)), { mode: 0o600 });
         const read = readDesktopCliRecord({ platform: "darwin", home: root });
         if (issue === "cleanup-pending") expect(read).toEqual({ state: "disabled", path, cleanupPending: true });
         else expect(read).toEqual({ state: "invalid", path, issue });
@@ -103,7 +107,7 @@ describe("observed ocx PATH selection", () => {
           expect(check.message).not.toMatch(/delet|remov/i);
         } else expect(check.message).toContain("finish terminal-command cleanup");
       }
-      writeFileSync(path, "x".repeat(DESKTOP_CLI_RECORD_MAX_BYTES + 1));
+      writeFileSync(path, "x".repeat(DESKTOP_CLI_RECORD_MAX_BYTES + 1), { mode: 0o600 });
       const tooLarge = collectCliPathDiagnostics({ platform: "darwin", home: root, cwd: root, env: {}, observe: () => ({ kind: "missing" }) });
       expect(tooLarge.issues).toEqual(["record-too-large"]);
       expect(cliCommandDoctorChecks(tooLarge)[0]!.message).toContain(`${DESKTOP_CLI_RECORD_MAX_BYTES} bytes`);
@@ -162,5 +166,36 @@ describe("observed ocx PATH selection", () => {
     expect(doctor.indexOf('console.log("\\nocx command selection")')).toBeLessThan(doctor.indexOf('console.log("\\nCodex runtime selection")'));
     const json = JSON.parse(JSON.stringify(fixture("linux", { PATH: "/npm" }, ["/npm/ocx", shim, target]).result));
     expect(json.pathFirst.path).toBe("/npm/ocx"); expect(json.shellResolution).toBe("unobserved");
+  });
+
+  (process.platform === "win32" ? test.skip : test)("unsafe record is a doctor FAIL with its path and no configured target", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-path-unsafe-"));
+    try {
+      mkdirSync(join(root, ".opencodex-desktop"), { mode: 0o700 });
+      const path = desktopCliRecordPath({ home: root });
+      writeFileSync(path, '{"version":1,"enabled":false}', { mode: 0o600 });
+      chmodSync(path, 0o644);
+      const row = collectCliPathDiagnostics({ home: root, cwd: root, env: { PATH: "" }, observe: () => ({ kind: "missing" }) });
+      expect(row.issues).toEqual(["record-unsafe"]);
+      expect(row.configured).toBe(false);
+      expect(row.handoffTarget).toBeNull();
+      const check = cliCommandDoctorChecks(row)[0]!;
+      expect(check.level).toBe("FAIL");
+      expect(check.message).toContain(path);
+      expect(check.message).toContain("OCX_NO_DESKTOP_HANDOFF=1");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test("Windows unsafe records still report a PATH first candidate with handoff disabled", () => {
+    const row = fixture("win32", { PATH: "C:\\npm", PATHEXT: ".CMD" }, ["C:\\npm\\ocx.cmd"], {
+      recordRead: { state: "invalid", path: "C:\\Desktop\\cli.json", issue: "record-unsafe" },
+    }).result;
+    expect(row.pathFirst?.path).toBe("C:\\npm\\ocx.cmd");
+    expect(row.packageHandoff).toBe("disabled-on-windows");
+    expect(row.handoffTarget).toBeNull();
+    expect(row.issues).toContain("record-unsafe");
+    const check = cliCommandDoctorChecks(row)[0]!;
+    expect(check.level).toBe("FAIL");
+    expect(check.message).toContain("package handoff=disabled on Windows");
+    expect(check.message).not.toContain("OCX_NO_DESKTOP_HANDOFF=1");
   });
 });

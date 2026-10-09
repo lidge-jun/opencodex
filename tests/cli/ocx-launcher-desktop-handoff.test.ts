@@ -1,17 +1,29 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, type lstatSync, type statSync } from "node:fs";
+import { chmodSync, chownSync, constants, fstatSync, lstatSync, mkdirSync, openSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync as writeFile, type statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { readDesktopCliRecord, desktopCliRecordPath, DESKTOP_CLI_RECORD_MAX_BYTES, type DesktopCliRecordRead } from "../../src/lib/desktop-cli-record.mjs";
+import { readDesktopCliRecord as readRecord, desktopCliRecordPath, DESKTOP_CLI_RECORD_MAX_BYTES, type DesktopCliRecordRead, type DesktopCliRecordOptions, type DesktopCliRecordDeps } from "../../src/lib/desktop-cli-record.mjs";
 import { desktopHandoffExcluded, planDesktopCliHandoff, runDesktopCliHandoff } from "../../src/lib/desktop-cli-handoff.mjs";
 import { initializeNodeLauncherContext } from "../../src/cli/launcher-context";
 import { buildNativeClaudeEnv } from "../../src/cli/claude";
 import { observeManagingClis } from "../../src/service/managing-cli";
 import { repoPath } from "../helpers/repo-root";
 
+// Explicit private fixtures; only temp paths are written by this helper.
+function writeFileSync(path: string, data: Parameters<typeof writeFile>[1]): void {
+  writeFile(path, data, { mode: 0o600 });
+}
+function readDesktopCliRecord(options: DesktopCliRecordOptions = {}, deps: DesktopCliRecordDeps = {}): DesktopCliRecordRead {
+  const hostStats = process.platform === "win32" ? {
+    euid: 0,
+    lstat: (path: string) => { const stat = lstatSync(path); stat.uid = 0; stat.mode = stat.isDirectory() ? 0o40700 : 0o100600; return stat; },
+    fstat: (fd: number) => { const stat = fstatSync(fd); stat.uid = 0; stat.mode = 0o100600; return stat; },
+  } : {};
+  return readRecord(options, { ...hostStats, ...deps });
+}
 const roots: string[] = [];
 const hostKind = { darwin: "macos-app", win32: "windows-install", linux: "linux-deb" }[process.platform as "darwin" | "win32" | "linux"];
 const PREFIX = "--ocx-internal-launch-proof=";
@@ -22,7 +34,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function box(): string {
-  const root = mkdtempSync(join(tmpdir(), "ocx-handoff-")); roots.push(root); return root;
+  const root = mkdtempSync(join(tmpdir(), "ocx-handoff-")); chmodSync(root, 0o700); roots.push(root); return root;
 }
 function ready(target = "/fixture/desktop/ocx"): DesktopCliRecordRead {
   return { state: "ready", path: "/fixture/cli.json", record: {
@@ -87,21 +99,21 @@ console.log(JSON.stringify(mod.readDesktopCliRecord({recordPath:${JSON.stringify
     const result = spawnSync("node", ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 5000 });
     expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toMatchObject({ issue: "record-too-large" });
   });
-  (process.platform === "win32" ? test.skip : test)("reader open failure is unreadable and disabled intent wins over pending journal", () => {
+  (process.platform === "win32" ? test.skip : test)("reader symlinks are unsafe and disabled intent wins over pending journal", () => {
     const root = box(); const recordPath = join(root, "cli.json");
     symlinkSync(recordPath, recordPath);
-    expect(readDesktopCliRecord({ recordPath })).toMatchObject({ state: "unreadable", issue: "record-unreadable" });
+    expect(readDesktopCliRecord({ recordPath })).toMatchObject({ state: "invalid", issue: "record-unsafe" });
     rmSync(recordPath); writeFileSync(recordPath, '{"version":1,"enabled":false,"pending":{}}');
     expect(readDesktopCliRecord({ recordPath })).toMatchObject({ state: "disabled", cleanupPending: true });
   });
   test("record absence and disabled intent keep the package path; invalid records error", () => {
-    for (const state of ["missing", "disabled"] as const) expect(planDesktopCliHandoff({ argv: ["status"], env: {}, recordRead: state === "disabled" ? { state, path: "fixture", cleanupPending: false } : { state, path: "fixture" } })).toEqual({ kind: "continue", reason: state });
-    for (const issue of ["record-invalid", "record-too-large", "record-pending", "record-unreadable"] as const) expect(planDesktopCliHandoff({ argv: ["status"], env: {}, recordRead: { state: issue === "record-unreadable" ? "unreadable" : "invalid", issue, path: "fixture" } })).toEqual({ kind: "error", issue });
+    for (const state of ["missing", "disabled"] as const) expect(planDesktopCliHandoff({ platform: "linux", argv: ["status"], env: {}, recordRead: state === "disabled" ? { state, path: "fixture", cleanupPending: false } : { state, path: "fixture" } })).toEqual({ kind: "continue", reason: state });
+    for (const issue of ["record-invalid", "record-too-large", "record-pending", "record-unreadable", "record-unsafe"] as const) expect(planDesktopCliHandoff({ platform: "linux", argv: ["status"], env: {}, recordRead: { state: issue === "record-unreadable" ? "unreadable" : "invalid", issue, path: "fixture" } })).toEqual({ kind: "error", issue });
   });
   test("update, removal, internal inspection and codex-cli-update are exceptions", () => {
     for (const argv of [["update"], ["update", "--help"], ["uninstall"], ["remove"], ["__update-badge"], ["system", "codex-cli-update", "malformed"], [PREFIX + "invalid", "update"]]) {
       expect(desktopHandoffExcluded(argv, {})).toBe(true);
-      expect(planDesktopCliHandoff({ argv, env: {}, recordRead: ready() }, { stat: (() => { throw new Error("must not read target"); }) as typeof stat })).toMatchObject({ reason: "excluded" });
+      expect(planDesktopCliHandoff({ platform: "linux", argv, env: {}, recordRead: ready() }, { stat: (() => { throw new Error("must not read target"); }) as typeof stat })).toMatchObject({ reason: "excluded" });
     }
     expect(desktopHandoffExcluded(["--version"], {})).toBe(false);
     expect(desktopHandoffExcluded(["inspect", "config"], {})).toBe(false);
@@ -127,10 +139,20 @@ console.log(JSON.stringify(mod.readDesktopCliRecord({recordPath:${JSON.stringify
       expect(plan.kind).toBe(code === "ENOENT" ? "continue" : "error");
     }
   });
-  test("Windows realpath comparison is case insensitive and defers execute permission to spawn", () => {
-    let mode = -1;
-    const plan = planDesktopCliHandoff({ argv: [], env: {}, platform: "win32", recordRead: ready("C:\\App\\ocx.exe"), selfPaths: ["c:\\app\\OCX.exe"] }, { ...deps, access: (_path, value) => { mode = value ?? -1; } });
-    expect(plan).toMatchObject({ issue: "target-self" }); expect(mode).toBe(0);
+  test("Windows returns before reading valid, unreadable or unsafe records and never selects a spawn", () => {
+    for (const read of [ready("C:\\App\\ocx.exe"), { state: "unreadable", path: "fixture", issue: "record-unreadable" }, { state: "invalid", path: "fixture", issue: "record-unsafe" }] as DesktopCliRecordRead[]) {
+      let readAttempted = false;
+      let targetChecked = false;
+      let spawned = false;
+      const input = { platform: "win32" as const, argv: ["--version"], env: {} };
+      Object.defineProperty(input, "recordRead", { get() { readAttempted = true; return read; } });
+      const plan = planDesktopCliHandoff(input, { stat: (() => { targetChecked = true; throw new Error("must not check target"); }) as typeof stat });
+      if (plan.kind === "handoff") spawned = true;
+      expect(plan).toEqual({ kind: "continue", reason: "windows-path-only" });
+      expect(readAttempted).toBe(false);
+      expect(targetChecked).toBe(false);
+      expect(spawned).toBe(false);
+    }
   });
 });
 
@@ -194,7 +216,7 @@ describe("async handoff transport", () => {
 });
 
 function packageFixture() {
-  const home = box(); const directory = join(home, ".opencodex-desktop"); mkdirSync(directory);
+  const home = box(); const directory = join(home, ".opencodex-desktop"); mkdirSync(directory, { mode: 0o700 });
   for (const name of ["opencodex", "codex", "grok"]) mkdirSync(join(home, name));
   const target = join(home, "desktop-cli");
   const recordPath = join(directory, "cli.json");
@@ -283,11 +305,12 @@ test("launcher source anchors preserve exceptions before handoff and handoff bef
 });
 
 describe("shared Rust record fixtures and lexical path boundaries", () => {
-  test("all ten fixtures map to consumption state on every supported host", () => {
+  test("the whole Rust fixture directory maps to consumption state on every supported host", () => {
     const fixtureDir = repoPath("tests", "fixtures", "desktop-cli-record");
     const expected = {
       "valid-darwin.json": { state: "ready", host: "darwin" },
       "valid-win32.json": { state: "ready", host: "win32" },
+      "notify-pending.json": { state: "ready", host: "win32" },
       "valid-linux.json": { state: "ready", host: "linux" },
       "disabled-tombstone.json": { state: "disabled", cleanupPending: false },
       "disabled-with-pending.json": { state: "disabled", cleanupPending: true },
@@ -297,10 +320,14 @@ describe("shared Rust record fixtures and lexical path boundaries", () => {
       "relative-target.json": { state: "invalid", issue: "record-invalid" },
       "dotdot-target.json": { state: "invalid", issue: "record-invalid" },
     } as const;
-    expect(readdirSync(fixtureDir).sort()).toEqual(Object.keys(expected).sort());
+    const names = readdirSync(fixtureDir).sort();
+    expect(names).toEqual(Object.keys(expected).sort());
+    const recordPath = join(box(), "cli.json");
     for (const platform of ["darwin", "win32", "linux"] as const) {
-      for (const [name, want] of Object.entries(expected)) {
-        const actual = readDesktopCliRecord({ recordPath: join(fixtureDir, name), platform });
+      for (const name of names) {
+        const want = expected[name as keyof typeof expected];
+        writeFileSync(recordPath, readFileSync(join(fixtureDir, name)));
+        const actual = readDesktopCliRecord({ recordPath, platform }, { checkAcl: () => true });
         if (want.state === "ready") {
           if (want.host === platform) {
             const fixture = JSON.parse(readFileSync(join(fixtureDir, name), "utf8"));
@@ -341,7 +368,7 @@ describe("shared Rust record fixtures and lexical path boundaries", () => {
       writeFileSync(recordPath, JSON.stringify({
         version: 1, enabled: true, bundle: { platform: "darwin", kind: "macos-app", cliExecutable },
       }));
-      expect(readDesktopCliRecord({ recordPath, platform: "darwin" }).state).toBe(accepted ? "ready" : "invalid");
+      expect(readDesktopCliRecord({ recordPath, platform: "darwin" }, { checkAcl: () => true }).state).toBe(accepted ? "ready" : "invalid");
     }
   });
 
@@ -421,7 +448,7 @@ posixTest("AM-2 record refusal names the record, repair and exact bypass for eve
     ["record-invalid", "{"],
     ["record-too-large", " ".repeat(DESKTOP_CLI_RECORD_MAX_BYTES + 1)],
     ["record-pending", JSON.stringify({ version: 1, enabled: true, pending: {} })],
-    ["record-unreadable", null],
+    ["record-unsafe", null],
   ] as const;
   for (const [issue, content] of cases) {
     rmSync(recordPath, { force: true });
@@ -448,4 +475,152 @@ posixTest("real --version opts out to the package version even with a broken rec
   expect(result.error).toBeUndefined();
   expect(result.status).toBe(0);
   expect(result.stdout.trim()).toBe(`opencodex ${version}`);
+});
+
+function safetyFixture() {
+  const home = box();
+  const directory = join(home, ".opencodex-desktop");
+  mkdirSync(directory, { mode: 0o700 });
+  chmodSync(directory, 0o700);
+  const recordPath = join(directory, "cli.json");
+  writeFileSync(recordPath, JSON.stringify({
+    version: 1, enabled: true, bundle: { platform: process.platform, kind: hostKind, cliExecutable: join(home, "ocx") },
+  }));
+  chmodSync(recordPath, 0o600);
+  return { home, directory, recordPath };
+}
+function expectUnsafe(read: DesktopCliRecordRead): void {
+  expect(read).toMatchObject({ state: "invalid", issue: "record-unsafe" });
+  expect(planDesktopCliHandoff({ platform: "linux", argv: ["--version"], env: {}, recordRead: read }, {
+    stat: (() => { throw new Error("unsafe record must not inspect or select a target"); }) as typeof stat,
+  })).toEqual({ kind: "error", issue: "record-unsafe" });
+}
+
+posixTest("POSIX safety precedes JSON/disabled interpretation and accepts explicit 0700/0600", () => {
+  const fixture = safetyFixture();
+  expect(readDesktopCliRecord({ home: fixture.home }).state).toBe("ready");
+  for (const value of ['{"version":1,"enabled":false}', "{"]) {
+    writeFileSync(fixture.recordPath, value);
+    chmodSync(fixture.recordPath, 0o666);
+    expectUnsafe(readDesktopCliRecord({ home: fixture.home }));
+    chmodSync(fixture.recordPath, 0o600);
+  }
+  chmodSync(fixture.directory, 0o777);
+  expectUnsafe(readDesktopCliRecord({ home: fixture.home }));
+});
+
+posixTest("directory and record symlinks are refused without handoff", () => {
+  for (const linked of ["directory", "record"]) {
+    const fixture = safetyFixture();
+    if (linked === "directory") {
+      const moved = join(fixture.home, "moved-directory");
+      renameSync(fixture.directory, moved);
+      symlinkSync(moved, fixture.directory, "dir");
+    } else {
+      const moved = join(fixture.directory, "moved-record");
+      renameSync(fixture.recordPath, moved);
+      symlinkSync(moved, fixture.recordPath);
+    }
+    expectUnsafe(readDesktopCliRecord({ home: fixture.home }));
+  }
+});
+
+posixTest("stat seam refuses foreign ownership for either path without requiring root", () => {
+  for (const foreign of ["directory", "record"]) {
+    const fixture = safetyFixture();
+    expectUnsafe(readDesktopCliRecord({ home: fixture.home }, {
+      lstat: path => {
+        const info = lstatSync(path);
+        if (path === (foreign === "directory" ? fixture.directory : fixture.recordPath)) info.uid += 1;
+        return info;
+      },
+    }));
+  }
+});
+const rootTest = process.platform !== "win32" && process.geteuid?.() === 0 ? test : test.skip;
+if (process.platform === "win32" || process.geteuid?.() !== 0) console.log("SKIP real foreign-owner fixture: effective uid is not root; injected-owner cases still run.");
+rootTest("root-only real foreign-owner directory and record are refused", () => {
+  for (const foreign of ["directory", "record"]) {
+    const fixture = safetyFixture();
+    chownSync(foreign === "directory" ? fixture.directory : fixture.recordPath, 10001, -1);
+    expectUnsafe(readDesktopCliRecord({ home: fixture.home }));
+  }
+});
+
+posixTest("lstat to open replacement and every descriptor identity field fail closed", () => {
+  const fixture = safetyFixture();
+  let actualFlags = 0;
+  expectUnsafe(readDesktopCliRecord({ home: fixture.home }, {
+    open: (path, flags) => {
+      actualFlags = flags;
+      renameSync(path, join(fixture.directory, "old-record"));
+      writeFileSync(path, '{"version":1,"enabled":false}');
+      return openSync(path, flags);
+    },
+  }));
+  expect(actualFlags & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW);
+  expect(actualFlags & constants.O_NONBLOCK).toBe(constants.O_NONBLOCK);
+  for (const field of ["dev", "ino", "uid", "mode"] as const) {
+    expectUnsafe(readDesktopCliRecord({ home: fixture.home }, {
+      fstat: fd => { const info = fstatSync(fd); info[field] += 1; return info; },
+    }));
+  }
+  expectUnsafe(readDesktopCliRecord({ home: fixture.home }, {
+    open: () => { throw coded("ENOENT"); },
+  }));
+});
+
+posixTest("a FIFO record and a FIFO replacement return refusals before the 2-second deadline", () => {
+  for (const replaceAtOpen of [false, true]) {
+    const fixture = safetyFixture();
+    if (!replaceAtOpen) {
+      rmSync(fixture.recordPath);
+      const created = spawnSync("mkfifo", ["-m", "600", fixture.recordPath], { encoding: "utf8", timeout: 1000 });
+      expect(created.error).toBeUndefined();
+      expect(created.status).toBe(0);
+    }
+    const script = [
+      'import { readDesktopCliRecord } from ' + JSON.stringify(pathToFileURL(repoPath("src", "lib", "desktop-cli-record.mjs")).href) + ';',
+      'import { openSync, renameSync } from "node:fs";',
+      'import { spawnSync } from "node:child_process";',
+      'const path = ' + JSON.stringify(fixture.recordPath) + ';',
+      'const deps = ' + replaceAtOpen + ' ? { open: (path, flags) => {',
+      'renameSync(path, path + ".old");',
+      'const made = spawnSync("mkfifo", ["-m", "600", path], { timeout: 1000 });',
+      'if (made.error || made.status !== 0) throw new Error("mkfifo failed");',
+      'return openSync(path, flags); } } : {};',
+      'console.log(JSON.stringify(readDesktopCliRecord({ recordPath: path }, deps)));',
+    ].join("\n");
+    const result = spawnSync("node", ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 2000 });
+    expect(result.error).toBeUndefined(); // Timeout termination is a failure, never refusal evidence.
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ state: "invalid", issue: "record-unsafe" });
+  }
+});
+
+posixTest("macOS ACL seam rejects entries and failed checks before JSON interpretation", () => {
+  const fixture = safetyFixture();
+  writeFileSync(fixture.recordPath, '{"version":1,"enabled":false}');
+  for (const checkAcl of [() => false, () => { throw coded("ETIMEDOUT"); }, () => { throw coded("ENOENT"); }]) {
+    expectUnsafe(readDesktopCliRecord({ recordPath: fixture.recordPath, platform: "darwin" }, { checkAcl }));
+  }
+  let checked: string[] = [];
+  expect(readDesktopCliRecord({ recordPath: fixture.recordPath, platform: "darwin" }, {
+    checkAcl: (directory, path) => { checked = [directory, path]; return true; },
+  }).state).toBe("disabled");
+  expect(checked).toEqual([fixture.directory, fixture.recordPath]);
+});
+const macTest = process.platform === "darwin" ? test : test.skip;
+if (process.platform !== "darwin") console.log("SKIP real macOS extended ACL fixture: chmod +a is only available on macOS.");
+macTest("macOS real extended ACLs on a 0700 directory or 0600 record are refused", () => {
+  for (const aclTarget of ["directory", "record"]) {
+    const fixture = safetyFixture();
+    const path = aclTarget === "directory" ? fixture.directory : fixture.recordPath;
+    const added = spawnSync("/bin/chmod", ["+a", "everyone allow read", path], { encoding: "utf8", timeout: 1000 });
+    expect(added.error).toBeUndefined();
+    expect(added.status).toBe(0);
+    expect(lstatSync(path).mode & 0o077).toBe(0);
+    expectUnsafe(readDesktopCliRecord({ home: fixture.home }));
+  }
 });

@@ -15,6 +15,8 @@ export type CliPathCandidate = {
 };
 export type CliPathDiagnostics = {
   configured: boolean;
+  recordPath: string;
+  packageHandoff: "enabled" | "disabled-on-windows";
   recordState: DesktopCliRecordRead["state"];
   expectedExecutable: string | null;
   handoffTarget: string | null;
@@ -102,7 +104,8 @@ export function collectCliPathDiagnostics(options: CliPathDiagnosticOptions = {}
       && (!expectedRealpath || !same(currentDirectoryCandidate.realpath, expectedRealpath))) add("windows-current-directory-shadow");
   }
   return {
-    configured, recordState: read.state, expectedExecutable: expected, handoffTarget: target,
+    configured, recordPath: read.path, packageHandoff: platform === "win32" ? "disabled-on-windows" : "enabled",
+    recordState: read.state, expectedExecutable: expected, handoffTarget: platform === "win32" ? null : target,
     candidates, pathFirst,
     desktopFirstOnPath: configured && !issues.includes("path-unreadable") && !issues.includes("path-scan-truncated")
       ? Boolean(pathFirst && expected && expectedRealpath
@@ -113,7 +116,7 @@ export function collectCliPathDiagnostics(options: CliPathDiagnosticOptions = {}
 
 export function formatCliCommandLine(value: CliPathDiagnostics): string {
   const first = value.pathFirst ? redactUserPath(value.pathFirst.path).replace(/[\x00-\x1f\x7f]/g, "?") : "none observed";
-  return `ocx command: PATH first=${first}; Desktop=${!value.configured ? "not configured" : value.desktopFirstOnPath === null ? "unobserved" : value.desktopFirstOnPath ? "first" : "not first"}; shell=unobserved${value.issues.length ? `; issues=${value.issues.join(",")}` : ""}`;
+  return `ocx command: PATH first=${first}; Desktop=${!value.configured ? "not configured" : value.desktopFirstOnPath === null ? "unobserved" : value.desktopFirstOnPath ? "first" : "not first"}; ${value.packageHandoff === "disabled-on-windows" ? "package handoff=disabled on Windows (user Path selects Desktop); " : ""}shell=unobserved${value.issues.length ? `; issues=${value.issues.join(",")}` : ""}`;
 }
 
 export function formatCliStatusHealthLabel(health: string, value: CliPathDiagnostics, local: boolean): string {
@@ -123,7 +126,7 @@ export function formatCliStatusHealthLabel(health: string, value: CliPathDiagnos
 export function cliCommandDoctorChecks(value: CliPathDiagnostics): { level: "OK" | "WARN" | "FAIL"; message: string }[] {
   const hard = value.issues.some(issue => issue.startsWith("record-") || issue.startsWith("desktop-target-") || issue.startsWith("expected-command-"));
   const recovery = value.issues.some(issue => issue.startsWith("record-"))
-    ? ` Open OpenCodex Desktop to repair the terminal command, or run with OCX_NO_DESKTOP_HANDOFF=1.${value.issues.includes("record-too-large") ? ` The record limit is ${DESKTOP_CLI_RECORD_MAX_BYTES} bytes.` : ""}`
+    ? ` The terminal-command record at ${redactUserPath(value.recordPath).replace(/[\x00-\x1f\x7f]/g, "?")} could not be used. Open OpenCodex Desktop to repair the terminal command.${value.packageHandoff === "disabled-on-windows" ? "" : " Or run with OCX_NO_DESKTOP_HANDOFF=1."}${value.issues.includes("record-too-large") ? ` The record limit is ${DESKTOP_CLI_RECORD_MAX_BYTES} bytes.` : ""}`
     : value.issues.includes("cleanup-pending") ? " Open OpenCodex Desktop to finish terminal-command cleanup." : "";
   return [{ level: hard ? "FAIL" : value.issues.length ? "WARN" : "OK", message: formatCliCommandLine(value) + recovery }];
 }

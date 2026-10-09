@@ -15,6 +15,8 @@ export function desktopHandoffExcluded(argv, env = process.env) {
 }
 
 export function planDesktopCliHandoff(input = {}, deps = {}) {
+  const platform = input.platform ?? process.platform;
+  if (platform === "win32") return { kind: "continue", reason: "windows-path-only" };
   const argv = input.argv ?? process.argv.slice(2);
   const env = input.env ?? process.env;
   if (desktopHandoffExcluded(argv, env)) return { kind: "continue", reason: "excluded" };
@@ -23,7 +25,6 @@ export function planDesktopCliHandoff(input = {}, deps = {}) {
     return { kind: "continue", reason: read.state };
   }
   if (read.state !== "ready") return { kind: "error", issue: read.issue };
-  const platform = input.platform ?? process.platform;
   const api = platform === "win32" ? win32 : posix;
   const target = read.record.cliExecutable;
   if (!api.isAbsolute(target)) return { kind: "error", issue: "target-invalid" };
