@@ -112,4 +112,3 @@ test("a hosted search turn sends both model rounds for a direct request and a Co
   expect(direct).toEqual({ status: 200, terminal: "response.completed", modelSends: 2, searches: 1 });
   expect(combo).toEqual({ status: 200, terminal: "response.completed", modelSends: 2, searches: 1 });
 });
-

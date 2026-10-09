@@ -101,6 +101,9 @@ When spend enforcement is inactive a combo-owned or compaction-prepaid send is s
 physical-dispatch receipt; when it is active the shared physical-send reporter keeps ownership, so
 a send is never charged by both. Other callers keep early settlement only when enforcement is inactive;
 enforced permits stay refundable until execution.
+For a Codex WebSocket request, the receipt runs before the frame is sent and at most once across
+the WS attempt and its HTTP fallback. If WS send then fails and HTTP refuses before dispatch, that
+accepted booking remains charged even though no physical send occurred.
 The existing `refundableAdapterDispatchBudget` view stays available to direct Antigravity search;
 its legacy already-settled-hop replacement still requires a fresh admitted reservation.
 `tests/responses/responses-hosted-send-unsent-hop.test.ts` covers real Vertex hosted-search queued

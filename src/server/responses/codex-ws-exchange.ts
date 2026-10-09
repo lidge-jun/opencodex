@@ -412,6 +412,17 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         failStream(error);
         return;
       }
+      try { options.onPhysicalDispatch?.(); } catch (error) {
+        // Admission refused before the frame left. This is a pre-open rejection,
+        // not a transport failure and not an authorization to replay over SSE.
+        settledPreOpen = true;
+        sent = false;
+        terminal = true;
+        cleanup();
+        session.dispose();
+        reject(error);
+        return;
+      }
       try {
         ws.send(frameText);
         sentAt = Date.now();
@@ -432,8 +443,6 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         resolve(sseFallback(url, init));
         return;
       }
-      // The frame already left: receipt failure must never enter the unsent SSE fallback.
-      try { options.onPhysicalDispatch?.(); } catch (error) { failStream(error); return; }
       if (!metadata) commitResponse();
       else if (!responseCommitted && !terminal) {
         armSilence();

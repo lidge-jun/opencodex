@@ -266,7 +266,8 @@ export async function executeResponsesSidecars(
         return null;
       }
       recoveryKind = "oauth-account-403";
-      sendBudgetState.pendingHopPermit = hop.permit;
+      if (!options.comboInitialSend) sendBudgetState.pendingHopPermit = hop.permit;
+      else sidecarBudget.ownCredentialHop(hop.permit);
     }
     const rotated = !originalResponse || originalResponse.status === 429
       ? rotateProviderTransportOn429(config, route.providerName, route.provider, {
