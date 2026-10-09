@@ -374,7 +374,10 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   gets the lowest sufficient tier, then the lowest price. Effort binds to ladder positions of the chosen
   model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
   only for a role whose file already sets `model_reasoning_effort`, and written by the same span-preserving
-  editor as `model`, located by the same TOML-aware scan.
+  editor as `model`, located by the same TOML-aware scan. A routed model's ladder is its row's
+  `reasoningEfforts`; a row that declares none takes the ladder the written Codex catalog shows for it, an
+  explicit empty list stays empty, and a row without its own default takes the catalog's default when that
+  rung is on the ladder.
 
 The sizing call is injectable (`completeCodexRoleSizing` on the management deps), so route tests answer it
 without a provider. Sibling instances refuse the preview too: it sits under the refused
