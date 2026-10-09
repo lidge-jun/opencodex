@@ -9,7 +9,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, delimiter, dirname, extname, join, posix, win32 } from "node:path";
-import { durableBunRuntime } from "../lib/bun-runtime";
+import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
+import { assertSelectedRuntimeWritable, RuntimePreflightError, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
+import { getConfigDir } from "../config";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { isWslRuntime, wslAutomountRoot } from "./home";
@@ -83,7 +85,9 @@ export function lastCodexDiscoveryError(): string | null {
   return lastShimDiscoveryError;
 }
 
-interface InstallCodexShimInternalOptions {
+interface InstallCodexShimInternalOptions extends RuntimePreflightDeps {
+  runtime?: DurableBunRuntime;
+  runtimeAdmitted?: boolean;
   expectedReplacements?: ReadonlyMap<string, ShimPathFingerprint>;
   allowFreshInstall: boolean;
   beforeGuardedRefresh?: (wrapperPath: string, index: number) => void;
@@ -105,12 +109,11 @@ export type CodexShimAutoRestoreResult =
   | { status: "ineligible" | "deferred"; message?: string }
   | { status: "restored"; message: string };
 
-function cliEntry(): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: string } {
+function cliEntry(runtime: DurableBunRuntime = durableBunRuntime()): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: string } {
   // Bundled Bun path (survives `ocx update`); all three shim builders
   // (Unix / Windows cmd / Windows PowerShell) receive it via this entry.
   // This module lives in src/codex/, the CLI entry in src/cli/index.ts.
   // Path and provenance resolve together so the marker always describes this binary.
-  const runtime = durableBunRuntime();
   return { bun: runtime.path, bunRuntimeSource: runtime.source, cli: join(import.meta.dir, "..", "cli", "index.ts") };
 }
 
@@ -345,8 +348,8 @@ function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry
  * updater's wrapper can carry them, and a replacement landing between the write
  * and the observation is otherwise indistinguishable from our own file.
  */
-function writeShim(wrapperPath: string, realCodexPath: string): { dev: number; ino: number } | undefined {
-  const { bun, bunRuntimeSource, cli } = cliEntry();
+function writeShim(wrapperPath: string, realCodexPath: string, runtime?: DurableBunRuntime): { dev: number; ino: number } | undefined {
+  const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
   if (process.platform === "win32") {
     const lower = wrapperPath.toLowerCase();
     if (lower.endsWith(".ps1")) {
@@ -458,7 +461,7 @@ function replaceOwnedBackup(sourcePath: string, backupPath: string): void {
   }
 }
 
-function refreshShimFile(file: ShimFileState): boolean {
+function refreshShimFile(file: ShimFileState, runtime: DurableBunRuntime): boolean {
   if (file.preserveOnly) {
     if (existsSync(file.originalPath) && !isShim(file.originalPath)) {
       replaceOwnedBackup(file.originalPath, file.backupPath);
@@ -474,10 +477,10 @@ function refreshShimFile(file: ShimFileState): boolean {
       file,
       expectedReplacement: replacement.fingerprint,
       sourcePath: file.wrapperPath,
-    }]);
+    }], undefined, undefined, runtime);
   }
   if (!existsSync(file.wrapperPath) && existsSync(file.backupPath)) {
-    writeShim(file.wrapperPath, file.realPath ?? file.backupPath);
+    writeShim(file.wrapperPath, file.realPath ?? file.backupPath, runtime);
     const writtenWrapper = stableShimPathProbe(file.wrapperPath);
     if (!writtenWrapper || !writtenWrapper.prefix.includes(SHIM_MARKER)) {
       return false;
@@ -503,7 +506,7 @@ function refreshShimFile(file: ShimFileState): boolean {
   }
   if (file.originalPath !== file.wrapperPath && existsSync(file.originalPath) && existsSync(file.wrapperPath) && isShim(file.wrapperPath)) {
     replaceOwnedBackup(file.originalPath, file.backupPath);
-    writeShim(file.wrapperPath, file.realPath ?? file.backupPath);
+    writeShim(file.wrapperPath, file.realPath ?? file.backupPath, runtime);
     return true;
   }
   return false;
@@ -610,6 +613,7 @@ function applyGuardedRefreshTransaction(
   operations: readonly GuardedRefreshOperation[],
   beforeGuardedRefresh?: (wrapperPath: string, index: number) => void,
   commitState?: () => void,
+  runtime?: DurableBunRuntime,
 ): boolean {
   const journal: GuardedRefreshJournalEntry[] = [];
   let applyError: Error | null = null;
@@ -643,7 +647,7 @@ function applyGuardedRefreshTransaction(
       if (!movedReplacement) throw new Error("Codex shim guarded refresh could not fingerprint the staged launcher");
       entry.movedReplacementFingerprint = movedReplacement.fingerprint;
       entry.wrapperWriteStarted = true;
-      const writtenInode = writeShim(operation.file.wrapperPath, operation.file.realPath ?? operation.file.backupPath);
+      const writtenInode = writeShim(operation.file.wrapperPath, operation.file.realPath ?? operation.file.backupPath, runtime);
       // Claim our own partial write before the hook can fail (see fresh install).
       entry.writtenWrapperFingerprint = ownedWrapperFingerprint(operation.file.wrapperPath, writtenInode);
       codexShimGuardedWriteHookForTests?.();
@@ -747,7 +751,7 @@ type ObsoleteUnixShimRefreshResult =
   | { installed: true; message: string }
   | { installed: false; deferred: boolean; message: string };
 
-function refreshObsoleteUnixShims(files: readonly ShimFileState[]): ObsoleteUnixShimRefreshResult {
+function refreshObsoleteUnixShims(files: readonly ShimFileState[], runtime?: DurableBunRuntime): ObsoleteUnixShimRefreshResult {
   if (process.platform === "win32") {
     return { installed: false, deferred: false, message: "Codex autostart shim is already current." };
   }
@@ -786,7 +790,7 @@ function refreshObsoleteUnixShims(files: readonly ShimFileState[]): ObsoleteUnix
         throw new Error("Codex autostart shim upgrade could not fingerprint the staged wrapper");
       }
       entry.wrapperWriteStarted = true;
-      const writtenInode = writeShim(file.wrapperPath, file.realPath ?? file.backupPath);
+      const writtenInode = writeShim(file.wrapperPath, file.realPath ?? file.backupPath, runtime);
       const writtenWrapper = stableShimPathProbe(file.wrapperPath);
       if (!writtenWrapper || !isCurrentUnixShimProbe(writtenWrapper)) {
         throw new Error("Codex autostart shim upgrade could not fingerprint the regenerated wrapper");
@@ -876,6 +880,19 @@ function refreshObsoleteUnixShims(files: readonly ShimFileState[]): ObsoleteUnix
 
 function installCodexShimInternal(options: InstallCodexShimInternalOptions): { installed: boolean; message: string } {
   const existing = readState();
+  const filesBefore = existing ? stateFiles(existing) : [];
+  if (filesBefore.length > 0 && filesBefore.every(file => {
+    if (file.preserveOnly) return existsSync(file.backupPath) && !existsSync(file.originalPath);
+    const probe = stableShimPathProbe(file.wrapperPath);
+    return hasUsableBackingPath(file) && probe !== null && isHealthyShimProbe(probe, process.platform);
+  })) {
+    return { installed: false, message: "Codex autostart shim is already installed." };
+  }
+  const runtime = options.runtime ?? Object.freeze({ ...(options.selectRuntime ?? durableBunRuntime)() });
+  if (!options.runtimeAdmitted) {
+    const configDir = (options.configDir ?? getConfigDir)();
+    (options.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { rootWasAbsent: !existsSync(configDir) });
+  }
   if (existing) {
     const files = stateFiles(existing);
     if (!options.expectedReplacements && process.platform !== "win32") {
@@ -907,7 +924,7 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
           throw writeError;
         }
       };
-      if (!applyGuardedRefreshTransaction(operations, options.beforeGuardedRefresh, commitState)) {
+      if (!applyGuardedRefreshTransaction(operations, options.beforeGuardedRefresh, commitState, runtime)) {
         return { installed: false, message: "Codex shim auto-restore deferred because tracked launchers changed." };
       }
       return {
@@ -916,7 +933,7 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
       };
     }
     let refreshed = false;
-    for (const file of files) refreshed = refreshShimFile(file) || refreshed;
+    for (const file of files) refreshed = refreshShimFile(file, runtime) || refreshed;
     const allInstalled = files.every(file => file.preserveOnly
       ? existsSync(file.backupPath) && !existsSync(file.originalPath)
       : existsSync(file.wrapperPath)
@@ -988,7 +1005,7 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
       }
       if (!target.preserveOnly) {
         entry.wrapperWriteStarted = true;
-        const writtenInode = writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
+        const writtenInode = writeShim(target.wrapperPath, target.realPath ?? target.backupPath, runtime);
         entry.writtenWrapperInode = writtenInode;
         codexShimFreshWriteHookForTests?.();
         if (process.platform !== "win32") {
@@ -1061,12 +1078,12 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
   };
 }
 
-export function installCodexShim(): { installed: boolean; message: string; refused?: boolean; runnable?: boolean } {
+export function installCodexShim(deps: RuntimePreflightDeps = {}): { installed: boolean; message: string; refused?: boolean; runnable?: boolean } {
   if (process.platform !== "win32") return installUnixOverlay(findCodexOnPath);
-  return installCodexShimInternal({ allowFreshInstall: true });
+  return installCodexShimInternal({ ...deps, allowFreshInstall: true });
 }
 
-export function autoRestoreCodexShim(options: {
+export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
   enabled: () => boolean;
   stabilitySleep?: (ms: number) => void;
   /** Narrow deterministic seam used to hold the interprocess lock in tests. */
@@ -1133,6 +1150,14 @@ export function autoRestoreCodexShim(options: {
     };
   }
 
+  const runtime = Object.freeze({ ...(options.selectRuntime ?? durableBunRuntime)() });
+  try {
+    const configDir = (options.configDir ?? getConfigDir)();
+    (options.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { rootWasAbsent: !existsSync(configDir) });
+  } catch (error) {
+    if (error instanceof RuntimePreflightError) return { status: "deferred", message: error.message };
+    throw error;
+  }
   const lock = tryAcquireShimRestoreLock(options.beforeStaleRestoreLockDelete);
   if (!lock) return { status: "deferred" };
   try {
@@ -1159,6 +1184,7 @@ export function autoRestoreCodexShim(options: {
       expectedReplacements.set(path, secondProbe.fingerprint);
     }
     const result = installCodexShimInternal({
+      runtime, runtimeAdmitted: true,
       allowFreshInstall: false,
       expectedReplacements,
       beforeGuardedRefresh: options.beforeGuardedRefresh,

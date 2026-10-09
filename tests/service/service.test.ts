@@ -2443,13 +2443,13 @@ describe("service lifecycle cleanup ordering", () => {
   test("Windows service install ends the running task before rewriting its assets, with write retry", async () => {
     const service = await readText("src/service/windows-ops.ts");
     const assetsHelper = service.slice(
-      service.indexOf("function writeWindowsSchedulerAssets()"),
-      service.indexOf("function installWindows()"),
+      service.indexOf("function writeWindowsSchedulerAssets("),
+      service.indexOf("function installWindows("),
     );
-    const installWindows = service.slice(service.indexOf("function installWindows()"), service.indexOf("async function installWindowsNative()"));
+    const installWindows = service.slice(service.indexOf("function installWindows("), service.indexOf("async function installWindowsNative("));
 
-    const stopAt = installWindows.indexOf("stopWindows();");
-    const assetsAt = installWindows.indexOf("writeWindowsSchedulerAssets();");
+    const stopAt = installWindows.indexOf("(deps.stopScheduler ?? stopWindows)();");
+    const assetsAt = installWindows.indexOf("(deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);");
     const createAt = installWindows.indexOf("buildWindowsSchtasksCreateArgs");
     expect(stopAt).toBeGreaterThan(-1);
     expect(assetsAt).toBeGreaterThan(-1);
@@ -2533,8 +2533,8 @@ describe("service lifecycle cleanup ordering", () => {
 
   test("native install refuses Microsoft-account logins before removing the scheduler backend", async () => {
     const service = await readText("src/service/windows-ops.ts");
-    const installNative = service.slice(service.indexOf("async function installWindowsNative()"), service.indexOf("function startWindows()"));
-    expect(installNative.indexOf("assertWindowsNativeServiceAccountSupported()")).toBeLessThan(installNative.indexOf("uninstallWindows()"));
+    const installNative = service.slice(service.indexOf("async function installWindowsNative("), service.indexOf("function startWindows()"));
+    expect(installNative.indexOf("(deps.assertNativeAccount ?? assertWindowsNativeServiceAccountSupported)()")).toBeLessThan(installNative.indexOf("(deps.uninstallScheduler ?? uninstallWindows)()"));
     expect(service).toContain("Microsoft-account Windows login");
   });
 

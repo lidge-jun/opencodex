@@ -34,8 +34,14 @@ opencodex 打包了 Bun 运行时（当前为 **1.3.14**）。这类内存增长
 
 1. **等待捆绑运行时更新。** 一旦某个 Bun 版本可验证地包含这些修复，opencodex 就会升级捆绑运行时，并在 Windows 上自动启用更安全的流路径（macOS 仍然需要下面的显式启用）。
 
-2. **通过 `OPENCODEX_BUN_PATH` 运行你信任的 Bun 运行时。** 这属于未验证区域，你是在一个我们没有测试过的运行时上运行 opencodex，风险自负。对服务安装而言，这个覆盖值是在生成服务产物时读取的，而不是在服务启动时读取的。先设置环境变量，然后在同一个 shell 中重新运行 `ocx service repair`，这样路径才会被写入持久化的服务定义。只设置环境变量对已经安装好的服务没有任何作用。
+2. **通过 `OPENCODEX_BUN_PATH` 使用可信的 Bun 运行时。** 在同一 shell 启动 `ocx` 前设置变量，再运行 `ocx service repair` 将所选运行时写入服务定义。之后加载的项目 `.env` 不会改变选择。仅修改环境变量不会更新已安装的服务。
 
 3. **通过 `streamMode: "eager-relay"` 显式启用有界中继。** 有两种方式：编辑 `config.json`（添加 `"streamMode": "eager-relay"`），或调用管理 API - `PUT /api/settings` 携带 `{"streamMode":"eager-relay"}`，即可对新轮次生效，无需重启。**崩溃风险警告：** 在 Bun 1.3.14 上，这会使用受 #32111 影响的流形态，可能在流中途使进程崩溃（任何操作系统都会受影响，不只是 Windows）。服务管理器会把它重启，但正在进行的请求会失败。`"legacy-tee"` 会固定在当前默认路径。Windows 上，`"auto"`（默认值）会交给运行时门控决定。macOS 上，`"auto"` 始终保持 tee；显式 `"eager-relay"` 才是显式启用选项。
 
 如果你在真实的 Windows 工作负载上尝试这些方案，请把变更前后 `ocx doctor` 的内存部分发到 [#314](https://github.com/lidge-jun/opencodex/issues/314)——这正是这个缓解措施在等待的验证。
+
+## Windows 所选运行时写入被拒绝
+
+Windows 服务安装、修复及 Codex shim 安装、刷新会检查所选可执行文件能否在 OpenCodex 配置根目录内创建并删除目录。这是写入策略检查，并非内存修复。失败时会在停止服务、下载、暂存以及写入令牌或启动器前拒绝操作。shim 自动修复会延后并显示指引，启动继续。正常或禁用的 shim 不会检查。不自动寻找其他运行时。
+
+> 所选 Bun 运行时无法在配置目录内创建并删除目录。Windows 应用策略可能禁止来自此可执行文件位置的写入。在启动 `ocx` 前，将 `OPENCODEX_BUN_PATH` 设置为策略允许的可信 Bun 可执行文件，或通过 `npm install -g opencodex` 重新安装后重试。未选择其他运行时。

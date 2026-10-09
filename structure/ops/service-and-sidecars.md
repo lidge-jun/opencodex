@@ -96,6 +96,29 @@ deadline before and under that lease, before/after bind, before PID and runtime 
 and at completion. Rollback retains custody until exit; the deadline ends an unfinished child.
 Windows, claimed, supervised and uncertain targets remain ineligible for this update path.
 
+## Windows selected-runtime write preflight
+
+Before service install/repair or a Windows Codex shim mutation, the selected Bun executable must
+create and remove an exclusive nonce-named directory inside the config root. Admission executes
+that exact lexical path with `-e`, no shell, a hidden window and a five-second timeout. Only a
+matching nonce acknowledgment admits it. Failure refuses with `OCX_RUNTIME_PREFLIGHT_FAILED`
+and `spawn`, `timeout`, `create`, `remove`, or `protocol`; it never discovers another runtime.
+The frozen selection feeds scheduler rendering, the WinSW entry and the install-state writer;
+`installServiceSafely` admits once before cleanup and uses internal commit functions. Direct public installers retain their own admission gate.
+Healthy or disabled shims do not probe; refused automatic restore defers with guidance and startup continues.
+Non-Windows admission performs no spawn or filesystem work. Selection remains pre-dotenv and `cliEntry` remains I/O-free.
+
+An absent root is captured before staging and created with an exclusive non-recursive mode-0700
+mkdir under an existing parent. A successful probe leaves it empty for config ownership claiming.
+The preflight never deletes the config root, including on refusal or concurrent creation. A created
+empty root stays claimable by a later install; concurrent contents and replacements are preserved.
+Existing roots must be real directories, not files or symlinks/junctions. Probe cleanup is non-recursive.
+A standalone selection is admitted in-process only when its path equals `process.execPath` exactly.
+Standalone is executable packaging, not Desktop ownership. This branch has neither child isolation
+nor a timeout: synchronous filesystem operations may block. Other standalone selections refuse.
+Recovery is an operator-selected trusted `OPENCODEX_BUN_PATH` before launching ocx, or an
+`npm install -g opencodex` reinstall followed by retry; no runtime discovery or probe memo is added.
+
 ## Windows npm tray update badge
 
 The npm Windows tray owns six installed ICOs: online, warning, and offline base safety glyphs plus one blue-dot variant of each. Its hidden `ocx __update-badge` child reads the package cache without refreshing or writing it. The tray samples no more often than every 60 seconds, caps stdout and stderr at 16 KiB each, requests termination after 12 seconds or a pipe overflow, and reaps the child on later Windows Forms ticks before allowing another launch. A successful badge observation expires after 180 seconds; failed reads do not extend it. The **Update available** item opens the dashboard and never installs a package. Shutdown requests child termination, waits at most 500 ms, and disposes the probe before tray UI disposal.

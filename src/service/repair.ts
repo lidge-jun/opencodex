@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { getConfigDir } from "../config";
+import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
+import { assertSelectedRuntimeWritable, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
 import { randomUUID } from "node:crypto";
 import { defaultWinswEntry, installWinswService } from "../lib/winsw";
 import { resolveWindowsTaskDiagnosticUserId, diagnoseService } from "./diagnostics";
@@ -23,18 +27,18 @@ import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionIns
  */
 export type ServiceRepairVerb = "repair" | "restart";
 
-export interface RepairServiceDeps {
+export interface RepairServiceDeps extends RuntimePreflightDeps {
   inspectSupervision?: SupervisionInspector;
   supervisionLatch?: SupervisionLatch;
   diagnose?: () => ServiceDiagnostic;
   assertEnv?: () => void;
   assertAuth?: () => void;
-  writeSchedulerAssets?: () => void;
+  writeSchedulerAssets?: (runtime: DurableBunRuntime) => void;
   stopScheduler?: () => void;
   startScheduler?: () => void;
-  writeSchedulerState?: () => void;
-  writeNativeState?: () => void;
-  repairNative?: () => void | Promise<void>;
+  writeSchedulerState?: (runtime: DurableBunRuntime) => void;
+  writeNativeState?: (runtime: DurableBunRuntime) => void;
+  repairNative?: (runtime: DurableBunRuntime) => void | Promise<void>;
   repairLaunchd?: () => LaunchdInstallOutcome | void;
   repairSystemd?: () => void;
   /** Restarts a launchd job the install path deliberately left alone. `restart` only. */
@@ -179,6 +183,9 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     throw new Error(foreignServiceOwnerRefusal(ownership.ownership));
   }
 
+  const runtime = Object.freeze({ ...(deps.selectRuntime ?? durableBunRuntime)() });
+  const configDir = (deps.configDir ?? getConfigDir)();
+  (deps.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { platform, rootWasAbsent: !existsSync(configDir) });
   (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
   (deps.assertAuth ?? assertServiceAuthEnvironment)();
 
@@ -187,9 +194,9 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
 
   if (platform === "win32") {
     if (diag.backend === "native") {
-      await (deps.repairNative ?? (() => installWinswService(defaultWinswEntry(serviceSourceDir))))();
+      await (deps.repairNative ?? ((selected: DurableBunRuntime) => installWinswService(defaultWinswEntry(serviceSourceDir, selected))))(runtime);
       assertNoDesktopSupervision(deps.inspectSupervision, latch);
-      (deps.writeNativeState ?? (() => writeServiceInstallState("native")))();
+      (deps.writeNativeState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("native", undefined, {}, selected)))(runtime);
       return;
     }
     const readSchedulerXml = deps.readSchedulerXml ?? statusWindowsXml;
@@ -249,7 +256,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       );
     }
     try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
-    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)();
+    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
     // Rewriting the on-disk assets does not touch the definition Task Scheduler holds, so a
     // task registered by an older version keeps its old triggers forever: status reports it
     // stale, tells the user to run repair, and repair changes nothing it complains about.
@@ -368,7 +375,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     );
     assertNoDesktopSupervision(deps.inspectSupervision, latch);
     (deps.startScheduler ?? startWindows)();
-    (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();
+    (deps.writeSchedulerState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("scheduler", undefined, {}, selected)))(runtime);
     return;
   }
   if (platform === "darwin") {
