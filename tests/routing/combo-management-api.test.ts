@@ -34,6 +34,7 @@ import {
   UnknownComboError,
 } from "../../src/combos";
 import { getConfigPath, readConfigDiagnostics, saveConfig } from "../../src/config";
+import * as outbound from "../../src/lib/provider-outbound";
 import { routeModel } from "../../src/router";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { handleResponses } from "../../src/server/responses";
@@ -51,9 +52,9 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
     port: 10100,
     defaultProvider: "a",
     providers: {
-      a: { adapter: "openai-chat", baseUrl: "https://a.example/v1", apiKey: "ka", models: ["m1"] },
-      b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", apiKey: "kb", models: ["m2"] },
-      c: { adapter: "openai-chat", baseUrl: "https://c.example/v1", apiKey: "kc", models: ["m3"] },
+      a: { adapter: "openai-chat", baseUrl: "https://a.example/v1", apiKey: "ka", models: ["m1"], liveModels: false },
+      b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", apiKey: "kb", models: ["m2"], liveModels: false },
+      c: { adapter: "openai-chat", baseUrl: "https://c.example/v1", apiKey: "kc", models: ["m3"], liveModels: false },
     },
     combos: {
       free: {
@@ -96,7 +97,46 @@ function successfulPicks(config: OcxConfig, count: number): string[] {
   });
 }
 
-async function withTempHome<T>(run: (dir: string) => Promise<T> | T): Promise<T> {
+// Bun can start another case while a timed-out callback is still running.
+// Chain owners so one fixture cannot install or restore another's environment.
+let tempHomeSettled: Promise<void> = Promise.resolve();
+let tempHomeStuck = false;
+let tempHomeDrainMs = 50_000;
+const STUCK = "an earlier withTempHome owner never settled; refusing to share its environment";
+const cleanups: Array<() => void> = [];
+
+function withTempHome<T>(run: (dir: string) => Promise<T> | T): Promise<T> {
+  if (tempHomeStuck) return Promise.reject(new Error(STUCK));
+  const operation = tempHomeSettled.then(() => {
+    // Owners queued before poisoning must refuse even if the predecessor resumes.
+    if (tempHomeStuck) throw new Error(STUCK);
+    return runWithTempHome(run);
+  });
+  tempHomeSettled = operation.then(() => {}, () => {});
+  return operation;
+}
+
+async function drainTempHome(): Promise<void> {
+  if (tempHomeStuck) throw new Error(STUCK);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const drained = await Promise.race([
+    tempHomeSettled.then(() => true),
+    new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), tempHomeDrainMs); }),
+  ]);
+  clearTimeout(timer);
+  if (!drained) {
+    tempHomeStuck = true;
+    throw new Error("withTempHome owner still running after the drain bound");
+  }
+}
+
+function resetTempHomeQueueForTest(): void {
+  tempHomeDrainMs = 50_000;
+  tempHomeStuck = false;
+  tempHomeSettled = Promise.resolve();
+}
+
+async function runWithTempHome<T>(run: (dir: string) => Promise<T> | T): Promise<T> {
   const previousHome = process.env.OPENCODEX_HOME;
   const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
   const dir = mkdtempSync(join(tmpdir(), "ocx-combos-"));
@@ -150,10 +190,15 @@ async function responseJson(response: Response | null): Promise<Record<string, u
   return response!.json() as Promise<Record<string, unknown>>;
 }
 
-afterEach(() => {
-  clearComboSelectionState();
-  clearComboTargetCooldowns();
-});
+afterEach(async () => {
+  try {
+    await drainTempHome();
+    clearComboSelectionState();
+    clearComboTargetCooldowns();
+  } finally {
+    for (const cleanup of cleanups.splice(0)) cleanup();
+  }
+}, 60_000);
 
 describe("combo management API", () => {
   test("bare alias precedence yields back to a non-OpenAI selector after rename and deletion", async () => {
@@ -1026,6 +1071,9 @@ describe("combo management API", () => {
   });
 
   test("PUT renames atomically, migrates public references, and clears both ids", async () => {
+    const discovery = spyOn(outbound, "providerOutboundGet")
+      .mockRejectedValue(new Error("the combo fixture must not discover provider models"));
+    cleanups.push(() => discovery.mockRestore());
     await withTempHome(async () => {
       const config = baseConfig({
         disabledModels: ["before", "combo/old", "middle", "old-public", "after"],
@@ -1114,6 +1162,7 @@ describe("combo management API", () => {
         modelMap: { inbound: "new-public", stable: "a/m1" },
       });
     });
+    expect(discovery).not.toHaveBeenCalled();
   });
 
   test("PUT rename migrates canonical references when the public alias stays unchanged", async () => {
@@ -1780,3 +1829,85 @@ describe("combo response-path strategy accounting", () => {
   }, 10_000);
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
+
+
+describe("combo management temp homes", () => {
+  test("serializes overlapping withTempHome owners", async () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const firstStarted = new Promise<void>(resolve => { started = resolve; });
+    let second: Promise<void> | undefined;
+    const first = withTempHome(async dir => {
+      started();
+      await gate;
+      expect(process.env.OPENCODEX_HOME).toBe(dir);
+      expect(process.env.CLAUDE_CONFIG_DIR).toBe(join(dir, "claude"));
+    });
+    try {
+      await firstStarted;
+      second = withTempHome(async dir => {
+        await gate;
+        expect(process.env.OPENCODEX_HOME).toBe(dir);
+        expect(process.env.CLAUDE_CONFIG_DIR).toBe(join(dir, "claude"));
+      });
+      release();
+      await first;
+      await second;
+      expect(process.env.OPENCODEX_HOME).toBe(previousHome);
+      expect(process.env.CLAUDE_CONFIG_DIR).toBe(previousClaudeConfigDir);
+    } finally {
+      release();
+      await Promise.allSettled([first, ...(second ? [second] : [])]);
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+      resetTempHomeQueueForTest();
+    }
+  });
+
+  test("poisons a stalled withTempHome queue and rejects later owners immediately", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const ownerStarted = new Promise<void>(resolve => { started = resolve; });
+    const owners: Array<Promise<void>> = [];
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    let queuedRan = false;
+    let laterRan = false;
+    const rejectsImmediately = async (operation: Promise<void>) => {
+      const result = await Promise.race([
+        operation.then(() => "resolved", error => error.message),
+        new Promise<string>(resolve => { timers.push(setTimeout(() => resolve("still waiting"), 100)); }),
+      ]);
+      expect(result).toBe(STUCK);
+    };
+    try {
+      tempHomeDrainMs = 20;
+      owners.push(withTempHome(async () => { started(); await gate; }));
+      await ownerStarted;
+      const queued = withTempHome(() => { queuedRan = true; });
+      owners.push(queued);
+      // Observe the expected rejection immediately, even if an earlier assertion fails.
+      void queued.catch(() => {});
+      await expect(drainTempHome()).rejects.toThrow("withTempHome owner still running after the drain bound");
+      tempHomeDrainMs = 1_000;
+      await rejectsImmediately(drainTempHome());
+      const later = withTempHome(() => { laterRan = true; });
+      owners.push(later);
+      await rejectsImmediately(later);
+      expect(laterRan).toBe(false);
+      release();
+      await expect(queued).rejects.toThrow(STUCK);
+      expect(queuedRan).toBe(false);
+    } finally {
+      release();
+      await Promise.allSettled(owners);
+      for (const timer of timers) clearTimeout(timer);
+      resetTempHomeQueueForTest();
+    }
+  });
+});
