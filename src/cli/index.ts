@@ -654,9 +654,9 @@ async function handleStart(options: { block?: boolean } = {}) {
     }
     removePid(process.pid);
     removeRuntimePort(process.pid);
-    if (teardown.restoreNativeCodex) {
+    if (teardown.restoreNativeCodex && !currentExternalCodexModelProvider()) {
       try {
-        if (!codexHomeIsAbsent(getCodexHome()) && !currentExternalCodexModelProvider()) {
+        if (!codexHomeIsAbsent(getCodexHome())) {
           const restored = restoreNativeCodex();
           if (!restored.success) {
             cleanupSucceeded = false;
