@@ -17,7 +17,7 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
-import { getVertexAccessToken } from "../lib/gcp-adc";
+import { GCP_CREDENTIAL_MARKER_PREFIX, getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
@@ -174,7 +174,11 @@ function resolveDirectGeminiWireModelId(modelId: string, applyRenames: boolean):
 
 /** Vertex API key: provider.apiKey if it looks real (not a sentinel), else GOOGLE_CLOUD_API_KEY env. */
 function resolveVertexApiKey(optKey?: string): string | undefined {
-  const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A" ? optKey : undefined;
+  // A `gcp-sa:` marker is the keychain-backed credential reference (see gcp-adc): it is not
+  // API-key material, so it must not be sent as x-goog-api-key — the ADC branch below handles it.
+  const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A" && !optKey.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)
+    ? optKey
+    : undefined;
   return realKey || process.env.GOOGLE_CLOUD_API_KEY;
 }
 

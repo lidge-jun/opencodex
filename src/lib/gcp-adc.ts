@@ -2,6 +2,10 @@
  * Application Default Credentials (ADC) resolution for Vertex AI.
  *
  * Direct WebCrypto + REST implementation (no `google-auth-library`). Sources, in priority order:
+ *   0. A `gcp-sa:<account>` reference (the provider's active key resolving to one) → the Service
+ *      Account / authorized_user JSON stored in the OS credential store under that account
+ *      (`keychain:<account>` secret, written by the key-store save path when the user pastes a
+ *      credential JSON directly into the API-key slot). See resolveGcpCredentialMarker.
  *   1. `GOOGLE_APPLICATION_CREDENTIALS` env → file with `type: "service_account"` (RS256 JWT
  *      exchange) or `type: "authorized_user"` (refresh-token exchange).
  *   2. gcloud user ADC (`CLOUDSDK_CONFIG`, else `%APPDATA%\gcloud` on Windows, else
@@ -18,6 +22,7 @@ import { Buffer } from "node:buffer";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readFileSync, existsSync, statSync } from "node:fs";
+import { providerKeychainEntry } from "../providers/api-key-resolve";
 import {
   captureConfigGeneration,
   sweepExpiredOnWrite,
@@ -35,6 +40,43 @@ const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 const TOKEN_TIMEOUT_MS = 15_000;
 const TOKEN_ATTEMPTS = 3;
 const TOKEN_RETRY_BASE_MS = 300;
+
+/**
+ * Reference prefix stored in `provider.apiKey` (and `apiKeyPool` entries) when the user pastes a
+ * GCP credential JSON directly into an API-key slot. The secret JSON lives in the OS credential
+ * store under the same service the `keychain:` references use; only the marker is persisted to
+ * `config.json`. Lives here — not in api-key-resolve — because it is meaningful only to this
+ * module's ADC resolution (the API-key twins, `keychain:` and `${ENV}`, stay there).
+ */
+export const GCP_CREDENTIAL_MARKER_PREFIX = "gcp-sa:";
+
+/** Extract the credential-store account from a `gcp-sa:<account>` marker. */
+export function gcpCredentialMarkerAccount(value: string | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return value.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) && value.length > GCP_CREDENTIAL_MARKER_PREFIX.length
+    ? value.slice(GCP_CREDENTIAL_MARKER_PREFIX.length)
+    : undefined;
+}
+
+/**
+ * Whether a pasted API-key value is in fact a GCP credential JSON. Used by the save path to
+ * divert JSON material out of the literal-key flow before it reaches `config.json`. Deliberately
+ * strict: only a `type` field with a known ADC credential type counts, so a user's literal API
+ * key that happens to start with `{` is never eaten.
+ */
+export function parseGcpCredentialJson(value: string): AdcFileCredentials | undefined {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed) as { type?: unknown };
+    if (parsed?.type === "service_account" || parsed?.type === "authorized_user") {
+      return parsed as AdcFileCredentials;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 interface CachedToken {
   token: string;
@@ -131,7 +173,30 @@ function readJsonFile<T>(filePath: string): T | undefined {
   return JSON.parse(readFileSync(filePath, "utf8")) as T;
 }
 
+/**
+ * Read the credential JSON for a `gcp-sa:<account>` marker from the OS credential store. Uses the
+ * same service name and the same injectable entry factory as the `keychain:` API-key references
+ * (api-key-resolve.providerKeychainEntry), so one probe surface and one test seam cover both.
+ * Mirrors `readKeychain`'s fail-closed policy: an unreadable entry yields no credential (the
+ * caller surfaces the failure instead of silently falling through to the next ADC source).
+ */
+function readMarkerCredential(account: string): AdcFileCredentials | undefined {
+  try {
+    const raw = providerKeychainEntry(account).getPassword();
+    if (typeof raw !== "string" || !raw.trim()) return undefined;
+    return parseGcpCredentialJson(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 function loadAdcCredentials(): { source: string; creds: AdcFileCredentials } | undefined {
+  const markerAccount = currentMarkerAccount();
+  if (markerAccount) {
+    const creds = readMarkerCredential(markerAccount);
+    if (!creds) throw new Error(`gcp-sa:${markerAccount} marker is set but its credential could not be read from the OS credential store`);
+    return { source: `marker:${markerAccount}`, creds };
+  }
   const gacPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (gacPath) {
     const creds = readJsonFile<AdcFileCredentials>(gacPath);
@@ -148,14 +213,33 @@ function loadAdcCredentials(): { source: string; creds: AdcFileCredentials } | u
  * The cache key for the source the NEXT resolve would use, computed cheaply (no network). Lets the
  * cache return a token only when it still matches the active credential source, so an in-process
  * change to GOOGLE_APPLICATION_CREDENTIALS (or the user ADC file) does not keep serving a stale
- * token from a different source. Falls back to "metadata" when no file/env ADC is present.
+ * token from a different source. Falls back to "metadata" when no marker/file/env ADC is present.
  */
 function currentAdcSourceKey(): string {
+  const markerAccount = currentMarkerAccount();
+  if (markerAccount) return `marker:${markerAccount}`;
   const gacPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (gacPath) return fileSourceTag("gac", gacPath);
   const userPath = userAdcPath();
   if (existsSync(userPath)) return fileSourceTag("user", userPath);
   return "metadata";
+}
+
+/**
+ * The marker source needs to know WHICH marker is active, but gcp-adc is a leaf module that
+ * must not import the provider config graph. Callers that route through a `gcp-sa:` marker
+ * register the active marker account here (the vertex adapter path calls
+ * `setActiveGcpCredentialMarker` from the router's key resolution, which already knows the
+ * resolved key string). Exported for that single call site + tests.
+ */
+let activeMarkerAccount: string | undefined;
+
+export function setActiveGcpCredentialMarker(value: string | undefined): void {
+  activeMarkerAccount = gcpCredentialMarkerAccount(value);
+}
+
+function currentMarkerAccount(): string | undefined {
+  return activeMarkerAccount;
 }
 
 function base64UrlEncode(bytes: Uint8Array | string): string {
