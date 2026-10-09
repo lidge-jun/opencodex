@@ -6,7 +6,7 @@ import {
   computeQuotaCooldown,
   formatCodexProviderForLog,
 } from "../../codex/routing";
-import { claimMainQuotaDispatchForWs, isMainQuotaDispatchLive, type MainQuotaDispatch } from "../../codex/main-account-cache";
+import { claimMainQuotaDispatchForWs, isMainQuotaDispatchLive, renewMainQuotaDispatchForAttempt, type MainQuotaDispatch } from "../../codex/main-account-cache";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isCodexAccountGenerationLive } from "../../codex/account-store";
@@ -135,8 +135,9 @@ export function liveMainQuotaDispatch(
 export function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxProviderConfig, modelId?: string): CodexWsQuotaObserver | undefined {
   if (!isCanonicalOpenAiForwardProvider(provider)) return undefined;
   if (!usesCodexForwardPoolAuth(authCtx, provider)) {
-    const dispatch = liveMainQuotaDispatch(authCtx, provider);
-    if (!dispatch) return undefined;
+    const captured = liveMainQuotaDispatch(authCtx, provider);
+    if (!captured || authCtx.kind !== "main") return undefined;
+    const dispatch = authCtx.mainQuotaDispatch = renewMainQuotaDispatchForAttempt(captured);
     return headers => {
       claimMainQuotaDispatchForWs(dispatch);
       if (!isMainQuotaDispatchLive(dispatch)) return;

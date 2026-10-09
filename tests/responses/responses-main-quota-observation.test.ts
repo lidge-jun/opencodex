@@ -511,8 +511,8 @@ describe("credential-bound plain-main Responses quota", () => {
     test(`attempt renewal preserves retired fences after ${mutation}`, async () => {
       observe();
       const ctx = materialized();
-      const original = ctx.mainQuotaDispatch!;
       const observer = codexWsQuotaObserver(ctx, provider, "gpt-5.5");
+      const original = ctx.mainQuotaDispatch!;
       expect(observer).toBeDefined();
       observer!(quotaHeaders("17"));
       expect(mainCache.isMainQuotaDispatchWsClaimed(original)).toBe(true);
@@ -533,6 +533,83 @@ describe("credential-bound plain-main Responses quota", () => {
       expect(getMainPolicyQuota()?.weeklyPercent).toBe(17);
     });
   }
+
+  test("full handler sanitized recovery with failed WS upgrade publishes fresh HTTP quota", async () => {
+    observe();
+    const originalSocket = globalThis.WebSocket;
+    const sockets: RecoverySocket[] = [];
+    const opaqueBytes = Buffer.alloc(73, 1);
+    opaqueBytes[0] = 0x80;
+    const opaqueOutput = opaqueBytes.toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
+    class RecoverySocket extends EventTarget {
+      readyState = 0;
+      sent: string[] = [];
+      constructor() {
+        super();
+        sockets.push(this);
+        const attempt = sockets.length;
+        queueMicrotask(() => {
+          if (attempt === 1) { this.readyState = 1; this.dispatchEvent(new Event("open")); }
+          else this.close();
+        });
+      }
+      send(text: string): void {
+        this.sent.push(text);
+        queueMicrotask(() => {
+          const emit = (payload: unknown) => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(payload) }));
+          emit({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 17, window_minutes: 10080 } } });
+          expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+          expect(getMainPolicyQuota()?.weeklyPercent).toBe(17);
+          emit({ type: "error", status_code: 400, error: { type: "invalid_request_error",
+            code: "invalid_encrypted_content", message: "The encrypted content could not be verified." } });
+        });
+      }
+      close(): void {
+        if (this.readyState === 3) return;
+        this.readyState = 3;
+        this.dispatchEvent(new Event("close"));
+      }
+    }
+    globalThis.WebSocket = RecoverySocket as unknown as typeof WebSocket;
+    let httpCalls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      httpCalls++;
+      const body = JSON.parse(String(init?.body));
+      const output = body.input.find((item: { type?: string }) => item.type === "function_call_output");
+      expect(output.output).toEqual([{ type: "input_text", text: "[encrypted content omitted]" }]);
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+      const headers = quotaHeaders("99");
+      headers.set("content-type", "text/event-stream");
+      return new Response(`event: response.completed\ndata: ${JSON.stringify({
+        type: "response.completed", response: { id: "fixture-sanitized-http", status: "completed", output: [] },
+      })}\n\n`, { status: 200, headers });
+    }) as typeof fetch;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: new Headers({ ...Object.fromEntries(caller()), "content-type": "application/json" }),
+        body: JSON.stringify({ model: "gpt-5.5", stream: true, store: false, input: [
+          { type: "function_call", call_id: "fixture-call", name: "fixture_tool", arguments: "{}" },
+          { type: "function_call_output", call_id: "fixture-call",
+            output: [{ type: "encrypted_content", encrypted_content: opaqueOutput }] },
+        ] }),
+      }), { ...config, defaultProvider: "openai", providers: { openai: { ...provider, codexAccountMode: "direct" } } },
+      { model: "", provider: "" }, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("fixture-sanitized-http");
+      expect(sockets).toHaveLength(2);
+      expect(sockets[0]!.sent).toHaveLength(1);
+      const firstOutput = JSON.parse(sockets[0]!.sent[0]!).input.find((item: { type?: string }) => item.type === "function_call_output");
+      expect(firstOutput.output[0].type).toBe("encrypted_content");
+      expect(sockets[1]!.sent).toHaveLength(0);
+      expect(httpCalls).toBe(1);
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+      expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
+    } finally {
+      for (const socket of sockets) socket.close();
+      globalThis.WebSocket = originalSocket;
+    }
+  });
 
   test("full handler preflight for encrypted function output retains newer WS quota", async () => {
     observe();
@@ -619,11 +696,43 @@ describe("credential-bound plain-main Responses quota", () => {
     expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
   });
 
+  test("each WS observer owns a fresh dispatch and an old observer cannot claim its successor", async () => {
+    observe();
+    const ctx = materialized();
+    const materializedDispatch = ctx.mainQuotaDispatch!;
+    const firstObserver = codexWsQuotaObserver(ctx, provider, "gpt-5.5");
+    const firstDispatch = ctx.mainQuotaDispatch!;
+    expect(firstObserver).toBeDefined();
+    expect(firstDispatch).not.toBe(materializedDispatch);
+    expect(firstDispatch).toEqual(materializedDispatch);
+    firstObserver!(quotaHeaders("17"));
+    expect(mainCache.isMainQuotaDispatchWsClaimed(firstDispatch)).toBe(true);
+    const nextObserver = codexWsQuotaObserver(ctx, provider, "gpt-5.5");
+    const nextDispatch = ctx.mainQuotaDispatch!;
+    expect(nextObserver).toBeDefined();
+    expect(nextDispatch).not.toBe(firstDispatch);
+    expect(nextDispatch).toEqual(firstDispatch);
+    expect(nextDispatch.writer).toBe(firstDispatch.writer);
+    expect(mainCache.isMainQuotaDispatchWsClaimed(nextDispatch)).toBe(false);
+    // A callback retained by a previous attempt must never claim the later fallback.
+    firstObserver!(new Headers());
+    expect(mainCache.isMainQuotaDispatchWsClaimed(nextDispatch)).toBe(false);
+    await deliver(ctx, quotaResponse(quotaHeaders("99")));
+    expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+    // If this attempt's own observer runs, its HTTP-shaped projection is suppressed.
+    nextObserver!(quotaHeaders("99"));
+    expect(mainCache.isMainQuotaDispatchWsClaimed(nextDispatch)).toBe(true);
+    await deliver(ctx, quotaResponse(quotaHeaders("17")));
+    expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+  });
+
   test("every observer invocation claims its captured dispatch before checking liveness", async () => {
     observe();
     const ctx = materialized();
-    const dispatch = ctx.mainQuotaDispatch!;
     const observer = codexWsQuotaObserver(ctx, provider, "gpt-5.5");
+    const dispatch = ctx.mainQuotaDispatch!;
     expect(observer).toBeDefined();
     expect(mainCache.isMainQuotaDispatchWsClaimed(dispatch)).toBe(false);
     mainCache.observeMainQuotaCredential("fixture-replaced-before-frame", ACCOUNT);
