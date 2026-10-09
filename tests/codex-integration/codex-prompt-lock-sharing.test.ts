@@ -149,3 +149,84 @@ for (const code of ["EPERM", "EBUSY", "EACCES"]) {
     expect(fs.readFileSync(path, "utf8")).toBe(body);
   });
 }
+
+for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+  test(`abandoned live-self reservation after ${code} exhaustion permits reacquisition`, () => {
+    const { path } = setup(); const original = fs.unlinkSync; let attempts = 0;
+    const liveSelf = { ...deps, isProcessAlive: ownerDefaults.isProcessAlive };
+    const sleep = spyOn(Bun, "sleepSync").mockImplementation(() => {}); restores.push(() => sleep.mockRestore());
+    const spy = spyOn(fs, "unlinkSync").mockImplementation(p => {
+      if (String(p).endsWith(".claim")) { attempts++; throw sharing(code); }
+      original(p);
+    }); restores.push(() => spy.mockRestore());
+    const first = tryAcquire(path, liveSelf); expect(first.ok).toBe(true); expect(attempts).toBe(3);
+    spy.mockRestore();
+    expect(fs.readdirSync(path + ".claims")).toHaveLength(1);
+    if (!first.ok) throw Error("setup");
+    expect(release(first.handle)).toBe(true);
+    const next = tryAcquire(path, liveSelf); expect(next.ok).toBe(true);
+    if (next.ok) expect(release(next.handle)).toBe(true);
+    expect(fs.existsSync(path + ".claims")).toBe(false);
+  });
+  for (const stage of ["peer deletion", "ticket publication", "reservation cleanup"] as const) {
+    for (const replacement of ["entry", "contents", "parent"] as const) {
+      test(`${stage}: ${code} retry preserves replaced ${replacement}`, () => {
+        const { path, peer } = setup(), directory = path + ".claims";
+        if (stage === "peer deletion") {
+          fs.mkdirSync(directory);
+          fs.writeFileSync(peer, JSON.stringify({ pid: 999999999, host, ticket: 1 }));
+        }
+        let target = "", attempts = 0, replaced = false;
+        const replacementBody = JSON.stringify({ pid: process.pid, host, ticket: 0, token: "replacement" });
+        const sleep = spyOn(Bun, "sleepSync").mockImplementation(() => {
+          if (!target || replaced) return;
+          replaced = true;
+          if (replacement === "parent") {
+            fs.renameSync(directory, directory + ".original"); fs.mkdirSync(directory);
+          } else if (replacement === "entry") fs.renameSync(target, target + ".original");
+          fs.writeFileSync(target, replacementBody);
+        }); restores.push(() => sleep.mockRestore());
+        const unlink = fs.unlinkSync, rename = fs.renameSync;
+        const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation(p => {
+          const name = String(p);
+          if (stage === "peer deletion" ? name === peer : stage === "reservation cleanup" && name.endsWith(".claim")) {
+            target = name; attempts++; if (attempts === 1) throw sharing(code);
+          }
+          unlink(p);
+        }); restores.push(() => unlinkSpy.mockRestore());
+        const renameSpy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+          if (stage === "ticket publication" && String(from).startsWith(path + ".claim-init-")) {
+            target = String(to); attempts++; if (attempts === 1) throw sharing(code);
+          }
+          rename(from, to);
+        }); restores.push(() => renameSpy.mockRestore());
+        tryAcquire(path, deps);
+        expect(replaced).toBe(true); expect(attempts).toBe(1);
+        expect(fs.readFileSync(target, "utf8")).toBe(replacementBody);
+      });
+    }
+  }
+}
+
+test("an active live-self reservation cannot be recovered as abandoned", () => {
+  const { path } = setup(); let nested: unknown;
+  const liveSelf = { ...deps, isProcessAlive: ownerDefaults.isProcessAlive };
+  const first = tryAcquire(path, { ...liveSelf, onClaimInitialized: () => {
+    nested = tryAcquire(path, liveSelf);
+    expect(fs.readdirSync(path + ".claims")).toHaveLength(1);
+  } });
+  expect(nested).toEqual({ ok: false, error: "locked" }); expect(first.ok).toBe(true);
+  if (first.ok) expect(release(first.handle)).toBe(true);
+});
+
+test("a peer released between directory scan and evidence capture is not unsafe", () => {
+  const { path, peer } = setup(); fs.mkdirSync(path + ".claims");
+  fs.writeFileSync(peer, JSON.stringify({ pid: 999999999, host, ticket: 1 }));
+  let reads = 0;
+  const acquired = tryAcquire(path, { ...deps, lstat: p => {
+    if (p === peer && ++reads === 2) fs.unlinkSync(peer);
+    return fs.lstatSync(p);
+  } });
+  expect(acquired.ok).toBe(true);
+  if (acquired.ok) expect(release(acquired.handle)).toBe(true);
+});
