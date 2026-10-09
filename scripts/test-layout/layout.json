@@ -38,7 +38,7 @@
     "antigravity-discovered-families.test.ts": "adapters/google",
     "provider-antigravity-effort-families.test.ts": "providers",
     "provider-antigravity-family-catalog.test.ts": "providers",
-    "claude-subagent-model-force.test.ts": "claude-integration",
+    "claude-subagent-model-force.test.ts": "claude-integration", "claude-config-home-isolation.test.ts": "claude-integration",
     "subagent-model-force-api.test.ts": "server",
     "caller-session-identity.test.ts": "server",
     "caller-session-ingress.test.ts": "server",

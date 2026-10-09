@@ -31,6 +31,8 @@ const GUARD_ENV = "OCX_TEST_HOME_GUARD";
  * loads, so the true home is only knowable from this hand-off.
  */
 const REAL_HOME_ENV = "OCX_REAL_HOME";
+/** Set by `scripts/test.ts` to the developer's own Claude config directory before it sandboxes one. */
+const REAL_CLAUDE_CONFIG_DIR_ENV = "OCX_REAL_CLAUDE_CONFIG_DIR";
 
 /**
  * Resolve symlinks so two spellings of one location compare equal — macOS hands out
@@ -63,6 +65,25 @@ const REAL_HOME = process.env[REAL_HOME_ENV]?.trim() || homedir();
 const PROTECTED_HOME = canonicalize(join(REAL_HOME, ".opencodex"));
 const PROTECTED_CODEX_HOME = canonicalize(join(REAL_HOME, ".codex"));
 /**
+ * The developer's Claude config directory: the default `<real home>/.claude`, plus their own
+ * `CLAUDE_CONFIG_DIR` when they set one. `scripts/test.ts` hands the original over as
+ * `OCX_REAL_CLAUDE_CONFIG_DIR` because its child already starts with a sandboxed
+ * `CLAUDE_CONFIG_DIR`; a bare run imports this module before the preload rewrites the
+ * environment, so `CLAUDE_CONFIG_DIR` still holds the developer's value here.
+ *
+ * Claude agent sync prunes generated `agents/ocx-*.md`, and a bare `bun test` once did that
+ * to a live directory: Bun's `os.homedir()` ignores a HOME rewritten after startup (#6775).
+ */
+const REAL_CLAUDE_CONFIG_DIRS = [...new Set([
+  join(REAL_HOME, ".claude"),
+  process.env[REAL_CLAUDE_CONFIG_DIR_ENV]?.trim() || process.env.CLAUDE_CONFIG_DIR?.trim() || join(REAL_HOME, ".claude"),
+])];
+const PROTECTED_CLAUDE_TREES = REAL_CLAUDE_CONFIG_DIRS.map(path => ({
+  path: canonicalize(path),
+  lexical: resolve(path),
+  label: "the real Claude config directory",
+}));
+/**
  * `~/Library/LaunchAgents` needs its own entry because HOME isolation does not reach it:
  * `os.homedir()` reads the password database, not `$HOME`, so a macOS test that rewrites
  * HOME still resolves `plistPath()` to the developer's real LaunchAgents directory. The
@@ -81,6 +102,11 @@ export function protectedHomeForTests(): string {
 /** The production Codex home this process protects when tests write native credentials. */
 export function protectedCodexHomeForTests(): string {
   return PROTECTED_CODEX_HOME;
+}
+
+/** The Claude config directories this process protects. Exported for the guard's own tests. */
+export function protectedClaudeConfigDirsForTests(): readonly string[] {
+  return PROTECTED_CLAUDE_TREES.map(tree => tree.path);
 }
 
 export function isTestHomeGuardArmed(): boolean {
@@ -156,6 +182,29 @@ export function assertNotRealCodexHomeUnderTest(dir: string): void {
 }
 
 /**
+ * Throw when an armed test process is about to write or prune inside the real Claude config
+ * directory. Unlike the OpenCodex and Codex homes this refuses descendants too: callers pass
+ * the config root, but a cache or agents subdirectory is the same user's state.
+ *
+ * Call FIRST, outside any best-effort catch, so a refusal is visible and nothing is touched.
+ */
+export function assertNotRealClaudeConfigUnderTest(dir: string): void {
+  if (!isTestHomeGuardArmed()) return;
+  for (const candidate of [canonicalize(dir), resolve(dir)]) {
+    for (const tree of PROTECTED_CLAUDE_TREES) {
+      for (const root of [tree.path, tree.lexical]) {
+        if (candidate !== root && !isInside(root, candidate)) continue;
+        throw new Error(
+          `refusing to write the real Claude config directory (${root}) from a test process. `
+          + "Set CLAUDE_CONFIG_DIR to a temp directory, or pass an explicit config directory "
+          + "(for a server, startServer's managementApi.claudeAgentConfigDir).",
+        );
+      }
+    }
+  }
+}
+
+/**
  * The trees a removal must never reach, and the reason each one is named.
  *
  * The writer guard above cannot help here. `rmSync` is plain `node:fs`: it calls no writer of
@@ -172,6 +221,7 @@ const PROTECTED_TREES: ReadonlyArray<{ path: string; lexical: string; label: str
     lexical: resolve(join(REAL_HOME, "Library", "LaunchAgents")),
     label: "the real LaunchAgents directory",
   },
+  ...PROTECTED_CLAUDE_TREES,
 ];
 const PROTECTED_REAL_HOME = canonicalize(REAL_HOME);
 const LEXICAL_REAL_HOME = resolve(REAL_HOME);

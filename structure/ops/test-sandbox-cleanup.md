@@ -8,6 +8,18 @@ that root. Its synchronous exit fallback leaves an undrained root for ownership-
 recovery instead of blocking child cleanup with removal retries.
 `tests/ci-workflows/test-sandbox-cleanup.test.ts` pins that ordering with a delayed reap.
 
+The sandbox also pins the client homes that otherwise default to `os.homedir()`:
+`CLAUDE_CONFIG_DIR` and `GROK_HOME` point inside its root and are never inherited, because
+Bun's `os.homedir()` keeps the home it read at startup and a preload that only rewrites HOME
+leaves them at the developer's directories. `scripts/test.ts` hands the developer's own Claude
+directory to the guard as `OCX_REAL_CLAUDE_CONFIG_DIR`. `claudeConfigDir()` in
+`src/claude/gateway-cache.ts` reads the current platform home variable (HOME, or USERPROFILE on
+Windows), as Claude Code's Node runtime does. Under an armed process,
+`assertNotRealClaudeConfigUnderTest` in `src/lib/test-home-guard.ts` refuses Claude agent sync
+and gateway-cache writes into the real Claude config directory, its default and the developer's
+override alike, and that directory is a protected removal tree.
+`tests/claude-integration/claude-config-home-isolation.test.ts` pins each layer.
+
 `tests/helpers/test-sandbox-cleanup.ts` exposes case-scoped lifecycle ownership: cancellation
 starts listener stops while owned asynchronous work settles, and repeated close/stop calls share
 one promise. After teardown starts only the lifecycle's own abort reason is absorbed; any other

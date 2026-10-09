@@ -80,6 +80,10 @@ export function createIsolatedTestEnvironment(
       // real-home write guard can still know which path to protect.
       // (devlog 260730_codex_rs_upstream_v2_live_handoff/070.)
       OCX_REAL_HOME: baseEnv.OCX_REAL_HOME ?? homedir(),
+      // Same hand-off for the guard's Claude entry: the child gets a sandboxed
+      // CLAUDE_CONFIG_DIR below, so the developer's own value only survives here.
+      OCX_REAL_CLAUDE_CONFIG_DIR: baseEnv.OCX_REAL_CLAUDE_CONFIG_DIR
+        ?? (baseEnv.CLAUDE_CONFIG_DIR?.trim() || join(baseEnv.OCX_REAL_HOME ?? homedir(), ".claude")),
       // Pin git's global config to the developer's real one before HOME moves.
       //
       // git resolves ~/.gitconfig from HOME, so a sandboxed HOME makes it invisible.
@@ -100,6 +104,12 @@ export function createIsolatedTestEnvironment(
       USERPROFILE: root,
       OPENCODEX_HOME: opencodexHome,
       CODEX_HOME: codexHome,
+      // Client homes that otherwise default to os.homedir(). Bun keeps the home it read at
+      // startup, so a preload that only rewrites HOME leaves these at the developer's real
+      // directories, and Claude agent sync prunes generated files there (#6775). Pin them in
+      // the sandbox; never inherit a live override.
+      CLAUDE_CONFIG_DIR: join(root, ".claude"),
+      GROK_HOME: join(root, ".grok"),
       TEMP: containedTemp,
       TMP: containedTemp,
       TMPDIR: containedTemp,
