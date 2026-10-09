@@ -225,12 +225,14 @@ while the room is reachable: bytes eviction cannot touch — in-flight reservati
 generations a job owns, and unreclaimable paths — plus the headroom must fit under the ceiling. That
 is re-read after every eviction, and once the publication cannot fit nothing more is evicted; the
 caller refuses it as a `spill-failed` tombstone. An impossible publication therefore never costs an
-unrelated continuation.
+unrelated continuation, and neither does one whose envelope exceeds the replay ceiling: admission
+skips reclaim for it because it would end in `EFBIG` anyway.
 
 `deleteResponseSpill` in `src/responses/spill-store.ts` reports a failed unlink (anything but a
 missing file) to the spill queue, which charges that path in its unreclaimable ledger until the path
-is gone, so neither admission nor ordinary pruning counts space that was never freed. The orphan
-sweep settles such files once the unlink can succeed. `spillCapacityRefusals` and
+is gone. Every later accounting read sees the file, so admission never counts space that was never
+freed; a single no-argument pruning pass still works from its local total and may stop short, leaving
+the remainder to the next pass. The orphan sweep settles such files once the unlink can succeed. `spillCapacityRefusals` and
 `spillHeadroomEvictions` on the memory endpoint are the cumulative refusal and admission-eviction
 counts. `tests/responses/responses-spill-admission-headroom.test.ts` covers headroom eviction,
 exact fit, impossible and inherited publications, pinned reservations, the shutdown fallback,

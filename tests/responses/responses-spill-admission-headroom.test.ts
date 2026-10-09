@@ -226,6 +226,28 @@ describe("Response spill admission headroom (#6747)", () => {
     expectReplay("resp_d");
   });
 
+  test("case 12: an envelope over the replay ceiling never evicts for headroom", async () => {
+    // Measure the incoming envelope with a same-length id, then start from an empty store.
+    const probe = await seed("resp_prb", "y".repeat(16_000));
+    clearResponseStateForTests();
+    const a = await seed("resp_a");
+    const b = await seed("resp_b");
+    const c = await seed("resp_c");
+    expect(probe.bytes).toBeGreaterThan(a.bytes);
+    setResponseSpillPayloadCapForTests(probe.bytes - 1);
+    // Without the replay ceiling this publication would fit after evicting the oldest seed.
+    const cap = 2 * a.bytes + 2 * probe.bytes + Math.floor(a.bytes / 2);
+    setSpilledResponseByteCapForTests(cap);
+    expect(getAccountedResponseSpillBytesForTests() + 2 * probe.bytes).toBeGreaterThan(cap);
+    clock += 1;
+    rememberLarge("resp_big", "y".repeat(16_000));
+    await awaitResponseSpillPublicationTailForTests();
+    for (const seeded of [a, b, c]) expect(exists(seeded.file)).toBe(true);
+    expect(responseStateMetrics()).toMatchObject({ spillHeadroomEvictions: 0, tombstoneCount: 1 });
+    expect(bytesOnDisk(home)).toBeLessThanOrEqual(cap);
+    expectReplay("resp_a");
+  });
+
   test("case 2: exact fit preserves every seed without a headroom eviction", async () => {
     const a = await seed("resp_a");
     const b = await seed("resp_b");

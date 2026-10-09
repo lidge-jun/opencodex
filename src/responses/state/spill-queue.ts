@@ -291,7 +291,8 @@ export function queuePendingResponseSpill(
   // against a total that is short by a whole envelope.
   const inheritedBytes = inheritedSpill?.payloadBytes ?? 0;
   if (requireStore().accountedResponseSpillBytes() + footprint + inheritedBytes > requireStore().spillByteCap()) {
-    requireStore().enforceSpilledResponseBudget(footprint + inheritedBytes);
+    // An envelope over the replay ceiling ends in EFBIG anyway; never evict a continuation for it.
+    if (footprint / 2 <= responseSpillPayloadCap()) requireStore().enforceSpilledResponseBudget(footprint + inheritedBytes);
     if (requireStore().accountedResponseSpillBytes() + footprint + inheritedBytes > requireStore().spillByteCap()) {
       noteSpillCapacityRefusal();
       requireStore().replaceWithSpillFailure(id, candidate);
@@ -427,7 +428,7 @@ function installShutdownFallbackSpill(
     // exhaustion path uses, so replay reports `spill_failed` and the client resends.
     if (requireStore().accountedResponseSpillBytes() + supersededBytes > requireStore().spillByteCap()) {
       // The footprint is already reserved above, so only the superseded generation is extra room.
-      requireStore().enforceSpilledResponseBudget(supersededBytes);
+      if (footprint / 2 <= responseSpillPayloadCap()) requireStore().enforceSpilledResponseBudget(supersededBytes);
       if (requireStore().accountedResponseSpillBytes() + supersededBytes > requireStore().spillByteCap()) {
         if (requireStore().currentEntry(job.id) === candidate) {
           noteSpillCapacityRefusal();
