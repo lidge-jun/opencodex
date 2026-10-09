@@ -206,7 +206,7 @@ function isOwnedFile(path: string): boolean {
 export function syncClaudeAgentDefs(defs: readonly ClaudeAgentDef[], configDir = claudeConfigDir()): string[] | null {
   // Outside the best-effort catch: under an armed test process a write or prune of the
   // real Claude agents directory must throw, never degrade to "returned null" (#6775).
-  assertNotRealClaudeConfigUnderTest(configDir);
+  assertNotRealClaudeConfigUnderTest(configDir, join(configDir, "agents"));
   try {
     const dir = join(configDir, "agents");
     if (defs.length === 0) {

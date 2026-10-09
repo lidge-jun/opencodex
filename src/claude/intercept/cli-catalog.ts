@@ -14,6 +14,7 @@
  */
 import { readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { assertNotRealClaudeConfigUnderTest } from "../../lib/test-home-guard";
 import type { ClaudeFirstPartyDesired } from "../first-party-settings";
 import { classifyInterceptClient } from "./client-class";
 import { BOOTSTRAP_MAX_DECODED_BYTES, injectPickerModels, type PickerModelEntry } from "./picker-bootstrap";
@@ -150,6 +151,8 @@ export async function rewriteCliCatalogResponse(
  */
 export function invalidateClaudeCodeServedCatalog(claudeDir: string): number {
   const dir = join(claudeDir, "cache", "model-catalog");
+  // Outside the catch below: an armed test process must not prune the real Claude cache (#6775).
+  assertNotRealClaudeConfigUnderTest(claudeDir, dir);
   let names: string[];
   try { names = readdirSync(dir); } catch { return 0; } // no-excuse-ok: catch -- no cache directory means nothing to drop.
   let removed = 0;

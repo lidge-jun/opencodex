@@ -66,7 +66,7 @@ export function currentUserHome(env: NodeJS.ProcessEnv = process.env, platform: 
 export function writeGatewayModelCache(baseUrl: string, models: readonly GatewayModelRow[], configDir = claudeConfigDir()): string | null {
   // Outside the best-effort catch: an armed test process must not write here, and must
   // fail loudly rather than degrade to "returned null".
-  assertNotRealClaudeConfigUnderTest(configDir);
+  assertNotRealClaudeConfigUnderTest(configDir, join(configDir, "cache"));
   try {
     // Mirror the CLI's usable-id filter so our file matches what it would cache.
     const usable = models.filter(m => /(claude|anthropic)/i.test(m.id));

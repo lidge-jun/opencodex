@@ -15,9 +15,12 @@ leaves them at the developer's directories. `scripts/test.ts` hands the develope
 directory to the guard as `OCX_REAL_CLAUDE_CONFIG_DIR`. `claudeConfigDir()` in
 `src/claude/gateway-cache.ts` reads the current platform home variable (HOME, or USERPROFILE on
 Windows), as Claude Code's Node runtime does. Under an armed process,
-`assertNotRealClaudeConfigUnderTest` in `src/lib/test-home-guard.ts` refuses Claude agent sync
-and gateway-cache writes into the real Claude config directory, its default and the developer's
-override alike, and that directory is a protected removal tree.
+`assertNotRealClaudeConfigUnderTest` in `src/lib/test-home-guard.ts` refuses Claude agent sync,
+gateway-cache writes, served-catalog invalidation and intercept `settings.json` writes into the
+real Claude config directory, its default and the developer's override alike. Writers pass every
+directory they touch, so a sandbox child linked into the real directory is judged by its target;
+protected roots resolve at check time and compare case-insensitively on macOS and Windows. That
+directory is also a protected removal tree.
 `tests/claude-integration/claude-config-home-isolation.test.ts` pins each layer.
 
 `tests/helpers/test-sandbox-cleanup.ts` exposes case-scoped lifecycle ownership: cancellation

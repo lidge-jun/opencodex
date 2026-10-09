@@ -9,7 +9,7 @@
  * cannot silently stand in for another.
  */
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { createIsolatedTestEnvironment } from "../../scripts/test";
@@ -100,29 +100,64 @@ test("currentUserHome reads the variable the platform's Node runtime reads", () 
   expect(currentUserHome({}, "win32")).toBe(homedir());
 });
 
-test("an armed guard refuses Claude agent sync and cache writes into the real directory", () => {
+test("an armed guard refuses every Claude writer that resolves into the real directory", () => {
   // The "real home" here is a disposable sentinel handed to a child at startup, the same way
   // scripts/test.ts hands over the developer's home. Nothing outside the sandbox is touched.
   const isolated = createIsolatedTestEnvironment();
   const sentinelHome = join(isolated.root, "sentinel-home");
   const realClaude = join(sentinelHome, ".claude");
   const probe = join(realClaude, "agents", "ocx-guard-probe.md");
-  const otherClaude = join(isolated.root, "fixture-claude");
+  const catalog = join(realClaude, "cache", "model-catalog", "probe-cc.json");
+  const fixtureClaude = join(isolated.root, "fixture-claude");
+  // A sandbox directory whose agents/cache children are links into the real directory.
+  const linkedClaude = join(isolated.root, "linked-claude");
   mkdirSync(join(realClaude, "agents"), { recursive: true });
+  mkdirSync(join(realClaude, "cache", "model-catalog"), { recursive: true });
+  mkdirSync(linkedClaude, { recursive: true });
   writeFileSync(probe, "---\nname: \"ocx-guard-probe\"\nmodel: \"x\"\n---\n\n<!-- generated-by: opencodex -->\n");
+  writeFileSync(catalog, "{}");
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  symlinkSync(join(realClaude, "agents"), join(linkedClaude, "agents"), linkType);
+  symlinkSync(join(realClaude, "cache"), join(linkedClaude, "cache"), linkType);
+  // On case-insensitive platforms another spelling names the same directory, including a
+  // developer override that does not exist yet when the guard loads.
+  const foldsCase = process.platform === "darwin" || process.platform === "win32";
+  const caseAlias = foldsCase ? join(sentinelHome, ".CLAUDE") : realClaude;
+  const absentOverride = join(sentinelHome, "Custom-Claude");
+  const absentAlias = foldsCase ? join(sentinelHome, "custom-claude") : absentOverride;
+  const modules = {
+    agents: repoPath("src", "claude", "agents-inject.ts"),
+    cache: repoPath("src", "claude", "gateway-cache.ts"),
+    catalog: repoPath("src", "claude", "intercept", "cli-catalog.ts"),
+    settings: repoPath("src", "claude", "intercept", "settings.ts"),
+  };
   const code = `
-    const { syncClaudeAgentDefs } = await import(${JSON.stringify(repoPath("src", "claude", "agents-inject.ts"))});
-    const { writeGatewayModelCache } = await import(${JSON.stringify(repoPath("src", "claude", "gateway-cache.ts"))});
-    const refusals = [];
-    for (const attempt of [
-      () => syncClaudeAgentDefs([], ${JSON.stringify(realClaude)}),
-      () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], ${JSON.stringify(realClaude)}),
-    ]) {
-      try { attempt(); refusals.push(false); }
-      catch (error) { refusals.push(/real Claude config directory/.test(String(error))); }
+    const m = ${JSON.stringify(modules)};
+    const { syncClaudeAgentDefs } = await import(m.agents);
+    const { writeGatewayModelCache } = await import(m.cache);
+    const { invalidateClaudeCodeServedCatalog } = await import(m.catalog);
+    const { applyClaudeInterceptSettings, buildClaudeInterceptEnv } = await import(m.settings);
+    const real = ${JSON.stringify(realClaude)}, linked = ${JSON.stringify(linkedClaude)};
+    const alias = ${JSON.stringify(caseAlias)}, fixture = ${JSON.stringify(fixtureClaude)};
+    const absentAlias = ${JSON.stringify(absentAlias)};
+    const env = buildClaudeInterceptEnv(1, "/tmp/ca.pem", "token");
+    const attempts = {
+      agents: () => syncClaudeAgentDefs([], real),
+      agentsThroughLink: () => syncClaudeAgentDefs([], linked),
+      cache: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], real),
+      cacheThroughLink: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], linked),
+      cacheThroughCaseAlias: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], alias),
+      cacheThroughAbsentOverrideAlias: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], absentAlias),
+      catalog: () => invalidateClaudeCodeServedCatalog(real),
+      settings: () => applyClaudeInterceptSettings(env, real),
+    };
+    const refused = {};
+    for (const [name, attempt] of Object.entries(attempts)) {
+      try { attempt(); refused[name] = false; }
+      catch (error) { refused[name] = /real Claude config directory/.test(String(error)); }
     }
-    const fixtureWrite = writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], ${JSON.stringify(otherClaude)});
-    console.log(JSON.stringify({ refusals, fixtureWrite: fixtureWrite !== null }));
+    const fixtureWrite = writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], fixture) !== null;
+    console.log(JSON.stringify({ refused, fixtureWrite }));
   `;
   try {
     const child = Bun.spawnSync([process.execPath, "-e", code], {
@@ -131,7 +166,7 @@ test("an armed guard refuses Claude agent sync and cache writes into the real di
         ...isolated.env,
         OCX_TEST_HOME_GUARD: "1",
         OCX_REAL_HOME: sentinelHome,
-        OCX_REAL_CLAUDE_CONFIG_DIR: realClaude,
+        OCX_REAL_CLAUDE_CONFIG_DIR: absentOverride,
         CLAUDE_CONFIG_DIR: realClaude,
       },
       stdout: "pipe",
@@ -140,11 +175,25 @@ test("an armed guard refuses Claude agent sync and cache writes into the real di
     const stderr = new TextDecoder().decode(child.stderr);
     expect({ exitCode: child.exitCode, stderr: child.exitCode === 0 ? "" : stderr }).toEqual({ exitCode: 0, stderr: "" });
     const lines = new TextDecoder().decode(child.stdout).trim().split("\n");
-    expect(JSON.parse(lines.at(-1)!)).toEqual({ refusals: [true, true], fixtureWrite: true });
+    expect(JSON.parse(lines.at(-1)!)).toEqual({
+      refused: {
+        agents: true,
+        agentsThroughLink: true,
+        cache: true,
+        cacheThroughLink: true,
+        cacheThroughCaseAlias: true,
+        cacheThroughAbsentOverrideAlias: true,
+        catalog: true,
+        settings: true,
+      },
+      fixtureWrite: true,
+    });
     expect(existsSync(probe)).toBe(true);
+    expect(existsSync(catalog)).toBe(true);
     expect(existsSync(join(realClaude, "cache", "gateway-models.json"))).toBe(false);
+    expect(existsSync(join(realClaude, "settings.json"))).toBe(false);
+    expect(existsSync(absentAlias)).toBe(false);
   } finally {
     isolated.cleanup();
   }
 });
-

@@ -183,17 +183,24 @@ export function assertNotRealCodexHomeUnderTest(dir: string): void {
 
 /**
  * Throw when an armed test process is about to write or prune inside the real Claude config
- * directory. Unlike the OpenCodex and Codex homes this refuses descendants too: callers pass
- * the config root, but a cache or agents subdirectory is the same user's state.
+ * directory. Unlike the OpenCodex and Codex homes this refuses descendants too, and callers pass
+ * every directory they are about to touch (the config root AND its `agents`/`cache` child), so a
+ * sandbox child that is a link into the real directory is judged by where it resolves.
+ *
+ * The protected roots are resolved at check time rather than at import, so a custom directory
+ * created after this module loaded still compares by its current identity. On macOS and Windows,
+ * whose default filesystems ignore case, paths compare case-insensitively: `.CLAUDE` is the same
+ * directory there. Comparing too broadly only refuses more, which is the safe direction here.
  *
  * Call FIRST, outside any best-effort catch, so a refusal is visible and nothing is touched.
  */
-export function assertNotRealClaudeConfigUnderTest(dir: string): void {
+export function assertNotRealClaudeConfigUnderTest(...paths: string[]): void {
   if (!isTestHomeGuardArmed()) return;
-  for (const candidate of [canonicalize(dir), resolve(dir)]) {
-    for (const tree of PROTECTED_CLAUDE_TREES) {
-      for (const root of [tree.path, tree.lexical]) {
-        if (candidate !== root && !isInside(root, candidate)) continue;
+  const roots = REAL_CLAUDE_CONFIG_DIRS.flatMap(path => [canonicalize(path), resolve(path)]);
+  for (const path of paths) {
+    for (const candidate of [canonicalize(path), resolve(path)]) {
+      for (const root of roots) {
+        if (!isSameOrInsideIgnoringPlatformCase(root, candidate)) continue;
         throw new Error(
           `refusing to write the real Claude config directory (${root}) from a test process. `
           + "Set CLAUDE_CONFIG_DIR to a temp directory, or pass an explicit config directory "
@@ -202,6 +209,15 @@ export function assertNotRealClaudeConfigUnderTest(dir: string): void {
       }
     }
   }
+}
+
+function isSameOrInsideIgnoringPlatformCase(root: string, candidate: string): boolean {
+  const foldCase = process.platform === "darwin" || process.platform === "win32";
+  const parent = foldCase ? root.toLowerCase() : root;
+  const child = foldCase ? candidate.toLowerCase() : candidate;
+  if (parent === child) return true;
+  const rel = relative(parent, child);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 /**
