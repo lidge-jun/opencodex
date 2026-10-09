@@ -91,8 +91,21 @@ describe("splitCredentialPaste", () => {
     expect(() => splitCredentialPaste("C:\\Users\\me\\sa.json")).toThrow(/file path/i);
   });
 
-  test("JSON without a recognized type field is rejected", () => {
-    expect(() => splitCredentialPaste('{"type": "external_account"}')).toThrow(/type/i);
+  test("a single-line brace-leading NON-credential literal falls back to a plain key (never eaten)", () => {
+    // parseGcpCredentialJson contract: a literal API key starting with `{` is never eaten.
+    expect(splitCredentialPaste('{"type": "external_account"}')).toEqual(['{"type": "external_account"}']);
+    expect(splitCredentialPaste("{abc:def}")).toEqual(["{abc:def}"]);
+  });
+
+  test("a MULTILINE JSON without a recognized type field is rejected with guidance", () => {
+    // Multi-line braces are not a plausible literal key — guidance error.
+    const multiline = JSON.stringify({ type: "external_account", token_url: "https://sts.example" }, null, 2);
+    expect(() => splitCredentialPaste(multiline)).toThrow(/type/i);
+  });
+
+  test("text between JSON objects is rejected, not silently discarded", () => {
+    const sa1 = JSON.parse(SERVICE_ACCOUNT_JSON);
+    expect(() => splitCredentialPaste(`${JSON.stringify(sa1)} garbage ${JSON.stringify(sa1)}`)).toThrow(/unexpected content|Paste credential/i);
   });
 
   test("truncated JSON is rejected", () => {

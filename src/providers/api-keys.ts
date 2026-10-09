@@ -40,6 +40,13 @@ export function maskApiKey(value: string): string {
  * credential JSON (or several, comma/space-separated — the same convention as newline-separated
  * API keys) is one row per JSON object. Windows file paths are rejected with guidance rather
  * than stored, because they are the most common paste mistake and silently break at runtime.
+ *
+ * Honors the parseGcpCredentialJson contract "a literal key that starts with `{` is never eaten":
+ * a brace-leading value that is NOT recognizable credential JSON falls back to a plain literal
+ * row (preserving the old single-line behavior), and only a multi-line or multi-object paste that
+ * fails credential validation rejects with guidance. The brace scanner tracks JSON string and
+ * escape state so a `}` inside a string field does not split the object early; any non-separator
+ * text between objects is rejected rather than silently discarded.
  */
 export function splitCredentialPaste(value: string): Array<string | { credentialJson: string }> {
   const trimmed = (value ?? "").trim();
@@ -51,24 +58,62 @@ export function splitCredentialPaste(value: string): Array<string | { credential
     }
     return [trimmed];
   }
+  // Brace-leading scans: split adjacent JSON objects (comma/newline separated). The scanner
+  // tracks string/escape state so braces inside JSON string fields do not count, and records
+  // each object's [start, end] so the gap check below can reject non-separator junk between
+  // objects in one pass.
+  const spans: Array<{ start: number; end: number }> = [];
   const objects: string[] = [];
   let depth = 0;
   let start = -1;
+  let inString = false;
+  let escaped = false;
   for (let i = 0; i < trimmed.length; i++) {
     const ch = trimmed[i];
-    if (ch === "{" && depth === 0) start = i;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{" && depth === 0) {
+      start = i;
+    }
     if (ch === "{") depth += 1;
     if (ch === "}") {
       depth -= 1;
       if (depth === 0 && start >= 0) {
         objects.push(trimmed.slice(start, i + 1));
+        spans.push({ start, end: i });
         start = -1;
       }
       if (depth < 0) throw new Error("Invalid credential JSON: unbalanced braces.");
     }
   }
   if (depth !== 0 || start >= 0) throw new Error("Invalid credential JSON: the pasted text ends inside a JSON object.");
-  return objects.map(json => {
+  // Single unrecognized object on a single line = a plain key starting with `{` (never eaten).
+  // Multi-line or multi-object pastes that fail validation get the guidance error instead.
+  const singleLine = !/[\r\n]/.test(trimmed);
+  if (objects.length === 1 && singleLine && spans[0]!.end === trimmed.length - 1 && !parseGcpCredentialJson(objects[0]!)) {
+    return [trimmed];
+  }
+  // Non-separator content BETWEEN objects is rejected, not silently discarded: everything
+  // between one object's close and the next object's open (and before the first) must be a
+  // separator character.
+  for (let i = 0; i < spans.length; i++) {
+    if (i === 0) {
+      if (!/^[\s,]*$/.test(trimmed.slice(0, spans[0]!.start))) {
+        throw new Error("Unrecognized credential JSON: unexpected content before the first JSON object. Paste credential JSON(s) separated by commas or newlines, or a plain API key.");
+      }
+      continue;
+    }
+    const gap = trimmed.slice(spans[i - 1]!.end + 1, spans[i]!.start);
+    if (!/^[\s,]*$/.test(gap)) {
+      throw new Error("Unrecognized credential JSON: unexpected content between JSON objects. Paste credential JSON(s) separated by commas or newlines, or a plain API key.");
+    }
+  }
+  return objects.map((json) => {
     if (!parseGcpCredentialJson(json)) {
       throw new Error("Unrecognized credential JSON: expected a GCP Service Account or authorized_user JSON with a \"type\" field.");
     }
@@ -81,7 +126,7 @@ export function splitCredentialPaste(value: string): Array<string | { credential
  * Verified write (read-back check) mirrors storeProviderKeyInKeychain; on any failure the caller
  * receives an error instead of half-stored state.
  */
-function storeGcpCredentialJson(config: OcxConfig, name: string, credentialJson: string): string {
+function storeGcpCredentialJson(config: OcxConfig, name: string, credentialJson: string, existedBefore: boolean): string {
   const probe = probeProviderKeychain();
   if (!probe.available) throw new Error(`OS keychain unavailable: ${probe.reason}`);
   const id = apiKeyPoolEntryId(credentialJson);
@@ -89,7 +134,12 @@ function storeGcpCredentialJson(config: OcxConfig, name: string, credentialJson:
   const entry = providerKeychainEntry(account);
   entry.setPassword(credentialJson);
   if (entry.getPassword() !== credentialJson) {
-    try { entry.deletePassword(); } catch { /* best effort */ }
+    // Delete on mismatch ONLY when this write created the entry: a re-paste targets an account an
+    // existing `gcp-sa:` marker already names, and deleting it would destroy the live credential
+    // the config still references.
+    if (!existedBefore) {
+      try { entry.deletePassword(); } catch { /* best effort */ }
+    }
     throw new Error(`keychain read-back mismatch for ${account}`);
   }
   return `${GCP_CREDENTIAL_MARKER_PREFIX}${account}`;
@@ -172,7 +222,7 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
       const existedBefore = providerKeychainEntry(account).getPassword() !== null;
       let marker: string;
       try {
-        marker = storeGcpCredentialJson(config, name, credentialJson);
+        marker = storeGcpCredentialJson(config, name, credentialJson, existedBefore);
       } catch (error) {
         return { error: error instanceof Error ? error.message : "credential storage failed" };
       }
