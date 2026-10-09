@@ -645,8 +645,10 @@ resolution and routing.
 Claude Code accounts 200k tokens for any model it does not recognize. **Auto context** (on by
 default) fixes that:
 
-1. Models whose real window is above 200k **and** at least the auto-compact threshold get the
-   `[1m]` marker on their picker rows and env slots.
+1. Launch env slots get the `[1m]` marker when the model's real window is above 200k **and** at
+   least the configured auto-compact threshold. Discovery and Desktop picker rows do not follow
+   that threshold: they use the fixed 829,800-token floor (a genuine 1M for Claude models on an
+   Anthropic route).
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (default `829800`, range `100000`–`1000000`) is injected so
    the conversation auto-summarizes at that point.
 
@@ -671,8 +673,9 @@ history and try compacting a fork with fewer enabled tool or MCP schemas, if you
 that workflow. A `[1m]` marker or larger client accounting setting does not raise the upstream
 limit, and OpenCodex does not silently remove history or tools to make it fit.
 
-Sub-1M native Anthropic models are never auto-marked. Values you export yourself always win (the
-proxy uses YOUR value to decide which models are safe to mark). Invalid hand-edited config values
+Sub-1M native Anthropic models are never auto-marked. A compact window you export yourself wins
+for launch-slot marking (the proxy uses YOUR value to decide which models are safe to mark).
+Discovery rows ignore that export and keep the fixed floor. Invalid hand-edited config values
 fall back to 829,800.
 
 ### Effective model environment
@@ -1004,7 +1007,7 @@ set (automatic with `ocx claude`). Run `ocx claude` to refresh the gateway model
 
 **200k context ceiling despite big model** — Select the `[1m]` variant in the picker, or enable
 auto-context (on by default). If the picker shows no `[1m]` row, the model's authoritative context
-window may be below the auto-compact threshold.
+window may be below the fixed 829,800-token floor.
 
 **High token count from skill loads** — The bundled `claude-api` skill (~136k tokens) auto-loads
 on Claude model mentions. This is normal for native passthrough; on routed models, opencodex stubs
@@ -1070,7 +1073,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

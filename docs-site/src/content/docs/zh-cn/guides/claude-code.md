@@ -303,8 +303,8 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 对于任何无法识别的模型，Claude Code 都会按 200k token 计算。默认开启的**自动上下文**可解决
 这一问题：
 
-1. 实际窗口大于 200k **且**至少达到自动压缩阈值的模型，其选择器条目和环境变量槽位会带有
-   `[1m]` 标记。
+1. 启动环境槽位会在实际窗口大于 200k **且**至少达到所配置的自动压缩阈值时带上
+   `[1m]` 标记。发现列表和 Desktop 选择器条目不跟随该阈值：它们使用固定的 829,800 token 下限（Anthropic 路由上的 Claude 模型必须真正达到 1M）。
 2. 系统会注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（默认 `829800`，范围 `100000`–`1000000`），
    使对话在该位置自动进行摘要。
 
@@ -317,8 +317,8 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 可以在 Claude 页面调整压缩值。**警告：**如果将其提高到超过模型的实际窗口，该模型将无法正常
 工作——聊天会在触发摘要之前报错。
 
-低于 1M 的原生 Anthropic 模型绝不会被自动标记。你自行导出的值始终优先（代理会使用**你的**
-值来判断哪些模型可以安全标记）。手动编辑配置时填入的无效值会回退到 829,800。
+低于 1M 的原生 Anthropic 模型绝不会被自动标记。你自行导出的压缩值在启动槽位标记上始终优先（代理会使用**你的**
+值来判断哪些模型可以安全标记）。发现列表忽略该导出值并保持固定下限。手动编辑配置时填入的无效值会回退到 829,800。
 
 ### 有效模型环境变量
 
@@ -567,7 +567,7 @@ OAuth 活动账户未标记 `needsReauth`。显式选择 Anthropic 却没有可�
 `ANTHROPIC_BASE_URL` 可能已经过时。请打开一个新终端，或重新运行 `ocx claude`。
 
 **大模型仍受 200k 上下文上限限制**——在选择器中选择 `[1m]` 变体，或启用自动上下文
-（默认开启）。如果选择器中没有 `[1m]` 条目，该模型的权威上下文窗口可能低于自动压缩阈值。
+（默认开启）。如果选择器中没有 `[1m]` 条目，该模型的权威上下文窗口可能低于固定的 829,800 token 下限。
 
 **技能加载导致 token 数量过高**——内置的 `claude-api` 技能（约 136k token）会在提及
 Claude 模型时自动加载。对于原生透传，这是正常现象；对于已路由模型，opencodex 默认会将其
@@ -590,7 +590,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
