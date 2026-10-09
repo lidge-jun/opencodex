@@ -98,11 +98,11 @@ function probeChild(runtime: DurableBunRuntime, path: string, nonce: string, spa
 let result = "create", owned;
 try { fs.mkdirSync(path, 0o700); owned = fs.lstatSync(path); result = "remove";
   fs.rmdirSync(path); result = "ok";
-} catch {} finally {
+} catch { /* result already names the failed step; details never leave the child */ } finally {
   if (owned) { try { const now = fs.lstatSync(path);
     if (now.isDirectory() && !now.isSymbolicLink() && now.dev === owned.dev && now.ino === owned.ino
       && fs.readdirSync(path).length === 0) fs.rmdirSync(path);
-  } catch {} }
+  } catch { /* leave any probe entry that cannot be proven ours */ } }
 }
 process.stdout.write(${JSON.stringify(nonce)} + ":" + result);
 process.exitCode = result === "ok" ? 0 : 1;`;
