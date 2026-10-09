@@ -74,3 +74,5 @@ The removal-lifetime contract holds two successive injected normal Windows ACL c
 The abort-lifetime contract uses synthetic response bodies whose cancellation remains pending. Both Responses and the shared HTTP finalizer release owned translator budgets on an already-aborted signal, a later abort, or explicit cancellation, while a live response retains its budget and successful EOF preserves bytes and response metadata.
 
 Abort finalization changes accounting only; transports retain producer cancellation and terminal precedence. Prepared 200, 499 and 504 bodies remain unchanged. The alias-removal contract uses an owned junction or symlink to prove physical and alias roots wait for the same work, including a deleted temporary file, unreadable identity and a child name beginning with two dots; an unrelated sibling remains outside the guard.
+
+The picker metadata contract injects two distinct full-width file IDs that round to the same number. It requires the pre-open/descriptor comparison to reject them before any credential-store access, using the existing Bun stat seams and synthetic public metadata.

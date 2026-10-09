@@ -1652,6 +1652,7 @@
     "server-live.test.ts": "server",
     "server-loopback-host-gate.test.ts": "server",
     "server-management-auth.test.ts": "server",
+    "server-management-log-admission.test.ts": "server",
     "server-opencode-go-goal-streaming.test.ts": "server",
     "server-rate-limit-retry-e2e.test.ts": "server",
     "server-request-body-size.test.ts": "server",
