@@ -142,11 +142,12 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
   };
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
-  // Qwen3.8-27B's pinned chat template rejects non-leading system and every developer role;
-  // a later user is rendered in place. Keep this exception specific to that template family.
-  // Gateways serve it under namespaced ids (LiteLLM's openai/Qwen3.8-27B, #6674), so any number
-  // of leading path segments is accepted; the final segment still has to name the checkpoint.
-  const qwen38LeadingSystemTemplate = !nativeOpenAI && /^(?:[^/]+\/)*(?:Qwen3\.8-27B|qwen3-8-27b(?:-(?:fp8|lora))?)$/i.test(parsed.modelId);
+  // Two pinned chat templates reject non-leading system and every developer role while a
+  // later user renders in place: Qwen3.8-27B and the OrcaSAQ-2-Cyber-27B GGUF family.
+  // Gateways serve them under namespaced ids (LiteLLM's openai/Qwen3.8-27B, #6674), so any
+  // number of leading path segments is accepted; the final segment names the checkpoint.
+  // Orca's GGUF marker must precede any colon quant tag; other Orca variants are unchanged.
+  const leadingSystemTemplate = !nativeOpenAI && /^(?:[^/]+\/)*(?:Qwen3\.8-27B|qwen3-8-27b(?:-(?:fp8|lora))?|OrcaSAQ-2-Cyber-27B(?=[^:/\s]*GGUF)[^:/\s]*(?::[\w-]+)?)$/i.test(parsed.modelId);
   // Which role a developer message carries, and why the unrecorded state folds, is stated once
   // in ./developer-role.ts and read from there by the native passthrough as well. Either way the
   // message keeps the slot it arrived in — only the role changes, never the position.
@@ -196,7 +197,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           // message instead is rejected by some upstreams. Native OpenAI keeps its existing
           // empty-developer wire, which is a separate question from placement.
           if (!nativeOpenAI && text.length === 0) break;
-          chatMsg = { role: qwen38LeadingSystemTemplate ? "user" : developerWireRole, content: text };
+          chatMsg = { role: leadingSystemTemplate ? "user" : developerWireRole, content: text };
         } else if (typeof msg.content === "string") {
           chatMsg = { role: "user", content: msg.content };
         } else if (!hasStructured) {

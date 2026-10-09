@@ -3,9 +3,11 @@
  *
  * Nothing else reads those keys directly: endpoint admission, `count_tokens`, the endpoint
  * metadata DTO and the dashboard all resolve through here, so they cannot disagree about
- * whether an API is open. Type-only config import keeps this module free of runtime edges.
+ * whether an API is open. Instance admission reads only config and registry metadata;
+ * this module never reads credentials or selects an account.
  */
 import type { OcxConfig } from "../types";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import type { Protocol } from "./contract";
 
 export type ApiSurfaceSource =
@@ -70,8 +72,10 @@ export interface ProtocolSettings {
   rollout: Readonly<ProtocolRolloutSettings>;
 }
 
+type ProtocolConfig = Pick<OcxConfig, "protocols" | "anthropicAccountPool"> & Partial<Pick<OcxConfig, "providers">>;
+
 /** Resolve protocol policy with conservative defaults for every absent or malformed field. */
-export function resolveProtocolSettings(config: Pick<OcxConfig, "protocols" | "anthropicAccountPool">, providerName?: string): Readonly<ProtocolSettings> {
+export function resolveProtocolSettings(config: ProtocolConfig, providerName?: string): Readonly<ProtocolSettings> {
   const raw: unknown = config.protocols;
   const protocols = isRec(raw) ? raw : {};
   const rollout = isRec(protocols.rollout) ? protocols.rollout : {};
@@ -79,9 +83,11 @@ export function resolveProtocolSettings(config: Pick<OcxConfig, "protocols" | "a
   // A present malformed container cannot become an absent/default-on policy.
   const validContainers = (raw === undefined || isRec(raw))
     && (!Object.hasOwn(protocols, "rollout") || isRec(protocols.rollout));
-  const rawPool: unknown = config.anthropicAccountPool;
+  const instance = configuredAnthropicInstance({ providers: config.providers ?? {} }, providerName);
+  const rawPool: unknown = instance === "anthropic2"
+    ? config.providers?.anthropic2?.anthropicAccountPool : instance === "anthropic" ? config.anthropicAccountPool : undefined;
   const pool = isRec(rawPool) ? rawPool : {};
-  const pooled = providerName === "anthropic" && pool.enabled === true;
+  const pooled = instance !== undefined && pool.enabled === true;
   const poolPreference = !Object.hasOwn(pool, "nativeMessages") || pool.nativeMessages === true;
   const nativeOn = (key: "managedMessagesNative" | "managedMessagesNativeOAuth") => validContainers
     && (!pooled || poolPreference)
@@ -105,15 +111,17 @@ export function resolveProtocolSettings(config: Pick<OcxConfig, "protocols" | "a
  * dashboard can tell a preview computed under an older policy from a current one. Not a
  * security boundary; FNV-1a over a canonical JSON projection.
  */
-export function protocolPolicyRevision(config: Pick<OcxConfig, "apiSurfaces" | "claudeCode" | "protocols" | "anthropicAccountPool">): string {
+export function protocolPolicyRevision(config: ProtocolConfig & Pick<OcxConfig, "apiSurfaces" | "claudeCode">): string {
   const surfaces = resolveApiSurfaceSettings(config);
   const settings = resolveProtocolSettings(config);
   const anthropicSettings = resolveProtocolSettings(config, "anthropic");
+  const secondarySettings = resolveProtocolSettings(config, "anthropic2");
   const state = (record: unknown, key: string) => !isRec(record) || !Object.hasOwn(record, key)
     ? "absent" : record[key] === true ? "true" : record[key] === false ? "false" : "invalid";
   const container = (value: unknown) => value === undefined ? "absent" : isRec(value) ? "object" : "invalid";
   const rawProtocols: unknown = config.protocols;
   const rawRollout = isRec(rawProtocols) ? rawProtocols.rollout : undefined;
+  const secondary = config.providers?.anthropic2;
   const canonical = JSON.stringify({
     messages: [surfaces.messages.enabled, surfaces.messages.source],
     unrepresentable: settings.unrepresentable,
@@ -122,6 +130,11 @@ export function protocolPolicyRevision(config: Pick<OcxConfig, "apiSurfaces" | "
       state(rawRollout, "managedMessagesNative"), state(rawRollout, "managedMessagesNativeOAuth"),
       container(config.anthropicAccountPool), state(config.anthropicAccountPool, "enabled"),
       state(config.anthropicAccountPool, "nativeMessages"),
+      container(secondary), state(secondary, "disabled"),
+      !!secondary && Object.hasOwn(secondary, "anthropicOAuthInstance"), secondary?.anthropicOAuthInstance ?? "absent",
+      secondary?.adapter ?? "absent", secondary?.authMode ?? "absent", secondary?.baseUrl ?? "absent",
+      container(secondary?.anthropicAccountPool), state(secondary?.anthropicAccountPool, "enabled"),
+      state(secondary?.anthropicAccountPool, "nativeMessages"),
     ],
     rollout: [
       settings.rollout.nativeChatCombos,
@@ -129,6 +142,8 @@ export function protocolPolicyRevision(config: Pick<OcxConfig, "apiSurfaces" | "
       settings.rollout.managedMessagesNativeOAuth,
       anthropicSettings.rollout.managedMessagesNative,
       anthropicSettings.rollout.managedMessagesNativeOAuth,
+      secondarySettings.rollout.managedMessagesNative,
+      secondarySettings.rollout.managedMessagesNativeOAuth,
       settings.rollout.directEncoders,
       settings.rollout.shadowPlan,
     ],

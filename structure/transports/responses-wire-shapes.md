@@ -315,12 +315,12 @@ an empty tool list is making a statement rather than omitting one, which is how 
 guard reads it through `clientExplicitWireToolCatalog` in
 `src/server/responses/passthrough-dispatch.ts`.
 
-The passthrough guard is not wire-scoped. `undeclaredToolGuardActive` gates namespace normalization
-and continuation-state suppression as well as the refusal, and it stands down only for
-`authMode: "forward"` and for a request that declares no catalog at all.
+The passthrough SSE/JSON refusal is wire-scoped too: only `responses` rejects undeclared calls.
+`undeclaredToolGuardActive` still gates namespace normalization and continuation suppression on every wire,
+standing down only for `authMode: "forward"` and requests with no catalog; relayed undeclared calls are not remembered.
 
-`src/server/responses/run-turn-execution.ts` and `src/server/responses/adapter-delivery.ts` set the
-flag from `inboundWire` on the streaming, buffered, and JSON paths alike, so the three cannot drift.
+`src/server/responses/run-turn-execution.ts`, `src/server/responses/adapter-delivery.ts`, and
+`src/server/responses/passthrough-delivery.ts` scope membership refusal from `inboundWire` for SSE and JSON alike.
 
 ## Selection outlives the declaration check
 

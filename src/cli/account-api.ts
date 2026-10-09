@@ -1,3 +1,4 @@
+import { configuredAnthropicInstance, isAnthropicOAuthInstance } from "../providers/anthropic-instance";
 import { parseQuotaFailureCode, type QuotaFailureCode, type ProviderQuota, type AccountQuotaMode } from "../providers/quota-types";
 /**
  * Data-access layer for `ocx account` (issue #180) — live-proxy HTTP client and
@@ -110,6 +111,7 @@ export function classifyAccount(config: OcxConfig, name: string): ClassifyResult
   if (provider && !provider.authMode && (provider.apiKey || (provider.apiKeyPool?.length ?? 0) > 0)) {
     return { type: "api-key" };
   }
+  if (name === "anthropic2" && !configuredAnthropicInstance(config, name)) return { error: "Anthropic pool instance is not configured" };
   if (isPublicOAuthProvider(name)) return { type: "oauth" };
   if (provider) return { type: "api-key" };
   return { error: `unknown provider "${name}"` };
@@ -408,7 +410,7 @@ async function fetchOAuthRows(
     needsReauth: a.needsReauth,
     ...projectAccountHealth(a, name, a.id),
     ...(a.paused === true ? { paused: true } : {}),
-    ...(name === "anthropic" && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
+    ...(isAnthropicOAuthInstance(name) && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
     ...(a.needsReauthReason === "verify_account" ? { needsReauthReason: a.needsReauthReason } : {}),
     ...(name === "kiro" && typeof a.autoSelectable === "boolean"
       ? { autoSelectable: a.autoSelectable } : {}),

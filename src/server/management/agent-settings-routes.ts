@@ -8,6 +8,8 @@ import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCach
 import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../config/provider-validation";
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../../config/multi-agent-surface";
 import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
+import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
+import { isAnthropicInstanceId, type AnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import {
   adoptPersistedClaudeCode,
   DEFAULT_SUBAGENT_MODELS,
@@ -71,9 +73,13 @@ import {
   webSearchCandidateRows,
   webSearchModelIsRejected,
   webSearchModelRejection,
+  sidecarAnthropicPoolOptions,
+  sidecarSettingsAfterPatch,
+  sidecarOptionsAuth,
   type WebSearchBackend,
 } from "./web-search-sidecar-options";
 import { drainAndShutdown } from "../lifecycle";
+import { inheritedAnthropicInstance } from "../../sidecar/auth";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
@@ -1368,6 +1374,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     );
     const webSearchOverride = config.claudeCode?.webSearchSidecar;
     const visionOverride = config.claudeCode?.visionSidecar;
+    const helperParent = config.claudeCode?.model?.includes("/") ? config.claudeCode.model.split("/")[0] : undefined;
+    const helperVision = { ...config.visionSidecar, ...visionOverride };
+    // Same pool the runtime picks (vision/plan.ts preferredVisionBackend): explicit, else inherited
+    // from the Claude model's instance, so a usable inherited Pool 2 reports the Anthropic backend.
+    const helperVisionInstance = helperVision.anthropicInstance ?? inheritedAnthropicInstance(config, helperParent);
+    const helperVisionBackend = helperVision.backend ?? (sidecarOptionsAuth(config, helperVisionInstance).isAnthropicAuth ? "anthropic" : "openai");
     const { firstPartyDesired, readFirstPartyProxyStatus } = await import("../../claude/first-party-settings");
     const { observeClaudeDesktopMode } = await import("../../claude/desktop-first-party");
     const { claudeInterceptEnabled, getClaudeInterceptState } = await import("../../claude/intercept/runtime");
@@ -1411,11 +1423,15 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       autoCompactWindow: config.claudeCode?.autoCompactWindow ?? null,
       blockedSkills: config.claudeCode?.blockedSkills ?? null,
       injectAgents: config.claudeCode?.injectAgents !== false,
+      sidecarPools: {
+        webSearchSidecar: sidecarAnthropicPoolOptions(config, { ...config.webSearchSidecar, ...webSearchOverride }, helperParent),
+        visionSidecar: sidecarAnthropicPoolOptions(config, { ...helperVision, backend: helperVisionBackend }, helperParent),
+      },
       ...(webSearchOverride && Object.keys(webSearchOverride).length > 0
-        ? { webSearchSidecar: { backend: webSearchOverride.backend, model: webSearchOverride.model } }
+        ? { webSearchSidecar: { backend: webSearchOverride.backend, model: webSearchOverride.model, ...(webSearchOverride.anthropicInstance ? { anthropicInstance: webSearchOverride.anthropicInstance } : {}) } }
         : {}),
       ...(visionOverride && Object.keys(visionOverride).length > 0
-        ? { visionSidecar: { backend: visionOverride.backend, model: visionOverride.model } }
+        ? { visionSidecar: { backend: visionOverride.backend, model: visionOverride.model, ...(visionOverride.anthropicInstance ? { anthropicInstance: visionOverride.anthropicInstance } : {}) } }
         : {}),
       fastMode: config.fastMode,
       forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
@@ -1563,6 +1579,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           ...(residual ? ["settings_residual"] : []),
         ] });
     }
+    const instanceError = anthropicSidecarPatchError(config, body, true);
+    if (instanceError) return jsonResponse({ error: instanceError }, 400);
     for (const field of ["webSearchSidecar", "visionSidecar"] as const) {
       const section = body[field];
       if (section === undefined || section === null) continue;
@@ -1587,7 +1605,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // gates cannot drift.
       if (field === "visionSidecar" && typeof section.model === "string" && section.model !== "") {
         const requested = section.model;
-        const candidates = await visionCandidateRows(config);
+        const candidates = await visionCandidateRows({ ...config, visionSidecar: {
+          ...config.visionSidecar, ...sidecarSettingsAfterPatch(config.claudeCode?.visionSidecar, section),
+        } });
         const hint = section.backend === "anthropic" || section.backend === "openai"
           || section.backend === "routed"
           ? section.backend
@@ -1610,7 +1630,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // module as /api/sidecar-settings — a gate on one route and a stale copy on
       // the other is no gate at all.
       if (field === "webSearchSidecar"
-        && (section.model !== undefined || section.backend !== undefined)) {
+        && (section.model !== undefined || section.backend !== undefined || section.anthropicInstance !== undefined)) {
         const stored = config.claudeCode?.webSearchSidecar;
         // Validate against the SUBMITTED backend across the whole union, not
         // just openai/anthropic (#2457). allowedBackends above already refused
@@ -1629,7 +1649,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           : typeof section.model === "string"
             ? section.model
             : stored?.model ?? config.webSearchSidecar?.model;
-        const candidates = await webSearchCandidateRows(config);
+        const candidates = await webSearchCandidateRows({ ...config, webSearchSidecar: {
+          ...config.webSearchSidecar, ...sidecarSettingsAfterPatch(config.claudeCode?.webSearchSidecar, section),
+        } });
         if (effectiveModel && webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
           return jsonResponse(webSearchModelRejection(
             "webSearchSidecar.model",
@@ -1650,8 +1672,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       // The per-field validation above guarantees vision only ever carries the two-member
       // union; the cast is the loop's shared-shape compromise, not a wider write path.
-      const requested = section as { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | null; model?: string };
+      const requested = section as { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | null; model?: string; anthropicInstance?: AnthropicInstanceId | null };
       const override = { ...next[field] } as NonNullable<OcxClaudeCodeConfig[typeof field]>;
+      if (requested.anthropicInstance === null) delete override.anthropicInstance;
+      else if (isAnthropicInstanceId(requested.anthropicInstance)) override.anthropicInstance = requested.anthropicInstance;
       if (requested.backend === null) delete override.backend;
       else if (requested.backend !== undefined) override.backend = requested.backend as never;
       if (requested.model === "") delete override.model;

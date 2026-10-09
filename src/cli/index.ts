@@ -210,11 +210,17 @@ initializeNodeLauncherContext();
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
 if (process.argv[2] === "__keyring-load-check") { console.log(JSON.stringify((await import("../lib/keyring-native")).inspectKeyringBinding())); process.exit(0); }
-if (process.argv[2] === "__codebuddy-mcp") {
-  const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
-  await runCodeBuddyMcpServer(process.argv[3] ?? "");
-  // The MCP stdio loop owns this process until stdin closes; do not fall through
-  // to ordinary CLI dispatch or exit after the handshake completes.
+
+// The compiled executable also launches the isolated MCP servers.
+// Handle these private entrypoints before CLI preflight or command dispatch.
+if (process.argv[2] === "__codebuddy-mcp" || process.argv[2] === "__qoder-mcp") {
+  if (process.argv[2] === "__codebuddy-mcp") {
+    const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
+    await runCodeBuddyMcpServer(process.argv[3] ?? "");
+  } else {
+    const { runCodingAgentMcpServer } = await import("../adapters/coding-agent/mcp-server");
+    await runCodingAgentMcpServer(process.argv[3] ?? "");
+  }
   await new Promise<never>(() => {});
 }
 

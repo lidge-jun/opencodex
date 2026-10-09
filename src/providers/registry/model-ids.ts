@@ -129,6 +129,7 @@ export const REGISTRY_FIELD_MODEL_ID_ROLES = {
   thinkingBudgetModels: NONE,
   escapeBuiltinToolNames: NONE,
   oauthId: NONE,
+  oauthFamily: NONE,
   virtualModels: RECORD_KEYS,
   modelMaxInputTokens: RECORD_KEYS,
   jawcodeBundle: NONE,

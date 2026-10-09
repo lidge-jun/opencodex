@@ -1,6 +1,6 @@
 /**
  * Per-role model for omo (Codex / LazyCodex): `$CODEX_HOME/agents/<role>.toml` plus LazyCodex's
- * `codex.agents.<role>.model` mirror in omo.jsonc. Both halves exist only when LazyCodex is
+ * `"[codex]".agents.<role>.model` mirror in omo.jsonc. Both halves exist only when LazyCodex is
  * detected; Pi-based and OpenCode-based omo are never read here.
  *
  * Loaded on demand from `src/server/management-api.ts`, like the quota-reset handler, so a

@@ -1,3 +1,6 @@
+import { createPhysicalSendReporter } from "../../lib/request-execution-budget";
+import { createInferenceSendBudget } from "../inference/context";
+import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { capturePoolQuotaWriter } from "../../codex/account-store";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
@@ -726,6 +729,7 @@ export async function handleResponsesCompact(
   logCtx.provider = route.codexAccountNamespace
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : route.providerName;
+  logCtx.spendPoolId = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
   // #4940, and the same refusal the ordinary Responses path makes in request-prepare.ts. Compact has
   // to repeat it rather than inherit it: the native branch below dispatches straight to
@@ -808,7 +812,7 @@ export async function handleResponsesCompact(
   // failure that hands off, continues here. The routed turn used to call handleResponses with
   // no budget at all, so `handleResponsesInner` minted a fresh four after the native attempt
   // had already spent some of the first one.
-  const sendBudget: RequestExecutionBudget = options.sendBudget ?? createRequestExecutionBudget();
+  const sendBudget: RequestExecutionBudget = options.sendBudget ?? createInferenceSendBudget(req, logCtx);
   // A manual override onto another backend must not mint ciphertext the conversation model cannot replay.
   const manualOverrideCrossesProvider = options.compactionRoutingOverride
     ? !compactionRoutingKeepsProviderIdentity(config, options.compactionRoutingOverride, route)
@@ -1026,12 +1030,21 @@ export async function handleResponsesCompact(
     // `kind === "pool"` and a main-pool credential left it false -- so 401 then 429 really did
     // reach five. The single sends spend the base allowance first and then the one shared
     // final-recovery reserve, which is the same rule the Responses path follows.
-    const sendSingleCompactAttempt = (
+    const sendSingleCompactAttempt = async (
       doFetch: () => Promise<Response>,
     ): Promise<Response> => {
       if (sendBudget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS) > 0) {
-        sendBudget.used += 1;
-        return doFetch();
+        const report = createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? route.providerName,
+          identityId: logCtx.accountLogLabel }));
+        let started = false;
+        try {
+          if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+          started = true;
+          return await doFetch();
+        } finally {
+          try { if (started) report(1); }
+          finally { report.close?.(); }
+        }
       }
       const decision = sendBudget.reserveDispatch({
         sendClass: "auth-recovery",
@@ -1080,7 +1093,8 @@ export async function handleResponsesCompact(
           // Draws the shared remainder instead of a fresh three. Compact is a native endpoint
           // of the same logical turn, so its sends belong to the same cap.
           attempts: sendBudget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS),
-          onSendsConsumed: (used: number) => { sendBudget.used += Math.max(0, used); },
+          onSendsConsumed: createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? route.providerName,
+            identityId: logCtx.accountLogLabel })),
         });
     };
 
@@ -1088,9 +1102,12 @@ export async function handleResponsesCompact(
     // actually happens, so every recorder call names the context that produced it.
     let outcomeCtx = authCtx;
     const localDispatchRefusal = (error: unknown): Response | undefined => {
-      const response = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(error), {
-        now: Date.now(), accountSelector: route.codexAccountNamespace,
-      });
+      const cause = unwrapUpstreamRetryEvidenceError(error);
+      const response = cause instanceof SendBudgetExhaustedError
+        ? unboundPoolSpendRefusalResponse(logCtx) ?? formatErrorResponse(429, "request_send_budget_exhausted", cause.message)
+        : mapCodexAuthContextErrorToResponse(cause, {
+          now: Date.now(), accountSelector: route.codexAccountNamespace,
+        });
       if (response) {
         releaseUpstreamHostAdmission(compactHostAdmissionLease);
         compactHostAdmissionLease = null;

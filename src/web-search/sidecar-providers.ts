@@ -5,7 +5,7 @@
  * evaluating when the bridge asks for these names).
  */
 import type { OcxConfig, OcxProviderConfig, OcxWebSearchSidecarConfig } from "../types";
-import { resolveSidecarAuth } from "../sidecar/auth";
+import { resolveSidecarAuth, resolveAnthropicHelperInstance } from "../sidecar/auth";
 import { getAccountSet } from "../oauth/store";
 import type { XaiSearchOptions } from "./xai-executor";
 
@@ -46,8 +46,9 @@ export interface AnthropicSidecarProvider {
  * Delegates to the shared sidecar auth module (#2188) so web-search and vision
  * cannot drift on what "Anthropic auth present" means.
  */
-export function findAnthropicSidecarProvider(config: OcxConfig): AnthropicSidecarProvider | undefined {
-  const auth = resolveSidecarAuth(config);
+export function findAnthropicSidecarProvider(config: OcxConfig, parentProviderName?: string): AnthropicSidecarProvider | undefined {
+  const instance = resolveAnthropicHelperInstance(config, { backendFamily: "anthropic", anthropicInstance: config.webSearchSidecar?.anthropicInstance, parentProviderName });
+  const auth = resolveSidecarAuth(config, instance);
   if (!auth.isAnthropicAuth || !auth.anthropicProviderName || !auth.anthropicProvider) return undefined;
   return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config };
 }

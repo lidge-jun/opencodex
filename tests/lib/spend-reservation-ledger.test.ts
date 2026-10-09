@@ -191,8 +191,10 @@ describe("spend reservation ledger, send identity", () => {
 
     // ...and after a restart rebuilds the ledger from the journal.
     const restarted = createSpendReservationLedger({ journal, policy: policy(1_000), now: () => 2_000 });
-    expect(restarted.knows("s1")).toBe(true);
-    expect(restarted.reserve(request).reserved).toBe(false);
+    // Durable replay forgets resolved IDs, never their totals; reuse books a fresh charge.
+    expect(restarted.knows("s1")).toBe(false);
+    expect(restarted.reserve(request).reserved).toBe(true);
+    expect(restarted.snapshot("root", "r1")).toMatchObject({ settled: 20, reserved: 20 });
   });
 
   test("an undispatched reservation is released and only a dispatched one becomes unresolved", () => {

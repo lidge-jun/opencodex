@@ -56,10 +56,13 @@ transport; it does not infer subscription attribution from the inbound protocol.
 - **Rewrites Codex's GPT-5 identity prompt** to a model-agnostic intro so routed models don't claim to
   be OpenAI.
 - For translated `Qwen3.8-27B` requests (including gateway-namespaced ids such as
-  `openai/Qwen3.8-27B`), a text-only developer reminder after the leading system
-  message stays in its conversation slot but is sent as `user`. The model's
-  [chat template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja)
-  rejects later `system` messages and does not accept `developer`, while later `user` messages
+  `openai/Qwen3.8-27B`) and `OrcaSAQ-2-Cyber-27B` GGUF requests, a text-only developer reminder
+  after the leading system message stays in its conversation slot but is sent as `user`.
+  The Orca exception requires `GGUF` in the final model segment before any optional colon
+  quant tag; non-GGUF Orca variants keep their configured developer-role behavior.
+  These pinned chat templates — for example
+  [Qwen3.8-27B's](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja) —
+  reject later `system` messages and do not accept `developer`, while later `user` messages
   are valid. This preserves order but cannot preserve developer-role precedence. Other models
   keep their configured developer-role behavior; native Chat passthrough is unchanged.
 - **Clamps `reasoning_effort`** to the model's advertised subset when an exact tier is unavailable;

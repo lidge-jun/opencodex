@@ -936,7 +936,7 @@ describe("claude outbound SSE", () => {
     const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
     expect(events.at(-1)!.data).toEqual({
       type: "error",
-      error: { type: "invalid_request_error", message: "Cursor context limit exceeded", code: "context_length_exceeded" },
+      error: { type: "invalid_request_error", message: "prompt is too long: Cursor context limit exceeded", code: "context_length_exceeded" },
     });
   });
 

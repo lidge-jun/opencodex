@@ -1,10 +1,14 @@
 # Anthropic Account Thresholds
 
 `src/oauth/anthropic-account-threshold.ts` resolves `ProviderAccount.autoSwitchThresholdOverride`
-against `anthropicAccountPool.autoSwitchThreshold` (default 80). Stored integers 0..100 survive
+against its instance's `anthropicAccountPool.autoSwitchThreshold` (default 80). Stored integers 0..100 survive
 refresh, re-login and restart. Missing/null inherits; malformed disk values normalize to absent.
 `setAnthropicAccountThreshold` in `src/oauth/store.ts` serializes writes with pause, refresh and
 deletion and advances selection revision when policy changes. Account deletion removes it.
+The required-instance resolver reads Pool 2's provider-local block; it never
+inherits the primary pool's configured value. Legacy entrypoints retain primary
+semantics. The store's required-instance setter publishes policy events with the
+actual provider, including when both pools have the same stored account ID.
 `src/server/responses/request-transport.ts` re-evaluates Anthropic selection after a revision
 conflict during credential resolution, with or without a model route, before physical dispatch.
 The policy-only post-persistence signal runs before the generic selection event and carries exact

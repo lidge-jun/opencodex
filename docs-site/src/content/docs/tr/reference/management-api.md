@@ -363,6 +363,8 @@ dolaşmamalıdır. Depoya yıldız verip vermeyeceğini kullanıcı seçmelidir.
 
 ### Sistem yaşam döngüsü
 
+`POST /api/system/restart`, gövde yoksa veya `{}` ise varsayılan 60 saniyelik boşaltma süresini korur. Bir yönetim oturumu veya yönetici token'ı, `{"drainGraceMs":2000}` ile daha kısa süreyi açıkça seçebilir. Değer 1 ile 60000 milisaniye arasında bir tam sayı olmalıdır. Geçersiz gövde veya değer, yeniden başlatmayı başlatmadan 400 döndürür; hedef sürece bağlı yerel yeniden başlatma capability'si bu seçeneğe izin vermez (403). Yanıttaki `drainTimeoutMs`, ilk kabul edilen süreyi bildirir; tekrarlanan çağrılar mevcut süreyi veya son tarihi değiştirmez. Yanıt gönderme gecikmesi bu süreye dahildir; temizleme ve yeni sürecin hazır olması için ayrı 60 ve 70 saniyelik bütçeler korunur. Kesilen bir istek zaten yürütülmüş olabilir: yeniden göndermeden önce sonucunu kontrol edin. Otomatik yeniden gönderme eklenmez.
+
 | Yöntem ve yol | Amaç | Dikkate değer hatalar |
 | --- | --- | --- |
 | `GET /api/system/memory` | Skaler süreç, yığın (heap), akış, yanıt durumu, denetleyici ve aktif tur metriklerini döndürün | — |

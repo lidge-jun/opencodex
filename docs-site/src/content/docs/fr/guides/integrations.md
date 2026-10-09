@@ -1,10 +1,10 @@
 ---
 title: Intégrations
-description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo et Factory Droid depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
+description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code et Factory Droid depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
 ---
 
 L'onglet **Connexion** écrit le bloc fournisseur d'opencodex dans le fichier de configuration du client,
-puis peut le retirer. Dix-sept clients fonctionnent ainsi, chacun avec son propre commutateur :
+puis peut le retirer. Dix-huit clients fonctionnent ainsi, chacun avec son propre commutateur :
 
 | Client | Fichier de configuration | Format | Prise d'effet de la modification | Identifiant |
 |---|---|---|---|---|
@@ -24,6 +24,7 @@ puis peut le retirer. Dix-sept clients fonctionnent ainsi, chacun avec son propr
 | omo | `~/.omo/agent/models.json` | JSON | nouvelles sessions | espace réservé de bouclage |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | après arrêt et redémarrage | bouclage uniquement |
 | Kilo | premier fichier existant parmi `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` ou `config.json` sous `~/.config/kilo` (`XDG_CONFIG_HOME` déplace ce répertoire ; `kilo.jsonc` est créé si aucun n'existe) | JSONC | nouvelles sessions | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (sous Windows avec le répertoire personnel par défaut : utiliser `HOME ?? USERPROFILE` uniquement si la valeur n’est ni vide ni composée uniquement d’espaces et désigne un chemin absolu Windows, sinon `homedir()` ; un répertoire personnel fourni séparément est conservé ; ajouter `.commandcode\providers.json`) | JSON | au prochain lancement de Command Code | aucun — boucle locale sans clé (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` sous Windows) | JSON | dès la détection du fichier | boucle locale sans clé |
 
 Les modèles GJC dotés d'une échelle d'effort de raisonnement prise en charge exportent `reasoning: true`, `thinking.levels` et `compat.supportsReasoningEffort`, afin que GJC propose le choix de l'effort. Les modèles Codex natifs reçoivent leur échelle standard même si le catalogue l'omet. Ces champs sont absents sans échelle connue ; `none` n'envoie pas d'effort et `ultra` devient `max` sur le réseau. Actualisez l'intégration pour mettre à jour ces options.

@@ -79,6 +79,7 @@ Usage:
   ocx alias <sub>             Short names for providers and models (list, set, rm, defaults)
   ocx combo <sub>             Combo routing strategies and failover
   ocx agent <sub>             Subagents, injection, effort caps, and sidecars
+  ocx message <sub>           Loaded local Codex sessions and queued peer messages (sessions|send)
   ocx effort [sub]            Inspect and configure reasoning effort caps and defaults
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx inspect <sub>           Effective config, catalog, analytics, pacing, client-config
@@ -91,7 +92,7 @@ Usage:
   ocx api-key <sub>           Alias of ocx access key
   ocx access <sub>            External API keys and endpoint information
   ocx api <sub>               Protocol paths: vocabulary, request-path preview, and policy
-  ocx export --client <id>    Print a client config wired to the running proxy (17 clients)
+  ocx export --client <id>    Print a client config wired to the running proxy (18 clients)
   ocx integration client <sub> Enable, disable, inspect or roll back a client integration
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
@@ -105,6 +106,8 @@ Usage:
   ocx mcode [args...]         Launch MiniMax Code through its managed provider
   ocx mmx text <sub> [args]   Launch MiniMax CLI text through the proxy
   ocx zcode [sub]             Connect ZCode to the proxy (managed provider)
+  ocx commandcode [sub]       Connect Command Code CLI to the proxy (managed provider)
+  ocx cmd [sub]               Alias of ocx commandcode
   ocx help [command]          Show help
   ocx --version | -v          Print version
 

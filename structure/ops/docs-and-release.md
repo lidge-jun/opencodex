@@ -86,7 +86,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 102 total: 84 key-based, 14 OAuth, three local, and one default
+documented split is 103 total: 84 key-based, 15 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
 quickstarts carry the same counts.
 
@@ -229,9 +229,9 @@ the existing repository-scoped open-PR lookup runs; absent or ambiguous matches 
 | `.github/workflows/react-doctor.yml` | `pull_request` (opened, synchronize, reopened, ready_for_review) and `push` to `main`; no path filter | React-focused static review. Findings fail the job; write-scoped outputs stay disabled, a contract pinned by `tests/ci-workflows/ci-workflows.test.ts`. |
 | `.github/workflows/stale-needs-info.yml` | `schedule` only (daily 06:15 UTC); deliberately no manual dispatch | Closes issues left in needs-info past the grace period. Manual dispatch is omitted so a branch-selected run cannot execute that branch's body with issue write scope. |
 
-`pull_request_target`, `issues`, and `schedule` workflows always load from the repository default
-branch, not from `dev`. Landing a change to one of them on `dev` does not change live behavior until
-it is promoted, so those files follow the promotion model rather than ordinary integration.
+`pull_request_target`, `issues`, and `schedule` workflows always load from the repository default branch, not from `dev`. Landing a change to one of them on `dev` does not change live behavior until it is promoted, so those files follow the promotion model rather than ordinary integration.
+
+CI setup uses the [Bun runtime and test-runner pins](../runtime.md#bun-runtime-and-test-runner): test jobs (including development-version validation) choose `test-runner`, while release packaging, desktop/widget compilation and runtime smokes keep the default `runtime` role. Local layout verification resolves that test pin, and `gui/package.json` runs `scripts/test-with-pinned-bun.ts` to preserve its working directory, configuration and arguments on the same pin. The wrapper forwards SIGINT, SIGTERM and SIGHUP, waits for child exit and preserves interruption status (130, 143 or 129).
 
 `scripts/test.ts` owns `SERIAL_FULL_SUITE_FILES`, the shared process-isolation roster. Local
 full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files
@@ -338,7 +338,7 @@ so the management route stays the single domain schema.
 
 The source runs on Bun, but the published package does **not** require a user-installed Bun.
 `package.json` `bin` points at `bin/ocx.mjs` (a Node shim), and the Bun runtime ships as the `bun`
-npm dependency (esbuild-style: a tiny main package plus platform-specific `@oven/bun-*`
+npm dependency pinned to `1.4.2` (esbuild-style: a tiny main package plus platform-specific `@oven/bun-*`
 `optionalDependencies`, finalized by the dependency's own `postinstall: node install.js`).
 
 Invariants:
@@ -401,7 +401,7 @@ respawn runs the replaced files at the same path, and refuses while that version
 Package release is npm-focused. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
 typecheck and GUI build. `scripts/release.ts` accepts either an explicit version or
 `--bump patch|minor|major`; the stable and preview channels use separate resolvers in
-`scripts/version-line.ts`. It runs local typecheck, `bun test --isolate tests`, and
+`scripts/version-line.ts`. It runs local typecheck, tests on the pin selected by `scripts/lib/test-runner-bun.ts`, and
 `bun run privacy:scan` before the version bump, commit/push, Cross-platform CI wait, and GitHub
 Release workflow dispatch. Docs publishing is separate from npm release publishing.
 

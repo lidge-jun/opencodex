@@ -32,7 +32,7 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { estimateTokens } from "../lib/token-estimate";
-import { captureRouteStaticPolicy, NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
+import { AnthropicSecondaryInstanceUnavailableError, captureRouteStaticPolicy, NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import { resolveOpenCodeGoTransport } from "../providers/opencode-go-transport";
@@ -242,6 +242,11 @@ async function handleChatCompletionsWithBudget(
       }
     }
   } catch (err) {
+    if (err instanceof AnthropicSecondaryInstanceUnavailableError) {
+      logCtx.requestedModel = requestedModel;
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 401, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(401, err.message, "authentication_error");
+    }
     if (err instanceof AdmissionModelDeniedError) {
       logCtx.requestedModel = requestedModel;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });

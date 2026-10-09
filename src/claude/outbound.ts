@@ -70,8 +70,67 @@ export function anthropicErrorType(status: number): string {
   }
 }
 
+/**
+ * Claude Code compacts reactively only when an oversized-prompt refusal is worded the way the
+ * Anthropic API words it: it looks for `prompt is too long` (or `input is too long for requested
+ * model`) in the message and reads `prompt is too long: <actual> tokens > <limit> maximum` for the
+ * gap (2.1.288 binary). Routed providers word the same refusal differently, so a
+ * context_length_exceeded envelope is rewritten into that form. Counts are carried over only when
+ * the upstream states both of them; otherwise the original text is prefixed and no number is
+ * guessed. Without this the client ends the turn on a fatal error instead of compacting
+ * (devlog/_plan/261009_claude_1m_default/010).
+ */
+const CLAUDE_PROMPT_TOO_LONG_RE = /prompt is too long|input is too long for requested model/i;
+const STATED_CONTEXT_COUNTS_RE = /maximum context length is (\d+) tokens[\s\S]*?(?:resulted in|you requested) (\d+) tokens/i;
+
+export function claudePromptTooLongMessage(message: string): string {
+  if (CLAUDE_PROMPT_TOO_LONG_RE.test(message)) return message;
+  const counts = STATED_CONTEXT_COUNTS_RE.exec(message);
+  if (counts) return `prompt is too long: ${counts[2]} tokens > ${counts[1]} maximum`;
+  return `prompt is too long: ${message}`;
+}
+
+/** Provider wordings of an oversized-input refusal, for lanes that relay a provider's own error text. */
+const CONTEXT_OVERFLOW_TEXT_RE = /prompt is too long|input is too long|context window|context length|maximum context|too many tokens|model token limit/i;
+
+export function isContextOverflowText(message: string): boolean {
+  return CONTEXT_OVERFLOW_TEXT_RE.test(message);
+}
+
+/**
+ * SSE payload rewrite for the native Messages lane: an `error` event that refuses an oversized
+ * input gets the Anthropic wording; every other payload passes through byte-identical. The type
+ * gate keeps a rate limit that happens to mention the context window untouched.
+ */
+export function claudeOverflowSsePayload(payload: string): string {
+  if (!payload.includes("\"error\"")) return payload;
+  let parsed: unknown;
+  try { parsed = JSON.parse(payload); } catch { return payload; }
+  if (!isRec(parsed) || parsed.type !== "error" || !isRec(parsed.error)) return payload;
+  const error = parsed.error;
+  const message = typeof error.message === "string" ? error.message : "";
+  const sized = error.type === "invalid_request_error" || error.type === "request_too_large";
+  if (!sized || isThroughputLimitText(message)) return payload;
+  if (!(error.code === "context_length_exceeded" || isContextOverflowText(message))) return payload;
+  const next = claudePromptTooLongMessage(message);
+  return next === message ? payload : JSON.stringify({ ...parsed, error: { ...error, message: next } });
+}
+
+/**
+ * A throughput limit that the shared classifier files under context_length_exceeded (its "too many
+ * tokens" match also catches "too many tokens per minute"). Worded as an overflow it would make
+ * Claude Code compact a conversation that only needs to wait, so it keeps its own text.
+ */
+const THROUGHPUT_LIMIT_TEXT_RE = /\bper (?:second|minute|hour|day)\b|\brate limit|\bquota\b|\btpm\b/i;
+
+export function isThroughputLimitText(message: string): boolean {
+  return THROUGHPUT_LIMIT_TEXT_RE.test(message);
+}
+
 export function anthropicErrorBody(status: number, message: string, type?: string, code?: string): Rec {
-  return { type: "error", error: { type: type ?? anthropicErrorType(status), message, ...(code ? { code } : {}) } };
+  const overflow = code === "context_length_exceeded" && !isThroughputLimitText(message);
+  const text = overflow ? claudePromptTooLongMessage(message) : message;
+  return { type: "error", error: { type: type ?? anthropicErrorType(status), message: text, ...(code ? { code } : {}) } };
 }
 
 export function anthropicErrorResponse(status: number, message: string, type?: string, code?: string): Response {

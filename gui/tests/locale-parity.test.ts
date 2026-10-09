@@ -43,6 +43,8 @@ function carriesTranslatableWords(value: string): boolean {
 const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // The Codex sidebar row is the product name, kept in every locale like Claude.
   "nav.codexSet",
+  // The primary Anthropic pool is labelled by the vendor name alone, kept in every locale.
+  "sidecar.poolA",
   // A bare em dash: the "no Reasoning control" marker is a symbol, not copy.
   "integrations.cursor.noControl",
   // API protocol/endpoint names
@@ -169,6 +171,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.tab.kilo",
   "api.clientConfig.clientKilo",
   "api.clientConfig.clientDroid",
+  // Command Code is a product name, identical in every locale.
+  "integrations.tab.commandcode",
+  "api.clientConfig.clientCommandCode",
   "integrations.codex.title",
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",

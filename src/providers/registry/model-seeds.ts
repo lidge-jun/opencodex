@@ -12,8 +12,10 @@ import type { ProviderModelDiscoverySpec } from "./types";
 // 260929 Claude Sonnet 5.5 (`claude-sonnet-5-5`, released 2026-09-28): 1M context / 128K output /
 // adaptive thinking / effort low..max with a high default, same price as Sonnet 5, per the Sonnet 5.5
 // overview, migration guide, effort and pricing pages (platform.claude.com).
-export const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
-export const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5-5": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
+// 261008 Claude Haiku 5.5: 1M / 128K, adaptive thinking, effort low..max (default medium),
+// per platform.claude.com Haiku 5.5 overview, migration guide and pricing page.
+export const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"];
+export const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5-5": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-5-5": 1_000_000, "claude-haiku-4-5": 200_000 };
 // All seeded Claude models support vision: https://platform.claude.com/docs/en/models/overview
 export const ANTHROPIC_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
   ANTHROPIC_MODELS.map(id => [id, ["text", "image"]]),
@@ -40,6 +42,7 @@ export const ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
  * headroom arithmetic wrong.
  */
 export const ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
+  "claude-haiku-5-5": 128_000,
   "claude-fable-5-1": 128_000,
   "claude-fable-5": 128_000,
   "claude-sonnet-5-5": 128_000,
@@ -70,8 +73,8 @@ export const ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
  * do what it says:
  * - `minimal`: `adaptiveEffort` rewrites it to `low` (the adaptive wire 400s on it), so
  *   it is not a distinct setting.
- * - `none`: only sonnet >= 5 accepts an explicit thinking disable
- *   (`EXPLICIT_THINKING_DISABLE_FAMILY_MINIMUMS`); Fable rejects one outright.
+ * - `none`: thinking-off support differs by family (`anthropic-model-contract.ts`);
+ *   Haiku 5.5 accepts it without effort, while Fable rejects one outright.
  * - `ultra`: not an Anthropic concept, and it is degraded to `max` at the request
  *   boundary anyway (src/responses/parser.ts).
  */

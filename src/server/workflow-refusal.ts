@@ -1,3 +1,4 @@
+import { sharedPoolContinuityDenial } from "../lib/spend-reservation-ledger";
 /**
  * The one place that knows how this proxy refuses a turn on its own workflow budget.
  *
@@ -96,6 +97,22 @@ export function workflowRefusalResponse(
   return refusal;
 }
 
+/** Render the approved conservative-overlay explanation after a dispatch reservation refuses. */
+export function unboundPoolSpendRefusalMessage(
+  logCtx: Pick<RequestLogContext, "spendRefusalDetail">,
+): string | undefined {
+  const detail = logCtx.spendRefusalDetail;
+  if (!detail?.includesUnboundPoolHistory) return undefined;
+  return workflowDenialSummary("workflow-spend-exhausted", detail).message;
+}
+
+/** HTTP form for pre-commit send-budget catches; the tracker already recorded the event. */
+export function unboundPoolSpendRefusalResponse(logCtx: RequestLogContext): Response | undefined {
+  const detail = logCtx.spendRefusalDetail;
+  if (!detail?.includesUnboundPoolHistory) return undefined;
+  return workflowRefusalResponse("workflow-spend-exhausted", logCtx, undefined, undefined, detail);
+}
+
 /**
  * Admit one HTTP turn against its root workflow budget.
  *
@@ -104,8 +121,20 @@ export function workflowRefusalResponse(
  * children. A request that names a parent is treated as that fan-out; a top-level request is
  * the conversation and may use the reserved slots.
  */
+/** Read-only alias validation: keep replay corruption distinct from conflicting pool owners. */
+export function poolContinuityRefusalReason(): WorkflowDenial | undefined {
+  const denial = sharedPoolContinuityDenial();
+  if (!denial) return undefined;
+  return denial.reason === "pool-history-unresolved" ? "workflow-pool-history-unresolved" : "workflow-spend-undurable";
+}
+
 export function admitHttpWorkflowTurn(headers: Headers): WorkflowDecision | undefined {
   const rootId = headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+  const continuityRefusal = poolContinuityRefusalReason();
+  if (continuityRefusal) {
+    recordWorkflowRefusalEvent(rootId, continuityRefusal);
+    return { admitted: false, reason: continuityRefusal, rootId: rootId ?? "" };
+  }
   const threadId = headers.get("thread-id")?.trim() || undefined;
   const lane: WorkflowLane = rootId !== undefined && threadId !== undefined && threadId !== rootId
     ? "worker"
@@ -132,6 +161,7 @@ export function workflowDecisionRefusalResponse(
       scope: decision.spendScope,
       limit: decision.spendLimit,
       ...(decision.spendProjected !== undefined ? { projected: decision.spendProjected } : {}),
+      ...(decision.spendIncludesUnboundPoolHistory ? { includesUnboundPoolHistory: true } : {}),
     }
     : undefined;
   return workflowRefusalResponse(decision.reason, logCtx, refusalLog, undefined, spend);

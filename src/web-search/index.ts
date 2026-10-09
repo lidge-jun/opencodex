@@ -6,7 +6,7 @@ import type { CodexAuthPolicyConfig } from "../codex/auth-context";
 import { isCodexReserveRequestEligible } from "../codex/loopback-target";
 import type { DataPlaneAdmission } from "../server/auth-cors";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
-import { resolveSidecarAuth } from "../sidecar/auth";
+import { resolveSidecarAuth, resolveAnthropicHelperInstance, withAnthropicHelperRefusal } from "../sidecar/auth";
 import { validateXaiSearchOptions, type XaiSearchOptions } from "./xai-executor";
 import type { OcxWebSearchSidecarConfig } from "../types";
 import { DEFAULT_STALL_TIMEOUT_SEC } from "../stall-timeout";
@@ -168,11 +168,15 @@ export function planWebSearch(
   const connectTimeoutMs = config.connectTimeoutMs ?? 200_000;
   // Shared auth state (#2188): presence only — backend PREFERENCE stays with
   // resolveSidecarBackend's explicit-or-openai contract.
-  const auth = resolveSidecarAuth(config);
+  const backend = resolveSidecarBackend(cfg.backend);
+  // Only the anthropic backend can be refused; an unavailable selected pool means no plan, so the
+  // main request takes the normal path instead of failing or borrowing another pool.
+  const auth = withAnthropicHelperRefusal("web-search", () => resolveSidecarAuth(config, resolveAnthropicHelperInstance(config,
+    { backendFamily: backend, anthropicInstance: cfg.anthropicInstance, parentProviderName: options.providerName })));
+  if (!auth) return undefined;
   const anthropicSidecar = auth.isAnthropicAuth && auth.anthropicProviderName && auth.anthropicProvider
     ? { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config }
     : undefined;
-  const backend = resolveSidecarBackend(cfg.backend);
   const maxSearches = cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES;
   const stallTimeoutSec = webSearchStallTimeoutSec(
     config.stallTimeoutSec,

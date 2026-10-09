@@ -78,6 +78,15 @@ describe("a spent send budget is reported as this proxy's refusal", () => {
     }
   });
 
+  test("reservation denials preserve unbound-history detail on HTTP and SSE response paths", () => {
+    const adapter = source("src/server/responses/adapter-dispatch.ts");
+    const passthrough = source("src/server/responses/passthrough-dispatch.ts");
+    const runTurn = source("src/server/responses/run-turn-execution.ts");
+    expect(adapter.match(/unboundPoolSpendRefusalResponse\(logCtx\)/g)).toHaveLength(2);
+    expect(passthrough).toContain("unboundPoolSpendRefusalResponse(logCtx)");
+    expect(runTurn).toContain("unboundPoolSpendRefusalMessage(logCtx) ?? err.message");
+  });
+
   test("a local 429 never rotates a credential or writes a cooldown", () => {
     const runTurn = source("src/server/responses/run-turn-execution.ts");
     const rotate = runTurn.indexOf("const rotateRunTurnAdapterOnPreflight429");

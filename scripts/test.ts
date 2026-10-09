@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { getTestRunnerBun } from "./lib/test-runner-bun";
 import {
   acquireTestRunLock,
   resolveWrappedTestRunLockPath,
@@ -552,6 +553,7 @@ export async function runTestLane(
     stdout: (value: string) => { process.stdout.write(value); },
     stderr: (value: string) => { process.stderr.write(value); },
   },
+  testRunner = getTestRunnerBun(),
 ): Promise<{ exitCode: number; output: string }> {
   const isolated = createIsolatedTestEnvironment({
     ...process.env,
@@ -565,7 +567,7 @@ export async function runTestLane(
   });
   const startedAt = Date.now();
   let interrupted: NodeJS.Signals | null = null;
-  const child = Bun.spawn([process.execPath, "test", ...lane.args], {
+  const child = Bun.spawn([testRunner, "test", ...lane.args], {
     env: isolated.env,
     stdin: "inherit",
     stdout: capture ? "pipe" : "inherit",
@@ -663,6 +665,11 @@ export function ensureGuiDependencies(io: {
 }
 
 if (import.meta.main) {
+  let testRunner: string;
+  try { testRunner = getTestRunnerBun(); } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   const requestedTests = process.argv.slice(2);
   const guiDependencies = ensureGuiDependencies();
   if (guiDependencies.kind === "failed") {
@@ -708,7 +715,7 @@ if (import.meta.main) {
       let exitCode = 0;
       let captured = "";
       for (const lane of resolveBunTestPlan(requestedTests, changedRun?.comparisonCommit)) {
-        const result = await runTestLane(lane, runId, inheritedLock, Boolean(changedRun));
+        const result = await runTestLane(lane, runId, inheritedLock, Boolean(changedRun), undefined, testRunner);
         captured += result.output;
         if (result.exitCode !== 0 && exitCode === 0) exitCode = result.exitCode;
         if ([124, 130, 143].includes(result.exitCode)) break;

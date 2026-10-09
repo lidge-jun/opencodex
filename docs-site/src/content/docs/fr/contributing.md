@@ -6,7 +6,7 @@ description: Développez opencodex — installation, structure, conventions et a
 ## Configuration
 
 Le développement depuis les sources exige la CLI `bun` dans votre `PATH`. Le paquet npm publié fournit son propre
-runtime Bun aux utilisateurs, mais les scripts de ce dépôt utilisent votre installation locale de Bun.
+runtime Bun aux utilisateurs ; les scripts du paquet peuvent résoudre Bun via cette dépendance incluse.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

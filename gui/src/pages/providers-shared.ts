@@ -50,6 +50,7 @@ export interface OAuthAccount {
 const OAUTH_LABELS: Record<string, string> = {
   xai: "xAI (Grok)",
   anthropic: "Anthropic (Claude)",
+  anthropic2: "Anthropic · Pool 2",
   kimi: "Kimi (Moonshot)",
   "meta-muse": "Meta Muse Code (CLI)",
   "google-antigravity": "Google Antigravity",

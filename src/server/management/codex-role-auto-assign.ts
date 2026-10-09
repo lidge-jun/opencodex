@@ -58,6 +58,10 @@ async function modelCandidates(slugs: readonly string[], models: readonly Catalo
   ]);
   const nativeSlugs = catalog.listCatalogNativeSlugs();
   const routed = new Map(models.map(model => [catalog.catalogModelSlug(model), model]));
+  // A routed model that declares no levels still gets the ladder Codex shows for it, the same one
+  // the Models page lists, so its proposal carries an effort instead of none. An explicit empty
+  // ladder means the model takes no effort control, and the written catalog lists none for it.
+  const written = catalog.catalogModelLadders(slugs);
   const unitPrice = (provider: string, modelId: string): number | null => {
     const cost = resolveMatchedPrice(provider, modelId)?.cost4;
     return cost ? cost.input + cost.output : null;
@@ -65,11 +69,18 @@ async function modelCandidates(slugs: readonly string[], models: readonly Catalo
   return slugs.map(slug => {
     const row = routed.get(slug);
     if (row) {
+      const ladder = written.get(slug);
+      const efforts = Array.isArray(row.reasoningEfforts) ? row.reasoningEfforts : ladder?.efforts ?? [];
+      // A row without its own default keeps the one Codex shows, when that rung is on the ladder.
+      const shownDefault = ladder?.defaultEffort !== undefined && efforts.includes(ladder.defaultEffort)
+        ? ladder.defaultEffort
+        : undefined;
+      const defaultEffort = row.defaultReasoningEffort ?? shownDefault;
       return {
         model: slug,
         unitPrice: unitPrice(row.provider, row.id),
-        efforts: row.reasoningEfforts ?? [],
-        ...(row.defaultReasoningEffort ? { defaultEffort: row.defaultReasoningEffort } : {}),
+        efforts,
+        ...(defaultEffort ? { defaultEffort } : {}),
       };
     }
     if (nativeSlugs.includes(slug)) {

@@ -1,6 +1,6 @@
 # Model Catalog
 
-Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Pool 2 discovery uses the [instance credential ownership contract](providers/anthropic-account-pool.md#discovery-credential-ownership).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation supplies no selected-runtime proof to catalog discovery or publication. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
@@ -47,7 +47,7 @@ provider-wide fallback. Exact model output limits precede the provider default o
 
 - preserves native OpenAI entries from the live catalog or static fallback, and emits
   gpt-5.6 natives from the pinned upstream models.json snapshot
-  (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra);
+  (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra); When native OpenAI rows are included and the final catalog has an ordinary bare native row other than Reserve (hidden rows count), `src/codex/catalog/control-plane.ts` separately preserves exactly one hidden `codex-auto-review` row or backfills its pinned metadata, including Low and the exact upstream ladder. It receives the ordinary native multi-agent projection but bypasses native synthesis, account cloning, picker/featured ordering, reasoning-ladder clamps and reviewer override stamps; Reserve-only/native-less catalogs omit it, and the final effort clamp removes persisted orphan reviewers; public lists and subagent rosters exclude it. The dependency-free `src/codex/control-plane-models.ts` shares the exact id set with the router without expanding visible native replacement authority;
 - reads pinned native rows only through `pinnedNativeModelRows()`
   (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
   `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds

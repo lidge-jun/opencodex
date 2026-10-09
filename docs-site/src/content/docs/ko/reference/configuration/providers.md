@@ -230,6 +230,65 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 Anthropic 계정 정책 위험을 이해하지 못한다면 이 기능은 꺼두십시오. 확신이 없으면 수동 `ocx account use anthropic <id>` 전환을 우선하십시오.
 :::
 
+### Anthropic · Pool 2 (`anthropic2`)
+
+`anthropic2`("Anthropic · Pool 2")는 자체 계정 풀을 가진 두 번째 내장 Anthropic OAuth 공급자입니다. `anthropic`과 같은 Anthropic 구현, 즉 같은 로그인 흐름, 와이어 형식, 네이티브 Messages와 Responses 브리지, 모델 메타데이터를 사용하며, 계정과 그 계정을 묶는 풀만 분리됩니다. 풀은 모델 접두사로 고릅니다. `anthropic/claude-sonnet-5`는 기본 풀을, `anthropic2/claude-sonnet-5`는 Pool 2를 사용합니다.
+
+Pool 2는 추가하기 전까지 비활성 상태입니다. `ocx login anthropic2`로 로그인하거나 대시보드 공급자 페이지에서 **Anthropic · 풀 2**를 추가하십시오. 첫 로그인이 성공하면 `"anthropicOAuthInstance": "anthropic2"` 표식이 붙은 `providers.anthropic2`가 만들어집니다. Pool 2는 기본 공급자가 되지 않습니다. 접두사 없는 `claude-*` 모델 이름, 기본 모델, Claude Code 호출자 전달은 계속 `anthropic`으로 해석됩니다. 예전에 직접 만든, 표식 없는 `anthropic2` 항목은 사용자 정의 의미를 유지하며, 로그인은 이름 충돌을 거부하고 그 항목과 자격 증명을 다시 쓰지 않습니다.
+
+Pool 2는 풀 설정을 자체 공급자 항목에서 읽습니다. 키, 기본값, 동작은 위의 최상위 `anthropicAccountPool`과 같고, 기본 풀에서 아무것도 상속하지 않습니다. `providers.anthropic.anthropicAccountPool`이나 다른 공급자에 둔 같은 필드는 거부됩니다.
+
+```json
+{
+  "anthropicAccountPool": { "enabled": true, "strategy": "quota" },
+  "providers": {
+    "anthropic2": {
+      "adapter": "anthropic",
+      "authMode": "oauth",
+      "baseUrl": "https://api.anthropic.com",
+      "anthropicOAuthInstance": "anthropic2",
+      "anthropicAccountPool": { "enabled": true, "strategy": "round-robin" }
+    }
+  }
+}
+```
+
+두 풀은 opencodex 안에서 분리됩니다.
+
+- **자격 증명:** Pool 2 계정은 보호된 자격 증명 저장소의 별도 키 `anthropic2` 아래에 저장됩니다. 토큰이나 검증된 Anthropic 계정이 이미 다른 풀에 저장된 로그인은 거부됩니다.
+- **풀 설정과 실행 상태:** 선택, 세션 결속, 쿨다운, 일시 중지, 모델 경로, 계정별 임계값은 한 풀에 속합니다. 경로의 `fallback: true`도 같은 풀 안에서만 넓어집니다.
+- **할당량과 사용량:** 사용량 조회, 할당량 캐시, 사용량 귀속은 풀별로 기록되므로, 두 풀에 같은 계정 ID가 있어도 기록은 따로 남습니다.
+- **리셋 부여:** Pool 2는 그대로 유지되는 기본 풀 저널 옆에 자체 저널(`anthropic2-reset-grant-ledger.json`)을 둡니다.
+- **복구:** `anthropic2/<model>` 직접 요청은 기본 풀로 넘어가지 않으며, Pool 2의 속도 제한이나 거부가 기본 풀 계정을 쿨다운시키지 않습니다. 두 풀을 모두 지정한 명시적 콤보는 선언한 대상을 그대로 유지합니다.
+
+이 분리는 opencodex 내부의 라우팅 경계입니다. Anthropic이 계정을 다루는 방식이나 위에서 설명한 계정 정책 위험은 바뀌지 않습니다.
+
+Pool 2 계정은 브라우저 OAuth로만 추가합니다. `anthropic`과 달리 Pool 2는 Claude Code CLI 토큰을 가져오거나, 채택하거나, 다시 쓰지 않으며, 이 차이는 의도된 것입니다. Pool 2는 빈 상태로 시작하고, 쓸 수 있는 Pool 2 계정이 없는 Pool 2 요청은 기본 풀이나 Claude Code 자격 증명을 빌리지 않고 인증 오류로 실패합니다.
+
+계정 명령과 관리 API는 풀을 이름으로 지정합니다: `ocx account pool anthropic2 …`, `ocx account auto-switch anthropic2 …`, `ocx account routes anthropic2 …`, `ocx account anthropic-reset-grants --provider anthropic2`. 풀 설정과 리셋 부여 엔드포인트는 `provider: "anthropic2"`를 받으며, 생략하면 기본 풀을 그대로 사용합니다.
+
+#### 보조 기능의 풀 선택 (`anthropicInstance`)
+
+웹 검색과 비전 보조 기능은 전역 `webSearchSidecar`, `visionSidecar` 설정과 Claude Code 재정의 `claudeCode.webSearchSidecar`, `claudeCode.visionSidecar`에서 선택적 `anthropicInstance`를 받습니다. 보조 기능의 백엔드가 Anthropic이면 대시보드에 **계정 풀** 선택 항목으로 나타납니다.
+
+| 값 | 동작 |
+| --- | --- |
+| 설정 안 함(기본값) | 현재 요청의 풀을 따릅니다. `anthropic2/<model>` 요청은 Pool 2를, `anthropic/<model>` 요청은 기본 풀을 사용합니다. 다른 공급자의 요청은 기존 보조 기능 탐색을 그대로 쓰며, 이 탐색은 Pool 2를 고르지 않습니다. |
+| `"anthropic"` | 항상 기본 풀을 사용합니다. |
+| `"anthropic2"` | 항상 Pool 2를 사용합니다. |
+
+이 필드는 보조 기능의 백엔드가 Anthropic으로 결정될 때만 적용됩니다. 다른 백엔드와 함께 설정하면 검증 오류입니다. 웹 검색의 기본 백엔드는 OpenAI이므로 `"backend": "anthropic"`도 함께 설정하십시오. `anthropic/claude-sonnet-5`에 `"anthropicInstance": "anthropic2"`를 지정하는 것처럼 다른 풀로 한정된 보조 모델도 거부됩니다. 고른 풀에 쓸 수 있는 계정이 없으면 보조 기능은 아무것도 보내기 전에 실패하며, 다른 풀로 바꾸지 않습니다. 이때 본 요청은 그 보조 기능 없이 그대로 진행됩니다. 설정하지 않은 선택은 `"anthropic"`이 아니라 값 없음으로 저장됩니다.
+
+```json
+{
+  "webSearchSidecar": { "backend": "anthropic", "anthropicInstance": "anthropic2" }
+}
+```
+
+:::caution[다운그레이드]
+Pool 2가 없는 버전은 `anthropic2` 항목을 이해하지 못합니다. 이전 버전을 설치하기 전에 프록시를 멈추고, `config.json`과 `auth.json`을 백업한 뒤, `config.json`에서 `providers.anthropic2`를 제거하십시오. Pool 2는 기본 풀 자격 증명을 옮기거나 다시 쓰지 않습니다. Pool 2가 활성 상태인 채로 제자리 다운그레이드하는 것은 지원하지 않습니다.
+:::
+
 ### 관리되는 레코드 구조
 
 `apiKeys[]` 항목에는 `id`, `name`, 생성된 `key`, ISO 형식 `createdAt` 문자열이 들어갑니다. `codexAccounts[]` 항목에는 `id`, `email`, `isMain`이 필요하고, 선택적으로 `plan`, `chatgptAccountId`, 개인정보를 해치지 않는 `logLabel`을 둘 수 있습니다. 이런 레코드는 보통 대시보드가 관리합니다.

@@ -1176,10 +1176,10 @@ describe("provider registry parity", () => {
   test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    // Registry order. Both OAuth entries (anthropic, google-antigravity) are gated by
+    // Registry order. OAuth entries, including both Anthropic instances, are gated by
     // providerSecureTransportConfigError; the rest are key/local providers that never send a
     // subscription bearer to the override.
-    expect(optedIn.map(entry => entry.id)).toEqual(["orcarouter-oauth", "anthropic", "google-antigravity", "ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["orcarouter-oauth", "anthropic", "anthropic2", "google-antigravity", "ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }
@@ -1408,7 +1408,7 @@ describe("provider registry parity", () => {
   test("GUI preset projection preserves current featured set plus key catalog and custom", () => {
     const featured = deriveFeaturedProviderIds();
     expect(featured).toEqual([
-      "openai", "xai", "command-code", "orcarouter-oauth", "anthropic", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
+      "openai", "xai", "command-code", "orcarouter-oauth", "anthropic", "anthropic2", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio", "opencode-free",
       "mimo-free",
     ]);
@@ -1475,6 +1475,7 @@ describe("provider registry parity", () => {
     expect(deriveJawcodeAliases()).toEqual({
       xai: "xai",
       anthropic: "anthropic",
+      anthropic2: "anthropic",
       "anthropic-apikey": "anthropic",
       "anthropic-key": "anthropic",
       kimi: "moonshot",

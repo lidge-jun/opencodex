@@ -646,12 +646,15 @@ window breaks that model — the chat errors out before the summary can fire.
 
 A model's advertised context window does not guarantee that a tool-heavy request fits the
 upstream input limit. A classified input-limit rejection reaches Claude Code as
-`invalid_request_error` with `context_length_exceeded`; a non-streaming response uses HTTP 400
-instead of a retryable 502. Reduce the current input or compact earlier. If `/compact` also
-exceeds the limit, preserve the original history and try compacting a fork with fewer enabled
-tool or MCP schemas, if your client supports that workflow. Recovery still depends on the
-reduced request fitting the upstream limit. A `[1m]` marker or larger client accounting setting
-does not raise that limit, and OpenCodex does not silently remove history or tools to make it fit.
+`invalid_request_error` with `context_length_exceeded`, worded the way Anthropic words it
+(`prompt is too long: …`, with token counts when the provider states them), so Claude Code
+compacts the conversation and retries on its own; a non-streaming response uses HTTP 400 instead
+of a retryable 502. Providers on the native Messages lane get the same wording. A throughput
+limit that only mentions tokens (for example "too many tokens per minute") keeps its text and is
+not treated as an overflow. If compaction itself still exceeds the limit, preserve the original
+history and try compacting a fork with fewer enabled tool or MCP schemas, if your client supports
+that workflow. A `[1m]` marker or larger client accounting setting does not raise the upstream
+limit, and OpenCodex does not silently remove history or tools to make it fit.
 
 Sub-1M native Anthropic models are never auto-marked. Values you export yourself always win (the
 proxy uses YOUR value to decide which models are safe to mark). Invalid hand-edited config values
@@ -1016,7 +1019,7 @@ and `"force"`. A value you export yourself always wins over the injected one.
 directives, not the Agent tool's `model` argument. Make sure the directive matches the intended
 route. Pass `"haiku"` as the model placeholder.
 
-Set `claudeCode.stabilizePromptCache` to `true` in `config.json` to relocate supported trailing Claude harness notices from system instructions to a trailing user message on translated routes. The default is `false`. Enable it only when this role change is appropriate for your clients. It preserves fenced examples and unmatched text; native Anthropic passthrough is unchanged. The metadata-less prompt-cache key then follows stabilized instructions. This does not create conversation identity or guarantee upstream cache hits.
+Set `claudeCode.stabilizePromptCache` to `true` in `config.json` to peel supported trailing Claude harness notices from system instructions on translated routes. Recognized `<total_tokens>N tokens left</total_tokens>` footers are dropped, including repeated footers. TaskCreate reminders still move to a trailing user message; if only token footers were peeled, no input message is added. The default is `false`. Enable it only when this role change is appropriate for your clients. It preserves fenced examples and unmatched text; native Anthropic passthrough is unchanged. The metadata-less prompt-cache key then follows stabilized instructions. This does not create conversation identity or guarantee upstream cache hits.
 
 On every translated Chat route, timeline reminders keep their position in the
 conversation, after any pending tool results. This prevents a newly appended

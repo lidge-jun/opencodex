@@ -1,9 +1,9 @@
 ---
 title: 集成
-description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo 和 Factory Droid；每个客户端都有独立开关，且每次写入前都会备份。
+description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo、Command Code 和 Factory Droid；每个客户端都有独立开关，且每次写入前都会备份。
 ---
 
-**连接** 标签页可将 opencodex 的提供商配置块写入客户端自己的配置文件，也可再次移除。以下 17 个客户端都采用这种方式，各有独立开关：
+**连接** 标签页可将 opencodex 的提供商配置块写入客户端自己的配置文件，也可再次移除。以下 18 个客户端都采用这种方式，各有独立开关：
 
 | 客户端 | 配置文件 | 格式 | 变更生效时间 | 凭据 |
 |---|---|---|---|---|
@@ -23,6 +23,7 @@ description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、
 | omo | `~/.omo/agent/models.json` | JSON | 新会话 | 回环占位符 |
 | Cline CLI | `~/.cline/data/settings/providers.json` 及同目录下的 `models.json` | JSON 文件对 | 停止并重启 Cline 后 | 回环占位符 |
 | Kilo | `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json`（`XDG_CONFIG_HOME` 可迁移目录；均不存在时创建 `kilo.jsonc`） | JSONC | 新会话 | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (Windows 使用默认主目录时：仅当 `HOME ?? USERPROFILE` 的值非空、非纯空白且为 Windows 绝对路径时使用，否则使用 `homedir()`；单独传入的主目录保持不变；文件位于其下的 `.commandcode\providers.json`) | JSON | 下次启动 Command Code 时 | 无 — 无密钥回环 (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows 上) | JSON | 文件变更时立即生效 | 无密钥回环 |
 
 生成的目录只包含各提供商选择中已启用的模型。下载文件和托管集成都遵循这一规则，Pi 和 Aside 也不例外。管理模型列表仍显示完整阵容，以便启用更多模型。

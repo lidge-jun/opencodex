@@ -387,7 +387,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
   });
   const {
-    accountSets, setAccountSets, accountLoadStates, switchingAccount, pausingAccount, keyPools, fetchAccountSets, fetchKeyPools,
+    accountSets, setAccountSets, accountLoadStates, switchingAccounts, pausingAccounts, keyPools, fetchAccountSets, fetchKeyPools,
     refreshAccountRosters, oauthCardProviders, keyCardProviders,
     switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
     removeAccount, activeAccountNeedsReauth,
@@ -669,8 +669,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             accountsFocusProvider={accountsFocus.provider}
             settingsFocusToken={settingsFocus.token}
             settingsFocusProvider={settingsFocus.provider}
-            switchingAccountId={switchingAccount?.provider === item.name ? switchingAccount.accountId : null}
-            pausingAccountId={pausingAccount?.provider === item.name ? pausingAccount.accountId : null}
+            switchingAccountId={switchingAccounts[item.name]?.accountId ?? null}
+            pausingAccountId={pausingAccounts[item.name]?.accountId ?? null}
             busyProvider={busy}
             loginHint={loginInfo}
             authHandlers={authHandlers}

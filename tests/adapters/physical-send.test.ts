@@ -14,14 +14,14 @@ afterEach(() => resetProviderRequestPacingForTest());
  * A credential hop has already reserved the replay it hands to the adapter, so the adapter's
  * first send spends that permit through the dispatch view instead of reserving again.
  */
-function prepaid() {
+function prepaid(refundable = false) {
   const parent = createRequestExecutionBudget();
   parent.used = 3;
   const { owner, dispose } = budgetOwner(parent);
   const hop = owner.reserveCredentialHop("auth-recovery", url, true);
   if (!hop.allowed || !hop.permit) throw new Error("Expected prepaid final send");
   owner.pendingHopPermit = hop.permit;
-  const scope = owner.adapterDispatchBudget;
+  const scope = refundable ? owner.refundableAdapterDispatchBudget : owner.adapterDispatchBudget;
   if (!scope) throw new Error("Expected an adapter dispatch budget");
   return { parent, scope, dispose };
 }
@@ -108,6 +108,30 @@ describe("adapter physical inference admission", () => {
       // the adapter's release has nothing left to refund.
       expect(parent.used).toBe(4);
       expect(parent.reserveSpent).toBe(true);
+      expect(sends).toBe(0);
+    } finally { dispose(); }
+  });
+
+  test.each(["pacing", "backoff", "abort", "adapter"] as const)("an opted-in hop refunds when the %s leg never dispatches", async phase => {
+    const { parent, scope, dispose } = prepaid(true);
+    let sends = 0;
+    const controller = new AbortController();
+    const failure = new Error(`fixture ${phase} refusal`);
+    const executor = Object.assign(async () => { sends += 1; return new Response("unexpected"); }, {
+      waitForPacing: async () => { if (phase === "pacing") throw failure; },
+    }) as typeof fetch;
+    try {
+      const send = createAdapterPhysicalSend({ sendBudget: scope, abortSignal: controller.signal }, executor);
+      await expect(send({ url, beforeDispatch: () => {
+        if (phase === "backoff") throw failure;
+        if (phase === "abort") controller.abort(failure);
+      }, dispatch: physical => {
+        if (phase === "adapter") throw failure;
+        return physical(url);
+      } })).rejects.toBe(failure);
+      // The refundable view leaves the hop open until actual executor invocation.
+      expect(parent.used).toBe(3);
+      expect(parent.reserveSpent).toBe(false);
       expect(sends).toBe(0);
     } finally { dispose(); }
   });

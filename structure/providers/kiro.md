@@ -1,5 +1,7 @@
 # Kiro Provider
 
+Kiro retry permits retain their [physical executor span](../transports/responses-spend.md#historical-pool-continuity-and-rollback) through credential selection and rebuild. A newly selected identity needs its own normal-capacity seed before inference I/O; a refused permit leaves the executor untouched.
+
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)

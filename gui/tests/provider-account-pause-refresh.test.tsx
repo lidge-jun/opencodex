@@ -70,6 +70,40 @@ test("confirmed threshold persists in UI when follow-up read fails; failed write
   expect(notices.some(notice => notice.key === "accountPool.autoSwitchUpdateFailed")).toBe(true);
 });
 
+test("equal account IDs in two pools have independent pending mutation ownership", async () => {
+  const mutations: Array<{ provider: string; accountId: string }> = [];
+  const releases: Array<() => void> = [];
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") {
+      mutations.push(JSON.parse(String(init.body)));
+      await new Promise<void>(resolve => { releases.push(resolve); });
+    }
+    return Response.json({ activeAccountId: "a", accounts: [row("a", true), row("b", false)] });
+  };
+  await act(async () => { await pools.fetchAccountSets(["anthropic", "anthropic2"]); });
+  let primary!: Promise<void>;
+  let secondary!: Promise<void>;
+  try {
+    await act(async () => {
+      secondary = pools.pauseAccount("anthropic2", row("b", false), true);
+      primary = pools.switchAccount("anthropic", row("b", false));
+      await Promise.resolve();
+    });
+    expect(mutations.map(entry => entry.provider).sort()).toEqual(["anthropic", "anthropic2"]);
+    expect(pools.pausingAccounts.anthropic2?.accountId).toBe("b");
+    expect(pools.switchingAccounts.anthropic?.accountId).toBe("b");
+    expect(pools.pausingAccounts.anthropic).toBeUndefined();
+    expect(pools.switchingAccounts.anthropic2).toBeUndefined();
+  } finally {
+    await act(async () => {
+      releases.forEach(release => release());
+      await Promise.all([primary, secondary]);
+    });
+  }
+  expect(pools.pausingAccounts).toEqual({});
+  expect(pools.switchingAccounts).toEqual({});
+});
+
 test("pending threshold owns its roster generation and blocks conflicting pause", async () => {
   let settle!: (response: Response) => void; let writes = 0;
   respond = async (_url, init) => {

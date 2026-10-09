@@ -162,7 +162,7 @@ an owner claim committed during the early probe cannot be followed by shared Cod
 When that lease is still busy after its wait, `acquireOwnershipMutationLease`
 (`src/service/ownership-mutation-lease.mjs`) names the holder in its error and on the error's
 `holder` field. That means the owner's PID, whether it is alive, a live holder's executable name
-when `tasklist`/`ps` answers within a second, and the owner's age on the clock stale recovery
+when POSIX `ps` answers within a second (the shared Node/Bun Windows path omits image lookup), and the owner's age on the clock stale recovery
 uses, plus the 30-second reclaim rule. `ocx service status` prints the same holder line whenever
 the lease directory exists. That read never reclaims.
 The connected-client branch, which returns into `startClientRuntime` before the server path,
@@ -465,6 +465,18 @@ clients do not retry it at all. `server_restarting` falls through to retryable
 `UnexpectedStatus` in either case and never reports a restart as model capacity. This drain-only
 response bypasses the shared provider-overload mapping in `src/lib/errors.ts`.
 `tests/codex-integration/issue-452-empty-503.test.ts` pins its body and both listeners' CORS.
+
+`src/server/management/system-routes.ts` accepts an optional JSON `drainGraceMs` on the authenticated
+restart API: an integer from 1 to 60000, with omission retaining the 60-second default. Invalid
+input starts no drain. `src/server/management/system-restart.ts` fixes the selected grace at first
+acceptance; repeated requests cannot shorten it. The response-flush delay stays 200ms for every
+caller. A grace shorter than 200ms cancels and releases active turns at the accepted deadline via
+a separate timer, cancelled by a pending restart veto. Cleanup, listener stop and process exit
+still wait for the response-flush delay; grace of at least 200ms arms no extra timer. The cleanup
+watchdog stays 60 seconds and replacement readiness stays 70 seconds. Short grace is an explicit
+API opt-in; dashboard, CLI, tray, join and automatic restarts keep their default. An interrupted
+turn may have an unknown upstream outcome and is not automatically replayed.
+`tests/server/system-restart-admission.test.ts` covers this contract and active-turn preservation.
 
 A dashboard drain-and-restart (`src/server/management/system-restart.ts`, which is also the restart
 after a join into a Child) and the client runtime's standalone recycle (`src/client/runtime.ts`)

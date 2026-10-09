@@ -14,6 +14,7 @@ import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginP
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
+import { assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
 
 /**
  * Seams a test drives in place of a browser, a terminal and a real provider. Production passes
@@ -136,6 +137,7 @@ export async function handleLogin(provider?: string, deps: LoginCliDeps = {}): P
 }
 
 export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}): Promise<void> {
+  if (name === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), name);
   const login = deps.runLogin ?? runLogin;
   const launch = deps.openUrl ?? openUrl;
   const browser = createBrowserLaunchReport(deps.warn);

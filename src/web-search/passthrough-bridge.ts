@@ -76,6 +76,7 @@ import {
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
 import { rememberBridgeSearchReplay } from "../responses/bridge-search-replay-cache";
+import { withAnthropicHelperRefusal } from "../sidecar/auth";
 
 /** Canonical Ollama Cloud origin. The only origin the "ollama" backend derives on its own. */
 export const OLLAMA_CLOUD_ORIGIN = "https://ollama.com";
@@ -246,12 +247,14 @@ export function resolvePassthroughWebSearchBridgeAuth(
   backend: ProviderWebSearchBridgeBackend | undefined,
   config: OcxConfig,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
+  parentProviderName?: string,
 ): PassthroughWebSearchBridgeAuth {
   switch (backend) {
     case "openai":
       return openAiSidecar ? { openAiSidecar } : {};
     case "anthropic": {
-      const anthropic = findAnthropicSidecarProvider(config);
+      // An unavailable selected pool leaves the bridge disarmed; it never fails the passthrough turn.
+      const anthropic = withAnthropicHelperRefusal("web-search", () => findAnthropicSidecarProvider(config, parentProviderName));
       return anthropic ? { anthropic } : {};
     }
     case "xai": {

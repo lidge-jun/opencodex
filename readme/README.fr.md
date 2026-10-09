@@ -325,7 +325,7 @@ OpenCodex suit l'état conservé par le processus dans les catégories ci-dessou
   rejeu des contrôles natifs, épinglé et jamais évincé.
 - **4 tampons observés** (accumulateurs de traduction, segments finaux d'images/OAuth/Grok) sont
   surveillés pour détecter la pression des octets en cours de traitement, sans éviction.
-- **28 enregistrements de stockages d'état** gèrent les balayages d'expiration (intervalle de 60 s) et la
+- **31 enregistrements de stockages d'état** gèrent les balayages d'expiration (intervalle de 60 s) et la
   réconciliation des générations de configuration afin de supprimer les clés obsolètes des fournisseurs et des comptes.
 - **Les mémos de chemins et d'empreintes** (métadonnées de l'espace de travail, identités renforcées, sels
   d'installation, capacités indiquées par le mode) utilisent des limites LRU selon l'ordre d'insertion (8 à 128 entrées).
@@ -465,9 +465,9 @@ le trier, et aucun délai de première réponse n'est promis.
 
 ## Développement
 
-Le développement depuis les sources nécessite la CLI `bun` dans votre `PATH`. Elle est distincte de
-l'environnement d'exécution Bun inclus dans le paquet npm publié, lequel est uniquement utilisé par les
-commandes `ocx` installées.
+Le développement depuis les sources nécessite la CLI `bun` dans votre `PATH`. Le paquet npm publié inclut
+son propre environnement d'exécution Bun pour les commandes `ocx` installées ; les scripts du paquet peuvent
+également résoudre Bun via cette dépendance incluse.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

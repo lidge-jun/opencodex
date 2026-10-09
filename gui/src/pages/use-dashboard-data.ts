@@ -48,6 +48,7 @@ import {
   defaultUpdateChannel,
   hashRequestsUpdateDialog,
   mergeSidecarSetting,
+  sidecarPatchForSave,
   nextSidecarCodexApply,
   readDashboardSectionFromHash,
   requireJson,
@@ -561,6 +562,7 @@ const [maBusy, setMaBusy] = useState(false);
 
   const saveSidecar = async (patch: SidecarPatch) => {
     if (!sidecar || sidecarSaving) return;
+    patch = sidecarPatchForSave(sidecar, patch);
     const previous = sidecar;
     const next = {
       webSearch: mergeSidecarSetting(sidecar.webSearch, patch.webSearch),

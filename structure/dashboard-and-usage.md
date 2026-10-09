@@ -123,7 +123,7 @@ The sidebar exposes eight rows (`gui/src/nav-groups.ts` `NAV_GROUPS`), in order:
 | Surface | Shape |
 | --- | --- |
 | Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). |
-| API keys | Key table plus per-key detail (`gui/src/components/apikeys-workspace/`). The list payload carries masked prefixes only; each row deletes in place behind a two-step confirm, and clicking a key fetches the full value from `POST /api/keys/reveal`, which refuses every principal but a dashboard session and answers `no-store`. |
+| API keys | Key table plus per-key detail (`gui/src/components/apikeys-workspace/`). The list payload carries masked prefixes only; each row deletes in place behind a two-step confirm, and clicking a key fetches the full value from `POST /api/keys/reveal`, which requires a current pairing or trusted Tailscale-identity session and answers `no-store`; automatic loopback sessions and raw admin tokens cannot reveal stored values, and a refusal there answers with the pairing surface — on the same-origin standalone transport the local pairing form, elsewhere the explanation alone — and requires a fresh reveal click after pairing. Displayed secrets and copy feedback are cleared on shared-session loss, pairing, inactive/hidden views, or a target change; stale asynchronous completions cannot restore them. |
 | Storage | Rail plus cleanup and trash detail (`gui/src/components/storage-workspace/`). |
 | Subagents | Featured-roster selection workspace (`gui/src/components/subagents-workspace/`). |
 | Combos | Rail, detail panel, and an add flow (`gui/src/components/ComboWorkspace.tsx`). |
@@ -333,7 +333,7 @@ selectors, a vendor-only inferred price is unavailable; exact provider and user 
 eligible. Missing trace evidence is not reconstructed from today's configuration. Provider-detail
 model shares use that provider's token total, not the global total. Unknown reserved `policy/`
 selectors are rejected before upstream dispatch; historical rows remain unchanged.
-Expected-price overlays are estimates, not billing reproductions: the Z.AI GLM rows (`zai`, `zhipu-bigmodel`, `zhipu-bigmodel-coding`, `zhipu-bigmodel-responses`) display the published z.ai USD list price on surfaces that actually bill by Coding Plan subscription or CNY-tiered domestic PAYG, and every such row is marked `verified-derived` so the estimate flag reaches the UI. Antigravity Claude Sonnet and Opus 5.5 base/tier overlays in `src/usage/expected-prices.ts` likewise use Anthropic reference prices with `verified-derived`, so even reported tokens retain an estimated-cost flag.
+Haiku 5.5 in `src/usage/expected-prices.ts` uses 0.10/0.50/0.01/0.125 USD per MTok (input/output/cache read/5m write), with all four rates multiplied by five above 100,000 raw prompt tokens; exactly 100,000 stays base. Exact provider/id bands include Cursor regular effort spellings and reference-priced preemptive surfaces; Kilo stays untiered. Sonnet 5.5 cache read is 0.10 (0.05x input), except Bedrock retains partner rates and Venice has its 1.25x exact overlay. Expected-price overlays are estimates, not billing reproductions: the Z.AI GLM rows (`zai`, `zhipu-bigmodel`, `zhipu-bigmodel-coding`, `zhipu-bigmodel-responses`) display the published z.ai USD list price on surfaces that actually bill by Coding Plan subscription or CNY-tiered domestic PAYG, and every such row is marked `verified-derived` so the estimate flag reaches the UI. Antigravity Claude Sonnet and Opus 5.5 base/tier overlays in `src/usage/expected-prices.ts` likewise use Anthropic reference prices with `verified-derived`, so even reported tokens retain an estimated-cost flag.
 
 The management API retains the compact accumulator plus bounded query summaries; it never retains
 normalized per-request rows after a response. File identity changes, shrinkage, same-size metadata
@@ -523,9 +523,9 @@ selection because the schema would drop the override. The model checklist is sea
 `PUT /api/settings` accepts a validated object or null to clear it; a failed save restores live settings and deletion provenance while the dashboard keeps the draft for retry.
 
 `src/server/gui-static.ts` serves the dashboard from `gui/dist`, with `OPENCODEX_GUI_DIST` taking
-priority and standalone binaries resolving the copied directory beside `ocx`. Runtime package
-metadata comes from the bundled `src/lib/package-version.ts` manifest import so compiled binaries
-do not read a source-tree `package.json`.
+priority. A standalone binary resolves the copied directory beside `ocx`, then the desktop bundle's resource directory
+(`../Resources` on macOS, `../lib/OpenCodex` on Linux), so a runtime the desktop shell did not start still serves it.
+Runtime package metadata comes from the bundled `src/lib/package-version.ts` manifest import so compiled binaries do not read a source-tree `package.json`.
 
 ## Quota-reset notifications
 

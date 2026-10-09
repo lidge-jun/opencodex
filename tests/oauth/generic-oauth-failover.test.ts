@@ -381,7 +381,7 @@ describe("sidecar on429 wiring", () => {
 
     // Anthropic's pool is excluded from generic failover, so it needs its own arm here or a 429
     // inside a web-search/image turn is terminal while the same 429 on the main path rotates.
-    const anthropic = body.indexOf("rotateAnthropicAccountOnResponse(");
+    const anthropic = body.indexOf("rotateAnthropicAccountOnResponseForInstance(anthropicInstance,");
     expect(anthropic).toBeGreaterThan(oauth);
 
     // REACHABILITY, not mention. The first draft of this arm sat behind an unconditional early
@@ -426,11 +426,12 @@ describe("sidecar on429 wiring", () => {
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
     const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, (?:next|retry)Parsed)?\)/g) ?? [];
-    // Nine includes Antigravity auth rotation, Kiro branches, native passthrough, plus
-    // the Antigravity 403 verify-account arm, which replays through the same snapshot
-    // helper so the rotated bearer keeps its account-matched project.
+    // Ten includes Antigravity auth rotation, Kiro branches, native passthrough, the
+    // Antigravity 403 verify-account arm, which replays through the same snapshot helper
+    // so the rotated bearer keeps its account-matched project, and the web-search sidecar's
+    // structured VALIDATION_REQUIRED rotation (#6710), which uses the same helper.
     // The explicit count keeps a newly added rotation site from skipping identity pairing.
-    expect(snapshotUses.length).toBe(9);
+    expect(snapshotUses.length).toBe(10);
     expect(helperUses.length).toBe(snapshotUses.length);
     // The bearer is written in exactly one place — inside the helper. Any other occurrence is a
     // rotation site that skipped the pairing rules.
@@ -548,7 +549,7 @@ describe("sidecar on429 wiring", () => {
     // identical limit recovers one loop over.
     const rotators = {
       key: /hasKeyPoolFailover\(/g,
-      anthropic: /rotateAnthropicAccountOnResponse\(/g,
+      anthropic: /rotateAnthropicAccountOnResponseForInstance\(anthropicInstance,/g,
       generic: /rotateGenericOAuthAccountOn429\(/g,
     };
     const counts = Object.fromEntries(

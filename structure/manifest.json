@@ -129,6 +129,16 @@
       ]
     },
     {
+      "path": "local-messaging.md",
+      "tier": 3,
+      "title": "Local Codex Messaging",
+      "scope": "Command-local metadata discovery, Unix RPC queued submission, peer envelopes, receipts and owned lifecycle bounds.",
+      "documents": [
+        "src/messaging/",
+        "src/cli/"
+      ]
+    },
+    {
       "path": "catalog.md",
       "tier": 2,
       "title": "Model Catalog",
@@ -315,10 +325,13 @@
       "path": "providers/anthropic-account-pool.md",
       "tier": 4,
       "title": "Anthropic Account Pool",
-      "scope": "Anthropic OAuth account pause, model routes, and quota labels.",
+      "scope": "Anthropic OAuth instances (primary and Pool 2), account pause, model routes, quota labels, and pool-bound helpers, quota, reset grants and management surfaces.",
       "documents": [
         "src/oauth/",
-        "src/providers/"
+        "src/providers/",
+        "src/providers/quota/anthropic-account-quota.ts",
+        "src/server/management/anthropic-pool-settings.ts",
+        "src/sidecar/anthropic-binding.ts"
       ]
     },
     {

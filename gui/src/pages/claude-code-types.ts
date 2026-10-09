@@ -1,4 +1,4 @@
-import type { SidecarOverride } from "./claude-manual-env";
+import type { AnthropicPoolOptions, SidecarOverride } from "./claude-manual-env";
 
 export interface MapRow {
   id: string;
@@ -65,6 +65,7 @@ export interface ClaudeCodeState {
   aliases: { id: string; display_name: string }[];
   webSearchSidecar?: SidecarOverride;
   visionSidecar?: SidecarOverride;
+  sidecarPools?: { webSearchSidecar: AnthropicPoolOptions; visionSidecar: AnthropicPoolOptions };
   port: number;
 }
 

@@ -355,6 +355,11 @@ When available, `input_tokens_details` can also include `cache_write_tokens`. Th
 detail objects are a compatibility guarantee for strict Responses clients; zero can mean "not
 reported," not necessarily "the provider performed no such work."
 
+For Anthropic upstreams, a reported `usage.output_tokens_details.thinking_tokens` is preserved as
+Responses `output_tokens_details.reasoning_tokens` and Chat `completion_tokens_details.reasoning_tokens`,
+for JSON and streaming replies. It is already included in the output-token total, not added again;
+missing or invalid detail is not estimated from visible thinking text. See [Anthropic's usage contract](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost).
+
 ### Correlating a response with its request log
 
 Every admitted HTTP Responses reply carries an `x-opencodex-request-id` header holding a

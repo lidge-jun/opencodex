@@ -1,3 +1,5 @@
+import { hasOrdinaryNativeOpenAiRow } from "./control-plane";
+import { isCodexControlPlaneModel } from "../control-plane-models";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -84,8 +86,14 @@ export function shouldApplyNativeEffortClamp(
     && isCanonicalOpenAiForwardProvider(provider);
 }
 
-export function catalogModelEfforts(slugs: readonly string[]): Map<string, string[]> {
-  const out = new Map<string, string[]>();
+export interface CatalogModelLadder {
+  readonly efforts: string[];
+  readonly defaultEffort?: string;
+}
+
+/** Each slug's reasoning ladder and default as the written Codex catalog offers them. */
+export function catalogModelLadders(slugs: readonly string[]): Map<string, CatalogModelLadder> {
+  const out = new Map<string, CatalogModelLadder>();
   if (slugs.length === 0) return out;
   const catalog = readCatalog(readCodexCatalogPath());
   if (!catalog) return out;
@@ -99,9 +107,17 @@ export function catalogModelEfforts(slugs: readonly string[]): Map<string, strin
       ? entry.supported_reasoning_levels as Array<{ effort?: string }>
       : [];
     const efforts = levels.flatMap(l => typeof l.effort === "string" ? [l.effort] : []);
-    if (efforts.length > 0) out.set(callerSlug, efforts);
+    if (efforts.length === 0) continue;
+    const defaultEffort = typeof entry.default_reasoning_level === "string" && efforts.includes(entry.default_reasoning_level)
+      ? entry.default_reasoning_level
+      : undefined;
+    out.set(callerSlug, defaultEffort === undefined ? { efforts } : { efforts, defaultEffort });
   }
   return out;
+}
+
+export function catalogModelEfforts(slugs: readonly string[]): Map<string, string[]> {
+  return new Map([...catalogModelLadders(slugs)].map(([slug, ladder]) => [slug, ladder.efforts]));
 }
 
 export function catalogEntryEfforts(entry: RawEntry): string[] {
@@ -385,7 +401,7 @@ export function clampEntryToCodexSupportedEfforts(
   entry: RawEntry,
   supported: ReadonlySet<string> | null,
 ): void {
-  if (!supported) return;
+  if (!supported || isCodexControlPlaneModel(entry.slug)) return;
   const levels = Array.isArray(entry.supported_reasoning_levels)
     ? entry.supported_reasoning_levels as Array<{ effort?: string }>
     : null;
@@ -530,6 +546,14 @@ export function clampCatalogModelsToObservedCodexSupport(
     }
     if (omitted) models.splice(index, 1);
     else index += 1;
+  }
+
+  // Only Reserve rows are currently omitted above; ordinary natives keep a fallback ladder.
+  // Also repair a persisted orphan so a removed Reserve can never leave a reviewer behind.
+  if (!hasOrdinaryNativeOpenAiRow(models)) {
+    for (let index = models.length - 1; index >= 0; index -= 1) {
+      if (isCodexControlPlaneModel(models[index]!.slug)) models.splice(index, 1);
+    }
   }
 
   return {

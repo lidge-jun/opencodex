@@ -5,6 +5,7 @@ import { Select } from "../ui";
 import {
   applySidecarBackendChange,
   applySidecarModelChange,
+  applySidecarPoolChange,
   sidecarSelectValue,
   type SidecarSelectValue,
 } from "./claude-code-sidecar";
@@ -156,6 +157,7 @@ export function ClaudeCodeSettingsCard({
         const titleKey = key === "webSearchSidecar" ? "claude.webSearchSidecar" : "claude.visionSidecar";
         const hintKey = key === "webSearchSidecar" ? "claude.webSearchSidecarHint" : "claude.visionSidecarHint";
         const listId = `claude-sidecar-models-${key}`;
+        const backend = override?.backend ?? state.sidecarPools?.[key]?.backend;
         return (
           <div className="setting-row claudecode-sidecar-row" key={key}>
             <div className="setting-label setting-copy">
@@ -203,6 +205,21 @@ export function ClaudeCodeSettingsCard({
                     <option key={m} value={m} />
                   ))}
                 </datalist>
+              )}
+              {backend === "anthropic" && (
+                <Select value={override?.anthropicInstance ?? ""} label={t("sidecar.pool")}
+                  options={[
+                    { value: "", label: t("sidecar.poolCurrent") },
+                    { value: "anthropic", label: t("sidecar.poolA") },
+                    { value: "anthropic2", label: t("sidecar.poolB") },
+                  ]}
+                  onChange={value => onStateChange({ ...state, [key]: applySidecarPoolChange(override, value) })}
+                  portal />
+              )}
+              {backend === "anthropic" && override?.anthropicInstance
+                && state.sidecarPools?.[key]?.parent
+                && override.anthropicInstance !== state.sidecarPools[key].parent && (
+                <span className="muted setting-hint">{t("sidecar.poolMixed")}</span>
               )}
             </div>
           </div>

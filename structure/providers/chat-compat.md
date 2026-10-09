@@ -30,8 +30,8 @@ repository where no test can reach it. The role was previously decided by testin
 against `api.openai.com`, so every OpenAI-compatible gateway was assumed not to support a standard
 role until proven otherwise, and the instruction silently lost `developer` precedence.
 
-The translated `Qwen3.8-27B` Chat route follows its [pinned template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja): a late `system` raises, `developer` is unsupported, and a late `user` renders in place.
-Gateway-namespaced ids such as LiteLLM's `openai/Qwen3.8-27B` match too. Text-only developer items therefore keep their content and slot but use the `user` wire role,
+The translated `Qwen3.8-27B` Chat route follows its [pinned template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja): a late `system` raises, `developer` is unsupported, and a late `user` renders in place; the `OrcaSAQ-2-Cyber-27B` GGUF family pins the same contract and takes the same mapping.
+Gateway-namespaced ids such as LiteLLM's `openai/Qwen3.8-27B` match too. The Orca exception requires `GGUF` in the final model segment before any optional colon quant tag; non-GGUF Orca variants keep their configured mapping. Text-only developer items therefore keep their content and slot but use the `user` wire role,
 losing developer precedence. Other models retain the mapping above; native Chat passthrough
 is unchanged. The rule is recorded in `tests/fixtures/qwen38-27b-chat-template-contract.json`
 and exercised by `tests/adapters/openai/openai-chat-qwen38-leading-system.test.ts`.
@@ -554,7 +554,7 @@ Claude Opus 5.5, Fable 5.1 and Sonnet 5.5 are upstream exceptions to the forced-
 adaptive thinking, for all three. The adapter sends `{type:"auto"}` for those choices so the
 request succeeds, but the caller's forced-tool guarantee cannot be preserved; the prompt
 must provide any required tool-use instruction. Other Claude model families retain the
-normal forced-choice mapping unless their own upstream contract says otherwise.
+normal forced-choice mapping: Haiku 5.5 retains `any`/named tools, uses adaptive thinking for low..max, and reasoning none sends `disabled` without effort. Its non-default sampling fields are dropped on every path.
 ## Unmapped modalities are recorded, not dropped
 
 The translated Chat route has no video mapping — this adapter does not implement one.

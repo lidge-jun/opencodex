@@ -1,4 +1,5 @@
 import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } from "./wire";
+import type { AnthropicAccountPoolConfig } from "./anthropic-account-pool";
 
 /**
  * Per-provider proactive-refresh policy. The guardian only ever touches a provider whose EFFECTIVE
@@ -274,6 +275,10 @@ export interface ModelCapabilities {
 }
 
 export interface OcxProviderConfig {
+  /** Explicit builtin Pool 2 provenance; endpoints never imply ownership. */
+  anthropicOAuthInstance?: "anthropic2";
+  /** Independent Anthropic pool settings; valid only on providers.anthropic2. */
+  anthropicAccountPool?: AnthropicAccountPoolConfig;
   /** Optional browser-compatible outbound TLS profile; disabled by default. */
   tlsProfile?: "antigravity-browser";
   /** Optional short provider namespace used only at request/catalog presentation time. */

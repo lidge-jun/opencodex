@@ -41,6 +41,17 @@ test("the Save body never carries the immediate connection switch", () => {
   expect("enabled" in claudeCodeSaveBody(STATE, [])).toBe(false);
 });
 
+test("Save preserves unset helper identity and explicit deletion without materializing A", () => {
+  const body = claudeCodeSaveBody({ ...STATE,
+    webSearchSidecar: { backend: "anthropic", model: "claude-haiku-4-5" },
+    visionSidecar: { backend: "anthropic", model: "claude-haiku-4-5", anthropicInstance: "anthropic2" },
+  }, []);
+  expect(body.webSearchSidecar).toEqual({ backend: "anthropic", model: "claude-haiku-4-5" });
+  expect(body.visionSidecar?.anthropicInstance).toBe("anthropic2");
+  expect(claudeCodeSaveBody({ ...STATE, visionSidecar: { backend: "openai", anthropicInstance: null } }, []).visionSidecar)
+    .toEqual({ backend: "openai", model: "", anthropicInstance: null });
+});
+
 test("modelMap is trimmed, drops blank rows, keeps the last duplicate and sorts keys", () => {
   expect(normalizedModelMap([row(" b ", " x "), row("", "y"), row("a", ""), row("b", "z"), row("a", "w")]))
     .toEqual({ a: "w", b: "z" });

@@ -321,7 +321,7 @@ OpenCodex はプロセスが保持する状態を以下のカテゴリで追跡�
   退避されません。
 - **観測バッファ 4 個**（トランスレーターのアキュムレーター、画像・OAuth・Grok の tail）は処理中の
   バイト圧力を監視するだけで、退避はしません。
-- **state-store の登録 28 個**が期限切れの掃除（60 秒間隔）と config 世代の reconciliation を担い、
+- **state-store の登録 31 個**が期限切れの掃除（60 秒間隔）と config 世代の reconciliation を担い、
   古いプロバイダー／アカウントのキーを取り除きます。
 - **パスとフィンガープリントのメモ**（ワークスペースのメタデータ、hardened identity、インストール
   salt、mode-hint の capability）は挿入順の LRU 上限（8〜128 件）を使います。
@@ -460,8 +460,8 @@ opencodex は既定で `127.0.0.1` にバインドし、追加の認証を必要
 
 ## 開発
 
-ソース開発には `PATH` に `bun` CLI が必要です。これは公開 npm パッケージが同梱する Bun ランタイム
-とは別物で、同梱ランタイムはインストール済みの `ocx` コマンドだけが使います。
+ソース開発には `PATH` に `bun` CLI が必要です。公開 npm パッケージはインストール済みの `ocx`
+コマンド用に Bun ランタイムを同梱し、パッケージのスクリプトもこの同梱依存関係から Bun を解決することがあります。
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

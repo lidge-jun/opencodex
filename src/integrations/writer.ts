@@ -18,7 +18,7 @@ import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
 import { copyPlainData } from "../lib/plain-data";
 import type { OcxConfig } from "../types";
-import { defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
+import { PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { inspectKiloCandidates } from "./kilo-candidates";
 import {
   fingerprint,
@@ -727,9 +727,15 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
   // exact bytes when the snapshot was taken. Re-deriving it from the file would
   // mean guessing which entries are ours, and a wrong guess deletes a user's.
   const restoredRecord = entry.priorRecord;
+  let restoredDocument = clientId === "droid" && restoredText !== null ? parseConfig(restoredText, "json") : undefined;
+  if (clientId === "commandcode" && restoredText !== null) {
+    const parsed = parseConfig(restoredText, "json");
+    // Restoring raw snapshot bytes must remain possible even when they are not parseable.
+    restoredDocument = parsed === PARSE_FAILED ? undefined : parsed;
+  }
   const fresh = buildIntegrationContribution(
     { ...input, droidReasoningDefaults: undefined }, rowTarget,
-    clientId === "droid" && restoredText !== null ? parseConfig(restoredText, "json") : undefined,
+    restoredDocument,
     restoredRecord,
   );
   /*
