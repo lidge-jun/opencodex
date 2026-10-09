@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
+import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import { commandInvocation } from "../../lib/win-exec";
 import { isStandaloneBinary } from "../../lib/standalone";
 import { modelRecordValue } from "../../reasoning-effort";
@@ -287,6 +289,19 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   const env = buildEnv(profile, apiKey);
   const invocation = commandInvocation(binary, args, platform, { env });
 
+  // An opaque CLI invocation is one send. Its internal retries are not observable here;
+  // terminal usage still settles the complete amount, including usage above the estimate.
+  let producer: { close(): void } | undefined;
+  let permit: SingleUseDispatchPermit | undefined;
+  try {
+  producer = incoming.sendBudget?.beginSpendProducer?.();
+  const decision = incoming.sendBudget?.reserveDispatch({
+    sendClass: "initial", targetKey: `${provider.adapter}|${profile.canonicalBaseUrl}|${parsed.modelId}`,
+  });
+  if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
+  permit = decision?.allowed ? decision.permit : undefined;
+  if (permit && !permit.use()) throw new SendBudgetExhaustedError();
+  incoming.onPhysicalSend?.({ ordinal: 1 });
   let child: ChildProcess;
   try {
     child = spawnFn(invocation.file, invocation.args, {
@@ -304,9 +319,6 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       code: "cli_spawn_failed",
       retryable: false,
     });
-    // A synchronous spawn() throw skips the event-loop `finally` below, so the private
-    // bridge dir would leak unless it is removed here as well.
-    if (toolBridgeDir) await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
     return;
   }
 
@@ -665,9 +677,6 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   } finally {
     releaseOpenToolBlocks(state);
     cleanup();
-    if (toolBridgeDir) {
-      await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
-    }
   }
 
   // Reap the process so no zombie is left behind (§三十): wait for the real `close`, and
@@ -746,6 +755,15 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         code: "protocol_error",
         retryable: false,
       });
+    }
+  }
+  } finally {
+    try { permit?.release(); }
+    finally {
+      try { producer?.close(); }
+      finally {
+        if (toolBridgeDir) await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
+      }
     }
   }
 }

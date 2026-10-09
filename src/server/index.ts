@@ -302,7 +302,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(config.appOwnedMemoryBudgetMb));
   enforceAppOwnedMemoryBudget();
   // Observe-only mode still journals physical sends, so every server owns before configuring.
-  spendLedgerLifecycle.configure(config.spend);
+  spendLedgerLifecycle.configure(config.spend, config.spendPoolAliases, Object.keys(config.providers));
   // After ownership: a second server on the same home is refused above, so the process running
   // this line is the only one appending to usage.jsonl and the only one that may compact it.
   setUsageLedgerRetention(config.usageLedgerMaxBytes);
@@ -505,7 +505,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     const lease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers));
     if (!lease) return serverBusyResponse(req, "active turns", policy);
     // Root, lane, and the refusal that follows from them, all live in ./workflow-refusal.
-    const workflow = admitHttpWorkflowTurn(req.headers);
+    let workflow: ReturnType<typeof admitHttpWorkflowTurn>;
+    try { workflow = admitHttpWorkflowTurn(req.headers); }
+    catch (error) { lease.release(); throw error; }
     if (workflow && !workflow.admitted) {
       lease.release();
       // withCors, because without Access-Control-Allow-Origin the exposed refusal header is

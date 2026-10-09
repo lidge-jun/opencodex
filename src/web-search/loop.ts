@@ -1,6 +1,7 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
 import type { AdapterEvent, OcxConfig, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxProviderOpaqueToolCallMetadata, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
@@ -576,7 +577,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
       while ((prepared.response.status === 429
         || (prepared.response.status === 403
-          && (deps.incomingMeta?.providerName === "anthropic" || deps.incomingMeta?.providerName === "google-antigravity")
+          && (isAnthropicInstanceId(deps.incomingMeta?.providerName) || deps.incomingMeta?.providerName === "google-antigravity")
           && !accountRefusalOutputStarted)
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,

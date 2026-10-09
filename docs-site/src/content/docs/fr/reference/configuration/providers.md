@@ -253,6 +253,65 @@ Laissez cette option désactivée, sauf si vous comprenez les risques liés aux 
 préférez le changement manuel avec `ocx account use anthropic <id>`.
 :::
 
+### Anthropic · Pool 2 (`anthropic2`)
+
+`anthropic2` (« Anthropic · Pool 2 ») est un second fournisseur OAuth Anthropic intégré, doté de son propre pool de comptes. Il utilise la même implémentation Anthropic que `anthropic` : même flux de connexion, même format de requête, mêmes Messages natifs et pont Responses, mêmes métadonnées de modèles. Seuls les comptes et le pool qui les entoure sont séparés. Le préfixe du modèle choisit le pool : `anthropic/claude-sonnet-5` utilise le pool principal et `anthropic2/claude-sonnet-5` le Pool 2.
+
+Le Pool 2 reste inactif tant que vous ne l'ajoutez pas. Connectez-vous avec `ocx login anthropic2` ou ajoutez **Anthropic · Pool 2** dans la page Fournisseurs du tableau de bord. Une première connexion réussie crée `providers.anthropic2` avec le marqueur `"anthropicOAuthInstance": "anthropic2"`. Le Pool 2 ne devient jamais le fournisseur par défaut : les noms de modèles `claude-*` sans préfixe, le modèle par défaut et le transfert d'appelant de Claude Code continuent de se résoudre vers `anthropic`. Une entrée `anthropic2` non marquée que vous avez créée vous-même garde sa signification personnalisée ; la connexion refuse la collision de noms et ne réécrit ni l'entrée ni vos identifiants.
+
+Le Pool 2 lit ses réglages de pool dans sa propre entrée de fournisseur. Les clés, valeurs par défaut et comportements sont ceux de `anthropicAccountPool` au niveau racine, décrit ci-dessus, et rien n'est hérité du pool principal. `providers.anthropic.anthropicAccountPool`, ou ce champ sur tout autre fournisseur, est rejeté.
+
+```json
+{
+  "anthropicAccountPool": { "enabled": true, "strategy": "quota" },
+  "providers": {
+    "anthropic2": {
+      "adapter": "anthropic",
+      "authMode": "oauth",
+      "baseUrl": "https://api.anthropic.com",
+      "anthropicOAuthInstance": "anthropic2",
+      "anthropicAccountPool": { "enabled": true, "strategy": "round-robin" }
+    }
+  }
+}
+```
+
+Les deux pools sont isolés dans opencodex :
+
+- **Identifiants :** les comptes du Pool 2 sont stockés sous leur propre clé `anthropic2` dans le magasin d'identifiants protégé. Une connexion dont le jeton ou le compte Anthropic vérifié est déjà stocké dans l'autre pool est rejetée.
+- **Réglages et état d'exécution :** sélection, affinité de session, temporisations, pauses, routes de modèles et seuils par compte appartiennent à un seul pool. `fallback: true` sur une route n'élargit qu'au sein du même pool.
+- **Quota et utilisation :** sondes d'utilisation, caches de quota et attribution de l'utilisation sont enregistrés par pool ; un même ID de compte présent dans les deux pools a donc deux enregistrements distincts.
+- **Octrois de réinitialisation :** le Pool 2 tient son propre journal (`anthropic2-reset-grant-ledger.json`) à côté du journal inchangé du pool principal.
+- **Reprise :** une requête directe `anthropic2/<model>` ne bascule jamais vers le pool principal, et une limite de débit ou un refus du Pool 2 ne met jamais en temporisation un compte du pool principal. Un combo explicite qui nomme les deux pools conserve les cibles déclarées.
+
+Cette séparation est une frontière de routage interne à opencodex. Elle ne change ni la façon dont Anthropic traite vos comptes ni les risques liés aux règles de comptes décrits ci-dessus.
+
+Les comptes du Pool 2 s'ajoutent uniquement par OAuth dans le navigateur. Contrairement à `anthropic`, le Pool 2 n'importe, n'adopte et ne réécrit jamais de jeton de la CLI Claude Code ; cette différence est voulue. Le Pool 2 démarre vide, et une requête Pool 2 sans compte Pool 2 utilisable échoue avec une erreur d'authentification au lieu d'emprunter un identifiant du pool principal ou de Claude Code.
+
+Les commandes de compte et les API de gestion désignent le pool par son nom : `ocx account pool anthropic2 …`, `ocx account auto-switch anthropic2 …`, `ocx account routes anthropic2 …` et `ocx account anthropic-reset-grants --provider anthropic2`. Les points de terminaison des réglages de pool et des octrois de réinitialisation acceptent `provider: "anthropic2"` ; sans ce champ, le pool principal reste utilisé.
+
+#### Choix du pool des assistants (`anthropicInstance`)
+
+Les assistants de recherche web et de vision acceptent un champ facultatif `anthropicInstance`, dans les réglages globaux `webSearchSidecar` et `visionSidecar` ainsi que dans les surcharges Claude Code `claudeCode.webSearchSidecar` et `claudeCode.visionSidecar`. Le tableau de bord l'affiche sous forme de menu **Pool de comptes** lorsque le backend de l'assistant est Anthropic.
+
+| Valeur | Comportement |
+| --- | --- |
+| non défini (par défaut) | Suit le pool de la requête en cours : une requête `anthropic2/<model>` utilise le Pool 2 et une requête `anthropic/<model>` le pool principal. Une requête d'un autre fournisseur conserve la découverte existante des assistants, qui ne choisit jamais le Pool 2. |
+| `"anthropic"` | Toujours le pool principal. |
+| `"anthropic2"` | Toujours le Pool 2. |
+
+Le champ ne s'applique que si le backend de l'assistant se résout en Anthropic. Le définir avec un autre backend est une erreur de validation ; comme la recherche web utilise OpenAI par défaut, définissez aussi `"backend": "anthropic"`. Un modèle d'assistant qualifié par l'autre pool, par exemple `anthropic/claude-sonnet-5` avec `"anthropicInstance": "anthropic2"`, est également rejeté. Si le pool choisi n'a aucun compte utilisable, l'assistant échoue avant tout envoi ; il ne passe pas à l'autre pool. La requête principale se poursuit alors sans cet assistant. Un choix non défini est enregistré comme absent, jamais comme `"anthropic"`.
+
+```json
+{
+  "webSearchSidecar": { "backend": "anthropic", "anthropicInstance": "anthropic2" }
+}
+```
+
+:::caution[Retour à une version antérieure]
+Les versions sans Pool 2 ne comprennent pas l'entrée `anthropic2`. Avant d'installer une version plus ancienne, arrêtez le proxy, sauvegardez `config.json` et `auth.json`, puis retirez `providers.anthropic2` de `config.json`. Le Pool 2 ne déplace ni ne réécrit jamais les identifiants du pool principal. Un retour en arrière sur place avec un Pool 2 actif n'est pas pris en charge.
+:::
+
 ### Formes d'enregistrement gérées
 
 Les entrées `apiKeys[]` contiennent les chaînes `id`, `name`, la valeur `key` générée et la date ISO `createdAt`.

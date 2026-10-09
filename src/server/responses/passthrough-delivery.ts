@@ -639,6 +639,7 @@ export async function deliverPassthroughResponse(
         route.provider.webSearchBridge?.backend,
         config,
         openAiSidecar,
+        route.providerName,
       );
       const webSearchBridgePlan = planPassthroughWebSearchBridge(parsed, route.provider, {
         providerName: route.providerName,

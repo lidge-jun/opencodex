@@ -86,8 +86,14 @@ export function shouldApplyNativeEffortClamp(
     && isCanonicalOpenAiForwardProvider(provider);
 }
 
-export function catalogModelEfforts(slugs: readonly string[]): Map<string, string[]> {
-  const out = new Map<string, string[]>();
+export interface CatalogModelLadder {
+  readonly efforts: string[];
+  readonly defaultEffort?: string;
+}
+
+/** Each slug's reasoning ladder and default as the written Codex catalog offers them. */
+export function catalogModelLadders(slugs: readonly string[]): Map<string, CatalogModelLadder> {
+  const out = new Map<string, CatalogModelLadder>();
   if (slugs.length === 0) return out;
   const catalog = readCatalog(readCodexCatalogPath());
   if (!catalog) return out;
@@ -101,9 +107,17 @@ export function catalogModelEfforts(slugs: readonly string[]): Map<string, strin
       ? entry.supported_reasoning_levels as Array<{ effort?: string }>
       : [];
     const efforts = levels.flatMap(l => typeof l.effort === "string" ? [l.effort] : []);
-    if (efforts.length > 0) out.set(callerSlug, efforts);
+    if (efforts.length === 0) continue;
+    const defaultEffort = typeof entry.default_reasoning_level === "string" && efforts.includes(entry.default_reasoning_level)
+      ? entry.default_reasoning_level
+      : undefined;
+    out.set(callerSlug, defaultEffort === undefined ? { efforts } : { efforts, defaultEffort });
   }
   return out;
+}
+
+export function catalogModelEfforts(slugs: readonly string[]): Map<string, string[]> {
+  return new Map([...catalogModelLadders(slugs)].map(([slug, ladder]) => [slug, ladder.efforts]));
 }
 
 export function catalogEntryEfforts(entry: RawEntry): string[] {

@@ -1,5 +1,7 @@
 /**
- * omo (Codex / LazyCodex)'s per-role model setting, `codex.agents.<role>.model` in `~/.omo/omo.jsonc`.
+ * omo (Codex / LazyCodex)'s per-role model setting, `"[codex]".agents.<role>.model` in `~/.omo/omo.jsonc`.
+ * The section name carries its brackets: LazyCodex reads `[codex]`, and its strict loader drops a
+ * bare `codex` key as unknown, so a pick written there never reaches a role.
  *
  * LazyCodex 5.1.1 and later reads it, and callers reach this only after `detectLazyCodex`
  * says LazyCodex is installed. The file is omo's, so this writes only on an explicit
@@ -29,6 +31,8 @@ export function omoJsoncPath(env: NodeJS.ProcessEnv = process.env, home: string 
 }
 
 type JsonObject = Record<string, unknown>;
+
+const CODEX_SECTION = "[codex]";
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -71,7 +75,7 @@ function load(path: string): Loaded {
 }
 
 function agentsOf(doc: JsonObject): JsonObject | null | undefined {
-  const codex = doc.codex;
+  const codex = doc[CODEX_SECTION];
   if (codex === undefined) return undefined;
   if (!isObject(codex)) return null;
   const agents = codex.agents;
@@ -109,7 +113,7 @@ export function writeOmoRoleModel(role: string, model: string, path: string = om
   if (loaded.kind !== "document") return loaded.kind === "comments" ? "skipped_comments" : loaded.kind;
   const { doc, text } = loaded;
   // Only an absent key is created; an explicit null is a value the reader calls invalid.
-  const codex = doc.codex === undefined ? {} : doc.codex;
+  const codex = doc[CODEX_SECTION] === undefined ? {} : doc[CODEX_SECTION];
   if (!isObject(codex)) return "invalid";
   const agents = codex.agents === undefined ? {} : codex.agents;
   if (!isObject(agents)) return "invalid";
@@ -118,7 +122,7 @@ export function writeOmoRoleModel(role: string, model: string, path: string = om
   if (entry.model === model) return "unchanged";
   agents[role] = { ...entry, model };
   codex.agents = agents;
-  doc.codex = codex;
+  doc[CODEX_SECTION] = codex;
   assertIntegrationWriteOwnership(path);
   atomicWriteFileNoFollowUnclaimed(path, serialize(text, doc));
   return "written";

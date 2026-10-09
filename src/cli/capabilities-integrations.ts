@@ -112,6 +112,22 @@ export const INTEGRATION_CAPABILITIES: readonly Capability[] = [
     details: ["With --client, restore requires --profile; only Aside profiles accept that selector. No automatic drift confirmation or retry.","Preview preserves exact opId/profile/confirm-drift intent. Generic restore derives the client on the server; the returned plan does not embed opId or complete command input.","A refused or no-op preview is completed inspection, not applied work. A stale bound mutation exits5 with a fixed re-preview hint; no replacement token is automatically adopted."],
   },
   {
+    command: ["commandcode", "restore"],
+    usage: "ocx commandcode restore --op <opId> [--confirm-drift] [--preview | --plan-fingerprint <token>] [--json]",
+    summary: "Restore a Command Code rollback operation, retaining client ownership and drift checks.",
+    routes: [{ method: "POST", path: "/api/client-integrations/commandcode/restore" }, { method: "POST", path: "/api/client-integrations/commandcode/restore/preview" }],
+    flags: [
+      { name: "--op", value: "string", summary: "Command Code operation ID; --op-id is an alias.", required: true },
+      { name: "--confirm-drift", value: "boolean", summary: "Explicitly allow replacing edits made after the snapshot." },
+      { name: "--preview", value: "boolean", summary: "Inspect restoration without mutating; exclusive with a commit fingerprint." },
+      { name: "--plan-fingerprint", value: "string", summary: "Optional versioned token from a matching preview; stale intent is refused without retry." },
+      { name: "--json", value: "boolean", summary: "Emit the result as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["cmd restore is an alias. --client and --profile are rejected; the dedicated route binds the operation to Command Code.", "Older proxies without the dedicated route fail without a generic restore fallback. Redirects are refused.", "Preview preserves the operation and drift intent. A stale bound mutation requires a new explicit preview."],
+  },
+  {
     command: ["claude", "config", "status"],
     usage: "ocx claude config status [--json]",
     summary: "Read effective Claude Code configuration.",

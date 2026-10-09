@@ -1,3 +1,6 @@
+import { resolveAnthropicHelperSnapshot, fetchAnthropicHelper, anthropicHelperMessagesUrl } from "../sidecar/anthropic-binding";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
+import type { OAuthAccessSnapshot } from "../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { sidecarThinkingOff } from "../adapters/anthropic-model-contract";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
@@ -159,8 +162,15 @@ export async function describeImageAnthropic(
   if (!image.block) return { text: "", error: image.error ?? "invalid image" };
 
   let token: string;
+  let snapshot: OAuthAccessSnapshot | undefined;
+  const capturedTarget = provider.baseUrl;
   try {
-    token = await getAnthropicSidecarAccessToken(providerName, settings.model, config);
+    if (config && isAnthropicInstanceId(providerName)) {
+      snapshot = await resolveAnthropicHelperSnapshot(config, providerName, settings.model);
+      token = snapshot.accessToken;
+    } else {
+      token = await getAnthropicSidecarAccessToken(providerName, settings.model, config);
+    }
   } catch (error) {
     return { text: "", error: `anthropic vision sidecar auth failed: ${publicOAuthAuthenticationErrorMessage(error)}` };
   }
@@ -195,13 +205,16 @@ export async function describeImageAnthropic(
 
   // Anthropic image blocks have no detail field, but detail remains part of the cache identity.
   void detail;
-  const base = provider.baseUrl.replace(/\/v1\/?$/, "");
+  const url = anthropicHelperMessagesUrl(provider.baseUrl);
+  const dispatch = (target: string, init: RequestInit) => snapshot && config
+    ? fetchAnthropicHelper(config, snapshot, settings.model, capturedTarget, target, init)
+    : fetch(target, init);
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("vision");
   const startedAt = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      recovery => fetch(`${base}/v1/messages`, applyUpstreamRecoveryInit({
+      recovery => dispatch(url, applyUpstreamRecoveryInit({
         method: "POST",
         redirect: "manual",
         headers,

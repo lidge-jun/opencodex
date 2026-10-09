@@ -328,13 +328,13 @@ describe("direct Messages fold matches bridge + collector (non-stream)", () => {
       code: "context_length_exceeded", message: "Synthetic input limit", retryable: false }];
     const frames = await expectStreamParity(events);
     expect(frames).toEqual([{ event: "error", data: { type: "error", error: {
-      type: "invalid_request_error", code: "context_length_exceeded", message: "Synthetic input limit",
+      type: "invalid_request_error", code: "context_length_exceeded", message: "prompt is too long: Synthetic input limit",
     } } }]);
     const response = await foldAnthropicMessage(replay(events), directOptions());
     expect(response.status).toBe(400);
     expect(response.headers.has("retry-after")).toBe(false);
     expect(await response.json()).toEqual({ type: "error", error: {
-      type: "invalid_request_error", code: "context_length_exceeded", message: "Synthetic input limit",
+      type: "invalid_request_error", code: "context_length_exceeded", message: "prompt is too long: Synthetic input limit",
     } });
   });
 

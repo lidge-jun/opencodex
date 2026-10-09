@@ -314,6 +314,39 @@ test("metadata replaced between lstat and open fails before credential access", 
   } finally { opening.mockRestore(); }
 });
 
+test("file identities that differ only beyond 2^53 still count as a replacement", () => {
+  // Windows file IDs carry a sequence number in the high bits, so two files can share a Number ino.
+  const dir = root();
+  const fake = memoryPickerCaStore();
+  ensurePickerCa(dir, { persistent: true, rotation: "startup", store: fake.store });
+  const path = join(filesystem.realpathSync(dir), "claude-picker", "authority.json");
+  const withIno = <T extends object>(stat: T, ino: bigint): T => {
+    const value = typeof (stat as { ino: unknown }).ino === "bigint" ? ino : Number(ino);
+    return Object.create(stat, { ino: { value } });
+  };
+  const { lstatSync, fstatSync } = filesystem;
+  let authorityFd = -1;
+  const lstat = spyOn(filesystem, "lstatSync").mockImplementation(((target: filesystem.PathLike, options?: object) => {
+    const stat = lstatSync(target, options as never);
+    return target === path && stat ? withIno(stat, 2n ** 60n + 1n) : stat;
+  }) as typeof lstatSync);
+  const open = filesystem.openSync;
+  const opening = spyOn(filesystem, "openSync").mockImplementation((target, flags, mode) => {
+    const fd = open(target, flags, mode);
+    if (target === path) authorityFd = fd;
+    return fd;
+  });
+  const fstat = spyOn(filesystem, "fstatSync").mockImplementation(((fd: number, options?: object) => {
+    const stat = fstatSync(fd, options as never);
+    return fd === authorityFd ? withIno(stat, 2n ** 60n + 2n) : stat;
+  }) as typeof fstatSync);
+  try {
+    expect(() => ensurePickerCa(dir, { persistent: true, rotation: "startup", store: fake.store }))
+      .toThrow("picker_ca_metadata_unsafe");
+    expect(fake.writes).toBe(1);
+  } finally { lstat.mockRestore(); opening.mockRestore(); fstat.mockRestore(); }
+});
+
 test("unsafe picker directory or lock cannot reach the credential store", () => {
   for (const pathKind of ["directory", "lock"] as const) {
     const dir = root();

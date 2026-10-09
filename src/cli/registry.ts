@@ -606,18 +606,18 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "commandcode",
-    usage: "ocx commandcode [status|show|list|enable|disable|history|restore --op <opId>] [--json]",
+    usage: "ocx commandcode [status|show|list|enable|disable|history|journal|restore --op <opId>] [--json]",
     summary: "Connect Command Code CLI to the proxy via its managed provider.",
     details: [
       "Alias of ocx integration client <sub> --client commandcode.",
-      "enable writes the managed provider.opencodex block into ~/.commandcode/providers.json; disable removes only that block.",
+      "enable manages the opencodex block under the existing provider or providers root in ~/.commandcode/providers.json; disable removes only that block.",
       "Command Code reads providers on startup.",
       "`restore --op <opId>` replays the exact previous managed block; take the id from `ocx commandcode history`.",
     ],
   },
   {
     name: "cmd",
-    usage: "ocx cmd [status|show|list|enable|disable|history|restore --op <opId>] [--json]",
+    usage: "ocx cmd [status|show|list|enable|disable|history|journal|restore --op <opId>] [--json]",
     summary: "Alias of ocx commandcode.",
   },
   {

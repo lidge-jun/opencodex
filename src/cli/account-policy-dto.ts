@@ -51,7 +51,7 @@ const grant = z.object({ id: grantId, label: text, resetsTotal: z.number().int()
   percentUsed: z.object({ five_hour: threshold.optional(), seven_day: threshold.optional(),
     seven_day_overage_included: threshold.optional() }),
 }).refine(value => value.resetsLeft <= value.resetsTotal);
-export const grantsSchema = z.object({ accountId: text.min(1), eligible: z.boolean(),
+export const grantsSchema = z.object({ provider: z.enum(["anthropic", "anthropic2"]).optional(), accountId: text.min(1), eligible: z.boolean(),
   ineligibleReason: z.enum(["config_off", "tier", "seat", "mobile", "surface", "cli_version", "no_grant", "tenure", "other_experiment", "unavailable", "unknown"]).nullable(),
   atLimit: z.boolean(), grants: z.array(grant).refine(values => new Set(values.map(value => value.id)).size === values.length), nextGrantId: grantId.nullable(), weeklyResetsAt: date, cooldownUntil: date,
   pendingOperation: z.object({ operationId: z.string().uuid(), grantId, createdAt: z.number().finite(),

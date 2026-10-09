@@ -52,11 +52,10 @@ import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { poolAccountProviderLabel } from "../../providers/label";
 import { getAccountSet } from "../../oauth/store";
+import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import {
+  anthropicRoutingFor,
   formatAnthropicProviderForLog,
-  getAnthropicAccountHealthSnapshot,
-  getAnthropicPoolRetryAfterSeconds,
-  getEligibleAnthropicAccounts,
 } from "../../oauth/anthropic-routing";
 import { codexAccountLogLabel } from "../../codex/account-label";
 import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
@@ -118,10 +117,11 @@ export const COMBO_TARGET_BASE_SENDS = CODEX_TEXT_GUARDED_BUDGET_POLICY.baseSend
 
 function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId: string, label: string | undefined): string | undefined {
   if (!label) return undefined;
-  if (providerName === "anthropic") {
-    const matches = getAccountSet("anthropic")?.accounts.filter(account =>
-      formatAnthropicProviderForLog("anthropic", account.id) === label) ?? [];
-    return matches.length === 1 && getAnthropicAccountHealthSnapshot(matches[0]!.id) ? label : undefined;
+  const instance = configuredAnthropicInstance(config, providerName);
+  if (instance && config.providers[providerName]?.authMode === "oauth") {
+    const matches = getAccountSet(instance)?.accounts.filter(account =>
+      formatAnthropicProviderForLog(instance, account.id) === label) ?? [];
+    return matches.length === 1 && anthropicRoutingFor(instance).getAnthropicAccountHealthSnapshot(matches[0]!.id) ? label : undefined;
   }
   const provider = config.providers[providerName];
   if (!provider || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
@@ -152,12 +152,13 @@ export function isAnthropicPoolLocalRefusal(
   failedAccount: string | undefined,
   now = Date.now(),
 ): boolean {
-  return providerName === "anthropic"
+  const instance = configuredAnthropicInstance(config, providerName);
+  return instance !== undefined
     && config.providers[providerName]?.authMode === "oauth"
     && status === 429
     && failedAccount === undefined
-    && getEligibleAnthropicAccounts(now).length === 0
-    && getAnthropicPoolRetryAfterSeconds(now) !== null;
+    && anthropicRoutingFor(instance).getEligibleAnthropicAccounts(now).length === 0
+    && anthropicRoutingFor(instance).getAnthropicPoolRetryAfterSeconds(now) !== null;
 }
 
 /**
@@ -713,6 +714,9 @@ export async function executeComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
+    const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+    // The inherited spend tracker observes this parent log, before the child has its own label.
+    logCtx.spendPoolId = targetRoute.providerName;
     // The first target seeds the ledger's target identity and charges nothing; every later one
     // is a real transition, refused once the declared hops, the alternate-target ledger or the
     // request total are spent. `countedExternally` is required: the child charges its own
@@ -744,7 +748,6 @@ export async function executeComboResponses(
       ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     };
-    const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
     const targetReasoningEfforts = supportedLadderFor({
       provider: targetRoute.provider,
       modelId: targetRoute.modelId,
@@ -861,6 +864,7 @@ export async function executeComboResponses(
       response = nativeChild ? await dispatchNativeComboChild({
         source: options.protocolSource!,
         plan: nativeChild,
+        comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         logCtx,
         childLog,
         attempt,
@@ -886,6 +890,7 @@ export async function executeComboResponses(
         // parent arrived with.
         sendBudget: targetSendBudget,
         comboAttempt: true,
+        comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later

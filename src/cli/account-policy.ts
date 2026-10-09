@@ -1,3 +1,4 @@
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
 import { isValidProviderName } from "../config/provider-name";
 import { resolveCodexAccountTargetFromRows } from "./account-target";
@@ -13,7 +14,7 @@ const USAGE = "Usage: ocx account pool <provider> [--enabled on|off] [--threshol
   + "       ocx account auto-switch openai <status|on|off|inherit|threshold N> --account ID [--json]\n"
   + "       ocx account credits openai <ID on|off|--all on|off> [--json]\n"
   + "       ocx account quota-activation openai ID --window <fiveHour|weekly> <on|off> [--json]\n"
-  + "       ocx account anthropic-reset-grants [ID] [--json]";
+  + "       ocx account anthropic-reset-grants [ID] [--provider anthropic|anthropic2] [--json]";
 const READ_ERRORS = { no_account: "No matching Anthropic OAuth account.", auth_failed: "Sign in to this Anthropic account again.",
   upstream_unavailable: "Anthropic did not return the reset-grant status.", ledger_unavailable: "The reset journal is unavailable.",
   ledger_busy: "The reset journal is busy. No grant was consumed." };
@@ -67,14 +68,14 @@ async function pool(args: string[], json: boolean, deps: RuntimeApiDeps): Promis
     patch.strategy = strategy;
   }
   if (window !== undefined) {
-    if (provider !== "anthropic" || !["five-hour", "weekly", "max-utilization"].includes(window)) usage();
+    if (!isAnthropicInstanceId(provider) || !["five-hour", "weekly", "max-utilization"].includes(window)) usage();
     patch.quotaWindow = window;
   }
   done(args);
   const pinned = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
   const before = parseDto(poolSchema, await request(`/api/pool/settings?provider=${encodeURIComponent(provider)}`, pinned));
   requireEqual(before.provider, provider);
-  requireEqual(before.kind, provider === "openai" ? "codex" : provider === "anthropic" ? "anthropic" : "generic");
+  requireEqual(before.kind, provider === "openai" ? "codex" : isAnthropicInstanceId(provider) ? "anthropic" : "generic");
   if (Object.keys(patch).some(key => !(before.supported as string[]).includes(key))
     || (before.kind === "codex" && enabled !== undefined)) throw new CliUsageError("The selected pool does not support a requested field.");
   if (!Object.keys(patch).length) return output(before, json);
@@ -157,10 +158,18 @@ export async function handleAccountPolicyCommand(sub: Subcommand, args: string[]
     if (rest.includes("--json")) usage();
     if (sub === "pool") return pool(rest, json, deps);
     if (sub !== "anthropic-reset-grants") return codex(sub, rest, json, deps);
+    const selectedProvider = option(rest, "--provider");
+    const provider = selectedProvider ?? "anthropic";
+    if (!isAnthropicInstanceId(provider)) usage();
     const id = rest.length ? selector(rest.shift()) : undefined;
     done(rest);
     const pinned = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
-    const result = parseDto(grantsSchema, await request(`/api/anthropic/reset-grants${id ? `?accountId=${encodeURIComponent(id)}` : ""}`, pinned));
+    // Omission preserves legacy A request syntax; explicit calls verify the echoed instance.
+    const query = new URLSearchParams();
+    if (id) query.set("accountId", id);
+    if (selectedProvider !== undefined) query.set("provider", provider);
+    const result = parseDto(grantsSchema, await request(`/api/anthropic/reset-grants${query.size ? `?${query}` : ""}`, pinned));
+    if (selectedProvider !== undefined || result.provider !== undefined) requireEqual(result.provider, provider);
     if (id) requireEqual(result.accountId, id);
     return output(result, json, "Reset-grant status read; no grant was consumed.");
   }, READ_ERRORS);

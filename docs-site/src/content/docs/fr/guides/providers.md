@@ -295,7 +295,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 102 préréglages intégrés : 84 à clé, 14 OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 103 préréglages intégrés : 84 à clé, 15 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 

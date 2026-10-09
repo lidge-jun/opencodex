@@ -64,7 +64,7 @@ describe("createInferenceSendBudget", () => {
         if (sends === 0) hop.permit?.use();
         sends++;
         return new Response("", { status: sends === 3 ? 200 : 503 });
-      }, { attempts: allowance.attempts, onSendsConsumed: owner.noteTransientSends });
+      }, { attempts: allowance.attempts, onSendsConsumed: owner.transientSendReporter(allowance.permit) });
       expect(response.status).toBe(200);
       expect(sends).toBe(3);
       expect(budget.used).toBe(12);
@@ -207,4 +207,25 @@ describe("createInferenceSendBudget", () => {
     expandInferenceOAuthSendBudget(started, 4);
     expect(started.policy).toEqual(CODEX_TEXT_GUARDED_BUDGET_POLICY);
   });
+});
+
+test("ingress reuses its tracker only for the same request even when log context is reused", () => {
+  const logCtx: RequestLogContext = { model: "m", provider: "p" };
+  const first = new Request("http://localhost/v1/responses");
+  createInferenceSendBudget(first, logCtx);
+  const initial = logCtx.spendTracker;
+  createInferenceSendBudget(first, logCtx);
+  expect(logCtx.spendTracker).toBe(initial);
+  createInferenceSendBudget(new Request("http://localhost/v1/responses"), logCtx);
+  expect(logCtx.spendTracker).not.toBe(initial);
+});
+
+test("checking an unconfigured ingress budget does not open its journal", async () => {
+  const { existsSync } = await import("node:fs");
+  const { createPhysicalSendReporter } = await import("../../src/lib/request-execution-budget");
+  const budget = createInferenceSendBudget(new Request("http://localhost/v1/responses"), { model: "m", provider: "p" });
+  expect(budget.spendEnforced).toBe(false);
+  expect(createPhysicalSendReporter(budget, () => ({ poolId: "p" })).beforeSend).toBeFunction();
+  expect(existsSync(join(home, "spend-ledger.salt"))).toBe(false);
+  expect(existsSync(join(home, "spend-ledger.jsonl"))).toBe(false);
 });

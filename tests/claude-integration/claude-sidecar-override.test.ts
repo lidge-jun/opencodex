@@ -38,6 +38,20 @@ const request = parseRequest({
   tools: [{ type: "web_search" }],
 });
 
+test("Claude helper replay inherits or overrides the instance without changing global settings", () => {
+  const config: OcxConfig = { port: 10100, defaultProvider: "anthropic", providers: {},
+    webSearchSidecar: { backend: "anthropic", anthropicInstance: "anthropic" },
+    visionSidecar: { backend: "anthropic", anthropicInstance: "anthropic2", timeoutMs: 30_000 },
+    claudeCode: { webSearchSidecar: { anthropicInstance: "anthropic2" } },
+  };
+  const replay = buildClaudeReplayConfig(config);
+  expect(replay.webSearchSidecar?.anthropicInstance).toBe("anthropic2");
+  expect(replay.visionSidecar?.anthropicInstance).toBe("anthropic2");
+  expect(replay.visionSidecar?.timeoutMs).toBe(30_000);
+  expect(config.webSearchSidecar?.anthropicInstance).toBe("anthropic");
+  expect(config.claudeCode?.visionSidecar).toBeUndefined();
+});
+
 test("Claude replay overrides both sidecars while preserving global-only settings", () => {
   const config: OcxConfig = {
     port: 10100,

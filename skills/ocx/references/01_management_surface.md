@@ -29,7 +29,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [providers-models](01_surface_providers-models.md) | 47 |
 | [accounts](01_surface_accounts.md) | 40 |
 | [agents-routing](01_surface_agents-routing.md) | 50 |
-| [integrations](01_surface_integrations.md) | 40 |
+| [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 92 |
 | [access-remote](01_surface_access-remote.md) | 28 |
 | [lab](01_surface_lab.md) | 21 |
@@ -827,6 +827,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_integrations.md#ocx-integration-client-restore)
 
+### `ocx commandcode restore`
+
+[State-changing task](01_surface_integrations.md#ocx-commandcode-restore)
+
 ### `ocx claude config status`
 
 [Read-oriented task](01_surface_integrations.md#ocx-claude-config-status)
@@ -1369,6 +1373,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 330
-- of those, state-changing: 199
+- declared capabilities: 331
+- of those, state-changing: 200
 - head-resolved invocations: 2

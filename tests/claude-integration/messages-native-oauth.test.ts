@@ -7,7 +7,7 @@ import { rotateAnthropicAccountOn429 } from "../helpers/anthropic-shared-quota";
  * prefix back in the answer. Pooled accounts keep the native wire with shared recovery. Every credential here is
  * synthetic, and any real network call fails the case.
  */
-import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, spyOn, mock } from "bun:test";
 import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -702,9 +702,19 @@ test("malformed route after an asynchronous admission is a request error", async
   expect(anthropicSessionAffinitySizeForTests()).toBe(0);
 });
 
+function mockPrimaryFamilyClaim(implementation: typeof familyQuota.claimAnthropicFamilyRevalidation) {
+  const claim = mock(implementation);
+  const resolve = familyQuota.anthropicModelQuotaFor;
+  const factory = spyOn(familyQuota, "anthropicModelQuotaFor").mockImplementation(instance => {
+    const facade = resolve(instance);
+    return instance === "anthropic" ? { ...facade, claimAnthropicFamilyRevalidation: claim } : facade;
+  });
+  return { claim, restoreClaim: () => factory.mockRestore() };
+}
+
 test("denied family lease records no physical send and creates no spend journal", async () => {
   await seed(1);
-  const denied = spyOn(familyQuota, "claimAnthropicFamilyRevalidation").mockReturnValue(null);
+  const { claim: denied, restoreClaim } = mockPrimaryFamilyClaim(() => null);
   try {
     const { response, row } = await send(fixtureConfig(), { ...BODY, stream: false });
     expect(response.status).toBe(429);
@@ -712,13 +722,13 @@ test("denied family lease records no physical send and creates no spend journal"
     expect(sent).toHaveLength(0);
     expect(row.attempts?.reduce((sum, attempt) => sum + attempt.sendCount, 0) ?? 0).toBe(0);
     expect(existsSync(join(home, "spend-ledger.jsonl"))).toBe(false);
-  } finally { denied.mockRestore(); }
+  } finally { restoreClaim(); }
 });
 
 test("family lease is released on physical transport failure", async () => {
   await seed(1);
   let releases = 0;
-  const claimed = spyOn(familyQuota, "claimAnthropicFamilyRevalidation").mockImplementation(() => () => { releases++; });
+  const { claim: claimed, restoreClaim } = mockPrimaryFamilyClaim(() => () => { releases++; });
   const config = fixtureConfig();
   config.providers.anthropic!.fetch = (async () => { throw new Error("fixture transport failed"); }) as typeof fetch;
   try {
@@ -726,7 +736,7 @@ test("family lease is released on physical transport failure", async () => {
     expect(response.status).toBe(502);
     expect(claimed).toHaveBeenCalledTimes(1);
     expect(releases).toBe(1);
-  } finally { claimed.mockRestore(); }
+  } finally { restoreClaim(); }
 });
 
 test("refusal cancellation starts before replacement selection without awaiting deferred disposal", async () => {
@@ -793,7 +803,7 @@ test("family lease releases when spend admission refuses without a physical send
   await seed(1);
   const config = fixtureConfig();
   let releases = 0;
-  const claimed = spyOn(familyQuota, "claimAnthropicFamilyRevalidation").mockImplementation(() => () => { releases++; });
+  const { claim: claimed, restoreClaim } = mockPrimaryFamilyClaim(() => () => { releases++; });
   configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: 1 } }));
   try {
     const { response, row } = await send(config, { ...BODY, stream: false });
@@ -803,7 +813,7 @@ test("family lease releases when spend admission refuses without a physical send
     expect(sent).toHaveLength(0);
     expect(row.attempts?.reduce((sum, attempt) => sum + attempt.sendCount, 0) ?? 0).toBe(0);
   } finally {
-    claimed.mockRestore();
+    restoreClaim();
     configureSharedSpendLedger(DEFAULT_SPEND_RESERVATION_POLICY);
   }
 });
@@ -813,7 +823,7 @@ test("family lease releases when cancellation arrives at admission before accoun
   const config = fixtureConfig();
   const controller = new AbortController();
   let releases = 0;
-  const claimed = spyOn(familyQuota, "claimAnthropicFamilyRevalidation").mockImplementation(() => {
+  const { claim: claimed, restoreClaim } = mockPrimaryFamilyClaim(() => {
     controller.abort(new Error("fixture cancellation"));
     return () => { releases++; };
   });
@@ -825,7 +835,7 @@ test("family lease releases when cancellation arrives at admission before accoun
     expect(sent).toHaveLength(0);
     expect(row.attempts?.reduce((sum, attempt) => sum + attempt.sendCount, 0) ?? 0).toBe(0);
     expect(existsSync(join(home, "spend-ledger.jsonl"))).toBe(false);
-  } finally { claimed.mockRestore(); }
+  } finally { restoreClaim(); }
 });
 
 test("a late UUID-only replacement cannot receive the sender's refusal attribution", async () => {

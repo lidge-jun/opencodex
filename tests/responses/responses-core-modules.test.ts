@@ -161,7 +161,7 @@ describe("Responses request-owned send budget after extraction", () => {
       expect(owner.pendingHopPermit).toBeUndefined();
       expect(hop.permit.use()).toBe(true);
       expect(hop.permit.use()).toBe(false);
-      owner.noteTransientSends(1);
+      owner.transientSendReporter(allowance.permit)(1);
       expect(holder.used).toBe(4);
       expect(owner.remainingTransientSendBudget(3)).toBe(0);
     } finally { dispose(); }

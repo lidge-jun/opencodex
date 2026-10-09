@@ -646,12 +646,15 @@ window breaks that model — the chat errors out before the summary can fire.
 
 A model's advertised context window does not guarantee that a tool-heavy request fits the
 upstream input limit. A classified input-limit rejection reaches Claude Code as
-`invalid_request_error` with `context_length_exceeded`; a non-streaming response uses HTTP 400
-instead of a retryable 502. Reduce the current input or compact earlier. If `/compact` also
-exceeds the limit, preserve the original history and try compacting a fork with fewer enabled
-tool or MCP schemas, if your client supports that workflow. Recovery still depends on the
-reduced request fitting the upstream limit. A `[1m]` marker or larger client accounting setting
-does not raise that limit, and OpenCodex does not silently remove history or tools to make it fit.
+`invalid_request_error` with `context_length_exceeded`, worded the way Anthropic words it
+(`prompt is too long: …`, with token counts when the provider states them), so Claude Code
+compacts the conversation and retries on its own; a non-streaming response uses HTTP 400 instead
+of a retryable 502. Providers on the native Messages lane get the same wording. A throughput
+limit that only mentions tokens (for example "too many tokens per minute") keeps its text and is
+not treated as an overflow. If compaction itself still exceeds the limit, preserve the original
+history and try compacting a fork with fewer enabled tool or MCP schemas, if your client supports
+that workflow. A `[1m]` marker or larger client accounting setting does not raise the upstream
+limit, and OpenCodex does not silently remove history or tools to make it fit.
 
 Sub-1M native Anthropic models are never auto-marked. Values you export yourself always win (the
 proxy uses YOUR value to decide which models are safe to mark). Invalid hand-edited config values

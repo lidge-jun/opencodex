@@ -1,4 +1,4 @@
-import { rotateAnthropicAccountOnResponse } from "../../oauth/anthropic-account-refusal";
+import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -35,7 +35,7 @@ import { persistKiroAccountState } from "../../providers/kiro-account-state-disk
 import { readDisplaySafeErrorText } from "./core-errors";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-  getAnthropicPoolAccessSnapshot,
+  anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
@@ -70,6 +70,8 @@ export async function executeResponsesSidecars(
     | "genericFailoverLimit"
     | "replayOAuthCredentialSnapshot"
     | "applyFailoverSnapshot"
+    | "anthropicInstance"
+    | "currentAnthropicRouteDecision"
     | "anthropicRouteDecision"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
@@ -95,6 +97,8 @@ export async function executeResponsesSidecars(
     && isGenericOAuthFailoverEnabled(config, requestState.route.providerName);
   const {
     applyFailoverSnapshot,
+    anthropicInstance,
+    currentAnthropicRouteDecision,
     anthropicSessionKey,
     commitResolvedOAuthSelection,
     resolveSelectionAdapter,
@@ -198,7 +202,7 @@ export async function executeResponsesSidecars(
   ): Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null> => {
     const antigravityValidationResponse = canRunWebSearch && route.providerName === "google-antigravity"
       && route.provider.authMode === "oauth" && originalResponse?.status === 403;
-    if (route.providerName !== "kiro" && !(route.providerName === "anthropic" && originalResponse?.status === 403)
+    if (route.providerName !== "kiro" && !(anthropicInstance && originalResponse?.status === 403)
       && !antigravityValidationResponse && originalResponse && originalResponse.status !== 429) return null;
     let antigravityVerification = false;
     if (antigravityValidationResponse) {
@@ -325,7 +329,7 @@ export async function executeResponsesSidecars(
       // Anthropic's pool is excluded from generic failover, so without this arm a 429 inside a
       // web-search or image-bridge turn was terminal even with the pool fully enabled -- while
       // the very same 429 on the main response path rotated.
-      transportState.anthropicPoolAccountId
+      anthropicInstance && transportState.anthropicPoolAccountId
     ) {
       // Same intersection for the Anthropic roster: its own per-request bound still applies,
       // and the shared budget decides whether this request may spend another send at all.
@@ -333,10 +337,10 @@ export async function executeResponsesSidecars(
         "auth-recovery",
         `${route.providerName}|${route.modelId}|sidecar-anthropic-429`,
       );
-      const nextAccountId = await rotateAnthropicAccountOnResponse(
+      const nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance,
         originalResponse ?? new Response(null, { status: 429, headers: responseHeaders ?? (retryAfter ? { "retry-after": retryAfter } : undefined) }), {
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: options.abortSignal,
+          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: options.abortSignal,
           allow429Recovery: !sidecarHasCommittedOutput(), allowAccountRefusal: !sidecarHasCommittedOutput(),
           canRetry: hop.allowed && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
         });
@@ -350,12 +354,12 @@ export async function executeResponsesSidecars(
         // carries none, and getAnthropicPoolAccessToken is what enforces its fail-closed
         // local-cli credential rule. Both existing Anthropic rotation sites apply the token the
         // same way.
-        const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
+        const admitted = await commitResolvedOAuthSelection(await anthropicRoutingFor(anthropicInstance).getAnthropicPoolAccessSnapshot(nextAccountId));
         if (!admitted) throw new Error("OAuth selection changed during recovery");
         transportState.anthropicPoolAccountId = admitted.accountId;
         transportState.anthropicPoolFailovers += 1;
         route.provider = { ...route.provider, apiKey: admitted.accessToken };
-        logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
+        logCtx.provider = formatAnthropicProviderForLog(anthropicInstance, admitted.accountId, config);
       } catch {
         hop.permit?.release();
         return null;

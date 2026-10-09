@@ -2,9 +2,16 @@ import { describe, expect, test } from "bun:test";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
+  createPhysicalSendReporter,
   deriveRequestExecutionBudget,
+  reportDispatchSends,
   type RequestExecutionBudgetPolicy,
 } from "../../src/lib/request-execution-budget";
+import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } from "../../src/lib/spend-reservation-ledger";
+import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { fetchWithTransientRetry, SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { createShippedSpendLedger, spendTestJournal, testSpendSalt } from "../helpers/shipped-spend-ledger";
+import { SpendLedgerOwnerError } from "../../src/lib/spend-ledger-owner";
 
 /**
  * The permit is the charge (#4546).
@@ -24,6 +31,167 @@ const ONE_SEND_LEFT: RequestExecutionBudgetPolicy = {
   maxAlternateTargetSends: 1,
   maxTargetTransitions: 1,
 };
+
+function policyEpochFixture(maxTokens?: number, limit = 4) {
+  const journal = spendTestJournal();
+  const policy = { ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens }, canonicalProviderIds: ["P"] };
+  const ledger = createSpendReservationLedger({ policy, journal, salt: testSpendSalt, now: () => 2 });
+  const request = () => {
+    const tracker = createRequestSpendTracker({ provider: "P", spendInputEstimateTokens: 10 }, undefined, ledger);
+    const budget = createRequestExecutionBudget({ ...ONE_SEND_LEFT, maxTotalModelSends: limit, baseSendAllowance: limit }, undefined, tracker);
+    const send = (identityId = "A", run = async () => new Response()) => fetchWithTransientRetry(run, {
+      attempts: 1, onSendsConsumed: createPhysicalSendReporter(budget, () => ({ poolId: "P", identityId })),
+    });
+    return { tracker, budget, send };
+  };
+  return { ledger, journal, policy, request, configure: (maxTokens?: number) => ledger.reconfigure({ ...policy, pool: { maxTokens } }) };
+}
+
+test("request construction and read-only policy checks do not capture before actual start", async () => {
+  const { request, configure, journal } = policyEpochFixture();
+  const { tracker, budget, send } = request();
+  expect(budget.spendEnforced).toBe(false);
+  expect(budget.spendPolicyStarted).toBe(false);
+  expect(journal.lines).toHaveLength(0);
+  configure(5);
+  await expect(send()).rejects.toThrow(SendBudgetExhaustedError);
+  expect(tracker.enforced).toBe(true);
+  expect(budget.spendPolicyStarted).toBe(true);
+  expect(budget.physicalStarted).toBe(0);
+});
+
+test("an off-start request stays legacy while the next request applies the new ceiling", async () => {
+  const { request, configure } = policyEpochFixture(undefined, 1);
+  const old = request();
+  await old.send("A", async () => { configure(5); return new Response(); });
+  await old.send("B");
+  expect(old.budget.spendEnforced).toBe(false);
+  expect(old.budget.physicalStarted).toBe(0);
+  expect(old.budget.used).toBe(2);
+  old.tracker.settle({ inputTokens: 70 });
+  await expect(request().send()).rejects.toThrow(SendBudgetExhaustedError);
+});
+
+for (const next of [undefined, 100, 5]) test(`an enforced request retains its original ceiling after reconfigure to ${next}`, async () => {
+  const { request, configure } = policyEpochFixture(15);
+  const old = request();
+  await old.send();
+  configure(next);
+  await expect(old.send("B")).rejects.toThrow(SendBudgetExhaustedError);
+  old.tracker.settle({ inputTokens: 10 });
+  const fresh = request();
+  if (next === 5) await expect(fresh.send()).rejects.toThrow(SendBudgetExhaustedError);
+  else { await fresh.send(); fresh.tracker.settle({ inputTokens: 10 }); }
+});
+
+test("overlapping requests use different immutable ceilings against the same totals", async () => {
+  const { request, configure, ledger } = policyEpochFixture(50);
+  const older = request();
+  await older.send();
+  configure(15);
+  const newer = request();
+  await expect(newer.send()).rejects.toThrow(SendBudgetExhaustedError);
+  await older.send("B");
+  older.tracker.settle({ inputTokens: 30 });
+  expect(ledger.snapshot("pool", "P")).toMatchObject({ settled: 30, unresolved: 10, reserved: 0 });
+});
+
+test("an enforced physical L remains fixed after a ceiling is disabled", async () => {
+  const { request, configure } = policyEpochFixture(100, 1);
+  const old = request();
+  await old.send(); configure();
+  await expect(old.send()).rejects.toThrow(SendBudgetExhaustedError);
+  expect(old.budget.physicalStarted).toBe(1);
+  old.tracker.settle({ inputTokens: 10 });
+});
+
+for (const ownerError of [false, true]) test(`fixed enforced terminal debt retries after ${ownerError ? "owner error" : "append failure"}`, async () => {
+  const { request, journal, ledger, policy } = policyEpochFixture(50);
+  const old = request(); await old.send();
+  const append = journal.append.bind(journal);
+  journal.append = line => { if (ownerError) throw new SpendLedgerOwnerError("SPEND_LEDGER_OWNER_NOT_HELD", "fixture"); append(line); };
+  journal.failAppend = !ownerError;
+  if (ownerError) expect(() => old.tracker.settle({ inputTokens: 70 })).toThrow(SpendLedgerOwnerError);
+  else old.tracker.settle({ inputTokens: 70 });
+  journal.append = append; journal.failAppend = false; ledger.prune();
+  expect(createShippedSpendLedger({ policy, journal: spendTestJournal(journal.lines), salt: testSpendSalt, now: () => 2 }).snapshot("pool", "P")).toMatchObject({ settled: 70, unresolved: 0 });
+});
+
+test("the actual first target determines the frozen enforcement mode", async () => {
+  const journal = spendTestJournal();
+  const ledger = createSpendReservationLedger({ journal, salt: testSpendSalt, policy: { ...DEFAULT_SPEND_RESERVATION_POLICY, identity: { maxTokens: 5 } } });
+  const tracker = createRequestSpendTracker({ spendInputEstimateTokens: 10 }, undefined, ledger);
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  expect(budget.spendEnforced).toBe(false);
+  await expect(fetchWithTransientRetry(async () => new Response(), {
+    attempts: 1, onSendsConsumed: createPhysicalSendReporter(budget, () => ({ identityId: "selected" })),
+  })).rejects.toThrow(SendBudgetExhaustedError);
+  expect(budget.spendEnforced).toBe(true);
+});
+
+for (const recovery of ["prune", "admission"] as const) for (const usage of [70, undefined]) test(`ordinary failed reserve repairs its prefix before terminal ${usage} via ${recovery}`, async () => {
+  const { request, journal, ledger, policy } = policyEpochFixture();
+  journal.failAppend = true;
+  const old = request(); await old.send();
+  old.tracker.settle(usage === undefined ? undefined : { inputTokens: usage });
+  journal.failAppend = false;
+  if (recovery === "prune") ledger.prune();
+  else expect(ledger.reserve({ sendId: "next-admission", scopes: {}, inputTokens: 0, outputCeilingTokens: 0 }).reserved).toBe(true);
+  const expected = { settled: usage ?? 0, unresolved: usage === undefined ? 10 : 0, reserved: 0 };
+  expect(ledger.snapshot("pool", "P")).toMatchObject(expected);
+  for (const create of [createSpendReservationLedger, createShippedSpendLedger]) {
+    expect(create({ policy, journal: spendTestJournal(journal.lines), salt: testSpendSalt, now: () => 2 }).snapshot("pool", "P")).toMatchObject(expected);
+  }
+  expect(journal.lines.map(line => JSON.parse(line).kind)).toEqual(["reserve", "dispatch", usage === undefined ? "lost" : "settle", ...(recovery === "admission" ? ["reserve"] : [])]);
+});
+
+test("captured ceiling preflight preserves exact prepaid exclusion across policy changes", () => {
+  const { request, configure, ledger } = policyEpochFixture(10);
+  const old = request();
+  expect(old.budget.spendAdmissionPolicy).toBeUndefined();
+  const seed = old.tracker.ensureSeed({ poolId: "P" });
+  expect(seed).toBeDefined();
+  const captured = old.budget.spendAdmissionPolicy!;
+  expect(Object.isFrozen(captured)).toBe(true);
+  expect(Object.isFrozen(captured.pool)).toBe(true);
+  configure();
+  expect(ledger.exhausted("pool", "P")).toBe(false);
+  expect(ledger.exhausted("pool", "P", undefined, captured)).toBe(true);
+  expect(ledger.exhausted("pool", "P", seed!.sendId, captured)).toBe(false);
+  expect(ledger.exhausted("pool", "P", "foreign", captured)).toBe(true);
+  ledger.markDispatched(seed!.sendId);
+  expect(ledger.exhausted("pool", "P", seed!.sendId, captured)).toBe(true);
+});
+
+test("started-off preflight retains an explicit empty ceiling view", () => {
+  const { request, configure, ledger } = policyEpochFixture();
+  const old = request();
+  old.budget.startRequest?.({ poolId: "P" });
+  configure(1);
+  ledger.reserve({ sendId: "prior", scopes: { poolId: "P" }, inputTokens: 2, outputCeilingTokens: 0, alreadySent: true });
+  expect(old.budget.spendAdmissionPolicy).toEqual({ root: {}, identity: {}, pool: {} });
+  expect(ledger.exhausted("pool", "P")).toBe(true);
+  expect(ledger.exhausted("pool", "P", undefined, old.budget.spendAdmissionPolicy)).toBe(false);
+});
+
+test("a prepaid reservation freezes L before a wider derived scope claims its first wire", async () => {
+  const { request } = policyEpochFixture(100, 1);
+  const { tracker, budget } = request();
+  const decision = budget.reserveDispatch({ sendClass: "initial", targetKey: "P", countedExternally: true });
+  if (!decision.allowed) throw new Error("fixture admission denied");
+  const child = deriveRequestExecutionBudget(budget, { ...ONE_SEND_LEFT, maxTotalModelSends: 4, baseSendAllowance: 4 });
+  expect(child.physicalLimit).toBe(1);
+  let wires = 0;
+  await fetchWithTransientRetry(async () => { wires++; return new Response(); }, {
+    attempts: 1, onSendsConsumed: createPhysicalSendReporter(child, () => ({ poolId: "P" }), decision.permit),
+  });
+  await expect(fetchWithTransientRetry(async () => { wires++; return new Response(); }, {
+    attempts: 1, onSendsConsumed: createPhysicalSendReporter(child, () => ({ poolId: "P" })),
+  })).rejects.toThrow(SendBudgetExhaustedError);
+  expect(wires).toBe(1);
+  expect(budget.physicalStarted).toBe(1);
+  tracker.settle({ inputTokens: 10 });
+});
 
 describe("atomic dispatch permits", () => {
   test("two interleaved reserves for one remaining send produce exactly one permit", () => {
@@ -102,7 +270,7 @@ describe("atomic dispatch permits", () => {
     expect(leg.permit.use()).toBe(true);
     // `onSendsConsumed` reporting one physical send settles the pending booking instead of
     // charging a second time. Charging both is how a four-send cap became a two-send cap.
-    budget.used += 1;
+    reportDispatchSends(budget, 1, leg.permit);
     expect(budget.used).toBe(1);
 
     // Sends the helper made beyond the reserved one are still charged in full.
@@ -118,7 +286,7 @@ describe("atomic dispatch permits", () => {
       countedExternally: true,
     });
     if (!leg.allowed) throw new Error("unreachable");
-    budget.used += 1;
+    reportDispatchSends(budget, 1, leg.permit);
     expect(budget.used).toBe(1);
     // The send physically happened. A refund here would hand the request a free one back.
     leg.permit.release();
@@ -293,7 +461,8 @@ describe("a credential hop is settled by whichever layer dispatches its replay",
     expect(budget.used).toBe(1);
 
     // The helper names the same physical send the hop already booked.
-    budget.used += 1;
+    if (!hop.allowed) throw new Error("unreachable");
+    reportDispatchSends(budget, 1, hop.permit);
     expect(budget.used).toBe(1);
     // A genuinely second send is charged in full.
     budget.used += 1;
@@ -373,7 +542,8 @@ describe("derived policy scopes", () => {
 
     const target = deriveRequestExecutionBudget(scope, wide);
     // The reporter names the send that the booking above already paid for.
-    target.used += 1;
+    if (!hop.allowed) throw new Error("unreachable");
+    reportDispatchSends(target, 1, hop.permit);
     expect(parent.used).toBe(1);
     // Anything beyond it is a genuinely new send.
     target.used += 2;
@@ -455,8 +625,10 @@ describe("derived scopes and the durable spend observer", () => {
     const spy = recordingObserver();
     const parent = createRequestExecutionBudget(wide, "lr-once", spy.observer);
     const scope = deriveRequestExecutionBudget(parent, wide);
-    expect(scope.reserveDispatch({ sendClass: "initial", targetKey: "a/m", countedExternally: true }).allowed).toBe(true);
-    deriveRequestExecutionBudget(scope, wide).used += 1;
+    const hop = scope.reserveDispatch({ sendClass: "initial", targetKey: "a/m", countedExternally: true });
+    expect(hop.allowed).toBe(true);
+    if (!hop.allowed) throw new Error("unreachable");
+    reportDispatchSends(deriveRequestExecutionBudget(scope, wide), 1, hop.permit);
     expect(spy.events).toEqual(["charge"]);
     expect(parent.used).toBe(1);
   });
@@ -558,4 +730,69 @@ test("a validated rebase remains admissible after alternate-target spend and ref
   expect(budget.reserveDispatch({ ...intent, targetKey: "e" })).toEqual({ allowed: false, reason: "total-exhausted" });
   expect(budget.alternateTargetSends).toBe(1);
   expect(budget.targetTransitions).toBe(1);
+});
+
+test("a reported external receipt cannot be taken over by an adapter", () => {
+  const budget = createRequestExecutionBudget();
+  const decision = budget.reserveDispatch({ sendClass: "initial", targetKey: "same", countedExternally: true });
+  if (!decision.allowed) throw new Error("synthetic reservation refused");
+  reportDispatchSends(budget, 1, decision.permit);
+  expect(decision.permit.assumeCharge()).toBe(false);
+  expect(decision.permit.use()).toBe(true); // reset helper reports before its dispatch thunk
+  expect(decision.permit.use()).toBe(false);
+  decision.permit.release();
+  expect(budget.used).toBe(1);
+});
+
+test("adapter executor rebinds its live permit to the selected account before wire", async () => {
+  const { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } = await import("../../src/lib/spend-reservation-ledger");
+  const { createRequestSpendTracker } = await import("../../src/server/responses/request-spend");
+  const { createAdapterPhysicalSend } = await import("../../src/adapters/physical-send");
+  const { rebindPhysicalSend } = await import("../../src/lib/request-execution-budget");
+  const ledger = createSpendReservationLedger({ salt: "permit-selected-account", policy: {
+    ...DEFAULT_SPEND_RESERVATION_POLICY, identity: { maxTokens: 30 }, pool: { maxTokens: 1000 },
+  } });
+  const ctx = { provider: "P", spendPoolId: "P", accountLogLabel: "A", spendInputEstimateTokens: 1, spendOutputCeilingTokens: 0 };
+  const tracker = createRequestSpendTracker(ctx, undefined, ledger);
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  let wires = 0;
+  const send = createAdapterPhysicalSend({ sendBudget: budget, executor: (async () => {
+    ctx.accountLogLabel = "B";
+    expect(rebindPhysicalSend(budget, { poolId: "P", identityId: "B" })).toBe(true);
+    wires++;
+    tracker.settle({ inputTokens: 7 });
+    expect(ledger.snapshot("identity", "B")?.reserved).toBe(1);
+    return new Response();
+  }) as typeof fetch });
+  await send({ url: "https://permit.example.test/", dispatch: execute => execute("https://permit.example.test/") });
+  expect(wires).toBe(1);
+  expect(budget.physicalStarted).toBe(1);
+  expect(ledger.snapshot("identity", "A")?.settled ?? 0).toBe(0);
+  expect(ledger.snapshot("identity", "A")?.reserved ?? 0).toBe(0);
+  expect(ledger.snapshot("identity", "B")).toMatchObject({ settled: 7, reserved: 0, unresolved: 0 });
+});
+
+test("adapter executor refuses a reselection whose identity cannot obtain a normal seed", async () => {
+  const { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } = await import("../../src/lib/spend-reservation-ledger");
+  const { createRequestSpendTracker } = await import("../../src/server/responses/request-spend");
+  const { createAdapterPhysicalSend } = await import("../../src/adapters/physical-send");
+  const { rebindPhysicalSend } = await import("../../src/lib/request-execution-budget");
+  const { SendBudgetExhaustedError } = await import("../../src/lib/upstream-retry");
+  const ledger = createSpendReservationLedger({ salt: "permit-selected-account", policy: {
+    ...DEFAULT_SPEND_RESERVATION_POLICY, identity: { maxTokens: 30 }, pool: { maxTokens: 1000 },
+  } });
+  ledger.reserve({ sendId: "prior", scopes: { identityId: "B" }, inputTokens: 30, outputCeilingTokens: 0 });
+  ledger.settle("prior", { inputTokens: 30, outputTokens: 0 });
+  const tracker = createRequestSpendTracker({ provider: "P", accountLogLabel: "A", spendInputEstimateTokens: 1, spendOutputCeilingTokens: 0 }, undefined, ledger);
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  let wires = 0;
+  const send = createAdapterPhysicalSend({ sendBudget: budget, executor: (async () => {
+    if (!rebindPhysicalSend(budget, { poolId: "P", identityId: "B" })) throw new SendBudgetExhaustedError();
+    wires++;
+    return new Response();
+  }) as typeof fetch });
+  await expect(send({ url: "https://permit.example.test/", dispatch: execute => execute("https://permit.example.test/") })).rejects.toThrow(SendBudgetExhaustedError);
+  tracker.settle(undefined);
+  expect(wires).toBe(0);
+  expect(ledger.snapshot("identity", "B")).toMatchObject({ settled: 30, reserved: 0, unresolved: 0 });
 });

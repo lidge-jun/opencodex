@@ -23,7 +23,7 @@ description: ダッシュボードから opencodex を OpenCode、Pi、OMP、Her
 | omo | `~/.omo/agent/models.json` | JSON | 新しいセッション | ループバック用プレースホルダー |
 | Cline CLI | `~/.cline/data/settings/providers.json` と同階層の `models.json` | JSON のペア | Cline の停止と再起動後 | ループバック用プレースホルダー |
 | Kilo | `~/.config/kilo` 内で最初に存在する `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json`、`config.json`（`XDG_CONFIG_HOME` でディレクトリを変更可能。どれもなければ `kilo.jsonc` を作成） | JSONC | 新しいセッション | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (Windows: `%HOME%` が設定されていればその配下、なければ `%USERPROFILE%` 配下の `.commandcode\providers.json`) | JSON | Command Code の次回起動時 | なし — キー不要のループバック (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (Windows の既定ホームを使用する場合: `HOME ?? USERPROFILE` が空文字列や空白のみではなく Windows の絶対パスの場合に限り使用し、それ以外は `homedir()`。別途指定されたホームは保持。その配下の `.commandcode\providers.json`) | JSON | Command Code の次回起動時 | なし — キー不要のループバック (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows の場合) | JSON | ファイル変更を即時反映 | キー不要のループバック |
 
 生成されるカタログには、各プロバイダーの選択で有効なモデルのみが含まれます。これはダウンロードと管理対象の統合の両方に適用され、Pi と Aside も対象です。管理画面のモデル一覧にはすべてのモデルが表示されるため、追加のモデルを有効にできます。

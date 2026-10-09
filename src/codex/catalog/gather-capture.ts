@@ -32,6 +32,7 @@ import {
   type OAuthActiveTokenObservation,
 } from "../../oauth";
 import { getAccountSet } from "../../oauth/store";
+import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -389,15 +390,15 @@ export function captureProviderGather(
     ? authResolver.resolve(name, provider)
     : undefined;
   // A refreshing capture carries the stored origin so accounts on different hosts keep separate
-  // flights. The send is rebuilt from the auth the gather resolves, and the observed path never
+  // flights. Host-scoped auth rebuilds its request; B retains its configured captured target. Observed capture never
   // reads the live store.
   const oauthApiBaseUrl = observedAuth
     ? observedAuth.oauthApiBaseUrl
-    : authResolver.kind === "refreshing" && provider.authMode === "oauth"
+    : authResolver.kind === "refreshing" && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider)
       ? getOAuthCredentialApiBaseUrl(name)
       : undefined;
   const request = captureModelsRequest(name, provider, oauthApiBaseUrl);
-  const refreshingOAuthAccountId = !observedAuth && authResolver.kind === "refreshing" && provider.authMode === "oauth"
+  const refreshingOAuthAccountId = !observedAuth && authResolver.kind === "refreshing" && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider)
     ? getAccountSet(name)?.activeAccountId
     : undefined;
   const resolved = resolveProviderModelDiscovery(name, provider);
@@ -531,6 +532,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     live: prov.liveModels ?? null,
     base: prov.baseUrl ?? "",
     adapter: prov.adapter ?? "",
+    instance: prov.anthropicOAuthInstance ?? null,
     models: [...(prov.models ?? [])].sort(),
     retain: [...(prov.retainModels ?? [])].sort(),
     selected: [...(prov.selectedModels ?? [])].sort(),

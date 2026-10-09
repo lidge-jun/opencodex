@@ -230,3 +230,35 @@ This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+## 歷史集區用量的連續性
+
+提供者集區額度依路由選定的標準提供者計算，請求日誌仍保留帳戶顯示標籤。對於目前設定的每個提供者 `P`，讀取餘額時會自動將本安裝環境的加鹽集區別名 `h(pool, P)` 綁定至 `P`，相同別名下保留的歷史餘額也適用。各提供者的獨立額度不需要手動加入自身對應，也不需要用鹽值自行計算雜湊。
+
+其他歷史標籤，包括帶有帳戶序號的標籤，不會自動綁定。每份原始餘額只計入所屬群組一次；仍未綁定的正餘額則保守地計入每個候選集區一次。已結算、預留及尚未確認的用量都會計入，因此未知歷史可能限制尚未使用的集區。目前名稱或帳戶排列順序不能證明歷史歸屬。根請求及身分額度仍各自獨立。
+
+對於已確認歸屬的歷史，請在 `config.json` 最上層設定 `spendPoolAliases`，不要放在 `spend` 內。索引鍵是本安裝環境日誌中的完整歷史集區加鹽別名，由 32 個小寫十六進位字元組成；值必須是已確認且目前已設定的提供者完整 ID，前後不得有空白。請保密保存日誌、鹽值及確認依據。已設定提供者自己的集區別名不能對應到另一個提供者；提供者集合變更時會重新驗證。驗證只讀取現有鹽值，不會建立新鹽值。
+
+自動綁定及明確對應都只在讀取時套用，不搬移原始餘額，也不將身分關聯寫入日誌。刪除明確對應會讓該歷史重新成為歸屬未知；但如果別名屬於目前設定的提供者自身，自動綁定仍然有效。無效對應在寫入時會遭拒；手動編輯留下無效對應時，既有額度仍保留，但拒絕新的集區請求。
+
+閒置的未知歷史只有在最後活動時間嚴格早於 `spend.retentionDays` 的期限後才會到期。容量不足不會提早刪除正餘額的未知歷史。活動中的預留及其目標即使為零權杖也會保留；只有刪除紀錄已持久化後，請求准入判斷才會使用減少後的餘額。
+
+### 預留及傳送次數上限
+
+若根請求、身分或集區額度適用，每個目標或金鑰的首次傳送都必須先取得一般追蹤容量的預留。無法預留時，不會傳送至提供者。同一目標的重試沿用原有範圍；不同目標或金鑰需要新的預留。`L` 是整個請求共用的實體傳送次數上限，在請求開始時固定。預設為四次；既有 OAuth 請求設定最多允許十八次。
+
+是否執行額度限制、適用的根請求／身分／集區權杖額度，以及 `L`，都在請求開始時確定。設定變更只影響變更後開始的請求。已經執行中的請求在所有重試及後續傳送中保留開始時的策略：啟用或降低額度不會收緊它，提高或刪除額度也不會放寬它。以僅觀察模式開始的請求會維持該模式直到結束。
+
+最終結算會等待已開始傳送的回報完成。只有帳務已持久化後才會遺忘傳送 ID，餘額仍會保留。上限限制的是傳送次數而非帳單，超過初始估算的實際用量仍全數計入。沒有適用額度時，維持原有的僅觀察行為，包括追蹤容量已滿時省略記帳；不會新增身分關聯檢查點。
+
+Claude CLI、CodeBuddy 及 Qoder 將每次 CLI 呼叫計為一次傳送，啟動前仍須取得一般預留，否則拒絕啟動。CLI 內部重試及工具回合不會另外消耗整個請求的傳送次數上限。費用依回報的實際用量結算，包括超出初始估算的部分。
+
+### 回復至 2.80.0：契約 C
+
+新紀錄使用一般 v1 格式及 `pool` 別名範圍。未修改的 2.80.0 可依其逐標籤規則讀取、壓縮日誌及套用保留期限。請保留最新日誌及鹽值；還原較舊副本會遺失該副本之後記錄的支出。不需要回補修正、啟動阻擋機制或對帳指令。
+
+降版後不保證維持標準提供者的彙總，也不保證與相同流量從未升級、始終由 2.80.0 處理時具有相同的剩餘額度。再次升級時，目前設定提供者的自動綁定及明確對應會套用至 2.80.0 仍保留的原始餘額。新檢查點不含需要舊版讀取器保留的身分關聯中繼資料。
+
+未發布實驗版本的日誌若含 `pool-current` 或 `poolContinuity`，即使後來經過壓縮，仍不屬於契約 C。其原始餘額會作為未知歷史保留至正常到期，不會立即轉換或刪除。
+
+完整但無效的紀錄，包括最後一行的 `null`，會使有額度限制的請求遭拒。壓縮仍可將有效帳務保留在乾淨的檢查點；目前程序的拒絕狀態會持續到重新啟動並讀取乾淨日誌。寫入中斷的最後一行 JSON 沿用原有復原規則。詳細範圍及錯誤碼請見[英文原文](/reference/configuration/server/#historical-pool-continuity)。

@@ -316,12 +316,11 @@ The provider summary default applies at Responses ingress; native Chat and Anthr
 
 ## Claude context rejection
 
-Claude Messages preserves the classified `context_length_exceeded` error through
-`src/claude/outbound.ts`, `src/protocols/encoders/messages.ts`, and
-`src/server/claude-messages.ts`. Streaming output carries one `invalid_request_error`
-terminal with that code; collected and failed-JSON responses return HTTP 400 without
-a retry hint. This mapping adds no recovery send or context pruning. Unknown upstream
-failures, replay refusal, and local translation-buffer limits retain their distinct handling.
+Claude Messages preserves the classified `context_length_exceeded` error (`src/claude/outbound.ts`, `src/protocols/encoders/messages.ts`, `src/server/claude-messages.ts`): one streaming `invalid_request_error` terminal, or HTTP 400 without a retry hint when collected or failed-JSON.
+`anthropicErrorBody` words that envelope as Anthropic does (`prompt is too long: ...`, counts only when the upstream states both), because Claude Code compacts reactively only on that wording; a throughput limit the classifier files under that code (`per minute`, `rate limit`, `quota`, `TPM`) keeps its text.
+The native Messages lane (`src/server/messages-native.ts`) does the same for a configured provider's own 400/413 or streamed `invalid_request_error` refusal without changing the envelope shape; the stream rewrite sits after the log tap so stall timing still reads raw bytes, and Anthropic pools skip it.
+This adds no recovery send or context pruning; replay refusal and translation-buffer limits keep their handling.
+History: `devlog/_plan/261009_claude_1m_default/010_prompt_too_long_envelope.md`.
 
 ## Claude affinity at final Go dispatch
 

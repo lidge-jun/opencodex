@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { join } from "node:path";
 import { isValidProviderName } from "../provider-name";
 import {
@@ -285,6 +286,9 @@ const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
  * fields pass through (preserved for runtime extensions).
  */
 export const providerConfigSchema = z.object({
+  anthropicAccountPool: anthropicAccountPoolSchema,
+  // Raw diagnostics/writes reject malformed provenance; tolerant loads preserve the custom row.
+  anthropicOAuthInstance: z.literal("anthropic2").optional().catch(undefined),
   modelCapabilities: modelCapabilitiesSchema.optional(),
   modelContextTiers: z.unknown().superRefine((value, ctx) => {
     const error = contextTierRecordConfigError(value);
