@@ -1557,15 +1557,15 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // pre-translation stream + native passthrough callbacks) — do not re-wrap the
         // translated Anthropic stream here.
         const sessionReq = withCallerSessionIdentity(req, admission);
+        // Entering the handler, or a logged refusal, means the final request log owns requestId.
         let ownsRequestLog = false;
-        const response = await runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
-          ownsRequestLog = true;
-          return withCors(
-            await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" }),
-            req,
-            policy,
-          );
-        }, { requestId, start, logCtx, onLogged: () => { ownsRequestLog = true; } });
+        const claimRequestLog = (work: (lease: ActiveTurnLease) => Promise<Response>) =>
+          (lease: ActiveTurnLease) => { ownsRequestLog = true; return work(lease); };
+        const response = await runAdmittedHttpTurn(sessionReq, policy, claimRequestLog(async turnAdmissionLease => withCors(
+          await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" }),
+          req,
+          policy,
+        )), { requestId, start, logCtx, onLogged: () => { ownsRequestLog = true; } });
         return ownsRequestLog ? withMessagesRequestLogId(response, requestId) : response;
       }
 
