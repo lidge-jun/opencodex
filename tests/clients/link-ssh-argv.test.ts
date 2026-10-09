@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -162,21 +162,35 @@ test.skipIf(process.platform !== "win32")("PowerShell parses the remote command 
   expect(result.stdout.toString().trim()).toBe("sh");
 });
 
+/** Install a stub `ocx` in `dir` that prints `label`, the PATH it ran with, and each argument in brackets. */
 function fakeOcx(dir: string, label: string): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "ocx"), `#!/bin/sh\nprintf "%s\\n" "${label}" "$PATH"\nfor arg in "$@"; do printf "[%s]\\n" "$arg"; done\n`, { mode: 0o755 });
+}
+
+/**
+ * A remote PATH that resolves `sh` and nothing else. A system PATH such as /usr/bin:/bin may
+ * already hold a real ocx (the Linux desktop package installs /usr/bin/ocx), and the prelude
+ * deliberately lets that one win, so the stub under ~/.bun/bin would never run.
+ */
+function shOnlyRemotePath(home: string): string {
+  const dir = join(home, "remote-bin");
+  mkdirSync(dir, { recursive: true });
+  symlinkSync("/bin/sh", join(dir, "sh"));
+  return dir;
 }
 
 test.skipIf(process.platform === "win32")("the remote prelude appends ~/.bun/bin after the remote PATH and keeps every argument", () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-link-remote-home-"));
   roots.push(home);
   fakeOcx(join(home, ".bun", "bin"), "bun");
+  const remotePath = shOnlyRemotePath(home);
   const command = quoteRemote(remoteOcxArgv(["link", "issue", "--alias", "it's x", "--json"]));
-  const result = Bun.spawnSync(["/bin/sh", "-c", command], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+  const result = Bun.spawnSync(["/bin/sh", "-c", command], { env: { HOME: home, PATH: remotePath } });
   expect(result.exitCode).toBe(0);
   const lines = result.stdout.toString().trim().split("\n");
   expect(lines[0]).toBe("bun");
-  expect(lines[1]).toBe(`/usr/bin:/bin:${home}/.bun/bin:${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin`);
+  expect(lines[1]).toBe(`${remotePath}:${home}/.bun/bin:${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin`);
   expect(lines.slice(2)).toEqual(["[link]", "[issue]", "[--alias]", "[it's x]", "[--json]"]);
 });
 
@@ -198,7 +212,7 @@ test.skipIf(process.platform === "win32")("the constructed remote command preser
   writeFileSync(join(bin, "ocx"), "#!/bin/sh\nprintf '%s\\0' \"$@\"\n", { mode: 0o755 });
   const args = ["it's x", "two\nlines", "火🔥", "x;$(echo no)", ""];
   const remote = quoteRemote(remoteOcxArgv(args));
-  const result = Bun.spawnSync(["/bin/sh", "-c", remote], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+  const result = Bun.spawnSync(["/bin/sh", "-c", remote], { env: { HOME: home, PATH: shOnlyRemotePath(home) } });
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toEqual(new TextEncoder().encode(args.join("\0") + "\0"));
 });

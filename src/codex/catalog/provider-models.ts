@@ -41,6 +41,7 @@ import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, mo
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
+import { isAzureModelMetadataDestination, refreshAzureModelMetadata } from "../../providers/azure-model-metadata";
 import {
   captureFastPolicyAuthority,
   fastPolicyForModel,
@@ -169,7 +170,8 @@ export async function fetchProviderModelsWithAuth(
   contextCap: number | undefined,
   resolveAuth: ModelsAuthResolver,
 ): Promise<ProviderModelsResult> {
-  const { name, provider: prov, discovery, metadataModelIdCaseFold } = captured;
+  const { name, provider: prov, discovery, metadataModelIdCaseFold, metadataConfigDir } = captured;
+  const azureMetadata = isAzureModelMetadataDestination(prov.baseUrl);
   const observed = (
     models: CatalogModel[],
     state: CatalogGatherProviderModelOutcome["state"],
@@ -185,6 +187,7 @@ export async function fetchProviderModelsWithAuth(
   const anthropicSelection = isAnthropicOAuthInstance(name) && prov.authMode === "oauth" && mayResolveModelsOAuth(name, prov)
     ? captureOAuthAccountSelection(name) : null;
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
+  if (azureMetadata) await refreshAzureModelMetadata(prov.baseUrl, metadataConfigDir);
   const seedVertexDefault = prov.adapter === "google"
     && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0
@@ -203,7 +206,7 @@ export async function fetchProviderModelsWithAuth(
   const configured: CatalogModel[] = configuredIds.map(id => ({
     id,
     provider: name,
-    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
   }));
   const withConfiguredRetention = (
     models: CatalogModel[],
@@ -219,6 +222,7 @@ export async function fetchProviderModelsWithAuth(
       seedVertexDefault,
       retainComboTargets: options?.retainComboTargets,
       metadataModelIdCaseFold,
+      metadataConfigDir,
     });
     if (
       options?.warnDrops === true
@@ -251,7 +255,7 @@ export async function fetchProviderModelsWithAuth(
       }
       return observed(ids.map(id => {
         const hints = catalogHintsFromProviderConfig(name, prov, id, contextCap,
-          metadataModelIdCaseFold, captured.effectiveAlias);
+          metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir);
         const observedWindow = kiroObservedContextWindow(id);
         return { id, provider: name, ...hints,
           ...(observedWindow !== undefined
@@ -296,7 +300,7 @@ export async function fetchProviderModelsWithAuth(
     : [{
       id: prov.defaultModel,
       provider: name,
-      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
     }];
   const vertexDefaultSeed = seedVertexDefault ? configured[0] : undefined;
   const withVertexDefaultSeed = (models: CatalogModel[]): CatalogModel[] => (
@@ -318,13 +322,13 @@ export async function fetchProviderModelsWithAuth(
     const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (fresh) {
       return observed(withConfiguredRetention(
-        applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
       ), "authoritative");
     }
     const scopedStale = getStaleCached(name, authorityIdentity);
     if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity) && scopedStale) {
       return observed(withConfiguredRetention(
-        applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
       ), "degraded");
     }
     const live = await fetchCodeBuddyModels(profile, apiKey);
@@ -332,7 +336,7 @@ export async function fetchProviderModelsWithAuth(
       const discovered = live.models.map(id => ({
         id,
         provider: name,
-        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
       }));
       const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
@@ -348,7 +352,7 @@ export async function fetchProviderModelsWithAuth(
     }
     const stale = getStaleCached(name, authorityIdentity);
     return observed(withConfiguredRetention(
-      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir) : configured,
     ), "degraded");
   }
   if (name === "zed" && prov.adapter === "zed") {
@@ -361,14 +365,14 @@ export async function fetchProviderModelsWithAuth(
     const cached = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (cached) {
       return observed(
-        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cached, contextCap, metadataModelIdCaseFold, captured.effectiveAlias)),
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cached, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir)),
         "authoritative",
       );
     }
     const stale = getStaleCached(name, authorityIdentity);
     if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity) && stale) {
       return observed(
-        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias)),
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir)),
         "degraded",
       );
     }
@@ -388,7 +392,7 @@ export async function fetchProviderModelsWithAuth(
           ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}),
           ...(model.supportsImages ? { inputModalities: ["text", "image"] } : {}),
           ...(reasoningEfforts?.length ? { reasoningEfforts } : {}),
-          ...catalogHintsFromProviderConfig(name, prov, model.id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+          ...catalogHintsFromProviderConfig(name, prov, model.id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
         } as CatalogModel;
       });
       const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
@@ -403,7 +407,7 @@ export async function fetchProviderModelsWithAuth(
         markProviderDiscoveryFailed(name, { reason: "provider" });
       }
       return observed(
-        withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias) : configured),
+        withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir) : configured),
         "degraded",
       );
     }
@@ -419,13 +423,13 @@ export async function fetchProviderModelsWithAuth(
     const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (fresh) {
       return observed(withConfiguredRetention(
-        applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
       ), "authoritative");
     }
     const scopedStale = getStaleCached(name, authorityIdentity);
     if (isModelsFetchCoolingDown(name) && scopedStale) {
       return observed(withConfiguredRetention(
-        applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
       ), "degraded");
     }
     const live = await fetchQoderModels(profile, apiKey);
@@ -433,7 +437,7 @@ export async function fetchProviderModelsWithAuth(
       const discovered = live.models.map(id => ({
         id,
         provider: name,
-        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
       }));
       const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
@@ -449,7 +453,7 @@ export async function fetchProviderModelsWithAuth(
     }
     const stale = getStaleCached(name, authorityIdentity);
     return observed(withConfiguredRetention(
-      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir) : configured,
     ), "degraded");
   }
   if (prov.adapter === "devin") {
@@ -464,7 +468,7 @@ export async function fetchProviderModelsWithAuth(
     const cachedDevin = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (cachedDevin) {
       return observed(
-        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedDevin)),
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedDevin, undefined, undefined, undefined, metadataConfigDir)),
         "authoritative",
       );
     }
@@ -472,7 +476,7 @@ export async function fetchProviderModelsWithAuth(
       const cooling = getStaleCached(name, authorityIdentity);
       return observed(
         withConfiguredRetention(
-          cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured,
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, undefined, undefined, metadataConfigDir) : configured,
         ),
         "degraded",
       );
@@ -514,7 +518,7 @@ export async function fetchProviderModelsWithAuth(
           // record and the vision-sidecar rewrite keep winning — the live
           // value survives only when none of them applies.
           ...(liveResult.inputModalities[id]?.length ? { inputModalities: liveResult.inputModalities[id] } : {}),
-          ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+          ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
         } as CatalogModel;
       });
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
@@ -530,7 +534,7 @@ export async function fetchProviderModelsWithAuth(
     }
     const stale = getStaleCached(name, authorityIdentity);
     return observed(
-      withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale) : configured),
+      withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale, undefined, undefined, undefined, metadataConfigDir) : configured),
       "degraded",
     );
   }
@@ -547,7 +551,7 @@ export async function fetchProviderModelsWithAuth(
     const cachedCursor = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (cachedCursor) {
       return observed(
-        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias)),
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir)),
         "authoritative",
       );
     }
@@ -555,7 +559,7 @@ export async function fetchProviderModelsWithAuth(
       const cooling = getStaleCached(name, authorityIdentity);
       return observed(
         withConfiguredRetention(
-          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir) : configured,
         ),
         "degraded",
       );
@@ -601,7 +605,7 @@ export async function fetchProviderModelsWithAuth(
     const staleCursor = getStaleCached(name, authorityIdentity);
     return observed(
       withConfiguredRetention(
-        staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+        staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir) : configured,
       ),
       "degraded",
     );
@@ -619,7 +623,7 @@ export async function fetchProviderModelsWithAuth(
   if (fresh) {
     return observed(
       withConfiguredRetention(
-        withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias)),
+        withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir)),
       ),
       "authoritative",
     ); // dedups Codex's frequent /v1/models polling within the TTL
@@ -631,7 +635,7 @@ export async function fetchProviderModelsWithAuth(
     return observed(
       withConfiguredRetention(
         stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias))
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir))
           : failedDiscoveryConfigured,
       ),
       "degraded",
@@ -676,7 +680,7 @@ export async function fetchProviderModelsWithAuth(
     return {
       models: withConfiguredRetention(
         stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias))
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir))
           : failedDiscoveryConfigured,
       ),
       fallback: stale ? "stale" : "configured",
@@ -754,7 +758,7 @@ export async function fetchProviderModelsWithAuth(
       return observed(models, "degraded");
     }
     if (antigravity) {
-      const live = antigravity.map(model => applyProviderConfigHints(name, prov, {
+      const upstream: CatalogModel[] = antigravity.map(model => ({
         id: model.id,
         provider: name,
         // Only an exact discovered wire map proves a new model's selectable effort ladder.
@@ -766,8 +770,9 @@ export async function fetchProviderModelsWithAuth(
         } : {}),
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
-      }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias));
-      const forCache = withConfiguredRetention(live, { retainComboTargets: false });
+      }));
+      const live = applyConfigHintsToCachedModels(name, prov, upstream, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir);
+      const forCache = azureMetadata ? upstream : withConfiguredRetention(live, { retainComboTargets: false });
       if (!isCurrentCacheGeneration()) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
@@ -781,7 +786,7 @@ export async function fetchProviderModelsWithAuth(
         return observed(withConfiguredRetention(configured), "degraded");
       }
       markProviderDiscoveryOk(name, live.length);
-      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+      return observed(withConfiguredRetention(azureMetadata ? live : forCache, { warnDrops: true }), "authoritative");
     }
     const googleAiStudio = effectiveGoogleMode(name, prov) === "ai-studio"
       ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
@@ -820,7 +825,7 @@ export async function fetchProviderModelsWithAuth(
         provider: prov,
       }).catch(() => undefined)
       : undefined;
-    const live = items.map(m => {
+    const upstream: CatalogModel[] = items.map(m => {
       const ownedBy = boundedOwnedBy(m.owned_by);
       // Precedence: the authoritative /v1/models row wins; /api/show fills only metadata the
       // models-API row does not carry. applyProviderConfigHints then applies explicit
@@ -836,22 +841,25 @@ export async function fetchProviderModelsWithAuth(
           ? { inputModalities: ["text", "image"] as string[] }
           : {}),
       };
-      return applyProviderConfigHints(name, prov, {
+      return {
         id: m.id,
         provider: name,
         ...(ownedBy ? { owned_by: ownedBy } : {}),
         ...discoveredHints,
-      }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias);
+      };
     })
       .filter(m => shouldExposeProviderModel(name, m.id));
+    const live = applyConfigHintsToCachedModels(name, prov, upstream, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir);
     // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
     // `live`; otherwise configured entries would be reported as discovered ones.
     const liveModelCount = live.length;
     // Dated-release aliases + configured retention (compat allow-list, combo targets,
     // Vertex default). Cache without combo retention so a later gather re-applies the
     // current capture's retain set on read (warm-cache OCX-111 / #1308).
-    const forCache = withConfiguredRetention(live, { retainComboTargets: false });
-    const returned = withConfiguredRetention(forCache, { warnDrops: true });
+    // Azure hints depend on the admitted config root. Keep only upstream evidence in the
+    // shared TTL/stale cache; every read reapplies metadata and retention for its own root.
+    const forCache = azureMetadata ? upstream : withConfiguredRetention(live, { retainComboTargets: false });
+    const returned = withConfiguredRetention(azureMetadata ? live : forCache, { warnDrops: true });
     const droppedConfiguredIds = configured
       .map(model => model.id)
       .filter(id => !returned.some(model => model.id === id));

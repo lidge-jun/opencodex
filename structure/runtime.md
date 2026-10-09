@@ -1,6 +1,6 @@
 # Runtime
 
-The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Codex control-plane ids are defined in the dependency-free `src/codex/control-plane-models.ts`; `src/router.ts` routes these exact ids unchanged to canonical OpenAI, retaining the existing error when no OpenAI provider is enabled. They do not widen the public native roster.
+The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Codex control-plane ids are defined in the dependency-free `src/codex/control-plane-models.ts`; `src/router.ts` routes these exact ids unchanged to canonical OpenAI, retaining the existing error when no OpenAI provider is enabled. They do not widen the public native roster. Catalog requests and scheduled source refreshes follow the [nonblocking catalog observation contract](catalog.md#shared-catalog). Async runtime persistence rejects observed selection/epoch changes and returns detached frozen results; bounded exec rejects promptly and releases output readers on deadline or abort, independently awaits actual child exit, and escalates SIGTERM to SIGKILL after the shared 2-second grace (Windows termination is forceful).
 
 ## Bun runtime and test runner
 
@@ -160,9 +160,9 @@ there. Feature code is grouped by responsibility:
 | Codex integration | `src/codex/`, `src/combos/`, `src/providers/`, `src/oauth/` |
 | Surfaces | `src/server/`, `src/cli/`, `src/tray/`, `src/github/` |
 | Evidence and contracts | `src/compatibility/`, `src/lab/` |
-| Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/` ([package refresh](ops/service-and-sidecars.md#package-cache-refresh); `desktop-badge.ts` holds bounded process-local display state, never install authority), `src/generated/` |
+| Support | `src/lib/`, `src/storage/` (Worker policy fixtures synchronize after loading the initial policy; `src/storage/policy.ts` bounds the test barrier at 10 seconds), `src/usage/`, `src/update/` ([package refresh](ops/service-and-sidecars.md#package-cache-refresh); `desktop-badge.ts` holds bounded process-local display state, never install authority), `src/generated/` |
 
-`src/generated/` is committed build output, not hand-edited; `scripts/generate-model-metadata.ts` derives `kimi-responses` → Moonshot metadata from the registry's `jawcodeBundle` while keeping its provider row distinct.
+`src/generated/` is committed build output, not hand-edited; `scripts/generate-model-metadata.ts` derives `kimi-responses` → Moonshot metadata from the registry's `jawcodeBundle` while keeping its provider row distinct. The generated vendor priority supplies bundled fallback for the Azure modality/limit lookup described in [the shared catalog contract](catalog.md#shared-catalog); discovery can refresh public Azure metadata independently of a release, without generation-time network fetches or static-policy changes. Snapshot refreshes preserve the separate public OpenAI API and native Codex bundles.
 
 `src/server/` is split by responsibility: `index.ts` owns the listener and the startup transaction
 while `index/serve-options.ts` owns route ordering; `responses.ts` and `responses/core.ts` compose

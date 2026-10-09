@@ -113,6 +113,7 @@ export async function handleChatCompletions(
     return finalizeTranslatorBudgetResponse(
       await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds),
       translatorBudget,
+      req.signal,
     );
   } catch (error) {
     translatorBudget.dispose();

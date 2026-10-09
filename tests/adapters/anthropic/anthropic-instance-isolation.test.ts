@@ -5,7 +5,7 @@ import type { GenerationContext, StateStoreRegistration } from "../../../src/lib
 
 let f: AnthropicInstanceFixture;
 beforeEach(async () => { f = await createAnthropicInstanceFixture(); await f.seed(); });
-afterEach(() => { f?.dispose(); });
+afterEach(async () => { await f?.dispose(); });
 const sibling = (instance: typeof INSTANCE_FIXTURE_INSTANCES[number]) => instance === "anthropic" ? "anthropic2" : "anthropic";
 
 function context(keys: readonly string[]): GenerationContext {
@@ -183,8 +183,8 @@ test("management account-ref dry-run attributes B quota using explicit config", 
   const unmarked = structuredClone(f.config);
   delete unmarked.providers.anthropic2!.anthropicOAuthInstance;
   expect((await preview(unmarked)).candidates[1]!.quota).toEqual({ known: false });
-  // Exercise the real retained handle and one-shot removal, including on Windows.
-  f.dispose();
+  // Exercise the real retained handle and drained root removal, including on Windows.
+  await f.dispose();
   expect(() => requestHistoryDb()).toThrow("request-history index is not open");
   expect(() => ownedHistory.query("SELECT 1 AS live").get()).toThrow();
   expect(existsSync(f.home)).toBe(false);
@@ -219,7 +219,7 @@ test("registered all-bucket hooks retire non-admitted B state while retaining li
 });
 
 
-test("fixture teardown cancels the quota disk debounce before fake-home restoration", () => {
+test("fixture teardown cancels the quota disk debounce before fake-home restoration", async () => {
   const originalClear = globalThis.clearTimeout;
   const scheduled = spyOn(globalThis, "setTimeout");
   const cancelledAt: string[] = [];
@@ -233,7 +233,7 @@ test("fixture teardown cancels the quota disk debounce before fake-home restorat
     f.quota.clearAccountQuotaCache("anthropic2");
     expect(scheduled.mock.calls.length).toBeGreaterThan(0);
     timer = scheduled.mock.results.at(-1)!.value;
-    f.dispose();
+    await f.dispose();
     expect(cancelled).toHaveBeenCalledWith(timer);
     expect(cancelledAt).toContain(f.paths.OPENCODEX_HOME);
     expect(process.env.OPENCODEX_HOME).not.toBe(f.paths.OPENCODEX_HOME);

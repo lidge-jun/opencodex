@@ -9,10 +9,11 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { discardPickerCaKey, ensurePickerCa, pickerCaCertPath, pickerCaFingerprints, readPendingPickerCaUntrust } from "../../src/claude/intercept/picker-ca";
 import { memoryPickerCaStore } from "../helpers/picker-ca-store";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const roots: string[] = [];
 const root = () => { const value = mkdtempSync(join(tmpdir(), "ocx-picker-store-")); roots.push(value); return value; };
-afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { for (const dir of roots.splice(0)) removeTreeWithRetry(dir); });
 /** Keep non-link assertions active; only a native Windows file-link privilege gap is unavailable. */
 function fileSymlink(target: string, path: string): boolean {
   try { symlinkSync(target, path, "file"); return true; }

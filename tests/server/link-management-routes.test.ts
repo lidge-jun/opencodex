@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -145,7 +146,7 @@ function versionRunner(remote: { probeCode: number; probeStderr: string; code: n
 }
 
 afterEach(() => {
-  if (temp) rmSync(temp, { recursive: true, force: true });
+  if (temp) removeTreeWithRetry(temp);
   temp = "";
 });
 

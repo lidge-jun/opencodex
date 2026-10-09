@@ -65,6 +65,8 @@ export interface PolicyJobTestHooks {
    * policy load, so concurrent PUTs can race completion metadata writes.
    */
   blockMs?: number;
+  /** Test-only shared barrier after the Worker has loaded its initial policy. */
+  workerLoadGate?: Int32Array;
   /**
    * When true, run on the main thread via `queueMicrotask` + optional sleep.
    * Used only for unit tests that cannot spawn workers; responsiveness tests
@@ -304,7 +306,7 @@ function applyMutationBusy(): void {
   };
 }
 
-function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Promise<PolicyRunResult> {
+function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number; workerLoadGate?: Int32Array }): Promise<PolicyRunResult> {
   const reservation = tryReserveStorageWorker();
   if (!reservation) return Promise.reject(new StorageWorkerAdmissionBusyError());
   return withStorageWorkerSpawnGate(() => new Promise<PolicyRunResult>((resolve, reject) => {
@@ -369,6 +371,7 @@ function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Prom
       ...(opts.codexHome ? { codexHome: opts.codexHome } : {}),
       ...(opts.busyTimeoutMs !== undefined ? { busyTimeoutMs: opts.busyTimeoutMs } : {}),
       ...(opts.blockMs !== undefined ? { blockMs: opts.blockMs } : {}),
+      ...(opts.workerLoadGate ? { workerLoadGate: opts.workerLoadGate } : {}),
       env: {
         ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
         ...(process.env.OPENCODEX_HOME ? { OPENCODEX_HOME: process.env.OPENCODEX_HOME } : {}),
@@ -410,6 +413,7 @@ async function executeJob(opts: RequestPolicyRunOptions): Promise<void> {
         ...opts,
         codexHome,
         ...(typeof blockMs === "number" && blockMs > 0 ? { blockMs } : {}),
+        ...(testHooks?.workerLoadGate ? { workerLoadGate: testHooks.workerLoadGate } : {}),
       });
     }
 

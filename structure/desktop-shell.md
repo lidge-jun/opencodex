@@ -200,6 +200,7 @@ commands. Tray and page installation share one atomic claim before taking `Pendi
 a failed download or drain restores that pending signed update and reenables retry. The
 page returns through the startup sequence's resolved dashboard URL, independently of the
 one-time initial navigation claim. The loopback dashboard has no updater IPC permission.
+Install/download failures with a known version show a manual-download hint and that version's GitHub release link; navigation errors do not.
 
 The window may navigate to the `tauri://` scheme, to the loopback endpoint the sequence resolved,
 and on Windows to `tauri.localhost`, which is where the pinned Tauri serves the app itself because

@@ -666,7 +666,9 @@ MiniMax model list is still the previous default receives it on the next start; 
 is left as it is; register the preview by hand with
 `ocx models add minimax MiniMax-M3.1-Flash-Preview --context-window 1000000`.
 
-**OpenCode Go** requires a stable session identifier for routing. OpenCodex derives
+**OpenCode Go** requires a stable session identifier for routing. OpenCodex sends
+`claude-haiku-5-5`, like the MiniMax models, over the Anthropic Messages wire, matching
+[OpenCode Go's endpoint table](https://opencode.ai/docs/go/#endpoints). OpenCodex derives
 its Go session header from Codex thread/session headers, or from a client's
 `x-opencode-session` header when Codex headers are absent. This applies to direct
 Chat Completions requests and requests bridged to Responses. Even an `ocx_`-prefixed

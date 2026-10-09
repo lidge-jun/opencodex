@@ -35,7 +35,7 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
-import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
+import { azureVendorModelMetadata, enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import {
   captureFastPolicyAuthority,
   fastPolicyForModel,
@@ -217,9 +217,11 @@ export function routedMaxOutputTokens(
   model: CatalogModel,
   metadataId = model.id,
   metadataModelIdCaseFold?: boolean,
+  metadataConfigDir?: string,
 ): number | undefined {
   const discovered = positiveSafeInteger(model.maxOutputTokens);
-  const generated = generatedMaxOutputTokens(providerName, model.id, metadataId, metadataModelIdCaseFold);
+  const generated = positiveSafeInteger(azureVendorModelMetadata(provider.baseUrl, metadataId, metadataConfigDir)?.maxTokens)
+    ?? generatedMaxOutputTokens(providerName, model.id, metadataId, metadataModelIdCaseFold);
   const configured = positiveSafeInteger(
     modelRecordValue(provider.modelMaxOutputTokens, model.id),
   );
@@ -255,6 +257,7 @@ export function applyProviderConfigHints(
   providerCap?: number,
   metadataModelIdCaseFold?: boolean,
   effectiveAlias?: string | null,
+  metadataConfigDir?: string,
 ): CatalogModel {
   const staticPolicy = resolveModelPolicy({
     providerName: name,
@@ -276,13 +279,14 @@ export function applyProviderConfigHints(
     : model.providerAlias;
   const configuredCap = staticPolicy.model.contextWindow ?? configuredContextWindow(prov, model.id);
   const configuredMaxInput = staticPolicy.model.maxInputTokens;
-  const maxOutputTokens = routedMaxOutputTokens(name, prov, model, model.id, metadataModelIdCaseFold);
+  const azureMetadata = azureVendorModelMetadata(prov.baseUrl, model.id, metadataConfigDir);
+  const maxOutputTokens = routedMaxOutputTokens(name, prov, model, model.id, metadataModelIdCaseFold, metadataConfigDir);
   const configuredAutoCompact = configuredAutoCompactTokenLimit(prov, model.id);
   // The resolver owns exact capability precedence and legacy exact/colon-family/case-fold fallback.
   // Removing an exact capability row therefore returns this projection to legacy-map inference.
-  let inputModalities = staticPolicy.model.inputModalities
-    ? [...staticPolicy.model.inputModalities]
-    : undefined;
+  const resolvedModalities = staticPolicy.model.inputModalities ?? model.inputModalities
+    ?? (azureMetadata?.input ? modelInputModalities({ id: model.id, input_modalities: azureMetadata.input }, undefined) : undefined);
+  let inputModalities = resolvedModalities ? [...resolvedModalities] : undefined;
   // The shared vision-sidecar consumer predicate keeps catalog advertisement and request-time
   // planning aligned. The catalog must still advertise image input — the Codex app
   // gates attachments client-side on input_modalities, and a text-only entry would block images
@@ -319,6 +323,7 @@ export function applyProviderConfigHints(
     ...(typeof model.maxInputTokens === "number" && model.maxInputTokens > 0 ? { maxInputTokens: model.maxInputTokens } : {}),
   });
   const hintedWindow = projectedLimits.contextWindow
+    ?? positiveSafeInteger(azureMetadata?.contextWindow)
     ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined);
   const hinted = {
     ...modelWithoutServiceTier,
@@ -383,8 +388,9 @@ export function catalogHintsFromProviderConfig(
   contextCap?: number,
   metadataModelIdCaseFold?: boolean,
   effectiveAlias?: string | null,
+  metadataConfigDir?: string,
 ): Partial<CatalogModel> {
-  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold, effectiveAlias);
+  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir);
   const { provider: _provider, id: _id, ...hints } = hinted;
   return hints;
 }
@@ -396,8 +402,9 @@ export function applyConfigHintsToCachedModels(
   contextCap?: number,
   metadataModelIdCaseFold?: boolean,
   effectiveAlias?: string | null,
+  metadataConfigDir?: string,
 ): CatalogModel[] {
-  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold, effectiveAlias));
+  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir));
 }
 
 /** Catalog slugs whose configured model must not gain a missing synthetic max rung. */

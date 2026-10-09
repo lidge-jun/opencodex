@@ -208,10 +208,10 @@ uses the original routed provider while the generated hash uses the settled adap
 Anthropic hard pin cannot make the canonical Go destination disappear from transport recognition.
 An operator-supplied header wins case-insensitively. Renamed providers are covered only when their
 fixed key-auth destination still matches the registry; custom and lookalike URLs receive nothing.
-OpenCode Go's exact `union-alpha` model id is hard-pinned to the Anthropic wire from every inbound
-surface; sibling models retain their existing Chat or Responses selection. This wire choice and the
-session namespace do not assert upstream availability after the Messages endpoint accepts the
-session header.
+OpenCode Go's exact `claude-haiku-5-5`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, and `union-alpha`
+model ids are hard-pinned to Anthropic from every inbound; Haiku uses Messages in Go's [endpoint table](https://opencode.ai/docs/go/#endpoints).
+Sibling models retain their Chat or Responses selection. This wire choice and the session namespace
+do not assert upstream availability after the Messages endpoint accepts the session header.
 `src/adapters/openai-responses/web-search.ts` also drops the provider-rejected
 `search_content_types` and `indexed_web_access` fields from plain `web_search` tools while
 preserving preview tools. The two OpenCode Zen destinations gate that on a Contributor Muse id

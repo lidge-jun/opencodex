@@ -148,6 +148,8 @@ export interface CapturedModelsRequest {
 }
 
 export interface CapturedProviderGather {
+  /** Public metadata reads and refreshes stay bound to this admission root. */
+  readonly metadataConfigDir: string;
   readonly name: string;
   readonly provider: OcxProviderConfig;
   readonly discovery: ResolvedProviderModelDiscovery;
@@ -354,6 +356,7 @@ export function captureProviderGather(
   retainConfiguredModelIds?: ReadonlySet<string>,
   config?: Pick<OcxConfig, "providers">,
 ): CapturedProviderGather {
+  const metadataConfigDir = getConfigDir();
   const enriched = detachedClone(withCanonicalOpenAiForwardAuthDefault(name, configured));
   enrichProviderFromRegistry(name, enriched);
   const registryTransportMatch = providerMatchesRegistryTransport(name, enriched);
@@ -428,6 +431,7 @@ export function captureProviderGather(
   const effectiveAlias = effectiveProviderAliasDecision(name, configured, config);
   return Object.freeze({
     name,
+    metadataConfigDir,
     provider,
     discovery,
     policy,
@@ -482,6 +486,7 @@ export function captureGatherFlight(
     providerGraphIdentity: keyedGatherIdentity("catalog-gather-provider-graph-v1",
       providers.map(provider => ({
         name: provider.name,
+        metadataConfigDir: provider.metadataConfigDir,
         // `fetch` is a caller-owned transport executor, not admitted state: the
         // outbound transport honors it so a caller can supply its own HTTP path.
         // It is the one member of a provider row that is legitimately a function,

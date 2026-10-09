@@ -147,6 +147,7 @@ test("Windows and Linux skip all picker effects while still discarding legacy ke
   }
 });
 
+// Windows lifecycle-lock ACL calls and CA inspections measured 4.9 s for this cycle.
 test("gateway startup retains controller but defers credentials until explicit first-party enable", async () => {
   const { root, config } = setup();
   const fake = memoryPickerCaStore();
@@ -180,7 +181,7 @@ test("gateway startup retains controller but defers credentials until explicit f
   expect(storeCalls).toBeGreaterThan(0);
   expect(fake.writes).toBe(1);
   expect(existsSync(join(root, "claude-picker", "authority.json"))).toBe(true);
-});
+}, watchdogMs(10_000));
 
 test("fresh production restarts retain fingerprint and issue no trust mutations, including lost trust", () => {
   const { root } = setup();
@@ -281,6 +282,7 @@ test("late first-party enable migrates a dead ephemeral predecessor before persi
   expect(result.fingerprint).not.toBe(prior.stdout.toString());
 }, PICKER_CHILD_TIMEOUT_MS * 2 + 5_000);
 
+// Windows lifecycle-lock ACL calls across these cycles measured 8.0-8.4 s.
 test("default, off, and disabled integration remain credential-free through status, refresh, and off", async () => {
   for (const claudeCode of [undefined, { desktopMode: "first-party", intercept: { picker: false } }, { desktopMode: "first-party" }]) {
     const { root, config } = setup();
@@ -304,7 +306,7 @@ test("default, off, and disabled integration remain credential-free through stat
     expect(calls).toBe(0);
     expect(existsSync(pickerCaCertPath(root))).toBe(false);
   }
-});
+}, watchdogMs(10_000));
 
 test("disarm during async predecessor cleanup prevents a later TLS listener from opening", async () => {
   const { root, config } = setup();

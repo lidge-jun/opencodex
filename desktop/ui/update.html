@@ -35,6 +35,7 @@
       <h1>OpenCodex update</h1>
       <p id="state" role="status" aria-live="polite">Reading update status…</p>
       <p id="error" role="alert" hidden></p>
+      <p id="manual" hidden><a id="release"></a></p>
       <div class="actions">
         <button id="check" type="button">Check again</button>
         <button id="install" type="button" disabled>Install update</button>
@@ -46,6 +47,8 @@ const invoke = window.__TAURI__?.core?.invoke;
 const titlebar = document.querySelector("#titlebar");
 const state = document.querySelector("#state");
 const error = document.querySelector("#error");
+const manual = document.querySelector("#manual");
+const release = document.querySelector("#release");
 const check = document.querySelector("#check");
 const install = document.querySelector("#install");
 const back = document.querySelector("#back");
@@ -65,9 +68,17 @@ function bounded(work, name, deadlineMs) {
     );
   });
 }
-function showError(cause) {
-  error.textContent = cause instanceof Error ? cause.message : String(cause);
+function showError(cause, installFailed = false) {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const version = installFailed ? latest?.latestVersion : null;
+  const hint = version
+    ? " If automatic download is slow or blocked by network, install the package manually from GitHub Releases (v" + version + ")."
+    : "";
+  error.textContent = message + hint;
   error.hidden = false;
+  manual.hidden = !version;
+  release.textContent = version ? "Download v" + version + " from GitHub Releases" : "";
+  release.href = version ? "https://github.com/lidge-jun/opencodex/releases/tag/v" + encodeURIComponent(version) : "";
 }
 function render(snapshot) {
   latest = snapshot;
@@ -98,6 +109,7 @@ async function refresh(name) {
   check.disabled = true;
   install.disabled = true;
   error.hidden = true;
+  manual.hidden = true;
   state.textContent = name === "update_check" ? "Checking for updates…" : "Reading update status…";
   try { render(await call(name)); }
   catch (cause) { showError(cause); if (latest) render(latest); }
@@ -110,14 +122,16 @@ install.addEventListener("click", async () => {
   check.disabled = true;
   install.disabled = true;
   error.hidden = true;
+  manual.hidden = true;
   state.textContent = "Installing update…";
   try { render(await call("update_install")); }
-  catch (cause) { showError(cause); try { render(await call("update_status")); } catch (readError) { showError(readError); } }
+  catch (cause) { showError(cause, true); try { render(await call("update_status")); } catch (readError) { showError(readError, true); } }
   finally { busy = false; if (latest) render(latest); else check.disabled = false; }
 });
 back.addEventListener("click", async () => {
   back.disabled = true;
   error.hidden = true;
+  manual.hidden = true;
   try { await call("return_to_dashboard"); }
   catch (cause) { showError(cause); back.disabled = false; }
 });

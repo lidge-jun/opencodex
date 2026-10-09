@@ -67,7 +67,7 @@ afterEach(async () => {
   try {
     f.ledger.assertNoCrossSend(); releaseSpend?.(); releaseSpend = undefined;
     (await import("../../src/responses/state")).clearResponseStateForTests();
-  } finally { f.dispose(); }
+  } finally { await f.dispose(); }
 });
 
 type Surface = "responses" | "chat" | "messages";

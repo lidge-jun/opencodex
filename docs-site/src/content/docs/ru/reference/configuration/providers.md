@@ -75,7 +75,7 @@ route fail closed, пока аккаунт отсутствует, а повто
 использует только текущий login вызывающей стороны / основной login. Уровень API использует только
 свой настроенный API-key или key-pool. Используйте bare-model либо `openai-apikey/<model>`;
 cross-route credential fallback не существует. Строки API GPT-5.6 несут метаданные контекста
-922,000 / max input 922,000, а виртуальные Pro-id переписываются в базовую wire-модель с
+1,050,000 / max input 922,000, а виртуальные Pro-id переписываются в базовую wire-модель с
 `reasoning.mode: "pro"`.
 
 `openaiProviderTierVersion: 2` отмечает текущую single-provider projection. Перед миграцией
@@ -567,9 +567,9 @@ malformed-результаты откатываются к stale/configured fall
 чтобы сбросить только это имя.
 
 Preview fallback-записи GPT-5.6 используют тот же механизм. Preset OpenAI API-key заранее засевает
-base- и Pro-id с context `922000` и max input `922000`; OpenRouter заранее засевает
-`openai/gpt-5.6-sol`, `openai/gpt-5.6-terra` и `openai/gpt-5.6-luna` с context `922000`.
-Pool/Direct рекламирует `922000`; синхронизированный каталог показывает `max`, сохраняя при этом
+base- и Pro-id с context `1050000` и max input `922000`; OpenRouter заранее засевает
+`openai/gpt-5.6-sol`, `openai/gpt-5.6-terra` и `openai/gpt-5.6-luna` с context `1050000`.
+Окна нативных Pool/Direct следуют [политике зарезервированных провайдеров OpenAI](/reference/configuration/providers/#reserved-openai-providers); синхронизированный каталог показывает `max`, сохраняя при этом
 отдельную ступень `xhigh`.
 
 ```json

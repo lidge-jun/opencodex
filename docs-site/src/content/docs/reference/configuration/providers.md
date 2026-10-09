@@ -341,6 +341,28 @@ For example, this applies a provider-wide concurrency cap and a stricter cap to 
 
 The concurrency slot stays occupied until the upstream request finishes, including the final streamed response bytes. Requests above the applicable provider and model limits wait in the pacing queue; when a slot is released, the next eligible request is admitted. Queue waiting does not consume the upstream response-header timeout.
 
+### Azure OpenAI model metadata discovery
+
+For a base URL whose hostname ends in `.openai.azure.com`, discovery fills missing image/text
+input support and context/output limits even when the provider has a custom name. Azure
+`/models` inference and chat flags alone do not describe image support or token limits.
+opencodex supplements them with the public [models.dev catalog](https://models.dev), using its
+Azure rows before bundled Azure metadata and other vendor bundles. Model-id lookup is exact
+or case-insensitive; a newly published model does not require a new opencodex release.
+
+The public metadata snapshot refreshes during discovery at most once per 24 hours, with a
+two-second deadline and a 16 MiB body limit. It is stored in `azure-model-metadata-cache.json`
+under the opencodex config directory. No Azure credentials are sent to the public catalog.
+Offline discovery keeps stale cached metadata or falls back to bundled hints; generation
+requests do not fetch this snapshot.
+
+Explicit input declarations and reported modalities retain precedence, including reported
+`vision: false`. Existing vision sidecar coverage still applies. Reported/configured limits
+remain authoritative and provider caps still clamp them. Metadata describes model support,
+not a particular deployment capacity. Arbitrary deployment aliases such as
+`my-production-model` cannot be mapped from Azure inference flags; set `modelInputModalities`
+and `modelContextWindows` for that exact id when needed. Unknown ids are not guessed.
+
 ### What a provider save keeps
 
 `POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Eight of them record how one upstream behaves: `preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx` and `retryOnReset`.
@@ -1444,9 +1466,10 @@ upstream accept it; a wrong id fails at request time with the upstream error. Fr
 `ocx provider edit <name> --retain-models gemini-3.7-flash,other-id` (`-` clears).
 
 Preview GPT-5.6 fallback entries use the same mechanism. The OpenAI API-key preset seeds base and Pro
-ids with context `922000` and max input `922000`; OpenRouter seeds `openai/gpt-5.6-sol`,
-`openai/gpt-5.6-terra`, and `openai/gpt-5.6-luna` with context `922000`. Pool/Direct advertises
-`922000`; the synced catalog advertises `max` while keeping `xhigh` distinct.
+ids with context `1050000` and max input `922000`; OpenRouter seeds `openai/gpt-5.6-sol`,
+`openai/gpt-5.6-terra`, and `openai/gpt-5.6-luna` with context `1050000`. Native Pool/Direct
+windows follow the [reserved OpenAI provider policy](#reserved-openai-providers). The synced
+catalog advertises `max` while keeping `xhigh` distinct.
 
 ```json
 {

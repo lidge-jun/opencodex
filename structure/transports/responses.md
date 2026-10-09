@@ -340,8 +340,8 @@ ChatGPT forward surface, the official OpenAI API, or a provider with the explici
 than one backend, including OpenAI and xAI, mints native blobs: a destination can decode its own blob
 without being able to decode the previous backend's. The same serving-identity mismatch signal
 therefore strips reasoning `encrypted_content` and degrades native compaction blobs through the
-existing opaque-note path. When the thread has no recorded identity, the destination-only behavior
-is deliberately unchanged. Forward auth alone is not evidence: noncanonical forward providers
+existing opaque-note path. Claude-native reasoning adds a per-blob tag check at every route binding:
+only the matching durable endpoint and generation-bearing credential retain raw and parsed carriers. Without recorded thread identity, the destination gate remains. Noncanonical forward providers
 receive no caller credentials and may point at any backend. On any other routed destination the blob
 also degrades to the same opaque note the bridged parser uses, because forwarding it there fails the
 turn and the item outlives the failure in the client transcript, repeating on every later turn
@@ -448,7 +448,7 @@ lease while a block-local `admission` holds only the acquisition result.
 reads that holder rather than minting a per-phase allowance. Combo recursion is injected through
 `ResponsesDispatchers`: a child re-enters the public handler without a reverse runtime import
 from the combo implementation into `core.ts`. `core-lifetime.ts` owns the shared run-turn response
-marker and translator-budget finalization; cleanup wrappers preserve its run-turn classification and nonreplayable failures, so retention cannot reopen combo retries after a tool effect.
+marker and translator-budget finalization; cleanup wrappers preserve its run-turn classification and nonreplayable failures, so retention cannot reopen combo retries after a tool effect. Owned-budget cleanup on request abort, including unread response bodies, follows the [byte-accounting lifetime contract](byte-accounting.md#stream-buffer-accounting).
 
 The pending admission `finally` lives in `core-pipeline.ts`. Native execution explicitly transfers its
 pending lease to `passthrough-execution.ts`; both owners await response construction before

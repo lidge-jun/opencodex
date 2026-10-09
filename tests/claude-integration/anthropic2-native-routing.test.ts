@@ -45,12 +45,12 @@ beforeEach(async () => {
   f.publishConfig();
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const restore of restorations.splice(0).reverse()) restore();
   pacing?.resetProviderRequestPacingForTest();
   releaseSpend?.();
   releaseSpend = undefined;
-  f?.dispose();
+  await f?.dispose();
 });
 
 async function seed(instances: readonly AnthropicInstanceId[] = INSTANCES) {

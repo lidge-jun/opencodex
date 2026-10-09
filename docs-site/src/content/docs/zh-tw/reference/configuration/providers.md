@@ -428,7 +428,7 @@ Vercel AI Gateway 可在多個底層推論供應商之間路由一個模型。`v
 
 當探索應仍然執行但只有 selected id 應出現在 Codex 與 `/v1/models` 時，請使用 `selectedModels`。儀表板保留完整的探索清單供日後允許清單變更。
 
-預覽 GPT-5.6 後備項目使用相同機制。OpenAI API-key 預設以 context `922000` 與 max input `922000` 播種基礎與 Pro id；OpenRouter 以 context `922000` 播種 `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra` 與 `openai/gpt-5.6-luna`。池／Direct 廣告 `922000`；同步目錄廣告 `max` 同時保持 `xhigh` 獨立。
+預覽 GPT-5.6 後備項目使用相同機制。OpenAI API-key 預設以 context `1050000` 與 max input `922000` 播種基礎與 Pro id；OpenRouter 以 context `1050000` 播種 `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra` 與 `openai/gpt-5.6-luna`。原生池／Direct 的視窗遵循[保留 OpenAI 供應商政策](/reference/configuration/providers/#reserved-openai-providers)；同步目錄廣告 `max` 同時保持 `xhigh` 獨立。
 
 ```json
 {

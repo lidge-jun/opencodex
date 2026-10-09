@@ -47,6 +47,7 @@ import {
   displayCodexRuntimePath,
   persistEffortClamp,
   resolveAndPersistCodexRuntime,
+  getCodexRuntimeSnapshot,
   UNCLAMPABLE_REASONING_EFFORTS,
   type EffortClampDiagnostic,
 } from "../runtime";
@@ -380,7 +381,9 @@ export function supportedCodexReasoningEffortsFromObservedCatalog(
 }
 
 export function codexSupportedReasoningEfforts(deps: BundledCatalogDeps = {}): ReadonlySet<string> | null {
-  return supportedCodexReasoningEffortsFromObservedCatalog(loadBundledCodexCatalog(deps));
+  return supportedCodexReasoningEffortsFromObservedCatalog(
+    deps.observedCatalog !== undefined ? deps.observedCatalog : loadBundledCodexCatalog(deps),
+  );
 }
 
 export function clampedDefaultEffort(original: string, surviving: readonly string[]): string {
@@ -572,7 +575,11 @@ export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: Bundl
 
   let runtimePath = "codex";
   let runtimeVersion: string | null = null;
-  if (!deps.commandCandidates) {
+  if (deps.observedCatalog !== undefined && !deps.commandCandidates) {
+    const snapshot = getCodexRuntimeSnapshot();
+    runtimePath = snapshot.runtime.command;
+    runtimeVersion = snapshot.runtime.version;
+  } else if (!deps.commandCandidates) {
     try {
       const resolved = resolveAndPersistCodexRuntime({
         execFileSync: deps.execFileSync,

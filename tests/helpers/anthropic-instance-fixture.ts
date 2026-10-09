@@ -1,10 +1,11 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
 import type { AnthropicAccountPoolConfig } from "../../src/types/anthropic-account-pool";
 import type { AnthropicInstanceId } from "../../src/providers/anthropic-instance-id";
 import type { OAuthCredentials } from "../../src/oauth/types";
+import { drainAndRemoveFixtureRoots } from "./fixture-teardown";
 
 export const INSTANCE_FIXTURE_IDS = ["shared-slot-1", "shared-slot-2"] as const;
 export const INSTANCE_FIXTURE_SESSION = "shared-session";
@@ -150,7 +151,7 @@ export async function createAnthropicInstanceFixture(
     }
   }
   let disposed = false;
-  function dispose(): void {
+  async function dispose(): Promise<void> {
     if (disposed) return;
     disposed = true;
     routing.clearAllAnthropicAccountPoolState();
@@ -159,20 +160,22 @@ export async function createAnthropicInstanceFixture(
     // fixture HOME still owns their target, before removing it or restoring the environment.
     quota.clearAccountQuotaCache();
     globalThis.fetch = originalFetch;
+    const restoreEnvironment = () => {
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    };
     try {
       // The assembled management dry-run opens this cached SQLite connection for
       // historical route health. Windows retains its file lock until it is closed.
       history.closeRequestHistoryIndex();
       health.clearHealthHistoryCacheForTests();
       cleanup.assertRemovalOutsideProtectedTrees(home);
-      // One attempt after releasing owned resources; EBUSY remains a test failure.
-      rmSync(home, { recursive: true, force: true, maxRetries: 0 });
+    } catch (error) {
+      restoreEnvironment();
+      throw error;
     }
-    finally {
-      for (const [key, value] of Object.entries(originalEnv)) {
-        if (value === undefined) delete process.env[key]; else process.env[key] = value;
-      }
-    }
+    await drainAndRemoveFixtureRoots({ roots: [{ path: home }], restoreEnvironment });
   }
   return { home, paths, config, ids: INSTANCE_FIXTURE_IDS, sessionKey: INSTANCE_FIXTURE_SESSION, model: INSTANCE_FIXTURE_MODEL,
     store, routing, quota, modelQuota, ratePolicy, kernel, ledger, publishConfig, seed, admit, dispose };

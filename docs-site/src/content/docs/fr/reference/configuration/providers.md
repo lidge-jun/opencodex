@@ -541,9 +541,9 @@ Utilisez `selectedModels` lorsque la découverte doit toujours s'exécuter mais 
 `/v1/models`. Le tableau de bord conserve la liste complète découverte pour les modifications ultérieures de la liste autorisée.
 
 Les entrées de repli de l'aperçu GPT-5.6 utilisent le même mécanisme. Le préréglage à clé API OpenAI initialise les identifiants de base et Pro
-avec un contexte de `922000` et une entrée maximale de `922000` ; OpenRouter initialise `openai/gpt-5.6-sol`,
-`openai/gpt-5.6-terra` et `openai/gpt-5.6-luna` avec le contexte `922000`. Les modes pool et direct annoncent
-`922000` ; le catalogue synchronisé annonce `max` tout en gardant `xhigh` distinct.
+avec un contexte de `1050000` et une entrée maximale de `922000` ; OpenRouter initialise `openai/gpt-5.6-sol`,
+`openai/gpt-5.6-terra` et `openai/gpt-5.6-luna` avec le contexte `1050000`. Les fenêtres natives pool et direct suivent
+la [politique des fournisseurs OpenAI réservés](/reference/configuration/providers/#reserved-openai-providers) ; le catalogue synchronisé annonce `max` tout en gardant `xhigh` distinct.
 
 ```json
 {

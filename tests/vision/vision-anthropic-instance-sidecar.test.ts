@@ -10,7 +10,7 @@ beforeEach(async () => {
   auth = await import("../../src/sidecar/auth");
   binding = await import("../../src/sidecar/anthropic-binding");
 });
-afterEach(() => fixture?.dispose());
+afterEach(async () => { await fixture?.dispose(); });
 
 test("generated descriptions cache within one instance but not across pools", async () => {
   const vision = await import("../../src/vision");

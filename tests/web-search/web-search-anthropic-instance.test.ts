@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createAnthropicInstanceFixture, type AnthropicInstanceFixture } from "../helpers/anthropic-instance-fixture";
 let f: AnthropicInstanceFixture;
 beforeEach(async () => { f = await createAnthropicInstanceFixture(); await f.seed(); });
-afterEach(() => f?.dispose());
+afterEach(async () => { await f?.dispose(); });
 
 test("search planner inherits B, honors explicit A and never auto-selects B without a parent", async () => {
   const { planWebSearch } = await import("../../src/web-search");

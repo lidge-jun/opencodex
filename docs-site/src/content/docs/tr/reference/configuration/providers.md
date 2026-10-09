@@ -82,7 +82,7 @@ artı eklenen hesaplar arasında seçim yapar; `"direct"` yalnızca geçerli
 arayan/ana girişi kullanır. API yalnızca yapılandırılmış API anahtarını veya
 anahtar havuzunu kullanır. Yalın bir model veya `openai-apikey/<model>`
 kullanın; rotalar arası kimlik bilgisi geri dönüşü yoktur. API GPT-5.6 satırları
-922.000 bağlam / 922.000 maksimum girdi meta verisi taşır ve Pro sanal
+1.050.000 bağlam / 922.000 maksimum girdi meta verisi taşır ve Pro sanal
 kimlikleri `reasoning.mode: "pro"` ile temel hat modeline yeniden yazılır.
 
 `openaiProviderTierVersion: 2`, geçerli tek sağlayıcılı projeksiyonu işaretler.
@@ -589,10 +589,10 @@ paneli daha sonraki izin listesi değişiklikleri için keşfedilen tam listeyi
 korur.
 
 Önizleme GPT-5.6 geri dönüş girdileri aynı mekanizmayı kullanır. OpenAI API
-anahtarı önayarı temel ve Pro kimliklerini `922000` bağlam ve `922000` maksimum
+anahtarı önayarı temel ve Pro kimliklerini `1050000` bağlam ve `922000` maksimum
 girdi ile tohumlar; OpenRouter `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra` ve
-`openai/gpt-5.6-luna`'yı `922000` bağlam ile tohumlar. Pool/Direct `922000`
-bildirir; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
+`openai/gpt-5.6-luna`'yı `1050000` bağlam ile tohumlar. Yerel Pool/Direct pencereleri
+[ayrılmış OpenAI sağlayıcı politikasını](/reference/configuration/providers/#reserved-openai-providers) izler; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
 
 ```json
 {

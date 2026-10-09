@@ -110,3 +110,32 @@ stops with `cache_root_dangling_link` or `cache_root_not_directory` and leaves t
 Then run `ocx update` again. If `ENOTDIR` persists after the check passes, open an issue with the
 full terminal output of `ocx update` and the output of `npm config get prefix` and
 `npm config get cache`.
+
+## Desktop app update stalls or fails on "Installing update…"
+
+In the OpenCodex desktop app, **Install update** downloads the installer from GitHub
+Releases before replacing the app and restarting. A failed download or installation with
+a known version shows a manual-download hint and a link to that version's release page.
+
+If `Installing update…` stalls or times out, GitHub release downloads may be slow or
+blocked by your network. Use the release link in the error, or find the same version on
+the [OpenCodex releases page](https://github.com/lidge-jun/opencodex/releases), and download
+the installer for your operating system and architecture. Preview versions have their own
+release pages; choose the version the app offered.
+
+Before running the installer, stop the proxy through its owner and confirm it has stopped:
+
+1. Quit the OpenCodex desktop app from its tray menu to stop an app-owned proxy.
+2. If a service owns the proxy, stop it through the service's controls (`ocx stop` for an
+   OpenCodex-managed service). For an unmanaged terminal proxy, stop it in that terminal.
+3. On Windows, use this process listing to help identify any remaining runtime:
+
+   ```powershell
+   Get-Process -Name ocx, opencodex-desktop, bun, bunx -ErrorAction SilentlyContinue
+   ```
+
+   The listing does not establish which app owns a process. Identify the OpenCodex runtime
+   and stop it through its owning app or service; a `bun` process may belong to another app.
+   Wait for the owning app and proxy to exit before installing.
+
+Run the downloaded installer, then reopen the desktop app or restart the owning service.

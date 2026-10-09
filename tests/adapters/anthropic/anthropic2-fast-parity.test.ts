@@ -43,7 +43,7 @@ afterEach(async () => {
   try {
     f.ledger.assertNoCrossSend(); releaseSpend?.(); releaseSpend = undefined;
     (await import("../../../src/responses/state")).clearResponseStateForTests();
-  } finally { f.dispose(); }
+  } finally { await f.dispose(); }
 });
 function post(instance: AnthropicInstanceId, model: string, log: RequestLogContext = { model: "", provider: "" }) {
   return handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json", "session-id": f.sessionKey },

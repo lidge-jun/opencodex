@@ -3,7 +3,7 @@ import { createAnthropicInstanceFixture, INSTANCE_FIXTURE_INSTANCES, type Anthro
 
 let f: AnthropicInstanceFixture;
 beforeEach(async () => { f = await createAnthropicInstanceFixture(); await f.seed(); });
-afterEach(() => { f?.dispose(); });
+afterEach(async () => { await f?.dispose(); });
 
 for (const instance of INSTANCE_FIXTURE_INSTANCES) {
   const other = instance === "anthropic" ? "anthropic2" : "anthropic";
