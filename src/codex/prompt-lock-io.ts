@@ -6,7 +6,7 @@ export class LockFileBusy extends Error {}
 export function lockFileOperation<T>(operation: () => T, platform: NodeJS.Platform): T {
   let contended = false;
   try {
-    return retryWindowsFileOperation(operation, { platform, sleep: Bun.sleepSync }, () => { contended = true; });
+    return retryWindowsFileOperation({ run: operation, onRetry: () => { contended = true; } }, { platform, sleep: Bun.sleepSync });
   }
   catch (error) {
     if (transientWindowsReplaceCode(platform, error)

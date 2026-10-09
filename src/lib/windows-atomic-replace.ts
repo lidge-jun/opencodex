@@ -109,21 +109,26 @@ export function transientWindowsReplaceCode(
   return code === "EBUSY" || code === "EPERM" || code === "EACCES" ? code : null;
 }
 
+/** One filesystem operation plus its retry observers, carried as members (not free callbacks). */
+export interface WindowsFileOperationStep<T> {
+  run: () => T;
+  onRetry?: (code: ReplaceRetryCode, exhausted: boolean) => void;
+  beforeAttempt?: () => void;
+}
+
 /** Bounded sharing-violation retries for one filesystem operation, never a transaction. */
 export function retryWindowsFileOperation<T>(
-  operation: () => T,
+  step: WindowsFileOperationStep<T>,
   io: Pick<AtomicRenameIO, "platform" | "sleep"> = { platform: process.platform, sleep: Bun.sleepSync },
-  onRetry?: (code: ReplaceRetryCode, exhausted: boolean) => void,
-  beforeAttempt?: () => void,
 ): T {
   for (let attempt = 0; ; attempt += 1) {
-    beforeAttempt?.();
-    try { return operation(); }
+    step.beforeAttempt?.();
+    try { return step.run(); }
     catch (error) {
       const code = transientWindowsReplaceCode(io.platform, error);
       if (!code) throw error;
       const exhausted = attempt >= MAX_RETRIES;
-      onRetry?.(code, exhausted);
+      step.onRetry?.(code, exhausted);
       if (exhausted) throw error;
       io.sleep(25 * (attempt + 1));
     }
@@ -141,9 +146,11 @@ export function renameAtomicFile(
   publisher: ReplacePublisher = "config",
   hooks: RenameValidationHooks = {},
 ): void {
-  retryWindowsFileOperation(() => io.rename(source, destination), io,
-    (code, exhausted) => bump(publisher, code, exhausted ? "exhausted" : "retried"),
-    () => hooks.validateBeforeRename?.(destination));
+  retryWindowsFileOperation({
+    run: () => io.rename(source, destination),
+    onRetry: (code, exhausted) => bump(publisher, code, exhausted ? "exhausted" : "retried"),
+    beforeAttempt: () => hooks.validateBeforeRename?.(destination),
+  }, io);
 }
 
 export async function renameAtomicFileAsync(
