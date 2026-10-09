@@ -5,11 +5,12 @@
  * prove that the top-level CLI preserves terminal-failed and pre-parse behavior
  * with isolated homes and an actual discovered proxy fixture.
  */
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
@@ -70,6 +71,15 @@ function writeRuntimePort(opencodexHome: string, port: number, pid: number): voi
 }
 
 describe("ocx ready real subprocess", () => {
+  // src/cli/index.ts has roughly fifty top-level imports, so the runCli children below all pay
+  // the same static graph. This file's first spawned child is the one that loads it, and under
+  // the run's private transpiler cache that cold load lands inside the child's own kill bound
+  // (windows 9/9 run 37736425700 killed it at 10s before it reached /healthz). Pay it once in
+  // setup instead; see tests/helpers/cold-spawn-warmup.ts.
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "cli-index/ready-subprocess", entry: cliPath });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("released-process protocol skew matrix rejects before any local write", async () => {
     const homes = isolatedHomes("ocx-protocol-skew-subprocess-");
     const script = `

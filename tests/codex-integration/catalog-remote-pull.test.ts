@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 
 import {
@@ -13,6 +14,7 @@ import {
 } from "../../src/codex/catalog/remote";
 import { resolveCodexCatalogSerializationDatabasePath, resolveEffectiveUserIdentity } from "../../src/codex/user-identity";
 import { withCatalogWriteSerialization } from "../../src/codex/catalog-write-serialization";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /** Every K acquisition states its intent (#6529); these tests exercise the lock, not the intent. */
@@ -51,7 +53,24 @@ async function withProxyEnv(env: Record<string, string>, action: () => Promise<v
   }
 }
 
+// Absolute filesystem path, not a file:// href: the warm-up's import scan keeps specifiers
+// that are absolute paths, and the spawned --eval children resolve either form identically.
+const remoteModule = fileURLToPath(new URL("../../src/codex/catalog/remote.ts", import.meta.url));
+
+// The module graph this file's real-Bun transport children load.
+const REMOTE_TRANSPORT_EVAL_SCRIPT = `
+  const { fetchRemoteCatalog } = await import(${JSON.stringify(remoteModule)});
+`;
+
 describe("remote catalog acquisition", () => {
+  // The --eval children load the catalog-remote graph in a fresh Bun process bounded by a
+  // 10s kill deadline; the cold module load can exceed it on a loaded Windows runner (run
+  // 37735238354, windows 3/9). Pay it once in setup, into the same transpiler cache the
+  // children inherit via BUN_RUNTIME_TRANSPILER_CACHE_PATH below.
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "catalog-remote-pull/transport-eval", source: REMOTE_TRANSPORT_EVAL_SCRIPT });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("accepts HTTPS and loopback HTTP but rejects credentials and insecure remote HTTP", () => {
     expect(validateRemoteCatalogUrl("https://hub.example.com/v1/catalog").href).toBe("https://hub.example.com/v1/catalog");
     expect(validateRemoteCatalogUrl("http://127.0.0.1:10100/v1/catalog").protocol).toBe("http:");
@@ -167,7 +186,7 @@ describe("remote catalog acquisition", () => {
       // Inherit process-launch necessities and test provenance only, never host credentials.
       const env: Record<string, string> = {};
       for (const key of ["PATH", "Path", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
-        "OCX_TEST_HOME_GUARD", "OCX_TEST_RUN_ID"]) {
+        "OCX_TEST_HOME_GUARD", "OCX_TEST_RUN_ID", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"]) {
         const value = process.env[key];
         if (value !== undefined) env[key] = value;
       }
@@ -179,7 +198,7 @@ describe("remote catalog acquisition", () => {
       writeFileSync(join(env.OPENCODEX_HOME, ".env"), "no_proxy=*\n");
       env.HTTP_PROXY = `http://127.0.0.1:${proxy.port}`;
       env.NO_PROXY = bypass;
-      const source = new URL("../../src/codex/catalog/remote.ts", import.meta.url).href;
+      const source = remoteModule;
       const script = `
         const { fetchRemoteCatalog } = await import(${JSON.stringify(source)});
         try {
