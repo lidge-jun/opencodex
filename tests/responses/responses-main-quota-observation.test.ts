@@ -19,6 +19,8 @@ import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { parseRequest } from "../../src/responses/parser";
 import { codexAccountSelectionForTurn, tryAdmitTurn } from "../../src/server/lifecycle";
+import { handleResponses } from "../../src/server/responses";
+import { BOUNDED_WS_RUNTIME } from "../helpers/ws-upstream-fixtures";
 import { deliverPassthroughResponse } from "../../src/server/responses/passthrough-delivery";
 import { codexWsQuotaObserver, retryCodexPoolOnAlternateAccount } from "../../src/server/responses/core-codex-account";
 import { CodexWsMetadata } from "../../src/server/responses/codex-ws-metadata";
@@ -427,18 +429,128 @@ describe("credential-bound plain-main Responses quota", () => {
           sseFallback: (async () => { fallbackCalls++; return quotaResponse(quotaHeaders("37")); }) as typeof fetch,
           onQuota: codexWsQuotaObserver(ctx, provider, "gpt-5.5"), bunVersion: "1.4.0" });
         expect(fallbackCalls).toBe(1);
+        expect(mainCache.isMainQuotaDispatchWsClaimed(ctx.mainQuotaDispatch!)).toBe(false);
         expect(isCodexWsUpstreamResponse(response)).toBe(false);
         expect(isCodexWsPreludeProjection(response)).toBe(false);
         expect(isCodexWsQuotaObservedResponse(response)).toBe(false);
         await deliver(ctx, response);
         expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(37);
         expect(getMainPolicyQuota()?.weeklyPercent).toBe(37);
+        expect(mainCache.isMainQuotaDispatchWsClaimed(ctx.mainQuotaDispatch!)).toBe(false);
       } finally {
         session.dispose();
         globalThis.WebSocket = originalSocket;
       }
     });
   }
+
+  test("full handler preflight for encrypted function output retains newer WS quota", async () => {
+    observe();
+    const newerObserver = codexWsQuotaObserver(materialized(), provider, "gpt-5.5");
+    expect(newerObserver).toBeDefined();
+    const originalSocket = globalThis.WebSocket;
+    const sockets: PreflightSocket[] = [];
+    const opaqueBytes = Buffer.alloc(73, 1);
+    opaqueBytes[0] = 0x80;
+    const opaqueOutput = opaqueBytes.toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
+    class PreflightSocket extends EventTarget {
+      readyState = 0;
+      sent: string[] = [];
+      constructor() {
+        super();
+        sockets.push(this);
+        queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event("open")); });
+      }
+      send(text: string): void {
+        this.sent.push(text);
+        queueMicrotask(() => {
+          const emit = (payload: unknown) => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(payload) }));
+          emit({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 17, window_minutes: 10080 } } });
+          expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+          emit({ type: "response.created", response: { id: "fixture-preflight", status: "in_progress", output: [] } });
+          // The committed response has a 17% prelude; another dispatch publishes 99%.
+          newerObserver!(quotaHeaders("99"));
+          expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+          emit({ type: "response.output_text.delta", delta: "fixture answer", output_index: 0, content_index: 0 });
+          emit({ type: "response.completed", response: { id: "fixture-preflight", status: "completed", output: [] } });
+        });
+      }
+      close(): void {
+        if (this.readyState === 3) return;
+        this.readyState = 3;
+        this.dispatchEvent(new Event("close"));
+      }
+    }
+    globalThis.WebSocket = PreflightSocket as unknown as typeof WebSocket;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: new Headers({ ...Object.fromEntries(caller()), "content-type": "application/json" }),
+        body: JSON.stringify({ model: "gpt-5.5", stream: true, input: [
+          { type: "function_call", call_id: "fixture-call", name: "fixture_tool", arguments: "{}" },
+          { type: "function_call_output", call_id: "fixture-call",
+            output: [{ type: "encrypted_content", encrypted_content: opaqueOutput }] },
+        ] }),
+      }), { ...config, defaultProvider: "openai", streamMode: "legacy-tee",
+        providers: { openai: { ...provider, codexAccountMode: "direct" } } }, { model: "", provider: "" },
+      { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
+      expect(response.status).toBe(200);
+      expect(sockets).toHaveLength(1);
+      const sentOutput = JSON.parse(sockets[0]!.sent[0]!).input.find((item: { type?: string }) => item.type === "function_call_output");
+      expect(sentOutput.output[0].type).toBe("encrypted_content");
+      // The preflight replay is a fresh Response; no response-object marker survives.
+      expect(isCodexWsUpstreamResponse(response)).toBe(false);
+      expect(isCodexWsPreludeProjection(response)).toBe(false);
+      const text = await response.text();
+      expect(text).toContain("fixture answer");
+      expect(text).toContain("response.completed");
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+      expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
+    } finally {
+      for (const socket of sockets) socket.close();
+      globalThis.WebSocket = originalSocket;
+    }
+  });
+
+  test("an observed WS dispatch rejects an unmarked HTTP-shaped quota snapshot", async () => {
+    observe();
+    const ctx = materialized();
+    const observer = codexWsQuotaObserver(ctx, provider, "gpt-5.5");
+    expect(observer).toBeDefined();
+    observer!(quotaHeaders("17"));
+    observer!(quotaHeaders("99"));
+    expect(mainCache.isMainQuotaDispatchWsClaimed(ctx.mainQuotaDispatch!)).toBe(true);
+    const response = quotaResponse(quotaHeaders("17"));
+    expect(isCodexWsUpstreamResponse(response)).toBe(false);
+    expect(isCodexWsPreludeProjection(response)).toBe(false);
+    await deliver(ctx, response);
+    expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+    expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
+  });
+
+  test("every observer invocation claims its captured dispatch before checking liveness", async () => {
+    observe();
+    const ctx = materialized();
+    const dispatch = ctx.mainQuotaDispatch!;
+    const observer = codexWsQuotaObserver(ctx, provider, "gpt-5.5");
+    expect(observer).toBeDefined();
+    expect(mainCache.isMainQuotaDispatchWsClaimed(dispatch)).toBe(false);
+    mainCache.observeMainQuotaCredential("fixture-replaced-before-frame", ACCOUNT);
+    expect(mainCache.isMainQuotaDispatchLive(dispatch)).toBe(false);
+    observer!(new Headers());
+    expect(mainCache.isMainQuotaDispatchWsClaimed(dispatch)).toBe(true);
+    expect(getAccountQuota(MAIN)).toBeNull();
+    // Reusing the context cannot transfer an old observer's claim to a new dispatch.
+    observe();
+    materializeCodexUpstreamAuth(caller(), ctx, { config, modelId: "gpt-5.5" });
+    expect(ctx.mainQuotaDispatch).not.toBe(dispatch);
+    expect(mainCache.isMainQuotaDispatchWsClaimed(ctx.mainQuotaDispatch!)).toBe(false);
+    observer!(quotaHeaders("99"));
+    await deliver(ctx, quotaResponse(quotaHeaders("37")));
+    expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(37);
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(37);
+  });
 
   test("async Reserve admission failure clears a reused main dispatch proof", async () => {
     observe();

@@ -438,6 +438,9 @@ cannot publish main usage. Pool health/failover handling stays scoped to Pool co
 The dispatch additionally fences the process-wide credential mutation epoch, so native main
 refresh and same-account reauth commits reject an older response before quota observation catches
 up. Publications for other credentials also conservatively drop the main update.
+Every plain-main WS observer invocation claims its dispatch before checking liveness, preventing
+HTTP publication from replacement Responses. A failed-upgrade HTTP fallback with no WS quota
+frames remains unclaimed and publishes normally; response markers remain an additional guard.
 `src/codex/auth-api/main-account-probe.ts` re-reads the bounded stored main credential and
 rechecks its writer, bearer and generation after body/retry awaits, before publishing main usage,
 credits, plan, reauth or Reserve state, including terminal 401/403 mutations. An unreadable file

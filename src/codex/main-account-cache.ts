@@ -82,6 +82,18 @@ export type MainQuotaDispatch = Readonly<{
   configGeneration: number;
 }>;
 
+// WS quota frames publish through their observer; prelude quota can only come from those frames.
+// A real HTTP fallback after a failed upgrade never invokes the observer and stays unclaimed.
+const wsObservedMainDispatches = new WeakSet<MainQuotaDispatch>();
+
+export function claimMainQuotaDispatchForWs(dispatch: MainQuotaDispatch): void {
+  wsObservedMainDispatches.add(dispatch);
+}
+
+export function isMainQuotaDispatchWsClaimed(dispatch: MainQuotaDispatch): boolean {
+  return wsObservedMainDispatches.has(dispatch);
+}
+
 export function captureMainQuotaDispatch(
   accessToken: string, accountId: string | undefined, configGeneration: number,
 ): MainQuotaDispatch | undefined {

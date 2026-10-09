@@ -30,7 +30,7 @@ import {
   isFixedCodexAccount,
   shouldDeferCodexResetDerivedCooldown,
 } from "./core-codex-account";
-import { isMainQuotaDispatchLive } from "../../codex/main-account-cache";
+import { isMainQuotaDispatchLive, isMainQuotaDispatchWsClaimed } from "../../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse, isCodexWsPreludeProjection } from "./ws-upstream";
@@ -542,7 +542,9 @@ export async function deliverPassthroughResponse(
       const mainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider);
       // The WS observer is the only plain-main publisher for a WebSocket exchange;
       // a prelude projection carries the prelude snapshot, not fresh evidence.
-      if (mainDispatch && !(isCodexWsUpstreamResponse(upstreamResponse) || isCodexWsPreludeProjection(upstreamResponse))) {
+      // The dispatch claim is authoritative because downstream wrappers can replace the Response.
+      if (mainDispatch && !isMainQuotaDispatchWsClaimed(mainDispatch)
+        && !(isCodexWsUpstreamResponse(upstreamResponse) || isCodexWsPreludeProjection(upstreamResponse))) {
         const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
         // Import yields; same-account token replacement leaves the identity writer live.
         // Re-check the credential fence with no await before publication.

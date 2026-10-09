@@ -6,7 +6,7 @@ import {
   computeQuotaCooldown,
   formatCodexProviderForLog,
 } from "../../codex/routing";
-import { isMainQuotaDispatchLive, type MainQuotaDispatch } from "../../codex/main-account-cache";
+import { claimMainQuotaDispatchForWs, isMainQuotaDispatchLive, type MainQuotaDispatch } from "../../codex/main-account-cache";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isCodexAccountGenerationLive } from "../../codex/account-store";
@@ -138,6 +138,7 @@ export function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxPro
     const dispatch = liveMainQuotaDispatch(authCtx, provider);
     if (!dispatch) return undefined;
     return headers => {
+      claimMainQuotaDispatchForWs(dispatch);
       if (!isMainQuotaDispatchLive(dispatch)) return;
       applyCapturedCodexQuota(MAIN_CODEX_ACCOUNT_ID, headers, dispatch.configGeneration, dispatch.writer, { modelId });
     };
