@@ -1,7 +1,7 @@
 # 049 — Outcome: the desktop-owned CLI path on Linux and Windows
 
 The macOS-built CLI path work (#6802, #6807, #6809, #6812, #6816, #6818) was probed on real hosts: Ubuntu 24.04 (`lidge`)
-and Windows 11 build 26200 (`mini`). Linux works end to end, including the deb path and real fish/bash logins. On
+and Windows 11 build 26200 (`mini`). Every tested Linux path works, including the deb path and real fish/bash logins. On
 Windows the PATH writer and new-terminal pickup work, but nothing in the CLI recognises the Desktop as the runtime's
 supervisor, and the Desktop's own conflict check reports a false positive. Two test defects that only appear off CI
 were fixed.
@@ -18,7 +18,7 @@ were fixed.
 | Refuse-to-compete (#6809) | works: `start` and `service install` refuse; `stop` warns by design (019 L10) | inactive (same cause) → #6853 |
 | PATH-Bun fallback (#6807) | works with Bun 1.4.2; failure text names no Desktop CLI (019 L11, F4) | works with Bun 1.4.2; same F4 (029 W10) → follow-up in #6853 |
 | Bun preflight (#6812) | — | product path not exercised live; three tests failed on a profile-located Bun → fixed by #6852 |
-| Rust `cli_command` tests | 60/60 after one unexplained first-run `lock-busy` (F1, no issue); ignored real-shell test broken on Ubuntu → fixed by #6851 | 27/27 |
+| Rust `cli_command` tests | 60/60 after one unexplained first-run `lock-busy` (F1, no issue); ignored real-shell test broken on Ubuntu → fixed by #6851 | 27/27, coordinator-reported (raw output not retained) |
 | Opt-out via the CLI page | unverified (no GUI operator) | unverified |
 
 ## Delivered
