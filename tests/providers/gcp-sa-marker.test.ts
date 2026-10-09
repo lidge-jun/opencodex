@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,7 +8,6 @@ import {
   gcpCredentialMarkerAccount,
   getVertexAccessToken,
   parseGcpCredentialJson,
-  setActiveGcpCredentialMarker,
   __resetVertexTokenCache,
 } from "../../src/lib/gcp-adc";
 import { splitCredentialPaste, addProviderApiKey } from "../../src/providers/api-keys";
@@ -32,7 +31,6 @@ const SERVICE_ACCOUNT_JSON_2 = JSON.stringify({
 
 afterEach(() => {
   __resetVertexTokenCache();
-  setActiveGcpCredentialMarker(undefined);
   setProviderKeychainEntryFactoryForTests(null);
 });
 
@@ -192,10 +190,38 @@ describe("addProviderApiKey with a pasted credential JSON", () => {
 describe("gcp-adc marker source", () => {
   let oauthCalls = 0;
   const realFetch = globalThis.fetch;
+  const prevEnv: Record<string, string | undefined> = {};
 
-  afterEach(() => { globalThis.fetch = realFetch; });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    for (const [k, v] of Object.entries(prevEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+      delete prevEnv[k];
+    }
+  });
 
-  test("an active marker resolves its keychain credential through the JWT exchange", async () => {
+  // The marker-account tests pass the account per request (options.markerAccount) — no
+  // process-global registration anywhere. Host ADC state is fully isolated: an empty
+  // CLOUDSDK_CONFIG dir, no GOOGLE_APPLICATION_CREDENTIALS, and a 404 fetching stub, so
+  // no test can make a real network call or depend on the developer's gcloud login.
+  function isolateHostAdc(): void {
+    prevEnv.GOOGLE_APPLICATION_CREDENTIALS ??= process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    prevEnv.CLOUDSDK_CONFIG ??= process.env.CLOUDSDK_CONFIG;
+    process.env.CLOUDSDK_CONFIG = join(tmpdir(), `ocx-gcp-sa-isolated-${Date.now()}`);
+    mkdirSync(process.env.CLOUDSDK_CONFIG, { recursive: true });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        oauthCalls++;
+        return new Response(JSON.stringify({ access_token: "marker-tok", expires_in: 3600 }), { status: 200 });
+      }
+      return new Response("nope", { status: 404 });
+    }) as typeof fetch;
+  }
+
+  test("a marker account resolves its keychain credential through the JWT exchange", async () => {
     // A real, signable RSA key (generated) so the RS256 JWT exchange inside the resolver works.
     const kp = await globalThis.crypto.subtle.generateKey(
       { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
@@ -216,17 +242,9 @@ describe("gcp-adc marker source", () => {
       setPassword: () => {},
       deletePassword: () => true,
     }));
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
-      if (url === "https://oauth2.googleapis.com/token") {
-        oauthCalls++;
-        return new Response(JSON.stringify({ access_token: "marker-tok", expires_in: 3600 }), { status: 200 });
-      }
-      return new Response("nope", { status: 404 });
-    }) as typeof fetch;
+    isolateHostAdc();
 
-    setActiveGcpCredentialMarker(`${GCP_CREDENTIAL_MARKER_PREFIX}p/abc123`);
-    const token = await getVertexAccessToken();
+    const token = await getVertexAccessToken({ markerAccount: "p/abc123" });
     expect(token).toBe("marker-tok");
     expect(oauthCalls).toBe(1);
   });
@@ -237,15 +255,14 @@ describe("gcp-adc marker source", () => {
       setPassword: () => {},
       deletePassword: () => true,
     }));
-    setActiveGcpCredentialMarker(`${GCP_CREDENTIAL_MARKER_PREFIX}p/missing`);
-    await expect(getVertexAccessToken()).rejects.toThrow(/gcp-sa:p\/missing/);
+    isolateHostAdc();
+    await expect(getVertexAccessToken({ markerAccount: "p/missing" })).rejects.toThrow(/gcp-sa:p\/missing/);
   });
 
-  test("clearing the marker restores the normal source priority", async () => {
-    setActiveGcpCredentialMarker(`${GCP_CREDENTIAL_MARKER_PREFIX}p/abc123`);
-    setActiveGcpCredentialMarker(undefined);
+  test("no marker account falls through to the normal source priority (isolated: fails with ADC guidance)", async () => {
+    isolateHostAdc();
     // With no marker and no env/file ADC, the resolver reaches the metadata-server attempt and
-    // fails with the standard ADC guidance — proving the marker is no longer the active source.
+    // fails with the standard ADC guidance — proving the no-marker path is unchanged.
     await expect(getVertexAccessToken()).rejects.toThrow(/Application Default Credentials/);
   });
 });

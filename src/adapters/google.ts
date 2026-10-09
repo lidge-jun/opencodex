@@ -17,7 +17,7 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
-import { GCP_CREDENTIAL_MARKER_PREFIX, getVertexAccessToken } from "../lib/gcp-adc";
+import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
@@ -1201,7 +1201,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (locationError) throw new Error(locationError);
         const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
         const url = `https://${host}/v1/projects/${project}/locations/${location}/publishers/google/models/${parsed.modelId}:${method}${streamParam}`;
-        const token = await getVertexAccessToken();
+        // The marker account travels per-request as an argument (never process-global state): a
+        // module-level "active marker" written at routing time would race across concurrent
+        // requests for different providers and could resolve one call with another's credential.
+        const markerAccount = gcpCredentialMarkerAccount(provider.apiKey);
+        const token = await getVertexAccessToken({ markerAccount });
         headers["Authorization"] = `Bearer ${token}`;
         return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
       }

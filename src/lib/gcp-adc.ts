@@ -123,7 +123,10 @@ export function sweepExpiredGcpAdcTokens(now = Date.now()): number {
 
 export function reconcileGcpAdcTokens(context: GenerationContext): number {
   if (context.generation <= lastReconciledGeneration) return 0;
-  const currentSource = currentAdcSourceKey();
+  // The periodic sweep registration has no request context, so no marker is active here: markers
+  // travel per-request via getVertexAccessToken(options.markerAccount), and a marker-token cache
+  // entry whose account no longer resolves is simply pruned by this sweep when it expires.
+  const currentSource = currentAdcSourceKey(undefined);
   let removed = 0;
   for (const source of tokenCache.keys()) {
     if (source === currentSource) continue;
@@ -190,8 +193,7 @@ function readMarkerCredential(account: string): AdcFileCredentials | undefined {
   }
 }
 
-function loadAdcCredentials(): { source: string; creds: AdcFileCredentials } | undefined {
-  const markerAccount = currentMarkerAccount();
+function loadAdcCredentials(markerAccount: string | undefined): { source: string; creds: AdcFileCredentials } | undefined {
   if (markerAccount) {
     const creds = readMarkerCredential(markerAccount);
     if (!creds) throw new Error(`gcp-sa:${markerAccount} marker is set but its credential could not be read from the OS credential store`);
@@ -215,31 +217,13 @@ function loadAdcCredentials(): { source: string; creds: AdcFileCredentials } | u
  * change to GOOGLE_APPLICATION_CREDENTIALS (or the user ADC file) does not keep serving a stale
  * token from a different source. Falls back to "metadata" when no marker/file/env ADC is present.
  */
-function currentAdcSourceKey(): string {
-  const markerAccount = currentMarkerAccount();
+function currentAdcSourceKey(markerAccount: string | undefined): string {
   if (markerAccount) return `marker:${markerAccount}`;
   const gacPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (gacPath) return fileSourceTag("gac", gacPath);
   const userPath = userAdcPath();
   if (existsSync(userPath)) return fileSourceTag("user", userPath);
   return "metadata";
-}
-
-/**
- * The marker source needs to know WHICH marker is active, but gcp-adc is a leaf module that
- * must not import the provider config graph. Callers that route through a `gcp-sa:` marker
- * register the active marker account here (the vertex adapter path calls
- * `setActiveGcpCredentialMarker` from the router's key resolution, which already knows the
- * resolved key string). Exported for that single call site + tests.
- */
-let activeMarkerAccount: string | undefined;
-
-export function setActiveGcpCredentialMarker(value: string | undefined): void {
-  activeMarkerAccount = gcpCredentialMarkerAccount(value);
-}
-
-function currentMarkerAccount(): string | undefined {
-  return activeMarkerAccount;
 }
 
 function base64UrlEncode(bytes: Uint8Array | string): string {
@@ -363,8 +347,8 @@ async function fetchMetadataToken(signal: AbortSignal | undefined, fetchImpl: Fe
   }
 }
 
-async function resolveAccessTokenUncached(signal: AbortSignal | undefined, fetchImpl: FetchImpl): Promise<{ source: string; token: TokenResponse }> {
-  const adc = loadAdcCredentials();
+async function resolveAccessTokenUncached(markerAccount: string | undefined, signal: AbortSignal | undefined, fetchImpl: FetchImpl): Promise<{ source: string; token: TokenResponse }> {
+  const adc = loadAdcCredentials(markerAccount);
   if (adc) {
     const token = adc.creds.type === "service_account"
       ? await exchangeJwtForToken(adc.creds, signal, fetchImpl)
@@ -379,14 +363,19 @@ async function resolveAccessTokenUncached(signal: AbortSignal | undefined, fetch
 }
 
 /** Returns a Bearer access token for the `Authorization` header on Vertex AI calls (cached + refreshed). */
-export async function getVertexAccessToken(options?: { signal?: AbortSignal; fetch?: FetchImpl }): Promise<string> {
+export async function getVertexAccessToken(options?: { signal?: AbortSignal; fetch?: FetchImpl; markerAccount?: string }): Promise<string> {
+  // The marker travels as an argument, never as process-global state: a module-level "active
+  // marker" written by the router would race across concurrent requests for different providers
+  // and could resolve one provider's Vertex call with another provider's service account. The
+  // adapter passes `gcpCredentialMarkerAccount(provider.apiKey)` per request instead.
+  const markerAccount = options?.markerAccount;
   const fetchImpl = options?.fetch ?? globalThis.fetch.bind(globalThis);
   const skew = getRefreshSkewMs();
   const now = Date.now();
 
   // Only serve a cached token that matches the source the next resolve would actually use; prune
   // expired or now-stale (different-source) entries so a credential-source change is honored.
-  const expectedSource = currentAdcSourceKey();
+  const expectedSource = currentAdcSourceKey(markerAccount);
   const writerGeneration = captureConfigGeneration();
   for (const [source, cached] of tokenCache) {
     if (source === expectedSource && cached.expiresAtMs - skew > now) return cached.token;
@@ -401,7 +390,7 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
 
   const promise = (async () => {
     try {
-      const { source, token } = await resolveAccessTokenUncached(options?.signal, fetchImpl);
+      const { source, token } = await resolveAccessTokenUncached(markerAccount, options?.signal, fetchImpl);
       const expiresAtMs = Date.now() + Math.max(0, token.expires_in * 1000);
       if (writerGeneration >= lastReconciledGeneration || liveSources.has(source)) {
         tokenCache.set(source, { token: token.access_token, expiresAtMs });

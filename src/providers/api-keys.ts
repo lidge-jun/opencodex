@@ -85,7 +85,7 @@ function storeGcpCredentialJson(config: OcxConfig, name: string, credentialJson:
   const probe = probeProviderKeychain();
   if (!probe.available) throw new Error(`OS keychain unavailable: ${probe.reason}`);
   const id = apiKeyPoolEntryId(credentialJson);
-  const account = `${name}/${id}`;
+  const account = gcpCredentialStoreAccount(name, id);
   const entry = providerKeychainEntry(account);
   entry.setPassword(credentialJson);
   if (entry.getPassword() !== credentialJson) {
@@ -93,6 +93,11 @@ function storeGcpCredentialJson(config: OcxConfig, name: string, credentialJson:
     throw new Error(`keychain read-back mismatch for ${account}`);
   }
   return `${GCP_CREDENTIAL_MARKER_PREFIX}${account}`;
+}
+
+/** The credential-store account a marker names for `name`/`id` (write + cleanup share it). */
+function gcpCredentialStoreAccount(name: string, id: string): string {
+  return `${name}/${id}`;
 }
 
 /** Content-derived id: re-adding the same key upserts instead of duplicating. */
@@ -160,13 +165,17 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
     } else {
       if (parts.length > 1) return { error: "paste one credential JSON per request; add each additional credential as its own key" };
       const credentialJson = (first as { credentialJson: string }).credentialJson;
+      const id = apiKeyPoolEntryId(credentialJson);
+      const account = gcpCredentialStoreAccount(name, id);
+      // Track whether this write CREATED the keychain entry: an upsert over an existing
+      // reference must not delete the previously-referenced credential on a failed commit.
+      const existedBefore = providerKeychainEntry(account).getPassword() !== null;
       let marker: string;
       try {
         marker = storeGcpCredentialJson(config, name, credentialJson);
       } catch (error) {
         return { error: error instanceof Error ? error.message : "credential storage failed" };
       }
-      const id = apiKeyPoolEntryId(credentialJson);
       const committed = commitProviderApiKeySelection(config, name, fresh => {
         const pool = ensurePool(fresh);
         const existing = pool.find(e => e.id === id);
@@ -182,6 +191,12 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
       if (committed.status === "committed") {
         invalidateResolvedProviderKeyCache();
         return { id };
+      }
+      // Failed commit: the just-written keychain entry has no config reference pointing at it.
+      // Delete it ONLY when this write created it — an upsert must keep the credential the old
+      // reference still names.
+      if (!existedBefore) {
+        try { providerKeychainEntry(account).deletePassword(); } catch { /* best effort */ }
       }
       return { error: "provider selection unavailable" };
     }
