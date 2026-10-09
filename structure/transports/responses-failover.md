@@ -81,7 +81,7 @@ logical request holds one replacement grant, whichever stage asks for it. The gr
 request's execution budget, so a combo child that derives its own scope draws on the same
 counter rather than holding a second. A replacement never widens a send budget: it still has to
 fit inside the allowance the leg already had, and it is charged to the same counter every other
-send goes through.
+send goes through; initial Combo bookings follow the [prepaid-send contract](responses-spend.md#prepaid-initial-sends).
 
 Generic translated dispatch in `src/server/responses/adapter-dispatch.ts` asks the same pre-header gate for initial and rebuilt sends, sharing the replacement grant and charging each physical send once to the existing request/workflow budgets. Adapter-owned transports and translated post-header failures are excluded. Coverage: `tests/responses/responses-translated-reset.test.ts`. The number of replacements is the request's as well. A leg reads it from `route.provider`, which
 credential rotation, OAuth refresh, transport resolution and each combo target reassign inside one

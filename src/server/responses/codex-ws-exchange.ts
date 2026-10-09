@@ -23,6 +23,7 @@ interface ExchangeOptions {
   sseFallback: typeof globalThis.fetch;
   onQuota?: CodexWsQuotaObserver;
   beforeDispatch?: (headers: Headers) => void;
+  onPhysicalDispatch?: () => void;
   /** Bun version string the caller gated on; stamped onto the stage record. */
   bunVersion?: string;
 }
@@ -431,6 +432,8 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         resolve(sseFallback(url, init));
         return;
       }
+      // The frame already left: receipt failure must never enter the unsent SSE fallback.
+      try { options.onPhysicalDispatch?.(); } catch (error) { failStream(error); return; }
       if (!metadata) commitResponse();
       else if (!responseCommitted && !terminal) {
         armSilence();

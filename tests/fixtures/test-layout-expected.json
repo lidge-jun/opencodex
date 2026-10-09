@@ -226,6 +226,7 @@
   "protocol-direct-encoders-local-upstream.test.ts": "responses",
   "protocol-direct-encoders-messages.test.ts": "responses", "chat-native-combo.test.ts": "responses",
   "messages-native-eligibility.test.ts": "responses", "messages-native-bridge-policy.test.ts": "responses",
+  "responses-first-send-reservation.test.ts": "responses", "responses-first-send-spend-policy.test.ts": "responses", "responses-dispatch-receipt.test.ts": "responses", "responses-hosted-send-hop.test.ts": "responses", "responses-hosted-send-producer.test.ts": "responses", "responses-hosted-send-reservation.test.ts": "responses", "responses-hosted-send-round-parity.test.ts": "responses", "responses-hosted-send-unsent-hop.test.ts": "responses", "responses-hosted-send-ws.test.ts": "responses",
   "messages-native-oauth-eligibility.test.ts": "responses", "chat-inbound-reasoning-none.test.ts": "responses",
   "chat-native-decline-reason.test.ts": "responses", "chat-inbound-reasoning-replay.test.ts": "responses",
   "chat-inline-document-bytes.test.ts": "responses", "chat-json-sse-fallback.test.ts": "responses",

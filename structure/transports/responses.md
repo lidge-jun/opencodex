@@ -49,7 +49,7 @@ keep-alive reuse with `Connection: close` and `keepalive: false`; exact hosts an
 match case-insensitively. `sendWithConnectionPolicy` applies the policy around the fetch that
 performs the physical send, after a dispatch override has selected or rebuilt the destination, so
 matching follows the URL sent on the wire rather than the URL supplied before credential
-revalidation. At this final HTTP boundary, native ChatGPT Responses and compact JSON strings of at least 1 MiB (UTF-8) become byte buffers to avoid Bun's large-string upload resets. Content, headers, abort signals and retry policy are preserved; WebSocket selection still receives the original string. Other destinations, small strings and existing byte/stream bodies retain their representation.
+revalidation; prepaid initial-send receipts follow the [spend contract](responses-spend.md#prepaid-initial-sends). At this final HTTP boundary, native ChatGPT Responses and compact JSON strings of at least 1 MiB (UTF-8) become byte buffers to avoid Bun's large-string upload resets. Content, headers, abort signals and retry policy are preserved; WebSocket selection still receives the original string. Other destinations, small strings and existing byte/stream bodies retain their representation.
 
 The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
 `route.provider.fetch` at send time, because reselection can install a different provider transport
@@ -426,7 +426,7 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 | `passthrough-dispatch.ts` | Native request preparation, upstream sends and pre-commit recovery. |
 | `passthrough-delivery.ts`, `terminal-error-redaction.ts`, `non-replayable-error.ts` | Native HTTP/SSE/JSON delivery and terminal accounting. Marked real errors use bounded reads to retain only allowlisted error type and code, keep status and non-replayability plus `x-should-retry: false` when present, and withhold upstream body text and all other upstream headers; the client receives a fixed generic message and synthetic refusals stay distinct. SSE diagnostics and xAI tool-envelope filtering precede client delivery/continuation storage. |
 | `policy-refusal.ts` | Rewrites an allowlisted non-combo HTTP 403 model refusal (`isUpstreamPolicyRefusal` in `src/lib/errors.ts`) from an xAI destination only (`isXaiResponsesDestination`: api.x.ai or the Grok CLI proxy, on either wire) to an HTTP 200 Responses `incomplete` / `content_filter` payload, JSON or SSE, for both `adapter-dispatch.ts` and `passthrough-delivery.ts`. A streamed rewrite takes the turn admission lease and releases it when the body finishes, so the refusal stays inside active-turn accounting. Combo attempts keep the original 403 so failover classifies it as a hop. |
-| `sidecar-execution.ts` | Image/video versus web-search execution and their shared rotation hook. |
+| `sidecar-execution.ts`, `sidecar-send-budget.ts` | Image/video versus web-search execution, shared rotation, and adapter-aware prepaid inference/producer ownership under the [spend contract](responses-spend.md#prepaid-initial-sends). |
 | `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns. |
 | `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery and the shared continuation retry counter. |
 | `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; a streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
@@ -546,10 +546,10 @@ The initial JEV override changes only the separate Responses body; native labels
 ([JEV Decision Routing](../providers/jev-decision.md)). Its attempt path is native (`[chat, chat]`) and its answer is marked `chat`.
 
 Send accounting: the combo's hop reservation already booked the target's first send, so the native
-child opens no spend tracker; it reports each physical send to the target budget (the first
-settles the hop's booking, each later one is charged and booked by the request's one tracker), its
-transient ladder and 429 replays are capped by the shared base allowance at the same cap its own
-ladder uses, and a refusal answers 429 `request_send_budget_exhausted` in the Chat shape.
+child opens no spend tracker; its final HTTP receipt confirms the exact owning prepaid permit,
+then reserves each later physical send independently under the [prepaid-send contract](responses-spend.md#prepaid-initial-sends).
+Its transient ladder and 429 replays intersect target-local totals with shared ceilings;
+a refusal answers 429 `request_send_budget_exhausted` in the Chat shape.
 
 A marked child skips `preflightComboStreamResponse`: native Chat reports a pre-stream failure by
 HTTP status before any byte, and a non-OK answer goes through `consumeComboFailure` unchanged. A

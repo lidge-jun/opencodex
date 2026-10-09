@@ -235,6 +235,7 @@ export async function executeResponsesRunTurn(
       preacquiredSlot?: ProviderRequestSlot,
     ): Promise<void> => {
       const attemptSeq = ++runTurnAttemptSeq;
+      if (attemptSeq === 1 && options.comboInitialSend) options.comboInitialSend.producerOwned = true;
       let pacingSlot = preacquiredSlot;
       const emit = (event: AdapterEvent) => {
         options.onCompactionRecoveryAdapterEvent?.(event);
@@ -339,6 +340,7 @@ export async function executeResponsesRunTurn(
                 message: err instanceof Error ? err.message : String(err),
               });
       } finally {
+        if (attemptSeq === 1) options.comboInitialSend?.permit.release();
         devinProducers.delete(producerAbort);
         cleanupProducerAbort?.();
         releaseProviderRequestSlot(pacingSlot);

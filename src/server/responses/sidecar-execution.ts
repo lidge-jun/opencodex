@@ -48,6 +48,7 @@ import { normalizeLogConversationId } from "../request-log-conversation";
 import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
+import { createSidecarSendBudget } from "./sidecar-send-budget";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesSidecars(
@@ -90,7 +91,7 @@ export async function executeResponsesSidecars(
     | "notifyResponseComplete"
     | "cancelResponseCompletion"
   >,
-  sendBudgetState: Pick<ResponsesSendBudget, "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "pendingHopPermit" | "noteAdapterPhysicalSend">,
+  sendBudgetState: Pick<ResponsesSendBudget, "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit">,
 ) {
   const { config, options, logCtx } = requestContext;
   const antigravityPoolActivated = requestState.route.providerName === "google-antigravity"
@@ -114,6 +115,7 @@ export async function executeResponsesSidecars(
   } = requestState;
   const { routedCompaction, openAiSidecar } = sidecarState;
   const { reserveCredentialHop } = sendBudgetState;
+  const sidecarBudget = createSidecarSendBudget(options, sendBudgetState, () => logCtx.usageLogInputTokens);
   const {
     commitReasoningReplayServingRoute,
     continuationStateForResponse,
@@ -323,8 +325,9 @@ export async function executeResponsesSidecars(
         return null;
       }
       recoveryKind = "oauth-account-429";
-      if (canRunWebSearch && route.providerName === "google-antigravity") sendBudgetState.pendingHopPermit = hop.permit;
-      else hop.permit?.use();
+      if (!options.comboInitialSend && canRunWebSearch && route.providerName === "google-antigravity")
+        sendBudgetState.pendingHopPermit = hop.permit;
+      else sidecarBudget.ownCredentialHop(hop.permit);
     } else if (
       // Anthropic's pool is excluded from generic failover, so without this arm a 429 inside a
       // web-search or image-bridge turn was terminal even with the pool fully enabled -- while
@@ -365,7 +368,7 @@ export async function executeResponsesSidecars(
         return null;
       }
       recoveryKind = "anthropic-oauth-429";
-      hop.permit?.use();
+      sidecarBudget.ownCredentialHop(hop.permit);
     } else {
       // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement
       // credential. The 429 is terminal for this sidecar turn.
@@ -451,11 +454,14 @@ export async function executeResponsesSidecars(
     const imageProviderFetch = providerFetch(
       route.provider,
       options.codexWsRuntimeIdentity,
-      { providerName: route.providerName, modelId: route.modelId },
+      { providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(transportState.adapter) },
     );
     const imgResponse = await runWithImageBridge({
       parsed, adapter: transportState.adapter,
-      incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget },
+      incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget, ...(options.comboInitialSend ? { providerFetch: imageProviderFetch } : {}), ...sidecarBudget.incomingMeta },
+      onProducerStart: sidecarBudget.takeProducerOwnership,
+      onProducerEnd: sidecarBudget.release,
+      onIterationEnd: sidecarBudget.releaseUnsentHop,
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
       forwardHeaders: requestState.selectedForwardHeaders,
@@ -471,10 +477,10 @@ export async function executeResponsesSidecars(
       stallTimeoutSec: config.stallTimeoutSec,
       waitForRequestSlot: imageProviderFetch.waitForPacing,
       fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
-      fetchForRequest: (request, iterParsed) => {
+      fetchForRequest: (request, iterParsed, adapter) => {
         const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           dispatchOverride: oauthDispatch(request, iterParsed),
-          providerName: route.providerName, modelId: route.modelId,
+          providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(adapter),
         });
         return fetch.unpacedFetch ?? fetch;
       },
@@ -541,12 +547,14 @@ export async function executeResponsesSidecars(
       providerFetch(route.provider, options.codexWsRuntimeIdentity, {
         providerName: route.providerName,
         modelId: route.modelId,
+        ...sidecarBudget.fetchOptions(transportState.adapter),
       })(input, init)) as typeof globalThis.fetch;
     const wsResponse = await runWithWebSearch({
       parsed, adapter: transportState.adapter,
-      fetchForRequest: (request, iterParsed) => providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+      onIterationEnd: sidecarBudget.releaseUnsentHop,
+      fetchForRequest: (request, iterParsed, adapter) => providerFetch(route.provider, options.codexWsRuntimeIdentity, {
         dispatchOverride: oauthDispatch(request, iterParsed),
-        providerName: route.providerName, modelId: route.modelId,
+        providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(adapter),
       }),
       incomingMeta: {
         headers: requestState.selectedForwardHeaders,
@@ -554,11 +562,11 @@ export async function executeResponsesSidecars(
         abortSignal: options.abortSignal,
         translatorBudget,
         providerFetch: routedProviderFetch,
-        ...(route.providerName === "google-antigravity" ? {
+        ...(!options.comboInitialSend && route.providerName === "google-antigravity" ? {
           sendBudget: sendBudgetState.refundableAdapterDispatchBudget,
           onPhysicalSend: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) =>
             sendBudgetState.noteAdapterPhysicalSend(logCtx.usageLogInputTokens, send),
-        } : {}),
+        } : sidecarBudget.incomingMeta),
       },
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
@@ -591,7 +599,7 @@ export async function executeResponsesSidecars(
       stallTimeoutSec: wsPlan.stallTimeoutSec,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
       on429: rotateSidecarProviderOn429,
-      ...(route.providerName === "google-antigravity" ? { onIterationEnd: () => {
+      ...(!options.comboInitialSend && route.providerName === "google-antigravity" ? { onIterationEnd: () => {
         // The next Antigravity adapter dispatch claims this permit. If request construction,
         // admission or cancellation stopped it first, return the unused send allowance.
         const permit = sendBudgetState.pendingHopPermit;
