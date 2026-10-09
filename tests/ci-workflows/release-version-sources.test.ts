@@ -8,8 +8,14 @@ import {
   writeVersionSources,
 } from "../../scripts/release-version-sources";
 import { repoPath, repoRoot } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 /**
+ * Every spawnSync below is bounded by the shared spawned-child deadline: Bun's test
+ * timeout cannot interrupt a synchronous wait, so an unbounded child that wedges on
+ * a lock or a runner stall pins its whole batch until the shard deadline cuts it
+ * (Linux test 1/4 batch 6, run 37736425700). A bounded child fails this one test instead.
+ *
  * The npm package and the desktop app read their version from different files. When only
  * package.json moved, dev carried 2.62.0 for npm while tauri.conf.json, Cargo.toml and the
  * opencodex-desktop Cargo.lock entry still said 2.61.0, so a release would have shipped an app
@@ -39,7 +45,7 @@ function snapshot(root: string): Record<string, string> {
 }
 
 function runCli(...args: string[]) {
-  const proc = Bun.spawnSync([process.execPath, CLI, ...args]);
+  const proc = Bun.spawnSync([process.execPath, CLI, ...args], { timeout: INTERNAL_DEADLINE_MS, killSignal: "SIGKILL" });
   return { exitCode: proc.exitCode, stderr: new TextDecoder().decode(proc.stderr) };
 }
 
@@ -217,6 +223,7 @@ describe("every version move covers all four sources", () => {
 
     const verdict = (changed: string) => Bun.spawnSync(
       ["bash", "-c", 'set -euo pipefail\nbranch=codex/dev-version-9.9.9\nchanged_files="$1"\n' + guard + "\necho accepted", "guard", changed],
+      { timeout: INTERNAL_DEADLINE_MS },
     ).exitCode;
 
     expect(verdict("package.json")).toBe(0);

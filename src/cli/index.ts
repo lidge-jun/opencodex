@@ -75,7 +75,7 @@ import {
   pendingTeardownsAreExactly,
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
-import { collectStatus, deadProxyRoutingAdviceLines, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, unusedProxyWarningLines } from "./status";
+import { collectStatus, deadProxyRoutingAdviceLines, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, runtimeSupervisorLine, unusedProxyWarningLines } from "./status";
 import { endpointsToProve, everyEndpointProvenDownAsync, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 import { parseStartOptions, StartArgsError } from "./start-args";
@@ -1785,6 +1785,7 @@ async function handleStatus() {
   console.log(`   Config: ${status.json.paths.config}${local}`);
   console.log(`   PID file: ${status.json.paths.pid}${local}`);
   console.log(`   Runtime: ${status.json.paths.runtime}${local}`);
+  if (runtimeSupervisorLine(status.json.startup)) console.log(`   ${runtimeSupervisorLine(status.json.startup)}`);
   console.log(`   Runtime source: ${status.json.runtime.source}${status.json.runtime.overrideEnv ? ` (${status.json.runtime.overrideEnv})` : ""}${local}`);
   // On a client this is the local default, which routing does not use — the hub applies its own.
   console.log(`   Default provider: ${status.json.defaultProvider}${local}`);

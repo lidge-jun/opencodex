@@ -30,9 +30,22 @@ pnpm add -g --allow-build=bun @bitkyc08/opencodex
 :::note[npm blocked the bun postinstall?]
 Recent npm versions may block bun's postinstall script (`npm warn
 install-scripts ... blocked because they are not covered by allowScripts`),
-which leaves the bundled Bun runtime unprepared. Reinstall allowing bun's
-script — and always include the package name (npm's abbreviated suggestion
-omits it, which would reinstall the current directory instead):
+which leaves the bundled Bun runtime unprepared. After trying permitted bundled-runtime
+recovery, the launcher can use an executable Bun from an absolute PATH directory if its
+stable version has the pinned major and a minor at least the pinned minor. With the current
+1.4.2 dependency, that means 1.4.0 or newer within major 1. Bounded version-policy and identity
+checks require `bun --version` to match `bun -e`'s `Bun.version`; on POSIX, the resolved file
+and its parent directory must not be group- or world-writable. A one-line stderr notice names
+the selected Bun version. Bun is still bundled; installing it yourself is optional.
+
+If no runtime works, the error still includes “the `bun` dependency is not installed” when
+the dependency is missing. On macOS, it also names an executable Desktop CLI found at
+`/Applications/OpenCodex.app/Contents/MacOS/ocx` or
+`~/Applications/OpenCodex.app/Contents/MacOS/ocx`. You can invoke that path explicitly;
+the package launcher does not delegate automatically or install a PATH shim.
+
+To repair the bundled runtime, reinstall allowing bun's script. Always include the package
+name: npm's abbreviated suggestion omits it and would reinstall the current directory:
 
 ```bash
 npm install -g --allow-scripts=bun @bitkyc08/opencodex
@@ -48,6 +61,12 @@ Verify both command aliases are on your `PATH`:
 ocx --version
 opencodex --version
 ```
+
+Before start, stop, restart, service, or an update handled by the Bun CLI, a brief stderr
+notice can identify a CLI/proxy version mismatch. It is advisory and preserves the command's
+exit code; JSON and help output do not trigger it. npm/pnpm updates handled by the Node launcher
+before the Bun CLI starts do not emit this notice. `ocx status`, `ocx doctor`, and `ocx resolve`
+already report version skew through their diagnostics.
 
 If you install the background service from a shell using fnm, nvm, mise, asdf, or volta,
 OpenCodex leaves shell-local multishell directories out of the service PATH. On Linux it

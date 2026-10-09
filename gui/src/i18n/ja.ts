@@ -290,6 +290,8 @@ export const ja: Record<TKey, string> = {
   "startup.protection.desktop": "デスクトップアプリ",
   "startup.desktopHint": "ログイン時に起動し、内蔵プロキシを監視します。所有権の記録と実行中のプロセスを確認します。",
   "startup.desktopRecovery": "OpenCodex がこのプロキシを管理しています。デスクトップアプリを開き直し、ログイン時の起動を確認してください。アプリが管理している間はサービスとランチャーを変更できません。",
+  "startup.desktopSupervisedRecovery": "OpenCodex Desktop がこのプロキシを実行しています。OpenCodex メニューで「ログイン時に起動」を有効にしてください。アプリがプロキシを実行している間は、サービスとランチャーを変更できません。",
+  "startup.desktopReopenRecovery": "OpenCodex を開き直し、「ログイン時に起動」の設定を確認してください。",
   "startup.protection.service": "バックグラウンドサービス",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "未インストール",

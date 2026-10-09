@@ -15,6 +15,42 @@ const validatorSource = readFileSync(
 );
 
 describe("ocx.mjs package launcher (source invariants)", () => {
+  test("PATH fallback follows bundled installer recovery and returns process provenance", () => {
+    const start = source.indexOf("function resolveBun(");
+    const end = source.indexOf("// `ocx update --help`", start);
+    const resolver = source.slice(start, end);
+    expect(resolver.indexOf("bunDir = bunBinDir()")).toBeGreaterThan(resolver.indexOf('source: "override"'));
+    expect(resolver.indexOf("findPathBun(")).toBeGreaterThan(resolver.indexOf("spawnSync(process.execPath, [installJs]"));
+    expect(resolver.indexOf("fail(bunDir ?")).toBeGreaterThan(resolver.indexOf("findPathBun("));
+    expect(resolver).toContain('source: "process"');
+    expect(resolver).not.toContain('catch {\n    fail("the `bun` dependency is not installed.");');
+  });
+
+  test("fallback derives its compatibility floor from the package dependency", () => {
+    expect(source).toContain('typeof pkg.dependencies?.bun === "string" ? pkg.dependencies.bun : ""');
+    expect(source).toContain("pinnedVersion: pinnedBunVersion(), deadlineMs: PATH_BUN_PROBE_BUDGET_MS");
+    // Bounded, but sized for a cold first run of a scanned bun.exe on Windows.
+    expect(source).toContain("const PATH_BUN_PROBE_BUDGET_MS = 5_000;");
+    expect(source).not.toContain('pinnedVersion: "1.4.2"');
+  });
+
+  test("terminal failure names Desktop only as a pointer; resolver and failure do not import supervision", () => {
+    const failStart = source.indexOf("function fail(");
+    const resolveStart = source.indexOf("function resolveBun(", failStart);
+    const resolveEnd = source.indexOf("// `ocx update --help`", resolveStart);
+    expect(failStart).toBeGreaterThanOrEqual(0);
+    expect(resolveStart).toBeGreaterThan(failStart);
+    expect(resolveEnd).toBeGreaterThan(resolveStart);
+    const failure = source.slice(failStart, resolveStart);
+    const resolver = source.slice(resolveStart, resolveEnd);
+    expect(failure).toContain("const desktopCli = findDesktopCli();");
+    expect(failure).toContain("An installed Desktop CLI is available:");
+    expect(failure).not.toMatch(/spawn(?:Sync)?\(/);
+    for (const body of [failure, resolver]) expect(body).not.toContain("desktop-supervision.mjs");
+    const pathRuntime = readFileSync(repoPath("src", "lib", "bun-path-runtime.mjs"), "utf8");
+    expect(pathRuntime).not.toContain("desktop-supervision.mjs");
+  });
+
   test("the Bun child receives the runtime provenance the launcher actually selected (#848)", () => {
     // The launcher is a plain-Node bin script executing at import time, so this is
     // asserted at the source level: the marker must reach the spawn env, and it must

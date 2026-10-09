@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getConfigDir, getConfigPath, readConfigDiagnostics } from "../config";
 import { readPid } from "../config/process-state";
+import { inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
 import { fetchLiveStartupHealth, probeUncleanExitState, selectStatusStartupHealth } from "./status";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { directLocalHttpFetch } from "../server/direct-local-http";
@@ -1379,7 +1380,8 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     configFn: () => ({ port: doctorConfig.port, hostname: doctorConfig.hostname }),
   });
   const liveStartup = live ? await fetchLiveStartupHealth(live) : null;
-  const startup = selectStatusStartupHealth(liveStartup, () => collectStartupHealth(doctorConfig));
+  const { startup } = selectStatusStartupHealth(liveStartup, () => collectStartupHealth(doctorConfig),
+    live?.pid != null ? () => inspectDesktopSupervision({ targetPid: live.pid! }) : undefined, live?.pid);
   console.log("\nCodex restart safety");
   console.log(`  ${startup.rebootSafe ? "ok " : "!! "} ${startupHealthSummary(startup)}`);
   console.log(`       ${formatStartupRoutingDetail(startup)}`);
@@ -1685,8 +1687,12 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   const anyDrvfs = paths.some(p => detectFsType(p.path, mounts).isDrvfs || detectFsType(p.path, mounts).isMntDrive);
   const noProxy = currentProxyEnv.every(p => !p.present) && !configuredProxy.present;
   if (!startup.rebootSafe) {
-    const command = startup.recommendedCommand ?? startup.commands.restoreNative;
-    hints.push(`Codex is pinned to the local proxy without persistent startup protection. After restart, requests can reconnect indefinitely. Run '${command}'.`);
+    if (startup.recommendedAction || startup.desktop?.supervisor) {
+      hints.push(`Codex is pinned to the local proxy without persistent startup protection. ${startup.recommendedAction ?? "Reopen OpenCodex and check Start at Login."}`);
+    } else {
+      const command = startup.recommendedCommand ?? startup.commands.restoreNative;
+      hints.push(`Codex is pinned to the local proxy without persistent startup protection. After restart, requests can reconnect indefinitely. Run '${command}'.`);
+    }
   }
   if (anyDrvfs) {
     hints.push("State dir is on a Windows-mounted (/mnt) drive. Prefer the Linux home (~) under WSL for token/lock reliability.");

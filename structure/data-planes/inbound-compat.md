@@ -9,6 +9,7 @@ Native steering follows [the shared WebSocket contract](../transports/streaming-
 
 Compatibility callers retain the public Responses ingress described by the
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+Chat Completions and Messages release their owned translator budget on request abort even if no caller consumes the response body, following the [shared byte-accounting lifetime contract](../transports/byte-accounting.md#stream-buffer-accounting).
 
 Chat and Messages admission previews the [xAI OAuth Fast wire destination](../providers/xai-grok.md#grok-47-fast-lane-oauth)
 using the same policy as final Responses serialization. Native dispatch retains its own destination scope check.
@@ -186,7 +187,9 @@ one bounded event. EOF with an unterminated event and an event above the transla
 upstream failures, never successful partial completions. Provider-controlled structured error
 messages are redacted before either JSON or SSE reaches the client. The native path uses the same
 request-attempt logging, reset retry, same-key 429 replay, key rotation, usage extraction, and
-request-signal cancellation contracts as routed Responses transport. Because
+request-signal cancellation contracts as routed Responses transport. Native Combo children expose only
+their own prepaid initial send and settle it at final HTTP admission; unsent exits and shared retry
+ceilings follow [prepaid initial sends](../transports/responses-spend.md#prepaid-initial-sends). Because
 `src/server/chat-completions.ts` never enters Responses core,
 `src/server/chat-native.ts` repeats the pre-dispatch `selectProactiveApiKeyTransport`
 call before it binds the adapter; the pick remains inert unless a strategy is configured

@@ -252,12 +252,12 @@ describe("pre-send Anthropic ownership fences physical response ABA", () => {
   }
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const instance of INSTANCE_FIXTURE_INSTANCES) recovery.anthropicCooldownRecoveryFor(instance).setAnthropicQuotaAfterSettlementForTests(undefined);
   // Cancel persistence while the isolated home is still installed, including fixture cleanup writes.
   cache.clearAccountQuotaCache();
   cache.resetProviderQuotaReconcileStateForTests();
-  f.dispose();
+  await f.dispose();
   // dispose's provider-only clears schedule writes; the all-cache clear only cancels them.
   cache.clearAccountQuotaCache();
 });

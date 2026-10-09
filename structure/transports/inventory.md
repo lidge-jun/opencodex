@@ -191,12 +191,12 @@ resolved-address policy error still rejects. Proxy mode logs once that the proxy
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
 `providerOutboundPost` refuses every non-HTTPS URL before any executor or DNS work. The one exception
 is the caller opt-in `allowLocalCleartextPost`, used only by the self-hosted JEV decision client in
-`src/combos/jev.ts`: it admits `http:` solely when the row sets `allowPrivateNetwork: true` itself
-(a registry default does not count) and the host is exactly `localhost` or an address literal in the
-narrow `localCleartextAddressAllowed` set (127/8, ::1, ::ffff:127.0.0.0/104, 10/8, 172.16/12,
-192.168/16, fc00::/7). Every resolved answer must stay in that set, any applicable proxy (including
-the DNS-failure proxy degradation) is refused, and an injected executor must receive an address
-literal. Every other destination keeps the HTTPS-only gate.
+`src/combos/jev-service-exchange.ts`: it admits `http:` solely when the row sets
+`allowPrivateNetwork: true` itself (a registry default does not count) and the host is exactly
+`localhost` or an address literal in the narrow `localCleartextAddressAllowed` set (127/8, ::1,
+::ffff:127.0.0.0/104, 10/8, 172.16/12, 192.168/16, fc00::/7). Every resolved answer must stay in
+that set, any applicable proxy (including the DNS-failure proxy degradation) is refused, and an
+injected executor must receive an address literal. Every other destination keeps the HTTPS-only gate.
 
 Every request through this wrapper is proxy-originated, so it fills a default
 `User-Agent: opencodex` when the request headers name no User-Agent of their own; registry

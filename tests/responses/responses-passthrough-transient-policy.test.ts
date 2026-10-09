@@ -37,7 +37,7 @@ describe("the Responses passthrough lane reads the provider transient policy", (
       "const transientSendPolicy = () => transientRetryPolicyFor(route.provider);\n"
       + "const transientSendAttempts = (): number => transientSendCapFor(\n"
       + "  transientSendPolicy()?.attempts,\n"
-      + "  sendBudgetState.sendsUsed,\n"
+      + "  sendBudgetState.targetSendsUsed,\n"
       + ");",
     ));
   });
@@ -55,7 +55,13 @@ describe("the Responses passthrough lane reads the provider transient policy", (
 
     const budgeted = occurrences(packed, "attempts:remainingTransientSendBudget(transientSendAttempts())");
     const allowanceBacked = occurrences(packed, "attempts:allowance.attempts");
-    expect(budgeted + allowanceBacked).toBe(sites);
+    const prepaidInitial = occurrences(packed, "attempts:sendBudgetState.initialSendAllowance(transientSendAttempts())");
+    expect(prepaidInitial).toBe(1);
+    // Combo-owned, non-enforced sends settle at physical dispatch; every other send keeps the
+    // shared reporter, so exactly one of the two accounts for any given send.
+    expect(packed).toContain("onPhysicalDispatch:receiptMode?sendBudgetState.noteInitialDispatch:undefined");
+    expect(packed).toContain("...(receiptMode?{}:{onSendsConsumed:transientSendReporter()})");
+    expect(budgeted + allowanceBacked + prepaidInitial).toBe(sites);
 
     // The rebuild leg spends a recovery allowance rather than the base budget directly, so its
     // cap has to come from the same resolver one level up.

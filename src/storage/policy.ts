@@ -74,6 +74,8 @@ export interface PolicyRunDeps {
    * land before completion merges run metadata.
    */
   holdAfterLoadMs?: number;
+  /** Test-only Worker barrier: 0=pending, 1=policy loaded, 2=released. */
+  holdAfterLoadGate?: Int32Array;
 }
 
 /** Canonical defaults — enabled is always false. */
@@ -500,6 +502,13 @@ export function runStorageCleanupPolicy(deps: PolicyRunDeps): PolicyRunResult {
       })
     : (patch: PolicyRunMetadataPatch) => commitPolicyRunMetadataToConfig(patch, policy);
 
+  if (deps.holdAfterLoadGate) {
+    Atomics.compareExchange(deps.holdAfterLoadGate, 0, 0, 1);
+    Atomics.notify(deps.holdAfterLoadGate, 0);
+    if (Atomics.wait(deps.holdAfterLoadGate, 0, 1, 10_000) === "timed-out") {
+      throw new Error("policy_test_load_gate_timeout");
+    }
+  }
   if (typeof deps.holdAfterLoadMs === "number" && Number.isFinite(deps.holdAfterLoadMs) && deps.holdAfterLoadMs > 0) {
     Bun.sleepSync(Math.floor(deps.holdAfterLoadMs));
   }

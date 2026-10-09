@@ -97,7 +97,7 @@ export {
   type ProviderAccountQuota,
 } from "./quota/account-cache";
 export { fetchAntigravityUsageQuota, isCanonicalAntigravityQuotaUrl, setAntigravityAccountQuotaTransportForTests } from "./quota/antigravity";
-export { parseOllamaCloudQuota, parseZaiQuotaLimits, providerApiKeyQuotaMode } from "./quota/vendor-probes-key";
+export { parseOllamaCloudBalance, parseOllamaCloudQuota, parseZaiQuotaLimits, providerApiKeyQuotaMode } from "./quota/vendor-probes-key";
 export { parseXaiCreditsResponse } from "./quota/vendor-probes-oauth";
 export async function fetchProviderApiKeyQuotas(config: OcxConfig, name: string, forceRefresh = false): Promise<ProviderApiKeyQuota[]> {
   const provider = config.providers[name];

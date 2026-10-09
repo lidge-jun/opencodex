@@ -6,6 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
+import { captureRouteStaticPolicy } from "../../src/router";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
 import type { OcxProviderConfig } from "../../src/types";
 
@@ -63,6 +64,52 @@ describe("per-model wire override (#404)", () => {
       .toBe("anthropic");
     expect(resolveWireProtocolOverride("opencode-go", "glm-5.2", provider).adapter)
       .toBe("openai-chat");
+  });
+
+  test("hard-pins OpenCode Go Haiku 5.5 to the Anthropic wire without changing siblings", () => {
+    const provider = gateway();
+
+    expect(resolveWireProtocolOverride("opencode-go", "claude-haiku-5-5", provider).adapter)
+      .toBe("anthropic");
+    expect(resolveWireProtocolOverride("opencode-go", "glm-5.2", provider).adapter)
+      .toBe("openai-chat");
+    // A configured override must not displace the pin: modelAdapters cannot
+    // name the anthropic wire, so without the pin there is no user-side fix.
+    const pinned = resolveWireProtocolOverride("opencode-go", "claude-haiku-5-5", gateway({
+      modelAdapters: { "claude-haiku-5-5": "openai-chat" },
+    }));
+    expect(pinned.adapter).toBe("anthropic");
+  });
+
+  test("captures the Go Haiku pin for every inbound and preserves it across repeated resolution", () => {
+    const model = "claude-haiku-5-5";
+    for (const override of ["openai-chat", "openai-responses"]) {
+      const provider = gateway({
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        modelAdapters: { [model]: override },
+      });
+      for (const inbound of ["responses", "chat", "anthropic"] as const) {
+        const policy = captureRouteStaticPolicy("opencode-go", model, provider, undefined, inbound);
+        expect(policy.modelId).toBe(model);
+        expect(policy.model.adapter).toBe("anthropic");
+        expect(policy.provenance.model.adapter).toBe("hard-pin");
+        const once = resolveWireProtocolOverride("opencode-go", model, provider, inbound, policy);
+        const twice = resolveWireProtocolOverride("opencode-go", model, once, inbound, policy);
+        expect(once.adapter).toBe("anthropic");
+        expect(twice.adapter).toBe("anthropic");
+        expect(resolveWireProtocolOverride("opencode-go", model, once, inbound).adapter)
+          .toBe("anthropic");
+        expect(provider.adapter).toBe("openai-chat");
+        expect(twice.baseUrl).toBe(provider.baseUrl);
+        expect(twice.apiKey).toBe(provider.apiKey);
+        const siblingPolicy = captureRouteStaticPolicy("opencode-go", "glm-5.2", provider, undefined, inbound);
+        expect(resolveWireProtocolOverride("opencode-go", "glm-5.2", provider, inbound, siblingPolicy).adapter)
+          .toBe("openai-chat");
+        const otherPolicy = captureRouteStaticPolicy("custom-go", model, provider, undefined, inbound);
+        expect(resolveWireProtocolOverride("custom-go", model, provider, inbound, otherPolicy).adapter)
+          .toBe(override);
+      }
+    }
   });
 
   test("pins only Command Code API-key Claude ids, including mixed-case ids", () => {

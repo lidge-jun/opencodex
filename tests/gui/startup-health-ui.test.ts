@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { createElement } from "../../gui/node_modules/react";
+import { renderToStaticMarkup } from "../../gui/node_modules/react-dom/server";
+import { DICTS, I18nContext, type TFn } from "../../gui/src/i18n/shared";
+import { StartupHeroSection } from "../../gui/src/pages/startup-sections";
+import type { StartupHealthData } from "../../gui/src/pages/startup-shared";
 import {
   PROJECT_CONFIG_DIAGNOSTICS_POLL_MS,
   beginPollEpochs,
+  desktopManagesStartup,
   mapStartupHealthProbe,
   probeNeedsFastRetry,
   seedStartupHealthFromSettings,
@@ -17,6 +23,87 @@ describe("startup health UI decisions", () => {
       .toBe("startup.riskDetailWindowsShim");
     expect(startupRiskDetailKey({ routingKind: "unknown", shimCoverage: "none" }))
       .toBe("startup.riskDetail");
+  });
+
+  test("desktop startup management requires ownership or verified supervision", () => {
+    const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
+    expect(desktopManagesStartup({})).toBe(false);
+    expect(desktopManagesStartup({ desktop: { owned: false } })).toBe(false);
+    expect(desktopManagesStartup({ desktop: { owned: false, supervisor: undefined } })).toBe(false);
+    expect(desktopManagesStartup({ desktop: { owned: true } })).toBe(true);
+    expect(desktopManagesStartup({ desktop: { owned: false, supervisor } })).toBe(true);
+    expect(desktopManagesStartup({ desktop: { owned: true, supervisor } })).toBe(true);
+  });
+
+  test("desktop risk details distinguish ownership from live supervision", () => {
+    const base = { routingKind: "opencodex-local", shimCoverage: "cli-only" } as const;
+    const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
+    expect(startupRiskDetailKey({ ...base, desktop: { owned: true } })).toBe("startup.desktopRecovery");
+    expect(startupRiskDetailKey({ ...base, desktop: { owned: false, supervisor } }))
+      .toBe("startup.desktopSupervisedRecovery");
+    expect(startupRiskDetailKey({ ...base, desktop: { owned: true, supervisor } }))
+      .toBe("startup.desktopRecovery");
+    expect(startupRiskDetailKey({ ...base, desktop: { owned: false } }))
+      .toBe("startup.riskDetailWindowsShim");
+    expect(startupRiskDetailKey({ ...base, routingKind: "custom-local", desktop: { owned: false, supervisor } }))
+      .toBe("startup.riskDetailCustomLocal");
+  });
+
+  test("custom-local guidance takes precedence over stale owned or supervised desktop guidance", () => {
+    const base = { routingKind: "custom-local", shimCoverage: "none" } as const;
+    const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
+    for (const diagnosticStale of [false, true]) {
+      expect(startupRiskDetailKey({ ...base, diagnosticStale, desktop: { owned: false, supervisor } }))
+        .toBe("startup.riskDetailCustomLocal");
+      expect(startupRiskDetailKey({ ...base, diagnosticStale, desktop: { owned: true } }))
+        .toBe("startup.riskDetailCustomLocal");
+    }
+    expect(startupRiskDetailKey(base)).toBe("startup.riskDetailCustomLocal");
+  });
+
+  test("desktop guidance only applies to opencodex-local routing", () => {
+    const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
+    for (const desktop of [{ owned: true }, { owned: false, supervisor }]) {
+      expect(startupRiskDetailKey({ routingKind: "opencodex-local", shimCoverage: "none", diagnosticStale: true, desktop }))
+        .toBe("startup.desktopReopenRecovery");
+      for (const routingKind of ["native", "custom-remote", "unknown"] as const) {
+        for (const diagnosticStale of [false, true]) {
+          expect(startupRiskDetailKey({ routingKind, shimCoverage: "none", diagnosticStale, desktop }))
+            .toBe("startup.riskDetail");
+          expect(startupRiskDetailKey({ routingKind, shimCoverage: "cli-only", diagnosticStale, desktop }))
+            .toBe("startup.riskDetailWindowsShim");
+        }
+      }
+    }
+  });
+
+  test("startup hero localizes desktop guidance and never displays the server action", () => {
+    const data: StartupHealthData = {
+      status: "at-risk", routingKind: "opencodex-local", routingInjected: true,
+      localRoutingDependency: true, autostartEnabled: true, rebootSafe: false, protection: "none",
+      serviceInstalled: false, serviceViable: false, serviceEnabled: false, serviceRunning: false,
+      serviceStale: false, serviceConflict: false, serviceSupported: true,
+      shimInstalled: false, shimHealthy: false, shimCoverage: "none", platform: "darwin",
+      recommendedCommand: null, recommendedAction: "Server English guidance must not reach the GUI",
+      diagnosticStale: false,
+      desktop: { owned: false, loginEnabled: false, running: true, viable: false,
+        supervisor: { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" } },
+      commands: { installService: "ocx service install", repairService: "ocx service repair",
+        installShim: "ocx codex-shim install", restoreNative: "ocx restore" },
+    };
+    for (const locale of Object.keys(DICTS) as (keyof typeof DICTS)[]) {
+      const t: TFn = key => DICTS[locale][key];
+      for (const diagnosticStale of [false, true]) {
+        const markup = renderToStaticMarkup(createElement(I18nContext.Provider,
+          { value: { locale, setLocale: () => {}, t } },
+          createElement(StartupHeroSection, { failed: false, data: { ...data, diagnosticStale } })));
+        const guidance = diagnosticStale ? "startup.desktopReopenRecovery" : "startup.desktopSupervisedRecovery";
+        const localized = t(guidance);
+        expect(typeof localized).toBe("string");
+        expect(markup).toContain(renderToStaticMarkup(createElement("p", null, localized)));
+        expect(markup).not.toContain(data.recommendedAction!);
+      }
+    }
   });
 
   test("rejects stale or mutation-racing settings polls", () => {

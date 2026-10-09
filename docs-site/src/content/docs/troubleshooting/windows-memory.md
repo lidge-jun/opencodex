@@ -94,6 +94,14 @@ runtime the leak itself remains an upstream problem:
   #32111 fix; today it is opt-in only (see below). On macOS it stays opt-in
   even after such a release — flipping macOS `auto` is a separate decision.
 
+Catalog metadata reads use the selected runtime's last confirmed bundled catalog.
+Cold or changed selections refresh through asynchronous version/model probes, so
+those probes do not hold the proxy event loop. Shared refreshes have a 45-second
+deadline; failed request-triggered refreshes retain matching rows and apply a
+60-second retry cooldown. Request abort releases translator accounting even
+when a response body is unread. These liveness changes do not establish that
+Windows native stream retention ([#6671](https://github.com/lidge-jun/opencodex/issues/6671)) is resolved.
+
 Real-world RSS improvement from these changes is **awaiting verification by
 Windows users** — we do not claim the leak is fixed.
 

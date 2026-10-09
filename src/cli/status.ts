@@ -7,6 +7,7 @@ import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../cod
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { diagnoseService, serviceLogPath } from "../service";
+import { inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
 import { collectStartupHealth, startupHealthReadBudgetMs, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { missingOwnedCatalogPath } from "../codex/inject/config-toml";
@@ -215,6 +216,7 @@ export type CliStatusJson = {
    * ignores the key is unaffected, and `proxyVersion` is null when nothing is live.
    */
   versionSkew: VersionSkew;
+  startupSource: "live" | "local" | "local-supervision-override";
 };
 
 export type CliStatusView = {
@@ -259,12 +261,28 @@ export async function fetchLiveStartupHealth(
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const row = payload as Record<string, unknown>;
   if (row.status !== "native" && row.status !== "protected" && row.status !== "at-risk") return null;
-  if (row.protection !== "service" && row.protection !== "shim" && row.protection !== "none") return null;
+  if (row.protection !== "service" && row.protection !== "desktop" && row.protection !== "shim" && row.protection !== "none") return null;
   if (row.routingKind !== "native" && row.routingKind !== "opencodex-local"
     && row.routingKind !== "custom-local" && row.routingKind !== "custom-remote" && row.routingKind !== "unknown") return null;
   if (row.shimCoverage !== "full" && row.shimCoverage !== "cli-only" && row.shimCoverage !== "none") return null;
   if (typeof row.platform !== "string") return null;
   if (row.recommendedCommand !== null && typeof row.recommendedCommand !== "string") return null;
+  if (row.recommendedAction !== undefined && row.recommendedAction !== null
+    && (typeof row.recommendedAction !== "string" || row.recommendedAction.length > 512)) return null;
+  if (row.desktop !== undefined) {
+    if (!row.desktop || typeof row.desktop !== "object" || Array.isArray(row.desktop)) return null;
+    const desktop = row.desktop as Record<string, unknown>;
+    for (const key of ["owned", "loginEnabled", "running", "viable"] as const) {
+      if (typeof desktop[key] !== "boolean") return null;
+    }
+    if (desktop.supervisor !== undefined) {
+      if (!desktop.supervisor || typeof desktop.supervisor !== "object" || Array.isArray(desktop.supervisor)) return null;
+      const supervisor = desktop.supervisor as Record<string, unknown>;
+      if (typeof supervisor.supervisorPid !== "number" || !Number.isFinite(supervisor.supervisorPid)
+        || typeof supervisor.runtimePid !== "number" || !Number.isFinite(supervisor.runtimePid)
+        || typeof supervisor.app !== "string") return null;
+    }
+  }
   if (!row.commands || typeof row.commands !== "object" || Array.isArray(row.commands)) return null;
   for (const key of ["installService", "repairService", "installShim", "restoreNative"] as const) {
     if (typeof (row.commands as Record<string, unknown>)[key] !== "string") return null;
@@ -286,12 +304,36 @@ export async function fetchLiveStartupHealth(
   return payload as StartupHealth;
 }
 
-/** Prefer an attested live verdict and evaluate the local fallback only when live state is absent. */
+/** Older runtimes cannot report supervision; only that missing capability permits a local override. */
 export function selectStatusStartupHealth(
   liveStartup: StartupHealth | null,
   fallback: () => StartupHealth,
-): StartupHealth {
-  return liveStartup ?? fallback();
+  supervision?: () => ReturnType<typeof inspectDesktopSupervision>,
+  livePid?: number | null,
+): { startup: StartupHealth; startupSource: CliStatusJson["startupSource"] } {
+  if (!liveStartup) return { startup: fallback(), startupSource: "local" };
+  if (liveStartup.desktop === undefined && supervision) {
+    let evidence: ReturnType<typeof inspectDesktopSupervision> | undefined;
+    try { evidence = supervision(); }
+    catch { /* Failed optional evidence cannot replace an attested live verdict. */ }
+    if (evidence?.kind === "desktop" && evidence.runtimePid === livePid) {
+      const local = fallback();
+      const supervisor = local.desktop?.supervisor;
+      // The local probe runs later; it must still describe the same unowned process pair.
+      if (local.desktop?.owned === false && supervisor
+        && supervisor.runtimePid === evidence.runtimePid && supervisor.supervisorPid === evidence.supervisorPid) {
+        return { startup: local, startupSource: "local-supervision-override" };
+      }
+    }
+  }
+  return { startup: liveStartup, startupSource: "live" };
+}
+
+export function runtimeSupervisorLine(startup: StartupHealth): string | null {
+  const supervisor = startup.desktop?.supervisor;
+  return supervisor
+    ? `Runtime supervisor: OpenCodex Desktop (pid ${supervisor.supervisorPid}, ${supervisor.app}); durable owner: ${startup.desktop?.owned ? "desktop" : "none"}`
+    : null;
 }
 
 /** Build the service summary from the same startup source that `ocx status` selected. */
@@ -299,18 +341,23 @@ export function statusServiceSummary(
   liveStartup: StartupHealth | null,
   service: Pick<ReturnType<typeof diagnoseService>, "installed" | "summary">,
   live: boolean,
+  // Which verdict was selected. A live proxy can still be described by the local reading when
+  // the runtime predates supervision reporting, so the label follows the verdict, not liveness.
+  startupSource?: CliStatusJson["startupSource"],
 ): string {
-  if (liveStartup) {
+  if (live && liveStartup) {
+    const supervisor = liveStartup.desktop?.supervisor ? "OpenCodex Desktop supervises the running proxy; " : "";
     if (liveStartup.protection === "service" && liveStartup.serviceViable) {
-      return `running under the live managed service (logs: ${serviceLogPath()})`;
+      return `${supervisor}running under the live managed service (logs: ${serviceLogPath()})`;
     }
     const state = [
       liveStartup.serviceInstalled ? "installed" : "absent",
       liveStartup.serviceRunning ? "running" : "not running",
       liveStartup.serviceViable ? "viable" : "not viable",
     ].join(", ");
-    const action = liveStartup.recommendedCommand ? `; run '${liveStartup.recommendedCommand}'` : "";
-    return `live startup reports service ${state}${action} (logs: ${serviceLogPath()})`;
+    const action = !liveStartup.desktop?.supervisor && liveStartup.recommendedCommand ? `; run '${liveStartup.recommendedCommand}'` : "";
+    const label = (startupSource ?? (live ? "live" : "local")) === "live" ? "live" : "local";
+    return `${supervisor}${label} startup reports service ${state}${action} (logs: ${serviceLogPath()})`;
   }
   return service.installed && !live
     ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service repair'`
@@ -757,14 +804,14 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
   // A service can be registered and still not serve: the manager reports the job
   // either way. When the identity-probed live proxy provides an attested startup verdict,
   // prefer it over a shell-local service-manager probe that lacks the service environment.
-  const serviceSummary = statusServiceSummary(liveStartup, service, Boolean(live));
   const codexShim = diagnoseCodexShim();
   const codexShimSummary = codexShim.summary;
-  const startup = selectStatusStartupHealth(liveStartup, () => collectStartupHealth(config, {
+  const { startup, startupSource } = selectStatusStartupHealth(liveStartup, () => collectStartupHealth(config, {
     service,
     shim: codexShim,
     routingKind: getCodexRoutingKind(),
-  }));
+  }), live?.pid != null ? () => inspectDesktopSupervision({ targetPid: live.pid! }) : undefined, live?.pid);
+  const serviceSummary = statusServiceSummary(startup, service, Boolean(live), startupSource);
   const codexPlugins = diagnoseCodexBundledPlugins();
   const lastClamp = loadLastEffortClamp();
   const clampActive = effortClampAppliesToRuntime(lastClamp, resolvedRuntime.runtime);
@@ -932,6 +979,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
       // fact about this install, not about the Codex runtime, and filing it there would
       // print it under the wrong heading (#2701).
       versionSkew,
+      startupSource,
     },
   };
 }

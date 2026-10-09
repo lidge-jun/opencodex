@@ -71,10 +71,23 @@ registration, including installations under `Program Files`. Previously enabled
 registrations are updated once on launch. Startup entries you disabled in the tray
 or Task Manager remain disabled.
 
+## Using the ocx CLI with the desktop app
+
+On macOS and Linux, `ocx status` shows `Runtime supervisor: OpenCodex Desktop` when
+it verifies that the desktop app runs its bundled proxy, even without recorded ownership.
+Turn on **Start at Login** in the OpenCodex menu instead of installing a background
+service. Startup safety credits the app only when its login registration is verified;
+if it cannot be verified, follow the Desktop guidance in status.
+
+The bundled CLI is `/Applications/OpenCodex.app/Contents/MacOS/ocx` on macOS and
+`/usr/bin/ocx` for the Linux deb package. Run that executable with `status` to check
+the app's proxy. Windows supervision detection is unsupported.
+
 ## Startup safety on macOS and Linux
 
-Startup safety reports **Desktop app** protection when OpenCodex's recorded ownership,
-**Start at Login** registration, and live supervision of its bundled proxy all match.
+Startup safety reports **Desktop app** protection when fresh diagnostics verify
+live supervision of the bundled proxy and that same app's **Start at Login** registration.
+Recorded desktop ownership is preserved separately; supervision does not create a claim.
 On Linux, the pinned autostart backend writes the login entry to
 `~/.config/autostart/OpenCodex.desktop`, even when `$XDG_CONFIG_HOME` is set. Startup
 safety reads that entry and the desktop install-id under `~/.config`. When

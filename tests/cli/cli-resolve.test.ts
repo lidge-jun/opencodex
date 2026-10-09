@@ -125,6 +125,7 @@ function ioOwnership(
   ownership: typeof OWNERSHIP_NONE | typeof OWNERSHIP_OWNED | typeof OWNERSHIP_UNKNOWN = OWNERSHIP_NONE,
   managers?: ReturnType<NonNullable<Parameters<typeof runResolve>[1]>["observeManagers"]> ,) {
   return {
+    inspectSupervision: () => ({ kind: "none" as const }),
     resolveOwnership: () => ownership,
     resolveState: () => ({ kind: "none", revision: 0, needsRepair: false }) as const,
     observeManagers: () => managers ?? ({
@@ -143,6 +144,7 @@ describe("runResolve", () => {
       readDiagnostics: () => ({ config: { port: 10100 }, source: "file", error: null } as ConfigDiagnostics),
       findLive: async () => fakeLive(),
       cliVersion: () => "2.61.0",
+      inspectSupervision: () => ({ kind: "none" }),
       resolveOwnership: () => ({ kind: "none", revision: 0 }),
       resolveState: () => ({ kind: "unknown", reason: "state unreadable" }),
       observeManagers: () => {
@@ -474,4 +476,52 @@ describe("resolve ownership and takeover fields", () => {
     expect(code).toBe(0);
     expect(json.takeover).toMatchObject({ kind: "blocked", reason: "managing-cli-unknown", detail: "probe blew up" });
   });
+});
+
+
+const DESKTOP_SUPERVISION = { kind: "desktop" as const, supervisorPid: 3131, runtimePid: 4242,
+  app: "/fixture/opencodex-desktop", proxy: "/fixture/ocx" };
+
+test("resolve projects only public supervision fields and only for live runtimes", () => {
+  const json = buildResolveJson({}, fakeLive(), "/h", "1.2.3", OWNERSHIP_NONE, TAKEOVER_BLOCKED, DESKTOP_SUPERVISION);
+  expect(json.supervisor).toEqual({ kind: "desktop", supervisorPid: 3131, runtimePid: 4242, app: DESKTOP_SUPERVISION.app });
+  expect(buildResolveJson({}, null, "/h", "1.2.3", OWNERSHIP_NONE, TAKEOVER_BLOCKED, DESKTOP_SUPERVISION).supervisor).toBeUndefined();
+});
+
+test("resolve binds the probe to live PID and retains exit zero on failure or mismatch", async () => {
+  for (const evidence of [DESKTOP_SUPERVISION, { kind: "unknown" as const, reason: "pid-mismatch", desktopSeen: true }, null]) {
+    const lines: string[] = [];
+    const code = await runResolve({ json: true }, {
+      ...ioOwnership(), configDir: () => "/h", cliVersion: () => "1.2.3",
+      readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
+      findLive: async () => fakeLive(), stdout: { log: value => lines.push(value) },
+      inspectSupervision: input => {
+        expect(input?.targetPid).toBe(4242);
+        if (!evidence) throw new Error("probe failed");
+        return evidence;
+      },
+    });
+    expect(code).toBe(0);
+    expect(JSON.parse(lines[0]!).supervisor).toEqual(evidence?.kind === "desktop"
+      ? { kind: "desktop", supervisorPid: 3131, runtimePid: 4242, app: DESKTOP_SUPERVISION.app }
+      : { kind: "unknown" });
+    expect(lines[0]).not.toContain("desktopSeen");
+    expect(lines[0]).not.toContain("probe failed");
+  }
+});
+
+test("resolve human output names the supervisor and absence never probes it", async () => {
+  for (const live of [fakeLive(), null]) {
+    const lines: string[] = [];
+    let probes = 0;
+    expect(await runResolve({ json: false }, {
+      ...ioOwnership(), configDir: () => "/h", cliVersion: () => "1.2.3",
+      readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
+      findLive: async () => live, readRuntime: () => null, probeEndpoint: () => "dead",
+      stdout: { log: value => lines.push(value) }, inspectSupervision: () => { probes++; return DESKTOP_SUPERVISION; },
+    })).toBe(0);
+    expect(probes).toBe(live ? 1 : 0);
+    if (live) expect(lines[1]).toContain("supervisor: desktop (pid 3131)");
+    else expect(lines.join(" ")).not.toContain("supervisor:");
+  }
 });

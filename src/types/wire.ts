@@ -47,6 +47,7 @@ export const MODEL_ADAPTER_OVERRIDE_ALLOWED: ReadonlySet<string> = new Set([
  */
 const ANTHROPIC_WIRE_MODELS: Record<string, ReadonlySet<string>> = {
   "opencode-go": new Set([
+    "claude-haiku-5-5",
     "minimax-m2.5",
     "minimax-m2.7",
     "minimax-m3",

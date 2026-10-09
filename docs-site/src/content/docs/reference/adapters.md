@@ -34,7 +34,7 @@ and image order are preserved; image detail `original` maps to `high`.
 Empty content, malformed or opaque parts, file-id-only images and partial envelopes
 remain invalid. Ordinary function/custom tool results still require a nonempty
 `call_id`. The envelope metadata identifies a compatibility shape and grants no
-additional permissions. Native passthrough and compaction retain their raw-body rules.
+additional permissions. Native passthrough and routed (portable) compaction apply the same user-turn mapping to their raw bodies; the direct native `/responses/compact` forward keeps its existing raw-body rules.
 
 ## `openai-chat`
 

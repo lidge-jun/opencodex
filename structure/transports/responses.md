@@ -49,7 +49,7 @@ keep-alive reuse with `Connection: close` and `keepalive: false`; exact hosts an
 match case-insensitively. `sendWithConnectionPolicy` applies the policy around the fetch that
 performs the physical send, after a dispatch override has selected or rebuilt the destination, so
 matching follows the URL sent on the wire rather than the URL supplied before credential
-revalidation. At this final HTTP boundary, native ChatGPT Responses and compact JSON strings of at least 1 MiB (UTF-8) become byte buffers to avoid Bun's large-string upload resets. Content, headers, abort signals and retry policy are preserved; WebSocket selection still receives the original string. Other destinations, small strings and existing byte/stream bodies retain their representation.
+revalidation; prepaid initial-send receipts follow the [spend contract](responses-spend.md#prepaid-initial-sends). At this final HTTP boundary, native ChatGPT Responses and compact JSON strings of at least 1 MiB (UTF-8) become byte buffers to avoid Bun's large-string upload resets. Content, headers, abort signals and retry policy are preserved; WebSocket selection still receives the original string. Other destinations, small strings and existing byte/stream bodies retain their representation.
 
 The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
 `route.provider.fetch` at send time, because reselection can install a different provider transport
@@ -340,8 +340,8 @@ ChatGPT forward surface, the official OpenAI API, or a provider with the explici
 than one backend, including OpenAI and xAI, mints native blobs: a destination can decode its own blob
 without being able to decode the previous backend's. The same serving-identity mismatch signal
 therefore strips reasoning `encrypted_content` unless the narrowly scoped [native reasoning retention](native-reasoning-retention.md#runtime-boundary) policy permits it. Native compaction blobs still degrade through the
-existing opaque-note path independently of that policy. When the thread has no recorded identity, the destination-only behavior
-is deliberately unchanged. Forward auth alone is not evidence: noncanonical forward providers
+existing opaque-note path independently of that policy. Claude-native reasoning adds a per-blob tag check at every route binding:
+only the matching durable endpoint and generation-bearing credential retain raw and parsed carriers. Without recorded thread identity, the destination gate remains. Noncanonical forward providers
 receive no caller credentials and may point at any backend. On any other routed destination the blob
 also degrades to the same opaque note the bridged parser uses, because forwarding it there fails the
 turn and the item outlives the failure in the client transcript, repeating on every later turn
@@ -426,7 +426,7 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 | `passthrough-dispatch.ts` | Native request preparation, upstream sends and pre-commit recovery. |
 | `passthrough-delivery.ts`, `terminal-error-redaction.ts`, `non-replayable-error.ts` | Native HTTP/SSE/JSON delivery and terminal accounting. Marked real errors use bounded reads to retain only allowlisted error type and code, keep status and non-replayability plus `x-should-retry: false` when present, and withhold upstream body text and all other upstream headers; the client receives a fixed generic message and synthetic refusals stay distinct. SSE diagnostics and xAI tool-envelope filtering precede client delivery/continuation storage. |
 | `policy-refusal.ts` | Rewrites an allowlisted non-combo HTTP 403 model refusal (`isUpstreamPolicyRefusal` in `src/lib/errors.ts`) from an xAI destination only (`isXaiResponsesDestination`: api.x.ai or the Grok CLI proxy, on either wire) to an HTTP 200 Responses `incomplete` / `content_filter` payload, JSON or SSE, for both `adapter-dispatch.ts` and `passthrough-delivery.ts`. A streamed rewrite takes the turn admission lease and releases it when the body finishes, so the refusal stays inside active-turn accounting. Combo attempts keep the original 403 so failover classifies it as a hop. |
-| `sidecar-execution.ts` | Image/video versus web-search execution and their shared rotation hook. |
+| `sidecar-execution.ts`, `sidecar-send-budget.ts` | Image/video versus web-search execution, shared rotation, and adapter-aware prepaid inference/producer ownership under the [spend contract](responses-spend.md#prepaid-initial-sends). |
 | `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns. |
 | `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery and the shared continuation retry counter. |
 | `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; a streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
@@ -448,7 +448,7 @@ lease while a block-local `admission` holds only the acquisition result.
 reads that holder rather than minting a per-phase allowance. Combo recursion is injected through
 `ResponsesDispatchers`: a child re-enters the public handler without a reverse runtime import
 from the combo implementation into `core.ts`. `core-lifetime.ts` owns the shared run-turn response
-marker and translator-budget finalization, so the combo and delivery paths observe one identity.
+marker and translator-budget finalization, so the combo and delivery paths observe one identity. Owned-budget cleanup on request abort, including unread response bodies, follows the [byte-accounting lifetime contract](byte-accounting.md#stream-buffer-accounting).
 
 The outer admission `finally` remains in `core.ts`. Native execution explicitly transfers its
 pending lease to `passthrough-execution.ts`; both owners await response construction before
@@ -541,15 +541,15 @@ not `openai-chat` is decided without a copy. An eligible child is dispatched thr
 already opened (its opening stays hand-rolled: the ordinal comes from the parent context while the
 active attempt and requested effort land on the child context, which `beginInferenceAttempt`
 does not express). The child gets the combo's per-target send budget, the client's abort signal
-and the turn lease, and the configured combo effort policy mapped onto `reasoning_effort` through `concreteComboRequestBody`.
-The initial JEV override changes only the separate Responses body; native labels omit it and keep native child transitions
-([JEV Decision Routing](../providers/jev-decision.md)). Its attempt path is native (`[chat, chat]`) and its answer is marked `chat`.
+and the turn lease. Ordinary Combo policy maps onto `reasoning_effort` through `concreteComboRequestBody`; the first JEV choice overrides it, including explicit null.
+Initial shaping removes conflicting controls and caller `service_tier` before provider pins/caps and wire normalization; labels retain applied transitions ([JEV Decision Routing](../providers/jev-decision.md)).
+Later targets use ordinary policy from the original body. Its attempt path is native (`[chat, chat]`) and its answer is marked `chat`.
 
 Send accounting: the combo's hop reservation already booked the target's first send, so the native
-child opens no spend tracker; it reports each physical send to the target budget (the first
-settles the hop's booking, each later one is charged and booked by the request's one tracker), its
-transient ladder and 429 replays are capped by the shared base allowance at the same cap its own
-ladder uses, and a refusal answers 429 `request_send_budget_exhausted` in the Chat shape.
+child opens no spend tracker; its final HTTP receipt confirms the exact owning prepaid permit,
+then reserves each later physical send independently under the [prepaid-send contract](responses-spend.md#prepaid-initial-sends).
+Its transient ladder and 429 replays intersect target-local totals with shared ceilings;
+a refusal answers 429 `request_send_budget_exhausted` in the Chat shape.
 
 A marked child skips `preflightComboStreamResponse`: native Chat reports a pre-stream failure by
 HTTP status before any byte, and a non-OK answer goes through `consumeComboFailure` unchanged. A

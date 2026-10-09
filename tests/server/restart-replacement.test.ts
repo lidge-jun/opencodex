@@ -9,8 +9,9 @@
  * The scripted children print fixed lines, so what a real `ocx start` prints is not covered here.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, constants, lstatSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, constants, lstatSync, mkdtempSync, openSync, readFileSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -33,7 +34,7 @@ afterEach(() => {
   for (const child of children.splice(0)) {
     try { child.kill("SIGKILL"); } catch { /* already gone */ }
   }
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) removeTreeWithRetry(dir);
 });
 
 function tempDir(): string {

@@ -281,7 +281,7 @@ function userMessageToItems(content: unknown, input: Rec[], elide: SkillElisionC
   pushUserMessage(input, pending);
 }
 
-function assistantMessageToItems(content: unknown, input: Rec[], budget: TranslatorBudget): void {
+function assistantMessageToItems(content: unknown, input: Rec[], budget: TranslatorBudget, requestedModel: string, nativeReasoningReplay: Map<string, string>): void {
   if (typeof content === "string") {
     if (content.length > 0) input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text: content }] });
     return;
@@ -314,6 +314,24 @@ function assistantMessageToItems(content: unknown, input: Rec[], budget: Transla
           const owned = decodeReasoningEnvelope(signature, budget);
           if (!owned) throw new AnthropicRequestError("malformed ocxr1 reasoning signature");
           if (Object.hasOwn(owned, "sig")) throw new AnthropicRequestError("OpenCodex reasoning continuity cannot be replayed as an Anthropic signature");
+          if (owned.nat) {
+            // The provider's own blob goes back only to the model that minted it; any other
+            // model gets the visible text alone, as before this envelope field existed.
+            const nat = owned.nat.model === requestedModel ? owned.nat : undefined;
+            if (nat) {
+              const previous = nativeReasoningReplay.get(nat.enc);
+              nativeReasoningReplay.set(nat.enc, previous === undefined || previous === nat.tag ? nat.tag : "");
+            }
+            if (nat) budget.chargeRetained(2 * nat.enc.length, { kind: "reasoning" });
+            if (thinking.length === 0 && !nat) break;
+            input.push({
+              type: "reasoning",
+              id: nat?.id ?? `rs_${crypto.randomUUID().replace(/-/g, "")}`,
+              summary: thinking.length > 0 ? [{ type: "summary_text", text: thinking }] : [],
+              ...(nat ? { encrypted_content: nat.enc } : {}),
+            });
+            break;
+          }
         }
         const encrypted = signature.length === 0 ? undefined : signature.startsWith(OCX_REASONING_PREFIX) ? signature : encodeReasoningEnvelope({ sig: signature }, budget);
         if (encrypted) budget.chargeRetained(2 * encrypted.length, { kind: "reasoning" });
@@ -355,6 +373,7 @@ export type ClaudeCacheKeySource = "metadata" | "system" | null;
 export interface ClaudeInboundTranslation {
   body: Rec;
   cacheKeySource: ClaudeCacheKeySource;
+  nativeReasoningReplay: ReadonlyMap<string, string>;
 }
 
 /**
@@ -400,6 +419,7 @@ function translateAnthropicRequest(
   }
 
   const input: Rec[] = [];
+  const nativeReasoningReplay = new Map<string, string>();
   const systemParts: string[] = [];
   const topLevelSystem = systemToInstructions(raw.system);
   if (topLevelSystem !== undefined) systemParts.push(topLevelSystem);
@@ -411,7 +431,7 @@ function translateAnthropicRequest(
   for (const msg of raw.messages) {
     if (!isRec(msg)) throw new AnthropicRequestError("each message must be an object");
     if (msg.role === "user") userMessageToItems(msg.content, input, elide);
-    else if (msg.role === "assistant") assistantMessageToItems(msg.content, input, budget);
+    else if (msg.role === "assistant") assistantMessageToItems(msg.content, input, budget, raw.model, nativeReasoningReplay);
     else if (msg.role === "system") {
       const text = systemMessageText(msg.content);
       // Keep it where the client put it. `developer` is first-class in the Responses
@@ -531,7 +551,61 @@ function translateAnthropicRequest(
       reasoning.effort = effortForThinkingBudget(thinking.budget_tokens);
     }
     body.reasoning = reasoning;
+    // store:false returns a provider's encrypted reasoning only on request. The outbound
+    // envelope (`nat`) carries it to the client so the next turn can hand it back.
+    body.include = ["reasoning.encrypted_content"];
   }
 
-  return { body, cacheKeySource };
+  return { body, cacheKeySource, nativeReasoningReplay };
+}
+
+/**
+ * Remove proxy-owned native blobs before sending a Messages body to native Anthropic.
+ *
+ * Every decode, and every re-encode on top of it, is reserved against the request's translator
+ * budget first (eight bytes per code unit, as `decodeReasoningEnvelope` does), and every new
+ * signature is charged as a retained copy, so a body of near-limit envelopes cannot allocate past the per-turn bound.
+ * Throws TranslatorBudgetExceededError when it would; callers answer 413.
+ */
+export function nativeAnthropicProjection(body: Rec, budget: TranslatorBudget): Rec {
+  if (!Array.isArray(body.messages)) return body;
+  let changed = false;
+  const messages = body.messages.flatMap(message => {
+    if (!isRec(message) || message.role !== "assistant" || !Array.isArray(message.content)) return [message];
+    let localChanged = false;
+    const content = message.content.flatMap(block => {
+      if (!isRec(block) || block.type !== "thinking" || typeof block.signature !== "string"
+        || !block.signature.startsWith(OCX_REASONING_PREFIX)) return [block];
+      // The decoded object stays alive while it is re-encoded, so its reservation is held until
+      // the new signature exists; the encode copies get their own reservation on top of it.
+      const decodeReservation = budget.reserveTransient(8 * block.signature.length, { kind: "reasoning" });
+      try {
+        let decoded: unknown;
+        try { decoded = JSON.parse(Buffer.from(block.signature.slice(OCX_REASONING_PREFIX.length), "base64").toString("utf8")); }
+        catch { decoded = undefined; }
+        if (!isRec(decoded)) { localChanged = true; return []; }
+        if (!Object.hasOwn(decoded, "nat")) return [block];
+        localChanged = true;
+        const { nat: _nat, ...rest } = decoded;
+        if (!rest.sig && !rest.red && !rest.krc && !(typeof rest.txt === "string" && rest.txt.length > 0)) return [];
+        // The re-encoded envelope is never larger than the decoded one (a field was removed), so a
+        // decode-sized reservation bounds the stringify, buffer and base64 copies before they exist.
+        const encodeReservation = budget.reserveTransient(8 * block.signature.length, { kind: "reasoning" });
+        let signature: string;
+        try {
+          signature = OCX_REASONING_PREFIX + Buffer.from(JSON.stringify(rest), "utf8").toString("base64");
+        } finally {
+          encodeReservation.release();
+        }
+        budget.chargeRetained(2 * signature.length, { kind: "reasoning" });
+        return [{ ...block, signature }];
+      } finally {
+        decodeReservation.release();
+      }
+    });
+    if (!localChanged) return [message];
+    changed = true;
+    return content.length ? [{ ...message, content }] : [];
+  });
+  return changed ? { ...body, messages } : body;
 }

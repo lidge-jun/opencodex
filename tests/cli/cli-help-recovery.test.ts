@@ -193,6 +193,12 @@ describe("CLI help recovery", () => {
       mock.module(${JSON.stringify(repoPath("src", "cli", "codex-shim-autorestore.ts"))}, () => ({
         maybeAutoRestoreCodexShim: command => { calls.push(command); if (reportCalls) console.log("preflight called"); },
       }));
+      // The lifecycle skew notice probes the configured (here: default) port. A developer machine
+      // with a live proxy there would answer, so keep this admission test independent of the host.
+      mock.module(${JSON.stringify(repoPath("src", "cli", "version-skew-notice.ts"))}, () => ({
+        shouldNoticeVersionSkew: () => false,
+        maybeNoticeVersionSkew: async () => {},
+      }));
       const { runCli } = await import(${JSON.stringify(repoPath("src", "cli", "root.ts"))});`;
     const rejected = isolated(`${mockSetup}
       reportCalls = true; await runCli(["modles"]);`);

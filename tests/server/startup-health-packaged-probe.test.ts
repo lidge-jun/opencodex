@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { helperPath, repoRoot } from "../helpers/repo-root";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // Exercise the default cache reader's real subprocess from a compiled executable.
 // A unit test of selfLaunchArgv alone misses a caller that still passes $bunfs source.
@@ -36,6 +37,6 @@ test("packaged startup probe is fresh before and after replacing its bundled exe
       expect(health).toMatchObject({ status: "native", diagnosticStale: false, rebootSafe: true });
     }
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    removeTreeWithRetry(scratch);
   }
 }, 120_000);

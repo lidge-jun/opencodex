@@ -4,6 +4,49 @@ How the Responses data plane reserves credential hops and durable spend before d
 spent budget tells the client. Dispatch and retry behavior is in
 [Responses transport](responses.md) and [Responses failover](responses-failover.md).
 
+## Prepaid initial sends
+
+`src/server/responses/core-combo.ts` derives each target scope before reserving its initial send.
+That reservation occupies the shared ceiling immediately; it is not a completed inference.
+`comboInitialSend` hands only that child's single-use permit to `request-send-budget.ts`.
+`initialSendAllowance` includes that one prepaid send while `remainingBaseSends` keeps every
+booking spent. Other pending external bookings never become this child's free headroom.
+Configured transient totals subtract an owner-local counter updated by physical receipts, adapter
+observers and retry-helper reports, not shared-ledger deltas. Earlier Combo targets, later bookings
+by other owners and the child's unsent booking do not consume that total; the shared ceiling and
+later-target holdback still intersect it.
+
+Initial passthrough and budgeted translated HTTP ladders report at the final executor admission,
+after pacing, credential rebuild and local egress checks, rather than at retry callback entry.
+The one-shot receipt survives rebuilt request init and nested executor wrappers. The WebSocket
+receipt runs immediately before the frame is sent; a refused receipt sends no frame and never
+permits SSE fallback.
+Adapter-owned dispatch claims the prepaid permit once through the live adapter view and closes
+its external booking with `assumeCharge`. A fresh derived scope binds its actual first endpoint
+without consuming a recovery transition; later endpoint moves keep ordinary transition limits.
+Unsent exits release once at Combo/ingress cleanup. Ordinary runTurn transfers cleanup at its first
+attempt; hosted media transfers before returning its streaming Response and retains ownership until
+its producer settles, including cancellation and synchronous failure before dispatch.
+Native Chat includes only its owning prepaid send in its initial ladder and confirms that permit at
+the final HTTP receipt; local egress refusal leaves it refundable. Initial-ladder receipts close their
+own external booking with `assumeCharge`; later sends reserve their own capacity instead of settling
+another owner's pending booking. Cleanup cannot refund real work. Detached judge budgets and leases stay separate.
+`tests/responses/responses-first-send-reservation.test.ts` and
+`tests/responses/responses-dispatch-receipt.test.ts` pin these boundaries.
+
+`src/server/responses/sidecar-send-budget.ts` binds hosted search/image/video inference to this same
+child-owned booking. Generic HTTP/WS uses the final physical-dispatch receipt; adapter-owned
+`fetchResponse`/`runTurn` receives the live budget and observers instead, never both charge paths.
+Receipt selection follows the actual iteration adapter after rotation. Hosted tool execution does
+not itself settle the model's booking. Children without an owning initial permit keep their existing
+accounting contract. The hosted reservation, producer and WS regression siblings in `tests/responses/`
+assert real synthetic inference, explicit durable settlement and unsent release without widening caps.
+Hosted credential hops stay open in this owner and the live pending-hop view until physical dispatch;
+generic receipts consume that exact permit, adapters claim it through the view, and fetch-iteration
+cleanup releases an unsent hop once, except while an asynchronous runTurn producer still owns it.
+Producer settlement performs that release instead, clearing only the matching pending-hop reference.
+Direct callers retain their prior hop reporting contract.
+
 ## Credential-hop reservations
 
 A credential rotation inside one provider's roster reserves a hop from the request's shared send
@@ -51,11 +94,23 @@ that owns its transport — Kiro's reset ladder, Cursor's transport ladder, or D
 pre-output stated-reset replay — reserves once per physical send instead, so no reporter ever
 arrives. Those ladders are handed
 `adapterDispatchBudget`, a live delegating view of the same budget that spends a permit passed down
-through `pendingHopPermit` on the adapter's first reservation and closes the booking through
-`permit.assumeCharge()`. The Antigravity fetch web-search path opts into `refundableAdapterDispatchBudget`:
-its booking stays refundable until executor invocation confirms it through `permit.use()` or
-`permit.assumeCharge()`, and failed admission releases it. Other callers keep early settlement only when spend enforcement is inactive; enforced permits stay refundable until execution.
-Letting both charge is how one physical send became two charges, and how a spent allowance answered a 429 with a synthetic error instead of the rate limit it was recovering
+through `pendingHopPermit` on the adapter's first reservation. Claiming keeps that exact permit
+refundable across pacing and `beforeDispatch`; `use()` or `assumeCharge()` closes its external
+booking only at physical consumption. Both methods share the underlying single-use state, and
+release remains idempotent. A used or released exact-owned permit cannot authorize another send.
+When spend enforcement is inactive a combo-owned or compaction-prepaid send is settled by the
+physical-dispatch receipt; when it is active the shared physical-send reporter keeps ownership, so
+a send is never charged by both. Other callers keep early settlement only when enforcement is inactive;
+enforced permits stay refundable until execution.
+For a Codex WebSocket request, the receipt runs before the frame is sent and at most once across
+the WS attempt and its HTTP fallback. If WS send then fails and HTTP refuses before dispatch, that
+accepted booking remains charged even though no physical send occurred.
+The existing `refundableAdapterDispatchBudget` view stays available to direct Antigravity search;
+its legacy already-settled-hop replacement still requires a fresh admitted reservation.
+`tests/responses/responses-hosted-send-unsent-hop.test.ts` covers real Vertex hosted-search queued
+cancellation, search/image/video pre-dispatch failure, dispatched cancellation and transition admission.
+Letting both layers charge is how one physical send became two charges, and how a
+spent allowance answered a 429 with a synthetic error instead of the rate limit it was recovering
 from (#4709).
 
 `run-turn-execution.ts` passes the same physical-send and recovery-withheld observers used by the
@@ -75,7 +130,7 @@ down, because a runTurn adapter is by definition the layer that sends. The passt
 the shape it already had: reserve with `countedExternally: true` and pass the permit to the rebuild.
 
 An explicit provider `transientRetryOn5xx.attempts` value is the exact physical-send total for that
-request. Once spent, a passthrough rebuild receives no final-recovery reserve and returns the
+request (target-local inside a Combo). Once spent, a passthrough rebuild receives no final-recovery reserve and returns the
 original upstream response. The guarded profile's shared reserve remains available only when the
 provider leaves that transient policy unconfigured; its existing hop-permit settlement is unchanged.
 

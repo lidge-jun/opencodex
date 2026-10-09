@@ -38,7 +38,7 @@ import { anthropicOAuthDefinition, assertAnthropicInstanceLoginConfig, Anthropic
   resumeAnthropicRefreshIntentCleanup, clearObservedAnthropicRefreshIntent } from "./anthropic-oauth-definitions";
 import { loginKimi, refreshKimiToken } from "./kimi";
 import { loginNous, NousTokenError, refreshNousToken, clearNousRefreshIntent, RefreshIntentIOError } from "./nous";
-import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chatgpt";
+import { ChatGptTokenRequestError, ChatGptTokenError, loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginZed, refreshZedToken } from "./zed";
@@ -350,7 +350,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
   },
   chatgpt: {
     login: (ctrl, opts) => loginChatGPT(ctrl, { forceLogin: opts?.forceLogin, flow: opts?.flow }),
-    refresh: (rt) => refreshChatGPTToken(rt),
+    refresh: (rt, signal) => refreshChatGPTToken(rt, { signal }),
     providerConfig: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const },
     defaultModel: "gpt-5.6-luna",
   },
@@ -712,10 +712,14 @@ function isTerminalRefreshError(err: unknown): boolean {
     || msg.includes("expired_token");
 }
 function terminal(error:unknown):boolean{
+  if (error instanceof ChatGptTokenRequestError) return false;
   if(error instanceof XaiTokenRequestError)return ["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??"");
   if(error instanceof AnthropicTokenError)return (error.httpStatus===400||error.httpStatus===401)&&["invalid_grant","refresh_token_reused","revoked","revoked_token","refresh_token_revoked"].includes(error.oauthError??"");
   if(error instanceof KiroTokenRefreshError)return (error.httpStatus===400||error.httpStatus===401)&&error.oauthError!==undefined;
   if(error instanceof NousTokenError)return error.terminal===true||["invalid_grant","refresh_token_reused","revoked","revoked_token","expired_token"].includes(error.oauthError??"");
+  // ChatGPT carries the pool classifier's verdict on the error itself: revoked and
+  // expired grants are terminal; unknown/transient failures stay retryable.
+  if(error instanceof ChatGptTokenError)return error.terminal;
   // Local durable-write/read/cleanup failures are operational, not credential
   // death: the provider credential was never rejected or consumed. Never mark
   // the account needsReauth for broken local persistence infrastructure.

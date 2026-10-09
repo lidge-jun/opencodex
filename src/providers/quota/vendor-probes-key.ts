@@ -38,6 +38,7 @@ const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const CLINE_BASE_URL = "https://api.cline.bot";
 const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
 const OLLAMA_CLOUD_USAGE_URL = `${OLLAMA_CLOUD_BASE_URL}/api/usage`;
+const OLLAMA_CLOUD_BALANCE_URL = `${OLLAMA_CLOUD_BASE_URL}/api/balance`;
 const ZAI_BASE_URL = "https://api.z.ai";
 const ZAI_CN_BASE_URL = "https://open.bigmodel.cn";
 const MINIMAX_REMAINS_PATH = "/v1/api/openplatform/coding_plan/remains";
@@ -439,11 +440,80 @@ async function fetchClineQuota(provider: string, config: OcxProviderConfig): Pro
 }
 
 /**
- * Ollama Cloud `GET https://ollama.com/api/usage` — returns account usage.
- * Legacy plans report rolling 5-hour `limits.session.usage` and 7-day
- * `limits.weekly.usage`. Migrated monthly-credit plans report
- * `limits.monthly.usage`. `usage` values are normalized fractions (0..1).
+ * Ollama Cloud quota. `GET https://ollama.com/api/balance` is the live source: it
+ * returns the included (plan) balance plus purchased credits. Legacy plans report
+ * rolling 5-hour `included.session.remaining_percent` and 7-day
+ * `included.weekly.remaining_percent` (remaining shares, so used = 100 - remaining);
+ * credit plans report `included.balance_usd`/`included.allowance_usd` over a
+ * `period`.
+ *
+ * `GET https://ollama.com/api/usage` used to carry `limits.{session,weekly,monthly}.usage`
+ * as normalized fractions but now returns only a request-count timeseries, so it is
+ * kept as a fallback for older deployments.
  */
+function parseOllamaUsedPercent(row: Record<string, unknown>): number | undefined {
+  if (row.remaining_percent !== undefined) {
+    const remaining = toFiniteNumber(row.remaining_percent);
+    if (remaining === undefined) return undefined;
+    return normalizePercent(Math.round((100 - remaining) * 100) / 100);
+  }
+  return parseOllamaPercent(row.usage);
+}
+
+export function parseOllamaCloudBalance(body: Record<string, unknown> | null): ProviderQuota | null {
+  if (!body) return null;
+  const included = asRecord(body.included);
+  if (!included) return null;
+
+  const quota: ProviderQuota = { updatedAt: Date.now() };
+  let windows = 0;
+
+  const rows: Array<[string, "fiveHour" | "weekly" | "monthly"]> = [
+    ["session", "fiveHour"],
+    ["weekly", "weekly"],
+    ["monthly", "monthly"],
+  ];
+  for (const [key, window] of rows) {
+    const row = asRecord(included[key]);
+    if (!row) continue;
+    const percent = parseOllamaUsedPercent(row);
+    if (percent === undefined) continue;
+    const resetAt = normalizeResetAt(row.resets_at);
+    if (window === "fiveHour") {
+      quota.fiveHourPercent = percent;
+      if (resetAt !== undefined) quota.fiveHourResetAt = resetAt;
+    } else if (window === "weekly") {
+      quota.weeklyPercent = percent;
+      if (resetAt !== undefined) quota.weeklyResetAt = resetAt;
+    } else {
+      quota.monthlyPercent = percent;
+      if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
+    }
+    windows += 1;
+  }
+
+  const allowance = toFiniteNumber(included.allowance_usd);
+  const balance = toFiniteNumber(included.balance_usd);
+  if (allowance !== undefined && allowance > 0 && balance !== undefined) {
+    const used = Math.max(0, allowance - balance);
+    const percent = normalizePercent(Math.round((used / allowance) * 10000) / 100);
+    if (percent !== undefined) {
+      const expiresAt = normalizeResetAt(asRecord(included.period)?.until);
+      // creditsUsd is the included allowance only; purchased credits are ignored.
+      quota.creditsUsd = {
+        used,
+        limit: allowance,
+        remaining: balance,
+        percent,
+        ...(expiresAt !== undefined ? { expiresAt } : {}),
+      };
+      windows += 1;
+    }
+  }
+
+  return windows > 0 ? quota : null;
+}
+
 function parseOllamaPercent(usageValue: unknown): number | undefined {
   const usage = toFiniteNumber(usageValue);
   if (usage === undefined || usage < 0) return undefined;
@@ -489,25 +559,65 @@ export function parseOllamaCloudQuota(body: Record<string, unknown> | null): Pro
   return windows > 0 ? quota : null;
 }
 
+/**
+ * Routing projection for an `/api/balance` report. `creditsUsd` covers the included
+ * allowance only, so it may veto routing only when purchased credit is known to be empty;
+ * otherwise an exhausted allowance would block an account that still has paid balance.
+ */
+function ollamaBalanceInferenceQuota(quota: ProviderQuota, body: Record<string, unknown> | null): ProviderQuota {
+  if (!quota.creditsUsd) return quota;
+  const purchased = toFiniteNumber(asRecord(body?.purchased)?.balance_usd);
+  if (purchased !== undefined && purchased <= 0) return quota;
+  const { creditsUsd: _includedOnly, ...inference } = quota;
+  return inference;
+}
+
 async function fetchOllamaCloudQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   const effectiveBaseUrl = config.baseUrl ?? getProviderRegistryEntry(provider)?.baseUrl ?? "";
   if (!isCanonicalOllamaCloudBaseUrl(effectiveBaseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await quotaFetch(provider, config, OLLAMA_CLOUD_USAGE_URL, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
-    redirect: "error",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    if (response.status === 404) return null;
-    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
-      ? TERMINAL_QUOTA_FAILURE
-      : null;
+  const attempts: Array<{
+    url: string;
+    source: string;
+    parse: (body: Record<string, unknown> | null) => ProviderQuota | null;
+  }> = [
+    { url: OLLAMA_CLOUD_BALANCE_URL, source: "ollama-cloud:balance", parse: parseOllamaCloudBalance },
+    { url: OLLAMA_CLOUD_USAGE_URL, source: "ollama-cloud:usage", parse: parseOllamaCloudQuota },
+  ];
+  let terminalFailure = false;
+  for (const attempt of attempts) {
+    let response: Response;
+    try {
+      response = await quotaFetch(provider, config, attempt.url, {
+        headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+        redirect: "error",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      continue;
+    }
+    if (!response.ok) {
+      if (response.status !== 404 && response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+        terminalFailure = true;
+      }
+      try {
+        void response.body?.cancel().catch(() => undefined);
+      } catch {
+        // Best-effort cancellation only.
+      }
+      continue;
+    }
+    const raw = await readQuotaJson(response);
+    if (raw === QUOTA_JSON_READ_FAILURE) return terminalFailure ? TERMINAL_QUOTA_FAILURE : null;
+    const body = asRecord(raw);
+    const quota = attempt.parse(body);
+    if (quota) {
+      const inference = attempt.url === OLLAMA_CLOUD_BALANCE_URL ? ollamaBalanceInferenceQuota(quota, body) : quota;
+      return keyReport(provider, attempt.source, quota, config, apiKey, inference);
+    }
   }
-  const body = asRecord(await readQuotaJson(response));
-  const quota = parseOllamaCloudQuota(body);
-  return quota ? keyReport(provider, "ollama-cloud:usage", quota, config, apiKey, quota) : null;
+  return terminalFailure ? TERMINAL_QUOTA_FAILURE : null;
 }
 
 /**

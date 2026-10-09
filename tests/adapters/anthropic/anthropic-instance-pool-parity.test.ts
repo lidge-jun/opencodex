@@ -5,7 +5,7 @@ import type { AnthropicAccountPoolConfig } from "../../../src/types/anthropic-ac
 
 let f: AnthropicInstanceFixture;
 beforeEach(async () => { f = await createAnthropicInstanceFixture(); await f.seed(); });
-afterEach(() => { f?.dispose(); });
+afterEach(async () => { await f?.dispose(); });
 function pool(instance: AnthropicInstanceId): AnthropicAccountPoolConfig {
   return instance === "anthropic" ? f.config.anthropicAccountPool! : f.config.providers.anthropic2!.anthropicAccountPool!;
 }

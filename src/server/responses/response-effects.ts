@@ -75,6 +75,7 @@ export function createResponsesEffects(
   // message, and leave Codex fataling on a missing compaction item (#422).
   const commitReasoningReplayServingRoute = (outboundHeaders?: HeadersInit): void => {
     commitReasoningReplayServingIdentity(parsed._reasoningReplayScope);
+    if (parsed._nativeReasoningMint) parsed._nativeReasoningMint.owner = parsed._nativeReasoningBoundOwner;
     rememberServingConversationStateIssuer(admissionState.authCtx, poolAffinityKey);
     // History has no model namespace. Record the account that actually accepted this
     // final attempt, after refresh/failover, rather than guessing from mutable affinity.

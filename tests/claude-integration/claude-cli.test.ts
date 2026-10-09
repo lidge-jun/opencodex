@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   buildClaudeEnv as buildClaudeEnvWithIo,
   buildNativeClaudeEnv,
@@ -16,7 +17,7 @@ import {
 } from "../../src/cli/claude";
 import { buildClaudeContextWindows } from "../../src/claude/context-windows";
 import { commandInvocation } from "../../src/lib/win-exec";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LivenessIo, LiveProxy } from "../../src/server/proxy-liveness";
@@ -231,7 +232,7 @@ describe("ocx claude native fallback", () => {
       expect(windows["ocx-claude-native--gpt-5.6-sol"]).toBe(272_000);
       expect(windows["claude-ocx-native--gpt-5.6-sol"]).toBe(272_000);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -269,7 +270,7 @@ describe("ocx claude native fallback", () => {
       expect(warnings).toHaveLength(1);
     } finally {
       console.warn = realWarn;
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });

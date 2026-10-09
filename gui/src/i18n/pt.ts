@@ -310,6 +310,8 @@ export const pt: Record<TKey, string> = {
   "startup.protection.desktop": "App desktop",
   "startup.desktopHint": "Inicia no login; o app desktop supervisiona o proxy embutido. A propriedade e os processos ativos são verificados.",
   "startup.desktopRecovery": "O OpenCodex é dono deste proxy. Reabra o app desktop e marque Iniciar no login. As alterações de serviço e de inicializador ficam desativadas enquanto o app desktop for o dono.",
+  "startup.desktopSupervisedRecovery": "O OpenCodex Desktop executa este proxy. Ative Iniciar no login no menu do OpenCodex. As alterações de serviço e de inicializador ficam desativadas enquanto o app executa o proxy.",
+  "startup.desktopReopenRecovery": "Reabra o OpenCodex e verifique Iniciar no login.",
   "startup.protection.service": "Serviço em segundo plano",
   "startup.protection.shim": "Shim do inicializador",
   "startup.protection.none": "Não instalado",

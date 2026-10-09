@@ -52,6 +52,7 @@ export const RESPONSES_CORE_MODULES = [
   "terminal-error-redaction.ts",
   "non-replayable-error.ts",
   "sidecar-execution.ts",
+  "sidecar-send-budget.ts",
   "completion-policy.ts",
   "run-turn-execution.ts",
   "adapter-dispatch.ts",

@@ -81,7 +81,7 @@ logical request holds one replacement grant, whichever stage asks for it. The gr
 request's execution budget, so a combo child that derives its own scope draws on the same
 counter rather than holding a second. A replacement never widens a send budget: it still has to
 fit inside the allowance the leg already had, and it is charged to the same counter every other
-send goes through.
+send goes through; initial Combo bookings follow the [prepaid-send contract](responses-spend.md#prepaid-initial-sends).
 
 Generic translated dispatch in `src/server/responses/adapter-dispatch.ts` asks the same pre-header gate for initial and rebuilt sends, sharing the replacement grant and charging each physical send once to the existing request/workflow budgets. Adapter-owned transports and translated post-header failures are excluded. Coverage: `tests/responses/responses-translated-reset.test.ts`. The number of replacements is the request's as well. A leg reads it from `route.provider`, which
 credential rotation, OAuth refresh, transport resolution and each combo target reassign inside one
@@ -340,9 +340,9 @@ endpoint. A mismatch marks the credential domain as rewritten, exactly like a sh
 intercept, and forces the portable summarizer even for a native-capable target: `compact.ts`
 skips `/responses/compact`, and `request-prepare.ts` sets `parsed._portableCompaction`, which
 `request-sidecar-auth.ts` (`routedCompaction`) and the passthrough adapter's compaction body
-build both honor for canonical ChatGPT destinations. Native ciphertext is replayable only by the
-backend that minted it; the conversation model would otherwise resume with an omission marker
-in place of its history.
+build both honor for canonical ChatGPT destinations. Native ciphertext is replayable only by the backend that minted it; the conversation model would otherwise resume with an omission marker in place of its history.
+
+The portable Responses summarizer in `src/adapters/openai-responses/passthrough.ts` uses `src/adapters/openai-responses/compaction-search-history.ts` to render remaining top-level `web_search_call` items, after bridge restoration, as assistant reference notes labeled untrusted historical metadata (not instructions or fetched page content). The allowlist keeps string status and action fields (type, query/queries, URL, pattern, source URL/title/type); opaque state, IDs, unknown fields and malformed values are omitted. Strings are cut at 2048 code units, lists at 20 entries, and one request carries at most 64 KiB of notes; later hosted cells collapse into a single omission note reserved inside that budget. Tool declarations stay absent, bridge-restored call/result pairs and existing messages/citations stay intact, and only the summary request changes, never stored history, ordinary turns or native compaction. A failed summary publishes no replacement history. Lite requests retain `parallel_tool_calls=false`, which the upstream requires even without tool declarations.
 
 `tests/responses/responses-compaction-override.test.ts` covers source filtering, trigger selection, config
 validation, native and routed handlers, credential retention, portable summaries and replay, and combo failover.

@@ -23,6 +23,7 @@ interface ExchangeOptions {
   sseFallback: typeof globalThis.fetch;
   onQuota?: CodexWsQuotaObserver;
   beforeDispatch?: (headers: Headers) => void;
+  onPhysicalDispatch?: () => void;
   /** Bun version string the caller gated on; stamped onto the stage record. */
   bunVersion?: string;
 }
@@ -409,6 +410,17 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         // fallback here would silently degrade a multi-agent turn into an ordinary
         // one. Fail the turn visibly instead.
         failStream(error);
+        return;
+      }
+      try { options.onPhysicalDispatch?.(); } catch (error) {
+        // Admission refused before the frame left. This is a pre-open rejection,
+        // not a transport failure and not an authorization to replay over SSE.
+        settledPreOpen = true;
+        sent = false;
+        terminal = true;
+        cleanup();
+        session.dispose();
+        reject(error);
         return;
       }
       try {

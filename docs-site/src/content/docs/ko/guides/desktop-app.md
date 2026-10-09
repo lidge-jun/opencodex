@@ -46,6 +46,19 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 macOS에서는 대시보드를 닫아도 앱이 메뉴 막대에서 계속 실행됩니다. Dock 또는 Finder에서 OpenCodex를 다시 열면 프록시를 재시작하지 않고 대시보드가 다시 표시됩니다.
 
+## 데스크톱 앱과 ocx CLI 함께 사용하기
+
+macOS와 Linux에서 데스크톱 앱이 번들 프록시를 실행하는 것으로 확인되면,
+`ocx status`에 `Runtime supervisor: OpenCodex Desktop`이 표시됩니다.
+기록된 소유권이 없어도 이 관계를 확인할 수 있습니다. 백그라운드 서비스를
+설치하는 대신 OpenCodex 메뉴에서 **Start at Login**을 켜세요. 앱의 로그인
+등록이 확인되어야 재시작 후 보호가 적용됩니다. 등록을 확인할 수 없으면
+status에 표시되는 데스크톱 안내를 따르세요. 실행 관계 확인은 소유권을 생성하지 않습니다.
+
+번들 CLI 경로는 macOS에서 `/Applications/OpenCodex.app/Contents/MacOS/ocx`,
+Linux deb 패키지에서 `/usr/bin/ocx`입니다. 해당 실행 파일에 `status`를 붙여
+앱의 프록시 상태를 확인할 수 있습니다. Windows에서는 supervision 감지를 지원하지 않습니다.
+
 ## 트레이에서 사용량 보기
 
 macOS와 Windows에서는 트레이 아이콘을 클릭하면 작은 사용량 창이 열립니다. 트레이의 **Show usage**로도 열 수 있으며, 트레이 클릭 이벤트를 전달하지 않는 Linux 데스크톱에서도 사용할 수 있습니다. Linux에서는 트레이 아이콘이 표시되지 않는 환경을 포함해 시작할 때 대시보드가 열립니다.

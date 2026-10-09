@@ -506,7 +506,7 @@ The account history response can include a [low-confidence effective capacity es
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

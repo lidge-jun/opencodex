@@ -29,8 +29,6 @@ import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { runWithCompactionRecovery } from "./compaction-recovery";
 
-/** Public Responses entry and compatibility exports. Implementations live with their owners. */
-
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -66,13 +64,15 @@ export async function handleResponses(
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
       sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx),
     }, handleResponsesInner);
-    const finalResponse = ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
+    const finalResponse = ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget, abortSignal) : response;
     if (!accountLoad.lease) { release(); return finalResponse; }
     return finalizeAccountLease(finalResponse, release);
   } catch (error) {
     release();
     if (ownsBudget) translatorBudget.dispose();
     throw error;
+  } finally {
+    if (!options.comboInitialSend?.producerOwned) options.comboInitialSend?.permit.release();
   }
 }
 

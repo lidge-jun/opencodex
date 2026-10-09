@@ -61,6 +61,12 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
+HTTP owners in `src/server/responses/core.ts`, `src/server/chat-completions.ts` and `src/server/claude-messages.ts` pass the request abort signal to `src/lib/translator-budget.ts`. An aborted request releases its owned translator budget even when its response body is never consumed. Abort finalization changes accounting only; the transport keeps ownership of producer cancellation and response terminal precedence. Explicit body cancellation also releases the budget before awaiting upstream reader cancellation. EOF and read errors share the same idempotent finalizer, which removes its abort listener. Responses lifetime wrapping in `src/server/responses/core-lifetime.ts` preserves native, eager-relay and preinspected-response markers. `tests/adapters/translator-budget-lifetime.test.ts` holds cancellation pending and covers abort before wrapping, abort after wrapping, explicit cancellation and successful EOF.
+
+Disposed budgets ignore late call, reservation, charge and observation work; reservations created before disposal cannot resurrect per-turn or aggregate counters. The same Bun contract checks both accounting scopes before any producer cancellation and while an explicit cancellation is pending. Every producer must honor its transport abort link; disposed accounting does not provide a byte cap to work that outlives its request.
+
+Prepared success, cancellation and timeout responses retain their bytes, status and headers when wrapping starts with an aborted request; its dead request budget is disposed immediately. This observer does not replace a transport verdict with a different abort error or an artificial EOF.
+
 Devin's [Messages ordering buffer](../clients/claude-desktop.md#devin-messages-output-ordering) charges retained
 semantic events consumed from the independently bounded adapter queue to the shared translator
 budget until downstream delivery. Cancellation and overflow release held events before producer shutdown.

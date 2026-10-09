@@ -285,6 +285,8 @@ export const fr: Record<TKey, string> = {
   "startup.protection.desktop": "Application de bureau",
   "startup.desktopHint": "Démarre à la connexion et supervise son proxy intégré. La prise en charge et les processus actifs sont vérifiés.",
   "startup.desktopRecovery": "OpenCodex gère ce proxy. Rouvrez l’application de bureau et vérifiez le démarrage à la connexion. Les modifications du service et du lanceur restent désactivées tant que l’application le gère.",
+  "startup.desktopSupervisedRecovery": "OpenCodex Desktop exécute ce proxy. Activez le démarrage à la connexion dans le menu OpenCodex. Les modifications du service et du lanceur restent désactivées tant que l’application exécute ce proxy.",
+  "startup.desktopReopenRecovery": "Rouvrez OpenCodex et vérifiez le démarrage à la connexion.",
   "startup.protection.service": "Service en arrière-plan",
   "startup.protection.shim": "Mécanisme de lancement",
   "startup.protection.none": "Non installé",

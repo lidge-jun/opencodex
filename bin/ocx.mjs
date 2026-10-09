@@ -34,6 +34,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
+import { findDesktopCli, findPathBun } from "../src/lib/bun-path-runtime.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
 import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
@@ -92,6 +93,15 @@ function currentPackageVersion() {
     return JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version ?? "?";
   } catch {
     return "?";
+  }
+}
+
+function pinnedBunVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
+    return typeof pkg.dependencies?.bun === "string" ? pkg.dependencies.bun : "";
+  } catch {
+    return "";
   }
 }
 
@@ -884,6 +894,8 @@ const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
 // imported; tests/cli/ocx-launcher-source.test.ts pins the two together.
 const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";
 const BUN_RUNTIME_PATH_ENV = "OCX_BUN_RUNTIME_PATH";
+/** Total budget for validating a PATH Bun fallback (both probes together). */
+const PATH_BUN_PROBE_BUDGET_MS = 5_000;
 
 function findBunBinary(bunDir) {
   // The bundled `bun` package ships the binary as bin/bun.exe on every platform;
@@ -899,6 +911,7 @@ function fail(msg) {
   const reinstall = installMethod === "pnpm"
     ? "pnpm add -g --allow-build=bun @bitkyc08/opencodex"
     : "npm install -g --allow-scripts=bun @bitkyc08/opencodex";
+  const desktopCli = findDesktopCli();
   console.error(
     `opencodex: ${msg}\n` +
       "The bundled Bun runtime could not be prepared. This usually means the\n" +
@@ -906,7 +919,8 @@ function fail(msg) {
       "or pnpm did not approve bun's build) or optional dependencies. Reinstall with:\n" +
       `  ${reinstall}\n` +
       "(use sudo if the original install used sudo; without --ignore-scripts\n" +
-      "and without --omit=optional / optional=false)"
+      "and without --omit=optional / optional=false)" +
+      (desktopCli ? `\nAn installed Desktop CLI is available: "${desktopCli}"` : "")
   );
   process.exit(1);
 }
@@ -923,25 +937,32 @@ function resolveBun({ allowInstall = true } = {}) {
     );
   }
 
-  let bunDir;
+  let bunDir = null;
   try {
     bunDir = bunBinDir();
-  } catch {
-    fail("the `bun` dependency is not installed.");
-  }
+  } catch { /* Missing dependency can still fall back to a validated PATH Bun. */ }
 
-  let bin = findBunBinary(bunDir);
+  let bin = bunDir ? findBunBinary(bunDir) : null;
   if (bin) return { path: bin, source: "bundled" };
 
   // Lazy fallback: --ignore-scripts (or a failed postinstall) leaves the
   // ~450-byte placeholder stub. Run the bun package's own installer once.
-  const installJs = join(bunDir, "install.js");
-  if (allowInstall && existsSync(installJs)) {
+  const installJs = bunDir ? join(bunDir, "install.js") : null;
+  if (allowInstall && installJs && existsSync(installJs)) {
     const r = spawnSync(process.execPath, [installJs], { stdio: "inherit" });
     if (r.status === 0) bin = findBunBinary(bunDir);
   }
-  if (!bin) fail("Bun binary missing after install attempt.");
-  return { path: bin, source: "bundled" };
+  if (bin) return { path: bin, source: "bundled" };
+
+  // Reached only when the bundled runtime is unusable. The two probes start the candidate Bun
+  // cold, and on Windows a first run of a copied bun.exe is often held by an on-access scan for
+  // well over a second, so the total budget is generous rather than interactive-tight.
+  const pathBun = findPathBun({ pinnedVersion: pinnedBunVersion(), deadlineMs: PATH_BUN_PROBE_BUDGET_MS });
+  if (pathBun) {
+    console.error(`opencodex: using PATH Bun ${pathBun.version}.`);
+    return { path: pathBun.path, source: "process" };
+  }
+  fail(bunDir ? "Bun binary missing after install attempt." : "the `bun` dependency is not installed.");
 }
 
 // `ocx update --help` prints usage and exits WITHOUT side effects. The Node launcher

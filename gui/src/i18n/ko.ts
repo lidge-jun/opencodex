@@ -285,6 +285,8 @@ export const ko: Record<TKey, string> = {
   "startup.protection.desktop": "데스크톱 앱",
   "startup.desktopHint": "로그인 시 시작하여 내장 프록시를 관리합니다. 소유 기록과 실행 중인 프로세스를 확인합니다.",
   "startup.desktopRecovery": "OpenCodex 데스크톱 앱이 이 프록시를 관리합니다. 앱을 다시 열고 로그인 시 시작 설정을 확인하세요. 앱이 관리하는 동안 서비스와 런처는 변경할 수 없습니다.",
+  "startup.desktopSupervisedRecovery": "OpenCodex 데스크톱 앱이 이 프록시를 실행하고 있습니다. OpenCodex 메뉴에서 ‘로그인 시 시작’을 켜세요. 앱이 프록시를 실행하는 동안에는 서비스와 런처를 변경할 수 없습니다.",
+  "startup.desktopReopenRecovery": "OpenCodex를 다시 열고 ‘로그인 시 시작’ 설정을 확인하세요.",
   "startup.protection.service": "백그라운드 서비스",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "설치되지 않음",

@@ -290,6 +290,8 @@ export const ru: Record<TKey, string> = {
   "startup.protection.desktop": "Настольное приложение",
   "startup.desktopHint": "Запускается при входе и следит за встроенным прокси. Проверяются владелец и работающие процессы.",
   "startup.desktopRecovery": "OpenCodex управляет этим прокси. Откройте настольное приложение заново и проверьте запуск при входе. Изменения службы и запускающего скрипта недоступны, пока прокси принадлежит приложению.",
+  "startup.desktopSupervisedRecovery": "OpenCodex Desktop запускает этот прокси. Включите «Запуск при входе» в меню OpenCodex. Изменения службы и запускающего скрипта недоступны, пока приложение запускает прокси.",
+  "startup.desktopReopenRecovery": "Откройте OpenCodex заново и проверьте «Запуск при входе».",
   "startup.protection.service": "Фоновая служба",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "Не установлен",

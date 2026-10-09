@@ -16,6 +16,7 @@ import type { ExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
 import type { CallerDirectAuth } from "../../providers/caller-authorization";
 import type { CompactionRoutingOverride } from "./compaction-routing";
 import type { TranslatorBudget } from "../../lib/translator-budget";
+import type { NativeReasoningOwner } from "../../responses/reasoning-replay-cache";
 import type { TransientSendBudget } from "../../lib/upstream-retry";
 import type { RequestLogContext } from "../request-log";
 import type { UpstreamHostAdmissionLease } from "../../codex/upstream-host-health";
@@ -134,6 +135,8 @@ export interface HandleResponsesOptions {
    * it. Omitted means a genuine Responses inbound.
    */
   inboundWire?: InboundWire;
+  nativeReasoningReplay?: ReadonlyMap<string, string>;
+  nativeReasoningMint?: { owner?: NativeReasoningOwner };
   /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
   droidDefaultEffort?: string;
   /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */
@@ -158,6 +161,8 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
+  comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
   /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */
   comboDispatchPermit?: SingleUseDispatchPermit;
   /** Internal handoff: this combo was selected by shadow-call interception. */

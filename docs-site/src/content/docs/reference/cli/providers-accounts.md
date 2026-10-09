@@ -225,6 +225,14 @@ them anyway: it routes to the account-pool login, so `ocx login codex --reauth` 
 `ocx account reauth codex`. The dashboard Codex account pool (Reauthenticate) does it too. That route
 runs inside the proxy, so it needs a running one.
 
+For the ChatGPT OAuth provider, an explicit terminal OAuth code confirming an expired
+or revoked refresh grant requires signing in again. Free-text descriptions alone never
+require reauthentication. Temporary token-service failures, timeouts and cancellation leave the account
+eligible for a later refresh. Browser token exchange and refresh each have a 30-second
+per-fetch deadline covering headers and body. HTTP-derived errors show only the status
+and an allowlisted OAuth code. Cancellation, timeout and transport failures use fixed
+messages without the original reason or cause.
+
 ```bash
 ocx login xai
 ocx login anthropic

@@ -76,7 +76,7 @@ afterEach(async () => {
     const { clearResponseStateForTests } = await import("../../../src/responses/state");
     clearResponseStateForTests();
   } finally {
-    try { fixture.dispose(); }
+    try { await fixture.dispose(); }
     finally { fixture.quota.resetProviderQuotaReconcileStateForTests(); }
   }
 });

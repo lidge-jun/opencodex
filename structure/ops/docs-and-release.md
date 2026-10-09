@@ -343,11 +343,11 @@ npm dependency pinned to `1.4.2` (esbuild-style: a tiny main package plus platfo
 
 Invariants:
 
-- `bin/ocx.mjs` resolves the bundled binary via `require.resolve("bun/package.json")` and a size gate
-  (`>= 1 MB`) that rejects the ~450-byte placeholder stub left by `--ignore-scripts`/pnpm; it then
-  lazy-runs `install.js` and execs `src/cli/index.ts` under Bun, propagating exit code and signal.
-  The Windows service wrapper applies the same gate before each launch and waits on a placeholder
-  instead of executing it ([Windows service wrapper](#windows-service-wrapper-and-incomplete-updates)).
+- `bin/ocx.mjs` selects explicit override, bundled Bun, allowed installer recovery, then validated PATH Bun.
+  `src/lib/bun-path-runtime.mjs` requires absolute entries, canonical regular/executable files, the >=1 MB gate, and rejects group/world-writable resolved files or parent directories on POSIX.
+  Bounded version-policy and identity checks require `--version` to match `-e`'s `Bun.version`, a stable version with the pinned major and minor ≥ pinned minor (currently 1.4.0 ≤ version < 2.0.0).
+  PATH selection stamps `process`; failure may name an installed Desktop CLI without executing it.
+  The [Windows service wrapper](#windows-service-wrapper-and-incomplete-updates) keeps its own placeholder wait gate; updater inspection never runs installer recovery.
 - `package.json` carries `"trustedDependencies": ["bun"]` so `bun install` runs the dependency's
   postinstall, and `"engines": { "node": ">=18" }` (Bun is no longer a user prerequisite).
 - The plain-Node launcher owns `OPENCODEX_BUN_PATH` selection before Bun can load project dotenv and

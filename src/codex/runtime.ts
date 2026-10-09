@@ -7,6 +7,7 @@ import { codexExecInvocation, isSpawnableCodexCandidate } from "./exec-invocatio
 import { resolveCodexHomeDir } from "./home";
 import { decodeOverlayState } from "./shim-state-file";
 import { redactSecretString, redactUserPath } from "../lib/redact";
+import { SUBPROCESS_KILL_GRACE_MS, waitForSubprocessExit } from "../lib/bounded-subprocess";
 
 export type CodexRuntimeSource =
   | "environment"
@@ -68,6 +69,8 @@ export type RuntimeExecFile = (
     shell?: boolean;
     windowsVerbatimArguments?: boolean;
     env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    maxBuffer?: number;
   },
 ) => string;
 
@@ -77,6 +80,7 @@ export type RuntimeExecFileAsync = (
 ) => Promise<string>;
 
 export interface ResolveCodexRuntimeDeps {
+  signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   configDir?: string;
@@ -487,23 +491,62 @@ function probeVersion(command: string, deps: ResolveCodexRuntimeDeps): VersionPr
   }
 }
 
-const defaultExecFileAsync: RuntimeExecFileAsync = (file, args, options) =>
+export const execCodexFileAsync: RuntimeExecFileAsync = (file, args, options) =>
   new Promise((resolve, reject) => {
+    if (options.signal?.aborted) { reject(new Error("Codex subprocess aborted")); return; }
     // execFile always pipes stdout/stderr; it takes no stdio option.
-    const { stdio: _stdio, ...execOptions } = options;
-    execFile(file, args, execOptions, (error, stdout) => (error ? reject(error) : resolve(String(stdout))));
+    // Own abort/deadline termination; execFile's built-in observer can settle the
+    // callback while a SIGTERM-ignoring child is still alive.
+    const { stdio: _stdio, signal: _signal, timeout: _timeout, ...execOptions } = options;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort = () => {};
+    const finish = (error: Error | null, stdout = "") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      if (error) reject(error); else resolve(stdout);
+    };
+    const child = execFile(file, args, execOptions, (error, stdout) => {
+      if (error && child.exitCode === null && child.signalCode === null) stop(error);
+      else finish(error, String(stdout));
+    });
+    const exited = new Promise<number>(resolveExit => {
+      child.once("exit", code => resolveExit(code ?? 1));
+      // A kill error is not exit proof; only failed spawn has no child to reap.
+      child.once("error", () => { if (!child.pid) resolveExit(1); });
+    });
+    // A reaper owns actual exit independently of caller-facing promise settlement.
+    let stopping = false;
+    const stop = (error: Error) => {
+      if (stopping) return;
+      stopping = true;
+      try { child.kill(); } catch { /* exit/error observation still owns reaping */ }
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      void waitForSubprocessExit({ exited, kill: () => child.kill("SIGKILL") }, SUBPROCESS_KILL_GRACE_MS);
+      finish(error);
+    };
+    abort = () => stop(new Error("Codex subprocess aborted"));
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.timeout > 0) {
+      timer = setTimeout(() => stop(new Error("Codex subprocess deadline exceeded")), options.timeout);
+      timer.unref?.();
+    }
+    if (options.signal?.aborted) abort();
   });
 
 /** probeVersion with the same sandbox and outcomes, but the exec never holds the event loop. */
 async function probeVersionAsync(command: string, deps: ResolveCodexRuntimeDeps): Promise<VersionProbeResult> {
   const settled = versionProbePrecheck(command, deps);
   if (settled) return settled;
-  const exec = deps.execFile ?? defaultExecFileAsync;
+  const exec = deps.execFile ?? execCodexFileAsync;
   let probeHome: string | undefined;
   try {
     probeHome = mkdtempSync(join(tmpdir(), "ocx-codex-probe-"));
     const { file, args, options } = versionProbeInvocation(command, deps, probeHome);
-    return versionProbeOutput(await exec(file, args, options));
+    return versionProbeOutput(await exec(file, args, { ...options, signal: deps.signal }));
   } catch (error) {
     return versionProbeError(error, probeHome);
   } finally {
@@ -782,9 +825,7 @@ function persistedRuntimeCacheStamp(deps: ResolveCodexRuntimeDeps): string {
   const configDir = deps.configDir ?? getConfigDir();
   const read = deps.readFileSync ?? ((path, encoding) => readFileSync(path, encoding));
   try {
-    const raw = parsePersistedCodexRuntime(read(codexRuntimeStatePath(configDir), "utf8"));
-    if (!raw) return "";
-    return `${raw.command}|${raw.selectedVersion ?? ""}|${raw.updatedAt ?? ""}`;
+    return read(codexRuntimeStatePath(configDir), "utf8");
   } catch {
     return "";
   }
@@ -793,7 +834,8 @@ function persistedRuntimeCacheStamp(deps: ResolveCodexRuntimeDeps): string {
 function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
   // Only memoize uninjected process-env resolves (settings/status hot paths).
   if (
-    deps.execFileSync
+    deps.signal
+    || deps.execFileSync
     || deps.execFile
     || deps.existsSync
     || deps.readFileSync
@@ -804,8 +846,14 @@ function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
   ) {
     return null;
   }
+  return codexRuntimeSelectionIdentity(deps);
+}
+
+/** Exec-free input identity, including pin changes made by another process. */
+export function codexRuntimeSelectionIdentity(deps: ResolveCodexRuntimeDeps = {}): string {
   const env = deps.env ?? process.env;
   return JSON.stringify({
+    configDir: deps.configDir ?? getConfigDir(),
     cli: env.CODEX_CLI_PATH ?? "",
     path: env.PATH ?? "",
     platform: deps.platform ?? process.platform,
@@ -859,7 +907,12 @@ export function resolveCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): Resolve
   return cloneAndDeepFreeze(result);
 }
 
-let asyncResolveInflight: { key: string; epoch: number; promise: Promise<ResolveCodexRuntimeResult> } | null = null;
+interface AsyncRuntimeObservation {
+  readonly result: ResolveCodexRuntimeResult;
+  readonly inputs: string;
+  readonly epoch: number | null;
+}
+let asyncResolveInflight: { key: string; epoch: number; promise: Promise<AsyncRuntimeObservation> } | null = null;
 
 /**
  * resolveCodexRuntime for server request paths: same selection and process memo, but every
@@ -869,16 +922,29 @@ let asyncResolveInflight: { key: string; epoch: number; promise: Promise<Resolve
 export async function resolveCodexRuntimeAsync(
   deps: ResolveCodexRuntimeDeps = {},
 ): Promise<ResolveCodexRuntimeResult> {
+  return cloneAndDeepFreeze((await resolveCodexRuntimeObservationAsync(deps)).result);
+}
+
+async function resolveCodexRuntimeObservationAsync(deps: ResolveCodexRuntimeDeps): Promise<AsyncRuntimeObservation> {
+  const inputs = codexRuntimeSelectionIdentity(deps);
+  const observed = (result: ResolveCodexRuntimeResult, epoch: number | null): AsyncRuntimeObservation => ({ result, inputs, epoch });
   // A deferred selection never execs, so the sync path is already nonblocking.
-  if (deps.probeVersion === false) return resolveCodexRuntime(deps);
-  const cacheKey = resolveCacheKey(deps);
+  if (deps.probeVersion === false) return observed(resolveCodexRuntime(deps), resolveCacheEpoch);
+  const cacheKey = resolveCacheKey({ ...deps, signal: undefined });
   if (cacheKey && resolveCache && resolveCache.key === cacheKey && Date.now() - resolveCache.at < RESOLVE_CACHE_MS) {
-    return cloneAndDeepFreeze(resolveCache.value);
+    return observed(cloneAndDeepFreeze(resolveCache.value), resolveCacheEpoch);
   }
-  if (!cacheKey) return cloneAndDeepFreeze(await resolveCodexRuntimeUncachedAsync(deps));
   const startedEpoch = resolveCacheEpoch;
+  // A cancellable miss owns its probes; a warm memo remains usable without a new child.
+  if (!cacheKey || deps.signal) {
+    const result = await resolveCodexRuntimeUncachedAsync(deps);
+    const current = !deps.signal?.aborted && resolveCacheEpoch === startedEpoch
+      && codexRuntimeSelectionIdentity(deps) === inputs;
+    if (current && cacheKey) publishResolveCache(cacheKey, Date.now(), result);
+    return observed(result, current ? resolveCacheEpoch : null);
+  }
   if (asyncResolveInflight?.key === cacheKey && asyncResolveInflight.epoch === startedEpoch) {
-    return cloneAndDeepFreeze(await asyncResolveInflight.promise);
+    return asyncResolveInflight.promise;
   }
   const promise = resolveCodexRuntimeUncachedAsync(deps).then(result => {
     // A persist or clear while the probes ran makes this answer the previous selection's;
@@ -886,13 +952,14 @@ export async function resolveCodexRuntimeAsync(
     // rewrite codex-runtime.json without touching this epoch, so the key is read again too.
     if (resolveCacheEpoch === startedEpoch && resolveCacheKey(deps) === cacheKey) {
       publishResolveCache(cacheKey, Date.now(), result);
+      return observed(result, resolveCacheEpoch);
     }
-    return result;
+    return observed(result, null);
   }).finally(() => {
     if (asyncResolveInflight?.promise === promise) asyncResolveInflight = null;
   });
   asyncResolveInflight = { key: cacheKey, epoch: startedEpoch, promise };
-  return cloneAndDeepFreeze(await promise);
+  return promise;
 }
 
 /**
@@ -1087,7 +1154,10 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
 async function resolveCodexRuntimeUncachedAsync(deps: ResolveCodexRuntimeDeps): Promise<ResolveCodexRuntimeResult> {
   const steps = resolveCodexRuntimeSteps(deps);
   let step = steps.next();
-  while (!step.done) step = steps.next(await probeVersionAsync(step.value.command, deps));
+  while (!step.done) {
+    if (deps.signal?.aborted) throw new Error("Codex runtime resolution aborted");
+    step = steps.next(await probeVersionAsync(step.value.command, deps));
+  }
   return step.value;
 }
 
@@ -1096,6 +1166,24 @@ export function resolveAndPersistCodexRuntime(
   deps: ResolveCodexRuntimeDeps = {},
 ): ResolveCodexRuntimeResult {
   const result = resolveCodexRuntime(deps);
+  return persistResolvedCodexRuntime(result, deps);
+}
+
+/** Same selection/persistence as the CLI driver, with stale async results rejected. */
+export async function resolveAndPersistCodexRuntimeAsync(
+  deps: ResolveCodexRuntimeDeps = {},
+  isCurrent: () => boolean = () => true,
+): Promise<ResolveCodexRuntimeResult | null> {
+  const observation = await resolveCodexRuntimeObservationAsync(deps);
+  if (!isCurrent() || observation.epoch === null || observation.epoch !== resolveCacheEpoch
+    || observation.inputs !== codexRuntimeSelectionIdentity(deps)) return null;
+  return cloneAndDeepFreeze(persistResolvedCodexRuntime(observation.result, deps));
+}
+
+function persistResolvedCodexRuntime(
+  result: ResolveCodexRuntimeResult,
+  deps: ResolveCodexRuntimeDeps,
+): ResolveCodexRuntimeResult {
   // Only WRITE when the selection actually changed. persistCodexRuntime() clears the
   // in-process resolve memo and persistedRuntimeCacheStamp() folds `updatedAt` into the
   // cache key, so an unconditional rewrite made every caller re-run the ~1s

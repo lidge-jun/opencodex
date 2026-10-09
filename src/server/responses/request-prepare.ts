@@ -383,6 +383,10 @@ export async function prepareResponsesRequest(
   try {
     parsed = parseRequest(body);
     parsed._nativeReasoningRetention = resolveNativeReasoningRetention(config);
+    if (options.inboundWire === "anthropic") {
+      parsed._nativeReasoningReplay = options.nativeReasoningReplay;
+      parsed._nativeReasoningMint = options.nativeReasoningMint;
+    }
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound

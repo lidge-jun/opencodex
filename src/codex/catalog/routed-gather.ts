@@ -347,6 +347,7 @@ async function gatherRoutedModelsUncached(
     lists.flat(),
     config,
     capture.openAiApiPolicy,
+    activeProviders.find(provider => provider.name === OPENAI_API_PROVIDER_ID)?.metadataConfigDir,
   );
   const apiProvider = activeProviders.find(provider => provider.name === OPENAI_API_PROVIDER_ID);
   // Trusted reconstruction replaces whole rows, including the earlier Fast hints.
@@ -363,12 +364,16 @@ async function gatherRoutedModelsUncached(
   const metadataModelIdCaseFoldByProvider = new Map(
     activeProviders.map(provider => [provider.name, provider.metadataModelIdCaseFold]),
   );
+  const metadataConfigDirByProvider = new Map(
+    activeProviders.map(provider => [provider.name, provider.metadataConfigDir]),
+  );
   const all = augmentRoutedModelsWithMetadata(
     apiAugmented,
     activeProviders.map(provider => provider.name),
     config.providers,
     config,
     metadataModelIdCaseFoldByProvider,
+    metadataConfigDirByProvider,
   )
     // Drop image/video generation models (e.g. Grok image/video) by default. Cursor's static catalog
     // intentionally mirrors Cursor's public model table, including Gemini image preview, so the
@@ -511,6 +516,7 @@ async function gatherRoutedModelsUncached(
         providerContextCap(config, target.provider),
         nativeAliasFallback,
         metadataModelIdCaseFoldByProvider.get(target.provider),
+        metadataConfigDirByProvider.get(target.provider),
       ))
       .filter((member): member is CatalogModel => member !== undefined);
     const derived = deriveComboCatalogModel(id, combo, members);
@@ -591,7 +597,7 @@ async function gatherRoutedModelsUncached(
         id: cm.modelId,
         provider: cm.provider,
         ...(nativeAliasMaxOutputTokens !== undefined ? { maxOutputTokens: nativeAliasMaxOutputTokens } : {}),
-      }, cm.modelId, metadataModelIdCaseFoldByProvider.get(cm.provider))
+      }, cm.modelId, metadataModelIdCaseFoldByProvider.get(cm.provider), metadataConfigDirByProvider.get(cm.provider))
       : nativeAliasMaxOutputTokens;
     const configuredAutoCompact = configuredAutoCompactTokenLimit(rawProvider, cm.modelId);
     const customAutoCompactTokenLimit = codexForwardNativeCapabilityAlias
@@ -827,6 +833,7 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
   models: CatalogModel[],
   config: OcxConfig,
   policy: CatalogTrustedOpenAiApiPolicySnapshot,
+  metadataConfigDir?: string,
 ): CatalogModel[] {
   if (policy.state !== "captured" || !policy.models) return models;
   const configured = config.providers[OPENAI_API_PROVIDER_ID];
@@ -862,6 +869,8 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
         ? { provider: OPENAI_API_PROVIDER_ID, id, maxOutputTokens: policy.modelMaxOutputTokens[id] }
         : existingById.get(id) ?? { provider: OPENAI_API_PROVIDER_ID, id },
       policy.virtualModels?.[id]?.wireModelId ?? id,
+      undefined,
+      metadataConfigDir,
     );
     return {
       provider: OPENAI_API_PROVIDER_ID,
@@ -920,6 +929,7 @@ export function augmentRoutedModelsWithMetadata(
   providers?: Record<string, OcxProviderConfig>,
   caps?: Pick<OcxConfig, "providerContextCaps">,
   metadataModelIdCaseFoldByProvider?: ReadonlyMap<string, boolean>,
+  metadataConfigDirByProvider?: ReadonlyMap<string, string>,
 ): CatalogModel[] {
   const out = [...models];
   const indexByKey = new Map(out.map((model, index) => [`${model.provider}/${model.id}`, index]));
@@ -947,6 +957,8 @@ export function augmentRoutedModelsWithMetadata(
             seeded,
             contextCap,
             metadataModelIdCaseFoldByProvider?.get(provider),
+            undefined,
+            metadataConfigDirByProvider?.get(provider),
           )
           : seeded;
         continue;
@@ -969,6 +981,8 @@ export function augmentRoutedModelsWithMetadata(
             model,
             contextCap,
             metadataModelIdCaseFoldByProvider?.get(provider),
+            undefined,
+            metadataConfigDirByProvider?.get(provider),
           )
           : {}),
       });

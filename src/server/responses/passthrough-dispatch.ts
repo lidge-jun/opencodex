@@ -225,6 +225,10 @@ export async function preparePassthroughExchange(
     | "pendingHopPermit"
     | "workflowRootId"
     | "sendsUsed"
+    | "targetSendsUsed"
+    | "initialSendAllowance"
+    | "noteInitialDispatch"
+    | "adapterSendBudget"
   >,
 ) {
   const { config, logCtx, options, req } = requestContext;
@@ -753,7 +757,7 @@ export async function preparePassthroughExchange(
     const transientSendPolicy = () => transientRetryPolicyFor(route.provider);
     const transientSendAttempts = (): number => transientSendCapFor(
       transientSendPolicy()?.attempts,
-      sendBudgetState.sendsUsed,
+      sendBudgetState.targetSendsUsed,
     );
     const configuredTransientSendBudgetExhausted = (): boolean =>
       transientSendPolicy() !== null && transientSendAttempts() === 0;
@@ -968,6 +972,11 @@ export async function preparePassthroughExchange(
     };
     const initialBodyRefusal = refuseOversizedOutboundBody(request);
     if (initialBodyRefusal) return initialBodyRefusal;
+    // A combo-owned first send is settled by the physical-dispatch receipt unless spend
+    // enforcement is on, where the shared reporter already owns the permit lifecycle.
+    // Stable per request: the Combo booking (`reserveDispatch`) already started and froze the spend
+    // policy, so `spendEnforced` cannot change before dispatch even though no reporter starts it here.
+    const receiptMode = !sendBudgetState.adapterSendBudget?.spendEnforced && Boolean(options.comboInitialSend);
     try {
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
@@ -994,6 +1003,7 @@ export async function preparePassthroughExchange(
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
+              onPhysicalDispatch: receiptMode ? sendBudgetState.noteInitialDispatch : undefined,
               onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
               beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                 ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
@@ -1004,7 +1014,10 @@ export async function preparePassthroughExchange(
             .then(adoptObservedResponse);
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url),
-          attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: transientSendReporter(),
+          attempts: sendBudgetState.initialSendAllowance(transientSendAttempts()),
+          // Reporter path: direct requests and enforced spend. Receipt-mode sends are settled
+          // by `onPhysicalDispatch`; a reporter as well would count them twice.
+          ...(receiptMode ? {} : { onSendsConsumed: transientSendReporter() }),
           claimAmbiguousResend: claimPreHeaderResend,
         },
       );

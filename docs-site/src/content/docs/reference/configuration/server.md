@@ -753,7 +753,15 @@ use that backend's native compact endpoint. Otherwise, including when either sid
 the conversation model is remembered as a combo target, OpenCodex runs the portable summarizer
 instead, so the summary stays readable when the conversation resumes on its own model, and the
 caller's credential does not cross to the other provider. The selected model must support the
-input size and content. Restart the proxy after editing
+input size and content. For portable Responses summaries, hosted `web_search_call` history items
+become labeled reference notes from the assistant, because the summary request has no tools. Known
+status, search queries, visited URLs, find patterns and source metadata are preserved, with long
+values and lists cut short and at most 64 KiB of notes per summary request; opaque state and
+unknown or malformed fields are omitted. These notes describe past search actions, not fetched
+page content or new instructions. Existing answer text, citations and ordinary tool results remain
+available. Lite requests retain `parallel_tool_calls=false`, which the upstream requires even
+without tool declarations. This changes only the summary request, not stored history or native
+compaction; a failed summary does not replace the history. Restart the proxy after editing
 `config.json` by hand. Dashboard saves apply immediately.
 
 ## Memory routing
