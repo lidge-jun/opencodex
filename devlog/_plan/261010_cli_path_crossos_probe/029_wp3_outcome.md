@@ -5,7 +5,7 @@ the live Desktop 2.77.0 runtime). Raw evidence stays in the worktree scratch `.t
 
 | Row | Result | Evidence |
 |---|---|---|
-| W1 Rust `cli_command` tests | **works** — 27 passed on `x86_64-pc-windows-msvc` (001) | — |
+| W1 Rust `cli_command` tests | **works** — `27 passed; 0 failed` on `x86_64-pc-windows-msvc` | coordinator run recorded in 001; its raw output was not retained |
 | Install eligibility | **works** — `stable_bundle(C:\Program Files\OpenCodex\opencodex-desktop.exe)` → `kind: windows-install`, CLI `C:\Program Files\OpenCodex\ocx.exe`; the per-machine MSI qualifies | mini-a `harness-bundle.txt` |
 | W3 real HKCU write (module level, `perform_selected` from an /IT task in session 1) | **works** — HKCU `Path` gained the staging directory first, `REG_EXPAND_SZ` kept, persisted `notifyPending:false` after the broadcast; Status `phase: partial` with `machine-path-conflict` (see F7) | mini-a `harness-install.txt`, `state-after.json` |
 | W4 new terminal pickup (release QA) | **works** — after the write, a Windows Terminal tab (`wt -w new new-tab --reloadEnvironment`, parent `WindowsTerminal.exe`, session 1), an Explorer-launched `cmd` (parent `explorer.exe`, session 1) and a Task Scheduler `cmd` all carried the staging directory and `where ocx` returned `%USERPROFILE%\ocx-probe-desktop\ocx.exe` **first**, ahead of nvm4w; before the write all three found nvm4w first. The SSH shell (session 0) stayed stale, as expected | mini-a `probe-pre-*.txt`, `probe-post-*.txt` |
