@@ -84,6 +84,10 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
     warmed: true,
     why: "every ocx subcommand here loads the same src/cli/index.ts static graph",
   },
+  "tests/cli/cli-update-badge.test.ts": {
+    warmed: true,
+    why: "the badge child loads the same src/cli/index.ts static graph as the other ocx commands",
+  },
   "tests/clients/client-connect.test.ts": {
     warmed: true,
     why: "three graphs: the state eval, the connect-transaction eval, and the generated lifecycle fixture",
