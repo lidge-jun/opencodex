@@ -321,7 +321,7 @@ describe("systemd service unit", () => {
     // condition, `restart` would fall through to the usage error.
     expect(serviceCommand).toContain('if (command === "repair" || command === "restart") {');
     expect(serviceCommand).toContain('const verb: ServiceRepairVerb = command === "restart" ? "restart" : "repair";');
-    expect(serviceCommand).toContain("await repairService({ verb });");
+    expect(serviceCommand).toContain("await repairService({ verb, supervisionLatch });");
   });
 
   test("Windows install presence distinguishes unknown queries from proven absence", () => {
@@ -2467,9 +2467,9 @@ describe("service lifecycle cleanup ordering", () => {
     const service = await readText("src/service/cli.ts");
     const installCase = service.slice(service.indexOf('case "install":'), service.indexOf('case "start":'));
     expect(installCase).toContain('scheduler.status === "absent"');
-    expect(installCase).toContain("await installFreshWindowsSchedulerSafely()");
+    expect(installCase).toContain("await installFreshWindowsSchedulerSafely({ supervisionLatch })");
     expect(installCase.indexOf('scheduler.status === "absent"')).toBeLessThan(
-      installCase.indexOf("await installFreshWindowsSchedulerSafely()"),
+      installCase.indexOf("await installFreshWindowsSchedulerSafely({ supervisionLatch })"),
     );
   });
 
