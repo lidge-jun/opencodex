@@ -36,6 +36,153 @@ function expectAbsent(): void {
   expect(existsSync(join(home.codexHome, "config.toml.ocx-write.lock"))).toBe(false);
 }
 
+const toggleRequest = `
+  async function toggle(deps) {
+    const { handleAgentSettingsRoutes } = require("./src/server/management/agent-settings-routes");
+    const url = new URL("http://localhost/api/codex-auth/features/default-mode-request-user-input");
+    const response = await handleAgentSettingsRoutes({
+      req: new Request(url, { method: "PUT", body: JSON.stringify({ enabled: true }) }), url,
+      config: {}, deps, version: "fixture", trustedLoopbackIngress: true, guiSessionIssuance: null,
+      convergeCodexCatalog: async () => {}, syncClaudeAgentDefsBestEffort: async () => {} });
+    return { status: response.status, body: await response.json() };
+  }
+`;
+
+test("a native toggle with no executable fails before creating the home", () => {
+  const { value } = run<{ status: number; body: { error: string }; resolvedBeforePreparation: boolean }>(`
+    const { mock } = require("bun:test"), fs = require("node:fs");
+    process.env.PATH = "";
+    let resolvedBeforePreparation = false;
+    const runtime = require("./src/codex/runtime");
+    mock.module("./src/codex/runtime", () => ({ ...runtime, resolveAndPersistCodexRuntime: () => {
+      resolvedBeforePreparation = !fs.existsSync(process.env.CODEX_HOME);
+      return { runtime: { command: "codex", version: null, source: "fallback" },
+        failures: [{ command: "codex", source: "fallback", reason: "program not found (ENOENT)" }] };
+    } }));
+    ${toggleRequest}
+    return { ...await toggle({}), resolvedBeforePreparation };
+  `);
+  expect(value.status).toBe(502);
+  expect(value.body.error).toContain("default_mode_request_user_input toggle failed");
+  expect(value.resolvedBeforePreparation).toBe(true);
+  expectAbsent();
+});
+
+test("a toggle failure after preparation removes its empty home", () => {
+  const { value } = run<{ status: number; prepared: boolean }>(`
+    const fs = require("node:fs"), path = require("node:path");
+    ${toggleRequest}
+    let prepared = false;
+    const response = await toggle({ toggleDefaultModeRequestUserInput: (_enabled, env) => {
+      prepared = fs.existsSync(path.join(env.CODEX_HOME, "config.toml.ocx-write.lock"));
+      throw new Error("fixture spawn failed");
+    } });
+    return { status: response.status, prepared };
+  `);
+  expect(value).toEqual({ status: 502, prepared: true });
+  expectAbsent();
+});
+
+test("a toggle lock failure removes its empty prepared home", () => {
+  const { value } = run<{ status: number; prepared: boolean }>(`
+    const { mock } = require("bun:test"), fs = require("node:fs");
+    const lock = require("./src/codex/config-write-lock");
+    let prepared = false;
+    mock.module("./src/codex/config-write-lock", () => ({ ...lock, acquireConfigWriteLock: async () => {
+      prepared = fs.existsSync(process.env.CODEX_HOME);
+      return { ok: false, error: "unsafe" };
+    } }));
+    ${toggleRequest}
+    return { ...await toggle({ toggleDefaultModeRequestUserInput: () => { throw new Error("must not spawn"); } }), prepared };
+  `);
+  expect(value.status).toBe(502);
+  expect(value.prepared).toBe(true);
+  expectAbsent();
+});
+
+test("a failed toggle preserves a concurrently populated home", () => {
+  const { value } = run<{ status: number }>(`
+    const fs = require("node:fs"), path = require("node:path");
+    ${toggleRequest}
+    return await toggle({ toggleDefaultModeRequestUserInput: (_enabled, env) => {
+      fs.writeFileSync(path.join(env.CODEX_HOME, "concurrent.txt"), "preserve");
+      throw new Error("fixture spawn failed");
+    } });
+  `);
+  expect(value.status).toBe(502);
+  expect(readFileSync(join(home.codexHome, "concurrent.txt"), "utf8")).toBe("preserve");
+});
+
+test("a failed toggle preserves an empty replacement home", () => {
+  const { value } = run<{ status: number }>(`
+    const fs = require("node:fs");
+    ${toggleRequest}
+    return await toggle({ toggleDefaultModeRequestUserInput: (_enabled, env) => {
+      fs.renameSync(env.CODEX_HOME, env.CODEX_HOME + "-original");
+      fs.mkdirSync(env.CODEX_HOME);
+      throw new Error("fixture spawn failed");
+    } });
+  `);
+  expect(value.status).toBe(502);
+  expect(existsSync(home.codexHome)).toBe(true);
+});
+
+test("a stale prompt projection removes its empty prepared home", () => {
+  const { value } = run(`
+    const prompts = require("./src/codex/prompt-layers"), path = require("node:path");
+    return prompts.setToggle("apps", false, "stale", {
+      configPath: path.join(process.env.CODEX_HOME, "config.toml"),
+      storePath: path.join(process.env.CODEX_HOME, "opencodex-prompt.json") });
+  `);
+  expect(value).toMatchObject({ ok: false, error: "stale_revision" });
+  expectAbsent();
+});
+
+test("a failed prompt projection also cleans a separately prepared store directory", () => {
+  const { value } = run(`
+    const prompts = require("./src/codex/prompt-layers"), path = require("node:path");
+    return prompts.setToggle("apps", false, "stale", {
+      configPath: path.join(process.env.CODEX_HOME, "config.toml"),
+      storePath: path.join(process.env.OPENCODEX_HOME, "prompt-store", "prompt.json") });
+  `);
+  expect(value).toMatchObject({ ok: false, error: "stale_revision" });
+  expectAbsent();
+  expect(existsSync(home.path("prompt-store"))).toBe(false);
+});
+
+for (const replacement of [false, true]) {
+  test(`a failed prompt lock preserves a concurrently ${replacement ? "replaced" : "populated"} home`, () => {
+    const { value } = run(`
+      const { mock } = require("bun:test"), fs = require("node:fs"), path = require("node:path");
+      const lock = require("./src/codex/prompt-lock");
+      mock.module("./src/codex/prompt-lock", () => ({ ...lock, tryAcquire: () => {
+        if (${replacement}) {
+          fs.renameSync(process.env.CODEX_HOME, process.env.CODEX_HOME + "-original");
+          fs.mkdirSync(process.env.CODEX_HOME);
+        } else fs.writeFileSync(path.join(process.env.CODEX_HOME, "concurrent.txt"), "preserve");
+        return { ok: false, error: "locked" };
+      } }));
+      const prompts = require("./src/codex/prompt-layers");
+      return prompts.setToggle("apps", false, "stale", {
+        configPath: path.join(process.env.CODEX_HOME, "config.toml"),
+        storePath: path.join(process.env.CODEX_HOME, "prompt.json") });
+    `);
+    expect(value).toMatchObject({ ok: false, error: "locked" });
+    expect(existsSync(home.codexHome)).toBe(true);
+    if (!replacement) expect(readFileSync(join(home.codexHome, "concurrent.txt"), "utf8")).toBe("preserve");
+  });
+}
+
+test("a failed toggle preserves a pre-existing empty home", () => {
+  mkdirSync(home.codexHome);
+  const { value } = run<{ status: number }>(`
+    ${toggleRequest}
+    return await toggle({ toggleDefaultModeRequestUserInput: () => { throw new Error("fixture spawn failed"); } });
+  `);
+  expect(value.status).toBe(502);
+  expect(existsSync(home.codexHome)).toBe(true);
+});
+
 for (const explicit of [true, false]) {
   for (const name of ["restoreNativeCodex", "restoreNativeCodexAsync"]) {
     test(`${name} skips a missing ${explicit ? "explicit" : "default"} home without creating it`, () => {
