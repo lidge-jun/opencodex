@@ -571,3 +571,37 @@ return answers;
         assert_eq!(answer["reaped"], true);
     }
 }
+
+#[test]
+fn picker_metadata_identity_preserves_full_width_file_ids() {
+    let result = contract(
+        "picker-file-id",
+        r#"
+const persistence=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/claude/intercept/picker-ca-persistence.ts')).href);
+const store=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/claude/intercept/picker-ca-store.ts')).href);
+const {spyOn}=await import('bun:test');
+const stateDir=join(root,'metadata');fs.mkdirSync(stateDir);
+const target=join(stateDir,'authority.json');
+fs.writeFileSync(target,JSON.stringify({schema:1,configId:store.pickerCaConfigId(root),fingerprint:'A'.repeat(64)}));
+const before=9007199254740992n, after=9007199254740993n;
+const nativeLstat=fs.lstatSync, nativeFstat=fs.fstatSync;
+let reads=0, opened=0, credentialCalls=0, error;
+const beforeRead=(path,options)=>{const stat=nativeLstat(path,options);if(path===target){reads++;stat.ino=options?.bigint?before:Number(before)}return stat};
+const afterOpen=(fd,options)=>{const stat=nativeFstat(fd,options);opened++;stat.ino=options?.bigint?after:Number(after);return stat};
+const lstatSpy=spyOn(fs,'lstatSync').mockImplementation(beforeRead);
+const fstatSpy=spyOn(fs,'fstatSync').mockImplementation(afterOpen);
+try {
+ persistence.ensurePersistentPickerCa({configDir:root,stateDir,
+  store:()=>{credentialCalls++;throw Error('credential store reached')},
+  acceptsAuthority:()=>false,create:()=>{throw Error('unexpected create')},predecessor:()=>null,publish:()=>{},publishMetadata:()=>{}});
+} catch(caught) {error=caught.message}
+finally {lstatSpy.mockRestore();fstatSpy.mockRestore()}
+return {error,credentialCalls,reads,opened,roundedEqual:Number(before)===Number(after)};
+"#,
+    );
+    assert_eq!(result["roundedEqual"], true);
+    assert_eq!(result["reads"], 1);
+    assert_eq!(result["opened"], 1);
+    assert_eq!(result["error"], "picker_ca_metadata_unsafe");
+    assert_eq!(result["credentialCalls"], 0);
+}

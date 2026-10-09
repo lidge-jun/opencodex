@@ -74,3 +74,5 @@ The abort-lifetime contract uses synthetic response bodies whose cancellation re
 Abort finalization changes accounting only; transports retain producer cancellation and terminal precedence. Prepared 200, 499 and 504 bodies remain unchanged.
 
 The async executor contract waits for a real child to install its signal handler before abort or deadline. Caller-facing rejection remains prompt while an independent reaper owns actual exit; on POSIX the SIGTERM-ignoring child is still alive at rejection and must exit after escalation. Windows exercises the same owner with native termination.
+
+The picker metadata contract injects two distinct full-width file IDs that round to the same number. It requires the pre-open/descriptor comparison to reject them before credential-store access, and asserts that both real stat hooks were reached. It uses synthetic public metadata and does not establish the exact file IDs of a historical runner.
