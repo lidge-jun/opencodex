@@ -2963,7 +2963,7 @@ export const fr: Record<TKey, string> = {
   "claude.autoContextDesc": "Contrôle l’étendue du marquage 1M. ACTIVÉ : tout modèle dont la fenêtre peut accueillir le seuil de compaction obtient une ligne de grand contexte. DÉSACTIVÉ : seuls les véritables modèles 1M en obtiennent une.",
   "claude.autoContextInert": "Inactif, car une ancienne valeur de taille de contexte (maxContextTokens) existe dans le fichier de configuration. Supprimez-la dans ce fichier pour réactiver l’option.",
   "claude.contextAccounting": "Comptabilisation du contexte",
-  "claude.contextAccountingDesc": "1M (par défaut) : les modèles dont la fenêtre peut contenir le point de résumé sont proposés à 1M partout où opencodex choisit la valeur par défaut. 200k : Claude Code compte chaque modèle à 200k, sauf si vous choisissez vous-même une ligne 1M.",
+  "claude.contextAccountingDesc": "1M : les modèles à longue fenêtre sont à 1M par défaut partout où opencodex choisit la valeur par défaut. 200k : opencodex ne marque plus automatiquement les modèles à 1M ; une ligne 1M choisie par vous et une valeur de contexte que vous avez définie restent appliquées.",
   "claude.contextAccounting1m": "1M (par défaut)",
   "claude.contextAccounting200k": "200k",
   "claude.autoCompactWindow": "Seuil de résumé automatique",

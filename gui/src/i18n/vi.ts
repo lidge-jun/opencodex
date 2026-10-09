@@ -2981,7 +2981,7 @@ export const vi: Record<TKey, string> = {
   "claude.autoContextDesc": "Kiểm soát phạm vi áp dụng nhãn 1M. ON: bất kỳ model nào có cửa sổ (window) đủ lớn để chứa ngưỡng nén (compaction threshold) đều sẽ có hàng big-context. OFF: chỉ những model thực sự đạt 1M mới có.",
   "claude.autoContextInert": "Bị vô hiệu hóa vì giá trị kích thước ngữ cảnh (maxContextTokens) cũ vẫn tồn tại trong tệp cấu hình. Hãy xóa nó ở đó để kích hoạt lại.",
   "claude.contextAccounting": "Cách tính ngữ cảnh",
-  "claude.contextAccountingDesc": "1M (mặc định): các mô hình có cửa sổ chứa được điểm tóm tắt được cung cấp ở mức 1M ở mọi nơi opencodex chọn giá trị mặc định. 200k: Claude Code tính mọi mô hình là 200k trừ khi bạn tự chọn một dòng 1M.",
+  "claude.contextAccountingDesc": "1M: các mô hình cửa sổ dài mặc định là 1M ở mọi nơi opencodex chọn giá trị mặc định. 200k: opencodex không còn tự động đánh dấu mô hình là 1M; dòng 1M bạn tự chọn và giá trị ghi đè ngữ cảnh bạn đặt vẫn được áp dụng.",
   "claude.contextAccounting1m": "1M (mặc định)",
   "claude.contextAccounting200k": "200k",
   "claude.autoCompactWindow": "Điểm tự động tóm tắt",

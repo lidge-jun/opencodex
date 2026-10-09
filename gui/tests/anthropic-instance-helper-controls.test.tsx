@@ -93,7 +93,7 @@ const claude: ClaudeCodeState = {
   enabled: true, cliFirstParty: false, cliFirstPartyApplied: false, desktopFirstParty: false,
   interceptRunning: false, interceptEligible: true, sharedProxy: "none", authMode: "proxy", autoConnectSupported: false,
   systemEnv: false, fastMode: null, maxContextTokens: null, autoContext: true, autoCompactWindow: null,
-  injectAgents: true, smallFastModel: "", effectiveModelEnv: {}, available: [], aliases: [], port: 10100,
+  contextAccounting: "1m", injectAgents: true, smallFastModel: "", effectiveModelEnv: {}, available: [], aliases: [], port: 10100,
   webSearchSidecar: { backend: "anthropic" }, visionSidecar: { backend: "anthropic" },
   sidecarPools: { webSearchSidecar: { parent: "anthropic", mixed: false, available: ["anthropic", "anthropic2"] },
     visionSidecar: { parent: "anthropic", mixed: false, available: ["anthropic", "anthropic2"] } },

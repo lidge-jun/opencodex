@@ -3006,7 +3006,7 @@ export const pt: Record<TKey, string> = {
   "claude.autoContextDesc": "Controla até onde vai a marcação de 1M. ON: qualquer modelo cuja janela comporte o limite de compactação ganha uma linha de contexto grande. OFF: só os modelos de 1M de verdade ganham uma.",
   "claude.autoContextInert": "Inativo porque existe um valor legado de tamanho de contexto (maxContextTokens) no arquivo de configuração. Remova-o de lá para reativar.",
   "claude.contextAccounting": "Contagem de contexto",
-  "claude.contextAccountingDesc": "1M (padrão): modelos cuja janela comporta o ponto de resumo são oferecidos com 1M onde o opencodex escolhe o padrão. 200k: o Claude Code conta todo modelo como 200k, a menos que você escolha uma linha 1M.",
+  "claude.contextAccountingDesc": "1M: modelos de janela longa ficam com 1M por padrão onde o opencodex escolhe o padrão. 200k: o opencodex deixa de marcar modelos como 1M automaticamente; uma linha 1M escolhida por você e uma substituição de contexto definida por você continuam valendo.",
   "claude.contextAccounting1m": "1M (padrão)",
   "claude.contextAccounting200k": "200k",
   "claude.autoCompactWindow": "Ponto de resumo automático",

@@ -2444,7 +2444,7 @@ export const zh: Record<TKey, string> = {
   "claude.autoContextDesc": "决定 1M 标记的范围。开：窗口能容纳压缩阈值的模型都有大上下文条目；关：仅真正的 1M 模型有。",
   "claude.autoContextInert": "配置文件中存在旧式上下文大小值（maxContextTokens），此功能暂不生效。删除该值即可恢复。",
   "claude.contextAccounting": "上下文计算方式",
-  "claude.contextAccountingDesc": "1M（默认）：窗口能容纳摘要点的模型，在 opencodex 选择默认值的所有地方都按 1M 提供。200k：除非你自己选择 1M 条目，Claude Code 会把所有模型按 200k 计算。",
+  "claude.contextAccountingDesc": "1M：长上下文模型在 opencodex 选择默认值的所有地方默认按 1M 提供。200k：opencodex 不再自动标记 1M；你自己选择的 1M 条目和你设置的上下文覆盖仍然生效。",
   "claude.contextAccounting1m": "1M（默认）",
   "claude.contextAccounting200k": "200k",
   "claude.autoCompactWindow": "自动摘要触发点",

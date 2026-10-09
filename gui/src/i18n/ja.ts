@@ -2865,7 +2865,7 @@ export const ja: Record<TKey, string> = {
   "claude.autoContextDesc": "1M マーキングがどこまで及ぶかを制御します。オン: 圧縮しきい値を収められるウィンドウを持つモデルに大型コンテキスト行を付けます。オフ: 真の 1M モデルのみに付けます。",
   "claude.autoContextInert": "設定ファイルにレガシーのコンテキストサイズ値(maxContextTokens)が存在するため無効です。再び有効化するにはそれを削除してください。",
   "claude.contextAccounting": "コンテキスト計算方式",
-  "claude.contextAccountingDesc": "1M（既定）: 要約ポイントを収められるウィンドウのモデルは、opencodex が既定を選ぶすべての場所で 1M として提供されます。200k: 自分で 1M の行を選ばない限り、Claude Code はすべてのモデルを 200k として数えます。",
+  "claude.contextAccountingDesc": "1M: 長いコンテキストのモデルは、opencodex が既定を選ぶすべての場所で既定で 1M になります。200k: opencodex は自動で 1M の標識を付けません。自分で選んだ 1M の行と自分で設定したコンテキスト上書きはそのまま適用されます。",
   "claude.contextAccounting1m": "1M（既定）",
   "claude.contextAccounting200k": "200k",
   "claude.autoCompactWindow": "自動要約ポイント",

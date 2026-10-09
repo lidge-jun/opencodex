@@ -2424,7 +2424,7 @@ export const de: Record<TKey, string> = {
   "claude.autoContextDesc": "Steuert, wie weit die 1M-Markierung geht. AN: jedes Modell, dessen Fenster den Komprimierungsschwellwert fasst, erhält eine Big-Context-Zeile. AUS: nur echte 1M-Modelle.",
   "claude.autoContextInert": "Inaktiv, weil in der Konfigurationsdatei ein alter Kontextgrößen-Wert (maxContextTokens) steht. Dort entfernen, um es wieder zu aktivieren.",
   "claude.contextAccounting": "Kontextberechnung",
-  "claude.contextAccountingDesc": "1M (Standard): Modelle, deren Fenster den Zusammenfassungspunkt aufnehmen kann, werden überall dort mit 1M angeboten, wo opencodex die Vorgabe wählt. 200k: Claude Code rechnet jedes Modell mit 200k, außer du wählst selbst eine 1M-Zeile.",
+  "claude.contextAccountingDesc": "1M: Modelle mit langem Kontextfenster sind überall dort standardmäßig 1M, wo opencodex die Vorgabe wählt. 200k: opencodex markiert Modelle nicht mehr automatisch als 1M; eine selbst gewählte 1M-Zeile und eine eigene Kontextvorgabe gelten weiterhin.",
   "claude.contextAccounting1m": "1M (Standard)",
   "claude.contextAccounting200k": "200k",
   "claude.autoCompactWindow": "Punkt für Auto-Zusammenfassung",

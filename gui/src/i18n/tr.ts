@@ -2984,7 +2984,7 @@ export const tr: Record<TKey, string> = {
   "claude.autoContextDesc": "1M işaretinin ne kadar ileri gideceğini kontrol eder. AÇIK: penceresi sıkıştırma eşiğini barındırabilen her model 1M aralığı kazanır. KAPALI: yalnızca gerçek 1M modelleri alır.",
   "claude.autoContextInert": "Pasif durumdadır çünkü konfigürasyon dosyasında eski bir bağlam boyutu değeri (maxContextTokens) var. Yeniden etkinleştirmek için oradan kaldırın.",
   "claude.contextAccounting": "Bağlam hesaplama",
-  "claude.contextAccountingDesc": "1M (varsayılan): Penceresi özetleme noktasını taşıyabilen modeller, opencodex'in varsayılanı seçtiği her yerde 1M olarak sunulur. 200k: Kendiniz bir 1M satırı seçmedikçe Claude Code her modeli 200k olarak sayar.",
+  "claude.contextAccountingDesc": "1M: Uzun pencereli modeller, opencodex'in varsayılanı seçtiği her yerde varsayılan olarak 1M olur. 200k: opencodex modelleri artık otomatik olarak 1M işaretlemez; kendi seçtiğiniz 1M satırı ve ayarladığınız bağlam geçersiz kılması geçerli kalır.",
   "claude.contextAccounting1m": "1M (varsayılan)",
   "claude.contextAccounting200k": "200k",
   "claude.autoCompactWindow": "Otomatik özetleme noktası",

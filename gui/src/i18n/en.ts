@@ -3048,7 +3048,7 @@ export const en = {
   "claude.autoContextDesc": "Controls how far the 1M marking goes. ON: any model whose window can host the compaction threshold gets a big-context row. OFF: only true 1M models get one.",
   "claude.autoContextInert": "Inactive because a legacy context-size value (maxContextTokens) exists in the config file. Remove it there to re-enable.",
   "claude.contextAccounting": "Context accounting",
-  "claude.contextAccountingDesc": "1M (default): models whose window can host the summarize point are offered at 1M wherever opencodex picks the default. 200k: Claude Code counts every model at 200k unless you pick a 1M row yourself.",
+  "claude.contextAccountingDesc": "1M: long-window models default to 1M wherever opencodex picks the default. 200k: opencodex stops marking models 1M automatically; a 1M row you pick yourself and a context override you set still apply.",
   "claude.contextAccounting1m": "1M (default)",
   "claude.contextAccounting200k": "200k",
   "claude.autoCompactWindow": "Auto-summarize point",
