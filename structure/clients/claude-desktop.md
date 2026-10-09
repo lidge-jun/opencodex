@@ -250,7 +250,8 @@ application-access dialogs are controlled by macOS; restart or upgrade does not 
 `picker-ca-store.ts` owns the versioned OS credential service, canonical-config identity namespace,
 bounded exact-shape payload, full constrained CA profile, validity and P-256 private-key match validation.
 `picker-ca-persistence.ts` validates public `authority.json` and `authority-init.json` records under
-the canonical CA lock, rejecting symlinks and mismatched pre-open/path and descriptor identities. Initialization journals the config identity, new fingerprint and public
+the canonical CA lock, rejecting symlinks and mismatched pre-open/path and descriptor identities.
+Device and inode comparisons use bigint stats so distinct full-width file IDs cannot alias through numeric rounding. Initialization journals the config identity, new fingerprint and public
 predecessor before writing the credential, verifies readback, then commits metadata and publication;
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.

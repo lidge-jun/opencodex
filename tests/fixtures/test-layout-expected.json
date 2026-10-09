@@ -1005,6 +1005,7 @@
   "server-live-frame-log.test.ts": "server",
   "server-live-realtime-fixtures.test.ts": "server", "server-live.test.ts": "server",
   "server-loopback-host-gate.test.ts": "server", "server-management-auth.test.ts": "server",
+  "server-management-log-admission.test.ts": "server",
   "server-opencode-go-goal-streaming.test.ts": "server", "server-rate-limit-retry-e2e.test.ts": "server",
   "server-request-body-size.test.ts": "server", "server-search.test.ts": "server",
   "server-startup-reconcile-resilience.test.ts": "server", "server-stop-config-hardening.test.ts": "server",
