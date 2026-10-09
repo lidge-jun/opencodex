@@ -36,7 +36,7 @@ export const SESSION_LANE_ID_BYTES = 32;
 const turnGate = createAdmissionGate("active_turns", MAX_ACTIVE_TURNS);
 export interface ActiveTurnLease extends AdmissionLease {
   attach(lease: AdmissionLease): void;
-  bindAbortSignal(signal: AbortSignal): void;
+  bindAbortSignal(signal: AbortSignal): () => void;
   bindAbortController(ac: AbortController): void;
   beginCodexAccountSelection(): CodexAccountSelectionAdmission;
   isTransferred(): boolean;
@@ -204,7 +204,7 @@ export function tryAdmitTurn(sessionLaneId?: string, clientSignal?: AbortSignal)
       else attachedLeases.add(attachedLease);
     },
     bindAbortSignal(signal) {
-      if (!active || abortListeners.has(signal)) return;
+      if (!active || abortListeners.has(signal)) return () => {};
       const onAbort = () => {
         cancellationReason = signal.reason;
         const boundControllers = [...controllers];
@@ -214,6 +214,11 @@ export function tryAdmitTurn(sessionLaneId?: string, clientSignal?: AbortSignal)
       abortListeners.set(signal, onAbort);
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) onAbort();
+      return () => {
+        if (abortListeners.get(signal) !== onAbort) return;
+        signal.removeEventListener("abort", onAbort);
+        abortListeners.delete(signal);
+      };
     },
     bindAbortController(ac) {
       knownTurnControllers.add(ac);

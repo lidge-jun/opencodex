@@ -12,6 +12,7 @@ import {
 } from "../../src/server/lifecycle";
 import { createJevModelInvoker } from "../../src/server/responses/jev-model-invoke";
 import { workflowBudgetSnapshot } from "../../src/lib/workflow-budget";
+import * as live from "../../src/server/live";
 import * as transport from "../../src/server/responses/request-transport";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -243,4 +244,56 @@ test("internal decision cancellation releases admission while dispatch remains p
     unblock.resolve(new Response(null, { status: 499 }));
     await settled;
   }
+});
+
+
+test("Live upgrade disconnect releases admission while resolution remains pending", async () => {
+  const previousHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-upgrade-disconnect-"));
+  process.env.OPENCODEX_HOME = home;
+  const entered = deferred<void>();
+  const unblock = deferred<Response>();
+  const resolve = spyOn(live, "resolveLiveSidebandUpgrade").mockImplementation(async () => {
+    entered.resolve();
+    return unblock.promise;
+  });
+  saveConfig({ port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "fixture",
+    codexAutoStart: false, integrations: { codex: { enabled: false }, claudeCode: { enabled: false } },
+    providers: { fixture: { adapter: "openai-responses", baseUrl: "http://127.0.0.1:1/v1", authMode: "key", apiKey: "fixture-key", allowPrivateNetwork: true, models: ["fixture"] } },
+  } as OcxConfig);
+  const server = startServer(0);
+  const before = getActiveTurnCount();
+  const socket = new WebSocket(new URL("/v1/live/fixture", server.url).href.replace("http:", "ws:"));
+  socket.onerror = () => {};
+  try {
+    await entered.promise;
+    expect(getActiveTurnCount()).toBe(before + 1);
+    socket.close();
+    await until(() => getActiveTurnCount() === before, "Live upgrade admission released");
+  } finally {
+    unblock.resolve(new Response(null, { status: 499 }));
+    resolve.mockRestore();
+    socket.close();
+    abortAndReleaseAllTurns(new Error("fixture teardown"));
+    await server.stop(true);
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(home);
+  }
+}, 15_000);
+
+
+test("upgrade transfer detaches ingress cancellation and keeps connection ownership", () => {
+  const before = getActiveTurnCount();
+  const ingress = new AbortController();
+  const connection = new AbortController();
+  const lease = tryAdmitTurn("fixture-upgrade-transfer")!;
+  lease.bindAbortController(connection);
+  const detach = lease.bindAbortSignal(ingress.signal);
+  detach();
+  detach();
+  ingress.abort(new Error("fixture handshake disposed"));
+  expect(getActiveTurnCount()).toBe(before + 1);
+  expect(connection.signal.aborted).toBe(false);
+  connection.abort(new Error("fixture socket closed"));
+  expect(getActiveTurnCount()).toBe(before);
 });
