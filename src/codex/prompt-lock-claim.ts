@@ -1,37 +1,16 @@
-import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
+import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ownEvidence, ownerState, safeNamespace, type OwnerDeps, type OwnerEvidence } from "./prompt-lock-owner";
+import { ChangedLock as ChangedClaim, checkEntry, checkIdentity, guarded, type Entry, type Namespace } from "./prompt-lock-evidence";
 import { LockFileBusy, lockFileOperation } from "./prompt-lock-io";
 
 export interface ClaimRecord extends OwnerEvidence { ticket: number; token?: string }
 export class UnsafeLockNamespace extends Error {
   constructor(readonly path: string) { super(`Unsafe lock state at ${path}; deliberate removal is required.`); }
 }
-class ChangedClaim extends LockFileBusy {}
-interface Namespace { path: string; stat: Stats }
-interface Entry extends Namespace { body: string }
 interface AbandonedClaim { token: string; parents: Namespace[]; entry: Entry }
 // Only a completed invocation may enter this map; live/reentrant reservations never do.
 const abandoned = new Map<string, AbandonedClaim>();
-function checkIdentity(saved: Namespace, deps: OwnerDeps): void {
-  const current = deps.lstat(saved.path);
-  if (current.isSymbolicLink() || current.dev !== saved.stat.dev || current.ino !== saved.stat.ino
-    || current.uid !== saved.stat.uid || current.isDirectory() !== saved.stat.isDirectory()
-    || current.isFile() !== saved.stat.isFile()) throw new ChangedClaim("Lock namespace changed");
-}
-function checkEntry(saved: Entry, deps: OwnerDeps): void {
-  checkIdentity(saved, deps);
-  if (readFileSync(saved.path, "utf8") !== saved.body) throw new ChangedClaim("Claim evidence changed");
-  checkIdentity(saved, deps);
-}
-function guarded<T>(parents: Namespace[], entries: Entry[], deps: OwnerDeps, operation: () => T): T {
-  return lockFileOperation(() => {
-    for (const parent of parents) checkIdentity(parent, deps);
-    for (const entry of entries) checkEntry(entry, deps);
-    for (const parent of parents) checkIdentity(parent, deps);
-    return operation();
-  }, deps.platform);
-}
 function recoverAbandoned(directory: string, deps: OwnerDeps): void {
   for (const [path, claim] of abandoned) {
     if (dirname(path) !== directory) continue;

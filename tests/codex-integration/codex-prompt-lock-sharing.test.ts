@@ -230,3 +230,69 @@ test("a peer released between directory scan and evidence capture is not unsafe"
   expect(acquired.ok).toBe(true);
   if (acquired.ok) expect(release(acquired.handle)).toBe(true);
 });
+
+for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+  for (const stage of ["stale rename", "quarantine cleanup", "failed-create cleanup", "exclusive creation", "post-quarantine creation", "lock release"] as const) {
+    const replacements = stage.includes("creation") ? ["parent", "parent-link"] as const : ["entry", "contents", "parent", "parent-link"] as const;
+    for (const replacement of replacements) test(`${stage}: ${code} retry fences replaced ${replacement}`, () => {
+      const { path, body } = setup(), root = join(path, "..");
+      const stale = !["exclusive creation", "lock release"].includes(stage);
+      if (stale) fs.writeFileSync(path, body);
+      const held = stage === "lock release" ? tryAcquire(path, deps) : undefined;
+      if (held && !held.ok) throw Error("setup");
+      const platform = ownerDefaults.platform;
+      ownerDefaults.platform = "win32"; restores.push(() => { ownerDefaults.platform = platform; });
+      const unlink = fs.unlinkSync, rename = fs.renameSync, write = fs.writeFileSync;
+      let target = "", attempts = 0, replaced = false;
+      let replacementBody = "", savedBody = "", originalTarget = "";
+      const sleep = spyOn(Bun, "sleepSync").mockImplementation(() => {
+        if (!target || replaced) return;
+        replaced = true;
+        savedBody = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
+        // Preserve the token for release/entry replacements: token-only checks miss these.
+        replacementBody = replacement === "contents"
+          ? JSON.stringify({ ...JSON.parse(savedBody), pid: process.pid, acquiredAt: 100_000, extra: "replacement" })
+          : savedBody || JSON.stringify({ token: "replacement", pid: process.pid, host, acquiredAt: 100_000 });
+        if (replacement === "parent" || replacement === "parent-link") {
+          const originalRoot = root + ".original"; roots.push(originalRoot);
+          rename(root, originalRoot);
+          originalTarget = join(originalRoot, target.slice(root.length + 1));
+          if (replacement === "parent-link") fs.symlinkSync(originalRoot, root, "junction");
+          else fs.mkdirSync(root);
+        } else if (replacement === "entry") {
+          originalTarget = target + ".original"; rename(target, originalTarget);
+        }
+        write(target, replacementBody);
+      }); restores.push(() => sleep.mockRestore());
+      const matches = (name: string) => stage === "stale rename" || stage.includes("creation") || stage === "lock release"
+        ? name === path : name.startsWith(path + ".stale-");
+      const hit = (name: string) => {
+        if (!matches(name)) return;
+        target = name; attempts++;
+        if (attempts === 1) throw sharing(code);
+      };
+      const renameSpy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+        if (stage === "stale rename") hit(String(from));
+        rename(from, to);
+      }); restores.push(() => renameSpy.mockRestore());
+      const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation(p => {
+        if (["quarantine cleanup", "failed-create cleanup", "lock release"].includes(stage)) hit(String(p));
+        unlink(p);
+      }); restores.push(() => unlinkSpy.mockRestore());
+      const writeSpy = spyOn(fs, "writeFileSync").mockImplementation((p, data, options) => {
+        if (stage === "failed-create cleanup" && String(p) === path && !fs.existsSync(path)) {
+          write(path, JSON.stringify({ token: "successor", pid: process.pid, host, acquiredAt: 100_000 }));
+        }
+        if (stage === "exclusive creation" || (stage === "post-quarantine creation" && !fs.existsSync(path))) hit(String(p));
+        write(p, data, options);
+      }); restores.push(() => writeSpy.mockRestore());
+      const result = held?.ok ? release(held.handle) : tryAcquire(path, { ...deps, isProcessAlive: pid => pid === process.pid });
+      expect(replaced).toBe(true); expect(attempts).toBe(1);
+      expect(fs.readFileSync(target, "utf8")).toBe(replacementBody);
+      if (originalTarget && replacement !== "parent-link" && savedBody) expect(fs.readFileSync(originalTarget, "utf8")).toBe(savedBody);
+      if (stage === "lock release") expect(result).toBe(false);
+      else if (!["quarantine cleanup"].includes(stage)) expect(result).toEqual({ ok: false, error: "locked" });
+      if (stage === "failed-create cleanup") expect(JSON.parse(fs.readFileSync(replacement === "parent" ? join(root + ".original", "prompt.lock") : path, "utf8")).token).toBe("successor");
+    });
+  }
+}

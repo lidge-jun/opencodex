@@ -22,6 +22,8 @@
  * window itself is documented as irreducible from user space.
  */
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { checkEntry, guarded, type Entry } from "./prompt-lock-evidence";
 import { randomBytes } from "node:crypto";
 import { UnsafeLockNamespace, withLockClaim } from "./prompt-lock-claim";
 
@@ -85,7 +87,10 @@ export function tryAcquire(path: string, deps: LockDeps = defaultDeps): AcquireR
 }
 
 function acquireReserved(path: string, token: string, deps: OwnerDeps & LockDeps): AcquireResult {
-  const io = <R>(operation: () => R): R => lockFileOperation(operation, deps.platform);
+  const parentPath = dirname(path);
+  if (!safeNamespace(parentPath, "directory", deps)) throw new UnsafeLockNamespace(parentPath);
+  const parents = [{ path: parentPath, stat: lockFileOperation(() => deps.lstat(parentPath), deps.platform) }];
+  const io = <R>(operation: () => R): R => guarded(parents, [], deps, operation);
   const record: LockRecord = { token, ...ownEvidence(deps), acquiredAt: deps.now() };
   const body = JSON.stringify(record);
 
@@ -96,34 +101,44 @@ function acquireReserved(path: string, token: string, deps: OwnerDeps & LockDeps
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
 
-  const previous = readRecord(path, deps.platform);
+  const observed = io(() => {
+    const entry: Entry = { path, stat: deps.lstat(path), body: readFileSync(path, "utf8") };
+    checkEntry(entry, deps);
+    return entry;
+  });
+  let previous: LockRecord | null;
+  try { previous = JSON.parse(observed.body); } catch { previous = null; }
   const state = ownerState(previous, deps);
   if (state === "unsafe") return { ok: false, error: "unsafe", detail: path };
   if (state !== "dead" || !previous || !Number.isFinite(previous.acquiredAt)
     || deps.now() - previous.acquiredAt <= STALE_AFTER_MS) return { ok: false, error: "locked" };
 
-  // Quarantine under the reservation; no cooperating successor can replace
-  // the observed stale record between our check and this rename.
+  // The reservation excludes cooperating writers; fence external replacements
+  // and parent retargets again on every sharing-error retry.
   const quarantine = `${path}.stale-${token}`;
   try {
-    io(() => renameSync(path, quarantine));
+    guarded(parents, [observed], deps, () => renameSync(path, quarantine));
   } catch {
     // Someone else won the rename, or the owner released between our checks.
     // Either way we do NOT touch the path — retry from the top.
     return { ok: false, error: "locked" };
   }
 
+  const moved = { ...observed, path: quarantine };
+  const cleanup = () => {
+    try { guarded(parents, [moved], deps, () => unlinkSync(quarantine)); } catch { /* Preserve changed or busy debris. */ }
+  };
   try {
     io(() => writeFileSync(path, body, { encoding: "utf8", mode: FILE_MODE, flag: "wx" }));
   } catch (error) {
     // A successor acquired the real lock between our rename and this create.
     // Its lock is live and is not ours to remove.
-    try { io(() => unlinkSync(quarantine)); } catch { /* debris */ }
+    cleanup();
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return { ok: false, error: "locked" };
     throw error;
   }
 
-  try { io(() => unlinkSync(quarantine)); } catch { /* debris */ }
+  cleanup();
   return { ok: true, handle: { path, token } };
 }
 
@@ -133,12 +148,16 @@ function acquireReserved(path: string, token: string, deps: OwnerDeps & LockDeps
  */
 export function release(handle: LockHandle): boolean {
   try {
-    return lockFileOperation(() => {
-      if (!safeNamespace(handle.path, "file", ownerDefaults)) return false;
-      if (readRecord(handle.path, ownerDefaults.platform)?.token !== handle.token) return false;
-      unlinkSync(handle.path);
-      return true;
-    }, ownerDefaults.platform);
+    const deps = ownerDefaults;
+    if (!safeNamespace(handle.path, "file", deps) || !safeNamespace(dirname(handle.path), "directory", deps)) return false;
+    const parents = [{ path: dirname(handle.path), stat: lockFileOperation(() => deps.lstat(dirname(handle.path)), deps.platform) }];
+    const entry = guarded(parents, [], deps, () => {
+      const saved = { path: handle.path, stat: deps.lstat(handle.path), body: readFileSync(handle.path, "utf8") };
+      checkEntry(saved, deps);
+      return saved;
+    });
+    if (JSON.parse(entry.body)?.token !== handle.token) return false;
+    return guarded(parents, [entry], deps, () => { unlinkSync(handle.path); return true; });
   } catch { return false; }
 }
 
