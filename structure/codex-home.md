@@ -383,9 +383,9 @@ The durable response-spill directory `~/.opencodex/responses-state-spill/` is bo
 aggregate, not only per file. Continuation state demoted out of the in-memory cap
 (`MAX_STORED_RESPONSE_BYTES`) is written there, and eviction past
 `MAX_SPILLED_RESPONSE_BYTES` removes oldest-first through the same deletion point that serves
-TTL and count eviction, so an evicted entry unlinks its file. One function owns that ceiling and
-three callers drive it: mutation pruning, the lazy load that follows a restart, and the periodic
-sweep. The periodic caller is not redundant — the mutation path runs only when traffic arrives, so a
+TTL and count eviction, so an evicted entry unlinks its file. One function owns that ceiling; mutation
+pruning, the post-restart lazy load, the periodic sweep and [spill admission](transports/byte-accounting.md#durable-spill-admission)
+drive it. The periodic caller is not redundant — the mutation path runs only when traffic arrives, so a
 process that comes up over budget from a snapshot written under a larger ceiling would otherwise
 stay over it while idle.
 

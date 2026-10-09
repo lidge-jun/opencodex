@@ -214,6 +214,28 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
+## Durable spill admission
+
+`enforceSpilledResponseBudget` in `src/responses/state.ts` owns the durable spill ceiling
+described in [Codex home](../codex-home.md). A queued publication, and the shutdown fallback, call it
+with the headroom their write needs on top of what is already accounted; called with no argument it
+only brings the store back under the ceiling. With headroom it evicts oldest-first, deferred
+superseded generations before installed spills, down to the ceiling minus that headroom, and only
+while the room is reachable: bytes eviction cannot touch — in-flight reservations, superseded
+generations a job owns, and unreclaimable paths — plus the headroom must fit under the ceiling. That
+is re-read after every eviction, and once the publication cannot fit nothing more is evicted; the
+caller refuses it as a `spill-failed` tombstone. An impossible publication therefore never costs an
+unrelated continuation.
+
+`deleteResponseSpill` in `src/responses/spill-store.ts` reports a failed unlink (anything but a
+missing file) to the spill queue, which charges that path in its unreclaimable ledger until the path
+is gone, so neither admission nor ordinary pruning counts space that was never freed. The orphan
+sweep settles such files once the unlink can succeed. `spillCapacityRefusals` and
+`spillHeadroomEvictions` on the memory endpoint are the cumulative refusal and admission-eviction
+counts. `tests/responses/responses-spill-admission-headroom.test.ts` covers headroom eviction,
+exact fit, impossible and inherited publications, pinned reservations, the shutdown fallback,
+deferred-first order, reload replay and failed unlinks.
+
 ## Unicode pattern normalization
 
 `src/adapters/responses-tool-schema.ts` strips unsupported Unicode property patterns with an

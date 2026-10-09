@@ -63,6 +63,15 @@ runtime the leak itself remains an upstream problem:
   remembered timeout state. Other failures use null. The cumulative
   `spillAclRetryReturnedTimeouts` and `spillAclTimeoutMemoRefusals` count terminal
   failed publications, not individual ACL commands or transient first attempts.
+  When a new continuation does not fit under the 1 GiB spill ceiling, the proxy
+  first evicts the oldest stored continuations to make room, as long as that can
+  succeed; a continuation that cannot fit even then is refused. The cumulative
+  `spillHeadroomEvictions` counts continuations evicted to make room, and
+  `spillCapacityRefusals` counts continuations refused because the ceiling could
+  not make room (each one is also a failed publication with class `ECAPACITY`).
+  A rising `spillCapacityRefusals` while memory is healthy means the durable
+  continuation set is full of space the proxy cannot reclaim — in-flight
+  publications or files a failed delete left behind — rather than a memory problem.
   Success clears the failure streak but retains the last failure fields and
   cumulative counts; a later unrelated failure sets the last origin to null.
   These values are process-local, so compare snapshots from the same process.
