@@ -15,6 +15,7 @@ import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider } from "./config/provider-name";
 import { anthropicInstanceRowShapeMatches } from "./providers/anthropic-instance-id";
 import { providerUsesKeyAuthOverride, resolveProviderApiKey } from "./providers/key-store";
+import { setActiveGcpCredentialMarker } from "./lib/gcp-adc";
 import { captureProviderApiKeySelection } from "./providers/api-key-selection-capture";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
@@ -298,6 +299,11 @@ export function resetCompactionFallbackWarningsForTests(): void {
 }
 
 function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
+  // A `gcp-sa:` marker carries no usable key material: the ADC resolver (gcp-adc) must learn it
+  // is the active credential source. Register before the early returns below — a marker resolves
+  // to `undefined` here (it is not a keychain/env ref, and the marker itself is not a literal),
+  // so the vertex adapter's ADC branch is what actually consumes the registration.
+  setActiveGcpCredentialMarker(apiKey);
   const resolved = resolveProviderApiKey(apiKey);
   return typeof resolved === "string" && resolved.trim().length > 0 ? resolved : undefined;
 }

@@ -9,6 +9,8 @@
 import { createHash } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, parseGcpCredentialJson } from "../lib/gcp-adc";
+import { invalidateResolvedProviderKeyCache, probeProviderKeychain, providerKeychainEntry } from "./api-key-resolve";
 import type { AccountQuotaFields } from "./quota-types";
 import { commitProviderApiKeySelection } from "./api-key-selection";
 
@@ -28,9 +30,69 @@ function isEnvReference(value: string): boolean {
 export function maskApiKey(value: string): string {
   // Env and keychain references carry no secret material; show them verbatim so an operator
   // can tell where the key lives.
-  if (isEnvReference(value) || value.startsWith("keychain:")) return value;
+  if (isEnvReference(value) || value.startsWith("keychain:") || value.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) return value;
   if (value.length <= 8) return "****";
   return `${value.slice(0, 4)}****${value.slice(-4)}`;
+}
+
+/**
+ * Split a pasted key value into candidate credentials. A plain API key is one row; a pasted GCP
+ * credential JSON (or several, comma/space-separated — the same convention as newline-separated
+ * API keys) is one row per JSON object. Windows file paths are rejected with guidance rather
+ * than stored, because they are the most common paste mistake and silently break at runtime.
+ */
+export function splitCredentialPaste(value: string): Array<string | { credentialJson: string }> {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return [];
+  // Fast path: a plain key (no JSON braces) — also covers env/keychain/gcp-sa references.
+  if (!trimmed.startsWith("{")) {
+    if (/^[A-Za-z]:[\\/]/.test(trimmed)) {
+      throw new Error("This looks like a file path. Paste the full JSON body of the credential, not a file path.");
+    }
+    return [trimmed];
+  }
+  const objects: string[] = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (ch === "{" && depth === 0) start = i;
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        objects.push(trimmed.slice(start, i + 1));
+        start = -1;
+      }
+      if (depth < 0) throw new Error("Invalid credential JSON: unbalanced braces.");
+    }
+  }
+  if (depth !== 0 || start >= 0) throw new Error("Invalid credential JSON: the pasted text ends inside a JSON object.");
+  return objects.map(json => {
+    if (!parseGcpCredentialJson(json)) {
+      throw new Error("Unrecognized credential JSON: expected a GCP Service Account or authorized_user JSON with a \"type\" field.");
+    }
+    return { credentialJson: json };
+  });
+}
+
+/**
+ * Store a pasted GCP credential JSON in the OS keychain and return the `gcp-sa:` marker for it.
+ * Verified write (read-back check) mirrors storeProviderKeyInKeychain; on any failure the caller
+ * receives an error instead of half-stored state.
+ */
+function storeGcpCredentialJson(config: OcxConfig, name: string, credentialJson: string): string {
+  const probe = probeProviderKeychain();
+  if (!probe.available) throw new Error(`OS keychain unavailable: ${probe.reason}`);
+  const id = apiKeyPoolEntryId(credentialJson);
+  const account = `${name}/${id}`;
+  const entry = providerKeychainEntry(account);
+  entry.setPassword(credentialJson);
+  if (entry.getPassword() !== credentialJson) {
+    try { entry.deletePassword(); } catch { /* best effort */ }
+    throw new Error(`keychain read-back mismatch for ${account}`);
+  }
+  return `${GCP_CREDENTIAL_MARKER_PREFIX}${account}`;
 }
 
 /** Content-derived id: re-adding the same key upserts instead of duplicating. */
@@ -84,6 +146,48 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
   const provider = config.providers[name];
   if (!provider || !isKeyAuthProvider(provider)) return { error: "provider does not use API-key auth" };
   if (typeof key !== "string" || !key.trim()) return { error: "key is required" };
+  // GCP credential JSON never enters the literal-key path: it is diverted to the OS keychain and
+  // only the `gcp-sa:` marker is stored. splitCredentialPaste runs FIRST (before the CRLF
+  // rejection) because pretty-printed JSON contains line breaks, and it also catches the
+  // file-path paste mistake with its own guidance before anything is stored.
+  try {
+    const parts = splitCredentialPaste(key);
+    const first = parts[0];
+    const isJsonPaste = first !== undefined && typeof first !== "string";
+    if (!isJsonPaste) {
+      // Not a credential paste — fall through to the plain API-key path below. splitCredentialPaste
+      // has already thrown for file paths; a plain key lands here as a single literal row.
+    } else {
+      if (parts.length > 1) return { error: "paste one credential JSON per request; add each additional credential as its own key" };
+      const credentialJson = (first as { credentialJson: string }).credentialJson;
+      let marker: string;
+      try {
+        marker = storeGcpCredentialJson(config, name, credentialJson);
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : "credential storage failed" };
+      }
+      const id = apiKeyPoolEntryId(credentialJson);
+      const committed = commitProviderApiKeySelection(config, name, fresh => {
+        const pool = ensurePool(fresh);
+        const existing = pool.find(e => e.id === id);
+        if (existing) {
+          existing.key = marker;
+          if (label?.trim()) existing.label = label.trim();
+        } else {
+          pool.push({ id, key: marker, ...(label?.trim() ? { label: label.trim() } : {}), addedAt: Date.now() });
+        }
+        fresh.apiKey = marker;
+        return { changed: true, selectionChanged: true, value: id };
+      });
+      if (committed.status === "committed") {
+        invalidateResolvedProviderKeyCache();
+        return { id };
+      }
+      return { error: "provider selection unavailable" };
+    }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "credential parse failed" };
+  }
   const trimmed = sanitizeApiKeyValue(key);
   if (!trimmed) return { error: "key must not include line breaks" };
   const id = apiKeyPoolEntryId(trimmed);
@@ -98,7 +202,8 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
     fresh.apiKey = trimmed;
     return { changed: true, selectionChanged: true, value: id };
   });
-  return committed.status === "committed" ? { id } : { error: "provider selection unavailable" };
+  if (committed.status !== "committed") return { error: "provider selection unavailable" };
+  return { id };
 }
 
 /** Switch the ACTIVE key (mirrors into `provider.apiKey`). Persists config. */
