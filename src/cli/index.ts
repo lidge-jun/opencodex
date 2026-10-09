@@ -85,11 +85,11 @@ import {
   recheckRestartFailedStart, reobserveRestartReplacement,
   restartStartOutcome,
   waitForProxyReplacement,
-  runProxyRestart,
   runTrayProxyStart,
   type ProxyRestartLive,
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
+import { duplicateRuntimeMessage, runDesktopAwareProxyRestart } from "./desktop-runtime-guidance";
 import { reportRestartFailure } from "./restart-failure";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
@@ -329,7 +329,7 @@ async function chooseListenPort(
         throw new StartCommandExit(serviceStayOutExitCode());
       }
       if (decision === "refuse-live-proxy") {
-        console.error(`⚠️  Proxy already running (PID ${holder?.pid ?? "unknown"}, port ${preferred}). Use 'ocx stop' first.`);
+        console.error(duplicateRuntimeMessage(holder?.pid, preferred));
         throw new StartCommandExit(1);
       }
       if (decision === "refuse-unidentified-holder") {
@@ -444,7 +444,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       process.exit(serviceStayOutExitCode());
     }
     if (decision === "refuse" || decision === "await-parent") {
-      console.error(`⚠️  Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}). Use 'ocx stop' first.`);
+      console.error(duplicateRuntimeMessage(owner.live.pid ?? owner.pidSnapshot, owner.live.port));
       process.exit(1);
     }
     // Sibling path. The new instance takes over this home's ocx.pid / runtime-port.json while
@@ -928,7 +928,7 @@ async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
-  const result = await runProxyRestart({
+  const result = await runDesktopAwareProxyRestart({
     findLive: () => discoverStableProxyForRestart({
       findLive: () => findLiveProxy({ deadlineAt, attempts: 2, acceptPackageTreeFenced: true }),
       expired: () => Date.now() >= deadlineAt,

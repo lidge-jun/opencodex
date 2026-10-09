@@ -37,6 +37,8 @@ import { parseStopApproval, type StopApproval } from "./stop-approval";
 import type { ResolveArgs } from "./resolve";
 import type { ClientConnectionState } from "../client/state";
 import { OCX_NATIVE_REPLAY_RECOVERY_NOTE } from "../responses/compaction";
+import { inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
+import { desktopStopNotice } from "./desktop-runtime-guidance";
 
 export interface CliDispatchDeps {
   args: string[];
@@ -51,6 +53,7 @@ export interface CliDispatchDeps {
   spawnDetached: (argv: readonly string[]) => void;
   handleStart: () => Promise<void>;
   handleStop: (approval?: StopApproval) => Promise<StopOutcome>;
+  inspectDesktopSupervision?: typeof inspectDesktopSupervision;
   handleEnsure: (options?: { existingIsSuccess?: boolean }) => Promise<boolean>;
   handleResolve: (args: ResolveArgs) => Promise<number>;
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
@@ -112,6 +115,8 @@ const commandRunners: Record<string, CommandRunner> = {
     // re-start the proxy immediately, so warning there would contradict the next line.
     const warning = "⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').";
     if (!parsed.json) {
+      const notice = desktopStopNotice((deps.inspectDesktopSupervision ?? inspectDesktopSupervision)());
+      if (notice) console.error(notice);
       // handleStop returns the structured outcome now; an object is always truthy, so
       // the warning must key on .ok — otherwise a failed stop would still claim downtime.
       if ((await deps.handleStop()).ok) console.log(warning);

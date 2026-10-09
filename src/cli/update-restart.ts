@@ -19,9 +19,11 @@ import { observeAttestedUpdateReplacement, stopAttestedUpdateTarget } from "./up
 import type { UpdateRestartCandidate } from "./update-restart-candidate";
 import { INCOMPLETE_INSTALL_RECOVERY } from "./restart-failure";
 import { computeVersionSkew } from "./version-skew";
+import { createSupervisionLatch, inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
 
 export interface UpdateRestartChild { pid?: number; exitCode: number | null; signalCode: string | null }
 export interface UpdateRestartIo {
+  inspectSupervision?: typeof inspectDesktopSupervision;
   now(): number;
   acquire(): { release(): void };
   home(): UpdateRestartHome;
@@ -37,7 +39,7 @@ export interface UpdateRestartIo {
   wait(ms: number): Promise<void>;
 }
 const ELIGIBILITY_REASONS = ["windows", "unsupported_platform", "foreground", "service", "shared_or_client",
-  "package_tree_fenced", "unverifiable_ancestry", "target_changed", "configuration_changed"] as const;
+  "package_tree_fenced", "unverifiable_ancestry", "target_changed", "configuration_changed", "desktop"] as const;
 export type UpdateRestartEligibilityReason = (typeof ELIGIBILITY_REASONS)[number];
 
 /** Carries only a closed reason code across the eligibility/transport boundary. */
@@ -56,6 +58,7 @@ function sameRuntime(candidate: UpdateRestartCandidate, current: RuntimePortStat
 
 /** A terminal update transaction: it never enters generic restart recovery. */
 export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadlineAt: number, io: UpdateRestartIo): Promise<UpdateRestartResult> {
+  const latch = createSupervisionLatch();
   let phase = "eligibility";
   let lease: { release(): void } | undefined;
   // Recorded here because the stop transport sanitizes anything thrown by beforeStop.
@@ -78,6 +81,13 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
       if (!sameRuntime(candidate, currentRuntime)) {
         eligibilityReason = currentRuntime?.siblingOfPort !== undefined ? "shared_or_client" : "target_changed";
         throw new Error("target");
+      }
+      const supervision = (io.inspectSupervision ?? inspectDesktopSupervision)({ targetPid: candidate.target.pid });
+      const evidence = supervision.kind === "desktop" && supervision.runtimePid !== candidate.target.pid
+        ? { kind: "unknown" as const, reason: "unrelated-target", desktopSeen: false } : supervision;
+      if (latch.observe(evidence)) {
+        eligibilityReason = "desktop";
+        throw new UpdateRestartEligibilityError("desktop");
       }
       try {
         if (!io.standalone(candidate.target)) throw new Error("target");
@@ -147,6 +157,7 @@ export function describeUpdateRestartFailure(code: string, reason?: UpdateRestar
       switch (reason) {
         case "windows": return "Restart from a newer CLI is unavailable on Windows. Run `ocx status`, then restart through the owning service or desktop app.";
         case "unsupported_platform": return "Restart from a newer CLI requires macOS or Linux. Run `ocx status`, then use the owning lifecycle manager.";
+        case "desktop": return "OpenCodex Desktop supervises this proxy. Use the app's updater (tray → Check for Updates), or quit OpenCodex before updating and restarting from this CLI.";
         case "service": return "An installed or active service owns lifecycle control. Run `ocx status`, then use the owning installation's `ocx service restart`.";
         case "foreground": return "The proxy is attached to a parent process. Run `ocx status`; if it runs in a terminal, restart it in that terminal, otherwise use its owning app or supervisor.";
         case "shared_or_client": return "This is a shared or connected-client runtime. Run `ocx status` and restart through its owning Hub, service or desktop app.";

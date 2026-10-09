@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { captureTestOutput } from "../../scripts/test";
+import { repoPath } from "../helpers/repo-root";
+import { duplicateRuntimeMessage, runDesktopAwareProxyRestart } from "../../src/cli/desktop-runtime-guidance";
+import { UpdateRestartRequired, type UpdateRestartCandidate } from "../../src/cli/update-restart-candidate";
+import { describeUpdateRestartFailure, runUpdateRestart, type UpdateRestartIo } from "../../src/cli/update-restart";
+import type { SupervisionEvidence } from "../../src/service/desktop-supervision.mjs";
+import type { ProxyRestartIo, ProxyRestartLive } from "../../src/cli/tray-proxy";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -386,4 +392,247 @@ describe("ocx ready", () => {
       cleanupCliHome(dir, failed);
     }
   }, CLI_TEST_TIMEOUT);
+});
+
+const DESKTOP = { kind: "desktop", runtimePid: 4242, supervisorPid: 4200,
+  app: "/Applications/OpenCodex.app/Contents/MacOS/opencodex-desktop",
+  proxy: "/Applications/OpenCodex.app/Contents/MacOS/ocx" } as const;
+const NON_DESKTOP: SupervisionEvidence[] = [{ kind: "none" },
+  { kind: "unknown", reason: "probe-timeout", desktopSeen: false }, { kind: "unsupported" }];
+const RESTART_TARGET: ProxyRestartLive = { pid: 4242, port: 19999, source: "runtime" };
+const UPDATE_CANDIDATE: UpdateRestartCandidate = {
+  home: { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0 },
+  target: { ...RESTART_TARGET, pid: 4242, version: "2.76.0" },
+  runtime: { pid: 4242, port: 19999, attestationSecret: "a".repeat(43) }, cliVersion: "2.77.0",
+};
+function desktopRestartFixture() {
+  const events: string[] = [];
+  const lines: string[] = [];
+  const io: ProxyRestartIo = {
+    findLive: async () => ({ status: "live", live: RESTART_TARGET }),
+    requestInPlaceRestart: async () => { events.push("request"); return { accepted: true }; },
+    waitForReplacement: async () => { events.push("replacement"); return { ...RESTART_TARGET, pid: 4243 }; },
+    reobserveAfterReplacement: async () => ({ status: "absent" }),
+    recheckAfterFailedStart: async () => ({ status: "live", live: { ...RESTART_TARGET, pid: 4243 } }),
+    startWhenStopped: async recovering => { events.push(`start:${recovering}`); return { status: "started" }; },
+    waitBetweenAttempts: async () => {},
+  };
+  return { io, events, lines };
+}
+
+describe("Desktop CLI start and restart guidance", () => {
+  test("duplicate start guidance names the verified Desktop target", () => {
+    const probes: Array<number | undefined> = [];
+    expect(duplicateRuntimeMessage(4242, 19999, deps => { probes.push(deps?.targetPid); return DESKTOP; }))
+      .toBe(`OpenCodex Desktop supervises the running proxy (pid 4242, ${DESKTOP.app}, port 19999). Use the running proxy, or quit OpenCodex before starting it from this CLI.`);
+    expect(probes).toEqual([4242]);
+    for (const evidence of [...NON_DESKTOP, { ...DESKTOP, runtimePid: 9999 }]) {
+      expect(duplicateRuntimeMessage(4242, 19999, () => evidence))
+        .toBe("⚠️  Proxy already running (PID 4242, port 19999). Use 'ocx stop' first.");
+    }
+    expect(duplicateRuntimeMessage(null, 19999, () => DESKTOP))
+      .toBe("⚠️  Proxy already running (PID unknown, port 19999). Use 'ocx stop' first.");
+    expect(duplicateRuntimeMessage(4242, 19999, () => ({ kind: "unknown", reason: "pid-mismatch", desktopSeen: true })))
+      .toContain("quit OpenCodex before starting it from this CLI");
+  });
+
+  test("Desktop restart reports its replacement only after request acceptance", async () => {
+    const s = desktopRestartFixture();
+    const result = await runDesktopAwareProxyRestart(s.io, deps => {
+      expect(deps?.targetPid).toBe(4242);
+      return DESKTOP;
+    }, line => { expect(s.events).toEqual(["request"]); s.lines.push(line); });
+    expect(result).toEqual({ ok: true, mode: "restarted", live: { ...RESTART_TARGET, pid: 4243 } });
+    expect(s.lines).toEqual(["Restart requested; OpenCodex Desktop starts the replacement."]);
+    expect(s.events).toEqual(["request", "replacement"]);
+  });
+
+  for (const later of NON_DESKTOP) test(`Desktop restart misses never start a competing CLI runtime: ${later.kind}`, async () => {
+    const s = desktopRestartFixture();
+    s.io.waitForReplacement = async () => null;
+    const probes: Array<number | undefined> = [];
+    const result = await runDesktopAwareProxyRestart(s.io, deps => {
+      probes.push(deps?.targetPid);
+      return probes.length === 1 ? DESKTOP : later;
+    }, line => s.lines.push(line));
+    expect(result).toEqual({ ok: false, phase: "replacement" });
+    expect(s.events).toEqual(["request"]);
+    expect(probes).toEqual([4242, 4242]);
+    expect(s.lines).toEqual(["Restart requested; OpenCodex Desktop starts the replacement."]);
+  });
+
+  for (const later of [DESKTOP, { kind: "unknown", reason: "pid-mismatch", desktopSeen: true }] as const) {
+    test(`Desktop appearing before a target-bound restart fallback prevents CLI activation: ${later.kind}`, async () => {
+      const s = desktopRestartFixture();
+      s.io.waitForReplacement = async () => null;
+      let probes = 0;
+      const result = await runDesktopAwareProxyRestart(s.io, deps => {
+        expect(deps?.targetPid).toBe(4242);
+        return ++probes === 1 ? { kind: "none" } : later;
+      }, line => s.lines.push(line));
+      expect(result).toEqual({ ok: false, phase: "replacement" });
+      expect(probes).toBe(2);
+      expect(s.events).toEqual(["request"]);
+      expect(s.lines).toEqual([]);
+    });
+  }
+
+  test("target-bound unknown with desktopSeen retains restart supervision through inconclusive fallback", async () => {
+    const s = desktopRestartFixture();
+    s.io.waitForReplacement = async () => null;
+    let probes = 0;
+    expect(await runDesktopAwareProxyRestart(s.io, deps => {
+      expect(deps?.targetPid).toBe(4242);
+      return { kind: "unknown", reason: "probe-timeout", desktopSeen: ++probes === 1 };
+    }, line => s.lines.push(line))).toEqual({ ok: false, phase: "replacement" });
+    expect(probes).toBe(2);
+    expect(s.events).toEqual(["request"]);
+    expect(s.lines).toEqual([]);
+  });
+
+  for (const uncertain of [false, true]) test(`Desktop restart refusal and uncertain response do not claim acceptance: ${uncertain}`, async () => {
+    const s = desktopRestartFixture();
+    const error = new Error("request-refused");
+    s.io.requestInPlaceRestart = async () => ({ accepted: false, uncertain, error });
+    s.io.waitForReplacement = async () => null;
+    expect(await runDesktopAwareProxyRestart(s.io, () => DESKTOP, line => s.lines.push(line)))
+      .toEqual({ ok: false, phase: "request", error });
+    expect(s.events).toEqual([]);
+    expect(s.lines).toEqual([]);
+  });
+
+  for (const evidence of [DESKTOP, { kind: "unknown", reason: "probe-timeout", desktopSeen: true }] as const) {
+    test(`newer CLI does not replace a supervised Desktop target: ${evidence.kind}`, async () => {
+      const s = desktopRestartFixture();
+      s.io.requestInPlaceRestart = async () => ({ accepted: false, uncertain: false, error: new UpdateRestartRequired(UPDATE_CANDIDATE) });
+      const result = await runDesktopAwareProxyRestart(s.io, () => evidence, line => s.lines.push(line));
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("Expected refusal");
+      expect(result.phase).toBe("request");
+      expect(result.error).toBeInstanceOf(Error);
+      expect((result.error as Error).message).toBe("restart_desktop_update_required");
+      expect(result.error).not.toBeInstanceOf(UpdateRestartRequired);
+      expect(s.events).toEqual([]);
+      expect(s.lines).toEqual(["OpenCodex Desktop supervises this proxy. Use the app's updater (tray → Check for Updates), or quit OpenCodex before updating and restarting from this CLI."]);
+    });
+  }
+
+  for (const evidence of [...NON_DESKTOP, { ...DESKTOP, runtimePid: 9999 }]) {
+    test(`non-Desktop restart retains generic recovery: ${evidence.kind}`, async () => {
+      const s = desktopRestartFixture();
+      s.io.waitForReplacement = async () => null;
+      const probes: Array<number | undefined> = [];
+      expect(await runDesktopAwareProxyRestart(s.io, deps => { probes.push(deps?.targetPid); return evidence; }, line => s.lines.push(line)))
+        .toEqual({ ok: true, mode: "started" });
+      expect(probes).toEqual([4242, 4242]);
+      expect(s.events).toEqual(["request", "start:true"]);
+      expect(s.lines).toEqual([]);
+    });
+  }
+
+  test("restart fallback permits an unrelated Desktop pid appearing after the request", async () => {
+    const s = desktopRestartFixture();
+    s.io.waitForReplacement = async () => null;
+    let probes = 0;
+    expect(await runDesktopAwareProxyRestart(s.io, deps => {
+      expect(deps?.targetPid).toBe(4242);
+      return ++probes === 1 ? { kind: "none" } : { ...DESKTOP, runtimePid: 9999 };
+    }, line => s.lines.push(line))).toEqual({ ok: true, mode: "started" });
+    expect(probes).toBe(2);
+    expect(s.events).toEqual(["request", "start:true"]);
+    expect(s.lines).toEqual([]);
+  });
+
+  for (const evidence of [...NON_DESKTOP, { ...DESKTOP, runtimePid: 9999 }]) {
+    test(`non-Desktop newer-CLI request retains the current-install candidate: ${evidence.kind}`, async () => {
+      const s = desktopRestartFixture();
+      const error = new UpdateRestartRequired(UPDATE_CANDIDATE);
+      s.io.requestInPlaceRestart = async () => ({ accepted: false, uncertain: false, error });
+      expect(await runDesktopAwareProxyRestart(s.io, () => evidence, line => s.lines.push(line)))
+        .toEqual({ ok: false, phase: "request", error });
+      expect(error.candidate()).toBe(UPDATE_CANDIDATE);
+      expect(s.events).toEqual([]);
+      expect(s.lines).toEqual([]);
+    });
+  }
+
+  for (const evidence of [DESKTOP, { kind: "unknown", reason: "probe-timeout", desktopSeen: true }, ...NON_DESKTOP]) {
+    test(`restart with no discovered target inspects before start: ${evidence.kind}`, async () => {
+      const s = desktopRestartFixture();
+      s.io.findLive = async () => ({ status: "absent" });
+      let probes = 0;
+      const blocked = evidence.kind === "desktop" || (evidence.kind === "unknown" && evidence.desktopSeen);
+      expect(await runDesktopAwareProxyRestart(s.io, deps => {
+        expect(deps?.targetPid).toBeUndefined();
+        probes++;
+        return evidence;
+      }, line => s.lines.push(line))).toEqual({ ok: true, mode: blocked ? "skipped" : "started" });
+      expect(probes).toBe(1);
+      expect(s.events).toEqual(blocked ? [] : ["start:false"]);
+      expect(s.lines).toEqual([]);
+    });
+  }
+
+  test("a thrown supervised restart request remains uncertain and never starts fallback", async () => {
+    const s = desktopRestartFixture();
+    const error = new Error("transport lost");
+    s.io.requestInPlaceRestart = async () => { throw error; };
+    s.io.waitForReplacement = async () => null;
+    expect(await runDesktopAwareProxyRestart(s.io, () => DESKTOP, line => s.lines.push(line)))
+      .toEqual({ ok: false, phase: "request", error });
+    expect(s.events).toEqual([]);
+    expect(s.lines).toEqual([]);
+  });
+
+  test("CLI entrypoint binds both duplicate refusals and restart to Desktop guidance", () => {
+    const source = readFileSync(repoPath("src", "cli", "index.ts"), "utf8");
+    expect(source).toContain("console.error(duplicateRuntimeMessage(holder?.pid, preferred))");
+    expect(source).toContain("console.error(duplicateRuntimeMessage(owner.live.pid ?? owner.pidSnapshot, owner.live.port))");
+    expect(source).toContain("const result = await runDesktopAwareProxyRestart({");
+  });
+});
+
+function desktopUpdateRestartFixture() {
+  const events: string[] = [];
+  const live = { ...UPDATE_CANDIDATE.target, pid: 4243, version: "2.77.0" };
+  const io: UpdateRestartIo = {
+    inspectSupervision: () => ({ kind: "none" }), now: () => 1000,
+    acquire: () => { events.push("acquire"); return { release: () => { events.push("release"); } }; },
+    home: () => UPDATE_CANDIDATE.home, checkHome: () => {}, runtime: () => UPDATE_CANDIDATE.runtime,
+    standalone: () => true, runtimeReady: () => true,
+    stop: async (_candidate, _deadline, beforeStop) => { beforeStop(); events.push("stop"); },
+    stopped: async () => true,
+    start: () => { events.push("start"); return { pid: 4243, exitCode: null, signalCode: null }; },
+    observe: async () => live, wait: async () => {},
+  };
+  return { io, events, live };
+}
+
+describe("Desktop guard on current-install restart", () => {
+  for (const evidence of [DESKTOP, { kind: "unknown", reason: "pid-mismatch", desktopSeen: true }] as const) {
+    for (const boundary of ["initial", "before-stop"] as const) {
+      test(`${evidence.kind} vetoes ${boundary} restart before stop or start`, async () => {
+        const s = desktopUpdateRestartFixture();
+        let probes = 0;
+        s.io.inspectSupervision = deps => {
+          expect(deps?.targetPid).toBe(4242);
+          return ++probes === 1 && boundary === "before-stop" ? { kind: "none" } : evidence;
+        };
+        const result = await runUpdateRestart(UPDATE_CANDIDATE, 5000, s.io);
+        const code = boundary === "initial" ? "update_restart_eligibility_failed" : "update_restart_stop_failed";
+        expect(result).toEqual({ ok: false, code, reason: "desktop" });
+        expect(probes).toBe(boundary === "initial" ? 1 : 2);
+        expect(s.events).toEqual(["acquire", "release"]);
+        expect(describeUpdateRestartFailure(code, "desktop")).toBe("OpenCodex Desktop supervises this proxy. Use the app's updater (tray → Check for Updates), or quit OpenCodex before updating and restarting from this CLI. Nothing was stopped by this restart attempt.");
+      });
+    }
+  }
+  for (const evidence of [...NON_DESKTOP, { ...DESKTOP, runtimePid: 9999 }]) {
+    test(`current-install restart retains eligibility: ${evidence.kind}`, async () => {
+      const s = desktopUpdateRestartFixture();
+      s.io.inspectSupervision = deps => { expect(deps?.targetPid).toBe(4242); return evidence; };
+      expect(await runUpdateRestart(UPDATE_CANDIDATE, 5000, s.io)).toEqual({ ok: true, live: s.live });
+      expect(s.events).toEqual(["acquire", "stop", "start", "release"]);
+    });
+  }
 });
