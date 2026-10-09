@@ -9,7 +9,7 @@ import { CODEX_RESPONSES_HTTP_URL, type PreparedCodexWsRequest } from "./codex-w
 import { CodexWsCorrelation } from "./codex-ws-correlation";
 import type { CodexWsSession } from "./codex-ws-session";
 import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES,
-  MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, markCodexWsRejectionResponse, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage,
+  MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, markCodexWsPreludeProjection, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage,
   codexWsCreateFrameExceedsLimit, codexWsFailureDetail, codexWsPreResponseFailure, markCodexWsStage, codexWsOcxVersion,
   markCodexWsSocketDeath, type CodexWsFailureStage, type CodexWsStageRecord } from "./codex-ws-wire";
 
@@ -242,6 +242,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         // are left out: their channel may already have sent continuation frames on this socket, so
         // the create frame alone no longer describes the turn.
         if (socketDied && !nativeControl) markCodexWsSocketDeath(failureResponse, stage);
+        markCodexWsPreludeProjection(failureResponse);
         resolve(failureResponse);
         return;
       }
@@ -514,7 +515,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
             cleanup();
             try { controller.close(); } catch { /* unused stream already closed */ }
             session.dispose();
-            markCodexWsRejectionResponse(rejection);
+            markCodexWsPreludeProjection(rejection);
             resolve(rejection);
             return;
           }

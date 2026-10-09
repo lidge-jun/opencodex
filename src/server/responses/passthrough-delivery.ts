@@ -33,7 +33,7 @@ import {
 import { isMainQuotaDispatchLive } from "../../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
 import type { ResponsesTerminalStatus } from "../../bridge";
-import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse, isCodexWsRejectionResponse } from "./ws-upstream";
+import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse, isCodexWsPreludeProjection } from "./ws-upstream";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
 import { codexProbeLeaseId, codexProbeQuotaScope, codexTransientProbeGrant, releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
@@ -541,8 +541,8 @@ export async function deliverPassthroughResponse(
     } else {
       const mainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider);
       // The WS observer is the only plain-main publisher for a WebSocket exchange;
-      // a refusal projection carries the prelude snapshot, not fresh evidence.
-      if (mainDispatch && !(isCodexWsUpstreamResponse(upstreamResponse) || isCodexWsRejectionResponse(upstreamResponse))) {
+      // a prelude projection carries the prelude snapshot, not fresh evidence.
+      if (mainDispatch && !(isCodexWsUpstreamResponse(upstreamResponse) || isCodexWsPreludeProjection(upstreamResponse))) {
         const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
         // Import yields; same-account token replacement leaves the identity writer live.
         // Re-check the credential fence with no await before publication.

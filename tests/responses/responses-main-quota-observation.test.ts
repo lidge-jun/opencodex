@@ -27,8 +27,8 @@ import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
 import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
 import { NATIVE_RESERVE_MODEL } from "../../src/codex/catalog/native-models";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
-import { isCodexWsRejectionResponse } from "../../src/server/responses/ws-upstream";
-import { markCodexWsResponse, isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse } from "../../src/server/responses/codex-ws-wire";
+import { CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, isCodexWsPreludeProjection } from "../../src/server/responses/ws-upstream";
+import { UPGRADE_DEADLINE_MS, markCodexWsResponse, isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse } from "../../src/server/responses/codex-ws-wire";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -49,6 +49,8 @@ let config: OcxConfig;
 let releaseSpend: (() => void) | undefined;
 let pendingPersist: { run: () => void; timer: ReturnType<typeof setTimeout> } | undefined;
 let clock: ReturnType<typeof installPersistenceClock>;
+let pendingPreludeTimeout: (() => void) | undefined;
+let pendingUpgradeTimeout: (() => void) | undefined;
 
 // Exercise the real serializer without a wall-clock race, as main-quota-provenance does.
 function installPersistenceClock() {
@@ -56,6 +58,14 @@ function installPersistenceClock() {
   return spyOn(globalThis, "setTimeout").mockImplementation(((
     callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]
   ) => {
+    if (delay === UPGRADE_DEADLINE_MS) {
+      pendingUpgradeTimeout = () => callback(...args);
+      return nativeTimeout(() => {}, delay);
+    }
+    if (delay === CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS) {
+      pendingPreludeTimeout = () => callback(...args);
+      return nativeTimeout(() => {}, delay);
+    }
     if (delay !== 250) return nativeTimeout(callback, delay, ...args);
     const timer = nativeTimeout(() => {}, 60_000);
     pendingPersist = { run: () => callback(...args), timer };
@@ -133,6 +143,8 @@ beforeEach(() => {
   bearer = fakeChatGptJwt(ACCOUNT);
   config = { providers: { openai: provider }, codexAccounts: [], codexMainAccountHardLock: false } as OcxConfig;
   pendingPersist = undefined;
+  pendingPreludeTimeout = undefined;
+  pendingUpgradeTimeout = undefined;
   clock = installPersistenceClock();
   globalThis.fetch = (async () => { throw new Error("unexpected network call"); }) as typeof fetch;
 });
@@ -142,6 +154,8 @@ afterEach(() => {
   clearAccountQuota();
   if (pendingPersist) clearTimeout(pendingPersist.timer);
   pendingPersist = undefined;
+  pendingPreludeTimeout = undefined;
+  pendingUpgradeTimeout = undefined;
   clock.mockRestore();
   clearCodexUpstreamHealth(); clearThreadAccountMap(); clearPoolRotationState();
   clearAccountNeedsReauth(MAIN); clearAccountNeedsReauth(POOL);
@@ -311,64 +325,120 @@ describe("credential-bound plain-main Responses quota", () => {
     metadata.finish();
   });
 
-  test("WS precommit refusal through the real exchange cannot republish stale prelude quota", async () => {
-    observe();
-    const ctx = materialized();
-    const observer = codexWsQuotaObserver(ctx, provider, "gpt-5.5");
-    expect(observer).toBeDefined();
-    const originalSocket = globalThis.WebSocket;
-    class RefusalSocket extends EventTarget {
-      readyState = 0;
-      constructor() {
-        super();
-        queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event("open")); });
+  for (const failure of ["4xx refusal", "socket closure", "prelude timeout", "connect timeout"] as const) {
+    test(`WS ${failure} through the real exchange cannot republish stale prelude quota`, async () => {
+      observe();
+      const ctx = materialized();
+      const observer = codexWsQuotaObserver(ctx, provider, "gpt-5.5");
+      expect(observer).toBeDefined();
+      const originalSocket = globalThis.WebSocket;
+      const controller = new AbortController();
+      class RefusalSocket extends EventTarget {
+        readyState = 0;
+        constructor() {
+          super();
+          queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event("open")); });
+        }
+        send(_text: string): void {
+          queueMicrotask(() => {
+            this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+              type: "codex.rate_limits", rate_limits: { primary: { used_percent: 17, window_minutes: 10080 } },
+            }) }));
+            expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+            // A concurrent main response publishes newer usage before this exchange fails.
+            observer!(quotaHeaders("99"));
+            expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+            expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+            if (failure === "socket closure") this.close();
+            else if (failure === "prelude timeout") {
+              expect(pendingPreludeTimeout).toBeDefined();
+              pendingPreludeTimeout!();
+            } else if (failure === "connect timeout") controller.abort(new DOMException("fixture deadline", "TimeoutError"));
+            else this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+              type: "error", status_code: 400, error: { type: "invalid_request_error", message: "fixture refused create" },
+            }) }));
+          });
+        }
+        close(): void {
+          if (this.readyState === 3) return;
+          this.readyState = 3;
+          this.dispatchEvent(new Event("close"));
+        }
       }
-      send(_text: string): void {
-        queueMicrotask(() => {
-          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
-            type: "codex.rate_limits", rate_limits: { primary: { used_percent: 17, window_minutes: 10080 } },
-          }) }));
-          expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
-          // A concurrent main response publishes newer usage before this exchange refuses.
-          observer!(quotaHeaders("99"));
-          expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
-          expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
-          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
-            type: "error", status_code: 400, error: { type: "invalid_request_error", message: "fixture refused create" },
-          }) }));
-        });
+      globalThis.WebSocket = RefusalSocket as unknown as typeof WebSocket;
+      const session = new CodexWsSession(CODEX_RESPONSES_WS_URL, {});
+      try {
+        expect(session.reserve()).toBe(true);
+        const init = { method: "POST", signal: controller.signal, headers: caller(), body: JSON.stringify({ model: "gpt-5.5", stream: true, input: "hi" }) };
+        const prepared = prepareCodexWsRequest(CODEX_RESPONSES_HTTP_URL, init);
+        expect(prepared).not.toBeNull();
+        const refusal = await codexWsExchange({ session, url: CODEX_RESPONSES_HTTP_URL, init, prepared: prepared!,
+          sseFallback: globalThis.fetch, onQuota: observer, bunVersion: "1.4.0" });
+        expect(refusal.status).toBe(failure === "4xx refusal" ? 400 : failure === "socket closure" ? 502 : 504);
+        expect(isCodexWsUpstreamResponse(refusal)).toBe(false);
+        expect(isCodexWsPreludeProjection(quotaResponse())).toBe(false);
+        expect(isCodexWsQuotaObservedResponse(refusal)).toBe(false);
+        expect(refusal.headers.get("x-codex-primary-used-percent")).toBe("17");
+        expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
+        await deliver(ctx, refusal);
+        expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+        expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+        expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
+        expect(isCodexWsPreludeProjection(refusal)).toBe(true);
+      } finally {
+        session.dispose();
+        globalThis.WebSocket = originalSocket;
       }
-      close(): void {
-        if (this.readyState === 3) return;
-        this.readyState = 3;
-        this.dispatchEvent(new Event("close"));
+    });
+  }
+
+  for (const failure of ["close", "error", "upgrade timeout", "send exception"] as const) {
+    test(`real HTTP fallback after WS ${failure} still publishes main quota`, async () => {
+      observe();
+      const ctx = materialized();
+      const originalSocket = globalThis.WebSocket;
+      class UpgradeFailureSocket extends EventTarget {
+        readyState = 0;
+        constructor() {
+          super();
+          queueMicrotask(() => {
+            if (failure === "upgrade timeout") { expect(pendingUpgradeTimeout).toBeDefined(); pendingUpgradeTimeout!(); }
+            else if (failure === "send exception") { this.readyState = 1; this.dispatchEvent(new Event("open")); }
+            else if (failure === "close") this.close();
+            else this.dispatchEvent(new Event("error"));
+          });
+        }
+        send(): void { throw new Error("fixture unsent create"); }
+        close(): void {
+          if (this.readyState === 3) return;
+          this.readyState = 3;
+          this.dispatchEvent(new Event("close"));
+        }
       }
-    }
-    globalThis.WebSocket = RefusalSocket as unknown as typeof WebSocket;
-    const session = new CodexWsSession(CODEX_RESPONSES_WS_URL, {});
-    try {
-      expect(session.reserve()).toBe(true);
-      const init = { method: "POST", headers: caller(), body: JSON.stringify({ model: "gpt-5.5", stream: true, input: "hi" }) };
-      const prepared = prepareCodexWsRequest(CODEX_RESPONSES_HTTP_URL, init);
-      expect(prepared).not.toBeNull();
-      const refusal = await codexWsExchange({ session, url: CODEX_RESPONSES_HTTP_URL, init, prepared: prepared!,
-        sseFallback: globalThis.fetch, onQuota: observer, bunVersion: "1.4.0" });
-      expect(refusal.status).toBe(400);
-      expect(isCodexWsRejectionResponse(refusal)).toBe(true);
-      expect(isCodexWsUpstreamResponse(refusal)).toBe(false);
-      expect(isCodexWsRejectionResponse(quotaResponse())).toBe(false);
-      expect(isCodexWsQuotaObservedResponse(refusal)).toBe(false);
-      expect(refusal.headers.get("x-codex-primary-used-percent")).toBe("17");
-      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
-      await deliver(ctx, refusal);
-      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
-      expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
-      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
-    } finally {
-      session.dispose();
-      globalThis.WebSocket = originalSocket;
-    }
-  });
+      globalThis.WebSocket = UpgradeFailureSocket as unknown as typeof WebSocket;
+      const session = new CodexWsSession(CODEX_RESPONSES_WS_URL, {});
+      let fallbackCalls = 0;
+      try {
+        expect(session.reserve()).toBe(true);
+        const init = { method: "POST", headers: caller(), body: JSON.stringify({ model: "gpt-5.5", stream: true, input: "hi" }) };
+        const prepared = prepareCodexWsRequest(CODEX_RESPONSES_HTTP_URL, init);
+        expect(prepared).not.toBeNull();
+        const response = await codexWsExchange({ session, url: CODEX_RESPONSES_HTTP_URL, init, prepared: prepared!,
+          sseFallback: (async () => { fallbackCalls++; return quotaResponse(quotaHeaders("37")); }) as typeof fetch,
+          onQuota: codexWsQuotaObserver(ctx, provider, "gpt-5.5"), bunVersion: "1.4.0" });
+        expect(fallbackCalls).toBe(1);
+        expect(isCodexWsUpstreamResponse(response)).toBe(false);
+        expect(isCodexWsPreludeProjection(response)).toBe(false);
+        expect(isCodexWsQuotaObservedResponse(response)).toBe(false);
+        await deliver(ctx, response);
+        expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(37);
+        expect(getMainPolicyQuota()?.weeklyPercent).toBe(37);
+      } finally {
+        session.dispose();
+        globalThis.WebSocket = originalSocket;
+      }
+    });
+  }
 
   test("async Reserve admission failure clears a reused main dispatch proof", async () => {
     observe();

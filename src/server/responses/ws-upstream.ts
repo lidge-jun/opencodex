@@ -26,7 +26,7 @@ import { codexWsCreateFrameExceedsLimit } from "./codex-ws-wire";
 import { isLoopbackUrl, rewriteWebSocketDial } from "../../plugins/upstream-hooks";
 export { CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES, MAX_CODEX_WS_QUEUE_BYTES,
   MAX_CODEX_WS_CREATE_FRAME_BYTES, CODEX_WS_CREATE_FRAME_LIMIT_BYTES, codexWsCreateFrameExceedsLimit,
-  isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse, isCodexWsRejectionResponse } from "./codex-ws-wire";
+  isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse, isCodexWsPreludeProjection } from "./codex-ws-wire";
 export const MIN_BOUNDED_CODEX_WS_BUN_VERSION = "1.4.0";
 
 /**
