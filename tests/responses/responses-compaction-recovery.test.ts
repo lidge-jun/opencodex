@@ -403,6 +403,7 @@ describe("routed compaction emergency integration", () => {
     abortOnSource = new AbortController();
     const response = await handleResponses(request(body(), "responses", abortOnSource.signal), settings(), { model: "", provider: "" });
     await response.text();
+    await new Promise<void>(resolve => setImmediate(resolve));
     expect(calls.map(call => call.model)).toEqual(["swe-2"]);
   });
 

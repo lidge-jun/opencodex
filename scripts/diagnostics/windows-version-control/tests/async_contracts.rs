@@ -94,7 +94,8 @@ fn removal_barrier_matches_canonical_directory_aliases() {
         r#"
 const acl=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/lib/windows-secret-acl.ts')).href);
 const principal=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/lib/windows-user-principal.ts')).href);
-const target=join(root,'..physical'); const alias=join(root,'alias'); fs.mkdirSync(target);
+const target=join(root,'..physical'); const namedRoot=join(root,'removal');fs.mkdirSync(target);fs.mkdirSync(namedRoot);
+const alias=join(namedRoot,'alias');
 fs.symlinkSync(target,alias,process.platform==='win32'?'junction':'dir');
 const heldFile=join(target,'held.tmp'); fs.writeFileSync(heldFile,'owned-fixture');
 const unrelated=join(root,'unrelated'); fs.mkdirSync(unrelated);
@@ -114,7 +115,14 @@ try {
  fs.unlinkSync(heldFile);const deletedGuard=acl.windowsSecretAclReapPendingAtOrBelow(alias);
  let settled=false;const barrier=acl.flushWindowsSecretAclReapsBeforeRemoval(alias).then(()=>{settled=true});
  await Bun.sleep(20);const early=settled;release();await Promise.all([harden,barrier]);
- return {guarded,rootGuard,unrelatedGuard,unreadableGuard,deletedGuard,early,remaining:acl.windowsSecretAclReapPendingAtOrBelow(alias)};
+ fs.writeFileSync(heldFile,'owned-fixture');acl.resetHardenedStateForTests();
+ const namedHeld=new Promise(resolve=>{release=resolve});const namedStarted=new Promise(resolve=>{announce=resolve});
+ acl.setAsyncIcaclsRunnerForTests(async()=>{announce();await namedHeld;return {success:true,exitCode:0,timedOut:false,stdout:''}});
+ const namedHarden=acl.hardenSecretPathAsync(join(alias,'held.tmp'),{required:true,deadlineMs:5000}).then(()=>true,()=>false);await namedStarted;
+ const namedGuard=acl.windowsSecretAclReapPendingAtOrBelow(namedRoot);let namedSettled=false;
+ const namedBarrier=acl.flushWindowsSecretAclReapsBeforeRemoval(namedRoot).then(()=>{namedSettled=true});
+ await Bun.sleep(20);const namedEarly=namedSettled;release();await Promise.all([namedHarden,namedBarrier]);
+ return {guarded,rootGuard,unrelatedGuard,unreadableGuard,deletedGuard,early,namedGuard,namedEarly,remaining:acl.windowsSecretAclReapPendingAtOrBelow(alias)};
 }finally{release();await acl.flushWindowsSecretAclReapsBeforeRemoval(target);fs.unlinkSync(alias)}
 "#,
     );
@@ -124,6 +132,8 @@ try {
     assert_eq!(result["unreadableGuard"], true);
     assert_eq!(result["deletedGuard"], true);
     assert_eq!(result["early"], false);
+    assert_eq!(result["namedGuard"], true);
+    assert_eq!(result["namedEarly"], false);
     assert_eq!(result["remaining"], false);
 }
 

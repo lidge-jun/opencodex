@@ -470,6 +470,8 @@ function canonicalRemovalPath(path: string): string | undefined {
 }
 
 function pathIsAtOrBelow(targetPath: string, rootPath: string): boolean {
+  const namedRelative = relative(resolve(rootPath), resolve(targetPath));
+  if (namedRelative !== ".." && !namedRelative.startsWith(`..${sep}`) && !isAbsolute(namedRelative)) return true;
   const target = canonicalRemovalPath(targetPath), root = canonicalRemovalPath(rootPath);
   // An unreadable identity cannot prove that a registered child is outside this tree.
   if (target === undefined || root === undefined) return true;
