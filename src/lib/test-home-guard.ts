@@ -196,7 +196,7 @@ export function assertNotRealCodexHomeUnderTest(dir: string): void {
  */
 export function assertNotRealClaudeConfigUnderTest(...paths: string[]): void {
   if (!isTestHomeGuardArmed()) return;
-  const roots = REAL_CLAUDE_CONFIG_DIRS.flatMap(path => [canonicalize(path), resolve(path)]);
+  const roots = currentClaudeConfigRoots();
   for (const path of paths) {
     for (const candidate of [canonicalize(path), resolve(path)]) {
       for (const root of roots) {
@@ -211,13 +211,18 @@ export function assertNotRealClaudeConfigUnderTest(...paths: string[]): void {
   }
 }
 
+function currentClaudeConfigRoots(): string[] {
+  return REAL_CLAUDE_CONFIG_DIRS.flatMap(path => [canonicalize(path), resolve(path)]);
+}
+
 function isSameOrInsideIgnoringPlatformCase(root: string, candidate: string): boolean {
   const foldCase = process.platform === "darwin" || process.platform === "win32";
   const parent = foldCase ? root.toLowerCase() : root;
   const child = foldCase ? candidate.toLowerCase() : candidate;
   if (parent === child) return true;
   const rel = relative(parent, child);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  // Only a leading ".." COMPONENT leaves the root; a child named "..fixture" is still inside.
+  return rel !== "" && !isAbsolute(rel) && rel.split(/[\\/]/)[0] !== "..";
 }
 
 /**
@@ -323,6 +328,12 @@ export function protectedRemovalReason(target: string): string | null {
         }
         if (isInside(candidate, protectedPath)) return `an ancestor of ${tree.label} (${protectedPath})`;
       }
+    }
+    // The Claude directory is judged like its writer guard: roots resolved now, case folded
+    // where the filesystem folds it, so an alias created after import is still refused.
+    for (const root of currentClaudeConfigRoots()) {
+      if (isSameOrInsideIgnoringPlatformCase(root, candidate)) return `the real Claude config directory or a path inside it (${root})`;
+      if (isSameOrInsideIgnoringPlatformCase(candidate, root)) return `an ancestor of the real Claude config directory (${root})`;
     }
   }
   return null;

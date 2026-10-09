@@ -9,7 +9,7 @@
  * cannot silently stand in for another.
  */
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { createIsolatedTestEnvironment } from "../../scripts/test";
@@ -125,11 +125,26 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
   const caseAlias = foldsCase ? join(sentinelHome, ".CLAUDE") : realClaude;
   const absentOverride = join(sentinelHome, "Custom-Claude");
   const absentAlias = foldsCase ? join(sentinelHome, "custom-claude") : absentOverride;
+  // A fixture directory whose cache FILE links to the real cache file.
+  const fileLinkedClaude = join(isolated.root, "file-linked-claude");
+  const realCacheFile = join(realClaude, "cache", "gateway-models.json");
+  mkdirSync(join(fileLinkedClaude, "cache"), { recursive: true });
+  writeFileSync(realCacheFile, "original");
+  // A Windows account without the symlink privilege cannot build this case; it then expects
+  // the ordinary unrefused write into the fixture.
+  let fileLinkBuilt = true;
+  try {
+    symlinkSync(realCacheFile, join(fileLinkedClaude, "cache", "gateway-models.json"), "file");
+  } catch (error) {
+    if (process.platform !== "win32") throw error;
+    fileLinkBuilt = false;
+  }
   const modules = {
     agents: repoPath("src", "claude", "agents-inject.ts"),
     cache: repoPath("src", "claude", "gateway-cache.ts"),
     catalog: repoPath("src", "claude", "intercept", "cli-catalog.ts"),
     settings: repoPath("src", "claude", "intercept", "settings.ts"),
+    guard: repoPath("src", "lib", "test-home-guard.ts"),
   };
   const code = `
     const m = ${JSON.stringify(modules)};
@@ -137,9 +152,11 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
     const { writeGatewayModelCache } = await import(m.cache);
     const { invalidateClaudeCodeServedCatalog } = await import(m.catalog);
     const { applyClaudeInterceptSettings, buildClaudeInterceptEnv } = await import(m.settings);
+    const { protectedRemovalReason } = await import(m.guard);
     const real = ${JSON.stringify(realClaude)}, linked = ${JSON.stringify(linkedClaude)};
     const alias = ${JSON.stringify(caseAlias)}, fixture = ${JSON.stringify(fixtureClaude)};
     const absentAlias = ${JSON.stringify(absentAlias)};
+    const fileLinked = ${JSON.stringify(fileLinkedClaude)};
     const env = buildClaudeInterceptEnv(1, "/tmp/ca.pem", "token");
     const attempts = {
       agents: () => syncClaudeAgentDefs([], real),
@@ -148,6 +165,8 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
       cacheThroughLink: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], linked),
       cacheThroughCaseAlias: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], alias),
       cacheThroughAbsentOverrideAlias: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], absentAlias),
+      cacheThroughFileLink: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], fileLinked),
+      cacheUnderDotDotNamedChild: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], real + "/..fixture"),
       catalog: () => invalidateClaudeCodeServedCatalog(real),
       settings: () => applyClaudeInterceptSettings(env, real),
     };
@@ -157,7 +176,8 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
       catch (error) { refused[name] = /real Claude config directory/.test(String(error)); }
     }
     const fixtureWrite = writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], fixture) !== null;
-    console.log(JSON.stringify({ refused, fixtureWrite }));
+    const removalRefused = protectedRemovalReason(absentAlias) !== null && protectedRemovalReason(real) !== null;
+    console.log(JSON.stringify({ refused, fixtureWrite, removalRefused }));
   `;
   try {
     const child = Bun.spawnSync([process.execPath, "-e", code], {
@@ -183,14 +203,18 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
         cacheThroughLink: true,
         cacheThroughCaseAlias: true,
         cacheThroughAbsentOverrideAlias: true,
+        cacheThroughFileLink: fileLinkBuilt,
+        cacheUnderDotDotNamedChild: true,
         catalog: true,
         settings: true,
       },
       fixtureWrite: true,
+      removalRefused: true,
     });
     expect(existsSync(probe)).toBe(true);
     expect(existsSync(catalog)).toBe(true);
-    expect(existsSync(join(realClaude, "cache", "gateway-models.json"))).toBe(false);
+    expect(readFileSync(realCacheFile, "utf8")).toBe("original");
+    expect(existsSync(join(realClaude, "..fixture"))).toBe(false);
     expect(existsSync(join(realClaude, "settings.json"))).toBe(false);
     expect(existsSync(absentAlias)).toBe(false);
   } finally {
