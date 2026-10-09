@@ -1056,13 +1056,14 @@ mod tests {
                     command.arg("-l");
                 }
                 // System rc files may print to stdout (Ubuntu's /etc/bash.bashrc sudo hint), so only
-                // the marked result lines count; a failed lookup or CLI run still fails the shell.
+                // the marked result lines count; a failed lookup or CLI run still fails the shell, and
+                // the end marker makes any extra CLI output line fail the comparison.
                 let output = command
                     .args([
                         "-i",
                         "-c",
                         "p=$(command -v ocx) || exit 11; o=$(ocx hello) || exit 12; \
-                         printf 'OCX-PATH:%s\\nOCX-OUT:%s\\n' \"$p\" \"$o\"",
+                         printf 'OCX-PATH:%s\\nOCX-OUT:%s:OCX-END\\n' \"$p\" \"$o\"",
                     ])
                     .output()
                     .expect("cannot start real shell");
@@ -1084,7 +1085,10 @@ mod tests {
                     paths[0] == expected_path.to_str().unwrap(),
                     "{shell}: command resolution selected the wrong executable"
                 );
-                assert!(outputs[0] == expected_output, "{shell}: wrong CLI output");
+                assert!(
+                    outputs[0] == format!("{expected_output}:OCX-END"),
+                    "{shell}: wrong CLI output"
+                );
             }
         };
         check_shells(&npm.join("ocx"), "npm-ocx");
