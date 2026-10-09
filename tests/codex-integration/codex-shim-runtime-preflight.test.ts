@@ -58,7 +58,7 @@ describe("Windows shim selected-runtime preflight", () => {
       expect(maybeAutoRestoreCodexShim("start", ["start"], { env: {}, warn: message => warnings.push(message), restore: () => result,
         readConfig: () => ({ config: getDefaultConfig(), source: "default", error: null }),
       })).toBeUndefined();
-      expect(warnings).toEqual([expect.stringContaining("npm install -g opencodex")]);
+      expect(warnings).toEqual([expect.stringContaining("npm install -g @bitkyc08/opencodex")]);
     }));
   }
 

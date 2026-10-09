@@ -42,6 +42,6 @@ opencodex 內嵌 Bun runtime（目前為 **1.3.14**）。記憶體成長由已�
 
 ## Windows 所選 runtime 寫入被拒絕
 
-Windows 服務安裝、修復及 Codex shim 安裝、更新會檢查所選執行檔能否在 OpenCodex 設定根目錄內建立並移除目錄。這是寫入政策檢查，而非記憶體修復。失敗時會在停止服務、下載、暫存以及寫入權杖或啟動器前拒絕操作。shim 自動修復會延後並顯示指引，啟動繼續。正常或停用的 shim 不會檢查。不自動尋找其他 runtime。
+Windows 服務安裝、修復及 Codex shim 安裝、更新會檢查所選執行檔能否在 OpenCodex 設定根目錄內建立並移除目錄。這是寫入政策檢查，而非記憶體修復。失敗時會在停止服務、下載、暫存以及寫入權杖或啟動器前拒絕操作。shim 自動修復會延後並顯示指引，啟動繼續。正常或停用的 shim 不會檢查。不自動尋找其他 runtime。 首次排程安裝會在此檢查前登錄工作並認領設定根目錄；被拒絕時會復原新登錄，已認領的根目錄保留以便重試。
 
-> 所選 Bun runtime 無法在設定目錄內建立並移除目錄。Windows 應用程式政策可能禁止來自此執行檔位置的寫入。在啟動 `ocx` 前，將 `OPENCODEX_BUN_PATH` 設為政策允許的可信 Bun 執行檔，或以 `npm install -g opencodex` 重新安裝後重試。未選擇其他 runtime。
+> 所選 Bun runtime 無法在設定目錄內建立並移除目錄。Windows 應用程式政策可能禁止來自此執行檔位置的寫入。在啟動 `ocx` 前，將 `OPENCODEX_BUN_PATH` 設為政策允許的可信 Bun 執行檔，或以 `npm install -g @bitkyc08/opencodex` 重新安裝後重試。未選擇其他 runtime。

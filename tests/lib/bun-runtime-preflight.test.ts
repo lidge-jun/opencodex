@@ -23,7 +23,7 @@ function refusal(run: () => void, reason: RuntimePreflightReason): void {
     expect(error).toBeInstanceOf(RuntimePreflightError);
     expect(error).toMatchObject({ code: "OCX_RUNTIME_PREFLIGHT_FAILED", reason });
     expect((error as Error).message).toContain("OPENCODEX_BUN_PATH");
-    expect((error as Error).message).toContain("npm install -g opencodex");
+    expect((error as Error).message).toContain("npm install -g @bitkyc08/opencodex");
   }
 }
 function child(result: Partial<ReturnType<typeof spawnSync>>): typeof spawnSync {

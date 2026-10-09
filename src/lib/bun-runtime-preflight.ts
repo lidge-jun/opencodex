@@ -9,7 +9,7 @@ export const RUNTIME_PREFLIGHT_TIMEOUT_MS = 5_000;
 export const RUNTIME_PREFLIGHT_GUIDANCE = "The selected Bun runtime could not create and remove a directory in the OpenCodex config directory. "
   + "Windows application policy may deny writes from this executable location. "
   + "Set OPENCODEX_BUN_PATH to a trusted Bun executable allowed by your policy before launching ocx, "
-  + "or reinstall opencodex with npm install -g opencodex, then retry. No alternate runtime was selected.";
+  + "or reinstall opencodex with npm install -g @bitkyc08/opencodex, then retry. No alternate runtime was selected.";
 
 export class RuntimePreflightError extends Error {
   readonly code = "OCX_RUNTIME_PREFLIGHT_FAILED";

@@ -121,7 +121,7 @@ A standalone selection is admitted in-process only when its path equals `process
 Standalone is executable packaging, not Desktop ownership. This branch has neither child isolation
 nor a timeout: synchronous filesystem operations may block. Other standalone selections refuse.
 Recovery is an operator-selected trusted `OPENCODEX_BUN_PATH` before launching ocx, or an
-`npm install -g opencodex` reinstall followed by retry; no runtime discovery or probe memo is added.
+`npm install -g @bitkyc08/opencodex` reinstall followed by retry; no runtime discovery or probe memo is added.
 
 ## Windows npm tray update badge
 
