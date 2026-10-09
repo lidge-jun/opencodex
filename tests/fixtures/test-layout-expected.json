@@ -1078,7 +1078,7 @@
   "tencent-siliconflow-providers.test.ts": "gui", "terminal-continuation-owner-rotation.test.ts": "adapters",
   "terminal-guard-server.test.ts": "server", "terminal-guard.test.ts": "server",
   "test-home-guard.test.ts": "ci-workflows", "test-runner.test.ts": "ci-workflows", "test-runner-bun.test.ts": "ci-workflows",
-  "test-sandbox-cleanup.test.ts": "ci-workflows", "thought-signature-credential-scope.test.ts": "responses",
+  "test-sandbox-cleanup.test.ts": "ci-workflows", "test-temp-quarantine.test.ts": "ci-workflows", "thought-signature-credential-scope.test.ts": "responses",
   "token-estimate.test.ts": "lib", "token-guardian.test.ts": "codex-integration",
   "tool-argument-integers.test.ts": "adapters", "tool-catalog-nudge.test.ts": "adapters",
   "tool-choice-performance.test.ts": "adapters", "transient-budget-scope-source.test.ts": "lib",

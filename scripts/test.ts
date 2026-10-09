@@ -16,6 +16,7 @@ import {
   removeTestTempTree,
   writeTestTempOwner,
 } from "./test-temp";
+import { listQuarantinedTestTemps } from "./test-temp-lock";
 
 export interface IsolatedTestEnvironment {
   root: string;
@@ -556,6 +557,42 @@ export function captureTestOutput(
   };
 }
 
+/**
+ * Remove a sandbox root after its lane exits.
+ *
+ * A contained subtree that was only renamed aside (`.trash-*`) is still inside this root.
+ * If that rename-aside is still locked when the root itself cannot be removed, the lane
+ * fails: swallowing it would hide a hold that outlasted the whole batch. A root that cannot
+ * be removed and has no quarantine left keeps the previous deferral, because a later run's
+ * stale-temp recovery is what retries that case.
+ */
+/** A green lane does not stay green when a quarantined tree is still locked at the end of the run. */
+export function exitCodeAfterTempSweep(
+  exitCode: number,
+  sweep: "removed" | "deferred" | "quarantine-remains",
+): number {
+  return sweep === "quarantine-remains" && exitCode === 0 ? 1 : exitCode;
+}
+
+export function settleIsolatedTestRoot(
+  root: string,
+  remove: (path: string) => void = removeTestTempTree,
+): "removed" | "deferred" | "quarantine-remains" {
+  try {
+    remove(root);
+    return "removed";
+  } catch (error) {
+    const remaining = listQuarantinedTestTemps(root);
+    if (remaining.length === 0) {
+      console.error("[test] deferred cleanup of one test root after Windows kept a handle open; a later run will retry it.");
+      return "deferred";
+    }
+    console.error(`[test] quarantined temp still could not be deleted: ${remaining.join(", ")}`);
+    console.error(error instanceof Error ? error.message : String(error));
+    return "quarantine-remains";
+  }
+}
+
 export async function runTestLane(
   lane: BunTestLane,
   runId: string,
@@ -596,6 +633,7 @@ export async function runTestLane(
   process.once("SIGTERM", onTerminate);
 
   const exited = child.exited;
+  let laneResult: { exitCode: number; output: string } | undefined;
   try {
     let exitCode = await waitWithTimeout(exited, lane.timeoutMs);
     if (exitCode === null) {
@@ -618,19 +656,29 @@ export async function runTestLane(
       console.error("[test] captured output is incomplete; collected output is shown above.");
       if (exitCode === 0) exitCode = 1;
     }
-    if (exitCode === null) return { exitCode: 124, output };
-    if (interrupted === "SIGINT") return { exitCode: 130, output };
-    if (interrupted === "SIGTERM") return { exitCode: 143, output };
+    if (exitCode === null) {
+      laneResult = { exitCode: 124, output };
+      return laneResult;
+    }
+    if (interrupted === "SIGINT") {
+      laneResult = { exitCode: 130, output };
+      return laneResult;
+    }
+    if (interrupted === "SIGTERM") {
+      laneResult = { exitCode: 143, output };
+      return laneResult;
+    }
     const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.warn(`[test] ${lane.label} finished in ${seconds}s (exit ${exitCode}).`);
-    return { exitCode, output };
+    laneResult = { exitCode, output };
+    return laneResult;
   } finally {
     process.off("SIGINT", onInterrupt);
     process.off("SIGTERM", onTerminate);
-    try {
-      isolated.cleanup();
-    } catch {
-      console.error("[test] deferred cleanup of one test root after Windows kept a handle open; a later run will retry it.");
+    if (laneResult) {
+      laneResult.exitCode = exitCodeAfterTempSweep(laneResult.exitCode, settleIsolatedTestRoot(isolated.root));
+    } else {
+      settleIsolatedTestRoot(isolated.root);
     }
   }
 }
