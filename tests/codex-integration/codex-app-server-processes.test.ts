@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
+import { resolveTrustedWindowsPowerShellExe, setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 import {
   createWindowsPowerShellFixture,
   probeWindowsPowerShellFixture,
@@ -956,40 +956,26 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
     () => {
       // Keep a live process whose CommandLine contains a Codex basename token.
       const child = spawn(
-        "powershell.exe",
+        resolveTrustedWindowsPowerShellExe(),
         [
           "-NoProfile", "-NoLogo", "-NonInteractive",
           "-Command",
-          "Start-Sleep -Seconds 45 # codex app-server integration-probe",
+          "Start-Sleep -Seconds 90 # codex app-server integration-probe",
         ],
         { stdio: "ignore", windowsHide: true },
       );
       try {
         expect(child.pid).toBeGreaterThan(1);
-        // Brief settle so Win32_Process can observe the child. A loaded Windows
-        // runner can also exhaust one CIM enumeration deadline, so tolerate one
-        // transient empty result OR one thrown deadline (ETIMEDOUT propagates by
-        // design) while keeping the production timeout unchanged.
-        Bun.sleepSync(250);
-        const enumerate = (): ReturnType<typeof listWindowsSnapshots> | undefined => {
-          try {
-            return listWindowsSnapshots();
-          } catch {
-            return undefined; // transient CIM deadline on a contended runner
-          }
-        };
-        let snapshots = enumerate() ?? [];
-        let match = snapshots.find(snapshot => snapshot.pid === child.pid);
-        if (!match) {
-          Bun.sleepSync(250);
-          snapshots = enumerate() ?? [];
-          match = snapshots.find(snapshot => snapshot.pid === child.pid);
-        }
-        if (!match) {
-          Bun.sleepSync(1_000);
-          snapshots = enumerate() ?? [];
-          match = snapshots.find(snapshot => snapshot.pid === child.pid);
-        }
+        // This verifies native enumeration, not the product's 8s latency bound.
+        // 46 same-user candidates took 28s in real GetOwner calls on a busy host.
+        // Keep the same trusted executable/script/parser with a bounded test runner;
+        // the fixture's explicit finally owns its lifetime, and lookup errors propagate.
+        const snapshots = listWindowsSnapshots(psCommand => execFileSync(
+          resolveTrustedWindowsPowerShellExe(),
+          ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command", psCommand],
+          { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 45_000, windowsHide: true },
+        ));
+        const match = snapshots.find(snapshot => snapshot.pid === child.pid);
         expect(match).toBeDefined();
         expect(match!.owner).toMatch(/\\/);
         expect(match!.commandLine.toLowerCase()).toContain("codex app-server");
@@ -1002,7 +988,7 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
         }
       }
     },
-    { timeout: 35_000 },
+    { timeout: 60_000 },
   );
 });
 

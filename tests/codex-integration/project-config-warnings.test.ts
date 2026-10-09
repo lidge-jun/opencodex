@@ -365,7 +365,15 @@ model_provider = "anthropic"
 [model_providers.anthropic]
 name = "anthropic"
 `);
-    expect(collectProjectCodexConfigWarnings({ cwd: testDir, codexConfigPath })).toEqual([]);
+    const warnings = collectProjectCodexConfigWarnings({ cwd: testDir, codexConfigPath });
+    expect(warnings.filter(warning => warning.path === join(projectDir, ".codex", "config.toml"))).toEqual([]);
+    writeGlobalRoutingConfig(`
+[projects.'${escaped}\\proj']
+trust_level = "trusted"
+`);
+    expect(collectProjectCodexConfigWarnings({ cwd: testDir, codexConfigPath })
+      .filter(warning => warning.path === join(projectDir, ".codex", "config.toml"))
+      .map(warning => warning.code)).toEqual(["model_providers_table"]);
   });
 
   test("uncached collection reflects project config changes", () => {
