@@ -94,6 +94,11 @@ export function isMainQuotaDispatchWsClaimed(dispatch: MainQuotaDispatch): boole
   return wsObservedMainDispatches.has(dispatch);
 }
 
+/** Give a replacement physical attempt its own quota ownership without recapturing credential fences. */
+export function renewMainQuotaDispatchForAttempt(dispatch: MainQuotaDispatch): MainQuotaDispatch {
+  return { ...dispatch };
+}
+
 export function captureMainQuotaDispatch(
   accessToken: string, accountId: string | undefined, configGeneration: number,
 ): MainQuotaDispatch | undefined {

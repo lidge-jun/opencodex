@@ -12,6 +12,7 @@ import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { transientSendCapFor } from "./request-send-budget";
+import { renewMainQuotaDispatchForAttempt } from "../../codex/main-account-cache";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
@@ -802,6 +803,9 @@ export async function preparePassthroughExchange(
     const sendAmbiguousReplacement = (
       signal: AbortSignal = upstream.signal,
     ): Promise<Response> => {
+      if (admissionState.authCtx.kind === "main" && admissionState.authCtx.mainQuotaDispatch) {
+        admissionState.authCtx.mainQuotaDispatch = renewMainQuotaDispatchForAttempt(admissionState.authCtx.mainQuotaDispatch);
+      }
       const report = transientSendReporter();
       let started = false;
       const run = () => fetchWithHeaderTimeout(

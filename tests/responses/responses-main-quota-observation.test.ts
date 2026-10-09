@@ -8,7 +8,7 @@ import {
   type CodexAuthContext,
 } from "../../src/codex/auth-context";
 import { beginNativeMainReauth, forceRefreshMainAccountToken } from "../../src/codex/main-account";
-import { codexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
+import { advanceCodexCredentialMutationEpoch, codexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
 import { resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -441,6 +441,96 @@ describe("credential-bound plain-main Responses quota", () => {
         session.dispose();
         globalThis.WebSocket = originalSocket;
       }
+    });
+  }
+
+  test("full handler HTTP replacement after WS quota publishes under a new physical attempt", async () => {
+    observe();
+    const originalSocket = globalThis.WebSocket;
+    const sockets: FailedAttemptSocket[] = [];
+    class FailedAttemptSocket extends EventTarget {
+      readyState = 0;
+      sent: string[] = [];
+      constructor() {
+        super();
+        sockets.push(this);
+        queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event("open")); });
+      }
+      send(text: string): void {
+        this.sent.push(text);
+        queueMicrotask(() => {
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+            type: "codex.rate_limits", rate_limits: { primary: { used_percent: 17, window_minutes: 10080 } },
+          }) }));
+          expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+          expect(getMainPolicyQuota()?.weeklyPercent).toBe(17);
+          this.close();
+        });
+      }
+      close(): void {
+        if (this.readyState === 3) return;
+        this.readyState = 3;
+        this.dispatchEvent(new Event("close"));
+      }
+    }
+    globalThis.WebSocket = FailedAttemptSocket as unknown as typeof WebSocket;
+    let httpCalls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      httpCalls++;
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: "gpt-5.5", store: false });
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+      const headers = quotaHeaders("99");
+      headers.set("content-type", "text/event-stream");
+      return new Response(`event: response.completed\ndata: ${JSON.stringify({
+        type: "response.completed", response: { id: "fixture-http-replacement", status: "completed", output: [] },
+      })}\n\n`, { status: 200, headers });
+    }) as typeof fetch;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: new Headers({ ...Object.fromEntries(caller()), "content-type": "application/json" }),
+        body: JSON.stringify({ model: "gpt-5.5", stream: true, store: false, input: "fixture self-contained turn" }),
+      }), { ...config, defaultProvider: "openai",
+        providers: { openai: { ...provider, codexAccountMode: "direct", retryOnReset: {} } } },
+      { model: "", provider: "" }, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("fixture-http-replacement");
+      expect(sockets).toHaveLength(1);
+      expect(sockets[0]!.sent).toHaveLength(1);
+      expect(sockets[0]!.readyState).toBe(3);
+      expect(httpCalls).toBe(1);
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+      expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
+    } finally {
+      for (const socket of sockets) socket.close();
+      globalThis.WebSocket = originalSocket;
+    }
+  });
+
+  for (const mutation of ["credential observation", "credential publication epoch"] as const) {
+    test(`attempt renewal preserves retired fences after ${mutation}`, async () => {
+      observe();
+      const ctx = materialized();
+      const original = ctx.mainQuotaDispatch!;
+      const observer = codexWsQuotaObserver(ctx, provider, "gpt-5.5");
+      expect(observer).toBeDefined();
+      observer!(quotaHeaders("17"));
+      expect(mainCache.isMainQuotaDispatchWsClaimed(original)).toBe(true);
+      if (mutation === "credential observation") mainCache.observeMainQuotaCredential("fixture-next-credential", ACCOUNT);
+      else advanceCodexCredentialMutationEpoch();
+      const renewed = mainCache.renewMainQuotaDispatchForAttempt(original);
+      expect(renewed).not.toBe(original);
+      expect(renewed).toEqual(original);
+      expect(renewed.writer).toBe(original.writer);
+      expect(mainCache.isMainQuotaDispatchWsClaimed(renewed)).toBe(false);
+      expect(mainCache.isMainQuotaDispatchWsClaimed(original)).toBe(true);
+      expect(mainCache.isMainQuotaDispatchLive(renewed)).toBe(false);
+      ctx.mainQuotaDispatch = renewed;
+      observer!(quotaHeaders("99"));
+      expect(mainCache.isMainQuotaDispatchWsClaimed(renewed)).toBe(false);
+      await deliver(ctx, quotaResponse(quotaHeaders("99")));
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+      expect(getMainPolicyQuota()?.weeklyPercent).toBe(17);
     });
   }
 
