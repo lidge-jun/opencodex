@@ -57,6 +57,8 @@ export interface ClaudeCodeState {
   maxContextTokens: number | null;
   autoContext: boolean;
   autoCompactWindow: number | null;
+  /** "1m" is the default; "200k" opts Claude surfaces out of automatic 1M (devlog 261009 030). */
+  contextAccounting: "1m" | "200k";
   injectAgents: boolean;
   smallFastModel: string;
   tierModels?: { haiku?: string };
@@ -96,4 +98,12 @@ export function formatCompactWindow(value: number, locale = "en"): string {
     return `${Math.round(value / 1_000)}k`;
   }
   return `${Math.round(value / 1_000)}k`;
+}
+
+/**
+ * The stored policy as the page edits it. A state cached by an older proxy, or read from one,
+ * has no field and is the "1m" default; anything but "200k" reads the same way.
+ */
+export function normalizeContextAccounting(value: unknown): "1m" | "200k" {
+  return value === "200k" ? "200k" : "1m";
 }

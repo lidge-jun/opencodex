@@ -42,3 +42,8 @@ test("model env slots and auto-compact window are appended before the claude lau
   expect(lines).toContain("export CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000");
   expect(lines.at(-1)).toBe("claude");
 });
+
+test("the 200k opt-in pastes no compact window, matching what the runtime injects", () => {
+  expect(buildManualEnv(state())).toContain("export CLAUDE_CODE_AUTO_COMPACT_WINDOW=829800");
+  expect(buildManualEnv(state({ contextAccounting: "200k" }))).not.toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+});

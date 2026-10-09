@@ -32,6 +32,8 @@ export interface ClaudeManualEnvState {
   maxContextTokens: number | null;
   autoContext: boolean;
   autoCompactWindow: number | null;
+  /** Absent on callers built before the field; reads as the "1m" default. */
+  contextAccounting?: "1m" | "200k";
   effectiveModelEnv: Record<string, string>;
   port: number;
 }
@@ -49,7 +51,8 @@ export function buildManualEnv(state: ClaudeManualEnvState): string {
   // "auto" defers to the backend's resolution; an older proxy that does not send one
   // degrades to the historical subscription default rather than guessing proxy.
   const marker = state.authMode === "auto" ? (state.markerMode ?? "subscription") : state.authMode;
-  const autoCompactActive = state.autoContext && state.maxContextTokens === null;
+  // The 200k opt-in injects no compact window, so the pasted block must not either.
+  const autoCompactActive = state.contextAccounting !== "200k" && state.autoContext && state.maxContextTokens === null;
   const modelEnvExports = MODEL_ENV_NAMES
     .filter(name => state.effectiveModelEnv[name])
     .map(name => `export ${name}=${state.effectiveModelEnv[name]}`);

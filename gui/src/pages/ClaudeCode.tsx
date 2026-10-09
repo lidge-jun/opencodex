@@ -16,7 +16,7 @@ import {
   ClaudeCodeQuickstartSection,
   ClaudeCodeSettingsCard,
 } from "./claude-code-sections";
-import { AUTO_COMPACT_WINDOW_DEFAULT, formatCompactWindow, newClientId, type ClaudeCodeState, type MapRow } from "./claude-code-types";
+import { AUTO_COMPACT_WINDOW_DEFAULT, formatCompactWindow, newClientId, normalizeContextAccounting, type ClaudeCodeState, type MapRow } from "./claude-code-types";
 import { SmallFastModelSetting } from "./claude-code-settings";
 import { interceptReasonKey, normalizeSharedProxy, selectFirstPartyNotice, type FirstPartyNotice } from "./claude-code-first-party";
 import {
@@ -43,6 +43,9 @@ function normalizeFirstPartyState(state: ClaudeCodeState): ClaudeCodeState {
     interceptRunning: state.interceptRunning === true,
     interceptEligible: state.interceptEligible === undefined ? true : state.interceptEligible === true,
     sharedProxy: normalizeSharedProxy(state.sharedProxy),
+    // Shared by the session cache and the GET read, so a state cached by an older proxy (no
+    // field) and an older server both read as the default.
+    contextAccounting: normalizeContextAccounting(state.contextAccounting),
   };
 }
 
