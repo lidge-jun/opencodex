@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertSelectedRuntimeWritable, RuntimePreflightError, type RuntimePreflightReason } from "../../src/lib/bun-runtime-preflight";
@@ -10,7 +10,7 @@ import { repairService } from "../../src/service/repair";
 import { cliEntry, writeServiceInstallState } from "../../src/service/state";
 import { buildWindowsServiceScript } from "../../src/service/windows-taskxml";
 import { defaultWinswEntry } from "../../src/lib/winsw";
-import { recordOwnedConfigPath, CONFIG_OWNER_FILE } from "../../src/lib/config-ownership";
+import { recordOwnedConfigPath, CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST } from "../../src/lib/config-ownership";
 import type { ServiceDiagnostic } from "../../src/service/diagnostics";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -35,7 +35,7 @@ const diagnostic: ServiceDiagnostic = {
 
 describe("service selected-runtime admission", () => {
   for (const reason of ["spawn", "timeout", "create", "remove", "protocol"] as RuntimePreflightReason[]) {
-    test(`${reason} refuses every install/repair entry before disruption`, async () => {
+    test(`${reason} refuses before disruption and rolls back fresh registration after ownership`, async () => {
       const effects: string[] = [];
       const deny = () => { throw new RuntimePreflightError(reason); };
       const deps = { platform: "win32" as const, selectRuntime: () => runtime, configDir: () => temporary(), assertRuntimeWritable: deny };
@@ -44,13 +44,24 @@ describe("service selected-runtime admission", () => {
         managerOps: () => ({ status: () => "present", stop: () => { effects.push("stop"); } }),
         stopTrackedProxy: async () => { effects.push("proxy"); },
       })).rejects.toMatchObject({ code: "OCX_RUNTIME_PREFLIGHT_FAILED", reason });
+      const home = join(temporary(), "absent-home");
+      const freshOrder: string[] = [];
       await expect(installFreshWindowsSchedulerSafely({
-        ...deps, stageRegistrationXml: () => { effects.push("stage"); return "stage"; },
-        register: async () => { effects.push("register"); }, prepare: async () => { effects.push("prepare"); },
-        recordOwnership: () => { effects.push("ownership"); return true; }, removeNativeService: () => { effects.push("remove"); },
-        publishAssets: () => { effects.push("assets"); }, writeState: () => { effects.push("state"); },
-        removeStagedXml: () => { effects.push("cleanup"); },
-      })).rejects.toMatchObject({ code: "OCX_RUNTIME_PREFLIGHT_FAILED", reason });
+        ...deps, configDir: () => home,
+        assertRuntimeWritable: (_selected, _root, options) => {
+          expect(options?.rootWasAbsent).toBe(false); freshOrder.push("preflight"); deny();
+        },
+        stageRegistrationXml: () => { expect(existsSync(home)).toBe(false); freshOrder.push("stage"); return "stage"; },
+        register: async () => { freshOrder.push("register"); }, removeStagedXml: () => {},
+        recordOwnership: () => { freshOrder.push("ownership"); return recordOwnedConfigPath(home, join(home, "service-state.json")); },
+        prepare: async () => { freshOrder.push("prepare"); effects.push("stop"); },
+        removeNativeService: () => { freshOrder.push("remove"); }, publishAssets: () => { freshOrder.push("assets"); },
+        verifyBeforeRun: () => { freshOrder.push("verify"); }, runTask: () => { freshOrder.push("run"); },
+        writeState: () => { freshOrder.push("state"); },
+        rollbackTask: async () => { freshOrder.push("rollback"); return null; },
+      })).rejects.toThrow(`${new RuntimePreflightError(reason).message}\nThe new Task Scheduler registration was rolled back.`);
+      expect(freshOrder).toEqual(["stage", "register", "ownership", "preflight", "rollback"]);
+      expect(existsSync(join(home, CONFIG_OWNER_FILE))).toBe(true);
       expect(() => installWindows(undefined, deps)).toThrow(RuntimePreflightError);
       await expect(installWindowsNative(undefined, deps)).rejects.toThrow(RuntimePreflightError);
       for (const backend of ["scheduler", "native"] as const) {
@@ -162,32 +173,60 @@ describe("service selected-runtime admission", () => {
     });
   }
 
-  test("fresh absent root is probed before stage and remains empty for ownership claiming", async () => {
+  test("fresh absent root clears stale ownership refusal before preflight and preparation", async () => {
     const home = join(temporary(), "absent-home");
+    mkdirSync(home); writeFileSync(join(home, "legacy.txt"), "keep");
+    expect(recordOwnedConfigPath(home, join(home, "service-state.json"))).toBe(false);
+    removeTreeWithRetry(home);
     const order: string[] = [];
+    const selected = { ...runtime };
+    let selections = 0;
     await installFreshWindowsSchedulerSafely({
-      platform: "win32", configDir: () => home, selectRuntime: () => runtime,
-      assertRuntimeWritable: (selected, root, options) => {
-        expect(options?.rootWasAbsent).toBe(true);
-        assertSelectedRuntimeWritable(selected, root, options); order.push("preflight");
+      platform: "win32", configDir: () => home, selectRuntime: () => { selections++; return selected; },
+      assertRuntimeWritable: (admitted, root, options) => {
+        expect(options?.rootWasAbsent).toBe(false);
+        expect(existsSync(join(home, CONFIG_OWNER_FILE))).toBe(true);
+        expect(admitted).toEqual(runtime); expect(Object.isFrozen(admitted)).toBe(true);
+        assertSelectedRuntimeWritable(admitted, root, options); order.push("preflight");
       },
-      stageRegistrationXml: () => { expect(readdirSync(home)).toEqual([]); order.push("stage"); return "stage"; },
+      stageRegistrationXml: () => {
+        expect(existsSync(home)).toBe(false); selected.path = "unprobed.exe"; order.push("stage"); return "stage";
+      },
       register: async () => { order.push("register"); }, removeStagedXml: () => {},
       recordOwnership: () => { order.push("ownership"); return recordOwnedConfigPath(home, join(home, "service-state.json")); },
-      prepare: async () => {}, removeNativeService: () => {}, publishAssets: () => {}, verifyBeforeRun: () => {}, runTask: () => {}, writeState: () => {},
+      prepare: async () => { order.push("prepare"); }, removeNativeService: () => { order.push("remove"); },
+      publishAssets: admitted => { expect(admitted).toEqual(runtime); order.push("assets"); },
+      verifyBeforeRun: () => { order.push("verify"); }, runTask: () => { order.push("run"); }, writeState: () => { order.push("state"); },
+      rollbackTask: async () => { order.push("rollback"); return null; },
     });
-    expect(order).toEqual(["preflight", "stage", "register", "ownership"]);
+    expect(selections).toBe(1);
+    expect(order).toEqual(["stage", "register", "ownership", "preflight", "prepare", "remove", "assets", "verify", "run", "state"]);
     expect(existsSync(join(home, CONFIG_OWNER_FILE))).toBe(true);
   });
 
-  test("fresh denied absent root stays empty and no staging or ownership write occurs", async () => {
+  test("fresh denied absent root retains ownership and rolls back registration before preparation", async () => {
     const home = join(temporary(), "absent-home");
+    const order: string[] = [];
+    let registeredNonce = "", rolledBackNonce = "";
     await expect(installFreshWindowsSchedulerSafely({
       platform: "win32", configDir: () => home, selectRuntime: () => ({ ...runtime, path: join(home, "missing.exe") }),
-      stageRegistrationXml: () => { throw new Error("must not stage"); },
-    })).rejects.toMatchObject({ code: "OCX_RUNTIME_PREFLIGHT_FAILED", reason: "spawn" });
-    expect(existsSync(home)).toBe(true);
-    expect(readdirSync(home)).toEqual([]);
+      assertRuntimeWritable: (selected, root, options) => {
+        order.push("preflight"); expect(options?.rootWasAbsent).toBe(false);
+        assertSelectedRuntimeWritable(selected, root, options);
+      },
+      stageRegistrationXml: () => { expect(existsSync(home)).toBe(false); order.push("stage"); return "stage"; },
+      register: async (_path, nonce) => { registeredNonce = nonce; order.push("register"); }, removeStagedXml: () => {},
+      recordOwnership: () => { order.push("ownership"); return recordOwnedConfigPath(home, join(home, "service-state.json")); },
+      prepare: async () => { order.push("prepare"); order.push("stop"); }, removeNativeService: () => { order.push("remove"); },
+      publishAssets: () => { order.push("assets"); }, verifyBeforeRun: () => { order.push("verify"); },
+      runTask: () => { order.push("run"); }, writeState: () => { order.push("state"); },
+      rollbackTask: async nonce => { rolledBackNonce = nonce; order.push("rollback"); return null; },
+    })).rejects.toThrow(`${new RuntimePreflightError("spawn").message}\nThe new Task Scheduler registration was rolled back.`);
+    expect(order).toEqual(["stage", "register", "ownership", "preflight", "rollback"]);
+    expect(registeredNonce).not.toBe(""); expect(rolledBackNonce).toBe(registeredNonce);
+    expect(existsSync(join(home, CONFIG_OWNER_FILE))).toBe(true);
+    expect(JSON.parse(readFileSync(join(home, CONFIG_UNINSTALL_MANIFEST), "utf8")).paths).toContain("service-state.json");
+    expect(existsSync(join(home, "service-state.json"))).toBe(false);
   });
 
   test("selection changes after admission cannot change scheduler rendering, WinSW entry or install state", async () => {

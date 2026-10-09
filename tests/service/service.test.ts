@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, posix, win32 } from "node:path";
@@ -2147,8 +2147,7 @@ describe("service lifecycle cleanup ordering", () => {
           stagedPath = path;
           expect(existsSync(path)).toBe(true);
           expect(path.startsWith(tmpdir())).toBe(true);
-          // The Windows runtime preflight may create the absent root first; it must stay empty and claimable.
-          expect(existsSync(home) ? readdirSync(home) : []).toEqual([]);
+          expect(existsSync(home)).toBe(false);
         },
         prepare: async () => {},
         removeNativeService: () => {},

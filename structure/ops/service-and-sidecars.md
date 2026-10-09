@@ -105,11 +105,15 @@ matching nonce acknowledgment admits it. Failure refuses with `OCX_RUNTIME_PREFL
 and `spawn`, `timeout`, `create`, `remove`, or `protocol`; it never discovers another runtime.
 The frozen selection feeds scheduler rendering, the WinSW entry and the install-state writer;
 `installServiceSafely` admits once before cleanup and uses internal commit functions. Direct public installers retain their own admission gate.
+The fresh scheduler path stages and registers its definition, removes staging and claims config
+ownership before admission, then calls `prepare()`. It captures root absence and freezes the runtime
+at entry, but probes with `rootWasAbsent: false` after ownership initialization creates the root.
+A refused probe rolls back the new registration before service-manager cleanup or asset/state publication.
 Healthy or disabled shims do not probe; refused automatic restore defers with guidance and startup continues.
 Non-Windows admission performs no spawn or filesystem work. Selection remains pre-dotenv and `cliEntry` remains I/O-free.
 
-An absent root is captured before staging and created with an exclusive non-recursive mode-0700
-mkdir under an existing parent. A successful probe leaves it empty for config ownership claiming.
+When admission receives an absent root, it creates it with an exclusive non-recursive mode-0700
+mkdir under an existing parent. A successful probe leaves it empty for later config ownership claiming.
 The preflight never deletes the config root, including on refusal or concurrent creation. A created
 empty root stays claimable by a later install; concurrent contents and replacements are preserved.
 Existing roots must be real directories, not files or symlinks/junctions. Probe cleanup is non-recursive.
