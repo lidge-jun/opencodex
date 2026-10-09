@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, re
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { bundledBunPath } from "../../src/lib/bun-runtime";
 import { findDesktopCli, findPathBun, type PathBunIo } from "../../src/lib/bun-path-runtime.mjs";
 import { REAL_BUN_MIN_BYTES } from "../../src/lib/bun-binary-validator.mjs";
@@ -697,6 +698,60 @@ describe.skipIf(!nodeAvailable)("PATH fallback negative activation", () => {
       const started = performance.now();
       expect(findPathBun({ env: { PATH: root }, pinnedVersion: "1.4.2", deadlineMs: 50 })).toBeNull();
       expect(performance.now() - started).toBeLessThan(1500);
+    } finally { removeTree(root); }
+  });
+});
+
+describe.skipIf(!nodeAvailable)("Node-safe Desktop supervision update guard", () => {
+  test("the real Node launcher loads update --help without package-manager probes", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-node-update-help-"));
+    try {
+      const result = spawnSync("node", [BIN_OCX, "update", "--help"], {
+        encoding: "utf8", timeout: 10_000, windowsHide: true,
+        env: isolatedLauncherEnv(root, ""),
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("update");
+      expect(result.stderr).toBe("");
+    } finally { removeTree(root); }
+  });
+
+  test("node -e imports the latch and inspector with injected darwin/Linux identities", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-node-supervision-"));
+    try {
+      const macos = join(root, "OpenCodex.app", "Contents", "MacOS");
+      mkdirSync(macos, { recursive: true });
+      const app = join(macos, "opencodex-desktop"), proxy = join(macos, "ocx");
+      for (const file of [app, proxy]) { writeFileSync(file, "fixture"); chmodSync(file, 0o755); }
+      const moduleUrl = pathToFileURL(repoPath("src/service/desktop-supervision.mjs")).href;
+      const script = `
+        const { inspectDesktopSupervision, createSupervisionLatch } = await import(${JSON.stringify(moduleUrl)});
+        const app = ${JSON.stringify(app)}, proxy = ${JSON.stringify(proxy)};
+        const states = ["linux", "darwin"].map(platform => inspectDesktopSupervision({
+          platform, readPid: () => 321, readRuntimePortPid: () => 321,
+          proc: { exe: pid => pid === 321 ? proxy : app, parent: pid => pid === 321 ? 123 : 1 },
+          run: (_command, args) => args[1] === "321" ? "123 " + proxy : "1 " + app,
+        }));
+        const latch = createSupervisionLatch();
+        const sequence = [states[0], { kind: "unknown", reason: "probe-failed", desktopSeen: false },
+          { kind: "unsupported" }, { kind: "none" }].map(evidence => latch.observe(evidence));
+        const uncertain = createSupervisionLatch();
+        const unknownSequence = [{ kind: "unknown", reason: "probe-failed", desktopSeen: true },
+          { kind: "unknown", reason: "probe-failed", desktopSeen: false }, { kind: "none" }]
+          .map(evidence => uncertain.observe(evidence));
+        const mismatch = inspectDesktopSupervision({ platform: "linux", targetPid: 999,
+          readPid: () => 321, readRuntimePortPid: () => 321 });
+        const none = inspectDesktopSupervision({ platform: "linux", readPid: () => null, readRuntimePortPid: () => null });
+        process.stdout.write(JSON.stringify({ kinds: states.map(state => state.kind), sequence, unknownSequence, mismatch, none }));
+      `;
+      const result = spawnSync("node", ["--input-type=module", "-e", script], {
+        encoding: "utf8", timeout: 10_000, windowsHide: true, env: isolatedLauncherEnv(root, ""),
+      });
+      expect(result.status).toBe(0); expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toEqual({
+        kinds: ["desktop", "desktop"], sequence: [true, true, true, false], unknownSequence: [true, true, false],
+        mismatch: { kind: "unknown", reason: "pid-mismatch", desktopSeen: false }, none: { kind: "none" },
+      });
     } finally { removeTree(root); }
   });
 });

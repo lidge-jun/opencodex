@@ -7,6 +7,11 @@
  * situation separately is how a fix ships on one side only.
  */
 
+function desktopSupervisionBlocked(supervision) {
+  return supervision === true || supervision?.kind === "desktop"
+    || (supervision?.kind === "unknown" && supervision.desktopSeen);
+}
+
 /**
  * Decide how an update treats a runtime it may not own.
  *
@@ -21,11 +26,11 @@
  * The service registration itself is untouched in every case. It is kept by decision, not by
  * accident, so a user who later runs `ocx service install` gets their npm service back.
  *
- * THE COST OF A STALE MARKER. This reads the recorded claim, not liveness. An app deleted
- * without releasing ownership leaves a marker behind, and an update then declines to stop or
- * refresh a runtime no app is managing any more. That is the orphan-recovery cost the
- * two-record ownership design accepted; `ocx service install` clears the marker and restores
- * the ordinary path.
+ * Durable ownership and live supervision are separate. Desktop supervision denies package
+ * replacement, stop and restoration even without a claim. A latch retains that veto through
+ * inconclusive probes until a positive none. Plain unknown supervision alone keeps existing
+ * behavior; unknown durable ownership still vetoes. Explicit service install recovers a stale
+ * durable claim after Desktop has quit.
  *
  * The three returned flags are separate authorities, not commands. In particular, leaving
  * a runtime running is not permission to replace the package it may be executing from.
@@ -34,10 +39,19 @@
  * carries installation identity, it therefore blocks package replacement as well as stop and
  * restoration; the notice tells a stale-marker user how to take ownership back explicitly.
  *
- * @param {{ ownership: { owner: string, installId: string, consentGeneration: number } | null, ownershipUnknown?: boolean, serviceInstalled: boolean }} input
+ * @param {{ ownership: { owner: string, installId: string, consentGeneration: number } | null, ownershipUnknown?: boolean, serviceInstalled: boolean, supervision?: boolean | ReturnType<typeof import('../service/desktop-supervision.mjs').inspectDesktopSupervision> }} input
  * @returns {{ mayReplacePackage: boolean, mayStopRuntime: boolean, mayRestoreService: boolean, notice: string | null }}
  */
-export function planUpdateRuntimeHandling({ ownership, ownershipUnknown = false, serviceInstalled }) {
+export function planUpdateRuntimeHandling({ ownership, ownershipUnknown = false, serviceInstalled, supervision }) {
+  if (desktopSupervisionBlocked(supervision)) {
+    return {
+      mayReplacePackage: false,
+      mayStopRuntime: false,
+      mayRestoreService: false,
+      notice: "OpenCodex Desktop runs this proxy from its own bundle; use the app's updater (tray → Check for Updates). "
+        + "This npm/Bun install was left unchanged; quit OpenCodex first to update it.",
+    };
+  }
   // Unreadable, malformed or contradictory is not "nobody owns it". Reading it that way is
   // how a permissions error reactivates the npm launcher over a consented takeover.
   if (ownershipUnknown) {
@@ -77,6 +91,7 @@ export function planUpdateRuntimeHandling({ ownership, ownershipUnknown = false,
 /** Decide recovery after this updater already stopped the prior CLI-owned runtime. */
 export function planStoppedRuntimeRecovery({
   stopAttempted,
+  supervision,
   ownership,
   ownershipUnknown = false,
   sameOwner,
@@ -86,6 +101,7 @@ export function planStoppedRuntimeRecovery({
   hadRuntimeState,
 }) {
   if (!stopAttempted) return { action: "none", reason: "not-stopped" };
+  if (desktopSupervisionBlocked(supervision)) return { action: "none", reason: "desktop-supervised" };
   if (ownershipUnknown) return { action: "manual", reason: "ownership-unknown" };
   if (!sameOwner || (ownership && ownership.owner !== "cli")) {
     return { action: "none", reason: "ownership-transferred" };

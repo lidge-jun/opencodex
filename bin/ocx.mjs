@@ -9,6 +9,7 @@
  * src/cli/index.ts — only the published npm/pnpm `bin` routes through here.)
  */
 import { spawn, spawnSync } from "node:child_process";
+import { createSupervisionLatch, inspectDesktopSupervision } from "../src/service/desktop-supervision.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
@@ -333,11 +334,13 @@ function runPackageManagerSelfUpdate(manager) {
     : JSON.stringify(observation.ownership
       ? ["owned", observation.ownership.owner, observation.ownership.installId, observation.ownership.consentGeneration]
       : ["none"]);
+  const supervisionLatch = createSupervisionLatch();
+  const observeSupervision = () => supervisionLatch.observe(inspectDesktopSupervision());
   const initialOwnership = readOwnership();
-  let runtimePlan = planUpdateRuntimeHandling({ ...initialOwnership, serviceInstalled: serviceWasInstalled });
+  let runtimePlan = planUpdateRuntimeHandling({ ...initialOwnership, serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
   if (runtimePlan.notice) console.log(runtimePlan.notice);
   if (!runtimePlan.mayReplacePackage) {
-    console.error("opencodex: update stopped before tray handoff, runtime stop, or package replacement because runtime ownership is unknown.");
+    console.error("opencodex: update stopped before tray handoff, runtime stop, or package replacement because runtime authority does not permit it.");
     process.exit(1);
   }
   const trayBeforeUpdate = planWindowsTrayUpdate(
@@ -466,6 +469,14 @@ function runPackageManagerSelfUpdate(manager) {
     : unprivilegedOwnershipMutationEnvironment(process.env);
 
   function startProxyDirectly() {
+    const supervision = observeSupervision();
+    const plan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: false, supervision });
+    if (!plan.mayStopRuntime) {
+      console.warn(supervision
+        ? "OpenCodex Desktop supervises the proxy; no CLI runtime was restored."
+        : plan.notice);
+      return false;
+    }
     if (!postUpdateLauncherUsable || !existsSync(postUpdateLauncher)) {
       console.error("opencodex: cannot restart the proxy because the launcher is missing; reinstall opencodex manually.");
       return false;
@@ -498,6 +509,15 @@ function runPackageManagerSelfUpdate(manager) {
   }
 
   function refreshBackgroundServiceOrStartDirect() {
+    const mayRefresh = () => {
+      const supervision = observeSupervision();
+      const plan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: true, supervision });
+      if (!plan.mayRestoreService) console.warn(supervision
+        ? "OpenCodex Desktop supervises the proxy; CLI recovery was skipped. Use the app's updater (tray → Check for Updates)."
+        : plan.notice);
+      return plan.mayRestoreService;
+    };
+    if (!mayRefresh()) return;
     const prevBake = process.env.OCX_BAKE_PORT;
     process.env.OCX_BAKE_PORT = String(bakePort);
     try {
@@ -513,6 +533,7 @@ function runPackageManagerSelfUpdate(manager) {
       // failure would resurrect the elevation prompt this change exists to avoid, and
       // could re-register a service the user just uninstalled.
       if (svc.status !== 0 && readServiceInstalledFromStatus(postUpdateLauncher) === false) {
+        if (!mayRefresh()) return;
         console.log("No registered service found — installing it instead.");
         svc = spawnSync(process.execPath, serviceInstallArgs(), {
           stdio: "inherit", windowsHide: true, env: mutationChildEnvironment(),
@@ -545,9 +566,12 @@ function runPackageManagerSelfUpdate(manager) {
         // Re-read rather than reuse the plan from before the package install: the app can
         // claim the runtime during an update that takes minutes, and the refusal that repair
         // just returned is indistinguishable from any other failure at this layer.
-        const nowOwned = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: true });
+        const supervision = observeSupervision();
+        const nowOwned = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: true, supervision });
         if (!nowOwned.mayStopRuntime) {
-          console.warn(nowOwned.notice ?? "opencodex: the background runtime is owned elsewhere; not starting a second proxy.");
+          console.warn(supervision
+            ? "OpenCodex Desktop supervises the proxy; CLI recovery was skipped. Use the app's updater (tray → Check for Updates)."
+            : nowOwned.notice ?? "opencodex: the background runtime is owned elsewhere; not starting a second proxy.");
           return;
         }
         // Repair normally avoids elevation for a healthy registration, but a stale Windows
@@ -584,7 +608,7 @@ function runPackageManagerSelfUpdate(manager) {
     // Stop authority is decided under the same lease the child joins. A takeover between the
     // earlier preflight and this boundary therefore blocks stop before it is sent.
     const lockedOwnership = readOwnership();
-    const lockedPlan = planUpdateRuntimeHandling({ ...lockedOwnership, serviceInstalled: serviceWasInstalled });
+    const lockedPlan = planUpdateRuntimeHandling({ ...lockedOwnership, serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
     if (lockedOwnership.subjectToken !== initialOwnership.subjectToken || !lockedPlan.mayReplacePackage) {
       releaseUpdateLease();
       console.error(lockedPlan.notice
@@ -626,6 +650,7 @@ function runPackageManagerSelfUpdate(manager) {
           liveness,
           plan: planStoppedRuntimeRecovery({
             stopAttempted,
+            supervision: observeSupervision(),
             ...recoveryOwnership,
             sameOwner: ownershipIdentity(recoveryOwnership) === stoppedOwnershipIdentity,
             liveness,
@@ -643,7 +668,9 @@ function runPackageManagerSelfUpdate(manager) {
         releaseUpdateLease();
         ({ liveness: recoveryLiveness, plan: recovery } = planRecovery());
       }
-      if (recovery.reason === "ownership-unknown") {
+      if (recovery.reason === "desktop-supervised") {
+        console.log("OpenCodex Desktop supervises the proxy; no CLI runtime was restored.");
+      } else if (recovery.reason === "ownership-unknown") {
         console.error(`opencodex: ${reason}; runtime ownership is unknown, so automatic recovery was refused. Run 'ocx status --json' and repair the service-state record before retrying.`);
       } else if (recovery.reason === "ownership-transferred") {
         console.log("opencodex: runtime ownership moved to another installation; the stopped CLI runtime was not revived.");
@@ -676,6 +703,14 @@ function runPackageManagerSelfUpdate(manager) {
       process.exit(1);
     }
     if (stopNeeded) {
+      const preStopPlan = planUpdateRuntimeHandling({
+        ...readOwnership(), serviceInstalled: serviceWasInstalled, supervision: observeSupervision(),
+      });
+      if (!preStopPlan.mayStopRuntime) {
+        console.error(preStopPlan.notice);
+        releaseUpdateLease();
+        process.exit(1);
+      }
       stopAttempted = true;
       console.log("⏹  Stopping the running proxy before updating...");
       const stopRes = spawnSync(process.execPath, [launcher, "stop"], {
@@ -732,7 +767,7 @@ function runPackageManagerSelfUpdate(manager) {
     }
 
     const replacementOwnership = readOwnership();
-    const replacementPlan = planUpdateRuntimeHandling({ ...replacementOwnership, serviceInstalled: serviceWasInstalled });
+    const replacementPlan = planUpdateRuntimeHandling({ ...replacementOwnership, serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
     const replacementLiveness = currentPackageRuntimeLiveness();
     if (replacementOwnership.subjectToken !== initialOwnership.subjectToken
       || !replacementPlan.mayReplacePackage
@@ -839,9 +874,10 @@ function runPackageManagerSelfUpdate(manager) {
     // path and keeps token restoration coupled to the lease itself.
     releaseUpdateLease();
   }
-  const postInstallPlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
+  const postInstallPlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
+    if (!postInstallPlan.mayStopRuntime) console.warn("Runtime authority does not permit CLI recovery; no service was refreshed or proxy started.");
     repairCodexShimIfNeeded(postUpdateLauncher);
     if (trayBeforeUpdate.refreshAfterReplacement) {
       const tray = spawnSync(process.execPath, [postUpdateLauncher, ...trayBeforeUpdate.installArgs], {

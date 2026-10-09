@@ -197,3 +197,23 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     expect(validatorSource).toMatch(/export function isRealBunBinary\(path\) \{[\s\S]*?try \{[\s\S]*?statSync\(path\)[\s\S]*?catch \{[\s\S]*?return false;/);
   });
 });
+
+
+test("Desktop supervision is freshly checked before Node stop and both package-manager mutations", () => {
+  expect(source).toContain('from "../src/service/desktop-supervision.mjs"');
+  expect(source.match(/createSupervisionLatch\(\)/g)).toHaveLength(1);
+  const initial = source.indexOf("supervision: observeSupervision()", source.indexOf("const initialOwnership"));
+  const gate = source.indexOf("const preStopPlan = planUpdateRuntimeHandling({");
+  const stop = source.indexOf('const stopRes = spawnSync(process.execPath, [launcher, "stop"]');
+  const npm = source.indexOf("const tx = transactionalNpmUpdate({");
+  const pnpm = source.indexOf("const update = runPnpmGlobalUpdate({");
+  expect(initial).toBeGreaterThan(0); expect(gate).toBeGreaterThan(initial);
+  expect(stop).toBeGreaterThan(gate); expect(npm).toBeGreaterThan(stop); expect(pnpm).toBeGreaterThan(stop);
+  const gateBody = source.slice(gate, stop);
+  expect(gateBody).toContain("supervision: observeSupervision()");
+  expect(gateBody).toContain("if (!preStopPlan.mayStopRuntime)");
+  expect(gateBody).toContain("process.exit(1)");
+  // Node has no identity-checked PID: the inspector must correlate its own records.
+  expect(source).toContain("supervisionLatch.observe(inspectDesktopSupervision())");
+  expect(source).not.toContain("inspectDesktopSupervision({ targetPid");
+});

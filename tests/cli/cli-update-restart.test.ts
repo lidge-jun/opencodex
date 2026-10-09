@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { describeUpdateRestartFailure, runUpdateRestart, UpdateRestartEligibilityError, type UpdateRestartIo } from "../../src/cli/update-restart";
 import type { UpdateRestartCandidate } from "../../src/cli/update-restart-candidate";
 import { reportRestartFailure } from "../../src/cli/restart-failure";
+import { updateRestartVeto } from "../../src/update/restart-ownership";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
 
 const candidate: UpdateRestartCandidate = {
@@ -225,4 +226,15 @@ test("an unverified update home names status and the owning service recovery", (
     const text = errors.mock.calls.flat().join(" ");
     expect(text).toContain("ocx status"); expect(text).toContain("ocx service restart"); expect(text).toContain("No changes were made");
   } finally { errors.mockRestore(); }
+});
+
+
+test("dashboard update restart veto gives Desktop update guidance with injected supervision", () => {
+  const resolve = () => ({ kind: "none" as const, revision: 0 });
+  expect(updateRestartVeto(resolve, () => ({
+    kind: "desktop", runtimePid: 321, supervisorPid: 123, app: "/fixture/opencodex-desktop", proxy: "/fixture/ocx",
+  }))).toContain("use the app's updater (tray → Check for Updates)");
+  expect(updateRestartVeto(resolve, () => ({ kind: "unknown", reason: "probe-failed", desktopSeen: true })))
+    .toContain("quit OpenCodex first");
+  expect(updateRestartVeto(resolve, () => ({ kind: "unknown", reason: "probe-failed", desktopSeen: false }))).toBeNull();
 });
