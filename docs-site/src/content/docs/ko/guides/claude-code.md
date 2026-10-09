@@ -379,8 +379,10 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
 `claudeCode.contextAccounting`은 opencodex가 기본으로 고르는 값을 정해요. 설정하지 않으면(`1m`, 기본값)
 긴 컨텍스트 모델이 실행 환경 슬롯, Desktop 선택기, Desktop 3P(`prefer1m`), 생성된 서브에이전트에서 1M으로
 잡혀요. `200k`로 바꾸면 자동 `[1m]` 표식을 붙이지 않고 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`도 넣지 않으며,
-Desktop 3P는 `supports1m`은 남기고 `prefer1m`만 빼요. 직접 `[1m]`을 붙인 선택은 그대로 유지되고, 디스커버리
-목록에는 실제 1M 모델의 `· 1M` 행이 계속 나와요. `200k`는 자동 컨텍스트와 직접 export한 압축 값보다 우선해요.
+Desktop 3P는 `supports1m`은 남기고 `prefer1m`만 빼요. 직접 `[1m]`을 붙인 선택은 계속 쓸 수 있어요(생성된
+서브에이전트와 강제 서브에이전트는 모델 창이 감당하지 못하는 표식을 여전히 떼요). 디스커버리 목록에는 실제 1M 모델의
+`· 1M` 행이 계속 나와요. `200k`는 자동 컨텍스트보다 우선해요. 직접 export한 압축 값이 있어도 자동 표식은 다시 켜지지
+않고, 그 export 값은 opencodex가 건드리지 않아요.
 
 ```bash
 ocx claude config set --context-accounting 200k

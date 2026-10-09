@@ -324,8 +324,9 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 
 `claudeCode.contextAccounting` 决定 opencodex 默认选用的值。未设置（`1m`，默认）时，长上下文模型在启动环境槽位、
 Desktop 选择器、Desktop 3P（`prefer1m`）和生成的子代理中按 1M 提供。设为 `200k` 即可退出：不再自动添加 `[1m]` 标记，
-不注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，Desktop 3P 保留 `supports1m` 但去掉 `prefer1m`。你自己标记 `[1m]` 的选择会保留，
-发现列表中真正 1M 模型的 `· 1M` 条目也仍然存在。`200k` 优先于自动上下文和你自行导出的压缩值。
+不注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，Desktop 3P 保留 `supports1m` 但去掉 `prefer1m`。你自己标记 `[1m]` 的选择仍可使用
+（生成的子代理和强制子代理仍会去掉模型窗口无法承载的标记），发现列表中真正 1M 模型的 `· 1M` 条目也仍然存在。`200k` 优先于
+自动上下文：你自行导出的压缩值不会重新启用自动标记，但 opencodex 不会改动你导出的值。
 
 ```bash
 ocx claude config set --context-accounting 200k

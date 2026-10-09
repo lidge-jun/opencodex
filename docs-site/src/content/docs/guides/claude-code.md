@@ -684,8 +684,10 @@ fall back to 829,800.
 default), long-window models are offered at 1M in the launch env slots, the Desktop pickers,
 Desktop 3P (`prefer1m`) and generated subagents. Set `200k` to opt out: nothing is marked `[1m]`
 automatically, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is not injected, and Desktop 3P drops `prefer1m`
-while keeping `supports1m`. A selector you mark `[1m]` yourself keeps it, and discovery still lists
-the `· 1M` rows of genuine 1M models. `200k` wins over auto-context and a compact window you export.
+while keeping `supports1m`. A selector you mark `[1m]` yourself stays available (generated and
+forced subagents still drop a marker the model's window cannot carry), and discovery still lists
+the `· 1M` rows of genuine 1M models. `200k` wins over auto-context: a compact window you export no
+longer turns automatic marking on, though opencodex leaves your own export in place.
 
 ```bash
 ocx claude config set --context-accounting 200k

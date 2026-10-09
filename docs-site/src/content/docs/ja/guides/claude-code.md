@@ -345,8 +345,9 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 `claudeCode.contextAccounting` は opencodex が既定で選ぶ値を決めます。未設定（`1m`、既定）では、
 長いコンテキストのモデルが起動環境スロット、Desktop ピッカー、Desktop 3P（`prefer1m`）、生成されたサブエージェントで 1M として扱われます。
 `200k` にすると `[1m]` 標識を自動では付けず、`CLAUDE_CODE_AUTO_COMPACT_WINDOW` も注入せず、Desktop 3P は `supports1m` を残して
-`prefer1m` だけを外します。自分で `[1m]` を付けた選択はそのまま残り、ディスカバリーには実際に 1M のモデルの `· 1M` 行が引き続き表示されます。
-`200k` は自動コンテキストや自分で export した圧縮値より優先されます。
+`prefer1m` だけを外します。自分で `[1m]` を付けた選択は引き続き使えます（生成されたサブエージェントと強制サブエージェントは、モデルのウィンドウが支えられない標識を引き続き外します）。
+ディスカバリーには実際に 1M のモデルの `· 1M` 行が引き続き表示されます。`200k` は自動コンテキストより優先され、自分で export した圧縮値があっても自動標識は
+再び有効になりません。その export 値自体は opencodex が変更しません。
 
 ```bash
 ocx claude config set --context-accounting 200k

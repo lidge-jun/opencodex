@@ -496,8 +496,9 @@ Les valeurs de configuration invalides définies manuellement reviennent à 829,
 longue fenêtre sont proposés à 1M dans les emplacements d'environnement du lancement, les sélecteurs Desktop, Desktop 3P
 (`prefer1m`) et les sous-agents générés. Avec `200k`, rien n'est marqué `[1m]` automatiquement, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
 n'est pas injecté et Desktop 3P retire `prefer1m` tout en gardant `supports1m`. Un sélecteur que vous marquez vous-même `[1m]`
-le conserve, et la découverte liste toujours les lignes `· 1M` des modèles réellement à 1M. `200k` l'emporte sur le contexte
-automatique et sur une valeur de compactage exportée.
+reste disponible (les sous-agents générés ou forcés retirent toujours un marqueur que la fenêtre du modèle ne peut pas porter), et
+la découverte liste toujours les lignes `· 1M` des modèles réellement à 1M. `200k` l'emporte sur le contexte automatique : une valeur
+de compactage que vous exportez ne réactive pas le marquage automatique, mais opencodex laisse votre export en place.
 
 ```bash
 ocx claude config set --context-accounting 200k
