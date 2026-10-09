@@ -59,9 +59,16 @@ export interface ClaudeCodeState {
   autoCompactWindow: number | null;
   /** "1m" is the default; "200k" opts Claude surfaces out of automatic 1M (devlog 261009 030). */
   contextAccounting: "1m" | "200k";
+  /**
+   * Accounting the server used when it built `effectiveModelEnv`. A draft can change
+   * `contextAccounting` before the next GET; the manual snippet must not mix the two.
+   */
+  servedContextAccounting?: "1m" | "200k";
+  /** Configured main slot. The manual snippet uses it to tell an explicit `[1m]` from an automatic one. */
+  model?: string;
   injectAgents: boolean;
   smallFastModel: string;
-  tierModels?: { haiku?: string };
+  tierModels?: { opus?: string; sonnet?: string; haiku?: string; fable?: string };
   effectiveModelEnv: Record<string, string>;
   available: string[];
   aliases: { id: string; display_name: string }[];

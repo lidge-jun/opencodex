@@ -46,6 +46,8 @@ function normalizeFirstPartyState(state: ClaudeCodeState): ClaudeCodeState {
     // Shared by the session cache and the GET read, so a state cached by an older proxy (no
     // field) and an older server both read as the default.
     contextAccounting: normalizeContextAccounting(state.contextAccounting),
+    // The GET has no separate field: the env on this read was built under the accounting it reports.
+    servedContextAccounting: normalizeContextAccounting(state.servedContextAccounting ?? state.contextAccounting),
   };
 }
 
