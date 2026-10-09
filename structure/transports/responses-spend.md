@@ -18,8 +18,9 @@ later-target holdback still intersect it.
 
 Initial passthrough and budgeted translated HTTP ladders report at the final executor admission,
 after pacing, credential rebuild and local egress checks, rather than at retry callback entry.
-The one-shot receipt survives rebuilt request init and nested executor wrappers. WebSocket receipt
-follows successful frame send; receipt failure remains post-send and never permits SSE fallback.
+The one-shot receipt survives rebuilt request init and nested executor wrappers. The WebSocket
+receipt runs immediately before the frame is sent; a refused receipt sends no frame and never
+permits SSE fallback.
 Adapter-owned dispatch claims the prepaid permit once through the live adapter view and closes
 its external booking with `assumeCharge`. A fresh derived scope binds its actual first endpoint
 without consuming a recovery transition; later endpoint moves keep ordinary transition limits.
