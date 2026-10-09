@@ -39,6 +39,9 @@ function provenAbsent(path: string): boolean {
   catch (error) { return absent(error) && provenAbsent(parent); }
 }
 
+/** A missing directory entry is a no-op; dangling links and unreadable homes are not. */
+export function codexHomeIsAbsent(home: string): boolean { return provenAbsent(home); }
+
 function validJournal(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const journal = value as Record<string, unknown>;

@@ -1,4 +1,5 @@
 import { configWriteLockFailureMessage, withConfigWriteLockHeld, publishConfigWrite, watchConfigWriteTargets, publishConfigWriteTarget, type LockHandle } from "./config-write-lock";
+import { codexHomeIsAbsent } from "./codex-home-owner";
 /**
  * prompt-journal.ts — the write transaction behind the prompt-layer surface.
  *
@@ -255,6 +256,7 @@ export function recoverIfNeeded(
   expectedTargets: RecoveryTargets,
   heldConfigWriteLock?: LockHandle,
 ): RecoveryOutcome {
+  if (codexHomeIsAbsent(dirname(expectedTargets.configPath)) && !existsSync(journalPath)) return { ok: true, action: "none" };
   const locked = withConfigWriteLockHeld(expectedTargets.configPath, heldConfigWriteLock, held => {
   watchConfigWriteTargets(held, [journalPath, expectedTargets.storePath]);
   const raw = readOrNull(journalPath);

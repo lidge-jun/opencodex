@@ -1,10 +1,10 @@
 import { beginCodexWriteSection, publishCodexArtifact } from "./inject/config-write-section";
 import { createHash } from "node:crypto";
 import type { AtomicWriteHooks } from "../config/atomic-write";
-import { lstatSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
-import { assertCodexHomeOwner, CODEX_HOME_JOURNAL_FILE, CodexHomeOwnerRefusal, opencodexHomeForInjection, readCodexHomeJournal, type CodexHomeOwnerRefusalReason } from "./codex-home-owner";
+import { assertCodexHomeOwner, codexHomeIsAbsent, CODEX_HOME_JOURNAL_FILE, CodexHomeOwnerRefusal, opencodexHomeForInjection, readCodexHomeJournal, type CodexHomeOwnerRefusalReason } from "./codex-home-owner";
 import { hasInjectedCodexRouting } from "./injected-marker";
 import { configWriteLockFailureMessage, withConfigWriteLockHeld } from "./config-write-lock";
 import type { LockHandle } from "./config-write-lock";
@@ -311,6 +311,10 @@ export function journalOwner(options: { readOnly?: boolean } = {}): JournalOwner
 export function restoreJournalState(
   options: { heldConfigWriteLock?: LockHandle } = {},
 ): RestoreJournalResult {
+  if (codexHomeIsAbsent(CODEX_HOME)) return {
+    configRestored: false, profileRestored: false, configRewritten: false, profileRewritten: false,
+    configChanged: false, profileChanged: false, complete: false, unverified: false,
+  };
   const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, options.heldConfigWriteLock, held => {
   try { assertCodexHomeOwner(CODEX_HOME); }
   catch (error) {
@@ -425,8 +429,7 @@ export interface ReconcileJournalOptions {
 }
 
 export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean {
-  try { lstatSync(CODEX_HOME); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  if (codexHomeIsAbsent(CODEX_HOME)) return false;
   const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, undefined, handle => {
   try { assertCodexHomeOwner(CODEX_HOME); }
   catch (error) {

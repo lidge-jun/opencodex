@@ -432,7 +432,7 @@
   "codex-prompt-journal.test.ts": "codex-integration", "codex-prompt-layers-read.test.ts": "codex-integration",
   "codex-prompt-layers-write.test.ts": "codex-integration", "codex-prompt-layers.test.ts": "codex-integration",
   "codex-prompt-lock-sharing.test.ts": "codex-integration",
-    "codex-prompt-lock.test.ts": "codex-integration", "codex-config-write-lock.test.ts": "codex-integration", "codex-prompt-route.test.ts": "codex-integration",
+    "codex-prompt-lock.test.ts": "codex-integration", "codex-config-write-lock.test.ts": "codex-integration", "codex-missing-home.test.ts": "codex-integration", "codex-prompt-route.test.ts": "codex-integration",
   "codex-prompt-text-probe.test.ts": "codex-integration", "codex-provider-table-retention.test.ts": "codex-integration",
   "codex-quota-auto-refresh-main-admission.test.ts": "codex-integration",
   "codex-quota-auto-refresh.test.ts": "codex-integration", "codex-quota-capacity.test.ts": "codex-integration",

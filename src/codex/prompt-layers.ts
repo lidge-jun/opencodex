@@ -785,7 +785,7 @@ function commit(
     // successful write reported an empty variant list back to its caller.
     return { ok: true, changed: true, snapshot: readPromptLayers({ ...opts, configPath, storePath }) };
     });
-    return configLocked.ok ? configLocked.value as WriteResult : { ok: false, error: configLocked.error, ...(configLocked.error === "unsafe" ? { detail: configWriteLockFailureMessage(configLocked) } : {}) };
+    return configLocked.ok ? configLocked.value as WriteResult : { ok: false, error: configLocked.error === "locked" ? "locked" : "unsafe", ...(configLocked.error !== "locked" ? { detail: configWriteLockFailureMessage(configLocked) } : {}) };
   } finally { release(handle); }
 }
 

@@ -647,7 +647,7 @@
     "codex-prompt-layers-write.test.ts": "codex-integration",
     "codex-prompt-layers.test.ts": "codex-integration",
     "codex-prompt-lock-sharing.test.ts": "codex-integration",
-    "codex-prompt-lock.test.ts": "codex-integration", "codex-config-write-lock.test.ts": "codex-integration",
+    "codex-prompt-lock.test.ts": "codex-integration", "codex-config-write-lock.test.ts": "codex-integration", "codex-missing-home.test.ts": "codex-integration",
     "codex-prompt-route.test.ts": "codex-integration",
     "codex-prompt-text-probe.test.ts": "codex-integration",
     "codex-provider-table-retention.test.ts": "codex-integration",

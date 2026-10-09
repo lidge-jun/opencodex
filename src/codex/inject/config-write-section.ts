@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { withConfigMutationLockSync } from "../../config";
 import { ConfigWriteLockRefusal, assertConfigWriteDestination, publishConfigWriteTarget, watchConfigWriteTargets, withConfigWriteLockHeld, type LockHandle } from "../config-write-lock";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../paths";
+import { getCodexHome } from "../paths";
+import { codexHomeIsAbsent } from "../codex-home-owner";
 import { JOURNAL_PATH, removeJournal } from "../journal";
 import { externalCodexModelProvider } from "./config-toml";
 
@@ -16,6 +18,7 @@ export function publishCodexArtifact<T>(path: string, held: LockHandle | undefin
 }
 /** Courtesy cleanup re-reads provider ownership inside the same config section. */
 export function cleanExternalProviderJournal(beforeClientWrite?: () => void): void {
+  if (codexHomeIsAbsent(getCodexHome())) return;
   const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, undefined, held => {
     beginCodexWriteSection(held);
     const cleanup = () => {

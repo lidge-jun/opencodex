@@ -2,7 +2,9 @@ import { ensureManagementClaudeIntercept, interceptStartRefusal, interceptStatus
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { codexHomeIsAbsent } from "../../codex/codex-home-owner";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../config/provider-validation";
@@ -429,6 +431,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
      */
     const needsCodexConfigWrites = requestedFlag !== undefined || wantsThreads
       || wantsAgentsEnabled || wantsMaxDepth || wantsSubagentInstructions || wantsModeHintText;
+    if (needsCodexConfigWrites && codexHomeIsAbsent(dirname(activeCodexConfigPath()))) {
+      return jsonResponse({ error: `config.toml not readable at ${activeCodexConfigPath()}` }, 502);
+    }
     const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage } = await import("../../codex/config-write-lock");
     const configWriteLock = needsCodexConfigWrites ? await acquireConfigWriteLock(activeCodexConfigPath()) : null;
     if (configWriteLock !== null && !configWriteLock.ok) {
@@ -566,6 +571,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // scalar edit or injection mid-write on either side.
     const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage, runConfigWriteChild, ConfigWriteDestinationChanged } = await import("../../codex/config-write-lock");
     const configPath = activeCodexConfigPath();
+    // Native `codex features` creates its home on a fresh install; prepare it before locking.
+    if (codexHomeIsAbsent(dirname(configPath))) mkdirSync(dirname(configPath), { recursive: true });
     const configLock = await acquireConfigWriteLock(configPath);
     if (!configLock.ok) {
       return jsonResponse({ error: configWriteLockFailureMessage(configLock), retryable: configLock.error === "locked" }, 502);
