@@ -14,6 +14,7 @@ import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { taskXmlSection, taskXmlWithoutCommentsAndCdata, taskXmlElementCount, taskXmlOptionalValueEquals, windowsTaskRegistrationOwnedByAttempt, windowsTaskHasSessionRecoveryTriggers, windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
 import type { ExpectedWindowsTaskUserId } from "./windows-taskxml";
 import { win32 } from "node:path";
+import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionInspector, type SupervisionLatch } from "./desktop-command-guard";
 
 /**
  * The two CLI verbs `repairService` serves. They differ on ONE platform and ONE case: a
@@ -23,6 +24,8 @@ import { win32 } from "node:path";
 export type ServiceRepairVerb = "repair" | "restart";
 
 export interface RepairServiceDeps {
+  inspectSupervision?: SupervisionInspector;
+  supervisionLatch?: SupervisionLatch;
   diagnose?: () => ServiceDiagnostic;
   assertEnv?: () => void;
   assertAuth?: () => void;
@@ -148,6 +151,8 @@ export async function assertSchedulerRegistrationBeforeStart(
  * macOS/Linux: re-run the user-level install/reload path.
  */
 export async function repairService(deps: RepairServiceDeps = {}): Promise<void> {
+  const latch = deps.supervisionLatch ?? createSupervisionLatch();
+  assertNoDesktopSupervision(deps.inspectSupervision, latch);
   const diagnose = deps.diagnose ?? diagnoseService;
   const platform = deps.platform ?? process.platform;
   const diag = diagnose();
@@ -183,6 +188,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
   if (platform === "win32") {
     if (diag.backend === "native") {
       await (deps.repairNative ?? (() => installWinswService(defaultWinswEntry(serviceSourceDir))))();
+      assertNoDesktopSupervision(deps.inspectSupervision, latch);
       (deps.writeNativeState ?? (() => writeServiceInstallState("native")))();
       return;
     }
@@ -311,6 +317,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
             }
             if (probe.status === "absent") {
               try {
+                assertNoDesktopSupervision(deps.inspectSupervision, latch);
                 await (deps.restoreSchedulerIfAbsent ?? restoreWindowsSchedulerTaskIfAbsent)(registeredXml);
                 restartExpectedXml = registeredXml;
               } catch (error) {
@@ -333,6 +340,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
               "The Task Scheduler registration changed again before restart; the newer definition was preserved and not started.",
               "Task Scheduler state remained unreadable before restart; the registration was preserved and not started.",
             );
+            assertNoDesktopSupervision(deps.inspectSupervision, latch);
             (deps.startScheduler ?? startWindows)();
           } catch (error) {
             recoveryErrors.push(error);
@@ -358,6 +366,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       "Task Scheduler registration changed before restart; the current definition was preserved and not started.",
       "Task Scheduler registration became unreadable before restart; it was preserved and not started.",
     );
+    assertNoDesktopSupervision(deps.inspectSupervision, latch);
     (deps.startScheduler ?? startWindows)();
     (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();
     return;

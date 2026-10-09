@@ -21,6 +21,7 @@ import { windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy }
 import { win32 } from "node:path";
 import { launchdGuiDomain } from "./launchd";
 import { LABEL } from "./state";
+import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionInspector, type SupervisionLatch } from "./desktop-command-guard";
 
 type ServiceOps = {
   install: () => void | Promise<void>; start: () => void; stop: () => void;
@@ -230,6 +231,8 @@ export async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyC
 }
 
 export interface ServiceInstallPreparationDeps {
+  inspectSupervision?: SupervisionInspector;
+  supervisionLatch?: SupervisionLatch;
   diagnose?: () => ServiceDiagnostic;
   managerOps?: (backend: ServiceBackend) => ServiceInstallCleanupOps | null;
   stopTrackedProxy?: () => Promise<unknown>;
@@ -245,6 +248,8 @@ export async function prepareServiceInstall(
   requestedBackend: ServiceBackend,
   deps: ServiceInstallPreparationDeps = {},
 ): Promise<void> {
+  const latch = deps.supervisionLatch ?? createSupervisionLatch();
+  assertNoDesktopSupervision(deps.inspectSupervision, latch);
   const diagnostic = (deps.diagnose ?? diagnoseService)();
   const platform = deps.platform ?? process.platform;
   const resolveOps = deps.managerOps ?? platformServiceInstallCleanupOps;
@@ -279,11 +284,15 @@ export async function installServiceSafely(
   install: () => void | Promise<void>,
   deps: ServiceInstallPreparationDeps = {},
 ): Promise<void> {
-  await prepareServiceInstall(requestedBackend, deps);
+  const latch = deps.supervisionLatch ?? createSupervisionLatch();
+  await prepareServiceInstall(requestedBackend, { ...deps, supervisionLatch: latch });
+  assertNoDesktopSupervision(deps.inspectSupervision, latch);
   await install();
 }
 
 export interface FreshWindowsSchedulerInstallDeps {
+  inspectSupervision?: SupervisionInspector;
+  supervisionLatch?: SupervisionLatch;
   stageRegistrationXml?: (attemptNonce: string) => string;
   register?: (xmlPath: string, attemptNonce: string) => Promise<void>;
   recordOwnership?: () => boolean;
@@ -312,10 +321,14 @@ export interface FreshWindowsSchedulerInstallDeps {
 export async function installFreshWindowsSchedulerSafely(
   deps: FreshWindowsSchedulerInstallDeps = {},
 ): Promise<void> {
+  const latch = deps.supervisionLatch ?? createSupervisionLatch();
+  assertNoDesktopSupervision(deps.inspectSupervision, latch);
   const stage = deps.stageRegistrationXml ?? stageWindowsSchedulerRegistrationXml;
   const register = deps.register ?? registerFreshWindowsSchedulerTask;
   const recordOwnership = deps.recordOwnership ?? recordWindowsSchedulerOwnership;
-  const prepare = deps.prepare ?? (() => prepareServiceInstall("scheduler"));
+  const prepare = deps.prepare ?? (() => prepareServiceInstall("scheduler", {
+    inspectSupervision: deps.inspectSupervision, supervisionLatch: latch,
+  }));
   const removeNativeService = deps.removeNativeService ?? removeNativeWindowsServiceForScheduler;
   const publishAssets = deps.publishAssets ?? writeWindowsSchedulerAssets;
   const verifyBeforeRun = deps.verifyBeforeRun ?? ((nonce: string) => (
@@ -348,6 +361,7 @@ export async function installFreshWindowsSchedulerSafely(
     stagedXml = stage(attemptNonce);
     await register(stagedXml, attemptNonce);
     registered = true;
+    assertNoDesktopSupervision(deps.inspectSupervision, latch);
 
     // The destructive boundary begins only after Task Scheduler accepted the definition.
     // The registration has consumed its temporary XML. Remove it before claiming a newly
@@ -362,9 +376,11 @@ export async function installFreshWindowsSchedulerSafely(
       );
     }
     await prepare();
+    assertNoDesktopSupervision(deps.inspectSupervision, latch);
     removeNativeService();
     publishAssets();
     await verifyBeforeRun(attemptNonce);
+    assertNoDesktopSupervision(deps.inspectSupervision, latch);
     runTask();
     started = true;
     writeState();
