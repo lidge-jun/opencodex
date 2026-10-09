@@ -432,7 +432,9 @@ remain process-local and never enter disk, logs, or management DTOs.
 Plain-main HTTP and WebSocket Responses on the canonical OpenAI forward provider refresh cached
 main usage under that same credential/workspace match, including stored-main substitution and
 an identical caller-owned credential. Materialization captures a process-local dispatch proof;
-publication rechecks identity and credential generations, including after an awaited HTTP import
+HTTP delivery captures the response-arrival proof before any body await and retains it for those
+headers even if deferred recovery renews the context. Publication rechecks identity and credential
+generations, including after an awaited HTTP import
 and for every WebSocket frame. A replaced credential, unmatched workspace, or custom destination
 cannot publish main usage. Pool health/failover handling stays scoped to Pool contexts.
 The dispatch additionally fences the process-wide credential mutation epoch, so native main

@@ -534,6 +534,59 @@ describe("credential-bound plain-main Responses quota", () => {
     });
   }
 
+  test("plaintext V2 deferred reset keeps original headers bound to their arrival dispatch", async () => {
+    observe();
+    const renewalSpy = spyOn(mainCache, "renewMainQuotaDispatchForAttempt");
+    const claimSpy = spyOn(mainCache, "isMainQuotaDispatchWsClaimed");
+    let httpCalls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      httpCalls++;
+      expect(JSON.parse(String(init?.body))).toMatchObject({ stream: true, store: false });
+      expect(getAccountQuota(MAIN)).toBeNull();
+      expect(getMainPolicyQuota()).toBeNull();
+      if (httpCalls === 1) {
+        return new Response(new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+            controller.error(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" }));
+          },
+        }), { status: 200, headers: quotaHeaders("17") });
+      }
+      return new Response(new TextEncoder().encode(`event: response.completed\ndata: ${JSON.stringify({
+        type: "response.completed", response: { id: "fixture-plaintext-reset", status: "completed", output: [] },
+      })}\n\n`), { status: 200, headers: quotaHeaders("99") });
+    }) as typeof fetch;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: new Headers({ ...Object.fromEntries(caller()), "content-type": "application/json" }),
+        body: JSON.stringify({ model: "gpt-5.5", stream: true, store: false, input: "fixture delegate request",
+          tools: [{ type: "namespace", name: "collaboration", tools: [{ type: "function", name: "spawn_agent",
+            parameters: { type: "object", properties: { message: { type: "string", encrypted: true } } } }] }],
+        }),
+      }), { ...config, defaultProvider: "openai", plaintextV2AgentMessages: true,
+        providers: { openai: { ...provider, codexAccountMode: "direct", upstreamWebsocket: false, retryOnReset: {} } } },
+      { model: "", provider: "" }, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("fixture-plaintext-reset");
+      expect(httpCalls).toBe(2);
+      expect(renewalSpy).toHaveBeenCalledTimes(2);
+      const arrival = renewalSpy.mock.results[0]!.value as mainCache.MainQuotaDispatch;
+      const successor = renewalSpy.mock.results[1]!.value as mainCache.MainQuotaDispatch;
+      expect(successor).not.toBe(arrival);
+      expect(successor).toEqual(arrival);
+      // The prefix probe awaits the replacement before publication; the original proof stays live.
+      // Its 17% may publish only under that proof. Replacement-header publication is a follow-up.
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+      expect(getMainPolicyQuota()?.weeklyPercent).toBe(17);
+      expect(claimSpy).toHaveBeenCalledTimes(1);
+      expect(claimSpy.mock.calls[0]![0]).toBe(arrival);
+      expect(claimSpy.mock.calls[0]![0]).not.toBe(successor);
+    } finally {
+      claimSpy.mockRestore();
+      renewalSpy.mockRestore();
+    }
+  });
+
   test("full handler sanitized recovery with failed WS upgrade publishes fresh HTTP quota", async () => {
     observe();
     const originalSocket = globalThis.WebSocket;

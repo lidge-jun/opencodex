@@ -409,6 +409,9 @@ export async function deliverPassthroughResponse(
     | "localUpstream"
   >,
 ): Promise<Response> {
+  const { route } = requestState;
+  // The proof must belong to the response whose headers are published.
+  const arrivalMainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider);
   const { logCtx, config, options, req } = requestContext;
   const {
     codexSafetyBufferingOptions,
@@ -432,7 +435,7 @@ export async function deliverPassthroughResponse(
     normalizeFunctionCompletionJson,
   } = nativeExchange;
   const { commitReasoningReplayServingRoute, recordTerminalOutcomes } = responseEffects;
-  const { parsed, route, subagentQuotaFailureModel, clientRequestedStream, translatorBudget, inboundWire } = requestState;
+  const { parsed, subagentQuotaFailureModel, clientRequestedStream, translatorBudget, inboundWire } = requestState;
   const enforceDeclaredToolNames = inboundWire !== "chat" && inboundWire !== "anthropic";
   const { openAiSidecar } = sidecarState;
   const { requestBindings } = transportState;
@@ -539,18 +542,17 @@ export async function deliverPassthroughResponse(
         });
       }
     } else {
-      const mainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider);
       // The WS observer is the only plain-main publisher for a WebSocket exchange;
       // a prelude projection carries the prelude snapshot, not fresh evidence.
       // The dispatch claim is authoritative because downstream wrappers can replace the Response.
-      if (mainDispatch && !isMainQuotaDispatchWsClaimed(mainDispatch)
+      if (arrivalMainDispatch && !isMainQuotaDispatchWsClaimed(arrivalMainDispatch)
         && !(isCodexWsUpstreamResponse(upstreamResponse) || isCodexWsPreludeProjection(upstreamResponse))) {
         const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
         // Import yields; same-account token replacement leaves the identity writer live.
         // Re-check the credential fence with no await before publication.
-        if (isMainQuotaDispatchLive(mainDispatch)) {
+        if (isMainQuotaDispatchLive(arrivalMainDispatch)) {
           applyAccountQuotaFromUpstreamHeaders(MAIN_CODEX_ACCOUNT_ID, upstreamResponse.headers,
-            mainDispatch.configGeneration, mainDispatch.writer, { modelId: route.modelId });
+            arrivalMainDispatch.configGeneration, arrivalMainDispatch.writer, { modelId: route.modelId });
         }
       }
     }
