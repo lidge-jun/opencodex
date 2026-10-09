@@ -234,7 +234,7 @@
   "chat-refusal-scope.test.ts": "responses", "chat-refusal.test.ts": "responses",
   "chat-responses-control-integration.test.ts": "responses", "chat-responses-control-scope.test.ts": "responses",
   "chat-tool-choice-allowed-tools.test.ts": "responses", "chatgpt-device-auth.test.ts": "oauth",
-  "chatgpt-oauth.test.ts": "oauth", "chatgpt-token-expiry.test.ts": "oauth",
+  "chatgpt-oauth.test.ts": "oauth", "chatgpt-token-expiry.test.ts": "oauth", "chatgpt-token-boundaries.test.ts": "oauth",
   "chutes-provider.test.ts": "providers", "ci-bun-crash-classifier.test.ts": "ci-workflows",
   "ci-crash-disposition.test.ts": "ci-workflows", "ci-privacy-gate.test.ts": "ci-workflows",
   "ci-review-lanes.test.ts": "ci-workflows", "ci-scope-reduction.test.ts": "ci-workflows",

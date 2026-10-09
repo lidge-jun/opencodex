@@ -329,6 +329,7 @@
     "chatgpt-device-auth.test.ts": "oauth",
     "chatgpt-oauth.test.ts": "oauth",
     "chatgpt-token-expiry.test.ts": "oauth",
+    "chatgpt-token-boundaries.test.ts": "oauth",
     "chutes-provider.test.ts": "providers",
     "ci-bun-crash-classifier.test.ts": "ci-workflows",
     "ci-crash-disposition.test.ts": "ci-workflows",
