@@ -53,3 +53,12 @@ FH=$(mktemp -d); env HOME="$FH" USERPROFILE="$FH" CLAUDE_CONFIG_DIR="$FH/.claude
   bun test tests/codex-integration/native-codex-toggle.test.ts
 ```
 
+
+## Implementation record
+
+Implemented as written in PR #6834 (branch `codex/n3-codex-toggle-fixture`, commit `c6addbb97e`),
+test-only. With a simulated registered service manager the round-trip case fails on dev (12 pass /
+1 fail, `service-home` refusal, `state: "absent"`) and passes with the stub (14/14). The new call
+assertion fails when the production probe call is bypassed; the spy is restored before fixture
+cleanup.
+
