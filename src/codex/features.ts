@@ -74,7 +74,7 @@ export function activeCodexConfigPath(): string {
   const home = resolveCodexHomeDir();
   if (!process.env.CODEX_HOME?.trim()) {
     const alias = join(homedir(), ".codex");
-    try { if (realpathSync(alias) === home) return join(alias, "config.toml"); }
+    try { if (realpathSync.native(alias) === home) return join(alias, "config.toml"); }
     catch { /* An absent local home can select the WSL Windows-home fallback. */ }
   }
   return join(home, "config.toml");
@@ -1155,7 +1155,7 @@ export function probeCodexSupportsModeHint(): boolean | null {
     const runtime = resolveAndPersistCodexRuntime({ env: process.env }).runtime;
     const selectedPath = resolveSelectedCommandPath(runtime.command);
     let selectedIdentity = selectedPath ?? "";
-    try { if (selectedPath) selectedIdentity = realpathSync(selectedPath); } catch { /* keep lexical path */ }
+    try { if (selectedPath) selectedIdentity = realpathSync.native(selectedPath); } catch { /* keep lexical path */ }
     const candidates = codexNativeBinaryCandidates(runtime.command);
     const binaryStatFingerprint = candidates.map(candidate => {
       try {
@@ -1224,7 +1224,7 @@ function codexNativeBinaryCandidates(command: string): string[] {
 
   const addSelectedTarget = (target: string) => {
     try {
-      const real = realpathSync(target);
+      const real = realpathSync.native(target);
       out.add(target);
       out.add(real);
       if (/[\\/]@openai[\\/]codex[\\/]bin[\\/]/.test(real)) resolverBases.add(real);

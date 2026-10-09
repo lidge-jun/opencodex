@@ -57,10 +57,10 @@ const recoveries = new WeakMap<LockHandle, ConfigWriteRecovery>();
 function destination(path: string): Destination {
   const absolute = resolve(path);
   let canonical: string;
-  try { canonical = realpathSync(absolute); }
+  try { canonical = realpathSync.native(absolute); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    canonical = join(realpathSync(dirname(absolute)), basename(absolute));
+    canonical = join(realpathSync.native(dirname(absolute)), basename(absolute));
   }
   try {
     const stat = statSync(canonical, { bigint: true });
@@ -132,7 +132,7 @@ export function assertNativeConfigWriteDestination(configPath: string, held: Loc
   let canonical: string;
   try { canonical = assertConfigWriteDestination(configPath, held); }
   catch { throw new ConfigWriteDestinationChanged(); }
-  const home = realpathSync(dirname(canonical));
+  const home = realpathSync.native(dirname(canonical));
   if (basename(canonical) !== "config.toml" || canonical !== join(home, "config.toml")) {
     throw new ConfigWriteDestinationChanged("Native feature changes are unavailable when config.toml is a symlink to a differently named file.");
   }
@@ -227,7 +227,7 @@ export function runConfigWriteChild(
       for (const key of Object.keys(env)) {
         if (["CODEX_HOME", "ORCA_CODEX_HOME"].includes(key.toUpperCase())) delete env[key];
       }
-      env.CODEX_HOME = realpathSync(dirname(canonical));
+      env.CODEX_HOME = realpathSync.native(dirname(canonical));
       validateBeforeSpawn();
       try { run(env, validateBeforeSpawn); }
       // Even a failed child can replace config.toml. Observe only after it entered.

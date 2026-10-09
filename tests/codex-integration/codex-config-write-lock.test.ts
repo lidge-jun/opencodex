@@ -532,7 +532,7 @@ test("a successful feature toggle that atomically replaces config advances the h
 
 describe("SQLite order and retained recovery authority", () => {
   test("SQLite mutation-lock contention observes config first, fails fast and leaves no deadlock", async () => {
-    const config = fixtureConfig('model = "fixture"\n'), home = require("node:fs").realpathSync(join(config, ".."));
+    const config = fixtureConfig('model = "fixture"\n'), home = require("node:fs").realpathSync.native(join(config, ".."));
     const env = { ...process.env, CODEX_HOME: home, OPENCODEX_HOME: join(home, ".ocx-fixture") };
     const holder = Bun.spawn([process.execPath, "-e", `
       const {readSync}=require('node:fs'),{withConfigMutationLockSync}=require('./src/config');
@@ -572,7 +572,7 @@ describe("SQLite order and retained recovery authority", () => {
     } finally { holder.kill(); }
   }, 30_000);
   test("post-publication commit and compensation failure retain a usable journal fallback", () => {
-    const config = fixtureConfig('model = "native"\n'), home = require("node:fs").realpathSync(join(config, ".."));
+    const config = fixtureConfig('model = "native"\n'), home = require("node:fs").realpathSync.native(join(config, ".."));
     const child = Bun.spawnSync([process.execPath, "-e", `
       const fs=require('node:fs'),{spyOn}=require('bun:test');
       const section=require('./src/codex/inject/config-write-section'),paths=require('./src/codex/paths'),journal=require('./src/codex/journal');
@@ -633,7 +633,7 @@ describe("publication and unsafe caller regressions", () => {
       expect(() => publishConfigWrite(config, held, (destination, hooks) => atomicWriteFile(destination, "ours", undefined, {
         ...hooks, afterRename(path) { hooks.afterRename?.(path); throw Error("post-publication failure"); },
       }))).toThrow("post-publication failure");
-      expect(assertConfigWriteDestination(config, held)).toBe(require("node:fs").realpathSync(config));
+      expect(assertConfigWriteDestination(config, held)).toBe(require("node:fs").realpathSync.native(config));
       expect(readFileSync(config, "utf8")).toBe("ours");
     });
   });
@@ -693,7 +693,7 @@ describe("native feature children stay bound to the held home", () => {
         : "[features]\ndefault_mode_request_user_input = false\n";
       const a = fixtureConfig(original), b = fixtureConfig(original);
       const aliasRoot = fs.mkdtempSync(join(tmpdir(), "ocx-child-alias-")); roots.push(aliasRoot);
-      const alias = join(aliasRoot, "home"), canonicalA = fs.realpathSync(join(a, ".."));
+      const alias = join(aliasRoot, "home"), canonicalA = fs.realpathSync.native(join(a, ".."));
       fs.symlinkSync(canonicalA, alias, "junction");
       // Windows treats Codex_Home as CODEX_HOME; setting it there would replace A with B.
       const caseSensitiveEnv = process.platform !== "win32";
@@ -706,7 +706,7 @@ describe("native feature children stay bound to the held home", () => {
       const fakeChild = (_enabled: boolean, env: NodeJS.ProcessEnv) => {
         received = env;
         lockedAtSpawn = !withConfigWriteLock(a, () => true).ok;
-        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync(join(b, "..")), alias, "junction");
+        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync.native(join(b, "..")), alias, "junction");
         if (!env?.CODEX_HOME) return;
         const childPath = join(env.CODEX_HOME, "config.toml");
         fs.writeFileSync(childPath + ".child", childBytes); fs.renameSync(childPath + ".child", childPath);
@@ -749,13 +749,13 @@ for (const route of ["default-input", "v2"] as const) test(`${route}: a home ret
   const original = "[features.multi_agent_v2]\nenabled = true\n";
   const a = fixtureConfig(original), b = fixtureConfig(original), aliasRoot = fs.mkdtempSync(join(tmpdir(), "ocx-before-child-"));
   roots.push(aliasRoot); const alias = join(aliasRoot, "home");
-  fs.symlinkSync(fs.realpathSync(join(a, "..")), alias, "junction");
+  fs.symlinkSync(fs.realpathSync.native(join(a, "..")), alias, "junction");
   const previous = process.env.CODEX_HOME; process.env.CODEX_HOME = alias;
   let children = 0;
   const acquire = locks.acquireConfigWriteLock;
   const spy = spyOn(locks, "acquireConfigWriteLock").mockImplementation(async (...args) => {
     const held = await acquire(...args);
-    fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync(join(b, "..")), alias, "junction");
+    fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync.native(join(b, "..")), alias, "junction");
     return held;
   });
   try {
@@ -779,13 +779,13 @@ test("CLI revalidates after executable resolution, immediately before spawning",
   const original = "[features.multi_agent_v2]\nenabled = true\n";
   const a = fixtureConfig(original), b = fixtureConfig(original), aliasRoot = fs.mkdtempSync(join(tmpdir(), "ocx-cli-child-"));
   roots.push(aliasRoot); const alias = join(aliasRoot, "home");
-  fs.symlinkSync(fs.realpathSync(join(a, "..")), alias, "junction");
+  fs.symlinkSync(fs.realpathSync.native(join(a, "..")), alias, "junction");
   const previous = process.env.CODEX_HOME; process.env.CODEX_HOME = alias;
   let children = 0, synced = false;
   try {
     const result = await cmdV2(["off"], {
       featuresInvocation: () => {
-        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync(join(b, "..")), alias, "junction");
+        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync.native(join(b, "..")), alias, "junction");
         return { file: "fake-codex", args: [], options: {} };
       },
       execFile: () => { children++; }, sync: async () => { synced = true; }, log: { log() {}, error() {} },
@@ -801,7 +801,7 @@ test("CLI passes the held home after invocation options and stops sync on post-c
   const fs = await import("node:fs"), { cmdV2 } = await import("../../src/cli/v2");
   const original = "[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n";
   const a = fixtureConfig(original), b = fixtureConfig(original), aliasRoot = fs.mkdtempSync(join(tmpdir(), "ocx-cli-env-"));
-  roots.push(aliasRoot); const alias = join(aliasRoot, "home"), canonicalA = fs.realpathSync(join(a, ".."));
+  roots.push(aliasRoot); const alias = join(aliasRoot, "home"), canonicalA = fs.realpathSync.native(join(a, ".."));
   fs.symlinkSync(canonicalA, alias, "junction");
   const previous = process.env.CODEX_HOME; process.env.CODEX_HOME = alias;
   let received: string | undefined, synced = false;
@@ -811,7 +811,7 @@ test("CLI passes the held home after invocation options and stops sync on post-c
       featuresInvocation: () => ({ file: "fake-codex", args: [], options: { env: { CODEX_HOME: join(b, "..") } } }),
       execFile: (_file, _args, options) => {
         received = options?.env?.CODEX_HOME;
-        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync(join(b, "..")), alias, "junction");
+        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync.native(join(b, "..")), alias, "junction");
         if (received) fs.writeFileSync(join(received, "config.toml"), childBytes);
       },
       sync: async () => { synced = true; }, log: { log() {}, error() {} },
@@ -828,7 +828,7 @@ test("injector restores canonical preimage on non-retryable child drift without 
   const fs = require("node:fs") as typeof import("node:fs");
   const original = 'model = "native"\n[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n';
   const a = fixtureConfig(original), b = fixtureConfig(original), root = fs.mkdtempSync(join(tmpdir(), "ocx-inject-child-"));
-  roots.push(root); const alias = join(root, "home"), canonicalA = fs.realpathSync(join(a, ".."));
+  roots.push(root); const alias = join(root, "home"), canonicalA = fs.realpathSync.native(join(a, ".."));
   fs.symlinkSync(canonicalA, alias, "junction");
   // A differently cased inherited key can override the explicit alias in a Windows child.
   const childEnv = { ...process.env };
@@ -849,7 +849,7 @@ test("injector restores canonical preimage on non-retryable child drift without 
       const home=received??${JSON.stringify(canonicalA)};
       console.log(JSON.stringify({result,received:received??null,effectiveHome:require('./src/codex/paths').CODEX_HOME,profile:fs.existsSync(path.join(home,'opencodex.config.toml')),journal:fs.existsSync(path.join(home,'opencodex-journal.json'))}));
     }finally{spy.mockRestore();setCodexMultiAgentV2ToggleForTests(undefined);}
-  `], { cwd: repoRoot(), env: { ...childEnv, CODEX_HOME: alias, OPENCODEX_HOME: join(root, ".ocx-fixture"), FIXTURE_B: fs.realpathSync(join(b, "..")) }, stdout: "pipe", stderr: "pipe" });
+  `], { cwd: repoRoot(), env: { ...childEnv, CODEX_HOME: alias, OPENCODEX_HOME: join(root, ".ocx-fixture"), FIXTURE_B: fs.realpathSync.native(join(b, "..")) }, stdout: "pipe", stderr: "pipe" });
   expect(child.exitCode, child.stderr.toString()).toBe(0);
   const output = JSON.parse(child.stdout.toString().trim().split("\n").at(-1)!);
   expect(output.received, JSON.stringify(output)).toBe(canonicalA);
@@ -864,7 +864,7 @@ test("a default .codex home alias is also bound to canonical A", () => {
   const fs = require("node:fs") as typeof import("node:fs");
   const original = "[features]\ndefault_mode_request_user_input = false\n";
   const a = fixtureConfig(original), b = fixtureConfig(original), root = fs.mkdtempSync(join(tmpdir(), "ocx-default-child-"));
-  roots.push(root); const canonicalA = fs.realpathSync(join(a, ".."));
+  roots.push(root); const canonicalA = fs.realpathSync.native(join(a, ".."));
   fs.symlinkSync(canonicalA, join(root, ".codex"), "junction");
   const child = Bun.spawnSync([process.execPath, "-e", `
     const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{spyOn}=require('bun:test');
@@ -882,7 +882,7 @@ test("a default .codex home alias is also bound to canonical A", () => {
       },
     });
     console.log(JSON.stringify({received,status:response.status,body:await response.json()}));
-  `], { cwd: repoRoot(), env: { ...process.env, CODEX_HOME: undefined, HOME: root, USERPROFILE: root, WSL_DISTRO_NAME: undefined, WSL_INTEROP: undefined, OPENCODEX_HOME: join(root, ".ocx-fixture"), FIXTURE_B: fs.realpathSync(join(b, "..")) }, stdout: "pipe", stderr: "pipe" });
+  `], { cwd: repoRoot(), env: { ...process.env, CODEX_HOME: undefined, HOME: root, USERPROFILE: root, WSL_DISTRO_NAME: undefined, WSL_INTEROP: undefined, OPENCODEX_HOME: join(root, ".ocx-fixture"), FIXTURE_B: fs.realpathSync.native(join(b, "..")) }, stdout: "pipe", stderr: "pipe" });
   expect(child.exitCode, child.stderr.toString()).toBe(0);
   const output = JSON.parse(child.stdout.toString().trim().split("\n").at(-1)!);
   expect(output.received).toBe(canonicalA); expect(output.status).toBe(502); expect(output.body.retryable).toBe(false);
@@ -925,10 +925,10 @@ test("enable transition restores the original legacy limit rather than its stage
   const fs = await import("node:fs");
   const original = "# preserve CRLF\r\n[agents]\r\nmax_threads = 7 # children\r\n", a = fixtureConfig(original), b = fixtureConfig("model = \"B\"\n");
   const root = fs.mkdtempSync(join(tmpdir(), "ocx-enable-drift-")); roots.push(root); const alias = join(root, "home");
-  fs.symlinkSync(fs.realpathSync(join(a, "..")), alias, "junction"); let staged = false;
+  fs.symlinkSync(fs.realpathSync.native(join(a, "..")), alias, "junction"); let staged = false;
   const result = transitionMultiAgentV2(true, (_enabled, env) => {
     const target = join(env.CODEX_HOME!, "config.toml"); staged = fs.readFileSync(target, "utf8") !== original;
-    fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync(join(b, "..")), alias, "junction");
+    fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync.native(join(b, "..")), alias, "junction");
     fs.writeFileSync(target, "[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 8\n");
   }, { configPath: join(alias, "config.toml") });
   expect(staged).toBe(true); expect(result).toMatchObject({ ok: false, retryable: false });
@@ -938,13 +938,13 @@ test("enable transition restores the original legacy limit rather than its stage
 for (const missing of [false, true]) test(`native child drift restores the immediate pre-spawn bytes or absence (missing=${missing})`, async () => {
   const fs = await import("node:fs"), { runConfigWriteChild } = await import("../../src/codex/config-write-lock");
   const a = fixtureConfig("initial"), b = fixtureConfig("B"), root = fs.mkdtempSync(join(tmpdir(), "ocx-child-preimage-")); roots.push(root);
-  const alias = join(root, "home"); fs.symlinkSync(fs.realpathSync(join(a, "..")), alias, "junction"); if (missing) fs.unlinkSync(a);
+  const alias = join(root, "home"); fs.symlinkSync(fs.realpathSync.native(join(a, "..")), alias, "junction"); if (missing) fs.unlinkSync(a);
   const bytes = Buffer.from([0xff, 0x0d, 0x0a, 0x00, 0x61]);
   withConfigWriteLock(join(alias, "config.toml"), held => {
     expect(() => runConfigWriteChild(join(alias, "config.toml"), held, (env, validate) => {
       if (!missing) fs.writeFileSync(a, bytes); // executable-resolution work precedes the actual spawn validator
       validate();
-      fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync(join(b, "..")), alias, "junction"); fs.writeFileSync(join(env.CODEX_HOME!, "config.toml"), "child bytes");
+      fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync.native(join(b, "..")), alias, "junction"); fs.writeFileSync(join(env.CODEX_HOME!, "config.toml"), "child bytes");
     })).toThrow("destination changed");
   });
   if (missing) expect(fs.existsSync(a)).toBe(false); else expect(fs.readFileSync(a)).toEqual(bytes);
@@ -955,15 +955,15 @@ test("canonical recovery refuses a subsequent writer even when its inode stays t
   const fs = await import("node:fs"), { spyOn } = await import("bun:test");
   const atomic = await import("../../src/config/atomic-write"), { runConfigWriteChild } = await import("../../src/codex/config-write-lock");
   const a = fixtureConfig("preimage"), b = fixtureConfig("B"), root = fs.mkdtempSync(join(tmpdir(), "ocx-recovery-race-")); roots.push(root);
-  const alias = join(root, "home"); fs.symlinkSync(fs.realpathSync(join(a, "..")), alias, "junction");
+  const alias = join(root, "home"); fs.symlinkSync(fs.realpathSync.native(join(a, "..")), alias, "junction");
   const writer = atomic.atomicWriteFileStreamed;
   const spy = spyOn(atomic, "atomicWriteFileStreamed").mockImplementation((path, write, hooks) => {
-    if (path === fs.realpathSync(a)) fs.writeFileSync(path, "subsequent independent writer"); return writer(path, write, hooks);
+    if (path === fs.realpathSync.native(a)) fs.writeFileSync(path, "subsequent independent writer"); return writer(path, write, hooks);
   });
   try {
     withConfigWriteLock(join(alias, "config.toml"), held => {
       expect(() => runConfigWriteChild(join(alias, "config.toml"), held, env => {
-        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync(join(b, "..")), alias, "junction"); fs.writeFileSync(join(env.CODEX_HOME!, "config.toml"), "child bytes");
+        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync.native(join(b, "..")), alias, "junction"); fs.writeFileSync(join(env.CODEX_HOME!, "config.toml"), "child bytes");
       })).toThrow("canonical preimage recovery refused");
     });
     expect(fs.readFileSync(a, "utf8")).toBe("subsequent independent writer"); expect(fs.readFileSync(b, "utf8")).toBe("B");
@@ -975,10 +975,10 @@ test("alias-only drift restores canonical bytes while holding the canonical lock
   const fs = await import("node:fs"), { runConfigWriteChild } = await import("../../src/codex/config-write-lock");
   const original = Buffer.from("# original\r\n[features.multi_agent_v2]\r\nenabled = true\r\nmax_concurrent_threads_per_session = 64\r\n");
   const a = fixtureConfig(original.toString()), b = fixtureConfig("B"), root = fs.mkdtempSync(join(tmpdir(), "ocx-alias-only-")); roots.push(root);
-  const alias = join(root, "home"); fs.symlinkSync(fs.realpathSync(join(a, "..")), alias, "junction");
+  const alias = join(root, "home"); fs.symlinkSync(fs.realpathSync.native(join(a, "..")), alias, "junction");
   withConfigWriteLock(join(alias, "config.toml"), held => {
     expect(() => runConfigWriteChild(join(alias, "config.toml"), held, env => {
-      fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync(join(b, "..")), alias, "junction"); fs.writeFileSync(join(env.CODEX_HOME!, "config.toml"), "child bytes");
+      fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync.native(join(b, "..")), alias, "junction"); fs.writeFileSync(join(env.CODEX_HOME!, "config.toml"), "child bytes");
     })).toThrow("canonical preimage restored");
     expect(withConfigWriteLock(a, () => true).ok).toBe(false); expect(fs.readFileSync(a)).toEqual(original);
   });
@@ -990,7 +990,7 @@ test("canonical-target replacement refuses restore and retains byte-identical re
   const atomic = await import("../../src/config/atomic-write"), { runConfigWriteChild } = await import("../../src/codex/config-write-lock");
   const original = Buffer.from("# recovery\r\n[features.multi_agent_v2]\r\nenabled = true\r\nmax_concurrent_threads_per_session = 64\r\n");
   const a = fixtureConfig(original.toString()), b = fixtureConfig("B"), root = fs.mkdtempSync(join(tmpdir(), "ocx-canonical-replacement-")); roots.push(root);
-  const alias = join(root, "home"), canonical = fs.realpathSync(a); fs.symlinkSync(fs.realpathSync(join(a, "..")), alias, "junction");
+  const alias = join(root, "home"), canonical = fs.realpathSync.native(a); fs.symlinkSync(fs.realpathSync.native(join(a, "..")), alias, "junction");
   const writer = atomic.atomicWriteFileStreamed; let lockedAtPublication = false;
   const spy = spyOn(atomic, "atomicWriteFileStreamed").mockImplementation((path, write, hooks) => writer(path, write, path === canonical ? {
     ...hooks, beforeRename: () => {
@@ -1001,7 +1001,7 @@ test("canonical-target replacement refuses restore and retains byte-identical re
   try {
     withConfigWriteLock(join(alias, "config.toml"), held => {
       expect(() => runConfigWriteChild(join(alias, "config.toml"), held, env => {
-        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync(join(b, "..")), alias, "junction"); fs.writeFileSync(join(env.CODEX_HOME!, "config.toml"), "child bytes");
+        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync.native(join(b, "..")), alias, "junction"); fs.writeFileSync(join(env.CODEX_HOME!, "config.toml"), "child bytes");
       })).toThrow("canonical preimage recovery refused");
     });
     expect(lockedAtPublication).toBe(true); expect(fs.readFileSync(a, "utf8")).toBe("independent replacement"); expect(fs.readFileSync(b, "utf8")).toBe("B");
@@ -1015,11 +1015,11 @@ test("canonical-target replacement refuses restore and retains byte-identical re
 test("canonical target redirected by the child refuses recovery without touching its new target", async () => {
   const fs = await import("node:fs"), { runConfigWriteChild } = await import("../../src/codex/config-write-lock");
   const original = "[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n";
-  const a = fixtureConfig(original), b = fixtureConfig("B"), canonical = fs.realpathSync(a);
+  const a = fixtureConfig(original), b = fixtureConfig("B"), canonical = fs.realpathSync.native(a);
   const journal = join(canonical, "..", "opencodex-journal.json"); fs.writeFileSync(journal, "retained journal authority");
   withConfigWriteLock(a, held => {
     expect(() => runConfigWriteChild(a, held, () => {
-      fs.writeFileSync(canonical, "child bytes"); fs.renameSync(canonical, canonical + ".child-left"); fs.symlinkSync(fs.realpathSync(b), canonical);
+      fs.writeFileSync(canonical, "child bytes"); fs.renameSync(canonical, canonical + ".child-left"); fs.symlinkSync(fs.realpathSync.native(b), canonical);
     })).toThrow("canonical preimage recovery refused");
   });
   expect(fs.lstatSync(a).isSymbolicLink()).toBe(true); expect(fs.readFileSync(b, "utf8")).toBe("B");
@@ -1033,13 +1033,13 @@ test("canonical recovery validates the actual atomic destination before publicat
   const fs = await import("node:fs"), { spyOn } = await import("bun:test");
   const atomic = await import("../../src/config/atomic-write"), { runConfigWriteChild } = await import("../../src/codex/config-write-lock");
   const a = fixtureConfig("preimage"), b = fixtureConfig("B"), root = fs.mkdtempSync(join(tmpdir(), "ocx-recovery-target-")); roots.push(root);
-  const alias = join(root, "home"), canonical = fs.realpathSync(a); fs.symlinkSync(fs.realpathSync(join(a, "..")), alias, "junction");
+  const alias = join(root, "home"), canonical = fs.realpathSync.native(a); fs.symlinkSync(fs.realpathSync.native(join(a, "..")), alias, "junction");
   const writer = atomic.atomicWriteFileStreamed;
-  const spy = spyOn(atomic, "atomicWriteFileStreamed").mockImplementation((path, write, hooks) => writer(path === canonical ? fs.realpathSync(b) : path, write, hooks));
+  const spy = spyOn(atomic, "atomicWriteFileStreamed").mockImplementation((path, write, hooks) => writer(path === canonical ? fs.realpathSync.native(b) : path, write, hooks));
   try {
     withConfigWriteLock(join(alias, "config.toml"), held => {
       expect(() => runConfigWriteChild(join(alias, "config.toml"), held, env => {
-        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync(join(b, "..")), alias, "junction"); fs.writeFileSync(join(env.CODEX_HOME!, "config.toml"), "child bytes");
+        fs.unlinkSync(alias); fs.symlinkSync(fs.realpathSync.native(join(b, "..")), alias, "junction"); fs.writeFileSync(join(env.CODEX_HOME!, "config.toml"), "child bytes");
       })).toThrow("canonical preimage recovery refused");
     });
     expect(fs.readFileSync(a, "utf8")).toBe("child bytes"); expect(fs.readFileSync(b, "utf8")).toBe("B");
@@ -1051,7 +1051,7 @@ test("canonical recovery validates the actual atomic destination before publicat
 
 test("canonical dangling symlink is a changed target rather than proven absence", async () => {
   const fs = await import("node:fs"), { runConfigWriteChild } = await import("../../src/codex/config-write-lock");
-  const a = fixtureConfig("preimage"), canonical = fs.realpathSync(a), missingTarget = canonical + ".missing";
+  const a = fixtureConfig("preimage"), canonical = fs.realpathSync.native(a), missingTarget = canonical + ".missing";
   withConfigWriteLock(a, held => {
     expect(() => runConfigWriteChild(a, held, () => { fs.unlinkSync(canonical); fs.symlinkSync(missingTarget, canonical); })).toThrow("canonical preimage recovery refused");
   });
@@ -1065,10 +1065,10 @@ for (const point of ["wrapper entry", "initial spawn validator"]) test(`transiti
   const atomic = await import("../../src/config/atomic-write");
   const original = Buffer.from("# exact CRLF\r\n[agents]\r\nmax_threads = 7 # children\r\n");
   const a = fixtureConfig(original.toString()), b = fixtureConfig("model = \"B\"\n");
-  const canonical = fs.realpathSync(a), home = join(canonical, ".."), root = fs.mkdtempSync(join(tmpdir(), "ocx-staged-entry-")); roots.push(root);
-  const alias = join(root, "home"), bHome = fs.realpathSync(join(b, "..")); fs.symlinkSync(home, alias, "junction");
+  const canonical = fs.realpathSync.native(a), home = join(canonical, ".."), root = fs.mkdtempSync(join(tmpdir(), "ocx-staged-entry-")); roots.push(root);
+  const alias = join(root, "home"), bHome = fs.realpathSync.native(join(b, "..")); fs.symlinkSync(home, alias, "junction");
   const retarget = () => { fs.unlinkSync(alias); fs.symlinkSync(bHome, alias, "junction"); };
-  const writer = atomic.atomicWriteFile, realpath = fs.realpathSync; let staged = false, homeReads = 0, children = 0;
+  const writer = atomic.atomicWriteFile, realpath = fs.realpathSync.native; let staged = false, homeReads = 0, children = 0;
   const publication = spyOn(atomic, "atomicWriteFile").mockImplementation((path, content, io, hooks) => {
     writer(path, content, io, hooks);
     if (path === canonical && content.includes("enabled = false")) {
@@ -1077,7 +1077,7 @@ for (const point of ["wrapper entry", "initial spawn validator"]) test(`transiti
       if (point === "wrapper entry") retarget();
     }
   });
-  const resolution = spyOn(fs, "realpathSync").mockImplementation((path, options) => {
+  const resolution = spyOn(fs.realpathSync, "native").mockImplementation((path, options) => {
     const resolved = realpath(path, options);
     // The native assertion reads the home first; environment preparation reads it
     // again immediately before the wrapper's initial spawn validation.
@@ -1095,12 +1095,12 @@ for (const point of ["wrapper entry", "initial spawn validator"]) test(`transiti
 for (const missing of [false, true]) test(`toggle initial spawn validator retains recovery protection (missing=${missing})`, async () => {
   const fs = await import("node:fs"), { spyOn } = await import("bun:test");
   const { runConfigWriteChild } = await import("../../src/codex/config-write-lock");
-  const a = fixtureConfig("original\r\n"), b = fixtureConfig("B"), canonical = fs.realpathSync(a), home = join(canonical, "..");
+  const a = fixtureConfig("original\r\n"), b = fixtureConfig("B"), canonical = fs.realpathSync.native(a), home = join(canonical, "..");
   const root = fs.mkdtempSync(join(tmpdir(), "ocx-initial-validator-")); roots.push(root);
-  const alias = join(root, "home"), bHome = fs.realpathSync(join(b, "..")); fs.symlinkSync(home, alias, "junction");
+  const alias = join(root, "home"), bHome = fs.realpathSync.native(join(b, "..")); fs.symlinkSync(home, alias, "junction");
   if (missing) fs.unlinkSync(a);
-  const realpath = fs.realpathSync; let homeReads = 0, children = 0;
-  const resolution = spyOn(fs, "realpathSync").mockImplementation((path, options) => {
+  const realpath = fs.realpathSync.native; let homeReads = 0, children = 0;
+  const resolution = spyOn(fs.realpathSync, "native").mockImplementation((path, options) => {
     const resolved = realpath(path, options);
     if (path === home && ++homeReads === 2) { fs.unlinkSync(alias); fs.symlinkSync(bHome, alias, "junction"); }
     return resolved;
@@ -1118,7 +1118,7 @@ for (const point of ["wrapper entry", "spawn revalidation"]) test(`changed canon
   const fs = await import("node:fs"), { spyOn } = await import("bun:test");
   const atomic = await import("../../src/config/atomic-write");
   const original = Buffer.from("# preserve bytes\r\n[agents]\r\nmax_threads = 7\r\n");
-  const a = fixtureConfig(original.toString()), canonical = fs.realpathSync(a), writer = atomic.atomicWriteFile;
+  const a = fixtureConfig(original.toString()), canonical = fs.realpathSync.native(a), writer = atomic.atomicWriteFile;
   const replace = () => { fs.writeFileSync(a + ".replacement", "independent replacement"); fs.renameSync(a + ".replacement", a); };
   let staged = false, children = 0;
   const publication = spyOn(atomic, "atomicWriteFile").mockImplementation((path, content, io, hooks) => {
