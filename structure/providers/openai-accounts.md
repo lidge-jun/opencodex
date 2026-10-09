@@ -280,6 +280,22 @@ API-key and custom forward destinations preserve their metadata. See [Responses 
 
 Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
 
+## Native-main refresh cancellation
+
+`src/codex/main-account.ts` takes the CODEX_HOME exclusive claim, then the
+per-grant refresh file lock. Caller cancellation can stop either wait and is
+checked before the token exchange starts. Once started, the exchange observes
+only the refresh's own 30-second timeout: success rotates and retires the old
+refresh token, so cancellation cannot discard the only live grant. Both locks
+await the callback through completion, including publication; aborting their
+wait signal does not release an acquired lock while the exchange runs.
+Successful refresh publishes access and refresh tokens and advances the
+credential mutation epoch before clearing grant rejection and applicable
+reauth quarantine, then throws the caller's abort reason if cancelled.
+Snapshot and identity checks still refuse an external auth writer, including
+when the caller also cancelled. Same-identity device reauth obtains a new login
+grant rather than rotating the existing grant and keeps its pre-publication fence.
+
 ## Manual account pause and resume
 
 Manual pause/resume in `src/codex/auth-api/account-pause-group.ts` resolves existing native-main

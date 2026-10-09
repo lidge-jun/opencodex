@@ -381,6 +381,12 @@ from provider enforcement, rate limits, or account actions.
 
 Terminal refresh failures mark the account as needing reauthentication instead of retrying forever.
 
+For the native main Codex credential in `CODEX_HOME/auth.json`, cancelling a request stops a
+waiting refresh before the token exchange starts. An exchange already started finishes within
+its own 30-second timeout and saves successful access and refresh tokens before reporting the
+request's cancellation. This preserves the rotated refresh token for later requests; a concurrent
+external credential replacement still takes precedence.
+
 **Cooldowns (Codex pool).** Upstream `429` / quota responses set a hard cooldown from
 `Retry-After`, quota `reset` headers (capped), or a short default backoff. Accounts on an explicit
 `Retry-After` cooldown are not probed early; reset-derived cooldowns may receive a paced probe lease
