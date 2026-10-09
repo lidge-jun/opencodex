@@ -97,3 +97,14 @@ FH=$(mktemp -d); env -u HTTPS_PROXY -u NODE_EXTRA_CA_CERTS HOME="$FH" USERPROFIL
   bun test tests/routing/combo-management-api.test.ts
 ```
 
+
+## Implementation record
+
+Implemented as written in PR #6833 (branch `codex/n3-combo-rename-fixture`, commit `0fa7ee87df`),
+test-only, in `tests/routing/combo-management-api.test.ts` (1,913 lines, under the ratchet cap, so
+no sibling file was needed). Before the change the three regressions fail (rename: 3 discovery
+calls; serialization: the first owner observes the second's `OPENCODEX_HOME`; poison: the drain
+resolves). After: 41/41 in the file under a fresh startup home; independent review also ran it with
+CI's `--isolate --timeout 60000` flags (77/77 across four files) and confirmed the timeout probe
+drains the owner before the next case.
+
