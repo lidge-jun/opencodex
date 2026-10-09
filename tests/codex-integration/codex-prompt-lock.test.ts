@@ -70,6 +70,14 @@ describe("staleness", () => {
     expect(tryAcquire(path, dead).ok).toBe(true);
   });
 
+  for (const token of [undefined, 42] as const) test(`a dead expired record with a ${token === undefined ? "missing" : "non-string"} token is unsafe and preserved`, () => {
+    const path = lockPath();
+    const body = JSON.stringify({ ...ownEvidence(ownerDefaults), ...(token === undefined ? {} : { token }), pid: 999999, acquiredAt: 1_000_000 });
+    writeFileSync(path, body, "utf8");
+    expect(tryAcquire(path, dead)).toEqual({ ok: false, error: "unsafe", detail: path });
+    expect(readFileSync(path, "utf8")).toBe(body);
+  });
+
   test("a dead owner INSIDE the grace window is respected", () => {
     // A process can die microseconds after writing its lock; a peer mid-write
     // deserves the window.

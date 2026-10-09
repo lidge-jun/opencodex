@@ -107,7 +107,11 @@ function acquireReserved(path: string, token: string, deps: OwnerDeps & LockDeps
     return entry;
   });
   let previous: LockRecord | null;
-  try { previous = JSON.parse(observed.body); } catch { previous = null; }
+  // Same shape gate as readRecord: a malformed record is evidence, never a takeover target.
+  try {
+    const parsed = JSON.parse(observed.body) as LockRecord;
+    previous = typeof parsed?.token === "string" && typeof parsed?.pid === "number" ? parsed : null;
+  } catch { previous = null; }
   const state = ownerState(previous, deps);
   if (state === "unsafe") return { ok: false, error: "unsafe", detail: path };
   if (state !== "dead" || !previous || !Number.isFinite(previous.acquiredAt)
