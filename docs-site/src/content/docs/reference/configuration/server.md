@@ -477,6 +477,14 @@ Codex app-servers are running, the proxy logs a restart hint and records `reload
 in its auto-refresh status. Run `ocx sync --restart-codex` when ready to restart those sessions.
 Automatic refresh never restarts them.
 
+When a background refresh changes the served set, OpenCodex also updates client integrations
+it has already written: an existing Grok Build block, the Claude Desktop gateway profile it
+applied (only while that profile is still selected and unedited, keeping its static, hybrid or
+discovery mode), and the owned blocks of file integrations such as OpenCode, Kilo, Pi, omo and
+Aside. It never connects a client for the first time, never refreshes Cline (stop Cline and
+run `ocx sync` instead), and skips local clients on a hub without the loopback listener. A
+client it could not refresh is counted in the proxy log; `ocx sync` retries it.
+
 ## Quota-reset notifications (`quotaResetNotify`)
 
 Off by default. When the section is absent, no detection runs, no timer starts, and no state

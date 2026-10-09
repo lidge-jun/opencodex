@@ -90,6 +90,7 @@ traffic through a local interception proxy, which Anthropic may treat as a terms
 owned settings are still observed; otherwise the field is `null`.
 `/api/sync` and roster-update auto-apply never write a gateway profile while the resolved mode is
 first-party; both re-resolve after model discovery before writing.
+Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged.
 
 Mode switches establish the replacement before removing the previous connection. A failed
 first-party apply (disabled intercept, CA failure, unreadable settings or foreign env) preserves

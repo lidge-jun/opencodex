@@ -750,6 +750,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   Object.defineProperty(server, "stop", {
     configurable: true,
     value: async (closeActiveConnections?: boolean): Promise<void> => {
+      backgroundLifecycle?.revokeClientFanout();
       remoteWorkspaceStopping = true;
       liveCallBindings.clear();
       // Disarm the package-tree restart timer before teardown can schedule another restart.

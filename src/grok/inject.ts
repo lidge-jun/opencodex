@@ -1,7 +1,8 @@
-import { constants, copyFileSync, existsSync, readFileSync, statSync } from "node:fs";
+import { constants, copyFileSync, existsSync, readFileSync, lstatSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
+import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { applyEol, dominantEol, isLoopbackHostname, providerBaseHost } from "../codex/inject";
 import {
   grokDefaultReasoningEffort,
@@ -22,7 +23,7 @@ export interface GrokInjectResult {
   ok: boolean;
   changed: boolean;
   message: string;
-  skippedReason?: "no-grok-home" | "orphaned-marker" | "non-loopback";
+  skippedReason?: "no-grok-home" | "orphaned-marker" | "non-loopback" | "refresh-only";
 }
 
 const BEGIN_MARKER = "# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>";
@@ -76,6 +77,18 @@ export function findManagedRegion(content: string): ManagedRegion | null {
   const endMatch = end.exec(content);
   if (!endMatch) return { start: begin.index, end: content.length, orphaned: true };
   return { start: begin.index, end: endMatch.index + endMatch[0].length, orphaned: false };
+}
+
+/** A complete managed fence is the existing opt-in required by refresh-only callers. */
+export function grokManagedBlockPresent(grokHome?: string): boolean {
+  try {
+    const path = join(resolveGrokHome(grokHome), "config.toml");
+    if (!lstatSync(path).isFile()) return false;
+    const region = findManagedRegion(applyEol(readFileSync(path, "utf8"), "\n"));
+    return region != null && !region.orphaned;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1074,12 +1087,27 @@ export function buildGrokManagedBlock(
   return lines.join("\n");
 }
 
+class GrokRefreshOnlyRefusal extends Error {}
+
+function refreshOnlySkipped(): GrokInjectResult {
+  return { ok: true, changed: false, message: "Grok refresh skipped", skippedReason: "refresh-only" };
+}
+
+function isSymlink(path: string): boolean {
+  try { return lstatSync(path).isSymbolicLink(); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 export function injectGrokConfig(
   port: number,
   models: GrokInjectModel[],
   opts: {
     grokHome?: string;
     hostname?: string;
+    refreshOnly?: { admit: () => boolean };
     excluded?: ReadonlySet<string>;
     /** Unfiltered known ids used only to distinguish hidden current models from retired ones. */
     catalogModelIds?: ReadonlySet<string>;
@@ -1108,6 +1136,7 @@ export function injectGrokConfig(
   // at all here; the user configures models manually, outside our fence, where nothing we do
   // can clobber their credential.
   if (!isLoopbackHostname(opts.hostname)) {
+    if (opts.refreshOnly) return refreshOnlySkipped();
     const removed = stripGrokConfig({ ...(opts.grokHome !== undefined ? { grokHome: opts.grokHome } : {}) });
     const cleanup = removed.changed
       ? " Removed the previously generated block, which pointed at a loopback address."
@@ -1131,6 +1160,10 @@ export function injectGrokConfig(
     const eol = dominantEol(rawContent);
     const originalContent = applyEol(rawContent, "\n");
     const originalRegion = findManagedRegion(originalContent);
+    if (opts.refreshOnly && (!configExisted || !originalRegion || originalRegion.orphaned
+      || !opts.refreshOnly.admit() || isSymlink(configPath) || isSymlink(backupPath))) {
+      return refreshOnlySkipped();
+    }
     // Ambiguous fence: refuse before the sweep, or "outside the region" could mean the
     // entire file.
     if (originalRegion?.orphaned) return orphanedMarkerResult("injection");
@@ -1240,8 +1273,20 @@ export function injectGrokConfig(
     // deletes a table the user has in their file. Previously the adjacent-orphan layout got a
     // backup only as a side effect of the fence being destroyed (which made `region` falsy);
     // preserving the fence must not silently drop that safety net.
-    if (configExisted && (!region || orphans.length > 0)) copyBackupOnce(configPath, backupPath);
-    atomicWriteFile(configPath, output);
+    if (opts.refreshOnly) {
+      const refreshOnly = opts.refreshOnly;
+      atomicWriteFileNoFollow(configPath, output, undefined, {
+        validateBeforeRename: () => {
+          try {
+            if (!refreshOnly.admit() || !lstatSync(configPath).isFile()
+              || readFileSync(configPath, "utf8") !== rawContent) throw new Error();
+          } catch { throw new GrokRefreshOnlyRefusal(); }
+        },
+      });
+    } else {
+      if (configExisted && (!region || orphans.length > 0)) copyBackupOnce(configPath, backupPath);
+      atomicWriteFile(configPath, output);
+    }
     return {
       ok: true,
       changed: true,
@@ -1250,6 +1295,7 @@ export function injectGrokConfig(
         : "Added the opencodex managed block to Grok config.",
     };
   } catch (error) {
+    if (error instanceof GrokRefreshOnlyRefusal) return refreshOnlySkipped();
     return errorResult("inject", error);
   }
 }
