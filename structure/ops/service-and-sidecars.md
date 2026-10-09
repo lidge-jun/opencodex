@@ -370,6 +370,16 @@ lease boundary before exiting, and thrown failures release it after owner-aware 
 Replacement and recovery inspect both the captured endpoint and the freshly read runtime record.
 Malformed or unreadable records remain unknown. Recovery requires the same complete owner
 identity and proven-dead liveness; unknown or transferred ownership never starts another proxy.
+Live supervision is re-read separately from durable ownership before stop, package replacement,
+service restoration and direct recovery. Each service command, Node/Bun update run and dashboard
+restart decision shares one `createSupervisionLatch()` from `src/service/desktop-supervision.mjs`:
+`desktop` or `unknown` with `desktopSeen: true` blocks; only a later `none` clears it.
+Plain unknown/unsupported evidence preserves existing decisions unless an earlier block remains.
+`src/update/runtime-ownership.mjs` denies all three update authorities and failed-update recovery
+when blocked. A restoration refusal after a completed package swap does not undo that update.
+Service install, repair, start and restart refuse before mutation, including Windows XML staging
+under injected Desktop evidence; production Windows probes remain unsupported. Limits are listed
+in [desktop supervision](../desktop-shell.md#runtime-ownership-from-the-apps-side).
 The lease is released before any service-manager-mediated start (`service repair` in recovery
 or the post-install refresh): the manager's `ocx start` child cannot join it, and holding it
 through the repair's health wait keeps that proxy from starting (#5760). The recovery decision
@@ -390,7 +400,7 @@ direct start stay serialized with a claim that landed in the unleased window; af
 swap, a lease that stays claimed is reported with manual recovery steps and a non-zero exit. The
 dashboard restart worker in `src/update/job.ts` releases the lease immediately before `ocx
 service repair` and re-acquires it at the direct-start fallthrough, waiting long enough to
-outlast one service-wrapper respawn, then re-runs the recorded-owner veto under it before
+outlast one service-wrapper respawn, then re-runs the durable-owner and live-supervision veto under it before
 mutating the port, because a claim could have landed during the now-unleased refresh window. A
 lease that stays claimed fails closed: nothing is started, and the job is marked failed, since
 the refresh before it produced no serving proxy; an ownership veto still ends as succeeded.

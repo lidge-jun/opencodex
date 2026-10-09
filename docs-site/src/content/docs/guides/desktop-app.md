@@ -83,6 +83,28 @@ The bundled CLI is `/Applications/OpenCodex.app/Contents/MacOS/ocx` on macOS and
 `/usr/bin/ocx` for the Linux deb package. Run that executable with `status` to check
 the app's proxy. Windows supervision detection is unsupported.
 
+While the CLI detects Desktop supervising the proxy, `ocx service install`, `repair`,
+`start`, and `restart` refuse before changing the service, even without recorded ownership
+or verified login registration. Quit OpenCodex, then run `ocx service install` to move
+startup management to the CLI. A duplicate `ocx start` names the Desktop supervisor.
+
+Use **Check for Updates…** in the tray to update the app's bundle. `ocx update` refuses
+package replacement while Desktop supervises the proxy, even for a separate npm/Bun install;
+quit OpenCodex first to update that install. An accepted `ocx restart` reports that Desktop
+starts the replacement and waits for it to become healthy. A newer PATH CLI cannot use
+`ocx restart` to replace the app's proxy with its own runtime.
+
+Terminal `ocx stop` still stops the proxy, but Desktop may start it again after a short
+backoff. Use **Stop proxy** or **Quit** in the tray to keep it stopped. Ordinary stop prints
+this reminder on stderr; `ocx stop --json` skips the supervision probe and reminder.
+
+These guards are early warnings in current CLIs and runtimes; older versions can lack them,
+and Windows does not support the supervision probe. A probe that saw Desktop but could not
+finish verification also blocks the operation. Once blocked, a later inconclusive probe
+does not clear it; a check must positively show no Desktop supervision. With no prior
+Desktop evidence, an inconclusive or unsupported probe keeps the existing command behavior.
+Recorded-ownership guards still apply independently.
+
 ## Startup safety on macOS and Linux
 
 Startup safety reports **Desktop app** protection when fresh diagnostics verify

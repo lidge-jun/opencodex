@@ -574,24 +574,24 @@ subject and both manager identities; `recordServiceOwner` re-observes and compar
 the lock, so a mutable shim or downgrade cannot inherit earlier consent. An upgrade is a
 separate user-authorized action; declining or failing it leaves the app a guest. `ocx service claim` in `src/service/claim.ts` accepts the expected subject and compatibility token and calls `recordServiceOwner` under the ownership mutation lease. The CLI rechecks both before writing; a mismatch writes nothing. The desktop owns the consent prompt and treats `approval-changed`, `manager-still-active`, unreadable stop output and stop-child timeout as terminal before its silence wait or claim. Only a parsed `stopped` result or a validated exit-79 `history-incomplete` result reaches that wait. A stopped but unclaimed runtime is reported as such, without a restoration claim.
 
-The verbs that activate the npm registration refuse on a foreign or unknown owner:
-`src/service/repair.ts` stops before it asserts, writes, stops or starts anything, and
-`ocx service start` reports the same refusal. `stop` and `uninstall` are not gated, because
-they deactivate. `src/update/runtime-ownership.mjs` vetoes both the pre-update stop and the
-post-update service refresh for all three update lanes — `src/update/index.ts`,
-`bin/ocx.mjs` and the dashboard worker in `src/update/job.ts`. The shared update decision has
-three independent authorities: package replacement, runtime stop and service restoration.
-Unknown and desktop ownership deny all three because a claim alone does not prove that the live
-process is detached from the npm package; CLI ownership permits the ordinary stop-first
-flow. Both package updaters use `src/service/install-state-contract.mjs`, backed by the single
-`state-record.mjs` parser and authority selector. One mutation lease covers the fresh stop
-authorization, the stop child, the current runtime-record re-read and package replacement.
+Activating service verbs retain their foreign/unknown durable-owner refusals.
+`src/service/desktop-command-guard.ts` separately refuses install, repair, start and restart
+before mutation, including registration staging; stop and uninstall remain available.
+Each guarded operation uses one `createSupervisionLatch()` from `src/service/desktop-supervision.mjs`:
+desktop or unknown with desktopSeen blocks; only a later none clears it. Plain unknown/unsupported cannot clear a block.
+`src/update/runtime-ownership.mjs` denies package replacement, stop and service restoration
+under blocked supervision, even for an unrelated npm install; foreign/unknown durable ownership also denies all three.
+Node and Bun updater gates, failure recovery and the dashboard restart veto re-read supervision at mutation boundaries.
+`src/cli/desktop-runtime-guidance.ts` names the supervisor for duplicate starts and accepted restarts;
+ordinary stop warns Desktop may restart it, while stop --json skips the probe and notice. Desktop starts its replacement.
+Both package updaters use `src/service/install-state-contract.mjs`, backed by the single state-record.mjs parser and authority selector.
+One mutation lease still covers fresh authorization, stop, runtime re-read and package replacement.
 The updater never treats the pre-stop address as proof that this installation is idle;
 an unreadable current record is unknown, and a valid address is probed even when its recorded
 PID is gone. Lease delegation is passed only to stop and recovery children, never package
 manager children. A replacement refusal passes through owner-aware recovery: only the same CLI
 owner revives the stopped runtime; foreign ownership stays transferred and unknown ownership
-remains a reported recovery requirement. Dashboard restart delegates the lease token to its `service repair` child, and releases the lease before that refresh: the service manager spawns `ocx start` outside the worker's process tree with no token, so the managed child must take the lease itself (#5760). Before the direct-start fallthrough kills or spawns on the port, the worker takes the lease back — a refresh that stayed claimed stops the restart — and re-runs the recorded-owner veto under it because a claim could have landed during the unleased refresh window. Direct start holds the same lease through bind plus PID and runtime-address publication. If listener rollback cannot prove the socket closed, the process retains its lease until exit.
+remains a reported recovery requirement. Dashboard restart delegates the lease token to its `service repair` child, and releases the lease before that refresh: the service manager spawns `ocx start` outside the worker's process tree with no token, so the managed child must take the lease itself (#5760). Before the direct-start fallthrough kills or spawns on the port, the worker takes the lease back — a refresh that stayed claimed stops the restart — and re-runs the durable-owner and live-supervision veto under it because a claim could have landed during the unleased refresh window. Direct start holds the same lease through bind plus PID and runtime-address publication. If listener rollback cannot prove the socket closed, the process retains its lease until exit.
 The registration is never deleted; `ocx service install` releases the marker only after the
 registration succeeds. Busy lease diagnostics name the recorded PID, current liveness, optional executable (omitted by default on Windows), and lease age. The process identity is unverified because a PID may be reused.
 

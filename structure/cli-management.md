@@ -6,6 +6,14 @@
 
 Catalog-derived reasoning-level diagnostics are escaped only at the human-output boundary, which `src/cli/runtime-api.ts` owns alongside the human/JSON print split. Every CLI path that prints a hub-supplied catalog value renders it there: the first-time refusal in `src/cli/connect.ts` and the connected `ocx sync` refusal in `src/cli/dispatch.ts`. C0/C1 controls, DEL, and Unicode line/paragraph separators print as visible hexadecimal escapes; structured status retains the exact reason, and a rendered failure keeps the domain error as its `cause`. The ready/unverified/incompatible classification and exit policy are unchanged. `src/cli/capabilities-command.ts` rejects leftover positional arguments, unknown or repeated flags, and blank route filters with exit 64 before emitting a capability index; a valid unmatched route remains exit 4. `printData` in `src/cli/runtime-api.ts` escapes each human-output line at the shared renderer, including role and delegation-model suggestion rationale. JSON output retains the exact original values. `src/cli/export-command.ts` passes native serialized documents as individual lines so their multiline layout is preserved. `tests/cli/cli-headless-parity.test.ts` checks both suggestion paths independently from their parsed JSON output; `tests/cli/cli-export-command.test.ts` covers export framing.
 
+`src/cli/desktop-runtime-guidance.ts` names verified Desktop supervision of the target for
+duplicate starts and accepted restart requests. Ordinary stop warns on stderr that Desktop
+may start the proxy again after backoff and directs the user to Stop Proxy or Quit in the
+OpenCodex menu. `stop --json` does not probe or print this guidance. Acceptance is not
+replacement health proof: lifecycle decisions, attestation and exit codes stay authoritative,
+and a known supervised target never earns a competing CLI recovery start. Command guard
+continuity follows [runtime ownership](runtime.md#background-service-runtime-ownership).
+
 ## Head and help navigation
 
 `src/cli/root.ts`, `src/cli/help.ts`, `src/cli/help-navigation.ts`
