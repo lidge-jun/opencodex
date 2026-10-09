@@ -182,3 +182,14 @@ bun run structure:check
 plus the issue's probe: plant a generated `ocx-probe.md` in `$FH/.claude/agents`,
 start Bun with `CLAUDE_CONFIG_DIR` unset, and confirm it survives.
 
+
+## Implementation record
+
+Merged as PR #6835 (`7f642e30e8`). Beyond this doc, review added: guarded served-catalog
+invalidation (`src/claude/intercept/cli-catalog.ts`) and the intercept `settings.json`
+writer (`src/claude/intercept/settings.ts`); every touched path, including
+`cache/gateway-models.json` and each agent definition's temporary file, is passed to the
+guard; roots resolve at check time with case folding on macOS and Windows; removal
+protection uses the same comparison and keeps the checkout-content lift. The regression file
+has eight cases, all failing on `dev` before the change.
+

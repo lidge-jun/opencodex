@@ -39,3 +39,31 @@ home.
 Focused files per doc plus `bun run typecheck`, run with a temporary home at
 process start. The full suite runs in hosted CI on each PR's exact head.
 
+
+## Outcome
+
+**DONE**, 2026-10-09. All three items merged into `dev` with squash admin merges, after
+exact-head CI passed and independent gpt-6.1-sol reviews passed:
+
+| Doc | Issue | PR | Merge commit | Exact-head CI |
+| --- | --- | --- | --- | --- |
+| 010 | #6775 | #6835 | `7f642e30e8` | all jobs green at `9ac1a95263`, including the nine Windows shards, `npm-global windows-latest` and `keyring windows` |
+| 020 | #6777 | #6833 | `6d7e5f48ad` | all jobs green at `0fa7ee87df`; Windows shards not selected (not Windows-sensitive) |
+| 030 | #6776 | #6834 | `c4baa30e09` | all jobs green at `c6addbb97e`; Windows shards not selected |
+
+Before merging, the three heads were combined on `dev` `b89bbfb083` (#6835 shares
+`layout.json` and `test-layout-expected.json` with changes that landed meanwhile): 180
+focused tests, typecheck and `structure:check` passed. The three issues were closed with
+a comment naming the PR and merge commit.
+
+010 went through four review rounds. The plan's two guarded writers grew to four (agent
+sync, gateway cache, served-catalog invalidation, intercept `settings.json`), and the guard
+now judges every touched path by where it resolves (directory and file links), resolves its
+roots at check time, compares case-insensitively on macOS and Windows, splits containment
+on the platform separator, and covers removals with the same comparison while keeping the
+checkout-content lift.
+
+Not done here: other client homes that still default to `os.homedir()` (Claude Desktop
+config library, several client-integration writers, Kiro, XDG-based clients) remain
+follow-up candidates. Native Windows was exercised only through hosted CI.
+
