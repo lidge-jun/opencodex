@@ -183,11 +183,11 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     throw new Error(foreignServiceOwnerRefusal(ownership.ownership));
   }
 
+  (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
+  (deps.assertAuth ?? assertServiceAuthEnvironment)();
   const runtime = Object.freeze({ ...(deps.selectRuntime ?? durableBunRuntime)() });
   const configDir = (deps.configDir ?? getConfigDir)();
   (deps.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { platform, rootWasAbsent: !existsSync(configDir) });
-  (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
-  (deps.assertAuth ?? assertServiceAuthEnvironment)();
 
   const temporaryLauncher = (deps.launcherPathDiagnostic ?? (() => serviceLauncherPathDiagnostic(undefined, platform, true)))();
   if (temporaryLauncher) console.warn(`⚠️ ${temporaryLauncher}`);

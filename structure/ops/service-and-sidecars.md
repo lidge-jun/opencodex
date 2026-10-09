@@ -102,9 +102,9 @@ Before service install/repair or a Windows Codex shim mutation, the selected Bun
 create and remove an exclusive nonce-named directory inside the config root. Admission executes
 that exact lexical path with `-e`, no shell, a hidden window and a five-second timeout. Only a
 matching nonce acknowledgment admits it. Failure refuses with `OCX_RUNTIME_PREFLIGHT_FAILED`
-and `spawn`, `timeout`, `create`, `remove`, or `protocol`; it never discovers another runtime.
+and `spawn`, `timeout`, `create`, `remove`, or `protocol`; it never discovers another runtime. The Node launcher may select a validated PATH Bun before CLI startup when bundled Bun is unusable; durable admission only probes the resulting selection.
 The frozen selection feeds scheduler rendering, the WinSW entry and the install-state writer;
-`installServiceSafely` admits once before cleanup and uses internal commit functions. Direct public installers retain their own admission gate.
+`installServiceSafely` refuses live Desktop supervision before selection or admission, then admits once before cleanup and uses internal commit functions. Repair refuses Desktop before diagnosis, checks ownership and auth before admission, and admits before native repair or scheduler stop. Direct public installers retain their own admission gate.
 The fresh scheduler path stages and registers its definition, removes staging and claims config
 ownership before admission, then calls `prepare()`. It captures root absence and freezes the runtime
 at entry, but probes with `rootWasAbsent: false` after ownership initialization creates the root.

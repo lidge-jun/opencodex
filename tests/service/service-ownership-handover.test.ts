@@ -313,14 +313,15 @@ describe("live Desktop service command guards", () => {
   test("safe install checks fresh supervision after asynchronous cleanup", async () => {
     for (const blocked of [SUPERVISION, SEEN_UNKNOWN]) {
       let reads = 0;
+      let current: DesktopSupervision = { kind: "none" };
       const touched: string[] = [];
       await expect(installServiceSafely("scheduler", () => { touched.push("install"); }, {
-        inspectSupervision: () => reads++ === 0 ? { kind: "none" } : blocked,
+        inspectSupervision: () => { reads++; return current; },
         platform: "darwin", diagnose: () => INSTALLED,
         managerOps: () => ({ status: () => null, stop: () => { touched.push("stop"); } }),
-        stopTrackedProxy: async () => { touched.push("tracked"); },
+        stopTrackedProxy: async () => { touched.push("tracked"); current = blocked; },
       })).rejects.toThrow(desktopServiceRefusal(blocked, true)!);
-      expect(reads).toBe(2);
+      expect(reads).toBe(3);
       expect(touched).toEqual(["tracked"]);
     }
   });

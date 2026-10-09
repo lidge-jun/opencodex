@@ -72,7 +72,7 @@ describe("service selected-runtime admission", () => {
           repairNative: () => { effects.push("download/xml"); }, writeNativeState: () => { effects.push("state"); },
         })).rejects.toMatchObject({ code: "OCX_RUNTIME_PREFLIGHT_FAILED", reason });
       }
-      expect(effects).toEqual([]);
+      expect(effects).toEqual(["env", "token", "env", "token"]);
     });
   }
 
