@@ -338,6 +338,9 @@ This process's start identity is cached where available; on Windows it is unknow
 Another PID's start lookup runs only for a dead-owner takeover decision when the record has start
 evidence, with a one-second command timeout; Windows retains trusted PowerShell for that lookup.
 Choosing evidence is published atomically before the bakery scan.
+Lock filesystem operations reuse `src/lib/windows-atomic-replace.ts`: Windows EPERM, EBUSY and EACCES retry after 25ms and 50ms; exhaustion returns busy. Unreadable evidence or a contended exclusive open followed by EEXIST never authorizes takeover.
+Unique cleanup is bounded and best effort. Release rechecks the token on every unlink attempt; protected writer errors propagate.
+`tests/codex-integration/codex-prompt-lock-sharing.test.ts` covers sharing violations.
 The last reservation removes its directory only with atomic empty-directory rmdir.
 Unsafe acquisition is non-retryable and carries the lock-path diagnostic through writer results.
 Automatic recovery is a no-op when the Codex home is proven absent and creates nothing.

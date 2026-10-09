@@ -2,6 +2,8 @@ import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsRegExe } from "../lib/windows-elevation";
 import { hostname } from "node:os";
 
+import { LockFileBusy, lockFileOperation } from "./prompt-lock-io";
+
 export interface HostIdentity { hostname: string; machine: string }
 export interface OwnerEvidence { pid: number; host?: HostIdentity; processStart?: string }
 export interface OwnerDeps {
@@ -118,8 +120,11 @@ export function ownerState(record: OwnerEvidence | null, deps: OwnerDeps): "dead
 }
 export function safeNamespace(path: string, kind: "file" | "directory", deps: OwnerDeps, missing = false): boolean {
   try {
-    const stat = deps.lstat(path), uid = deps.uid();
+    const stat = lockFileOperation(() => deps.lstat(path), deps.platform), uid = deps.uid();
     return !stat.isSymbolicLink() && (kind === "file" ? stat.isFile() : stat.isDirectory())
       && (deps.platform === "win32" || (uid !== undefined && stat.uid === uid));
-  } catch (error) { return missing && (error as NodeJS.ErrnoException).code === "ENOENT"; }
+  } catch (error) {
+    if (error instanceof LockFileBusy) throw error;
+    return missing && (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
 }

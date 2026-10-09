@@ -21,11 +21,13 @@
  * is handled by the per-target byte checks in the write path, and the rename
  * window itself is documented as irreducible from user space.
  */
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { UnsafeLockNamespace, withLockClaim } from "./prompt-lock-claim";
 
 import { ownerDefaults, ownEvidence, ownerState, safeNamespace, type OwnerDeps, type OwnerEvidence } from "./prompt-lock-owner";
+
+import { LockFileBusy, lockFileOperation } from "./prompt-lock-io";
 
 const FILE_MODE = 0o600;
 
@@ -55,12 +57,13 @@ export interface LockDeps extends Partial<OwnerDeps> {
 }
 const defaultDeps: LockDeps = { ...ownerDefaults, now: () => Date.now() };
 
-function readRecord(path: string): LockRecord | null {
+function readRecord(path: string, platform: NodeJS.Platform): LockRecord | null {
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as LockRecord;
+    const parsed = JSON.parse(lockFileOperation(() => readFileSync(path, "utf8"), platform)) as LockRecord;
     if (typeof parsed?.token !== "string" || typeof parsed?.pid !== "number") return null;
     return parsed;
-  } catch {
+  } catch (error) {
+    if (error instanceof LockFileBusy) throw error;
     return null;
   }
 }
@@ -75,23 +78,25 @@ export function tryAcquire(path: string, deps: LockDeps = defaultDeps): AcquireR
       () => acquireReserved(path, token, resolved), deps.onClaimInitialized);
     return reserved.ok ? reserved.value : { ok: false, error: "locked" };
   } catch (error) {
+    if (error instanceof LockFileBusy) return { ok: false, error: "locked" };
     if (error instanceof UnsafeLockNamespace) return { ok: false, error: "unsafe", detail: error.path };
     throw error;
   }
 }
 
 function acquireReserved(path: string, token: string, deps: OwnerDeps & LockDeps): AcquireResult {
+  const io = <R>(operation: () => R): R => lockFileOperation(operation, deps.platform);
   const record: LockRecord = { token, ...ownEvidence(deps), acquiredAt: deps.now() };
   const body = JSON.stringify(record);
 
   try {
-    writeFileSync(path, body, { encoding: "utf8", mode: FILE_MODE, flag: "wx" });
+    io(() => writeFileSync(path, body, { encoding: "utf8", mode: FILE_MODE, flag: "wx" }));
     return { ok: true, handle: { path, token } };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
 
-  const previous = readRecord(path);
+  const previous = readRecord(path, deps.platform);
   const state = ownerState(previous, deps);
   if (state === "unsafe") return { ok: false, error: "unsafe", detail: path };
   if (state !== "dead" || !previous || !Number.isFinite(previous.acquiredAt)
@@ -101,7 +106,7 @@ function acquireReserved(path: string, token: string, deps: OwnerDeps & LockDeps
   // the observed stale record between our check and this rename.
   const quarantine = `${path}.stale-${token}`;
   try {
-    renameSync(path, quarantine);
+    io(() => renameSync(path, quarantine));
   } catch {
     // Someone else won the rename, or the owner released between our checks.
     // Either way we do NOT touch the path — retry from the top.
@@ -109,16 +114,16 @@ function acquireReserved(path: string, token: string, deps: OwnerDeps & LockDeps
   }
 
   try {
-    writeFileSync(path, body, { encoding: "utf8", mode: FILE_MODE, flag: "wx" });
+    io(() => writeFileSync(path, body, { encoding: "utf8", mode: FILE_MODE, flag: "wx" }));
   } catch (error) {
     // A successor acquired the real lock between our rename and this create.
     // Its lock is live and is not ours to remove.
-    try { unlinkSync(quarantine); } catch { /* debris */ }
+    try { io(() => unlinkSync(quarantine)); } catch { /* debris */ }
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return { ok: false, error: "locked" };
     throw error;
   }
 
-  try { unlinkSync(quarantine); } catch { /* debris */ }
+  try { io(() => unlinkSync(quarantine)); } catch { /* debris */ }
   return { ok: true, handle: { path, token } };
 }
 
@@ -127,19 +132,20 @@ function acquireReserved(path: string, token: string, deps: OwnerDeps & LockDeps
  * when we were superseded, which the caller surfaces as `write_superseded`.
  */
 export function release(handle: LockHandle): boolean {
-  if (!safeNamespace(handle.path, "file", ownerDefaults)) return false;
-  const record = readRecord(handle.path);
-  if (record === null || record.token !== handle.token) return false;
   try {
-    unlinkSync(handle.path);
-    return true;
-  } catch {
-    return false;
-  }
+    return lockFileOperation(() => {
+      if (!safeNamespace(handle.path, "file", ownerDefaults)) return false;
+      if (readRecord(handle.path, ownerDefaults.platform)?.token !== handle.token) return false;
+      unlinkSync(handle.path);
+      return true;
+    }, ownerDefaults.platform);
+  } catch { return false; }
 }
 
 /** True when the on-disk lock is still the one this handle acquired. */
 export function stillHeld(handle: LockHandle): boolean {
-  if (!existsSync(handle.path) || !safeNamespace(handle.path, "file", ownerDefaults)) return false;
-  return readRecord(handle.path)?.token === handle.token;
+  try {
+    return safeNamespace(handle.path, "file", ownerDefaults)
+      && readRecord(handle.path, ownerDefaults.platform)?.token === handle.token;
+  } catch { return false; }
 }

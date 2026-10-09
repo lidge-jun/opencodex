@@ -100,13 +100,34 @@ const MAX_RETRIES = 2;
  * Windows sharing violations only, returning the code so the caller can record
  * which one. Any other error is the caller's to see, immediately.
  */
-function transientWindowsReplaceCode(
+export function transientWindowsReplaceCode(
   platform: NodeJS.Platform,
   error: unknown,
 ): ReplaceRetryCode | null {
   if (platform !== "win32") return null;
   const code = (error as NodeJS.ErrnoException).code;
   return code === "EBUSY" || code === "EPERM" || code === "EACCES" ? code : null;
+}
+
+/** Bounded sharing-violation retries for one filesystem operation, never a transaction. */
+export function retryWindowsFileOperation<T>(
+  operation: () => T,
+  io: Pick<AtomicRenameIO, "platform" | "sleep"> = { platform: process.platform, sleep: Bun.sleepSync },
+  onRetry?: (code: ReplaceRetryCode, exhausted: boolean) => void,
+  beforeAttempt?: () => void,
+): T {
+  for (let attempt = 0; ; attempt += 1) {
+    beforeAttempt?.();
+    try { return operation(); }
+    catch (error) {
+      const code = transientWindowsReplaceCode(io.platform, error);
+      if (!code) throw error;
+      const exhausted = attempt >= MAX_RETRIES;
+      onRetry?.(code, exhausted);
+      if (exhausted) throw error;
+      io.sleep(25 * (attempt + 1));
+    }
+  }
 }
 
 export function renameAtomicFile(
@@ -120,22 +141,9 @@ export function renameAtomicFile(
   publisher: ReplacePublisher = "config",
   hooks: RenameValidationHooks = {},
 ): void {
-  for (let attempt = 0; ; attempt += 1) {
-    hooks.validateBeforeRename?.(destination);
-    try {
-      io.rename(source, destination);
-      return;
-    } catch (error) {
-      const code = transientWindowsReplaceCode(io.platform, error);
-      if (!code) throw error;
-      if (attempt >= MAX_RETRIES) {
-        bump(publisher, code, "exhausted");
-        throw error;
-      }
-      bump(publisher, code, "retried");
-      io.sleep(25 * (attempt + 1));
-    }
-  }
+  retryWindowsFileOperation(() => io.rename(source, destination), io,
+    (code, exhausted) => bump(publisher, code, exhausted ? "exhausted" : "retried"),
+    () => hooks.validateBeforeRename?.(destination));
 }
 
 export async function renameAtomicFileAsync(
