@@ -11,7 +11,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { createIsolatedTestEnvironment } from "../../scripts/test";
 import { claudeConfigDir, currentUserHome } from "../../src/claude/gateway-cache";
 import { protectedClaudeConfigDirsForTests } from "../../src/lib/test-home-guard";
@@ -167,6 +167,8 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
       cacheThroughAbsentOverrideAlias: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], absentAlias),
       cacheThroughFileLink: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], fileLinked),
       cacheUnderDotDotNamedChild: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], real + "/..fixture"),
+      // On POSIX a backslash is an ordinary filename character, so this is still a child.
+      cacheUnderBackslashNamedChild: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], real + "/..\\\\fixture"),
       catalog: () => invalidateClaudeCodeServedCatalog(real),
       settings: () => applyClaudeInterceptSettings(env, real),
     };
@@ -176,7 +178,10 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
       catch (error) { refused[name] = /real Claude config directory/.test(String(error)); }
     }
     const fixtureWrite = writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], fixture) !== null;
-    const removalRefused = protectedRemovalReason(absentAlias) !== null && protectedRemovalReason(real) !== null;
+    // Windows reads the backslash as a separator, so there the same spelling leaves the root.
+    const backslashChildRefused = process.platform === "win32" || protectedRemovalReason(real + "/..\\\\fixture") !== null;
+    const removalRefused = protectedRemovalReason(absentAlias) !== null && protectedRemovalReason(real) !== null
+      && backslashChildRefused;
     console.log(JSON.stringify({ refused, fixtureWrite, removalRefused }));
   `;
   try {
@@ -205,6 +210,7 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
         cacheThroughAbsentOverrideAlias: true,
         cacheThroughFileLink: fileLinkBuilt,
         cacheUnderDotDotNamedChild: true,
+        cacheUnderBackslashNamedChild: process.platform !== "win32",
         catalog: true,
         settings: true,
       },
@@ -221,3 +227,37 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
     isolated.cleanup();
   }
 });
+
+test("removal protection keeps the running checkout's own content removable when it sits inside the Claude directory", () => {
+  const checkout = repoRoot();
+  const code = `
+    const { protectedRemovalReason } = await import(${JSON.stringify(repoPath("src", "lib", "test-home-guard.ts"))});
+    const checkout = ${JSON.stringify(checkout)};
+    console.log(JSON.stringify({
+      content: protectedRemovalReason(checkout + "/tests/fixtures/n3-removal-probe") === null,
+      checkoutRoot: protectedRemovalReason(checkout) !== null,
+      protectedRoot: protectedRemovalReason(${JSON.stringify(dirname(checkout))}) !== null,
+    }));
+  `;
+  const isolated = createIsolatedTestEnvironment();
+  try {
+    const child = Bun.spawnSync([process.execPath, "-e", code], {
+      cwd: checkout,
+      env: {
+        ...isolated.env,
+        OCX_TEST_HOME_GUARD: "1",
+        OCX_REAL_HOME: join(isolated.root, "sentinel-home"),
+        // The checkout's parent stands in for a Claude directory that contains the checkout.
+        OCX_REAL_CLAUDE_CONFIG_DIR: dirname(checkout),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(child.exitCode).toBe(0);
+    const lines = new TextDecoder().decode(child.stdout).trim().split("\n");
+    expect(JSON.parse(lines.at(-1)!)).toEqual({ content: true, checkoutRoot: true, protectedRoot: true });
+  } finally {
+    isolated.cleanup();
+  }
+});
+

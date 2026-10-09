@@ -20,7 +20,7 @@
  *    how this incident happened.
  */
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -215,14 +215,18 @@ function currentClaudeConfigRoots(): string[] {
   return REAL_CLAUDE_CONFIG_DIRS.flatMap(path => [canonicalize(path), resolve(path)]);
 }
 
+function foldPlatformCase(path: string): string {
+  return process.platform === "darwin" || process.platform === "win32" ? path.toLowerCase() : path;
+}
+
 function isSameOrInsideIgnoringPlatformCase(root: string, candidate: string): boolean {
-  const foldCase = process.platform === "darwin" || process.platform === "win32";
-  const parent = foldCase ? root.toLowerCase() : root;
-  const child = foldCase ? candidate.toLowerCase() : candidate;
+  const parent = foldPlatformCase(root);
+  const child = foldPlatformCase(candidate);
   if (parent === child) return true;
   const rel = relative(parent, child);
-  // Only a leading ".." COMPONENT leaves the root; a child named "..fixture" is still inside.
-  return rel !== "" && !isAbsolute(rel) && rel.split(/[\\/]/)[0] !== "..";
+  // Only a leading ".." COMPONENT leaves the root, split on this platform's separator: a child
+  // named "..fixture", or "..\\fixture" on POSIX where a backslash is a filename character, is inside.
+  return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
 }
 
 /**
@@ -332,7 +336,12 @@ export function protectedRemovalReason(target: string): string | null {
     // The Claude directory is judged like its writer guard: roots resolved now, case folded
     // where the filesystem folds it, so an alias created after import is still refused.
     for (const root of currentClaudeConfigRoots()) {
-      if (isSameOrInsideIgnoringPlatformCase(root, candidate)) return `the real Claude config directory or a path inside it (${root})`;
+      if (isSameOrInsideIgnoringPlatformCase(root, candidate)) {
+        // Same narrow lift as the trees above: content of the running checkout when that
+        // checkout itself lives inside the directory. Never the root itself.
+        if (foldPlatformCase(root) !== foldPlatformCase(candidate) && isOwnCheckoutContent(root, candidate)) continue;
+        return `the real Claude config directory or a path inside it (${root})`;
+      }
       if (isSameOrInsideIgnoringPlatformCase(candidate, root)) return `an ancestor of the real Claude config directory (${root})`;
     }
   }
