@@ -69,7 +69,6 @@ let previewResponse: (body: Record<string, unknown>, signal?: AbortSignal | null
  */
 let failExtraSources = false;
 let lazycodexRoles: Record<string, unknown>;
-let lazycodexRolesServed = 0;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -216,10 +215,7 @@ beforeEach(() => {
     if (url.includes("/api/grok")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ present: false, models: [] });
     }
-    if (url.endsWith("/api/codex-agent-roles")) {
-      lazycodexRolesServed += 1;
-      return json(lazycodexRoles);
-    }
+    if (url.endsWith("/api/codex-agent-roles")) return json(lazycodexRoles);
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.6-sol"] });
     if (method === "PUT") return putResponse(request);
     if (url.includes("/restore")) return json({ ok: true, clientId: "hermes", changed: true, state: "current", message: "restored" });
@@ -1813,18 +1809,15 @@ test("the LazyCodex role section sits on the omo tab and only when LazyCodex is 
     import("../src/i18n/provider"),
     import("../src/pages/Integrations"),
   ]);
-  // Waits on observable state, not a fixed delay, so a slow runner cannot pass or fail early.
-  const settle = async (ready: () => boolean) => {
-    for (let attempt = 0; attempt < 150 && !ready(); attempt += 1) {
-      await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
-    }
-    expect(ready()).toBe(true);
-    await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
-  };
-  const render = async (hash: string, ready: () => boolean) => {
+  // Every tab panel is mounted, and the section shows only on the active one. Seeding the role list's
+  // store renders it in the first commit, so placement is checked without waiting on a request.
+  type Roles = { detected: boolean; roles: unknown[]; omoJsonc: unknown; available: string[] };
+  const render = async (hash: string, roles: Roles) => {
     testWindow.location.hash = hash;
     mountCount += 1;
     apiBase = `http://ocx-test-${mountCount}.invalid`;
+    lazycodexRoles = { lazycodex: { detected: roles.detected }, omoJsonc: roles.omoJsonc, roles: roles.roles };
+    setClientResourceData(`lazycodex-role-models:${apiBase}`, roles);
     await act(async () => {
       root?.unmount();
       root = createRoot(container);
@@ -1834,26 +1827,28 @@ test("the LazyCodex role section sits on the omo tab and only when LazyCodex is 
         </LanguageProvider>,
       );
     });
-    await settle(ready);
   };
-  const section = (tab: string) => container.querySelector(`#integrations-panel-${tab} #lazycodex-role-models`);
-  const servedAfter = (count: number) => () => lazycodexRolesServed > count;
+  // Compared as a list: under happy-dom, toBeNull() also accepts an HTMLElement, so it cannot fail here.
+  const panelsWithSection = () => [...container.querySelectorAll(".lazycodex-role-models")]
+    .map(element => element.closest("[id^='integrations-panel-']")?.id ?? "outside");
 
-  // Pi-based omo alone: the omo tab asks, and once the answer lands it shows nothing of LazyCodex.
-  await render("#integrations/omo", servedAfter(lazycodexRolesServed));
-  expect(section("omo")).toBeNull();
+  // Pi-based omo alone: no tab shows anything of LazyCodex.
+  await render("#integrations/omo", { detected: false, roles: [], omoJsonc: null, available: [] });
+  expect(panelsWithSection()).toEqual([]);
 
-  lazycodexRoles = {
-    lazycodex: { detected: true, pluginEnabled: true, pluginInstalled: true },
-    omoJsonc: { state: "present" },
+  const detected: Roles = {
+    detected: true,
     roles: [{ role: "explorer", model: "gpt-5.6-sol", omoJsoncModel: null }],
+    omoJsonc: { state: "present" },
+    available: ["gpt-5.6-sol"],
   };
-  await render("#integrations/omo", () => section("omo")?.textContent?.includes("explorer") === true);
-  expect(section("omo")?.textContent).toContain("explorer");
+  await render("#integrations/omo", detected);
+  expect(panelsWithSection()).toEqual(["integrations-panel-omo"]);
+  expect(container.querySelector("#integrations-panel-omo .lazycodex-role-models")?.textContent).toContain("explorer");
 
-  await render("#integrations/codex", () => container.querySelector("#integrations-panel-codex") !== null);
-  expect(container.querySelector("#integrations-panel-codex")).not.toBeNull();
-  expect(section("codex")).toBeNull();
+  // The Codex tab no longer carries it.
+  await render("#integrations/codex", detected);
+  expect(panelsWithSection()).toEqual([]);
 });
 
 test("Droid target changes discard the draft and its confirmation", async () => {
