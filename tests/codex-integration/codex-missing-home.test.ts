@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoRoot } from "../helpers/repo-root";
@@ -68,7 +68,7 @@ test("a native toggle with no executable fails before creating the home", () => 
   expectAbsent();
 });
 
-test("a toggle failure after preparation removes its empty home", () => {
+test("a toggle failure after preparation keeps its empty home without a lock", () => {
   const { value } = run<{ status: number; prepared: boolean }>(`
     const fs = require("node:fs"), path = require("node:path");
     ${toggleRequest}
@@ -80,10 +80,10 @@ test("a toggle failure after preparation removes its empty home", () => {
     return { status: response.status, prepared };
   `);
   expect(value).toEqual({ status: 502, prepared: true });
-  expectAbsent();
+  expect(readdirSync(home.codexHome)).toEqual([]);
 });
 
-test("a toggle lock failure removes its empty prepared home", () => {
+test("a toggle lock failure keeps its empty prepared home", () => {
   const { value } = run<{ status: number; prepared: boolean }>(`
     const { mock } = require("bun:test"), fs = require("node:fs");
     const lock = require("./src/codex/config-write-lock");
@@ -97,7 +97,7 @@ test("a toggle lock failure removes its empty prepared home", () => {
   `);
   expect(value.status).toBe(502);
   expect(value.prepared).toBe(true);
-  expectAbsent();
+  expect(readdirSync(home.codexHome)).toEqual([]);
 });
 
 test("a failed toggle preserves a concurrently populated home", () => {
@@ -127,7 +127,7 @@ test("a failed toggle preserves an empty replacement home", () => {
   expect(existsSync(home.codexHome)).toBe(true);
 });
 
-test("a stale prompt projection removes its empty prepared home", () => {
+test("a stale prompt projection keeps its prepared home without writing config", () => {
   const { value } = run(`
     const prompts = require("./src/codex/prompt-layers"), path = require("node:path");
     return prompts.setToggle("apps", false, "stale", {
@@ -135,10 +135,10 @@ test("a stale prompt projection removes its empty prepared home", () => {
       storePath: path.join(process.env.CODEX_HOME, "opencodex-prompt.json") });
   `);
   expect(value).toMatchObject({ ok: false, error: "stale_revision" });
-  expectAbsent();
+  expect(existsSync(join(home.codexHome, "config.toml"))).toBe(false);
 });
 
-test("a failed prompt projection also cleans a separately prepared store directory", () => {
+test("a failed prompt projection writes no config or store", () => {
   const { value } = run(`
     const prompts = require("./src/codex/prompt-layers"), path = require("node:path");
     return prompts.setToggle("apps", false, "stale", {
@@ -146,8 +146,8 @@ test("a failed prompt projection also cleans a separately prepared store directo
       storePath: path.join(process.env.OPENCODEX_HOME, "prompt-store", "prompt.json") });
   `);
   expect(value).toMatchObject({ ok: false, error: "stale_revision" });
-  expectAbsent();
-  expect(existsSync(home.path("prompt-store"))).toBe(false);
+  expect(existsSync(join(home.codexHome, "config.toml"))).toBe(false);
+  expect(existsSync(home.path("prompt-store", "prompt.json"))).toBe(false);
 });
 
 for (const replacement of [false, true]) {

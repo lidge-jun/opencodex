@@ -579,9 +579,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage, runConfigWriteChild, ConfigWriteDestinationChanged } = await import("../../codex/config-write-lock");
     const configPath = activeCodexConfigPath();
     // Preserve native home creation only after executable resolution succeeds.
-    const cleanupHome = prepareCodexHome(dirname(configPath));
-    let succeeded = false;
-    try {
+    prepareCodexHome(dirname(configPath));
+    {
       const configLock = await acquireConfigWriteLock(configPath);
       if (!configLock.ok) {
         return jsonResponse({ error: configWriteLockFailureMessage(configLock), retryable: configLock.error === "locked" }, 502);
@@ -612,9 +611,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (enabled !== before) {
         warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the change.");
       }
-      succeeded = true;
       return jsonResponse({ ok: true, enabled, changed: enabled !== before, warnings });
-    } finally { if (!succeeded) cleanupHome(); }
+    }
   }
 
   // Subagent prompt injection model: single native or routed model whose info is

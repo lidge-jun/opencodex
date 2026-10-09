@@ -673,16 +673,8 @@ function commit(
   build: (snapshot: PromptLayerSnapshot, configBytes: string | null, storeBytes: string | null)
     => Mutation | { error: WriteError; detail?: string },
 ): WriteResult {
-  const cleanups: (() => void)[] = [];
-  let succeeded = false;
-  try {
-    for (const path of [activeConfigPath(opts), activeStorePath(opts)]) {
-      cleanups.push(prepareCodexHome(dirname(path), 0o700));
-    }
-    const result = commitPrepared(opts, revision, build);
-    succeeded = result.ok;
-    return result;
-  } finally { if (!succeeded) for (const cleanup of cleanups.reverse()) cleanup(); }
+  for (const path of [activeConfigPath(opts), activeStorePath(opts)]) prepareCodexHome(dirname(path), 0o700);
+  return commitPrepared(opts, revision, build);
 }
 
 function commitPrepared(
