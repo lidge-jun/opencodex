@@ -21,6 +21,7 @@ import {
 } from "./live-sideband";
 import {
   withRequestLogId,
+  withMessagesRequestLogId,
 } from "./startup-warnings";
 
 import { remoteWorkspaceEnabled } from "../../remote-control/workspace-activation";
@@ -1556,11 +1557,16 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // pre-translation stream + native passthrough callbacks) — do not re-wrap the
         // translated Anthropic stream here.
         const sessionReq = withCallerSessionIdentity(req, admission);
-        return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => withCors(
-          await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" }),
-          req,
-          policy,
-        ), { requestId, start, logCtx });
+        let ownsRequestLog = false;
+        const response = await runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
+          ownsRequestLog = true;
+          return withCors(
+            await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" }),
+            req,
+            policy,
+          );
+        }, { requestId, start, logCtx, onLogged: () => { ownsRequestLog = true; } });
+        return ownsRequestLog ? withMessagesRequestLogId(response, requestId) : response;
       }
 
       // OpenAI Chat Completions inbound (GitHub Copilot App / OpenAI-compatible clients).
