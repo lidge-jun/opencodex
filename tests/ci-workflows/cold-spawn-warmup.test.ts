@@ -108,15 +108,6 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
       + "graph, and an import scan has nothing to warm. The generated shim never loads a repository "
       + "module in the child: the point of the file is what the shell does with an exit status.",
   },
-  "tests/codex-integration/codex-shim.test.ts": {
-    warmed: false,
-    why:
-      "Its Windows children are a cmd.exe or PowerShell driver tree, so the cold cost is shell and "
-      + "process startup rather than a repository module graph, and an import scan has nothing to warm. "
-      + "The file also sits exactly on its file-size ratchet cap of 2388 lines in "
-      + "tests/fixtures/file-size-baseline.json, and that cap only moves downward, so a warm-up cannot "
-      + "be added here without unrelated deletions. Left for a separate change.",
-  },
 };
 
 /**
