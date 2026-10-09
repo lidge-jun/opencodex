@@ -42,6 +42,9 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `pool.cacheAffinity?` | `boolean` | `true` | 紐付け済み Codex スレッド向けの cache-affinity 順序。`pool.kernel` とは独立で、既定はオンです。不正な値はオンとして読みます。live な紐付けが quota 余裕より優先され、`quota` は使用量が `autoSwitchThreshold` を超えたという理由だけではスレッドを移しません。一時停止、使用不可、または実際に使い切られたアカウント（既知 usage 100%）では離れますが、実際に quota 余裕があり usage がより低いアカウントへだけ移ります。`false` にするとしきい値での再紐付けに戻ります。affinity は固定ではなく並べ替えです。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 1 回の round-robin 選択で次へ進む前に保持する新規/未紐付けタスク割り当て数。カウンターは上流の成功後ではなくタスクの紐付け時に増えます。範囲 1–100。`accountPoolStrategy` が `round-robin` のときのみ。 |
 | `upstreamFailoverThreshold?` | `number` | `3` |今後の新しいセッションがフェイルオーバーする前に一時的なエラーが連続して発生する。 `0` を無効に設定します。通常のResponses送信とネイティブcompact送信では、実証済みの接続前DNS/TCP到達不能障害はprovider-host単位で記録され、アカウントの健全性、アカウントのクールダウン、スレッド/セッションの親和性、アクティブアカウントの選択、Poolルーティングには影響せず、この閾値にもカウントされません。 |
+| `codexFailureWindow?` | `boolean` | `true` | 60秒の失敗率。20件以上かつ25%以上でアカウントを劣化とし、新しいスレッドだけを避けます。10%以下が30秒続けば回復します。`false` では連続カウントだけを使います。 |
+| `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手動ピンが劣化したとき、`hold` は警告を出して使い続け、`detour-new-threads` は新しいスレッドだけを別アカウントへ置きます。送信済みのターンは再送しません。 |
+| `codexWsReuseAcrossTurns?` | `boolean` | `false` | 同一アカウントとスレッドで Codex WebSocket をターンをまたいで再利用します。既定はオフ。オンにすると忙しいソケットを最大750ms待ち、モデルやティアの変更では最大2本を残します。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | ネイティブOpenAI forwardのResponses送信とcompact送信で、実証済みの接続前DNS/TCP障害に適用するオプトインのサーキットしきい値です。`0`で無効、`1`〜`20`ではその回数の終端論理リクエストが失敗するとprovider-originを30秒間遮断します。遮断中はアカウント選択やupstream送信の前に`Retry-After`付き`503`を返し、時間経過後はhalf-openリクエストを1件だけ許可します。タイムアウトとHTTP応答は数えず、HTTP応答が1件でもあれば回路を閉じます。 Codex Pool ルーティングでアカウントが固定されていない場合にのみ適用され、`codexAccountMode: "direct"` とアカウント修飾セレクターでは動作しません。 |
 | `modelCacheTtlMs?` | `number` | `300000` |プロバイダーごとの `/models` キャッシュの鮮度ウィンドウ。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。 |

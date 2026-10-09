@@ -1,3 +1,4 @@
+import { setCodexWsReuseAcrossTurns } from "./codex-ws-reuse-setting";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -125,6 +126,7 @@ export function warnDegradedCompactionRouting(rawParsed: unknown, validated: Ocx
  * the ratchet only ever moves down: a per-block call there costs a line the file does not have.
  */
 export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
+  setCodexWsReuseAcrossTurns(validated.codexWsReuseAcrossTurns === true);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
   const chatgptDesktop = chatgptDesktopConfigIssue(rawParsed);

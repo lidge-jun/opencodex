@@ -398,6 +398,8 @@ true for unknown usage, correctly for an unbound pick — would trade a warm pre
 account. `CODEX_UNKNOWN_USAGE_SCORE` is 101, so the second bar excludes an unobserved destination
 without a special case.
 
+`src/codex/routing/failure-window.ts` keeps a 60-second sliding ratio beside the consecutive streak. Twenty or more terminal samples at a 25% transient-failure ratio mark the account degraded; it clears only after the ratio stays at or below 10% for 30 seconds. The ratio does not depend on completion order. Degraded accounts leave the unbound candidate list, so new threads move. A live thread binding is left alone, and a manual pin stays in place unless `codexPinnedTransientPolicy` is `detour-new-threads`. The default `hold` logs that the pin is degraded and keeps using it. `codexFailureWindow: false` leaves steering to the consecutive counter. Nothing here resends a turn that already started.
+
 Movement is therefore bounded by the number of accounts rather than the number of turns. The rule
 narrows a preference and never a refusal: a 429/402 with no success since, a failover streak, pause,
 cooldown, lost generation and an unusable account all still release the binding before this rule is

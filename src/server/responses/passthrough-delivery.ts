@@ -142,6 +142,7 @@ import {
   httpStatusFromTerminalError,
   inspectResponseLogJson,
   inspectResponseLogSsePayloadParsed,
+  noteUpstreamRequestId,
 } from "../request-log";
 import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
 import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-compat";
@@ -458,6 +459,7 @@ export async function deliverPassthroughResponse(
   }
 
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
+    if (!upstreamResponse.ok) noteUpstreamRequestId(logCtx, headers);
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel) {
       logCtx.servedModel = resolvedModel;

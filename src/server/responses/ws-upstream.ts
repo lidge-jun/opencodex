@@ -15,6 +15,7 @@ import type { NativeResponseControl } from "./native-response-control";
 // returned event frames as an SSE byte stream, so every downstream consumer
 // (passthrough relay, adapter parsers, usage sniffing) is unchanged.
 
+import { codexWsReuseAcrossTurnsEnabled } from "../../config/codex-ws-reuse-setting";
 import { compareBunVersions } from "../../lib/bun-stream-caps";
 import { resolveProxyRoute, socks5ProxyFromEnv } from "../../lib/proxy-env";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
@@ -99,8 +100,10 @@ export function planCodexWsDial(
   // and is authoritative; a pooled socket's upgrade copy is intentionally ignored. A rewriter
   // therefore cannot change them here, and the upgrade keeps the values the frame carries.
   const dialHeaders = { ...rewritten.headers };
+  const reuseAcrossTurns = codexWsReuseAcrossTurnsEnabled();
   for (const name of CODEX_WS_FRAME_HEADERS) {
-    if (Object.hasOwn(headers, name)) dialHeaders[name] = headers[name]!;
+    if (reuseAcrossTurns) delete dialHeaders[name];
+    else if (Object.hasOwn(headers, name)) dialHeaders[name] = headers[name]!;
     else delete dialHeaders[name];
   }
   const dial = { ...rewritten, headers: dialHeaders };
@@ -149,7 +152,7 @@ export function shouldUseCodexWsUpstream(
 }
 
 /** Select the bounded WS lane or HTTP fallback, forwarding receipts at physical dispatch. */
-export function codexWsUpstreamFetch(
+export async function codexWsUpstreamFetch(
   url: string,
   init: RequestInit,
   sseFallback: typeof globalThis.fetch,
@@ -219,8 +222,16 @@ export function codexWsUpstreamFetch(
     const dial = planCodexWsDial(wsUrl, headers, proxy);
     if (!dial) return sseFallback(url, init);
     const identity = control ? null : codexWsReuseIdentity(url, dial.headers, frameText, dial.proxy, dial.url);
-    session = (identity ? codexWsPool.acquire(identity, dial.url, dial.headers, dial.proxy) : null)
-      ?? new CodexWsSession(dial.url, dial.headers, false, undefined, dial.proxy);
+    const reuseAcrossTurns = identity !== null && codexWsReuseAcrossTurnsEnabled();
+    const pooled = identity
+      ? reuseAcrossTurns
+        ? await codexWsPool.acquireWaiting(identity, dial.url, dial.headers, dial.proxy, signal)
+        : codexWsPool.acquire(identity, dial.url, dial.headers, dial.proxy)
+      : null;
+    if (reuseAcrossTurns && signal?.aborted) {
+      return Promise.reject(signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+    }
+    session = pooled ?? new CodexWsSession(dial.url, dial.headers, false, undefined, dial.proxy);
     if (!session.busy && !session.reserve()) {
       session.dispose();
       return sseFallback(url, init);

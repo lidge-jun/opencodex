@@ -1184,6 +1184,18 @@ export interface OcxConfig {
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
   upstreamFailoverThreshold?: number;
   /**
+   * Sliding 60s transient-failure ratio for Codex pool placement. Default on.
+   * Set false to steer new threads from the consecutive counter only.
+   */
+  codexFailureWindow?: boolean;
+  /**
+   * What a manual pin does while its failure window is degraded.
+   * `hold` keeps using it and logs a warning. `detour-new-threads` places only new threads elsewhere.
+   */
+  codexPinnedTransientPolicy?: "hold" | "detour-new-threads";
+  /** Opt-in: retain one Codex WebSocket per account and thread across turns. Default off. */
+  codexWsReuseAcrossTurns?: boolean;
+  /**
    * Opt-in provider-origin circuit threshold for proven pre-connection reachability failures.
    * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.
    */

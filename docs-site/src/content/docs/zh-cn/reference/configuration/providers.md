@@ -42,6 +42,9 @@ ocx models provider openrouter on
 | `pool.cacheAffinity?` | `boolean` | `true` | 已绑定 Codex 线程的 cache-affinity 排序，独立于 `pool.kernel`。默认开启；省略该键或设为 `true` 即为开启，非法值视为开启。live 绑定优先于 quota 余量：`quota` 不会仅因用量越过 `autoSwitchThreshold` 就移动线程。账号暂停、不可用或真正耗尽（已知 usage 为 100%）时仍会离开，且只改绑到确有额度余量且 usage 严格更低的账号。用量未知的账号不会作为已绑定任务的改绑目标。设为 `false` 可恢复按阈值改绑。affinity 是重排而非钉死。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的新建/未绑定任务分配数。计数在任务绑定时增加，而不是在上游成功后增加。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次瞬态故障后，后续新会话会切换到备用上游。设为 `0` 可禁用。对于常规 Responses 和原生 compact 发送，已证明的连接前 DNS/TCP 不可达故障按 provider-host 粒度记录，不影响账户健康、账户冷却、线程/会话亲和性、活动账户选择或 Pool 路由，也不会计入此阈值。 |
+| `codexFailureWindow?` | `boolean` | `true` | 60 秒滑动失败率，与连续计数一起使用。至少 20 次且失败率 ≥25% 时账号降级，新线程避开它；比率 ≤10% 并持续 30 秒后恢复。已绑定线程不切换。`false` 只使用连续计数。 |
+| `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手动固定的账号降级时，`hold` 继续使用并记录警告；`detour-new-threads` 只把新线程放到其他账号。不会改派进行中的请求，也不会在已发送后重发。 |
+| `codexWsReuseAcrossTurns?` | `boolean` | `false` | 可选：同一账号和线程的 Codex WebSocket 跨回合复用。开启后忙套接字最多等待 750ms，模型或服务层级变化时最多保留 2 个套接字，回合状态头只出现在每条消息上。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | 原生 OpenAI forward Responses 与 compact 发送的可选断路器阈值，仅统计已证明的连接前 DNS/TCP 故障。`0` 表示禁用；`1`–`20` 表示在这么多个终止逻辑请求失败后，对 provider-origin 冷却 30 秒。断路期间会在账户选择和上游发送之前返回带 `Retry-After` 的 `503`；冷却结束后只允许一个半开请求。超时和 HTTP 响应不计数，任意 HTTP 响应都会关闭断路器。 仅适用于未固定账户的 Codex Pool 路由；在 `codexAccountMode: "direct"` 或使用账户限定选择器时不会启用。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个提供者 `/models` 缓存的新鲜度窗口。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。 |

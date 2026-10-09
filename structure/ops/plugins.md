@@ -60,7 +60,8 @@ so the request path depends on it without depending on the loader.
   with stale plugin headers. The per-turn headers in `CODEX_WS_FRAME_HEADERS`
   (`src/server/responses/codex-ws-request.ts`) ride in each frame's `client_metadata`, prepared
   before the rewrite and authoritative, so `planCodexWsDial` restores their original values and
-  they stay outside the reuse identity. Rewriting any earlier would
+  they stay outside the reuse identity. With `codexWsReuseAcrossTurns` (default off) those headers
+  are omitted from the handshake entirely, because one socket then serves later turns. Rewriting any earlier would
   hide the ChatGPT origin from the WebSocket selection and push Codex turns onto HTTP. The target
   carries the URL, mutable headers and the transport (`http` or `websocket`).
 - `sendWithConnectionPolicy` can run twice for one send (an override handing back to the supplied

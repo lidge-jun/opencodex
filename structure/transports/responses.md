@@ -40,7 +40,7 @@ redirect following; providers requiring a redirect must be configured with their
 
 `src/server/responses/fetch-helpers.ts` is a transport leaf shared by Responses, compact, and native
 Chat. Its runtime imports are limited to the Codex WebSocket transport, provider request pacing, and
-the upstream HTTP-version helper. Server, provider, and WebSocket data types remain type-only edges.
+the upstream HTTP-version helper. Server, provider, and WebSocket data types remain type-only edges. Opt-in `codexWsReuseAcrossTurns` (default off) in `src/server/responses/codex-ws-pool.ts` keeps a socket for an account and thread across turns, waits at most 750ms for a busy socket before dialing another, and leaves `x-codex-turn-state` / `x-codex-turn-metadata` on each frame.
 It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
 modules merely because those imports existed in the pre-split `responses.ts` monolith.
 
