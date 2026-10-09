@@ -1,6 +1,6 @@
 /** Ownership captured before a physical send, independent of subsequent cooldown observations. */
 import type { OAuthAccessSnapshot } from "./index";
-import { credentialGeneration, getAccountSet } from "./store";
+import { credentialGeneration, getAccountSet, type AuthStore } from "./store";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { anthropicCooldownRecoveryFor } from "../providers/quota/anthropic-cooldown-recovery";
 import { captureProviderAccountQuotaEpoch } from "../providers/quota/account-cache";
@@ -32,8 +32,8 @@ export function captureAnthropicPhysicalSendOwnership(snapshot: OAuthAccessSnaps
 }
 
 /** Pure ownership read: never adopt or reserve the replacement account's current incarnation. */
-export function anthropicPhysicalSendOwnershipIsCurrent(owner: AnthropicPhysicalSendOwnership): boolean {
-  const row = getAccountSet(owner.provider)?.accounts.find(account => account.id === owner.accountId);
+export function anthropicPhysicalSendOwnershipIsCurrent(owner: AnthropicPhysicalSendOwnership, store?: AuthStore): boolean {
+  const row = (store ? store[owner.provider] : getAccountSet(owner.provider))?.accounts.find(account => account.id === owner.accountId);
   return !!row && row.loginId === owner.loginId && row.addedAt === owner.addedAt
     && row.credential.access === owner.accessToken && credentialGeneration(row.credential) === owner.generation
     && anthropicCooldownRecoveryFor(owner.provider).anthropicAccountIncarnation(owner.accountId) === owner.accountIncarnation

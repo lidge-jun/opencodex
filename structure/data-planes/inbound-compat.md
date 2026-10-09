@@ -516,6 +516,8 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 The [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) requires original Responses ingress; translated Chat and Messages calls retain their own routing.
 
+Native Messages and translated Anthropic requests share [revoked-token recovery](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery); only pre-output recovery may send a sibling.
+
 Managed native Anthropic OAuth metadata follows [the native Messages binding contract](protocol-paths.md#managed-native-messages): the serving credential's provider UUID replaces only recognized account metadata, with each attempt rebuilt from the source.
 
 Managed native Messages retain a coherent observed CLI identity bundle only for first-party Anthropic; [native Messages](protocol-paths.md#managed-native-messages) owns its bounds and credential separation. Header identity never selects an account or authorizes a request.

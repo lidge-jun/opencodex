@@ -1097,7 +1097,7 @@ export async function prepareAdapterExchange(
       // Anthropic OAuth: recover a rate limit or proven account entitlement refusal
       // before output, within the shared request and account rotation limits.
       while (
-        (upstreamResponse.status === 429 || upstreamResponse.status === 403)
+        (upstreamResponse.status === 429 || upstreamResponse.status === 403 || upstreamResponse.status === 401)
         && anthropicInstance
         && transportState.anthropicPoolAccountId
       ) {
@@ -1122,7 +1122,7 @@ export async function prepareAdapterExchange(
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-         const result = await rebuildAndRefetch("anthropic-oauth-429");
+         const result = await rebuildAndRefetch(upstreamResponse.status === 401 ? "oauth-401" : "anthropic-oauth-429");
          if ("failed" in result) return result.failed;
          upstreamResponse = result;
           if (isNonReplayableResponse(upstreamResponse)) continue recovery;

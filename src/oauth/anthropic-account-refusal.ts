@@ -3,7 +3,7 @@ import { anthropicModelFamily } from "./anthropic-model-quota";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyAnthropic429, anthropicRetryAfterMs, anthropicRatePolicyFor, ANTHROPIC_SHORT_RETRY_MS, ANTHROPIC_MAX_INLINE_THROTTLE_MS } from "./anthropic-rate-limit-policy";
 import { isNonReplayableResponse, sleepWithAbort } from "../lib/upstream-retry";
-import { credentialGeneration, getAccountCredentialWithStatus } from "./store";
+import { credentialGeneration, getAccountCredentialWithStatus, markAccountNeedsReauthIfGeneration } from "./store";
 import type { OAuthAccessSnapshot } from "./index";
 import type { OcxConfig } from "../types";
 import type { AnthropicRouteDecision } from "./anthropic-model-routes";
@@ -29,6 +29,22 @@ export function bindAnthropicRefusalCredential(response: Response, snapshot: OAu
 /** Retain the pre-send owner even when stale; binding a returned response cannot renew its authority. */
 export function bindAnthropicRefusalCredentialForSend(response: Response, owner: AnthropicPhysicalSendOwnership, providerAccountUuid?: string): void {
   responseCredentials.set(response, Object.freeze({ ...owner, providerAccountUuid, checkProviderUuid: arguments.length >= 3 }));
+}
+
+async function isRevokedOAuthToken(response: Response, signal?: AbortSignal): Promise<boolean> {
+  if (response.status !== 401) return false;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal, fatalUtf8: true });
+    if (!body.displaySafe || body.truncated) return false;
+    const payload: unknown = JSON.parse(body.text);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)
+      || !("type" in payload) || payload.type !== "error" || !("error" in payload)) return false;
+    const error = payload.error;
+    return !!error && typeof error === "object" && !Array.isArray(error)
+      && "type" in error && error.type === "authentication_error"
+      && "message" in error && error.message === "OAuth access token has been revoked."
+      && (!("code" in error) || error.code == null);
+  } catch { return false; }
 }
 
 async function isAccountRefusal(response: Response, signal?: AbortSignal): Promise<boolean> {
@@ -91,6 +107,28 @@ export async function rotateAnthropicAccountOnResponseForInstance(
       && credentialGeneration(row.credential) === sent.generation
       && (!sent.checkProviderUuid || row.credential.accountId === sent.providerAccountUuid) ? row : undefined;
   };
+  if (response.status === 401) {
+    if (options.allowAccountRefusal === false) return null;
+    let verdict = verdicts.get(response);
+    if (!verdict) { verdict = isRevokedOAuthToken(response, options.signal); verdicts.set(response, verdict); }
+    if (!await verdict || options.signal?.aborted || !ownedCurrent()) return null;
+    options.currentDecision?.();
+    let marked: boolean;
+    try {
+      marked = await markAccountNeedsReauthIfGeneration(instance, sent.accountId, sent.generation, undefined, undefined, store => {
+        const row = store[instance]?.accounts.find(account => account.id === sent.accountId);
+        return !options.signal?.aborted && configuredAnthropicInstance(options.config, instance) === instance
+          && anthropicPhysicalSendOwnershipIsCurrent(sent, store)
+          && (!sent.checkProviderUuid || row?.credential.accountId === sent.providerAccountUuid);
+      });
+    } catch { return null; }
+    if (!marked || configuredAnthropicInstance(options.config, instance) !== instance
+      || !anthropicPhysicalSendOwnershipIsCurrent(sent)) return null;
+    routing.clearAnthropicSessionAffinityForAccount(sent.accountId);
+    if (!options.canRetry || options.signal?.aborted) return null;
+    const decision = options.currentDecision ? options.currentDecision() : options.decision ?? null;
+    return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(), decision, options.model, options.excludedAccountIds);
+  }
   if (response.status === 429) {
     const current = ownedCurrent();
     if (!current) return null;

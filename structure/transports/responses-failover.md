@@ -542,7 +542,7 @@ Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: a
 cooldown remain in force, while generic OAuth uses the stable snapshot ceiling described below. The
 complete credential/transport/replay identity is refreshed, and usage is attributed to the serving
 account. Single-account installs do not rotate; a missing alternate credential preserves the original
-error while transient recovery remains available.
+error while transient recovery remains available. Translated Anthropic exact revoked-token 401s follow [the account-pool contract](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery), with existing output and send-budget gates.
 
 Kiro adapter additionally classifies bounded HTTP 400/403/429 refusals before output.
 Confirmed monthly exhaustion is persisted for the sent login, suspension is quarantined

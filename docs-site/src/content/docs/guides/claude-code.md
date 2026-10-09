@@ -81,6 +81,12 @@ Operational contract when enabled:
   access, policy and unrecognized errors stay terminal. Recovery respects model routes and
   send limits; if no replacement is eligible, the original 403 is returned. This also works
   with proactive pooling off. A 403 after assistant output starts never switches accounts.
+- Before output, an exact structured **401** authentication_error with no error code and the message
+  “OAuth access token has been revoked.” marks the sending OAuth account as requiring
+  a new login and clears its session affinities. Before output, an eligible account in
+  the same pool may take over within existing send limits. With no eligible replacement,
+  the original 401 is returned; the refused account remains excluded until login.
+  Other 401 errors retain their existing behavior.
 - Token-refresh credential failures retain the existing `needsReauth` policy. Subscription
   renewal does not require reauthentication, but the account waits for its cooldown to expire.
 - If every eligible account is cooling, the proxy returns **429** (not 401) with `Retry-After`

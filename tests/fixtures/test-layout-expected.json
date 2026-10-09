@@ -1,6 +1,11 @@
 {
     "messages-request-id-headers.test.ts": "claude-integration",
     "messages-request-id-endpoint.test.ts": "claude-integration",
+  "anthropic-revoked-token.test.ts": "adapters/anthropic",
+  "messages-revoked-token.test.ts": "claude-integration",
+  "anthropic-revoked-token-continuation.test.ts": "adapters/anthropic",
+  "anthropic-revoked-token-sidecars.test.ts": "adapters/anthropic",
+  "anthropic-revoked-token-boundaries.test.ts": "adapters/anthropic",
   "azure-vendor-metadata.test.ts": "providers",
   "anthropic-instance-isolation.test.ts": "adapters/anthropic", "anthropic-instance-pool-parity.test.ts": "adapters/anthropic",
   "anthropic-instance-quota.test.ts": "adapters/anthropic", "anthropic-instance-recovery.test.ts": "adapters/anthropic",
