@@ -69,6 +69,7 @@ let previewResponse: (body: Record<string, unknown>, signal?: AbortSignal | null
  */
 let failExtraSources = false;
 let lazycodexRoles: Record<string, unknown>;
+let lazycodexRolesServed = 0;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -215,7 +216,10 @@ beforeEach(() => {
     if (url.includes("/api/grok")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ present: false, models: [] });
     }
-    if (url.endsWith("/api/codex-agent-roles")) return json(lazycodexRoles);
+    if (url.endsWith("/api/codex-agent-roles")) {
+      lazycodexRolesServed += 1;
+      return json(lazycodexRoles);
+    }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.6-sol"] });
     if (method === "PUT") return putResponse(request);
     if (url.includes("/restore")) return json({ ok: true, clientId: "hermes", changed: true, state: "current", message: "restored" });
@@ -1809,7 +1813,15 @@ test("the LazyCodex role section sits on the omo tab and only when LazyCodex is 
     import("../src/i18n/provider"),
     import("../src/pages/Integrations"),
   ]);
-  const render = async (hash: string) => {
+  // Waits on observable state, not a fixed delay, so a slow runner cannot pass or fail early.
+  const settle = async (ready: () => boolean) => {
+    for (let attempt = 0; attempt < 150 && !ready(); attempt += 1) {
+      await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+    }
+    expect(ready()).toBe(true);
+    await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+  };
+  const render = async (hash: string, ready: () => boolean) => {
     testWindow.location.hash = hash;
     mountCount += 1;
     apiBase = `http://ocx-test-${mountCount}.invalid`;
@@ -1822,12 +1834,13 @@ test("the LazyCodex role section sits on the omo tab and only when LazyCodex is 
         </LanguageProvider>,
       );
     });
-    await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+    await settle(ready);
   };
   const section = (tab: string) => container.querySelector(`#integrations-panel-${tab} #lazycodex-role-models`);
+  const servedAfter = (count: number) => () => lazycodexRolesServed > count;
 
-  // Pi-based omo alone: the omo tab shows nothing of LazyCodex.
-  await render("#integrations/omo");
+  // Pi-based omo alone: the omo tab asks, and once the answer lands it shows nothing of LazyCodex.
+  await render("#integrations/omo", servedAfter(lazycodexRolesServed));
   expect(section("omo")).toBeNull();
 
   lazycodexRoles = {
@@ -1835,10 +1848,10 @@ test("the LazyCodex role section sits on the omo tab and only when LazyCodex is 
     omoJsonc: { state: "present" },
     roles: [{ role: "explorer", model: "gpt-5.6-sol", omoJsoncModel: null }],
   };
-  await render("#integrations/omo");
+  await render("#integrations/omo", () => section("omo")?.textContent?.includes("explorer") === true);
   expect(section("omo")?.textContent).toContain("explorer");
 
-  await render("#integrations/codex");
+  await render("#integrations/codex", () => container.querySelector("#integrations-panel-codex") !== null);
   expect(container.querySelector("#integrations-panel-codex")).not.toBeNull();
   expect(section("codex")).toBeNull();
 });
