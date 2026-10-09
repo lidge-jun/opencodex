@@ -23,7 +23,7 @@ Canonical forward auth retains its separate fixed credential/metadata allowlist;
 
 Retired Codex Spark has no model-specific tool or Responses Lite override; general Lite handling and
 namespace scrubbing remain shared compatibility behavior. Codex quota/reset evidence follows the
-[shared/Reserve policy](../providers/openai-tiers.md#public-provider-contract), including suppression of retired model-derived evidence before shared recovery.
+[shared/Reserve policy](../providers/openai-tiers.md#public-provider-contract), including suppression of retired model-derived evidence before shared recovery. Plain-main HTTP/WS quota headers refresh `__main__` only on the canonical OpenAI forward provider when the materialized bearer and workspace match the owned main observation, using the hard-lock credential-match rule. `src/server/responses/passthrough-delivery.ts` rechecks the captured credential generation after its awaited import; `src/server/responses/core-codex-account.ts` retains one dispatch proof per WS observer and rechecks it for each frame. Rotated credentials and unmatched workspaces publish nothing; WS-observed responses skip duplicate HTTP writes, and Pool health/failover gates remain unchanged.
 
 ### Credential-bearing HTTP redirects
 

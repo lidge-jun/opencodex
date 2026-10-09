@@ -407,6 +407,12 @@ with the lock status; Direct provider quota omits an unpublished response and it
 identities and stale 401/403 replies retain the current
 cached info and cannot clear or set the current account's reauthentication state.
 
+Responses to requests sent with the identified main credential refresh its cached
+usage from their quota headers, whether the proxy substituted the stored credential or
+the caller sent the same credential itself. A response is applied only if that
+credential is still the observed main credential when it arrives; a caller-owned
+credential for another account or workspace never updates the main account's usage.
+
 The persisted option is `"codexMainAccountHardLock"` in OpenCodex's `config.json`. An absent key or
 `true` means on; only an explicit `false` turns it off, and that is what switching the setting off
 stores. The default changed here: the policy used to be opt-in and the old switch removed the key

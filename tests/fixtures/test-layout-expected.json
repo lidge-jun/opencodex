@@ -808,6 +808,7 @@
   "openai-provider-option-startup.test.ts": "adapters/openai",
   "openai-provider-option-tooling.test.ts": "adapters/openai", "openai-provider-option.test.ts": "adapters/openai",
   "responses-forward-client-headers.test.ts": "responses", "openai-responses-passthrough.test.ts": "responses",
+  "responses-main-quota-observation.test.ts": "responses",
   "external-task-input-repair.test.ts": "responses",
   "openai-responses-summary-none.test.ts": "responses", "responses-forward-output-cap.test.ts": "responses",
   "opencode-cli.test.ts": "providers", "opencode-free-provider.test.ts": "providers",

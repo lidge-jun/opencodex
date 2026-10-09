@@ -429,6 +429,12 @@ invalidates old evidence. Request-owned bearers are matched only against a crede
 workspace already observed under native ownership; an unrelated or unmatched keyring credential
 is not attributed to stored main and introduces no physical-main read. Credential equality tags
 remain process-local and never enter disk, logs, or management DTOs.
+Plain-main HTTP and WebSocket Responses on the canonical OpenAI forward provider refresh cached
+main usage under that same credential/workspace match, including stored-main substitution and
+an identical caller-owned credential. Materialization captures a process-local dispatch proof;
+publication rechecks identity and credential generations, including after an awaited HTTP import
+and for every WebSocket frame. A replaced credential, unmatched workspace, or custom destination
+cannot publish main usage. Pool health/failover handling stays scoped to Pool contexts.
 `src/codex/auth-api/main-account-probe.ts` re-reads the bounded stored main credential and
 rechecks its writer, bearer and generation after body/retry awaits, before publishing main usage,
 credits, plan, reauth or Reserve state, including terminal 401/403 mutations. An unreadable file

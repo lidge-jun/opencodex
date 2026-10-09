@@ -73,6 +73,26 @@ export function isMainQuotaWriterLive(writer: MainQuotaWriter): boolean {
     && writer.identityGeneration === mainAccountIdentityGeneration;
 }
 
+/** Proof that a dispatch used the observed main credential; process-local, never persisted. */
+export type MainQuotaDispatch = Readonly<{
+  writer: MainQuotaWriter;
+  credentialGeneration: number;
+  configGeneration: number;
+}>;
+
+export function captureMainQuotaDispatch(
+  accessToken: string, accountId: string | undefined, configGeneration: number,
+): MainQuotaDispatch | undefined {
+  if (!accountId || !matchesMainQuotaCredential(accessToken, accountId)) return undefined;
+  const writer = captureMainQuotaWriter(accountId);
+  return writer ? { writer, credentialGeneration: mainQuotaCredentialGeneration, configGeneration } : undefined;
+}
+
+export function isMainQuotaDispatchLive(dispatch: MainQuotaDispatch): boolean {
+  return isMainQuotaWriterLive(dispatch.writer)
+    && dispatch.credentialGeneration === mainQuotaCredentialGeneration;
+}
+
 export function getObservedMainQuotaIdentityKey(): string | undefined {
   return observedMainQuotaIdentityKey;
 }
