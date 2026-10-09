@@ -1,6 +1,6 @@
 /**
  * Long windows (>= the default compact window) are 1M on every Claude surface whose runner may
- * lack CLAUDE_CODE_AUTO_COMPACT_WINDOW; real Anthropic rows of either pool still need a genuine
+ * lack CLAUDE_CODE_AUTO_COMPACT_WINDOW; Claude models on either Anthropic pool still need a genuine
  * 1M (devlog/_plan/261009_claude_1m_default/020_long_context_eligibility.md).
  */
 import { describe, expect, test } from "bun:test";

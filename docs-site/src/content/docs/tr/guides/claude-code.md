@@ -470,10 +470,11 @@ giderme adımıdır; kesin çözüm değildir. OpenCodex seçici durumunu gözle
 her isteğin taşıdığı model kimliğini yönlendirir. İstemcinin ne gönderdiğini
 **Logs → requestedModel** altında kontrol edin.
 
-Yetkili 1M bağlam penceresine sahip modeller fazladan bir `…[1m]` seçici satırı
-alır: bunu seçmek Claude Code'un bu model için tam 1M bağlam hesabı yapmasını
-sağlar (otomatik sıkıştırma açık kalır) — proxy yönlendirmeden önce işaretçiyi
-kaldırır.
+Uzun bağlam penceresine sahip modeller (1M, veya en az 829.800 token varsayılan
+sıkıştırma eşiği; Anthropic rotasındaki Claude modellerinin gerçekten 1M olması
+gerekir) fazladan bir `…[1m]` seçici satırı alır: bunu seçmek Claude Code'un bu
+model için tam 1M bağlam hesabı yapmasını sağlar (otomatik sıkıştırma açık kalır)
+— proxy yönlendirmeden önce işaretçiyi kaldırır.
 Birini seçmek, onu Claude Code'un `settings.json` `model` alanına kaydeder;
 gelen istekler takma adı yönlendirilen modele geri çözer. Eski Claude Code
 sürümlerinde seçici yerel kalır — `ANTHROPIC_MODEL` aracılığıyla yuvaları
