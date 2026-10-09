@@ -43,13 +43,13 @@ process start. The full suite runs in hosted CI on each PR's exact head.
 ## Outcome
 
 **DONE**, 2026-10-09. All three items merged into `dev` with squash admin merges, after
-exact-head CI passed and independent gpt-6.1-sol reviews passed:
+exact-head CI concluded `success` and independent gpt-6.1-sol reviews passed:
 
 | Doc | Issue | PR | Merge commit | Exact-head CI |
 | --- | --- | --- | --- | --- |
-| 010 | #6775 | #6835 | `7f642e30e8` | all jobs green at `9ac1a95263`, including the nine Windows shards, `npm-global windows-latest` and `keyring windows` |
-| 020 | #6777 | #6833 | `6d7e5f48ad` | all jobs green at `0fa7ee87df`; Windows shards not selected (not Windows-sensitive) |
-| 030 | #6776 | #6834 | `c4baa30e09` | all jobs green at `c6addbb97e`; Windows shards not selected |
+| 010 | #6775 | #6835 | `7f642e30e8` | all executed jobs passed at `9ac1a95263`, including the nine Windows shards, `npm-global windows-latest` and `keyring windows` |
+| 020 | #6777 | #6833 | `6d7e5f48ad` | all executed jobs passed at `0fa7ee87df`; Windows shards and other conditional jobs skipped (not selected for this diff) |
+| 030 | #6776 | #6834 | `c4baa30e09` | all executed jobs passed at `c6addbb97e`; Windows shards and other conditional jobs skipped (not selected for this diff) |
 
 Before merging, the three heads were combined on `dev` `b89bbfb083` (#6835 shares
 `layout.json` and `test-layout-expected.json` with changes that landed meanwhile): 180
