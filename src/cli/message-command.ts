@@ -2,13 +2,16 @@ import { MessageBudget } from "../messaging/budget";
 import { readMessageInput } from "../messaging/input";
 import { localSessions, messageFailure, sendLocalMessage } from "../messaging/send";
 import { parseMessageArgs } from "./message-args";
+import { parseRemoteMessageArgs } from "./message-remote-args";
 import { terminalSafeText } from "./runtime-api";
 
 /** Run one local messaging operation after pure syntax validation, then release owned resources. */
 export async function runMessageCommand(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
+  const remote = parseRemoteMessageArgs(argv);
+  if (remote) return (await import("./message-remote-command")).runRemoteMessageCommand(remote, env);
   const args = parseMessageArgs(argv);
   if (!args) {
-    console.error("Usage: ocx message sessions [--json] | send (--thread <uuid> | --name <exact-name>) --stdin [--kind request|response|notification] [--in-reply-to <uuid>] [--json]");
+    console.error("Usage: ocx message sessions [--host <peer>] [--json] | send (--thread <uuid> | --name <exact-name>) --stdin [--host <peer>] [--kind request|response|notification] [--in-reply-to <uuid>] [--json] | enable [--port <port>] | disable | status | hosts <probe|add|list|remove> | serve [--host <peer>]...");
     return 64;
   }
   const controller = new AbortController();

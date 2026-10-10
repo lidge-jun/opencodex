@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 51.
+Declared capabilities: 59.
 
 ### `ocx agent subagents force`
 
@@ -145,7 +145,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx message sessions`
 
-Discover already-loaded local Codex sessions without reading conversation history.
+Discover already-loaded Codex sessions locally or on an explicitly enrolled peer.
 
 State-changing: no. JSON mode: `envelope`.
 
@@ -153,13 +153,14 @@ Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit a versioned local session directory. |
+| `--json` | boolean | Emit a versioned session directory. |
+| `--host` | string | Exact enrolled peer alias or machine UUID; requires a live foreground owner. |
 
 - Linux/macOS Unix socket only. Uses effective CODEX_HOME; starts no daemon and returns no partial directory.
 
 ### `ocx message send`
 
-Submit one correlated peer message to an exact loaded local Codex destination.
+Submit one correlated peer message to an exact loaded Codex destination.
 
 State-changing: yes. JSON mode: `envelope`.
 
@@ -173,10 +174,11 @@ Drives no management route.
 | `--kind` | string | request (default), response or notification. |
 | `--in-reply-to` | string | Request message UUID; required only for a response. |
 | `--json` | boolean | Emit a receipt with not_sent, queued or unknown status. |
+| `--host` | string | Exact enrolled peer alias or machine UUID; omit for the unchanged local path. |
 
 - Requires daemon support for experimental thread/queue/add. Sender context comes from CODEX_THREAD_ID, not an authentication claim.
 - queued means submitted, not processed. unknown must not be replayed; no automatic retry, daemon start or thread resume.
-- Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No remote/Claude transport or skill installation.
+- Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No Claude transport, native lifecycle mutation or skill installation.
 
 ### `ocx advisor`
 
@@ -200,6 +202,111 @@ State-changing: yes. JSON mode: `payload`.
 - `policy: preflight` makes OpenCodex attempt one automatic consultation per task with a stable conversation identity once the task shows orientation evidence (an assistant tool call or a tool result after the latest user message). Without a stable identity, each eligible request may trigger another consultation. `policy: manual` consults only when the worker calls the synthetic `advisor` tool. Neither path sends task context without current context-sharing consent.
 - `policy: adaptive` adds evidence-based failed-repair consultation after the same validation fails, a file edit completes, and validation fails again. Automatic calls require a stable conversation identity. `set --max-consultations <1-3>` caps adaptive task attempts, including manual calls, in a durable 24-hour budget. No semantic stuck detection is claimed.
 - `activity` reads up to 100 recent consultation metadata records (trigger, status, models, requested and mapped effort, duration, reported tokens); no task or advice content is retained. Records are process-local and expire after 24 hours. Missing mapped effort means unreported, not successful application.
+
+### `ocx message enable`
+
+Explicitly enable private remote messaging state, without starting a listener.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--port` | number | Unprivileged IPv4-loopback port; defaults to 39176 on first enable. |
+| `--json` | boolean | Emit configuration without credentials. |
+
+### `ocx message disable`
+
+Disable remote admission and retire the foreground owner generation.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit safe configuration. |
+
+### `ocx message status`
+
+Read enabled, running and leased/initiated route states without activation.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit safe configuration and owner observations. |
+
+### `ocx message serve`
+
+Own a foreground listener and optional duplex SSH peer routes; no automatic reconnect.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--host` | string | Exact initiating peer; repeat for at most four distinct peers. |
+| `--json` | boolean | Emit the startup observation without credentials. |
+
+### `ocx message hosts probe`
+
+Offer an SSH host fingerprint without enrollment or persistent changes.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--ssh` | string | OpenSSH destination/alias. |
+| `--json` | boolean | Emit the offered fingerprint. |
+
+### `ocx message hosts add`
+
+Usage: `ocx message hosts add <alias> --ssh <destination> --fingerprint <SHA256> [--json]`
+
+Enroll one explicitly enabled peer after SSH fingerprint confirmation.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--ssh` | string | OpenSSH destination/alias. |
+| `--fingerprint` | string | Explicitly confirmed offered SSH host-key fingerprint. |
+| `--json` | boolean | Emit enrollment metadata, never credentials. |
+
+### `ocx message hosts list`
+
+List exact peer identities without credentials or listener activation.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit safe peer metadata. |
+
+### `ocx message hosts remove`
+
+Usage: `ocx message hosts remove <alias-or-machine-uuid> [--json]`
+
+Revoke local admission first and report any unconfirmed remote cleanup explicitly.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit local and remote revocation outcomes. |
 
 ### `ocx agent status`
 
