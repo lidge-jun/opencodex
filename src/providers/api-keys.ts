@@ -13,6 +13,7 @@ import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, parseGcpCrede
 import { invalidateResolvedProviderKeyCache, probeProviderKeychain, providerKeychainEntry } from "./api-key-resolve";
 import type { AccountQuotaFields } from "./quota-types";
 import { commitProviderApiKeySelection } from "./api-key-selection";
+import { cleanupRemovedGcpCredentials } from "./gcp-credential-cleanup";
 
 export interface ProviderApiKeyInfo extends AccountQuotaFields {
   id: string;
@@ -38,7 +39,7 @@ export function maskApiKey(value: string): string {
 /**
  * Split a pasted key value into candidate credentials. A plain API key is one row; a pasted GCP
  * credential JSON (or several, comma/space-separated — the same convention as newline-separated
- * API keys) is one row per JSON object. Windows file paths are rejected with guidance rather
+ * API keys) is one row per JSON object. File paths are rejected with guidance rather
  * than stored, because they are the most common paste mistake and silently break at runtime.
  *
  * Honors the parseGcpCredentialJson contract "a literal key that starts with `{` is never eaten":
@@ -53,7 +54,7 @@ export function splitCredentialPaste(value: string): Array<string | { credential
   if (!trimmed) return [];
   // Fast path: a plain key (no JSON braces) — also covers env/keychain/gcp-sa references.
   if (!trimmed.startsWith("{")) {
-    if (/^[A-Za-z]:[\\/]/.test(trimmed)) {
+    if (/^(?:[A-Za-z]:[\\/]|[\\/]|~[\\/]|\.{1,2}[\\/])/.test(trimmed) || /^[^\s{}]+\.json$/i.test(trimmed)) {
       throw new Error("This looks like a file path. Paste the full JSON body of the credential, not a file path.");
     }
     return [trimmed];
@@ -223,42 +224,41 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
       // Not a credential paste — fall through to the plain API-key path below. splitCredentialPaste
       // has already thrown for file paths; a plain key lands here as a single literal row.
     } else {
-      if (parts.length > 1) return { error: "paste one credential JSON per request; add each additional credential as its own key" };
-      const credentialJson = (first as { credentialJson: string }).credentialJson;
-      const id = apiKeyPoolEntryId(credentialJson);
-      const account = gcpCredentialStoreAccount(name, id);
-      // Track whether this write CREATED the keychain entry: an upsert over an existing
-      // reference must not delete the previously-referenced credential on a failed commit.
-      const existedBefore = providerKeychainEntry(account).getPassword() !== null;
-      let marker: string;
+      const stored: Array<{ id: string; marker: string }> = [];
+      const created: string[] = [];
       try {
-        marker = storeGcpCredentialJson(config, name, credentialJson, existedBefore);
+        for (const part of parts) {
+          const credentialJson = (part as { credentialJson: string }).credentialJson;
+          const id = apiKeyPoolEntryId(credentialJson);
+          const account = gcpCredentialStoreAccount(name, id);
+          const existedBefore = providerKeychainEntry(account).getPassword() !== null;
+          if (!existedBefore) created.push(`${GCP_CREDENTIAL_MARKER_PREFIX}${account}`);
+          stored.push({ id, marker: storeGcpCredentialJson(config, name, credentialJson, existedBefore) });
+        }
+        const committed = commitProviderApiKeySelection(config, name, fresh => {
+          const pool = ensurePool(fresh);
+          for (const { id, marker } of stored) {
+            const existing = pool.find(e => e.id === id);
+            if (existing) {
+              existing.key = marker;
+              if (label?.trim()) existing.label = label.trim();
+            } else {
+              pool.push({ id, key: marker, ...(label?.trim() ? { label: label.trim() } : {}), addedAt: Date.now() });
+            }
+          }
+          fresh.apiKey = stored[0]!.marker;
+          return { changed: true, selectionChanged: true, value: stored[0]!.id };
+        });
+        if (committed.status === "committed") {
+          invalidateResolvedProviderKeyCache();
+          return { id: committed.value };
+        }
+        cleanupRemovedGcpCredentials(created);
+        return { error: "provider selection unavailable" };
       } catch (error) {
+        cleanupRemovedGcpCredentials(created);
         return { error: error instanceof Error ? error.message : "credential storage failed" };
       }
-      const committed = commitProviderApiKeySelection(config, name, fresh => {
-        const pool = ensurePool(fresh);
-        const existing = pool.find(e => e.id === id);
-        if (existing) {
-          existing.key = marker;
-          if (label?.trim()) existing.label = label.trim();
-        } else {
-          pool.push({ id, key: marker, ...(label?.trim() ? { label: label.trim() } : {}), addedAt: Date.now() });
-        }
-        fresh.apiKey = marker;
-        return { changed: true, selectionChanged: true, value: id };
-      });
-      if (committed.status === "committed") {
-        invalidateResolvedProviderKeyCache();
-        return { id };
-      }
-      // Failed commit: the just-written keychain entry has no config reference pointing at it.
-      // Delete it ONLY when this write created it — an upsert must keep the credential the old
-      // reference still names.
-      if (!existedBefore) {
-        try { providerKeychainEntry(account).deletePassword(); } catch { /* best effort */ }
-      }
-      return { error: "provider selection unavailable" };
     }
   } catch (error) {
     return { error: error instanceof Error ? error.message : "credential parse failed" };
@@ -309,11 +309,13 @@ export function setProviderApiKeyLabel(config: OcxConfig, name: string, id: stri
 
 /** Remove one key; removing the active one promotes the first remaining. Persists config. */
 export function removeProviderApiKey(config: OcxConfig, name: string, id: string): boolean {
+  let removed: string | undefined;
   const committed = commitProviderApiKeySelection(config, name, provider => {
     const pool = provider.apiKeyPool?.length ? provider.apiKeyPool
       : provider.apiKey ? [{ id: apiKeyPoolEntryId(provider.apiKey), key: provider.apiKey }] : [];
     const entry = pool.find(e => e.id === id);
     if (!entry) return { changed: false, value: false };
+    removed = entry.key;
     provider.apiKeyPool = pool.filter(e => e.id !== id);
     if (provider.apiKey === entry.key) {
       const next = provider.apiKeyPool[0];
@@ -323,5 +325,8 @@ export function removeProviderApiKey(config: OcxConfig, name: string, id: string
     if (provider.apiKeyPool.length === 0) delete provider.apiKeyPool;
     return { changed: true, value: true };
   });
-  return committed.status === "committed" && committed.value;
+  if (committed.status !== "committed" || !committed.value) return false;
+  if (removed?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) cleanupRemovedGcpCredentials([removed]);
+  invalidateResolvedProviderKeyCache();
+  return true;
 }

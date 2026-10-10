@@ -10,9 +10,10 @@ import {
   parseGcpCredentialJson,
   __resetVertexTokenCache,
 } from "../../src/lib/gcp-adc";
-import { splitCredentialPaste, addProviderApiKey } from "../../src/providers/api-keys";
+import { splitCredentialPaste, addProviderApiKey, removeProviderApiKey } from "../../src/providers/api-keys";
+import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers } from "../../src/providers/gcp-credential-cleanup";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -56,7 +57,8 @@ describe("parseGcpCredentialJson", () => {
 describe("gcpCredentialMarkerAccount", () => {
   test("extracts the account from a marker", () => {
     expect(gcpCredentialMarkerAccount(`${GCP_CREDENTIAL_MARKER_PREFIX}p/abc123`)).toBe("p/abc123");
-    expect(gcpCredentialMarkerAccount("gcp-sa:")).toBeUndefined();
+      expect(() => gcpCredentialMarkerAccount("gcp-sa:")).toThrow(/non-empty account/);
+      expect(() => gcpCredentialMarkerAccount("gcp-sa:  ")).toThrow(/non-empty account/);
     expect(gcpCredentialMarkerAccount("keychain:p/abc")).toBeUndefined();
     expect(gcpCredentialMarkerAccount(undefined)).toBeUndefined();
   });
@@ -87,8 +89,10 @@ describe("splitCredentialPaste", () => {
     expect(parts[1]).toEqual({ credentialJson: SERVICE_ACCOUNT_JSON_2 });
   });
 
-  test("a file path is rejected with paste guidance", () => {
-    expect(() => splitCredentialPaste("C:\\Users\\me\\sa.json")).toThrow(/file path/i);
+    test("a file path is rejected with paste guidance", () => {
+      for (const path of ["C:\\Users\\me\\sa.json", "/tmp/sa.json", "./sa.json", "../sa.json", "~/sa.json", "credentials/sa.json", "sa.json", "\\\\host\\share\\sa.json"]) {
+        expect(() => splitCredentialPaste(path)).toThrow(/file path/i);
+      }
   });
 
   test("a single-line brace-leading NON-JSON literal falls back to a plain key (never eaten)", () => {
@@ -204,7 +208,7 @@ describe("addProviderApiKey with a pasted credential JSON", () => {
     expect(JSON.stringify(config).includes(GCP_CREDENTIAL_MARKER_PREFIX)).toBe(false);
   });
 
-  test("keychain-unavailable fails closed with an error", () => {
+    test("keychain-unavailable fails closed with an error", () => {
     // No fake factory installed: the real keyring may exist in CI, so probe through the seam
     // with a factory that always throws instead.
     setProviderKeychainEntryFactoryForTests(() => {
@@ -213,8 +217,141 @@ describe("addProviderApiKey with a pasted credential JSON", () => {
     const config = makeConfig({ apiKey: "legacy-key" });
     const result = addProviderApiKey(config, "p", SERVICE_ACCOUNT_JSON);
     expect("error" in result).toBe(true);
-    expect(JSON.stringify(config).includes(GCP_CREDENTIAL_MARKER_PREFIX)).toBe(false);
-  });
+      expect(JSON.stringify(config).includes(GCP_CREDENTIAL_MARKER_PREFIX)).toBe(false);
+    });
+
+    test("multiple JSON credentials commit together, deduplicate and select the first", () => {
+      installFakeKeychain();
+      const config = makeConfig({ apiKey: "legacy-key" });
+      const pasted = `${SERVICE_ACCOUNT_JSON}, ${SERVICE_ACCOUNT_JSON_2}, ${SERVICE_ACCOUNT_JSON}`;
+      expect(addProviderApiKey(config, "p", pasted)).toEqual({ id: expect.any(String) });
+      const pool = config.providers.p!.apiKeyPool!;
+      expect(pool).toHaveLength(3);
+      expect(config.providers.p!.apiKey).toBe(pool[1]!.key);
+      expect([...keychainStore.values()].sort()).toEqual([SERVICE_ACCOUNT_JSON, SERVICE_ACCOUNT_JSON_2].sort());
+      expect(JSON.stringify(config)).not.toContain("private_key");
+      expect(addProviderApiKey(config, "p", pasted)).toEqual({ id: pool[1]!.id });
+      expect(config.providers.p!.apiKeyPool).toHaveLength(3);
+    });
+
+    test("a failed second write rolls back new credentials but preserves existing upserts", () => {
+      installFakeKeychain();
+      const config = makeConfig({ apiKey: "legacy-key" });
+      addProviderApiKey(config, "p", SERVICE_ACCOUNT_JSON);
+      const before = JSON.stringify(config);
+      setProviderKeychainEntryFactoryForTests((service, account) => ({
+        getPassword: () => keychainStore.get(`${service}:${account}`) ?? null,
+        setPassword: value => { if (value === SERVICE_ACCOUNT_JSON_2) throw new Error("fixture write failed"); keychainStore.set(`${service}:${account}`, value); },
+        deletePassword: () => keychainStore.delete(`${service}:${account}`),
+      }));
+      expect(addProviderApiKey(config, "p", `${SERVICE_ACCOUNT_JSON}, ${SERVICE_ACCOUNT_JSON_2}`)).toHaveProperty("error");
+      expect(JSON.stringify(config)).toBe(before);
+      expect([...keychainStore.values()]).toEqual([SERVICE_ACCOUNT_JSON]);
+    });
+
+    test("a failed batch config commit removes new secrets and preserves existing credentials", () => {
+      installFakeKeychain();
+      const config = makeConfig({ apiKey: "legacy-key" });
+      addProviderApiKey(config, "p", SERVICE_ACCOUNT_JSON);
+      const removed = config.providers.p!;
+      config.providers.fallback = { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "fixture" };
+      config.defaultProvider = "fallback";
+      delete config.providers.p;
+      saveConfig(config);
+      config.providers.p = removed;
+      expect(addProviderApiKey(config, "p", `${SERVICE_ACCOUNT_JSON}, ${SERVICE_ACCOUNT_JSON_2}`)).toHaveProperty("error");
+      expect([...keychainStore.values()]).toEqual([SERVICE_ACCOUNT_JSON]);
+    });
+
+    test("a later write failure removes every newly created secret without a partial pool", () => {
+      installFakeKeychain();
+      const config = makeConfig({ apiKey: "legacy-key" });
+      const before = JSON.stringify(config);
+      setProviderKeychainEntryFactoryForTests((service, account) => ({
+        getPassword: () => keychainStore.get(`${service}:${account}`) ?? null,
+        setPassword: value => { if (value === SERVICE_ACCOUNT_JSON_2) throw new Error("fixture write failed"); keychainStore.set(`${service}:${account}`, value); },
+        deletePassword: () => keychainStore.delete(`${service}:${account}`),
+      }));
+      expect(addProviderApiKey(config, "p", `${SERVICE_ACCOUNT_JSON}, ${SERVICE_ACCOUNT_JSON_2}`)).toHaveProperty("error");
+      expect(JSON.stringify(config)).toBe(before);
+      expect(keychainStore.size).toBe(0);
+    });
+
+    test("a refused removal leaves the credential intact", () => {
+      installFakeKeychain();
+      const config = makeConfig({ apiKey: "legacy-key" });
+      const result = addProviderApiKey(config, "p", SERVICE_ACCOUNT_JSON);
+      if ("error" in result) throw new Error(result.error);
+      const provider = config.providers.p!;
+      config.providers.fallback = { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "fixture" };
+      config.defaultProvider = "fallback";
+      delete config.providers.p;
+      saveConfig(config);
+      config.providers.p = provider;
+      expect(removeProviderApiKey(config, "p", result.id)).toBe(false);
+      expect([...keychainStore.values()]).toEqual([SERVICE_ACCOUNT_JSON]);
+    });
+
+    test("key removal deletes its secret only after successful config removal", () => {
+      installFakeKeychain();
+      const config = makeConfig({ apiKey: "legacy-key" });
+      const result = addProviderApiKey(config, "p", SERVICE_ACCOUNT_JSON);
+      if ("error" in result) throw new Error(result.error);
+      expect(removeProviderApiKey(config, "p", "missing")).toBe(false);
+      expect([...keychainStore.values()]).toEqual([SERVICE_ACCOUNT_JSON]);
+      expect(removeProviderApiKey(config, "p", result.id)).toBe(true);
+      expect(keychainStore.size).toBe(0);
+      expect(config.providers.p!.apiKey).toBe("legacy-key");
+    });
+
+    test("provider cleanup preserves shared markers until their last reference is removed", () => {
+      installFakeKeychain();
+      const config = makeConfig({ apiKey: "legacy-key" });
+      addProviderApiKey(config, "p", SERVICE_ACCOUNT_JSON);
+      const markers = providerGcpCredentialMarkers(config.providers.p!);
+      config.providers.other = { ...config.providers.p!, apiKeyPool: undefined };
+      config.defaultProvider = "other";
+      delete config.providers.p;
+      saveConfig(config);
+      cleanupRemovedGcpCredentials(markers);
+      expect([...keychainStore.values()]).toEqual([SERVICE_ACCOUNT_JSON]);
+      config.providers.fallback = { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "fixture" };
+      config.defaultProvider = "fallback";
+      delete config.providers.other;
+      saveConfig(config);
+      cleanupRemovedGcpCredentials(markers);
+      expect(keychainStore.size).toBe(0);
+    });
+
+    test("CLI provider removal cleans all removed GCP credentials", async () => {
+      installFakeKeychain();
+      const config = makeConfig({ apiKey: "legacy-key" });
+      addProviderApiKey(config, "p", `${SERVICE_ACCOUNT_JSON}, ${SERVICE_ACCOUNT_JSON_2}`);
+      config.providers.fallback = { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "fixture" };
+      config.defaultProvider = "fallback";
+      saveConfig(config);
+      const { handleProviderCommand } = await import("../../src/cli/provider");
+      await handleProviderCommand(["remove", "p", "--json"]);
+      expect(loadConfig().providers.p).toBeUndefined();
+      expect(keychainStore.size).toBe(0);
+    });
+
+    test("management provider removal cleans all removed GCP credentials", async () => {
+      installFakeKeychain();
+      const config = makeConfig({ apiKey: "legacy-key" });
+      addProviderApiKey(config, "p", `${SERVICE_ACCOUNT_JSON}, ${SERVICE_ACCOUNT_JSON_2}`);
+      config.providers.fallback = { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "fixture" };
+      saveConfig(config);
+      const { handleProviderRoutes } = await import("../../src/server/management/provider-routes");
+      const req = new Request("http://localhost/api/providers?name=p", { method: "DELETE" });
+      const response = await handleProviderRoutes({
+        req, url: new URL(req.url), config, deps: {},
+        convergeCodexCatalog: async () => ({ converged: true }),
+      } as unknown as import("../../src/server/management/context").ManagementContext);
+      expect(response?.status).toBe(200);
+      expect(loadConfig().providers.p).toBeUndefined();
+      expect(keychainStore.size).toBe(0);
+    });
 });
 
 describe("gcp-adc marker source", () => {

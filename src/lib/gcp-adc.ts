@@ -50,12 +50,12 @@ const TOKEN_RETRY_BASE_MS = 300;
  */
 export const GCP_CREDENTIAL_MARKER_PREFIX = "gcp-sa:";
 
-/** Extract the credential-store account from a `gcp-sa:<account>` marker. */
+/** Extract a marker account; malformed explicit markers never opt into host ADC. */
 export function gcpCredentialMarkerAccount(value: string | undefined): string | undefined {
-  if (typeof value !== "string") return undefined;
-  return value.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) && value.length > GCP_CREDENTIAL_MARKER_PREFIX.length
-    ? value.slice(GCP_CREDENTIAL_MARKER_PREFIX.length)
-    : undefined;
+  if (typeof value !== "string" || !value.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) return undefined;
+  const account = value.slice(GCP_CREDENTIAL_MARKER_PREFIX.length);
+  if (!account.trim()) throw new Error("GCP credential marker requires a non-empty account");
+  return account;
 }
 
 /**

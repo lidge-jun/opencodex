@@ -26,6 +26,25 @@ afterEach(() => {
 });
 
 describe("vertex adapter with a gcp-sa marker key", () => {
+  test("an empty marker fails before host ADC or any token fetch", async () => {
+    const realFetch = globalThis.fetch;
+    const previousKey = process.env.GOOGLE_CLOUD_API_KEY;
+    let calls = 0;
+    process.env.GOOGLE_CLOUD_API_KEY = "fixture-env-key";
+    globalThis.fetch = (async () => { calls++; return new Response("fixture"); }) as typeof fetch;
+    try {
+      for (const apiKey of ["gcp-sa:", "gcp-sa:  "]) {
+        const provider = { adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com", project: "fixture", location: "global", apiKey } as OcxProviderConfig;
+        await expect(createGoogleAdapter(provider).buildRequest(parsed())).rejects.toThrow(/non-empty account/);
+      }
+      expect(calls).toBe(0);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (previousKey === undefined) delete process.env.GOOGLE_CLOUD_API_KEY;
+      else process.env.GOOGLE_CLOUD_API_KEY = previousKey;
+    }
+  });
+
   test("marker resolves through the ADC branch (never the x-goog-api-key fast path)", async () => {
     // A real, signable RSA key so buildRequest reaches the actual signing step of the ADC branch.
     const kp = await generateKeyPair();
