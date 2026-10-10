@@ -1,5 +1,5 @@
 import { OCX_SECTION_MARKER } from "../injected-marker";
-import { encodeBasicString, matchKeyHead } from "./encoding";
+import { encodeBasicString, lexicalLineStarts, matchKeyHead } from "./encoding";
 import { TABLE_HEADER, ANY_DEV_INSTRUCTIONS, DEV_INSTRUCTIONS_KEY } from "./toml-read";
 
 /** Line editing, not re-serialization: the user's comments and layout survive. */
@@ -62,44 +62,13 @@ interface AssignmentHead {
 }
 
 /**
- * For each line, whether it begins outside every string and composite span.
- *
- * The editors below match assignments and table headers line by line, so a line
- * that sits inside a `"""…"""` value or a multi-line array is prose, not syntax:
- * `"model_instructions_file" = "x"` written inside `developer_instructions` must
- * never be edited as the real key. Only lines that start at top level are
- * candidates. A span that never closes means the scope of every later line is
- * unknown, so the whole edit refuses instead of guessing.
+ * Lexical line scope for the editors below (see `lexicalLineStarts`). A span
+ * that never closes means the scope of every later line is unknown, so the
+ * whole edit refuses instead of guessing.
  */
-function lexicalLineStarts(lines: readonly string[]): boolean[] {
-  const starts: boolean[] = [];
-  let open: string | null = null;
-  let depth = 0;
-  const refuse = () => { throw new UnsupportedTomlForm("configuration contains an unterminated string or composite value"); };
-  for (const line of lines) {
-    starts.push(open === null && depth === 0);
-    for (let i = 0; i < line.length; i += 1) {
-      const char = line[i]!;
-      if (open !== null) {
-        if (char === "\\" && (open === '"' || open === '"""')) { i += 1; continue; }
-        if (char !== open[0]) continue;
-        if (open.length === 1) { open = null; continue; }
-        let run = 0;
-        while (line[i + run] === char) run += 1;
-        // Up to two quotes may sit inside the value just before the closing three.
-        if (run >= 3) { open = null; i += run - 1; }
-        else i += run - 1;
-      } else if (char === "#") break;
-      else if (char === '"' || char === "'") {
-        open = line.startsWith(char.repeat(3), i) ? char.repeat(3) : char;
-        i += open.length - 1;
-      } else if (char === "[" || char === "{") depth += 1;
-      else if (char === "]" || char === "}") { depth -= 1; if (depth < 0) refuse(); }
-    }
-    // Single-line strings cannot cross a newline.
-    if (open !== null && open.length === 1) refuse();
-  }
-  if (open !== null || depth !== 0) refuse();
+function scopedLineStarts(lines: readonly string[]): boolean[] {
+  const starts = lexicalLineStarts(lines);
+  if (starts === null) throw new UnsupportedTomlForm("configuration contains an unterminated string or composite value");
   return starts;
 }
 
@@ -153,7 +122,7 @@ export function rootKeyValueForm(content: string, key: string): "absent" | "simp
   const { body } = splitBom(content);
   const lines = splitLines(body);
   let starts: boolean[];
-  try { starts = lexicalLineStarts(lines); } catch { return "unsupported"; }
+  try { starts = scopedLineStarts(lines); } catch { return "unsupported"; }
   const limit = firstTableIndex(lines, starts);
   for (let i = 0; i < limit; i += 1) {
     if (!starts[i]) continue;
@@ -205,7 +174,7 @@ export function setRootBool(content: string, key: string, value: boolean | null)
   const eol = dominantEol(content);
   const { bom, body } = splitBom(content);
   const lines = splitLines(body);
-  const starts = lexicalLineStarts(lines);
+  const starts = scopedLineStarts(lines);
   const limit = firstTableIndex(lines, starts);
   for (let i = 0; i < limit; i += 1) {
     if (!starts[i] || !matchKeyHead(lines[i]!, key)) continue;
@@ -228,7 +197,7 @@ export function setRootString(content: string, key: string, value: string | null
   const eol = dominantEol(content);
   const { bom, body } = splitBom(content);
   const lines = splitLines(body);
-  const starts = lexicalLineStarts(lines);
+  const starts = scopedLineStarts(lines);
   const limit = firstTableIndex(lines, starts);
   for (let i = 0; i < limit; i += 1) {
     if (!starts[i] || !matchKeyHead(lines[i]!, key)) continue;
@@ -251,7 +220,7 @@ export function setTableBool(content: string, table: string, key: string, value:
   const eol = dominantEol(content);
   const { bom, body } = splitBom(content);
   const lines = splitLines(body);
-  const starts = lexicalLineStarts(lines);
+  const starts = scopedLineStarts(lines);
   const escaped = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const header = new RegExp(`^\\s*\\[${escaped}\\]\\s*(?:#.*)?$`);
   const start = lines.findIndex((l, i) => starts[i] === true && header.test(l));

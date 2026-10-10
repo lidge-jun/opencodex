@@ -153,7 +153,7 @@ export type { Ownership } from "./prompt-layers/toml-read";
 import { activeConfigPath, activeStorePath, activeBaseVariantDir, journalPathFor, lockPathFor, type Paths } from "./prompt-layers/paths";
 import { readFileOrNull, computeRevision, updateFingerprintField } from "./prompt-layers/revision";
 import { normalizeBody, findInvalidCharacter, decodeBasicString, decodeTomlBasicString } from "./prompt-layers/encoding";
-import { rootArrayEntries, hasRootKey, rootLines, rootValue, tableLines, boolInLines, inspectOwnership } from "./prompt-layers/toml-read";
+import { rootArrayEntries, hasRootKey, rootLines, rootValue, scopedBool, inspectOwnership } from "./prompt-layers/toml-read";
 import {
   setRootBool, setRootString, setTableBool, setProjection, removeUnownedProjection,
   rootKeyValueForm, UnsupportedTomlForm,
@@ -359,8 +359,7 @@ function readToggle(configBytes: string | null, id: ToggleId): ToggleState {
   const key = spec.table ? `${spec.table}.${spec.key}` : spec.key;
   let value: boolean | null = null;
   if (configBytes !== null) {
-    const scope = spec.table ? tableLines(configBytes, spec.table) : rootLines(configBytes);
-    value = scope === null ? null : boolInLines(scope, spec.key);
+    value = scopedBool(configBytes, spec.table ?? null, spec.key);
   }
   return {
     id,

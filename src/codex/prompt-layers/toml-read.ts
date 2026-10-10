@@ -1,5 +1,5 @@
 import { OCX_SECTION_MARKER } from "../injected-marker";
-import { decodeBasicString, matchKeyHead } from "./encoding";
+import { decodeBasicString, lexicalLineStarts, matchKeyHead } from "./encoding";
 
 /**
  * Decoded string entries of a root-scope TOML array.
@@ -127,6 +127,36 @@ export function tableLines(content: string, header: string): string[] | null {
   const rest = lines.slice(start + 1);
   const end = rest.findIndex(l => TABLE_HEADER.test(l));
   return end === -1 ? rest : rest.slice(0, end);
+}
+
+/**
+ * A root-scope (`table === null`) or `[table]` boolean, reading only lines that
+ * start outside every string and composite span, so assignment-shaped prose in a
+ * multiline value is never reported as the setting. A file whose spans never
+ * close falls back to the plain line scan; Codex cannot load it either way.
+ */
+export function scopedBool(content: string, table: string | null, key: string): boolean | null {
+  const lines = content.split("\n");
+  const starts = lexicalLineStarts(lines);
+  if (starts === null) {
+    const scope = table === null ? rootLines(content) : tableLines(content, table);
+    return scope === null ? null : boolInLines(scope, key);
+  }
+  const top = (i: number) => starts[i] === true;
+  let from = 0;
+  if (table !== null) {
+    const escaped = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const header = new RegExp(`^\\s*\\[${escaped}\\]\\s*(?:#.*)?$`);
+    from = lines.findIndex((l, i) => top(i) && header.test(l)) + 1;
+    if (from === 0) return null;
+  }
+  for (let i = from; i < lines.length; i += 1) {
+    if (!top(i)) continue;
+    if (TABLE_HEADER.test(lines[i]!)) break;
+    const value = boolInLines([lines[i]!], key);
+    if (value !== null) return value;
+  }
+  return null;
 }
 
 export function boolInLines(lines: string[], key: string): boolean | null {

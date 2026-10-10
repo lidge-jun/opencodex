@@ -21,6 +21,8 @@ assignment or table header, so assignment-shaped text inside
 `developer_instructions` is not edited. A string or composite that never closes
 refuses the whole edit before publication, and a composite or multiline target
 value also refuses. Delimiters in quoted strings and comments do not change scope.
+Toggle reads use the same scan (`scopedBool` in `toml-read.ts`, scanner in
+`encoding.ts`), so a write and the snapshot read back agree.
 
 `src/codex/prompt-layers/import-source.ts` opens an external source nonblocking,
 checks the opened descriptor is regular, and reads at most 128 KiB plus one refusal

@@ -86,3 +86,20 @@ for (const [rootKey, tableKey] of [
     }
   });
 }
+test("toggle snapshots ignore assignment-shaped prose inside a multiline value", () => {
+  const prose = 'developer_instructions = """\n"include_apps_instructions" = false\n[skills]\n"include_instructions" = false\n"""\n';
+  const paths = fixture(`${prose}include_apps_instructions = true\n[skills]\ninclude_instructions = true\n`);
+  const before = readPromptLayers(paths);
+  for (const id of ["apps", "skills"]) expect(before.toggles.find(t => t.id === id)).toMatchObject({ userFileValue: true });
+  let revision = before.revision;
+  for (const id of ["apps", "skills"]) {
+    const result = setToggle(id, false, revision, paths);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.snapshot.toggles.find(t => t.id === id)).toMatchObject({ userFileValue: false, defaultedUserValue: false });
+    revision = result.snapshot.revision;
+  }
+  const parsed = Bun.TOML.parse(readFileSync(paths.configPath, "utf8")) as Record<string, unknown>;
+  expect(parsed).toMatchObject({ include_apps_instructions: false, skills: { include_instructions: false } });
+  expect(parsed.developer_instructions).toBe('"include_apps_instructions" = false\n[skills]\n"include_instructions" = false\n');
+});
