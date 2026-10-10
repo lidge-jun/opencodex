@@ -1472,7 +1472,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // an error instead of a silently-incomplete done. Mirrors kiro-truncation.
         if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
           && isVertexTruncatedTurn(lastFinishReason, toolCallsStarted)) {
-          yield vertexTruncationErrorEvent(lastFinishReason, toolCallsStarted);
+          yield vertexTruncationErrorEvent(lastFinishReason, toolCallsStarted, pendingUsage);
           return;
         }
         if (!sawAnyFrame || !sawTerminalSignal) {
@@ -1687,7 +1687,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
       if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
         && isVertexTruncatedTurn(candidate.finishReason, toolCallsStarted)) {
-        return finish([vertexTruncationErrorEvent(candidate.finishReason, toolCallsStarted)]);
+        return finish([vertexTruncationErrorEvent(
+          candidate.finishReason,
+          toolCallsStarted,
+          usageFromGemini(json.usageMetadata as Record<string, number> | undefined),
+        )]);
       }
 
       const usage = json.usageMetadata as Record<string, number> | undefined;
