@@ -39,17 +39,25 @@ function defaultEntryFactory(service: string, account: string): ProviderKeychain
 let entryFactory: ProviderKeychainEntryFactory = defaultEntryFactory;
 const resolvedCache = new Map<string, string>();
 const warnedAccounts = new Set<string>();
+let resolutionGeneration = 0;
+
+/** Advances whenever cached secrets may have changed, so derived snapshots can rebuild. */
+export function providerKeyResolutionGeneration(): number {
+  return resolutionGeneration;
+}
 
 /** Test seam: swap the OS entry for an in-memory one and drop caches. */
 export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychainEntryFactory | null): void {
   entryFactory = factory ?? defaultEntryFactory;
   resolvedCache.clear();
+  resolutionGeneration++;
   warnedAccounts.clear();
 }
 
 /** Write-path seam: a store/restore mutated secrets, so cached reads and warnings are stale. */
 export function invalidateResolvedProviderKeyCache(): void {
   resolvedCache.clear();
+  resolutionGeneration++;
   warnedAccounts.clear();
 }
 

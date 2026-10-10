@@ -8,6 +8,7 @@ import {
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
+import { configuredCredentials, type ConfiguredCredentials } from "./configured-credentials";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -75,7 +76,7 @@ function noteBoundedDiagnostic(
   if (logCtx[field] !== undefined) return;
   if (!isSafeDiagnosticToken(value)) return;
   if (field === "upstreamErrorType" && !KNOWN_UPSTREAM_ERROR_TYPES.has(value)) return;
-  if (!diagnosticValueAllowed(field, value)) return;
+  if (!diagnosticValueAllowed(value)) return;
   logCtx[field] = value;
   const status = logCtx.terminalHttpStatus;
   if (status === undefined || status >= 500) {
@@ -85,19 +86,19 @@ function noteBoundedDiagnostic(
 }
 
 /**
- * A diagnostic must not repeat a header value this process sent upstream (an echoed credential).
- * Code and request id are open vocabularies, so they also fail closed once the registry can no
- * longer vouch for complete coverage. The type is a closed vocabulary; the check is depth only.
- * Applied at capture, again for every retained value interpolated into a warning, and at
- * projection, because a credential can be sent after the value was captured.
+ * A diagnostic must not repeat a configured credential or a credential this process sent upstream
+ * (an echo). All three fields fail closed while either source cannot vouch for complete coverage:
+ * a closed type vocabulary does not prove a member is not also a credential. Applied at capture,
+ * again for every retained value interpolated into a warning, and at projection, because a
+ * credential can be configured or sent after the value was captured.
  */
 export function diagnosticValueAllowed(
-  field: "upstreamErrorCode" | "upstreamErrorType" | "upstreamRequestId",
   value: string,
   registry: OutboundCredentialRegistry = outboundCredentials(),
+  configured: ConfiguredCredentials = configuredCredentials(),
 ): boolean {
-  if (registry.matches(value)) return false;
-  return field === "upstreamErrorType" || registry.complete();
+  if (!registry.complete() || !configured.complete) return false;
+  return !registry.matches(value) && !configured.matches(value);
 }
 
 export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: Headers): void {
@@ -117,7 +118,7 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
 export function upstreamDiagnosticLogFields(logCtx: UpstreamErrorDiagnostics): UpstreamErrorDiagnostics {
   const allowed = (field: keyof UpstreamErrorDiagnostics): string | undefined => {
     const value = logCtx[field];
-    return value && diagnosticValueAllowed(field, value) ? value : undefined;
+    return value && diagnosticValueAllowed(value) ? value : undefined;
   };
   const code = allowed("upstreamErrorCode");
   const type = allowed("upstreamErrorType");

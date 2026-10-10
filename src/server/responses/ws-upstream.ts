@@ -222,7 +222,9 @@ export async function codexWsUpstreamFetch(
     // reused for a different destination or with stale plugin headers.
     const dial = planCodexWsDial(wsUrl, headers, proxy);
     if (!dial) return sseFallback(url, init);
-    // The final dial headers, after plugin rewrites, are what the WebSocket upstream receives.
+    // The final dial headers, after plugin rewrites, are what the WebSocket upstream receives; the
+    // per-turn headers planning drops from the upgrade still reach it inside the frame metadata.
+    outboundCredentials().remember(headers);
     outboundCredentials().remember(dial.headers);
     const identity = control ? null : codexWsReuseIdentity(url, dial.headers, frameText, dial.proxy, dial.url);
     const reuseAcrossTurns = identity !== null && codexWsReuseAcrossTurnsEnabled();

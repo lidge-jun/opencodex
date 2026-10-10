@@ -12,7 +12,7 @@ import { codexWsUpstreamFetch, streamingInit } from "../helpers/ws-upstream-fixt
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { OutboundCredentialRegistry, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
+import { OutboundCredentialRegistry, credentialComponents, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
 import { diagnosticValueAllowed } from "../../src/server/request-log-terminal-status";
 import { classifyCodexUpstreamOutcome } from "../../src/codex/routing/cooldown-math";
 import { httpStatusFromTerminalError } from "../../src/lib/errors";
@@ -226,13 +226,23 @@ for (const field of ["error", "last_error", "response"] as const) {
 }
 
 // ---- #6911: sent-credential registry (private instances; no global state) ----
+const noConfigured = { complete: true, matches: () => false };
 describe("outbound credential registry", () => {
-  test("records sent values but not denylisted non-credential headers", () => {
+  test("credential-named headers match at any length; other headers only at 8+ chars; correlation ids are skipped", () => {
     const reg = new OutboundCredentialRegistry();
-    reg.remember({ "X-Gateway-Credential": "gw-secret-value", "content-type": "application/json",
-      "user-agent": "agent/1.0", "x-request-id": "req_123", "openai-beta": "responses=v1" });
-    expect(reg.matches("gw-secret-value")).toBe(true);
-    for (const value of ["application/json", "agent/1.0", "req_123", "responses=v1"]) expect(reg.matches(value)).toBe(false);
+    reg.remember({ "X-Gateway-Credential": "gw-short", "content-api-key": "cak-1", "x-gateway-request-id": "gw-req-opaque-1",
+      "x-request-id": "req_client_123", "x-codex-turn-metadata": "tokens" });
+    for (const value of ["gw-short", "cak-1", "gw-req-opaque-1"]) expect(reg.matches(value)).toBe(true);
+    for (const value of ["req_client_123", "tokens"]) expect(reg.matches(value)).toBe(false);
+  });
+  test("compound values register every part a server could authenticate with", () => {
+    expect(credentialComponents("Token opaque-part-1")).toEqual(["Token opaque-part-1", "opaque-part-1"]);
+    expect(credentialComponents('Digest username="u1", response="r-value"')).toContain("r-value");
+    expect(credentialComponents("  ")).toEqual([]);
+    const reg = new OutboundCredentialRegistry();
+    reg.remember({ "x-gateway-credential": "Token opaque-part-1" });
+    expect(reg.matches("opaque-part-1")).toBe(true);
+    expect(reg.matches("Token")).toBe(false);
   });
   test("authorization registers the full value and the token; standard Basic also registers its parts", () => {
     const reg = new OutboundCredentialRegistry();
@@ -250,35 +260,49 @@ describe("outbound credential registry", () => {
     expect(reg.matches("cookie-two")).toBe(true);
     expect(reg.matches("")).toBe(false);
   });
-  test("exact match at any length, substring only for credentials of 12 chars or more", () => {
+  test("exact match at any length, substring only for credentials of 8 chars or more", () => {
     const reg = new OutboundCredentialRegistry();
-    reg.remember({ "x-a": "k", "x-b": "elevenchars", "x-c": "twelve-chars" });
+    reg.remember({ "x-api-key": "k", "x-secret-b": "sevenc7", "x-secret-c": "abcDEF78" });
     expect(reg.matches("k")).toBe(true);
-    expect(reg.matches("elevenchars")).toBe(true);
-    expect(reg.matches("xxelevencharsxx")).toBe(false);
-    expect(reg.matches("xxtwelve-charsxx")).toBe(true);
+    expect(reg.matches("sevenc7")).toBe(true);
+    expect(reg.matches("xxsevenc7xx")).toBe(false);
+    expect(reg.matches("failed_abcDEF78_retry")).toBe(true);
     const cls = new OutboundCredentialRegistry();
     cls.remember({ "x-api-key": "server_error" });
-    expect(diagnosticValueAllowed("upstreamErrorCode", "server_error", cls)).toBe(false);
+    expect(diagnosticValueAllowed("server_error", cls, noConfigured)).toBe(false);
   });
-  test("entry and byte bounds evict in LRU order and mark coverage incomplete", () => {
+  test("strict entry and byte bounds evict in LRU order and mark coverage incomplete", () => {
     const reg = new OutboundCredentialRegistry({ maxEntries: 2 });
-    reg.remember({ "x-1": "value-one" });
-    reg.remember({ "x-2": "value-two" });
-    reg.remember({ "x-1": "value-one" });
+    reg.remember({ "x-secret-1": "value-one" });
+    reg.remember({ "x-secret-2": "value-two" });
+    reg.remember({ "x-secret-1": "value-one" });
     expect(reg.complete()).toBe(true);
-    reg.remember({ "x-3": "value-three" });
+    reg.remember({ "x-secret-3": "value-three" });
     expect(reg.complete()).toBe(false);
     expect(reg.matches("value-two")).toBe(false);
     expect(reg.matches("value-one")).toBe(true);
     const bytes = new OutboundCredentialRegistry({ maxBytes: 10 });
-    bytes.remember({ "x-1": "123456" });
-    bytes.remember({ "x-2": "abcdef" });
+    bytes.remember({ "x-secret-1": "123456" });
+    bytes.remember({ "x-secret-2": "abcdef" });
     expect(bytes.complete()).toBe(false);
     const big = new OutboundCredentialRegistry({ maxValueBytes: 4 });
-    big.remember({ "x-1": "12345" });
+    big.remember({ "x-secret-1": "12345" });
     expect(big.complete()).toBe(false);
     expect(big.matches("12345")).toBe(false);
+  });
+  test("high-cardinality metadata churn never disables diagnostics", () => {
+    const reg = new OutboundCredentialRegistry({ maxEntries: 4 });
+    reg.remember({ authorization: "Bearer churn-bearer-1" });
+    for (let turn = 0; turn < 50; turn++) reg.remember({ "x-codex-turn-state": `turn-state-${turn}-opaque`, session_id: `session-${turn}-opaque` });
+    expect(reg.complete()).toBe(true);
+    expect(reg.matches("churn-bearer-1")).toBe(true);
+    expect(diagnosticValueAllowed("req_safe_after_churn", reg, noConfigured)).toBe(true);
+  });
+  test("configured coverage gaps fail closed for every field", () => {
+    const reg = new OutboundCredentialRegistry();
+    expect(diagnosticValueAllowed("server_error", reg, { complete: false, matches: () => false })).toBe(false);
+    expect(diagnosticValueAllowed("server_error", reg, { complete: true, matches: value => value === "server_error" })).toBe(false);
+    expect(diagnosticValueAllowed("server_error", reg, noConfigured)).toBe(true);
   });
   test("Request headers without init are read case-insensitively", () => {
     const reg = new OutboundCredentialRegistry();
@@ -288,7 +312,7 @@ describe("outbound credential registry", () => {
 });
 
 describe("diagnostic wiring against a swapped registry", () => {
-  test("a value captured before eviction is dropped from later warnings and the row, while type and status remain", () => {
+  test("a value captured before eviction is dropped from later warnings and the row, the type included; status remains", () => {
     const reg = new OutboundCredentialRegistry({ maxEntries: 1 });
     const restore = setOutboundCredentialRegistryForTests(reg);
     const warnings: string[] = [];
@@ -300,8 +324,8 @@ describe("diagnostic wiring against a swapped registry", () => {
       inspectResponseLogJson(log, JSON.stringify({ type: "error", error: { type: "overloaded_error", code: "opaque_code_value", message: "x" } }));
       expect(log.upstreamErrorCode).toBe("opaque_code_value");
       const statusBefore = httpStatusForRequestLogTerminal("failed", log);
-      reg.remember({ "x-1": "first-value" });
-      reg.remember({ "x-2": "second-value" });
+      reg.remember({ "x-secret-1": "first-value" });
+      reg.remember({ "x-secret-2": "second-value" });
       expect(reg.complete()).toBe(false);
       warnings.length = 0;
       noteUpstreamRequestId(log, new Headers({ "x-request-id": "req_later" }));
@@ -309,16 +333,17 @@ describe("diagnostic wiring against a swapped registry", () => {
       expect(warnings.length).toBe(0);
       expect(log.upstreamRequestId).toBeUndefined();
       expect(row!.upstreamErrorCode).toBeUndefined();
-      expect(row!.upstreamErrorType).toBe("overloaded_error");
+      // A closed vocabulary does not prove an evicted credential was not also a class name.
+      expect(row!.upstreamErrorType).toBeUndefined();
       expect(row!.status).toBe(statusBefore);
     } finally {
       console.warn = warn;
       restore();
     }
   });
-  test("an incomplete registry fails closed for new code and request ids but keeps the type vocabulary", () => {
+  test("an incomplete registry fails closed for new code, request id and type", () => {
     const reg = new OutboundCredentialRegistry({ maxValueBytes: 1 });
-    reg.remember({ "x-1": "too-long" });
+    reg.remember({ "x-secret-1": "too-long" });
     const restore = setOutboundCredentialRegistryForTests(reg);
     const warn = console.warn;
     console.warn = (() => {}) as typeof console.warn;
@@ -328,7 +353,7 @@ describe("diagnostic wiring against a swapped registry", () => {
       inspectResponseLogJson(log, JSON.stringify({ error: { type: "server_error", code: "server_error" } }));
       expect(log.upstreamRequestId).toBeUndefined();
       expect(log.upstreamErrorCode).toBeUndefined();
-      expect(log.upstreamErrorType).toBe("server_error");
+      expect(log.upstreamErrorType).toBeUndefined();
     } finally {
       console.warn = warn;
       restore();
@@ -363,9 +388,9 @@ describe("sent credentials echoed into upstream diagnostics", () => {
     return Response.json(body, { status: 503, headers: responseHeaders });
   }) as typeof fetch;
   const bearer = (headers: Headers) => headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? null;
-  const run = async (provider: Record<string, unknown>) => {
+  const run = async (provider: Record<string, unknown>, extraProviders: Record<string, unknown> = {}) => {
     const config = { port: 0, defaultProvider: "echo", providers: { echo: { adapter: "openai-responses", authMode: "key",
-      baseUrl: "https://upstream.invalid/v1", models: ["fixture-model"], defaultModel: "fixture-model", ...provider } } } as unknown as OcxConfig;
+      baseUrl: "https://upstream.invalid/v1", models: ["fixture-model"], defaultModel: "fixture-model", ...provider }, ...extraProviders } } as unknown as OcxConfig;
     await saveConfig(config);
     const log: RequestLogContext = { model: "", provider: "" };
     const warnings: string[] = [];
@@ -383,6 +408,91 @@ describe("sent credentials echoed into upstream diagnostics", () => {
     }
     return { log, row: JSON.stringify(row ?? {}), warnings: warnings.join("\n") };
   };
+  const expectMasked = (value: string, result: { log: RequestLogContext; row: string; warnings: string }) => {
+    expect(`${result.log.upstreamErrorCode ?? ""} ${result.log.upstreamRequestId ?? ""}`).not.toContain(value);
+    expect(result.row).not.toContain(value);
+    expect(result.warnings).not.toContain(value);
+  };
+  const recording = (name: string, received: string[], transform: (value: string) => string = value => value) =>
+    (headers: Headers) => {
+      const value = headers.get(name);
+      if (value) received.push(value);
+      return value === null ? null : transform(value);
+    };
+
+  for (const name of ["Content-Api-Key", "X-Gateway-Request-Id"]) {
+    test(`a configured credential in a ${name} header is masked whatever its name`, async () => {
+      const value = secret("named");
+      const received: string[] = [];
+      const result = await run({ apiKey: secret("unused"), headers: { [name]: value }, fetch: echoingExecutor("error", recording(name, received)) });
+      expect(received).toContain(value);
+      expectMasked(value, result);
+    });
+  }
+
+  test("the bare token of a compound configured credential echoed back is masked", async () => {
+    const token = secret("compound");
+    const received: string[] = [];
+    const result = await run({ apiKey: secret("unused"), headers: { "X-Gateway-Credential": `Token ${token}` },
+      fetch: echoingExecutor("error", recording("x-gateway-credential", received, value => value.replace(/^Token\s+/, ""))) });
+    expect(received).toContain(`Token ${token}`);
+    expectMasked(token, result);
+  });
+
+  test("a configured credential echoed before this process ever sent it is masked", async () => {
+    const otherKey = secret("never-sent");
+    const sent: string[] = [];
+    const result = await run({ apiKey: secret("active"), fetch: echoingExecutor("error", headers => {
+      sent.push(bearer(headers) ?? "");
+      return otherKey;
+    }) }, { other: { adapter: "openai-responses", authMode: "key", baseUrl: "https://other.invalid/v1", apiKey: otherKey,
+      apiKeyPool: [{ id: "o", key: otherKey }], models: ["fixture-model"], defaultModel: "fixture-model" } });
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent).not.toContain(otherKey);
+    expectMasked(otherKey, result);
+  });
+
+  test("an OAuth token from the credential store is masked before it is ever sent", async () => {
+    const { saveCredential } = await import("../../src/oauth/store");
+    const access = secret("oauth-unsent");
+    const refresh = secret("oauth-refresh");
+    await saveCredential("github-copilot", { access, refresh, expires: Date.now() + 3_600_000, accountId: "u", source: "oauth" });
+    for (const value of [access, refresh]) {
+      const log = context();
+      inspectResponseLogJson(log, JSON.stringify({ error: { type: "server_error", code: value } }));
+      noteUpstreamRequestId(log, new Headers({ "x-request-id": value }));
+      expect(`${log.upstreamErrorCode ?? ""} ${log.upstreamRequestId ?? ""}`).not.toContain(value);
+    }
+  });
+
+  test("a short credential inside a decorated diagnostic is masked", async () => {
+    const short = "abcDEF789";
+    const result = await run({ apiKey: short, fetch: echoingExecutor("error", headers => `failed_${bearer(headers)}_retry`) });
+    expectMasked(short, result);
+  });
+
+  test("a per-turn header carried in a reused WebSocket frame instead of the upgrade is registered", async () => {
+    const { setCodexWsReuseAcrossTurns } = await import("../../src/config/codex-ws-reuse-setting");
+    const turnSecret = secret("ws-frame");
+    const unregister = registerUpstreamRewriter("ws-frame-fixture", target => {
+      if (target.transport === "websocket") target.url = "ws://127.0.0.1:1/backend-api/codex/responses";
+    });
+    setCodexWsReuseAcrossTurns(true);
+    try {
+      const init = streamingInit();
+      (init.headers as Record<string, string>)["x-codex-turn-state"] = turnSecret;
+      const response = await codexWsUpstreamFetch("https://chatgpt.com/backend-api/codex/responses", init,
+        (async () => new Response("fallback", { status: 500 })) as typeof fetch);
+      await response.text().catch(() => "");
+      const log = context();
+      inspectResponseLogJson(log, JSON.stringify({ error: { type: "server_error", code: turnSecret } }));
+      noteUpstreamRequestId(log, new Headers({ "x-request-id": turnSecret }));
+      expect(`${log.upstreamErrorCode ?? ""} ${log.upstreamRequestId ?? ""}`).not.toContain(turnSecret);
+    } finally {
+      setCodexWsReuseAcrossTurns(false);
+      unregister();
+    }
+  });
 
   for (const slot of ["error", "last_error", "response", "openai-request-id"]) {
     test(`a key-auth credential echoed in ${slot} never reaches the context, row or warning`, async () => {
