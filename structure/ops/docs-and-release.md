@@ -211,8 +211,7 @@ contexts retain exit 0.
 
 The PR-target resolver accepts commit-index candidates only when their base repository's
 owner and name match the workflow repository. Foreign or incomplete fork-network entries
-cannot supply a write-job PR number. If no unique local current-head candidate remains,
-the existing repository-scoped open-PR lookup runs; absent or ambiguous matches emit no identity.
+cannot supply a write-job PR number. If no unique local current-head candidate remains, the existing repository-scoped open-PR lookup runs; absent or ambiguous matches emit no identity.
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
