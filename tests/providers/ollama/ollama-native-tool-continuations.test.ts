@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { TranslatorBudgetExceededError } from "../../../src/lib/translator-budget";
-import { createOllamaNativeAdapter } from "../../../src/adapters/ollama-native";
+import { createOllamaNativeAdapter, OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../../src/adapters/ollama-native";
 import { parseRequest } from "../../../src/responses/parser";
 import { handleResponses } from "../../../src/server/responses/core";
 import type { RequestLogContext } from "../../../src/server/request-log";
@@ -134,7 +134,7 @@ describe("Ollama late-result attribution budget", () => {
     expect(messages.filter((message: { role: string }) => message.role === "user")).toHaveLength(1_024);
   });
 
-  test("an overflowing replay surfaces the established HTTP 413, not a 400", async () => {
+  test.each([false, true])("an overflowing replay surfaces HTTP 413 with the late-attribution guidance, not a 400 (stream=%s)", async stream => {
     // The budget throw leaves the builder inside handleResponses' adapter-dispatch. The
     // established refusal for a translator-budget error is 413 translation_buffer_limit;
     // a 400 invalid_request_error would hide the size verdict from the client.
@@ -168,7 +168,7 @@ describe("Ollama late-result attribution budget", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             model: "local-llm/deepseek-v4.1-flash",
-            stream: false,
+            stream,
             input: history("a".repeat(32_768), 16),
           }),
         }),
@@ -178,13 +178,16 @@ describe("Ollama late-result attribution budget", () => {
       );
       expect(response.status).toBe(413);
       const json = await response.json() as { error?: { message?: string; type?: string; code?: string } };
-      // The Responses error formatter classifies every local budget 413 alike; the
-      // identifying contract on this wire is status + request_too_large + this message.
-      expect(json.error).toMatchObject({
-        message: "request translation buffer exceeded the safe limit",
+      // The established local-budget wire (413 request_too_large) with the proxy-owned guidance:
+      // it names the cause and the 256 KiB limit, and points to a new thread, since a compaction
+      // on the same route would resend the same history. It is not a context overflow.
+      expect(json.error).toEqual({
+        message: OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE,
         type: "request_too_large",
         code: "request_too_large",
       });
+      expect(OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE).toContain("256 KiB");
+      expect(OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE).toContain("new thread");
       // A local refusal never reaches Ollama.
       expect(upstreamCalls).toEqual([]);
     } finally {
@@ -193,3 +196,4 @@ describe("Ollama late-result attribution budget", () => {
     }
   });
 });
+

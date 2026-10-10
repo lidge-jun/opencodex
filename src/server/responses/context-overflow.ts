@@ -1,6 +1,18 @@
-import { bridgeToResponsesSSE } from "../../bridge";
+import { bridgeToResponsesSSE, formatErrorResponse } from "../../bridge";
+import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { AdapterEvent } from "../../types";
+
+/**
+ * The Ollama late-attribution refusal as a client response: the existing translator-budget
+ * wire shape (413 request_too_large) with only the proxy-owned constant as its message.
+ * It is deliberately not a context overflow: compacting on the same route cannot shrink it.
+ */
+export function lateAttributionLimitResponse(): Response {
+  return formatErrorResponse(413, "request_too_large", OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE, {
+    code: "translation_buffer_limit",
+  });
+}
 
 export const PROVIDER_INPUT_TOO_LARGE_MESSAGE =
   "The provider rejected this turn because its input exceeds the provider size or context limit. Reduce the current input or compact the conversation before retrying.";

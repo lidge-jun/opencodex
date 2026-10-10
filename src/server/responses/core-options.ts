@@ -30,6 +30,8 @@ export interface ConsumedComboFailure {
   codexModelRefusal?: CodexAccountModelRefusal;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
+  /** Sanitized structured `error.message`; compared only against proxy-owned constants, never emitted. */
+  upstreamMessage?: string;
   /** Complete structured provider type, retained for conservative recovery classification. */
   upstreamType?: string;
   /** Valid numeric/date value used only for cooldown calculation. */

@@ -112,6 +112,20 @@ const NATIVE_TOOL_ID_MAX_LENGTH = 256;
 const NATIVE_TOOL_NAME_MAX_BYTES = 1024;
 const NATIVE_MAX_PENDING_TOOL_CALLS = 128;
 const NATIVE_MAX_LATE_ATTRIBUTION_BYTES = 256 * 1024;
+/** Proxy-owned refusal text for an exhausted late-attribution budget. A compaction on the same
+ *  Ollama route resends the same history, so the only reliable recovery is a new thread. */
+export const OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE =
+  "Late tool-output attribution for this conversation exceeded the 256 KiB per-request limit. Start a new thread to continue.";
+
+/** The late-attribution budget refusal, reporting the full limit rather than the bytes left. */
+export class OllamaLateAttributionBudgetError extends TranslatorBudgetExceededError {
+  readonly publicMessage = OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;
+
+  constructor() {
+    super("request_copies", NATIVE_MAX_LATE_ATTRIBUTION_BYTES);
+    this.name = "OllamaLateAttributionBudgetError";
+  }
+}
 // Account for the retained Map key and call bookkeeping in addition to the provider's name.
 const NATIVE_TOOL_CALL_BOOKKEEPING_BYTES = 128;
 const NATIVE_TOOL_ID_CONTROL = /[\u0000-\u001f\u007f]/u;
@@ -400,7 +414,12 @@ function buildNativeMessages(
         // Count the joined JSON string exactly, without constructing a measurement copy.
         const attribution = ['[ocx] additional output for previously issued tool "',
           call.wireName, '" (', call.id, '):\n', message.isError ? "ERROR: " : ""];
-        lateAttributionBytes += jsonStringPartsUtf8Bytes(attribution, NATIVE_MAX_LATE_ATTRIBUTION_BYTES - lateAttributionBytes);
+        try {
+          lateAttributionBytes += jsonStringPartsUtf8Bytes(attribution, NATIVE_MAX_LATE_ATTRIBUTION_BYTES - lateAttributionBytes);
+        } catch (error) {
+          if (error instanceof TranslatorBudgetExceededError) throw new OllamaLateAttributionBudgetError();
+          throw error;
+        }
         const translated = contentToNative(message.content, "late tool result");
         const late: OllamaNativeMessage = { role: "user",
           content: attribution.join("") + translated.content,

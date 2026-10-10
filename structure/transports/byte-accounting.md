@@ -25,6 +25,15 @@ builds. Its wire error type/code is `request_too_large`, with the standard trans
 message; `translation_buffer_limit` is the internal verdict. Ollama endpoint and adapter
 abort-guard regressions cover refusal before the initial send or any recovery send.
 Existing client-cancellation and deliberately preserved recovery-refusal precedence remain.
+The late-attribution refusal is the one exception to that message: it throws
+`OllamaLateAttributionBudgetError`, which reports the full 256 KiB limit, and
+`lateAttributionLimitResponse()` in `src/server/responses/context-overflow.ts` returns the same
+413 `request_too_large` wire with a proxy-owned message that names the cause, the limit and the
+recovery (start a new thread). It is deliberately not a context overflow: a compaction on the
+same Ollama route resends the same history and is refused again. A combo member's refusal
+reaches the client only as that literal constant envelope (`isLateAttributionRefusal` requires
+the exact constant, the local wire code, status 413 and a replayable attempt); every other
+classification input is left untouched.
 
 The Google tool-schema loss report retains fixed categories, bounded counts, and endpoint class
 only. It copies no request content and adds no bytes to the upstream wire; see the

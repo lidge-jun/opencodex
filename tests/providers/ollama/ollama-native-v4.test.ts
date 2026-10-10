@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { createOllamaNativeAdapter } from "../../../src/adapters/ollama-native";
+import { createOllamaNativeAdapter, OllamaLateAttributionBudgetError, OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../../src/adapters/ollama-native";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 import { REASONING_EFFORT_OMIT_SENTINEL } from "../../../src/reasoning-effort";
 import type { AdapterEvent } from "../../../src/types";
@@ -126,9 +126,23 @@ describe("ollama-native — exact late-attribution JSON-string budget", () => {
       const name = padded(seed, "call", cap + 1, error, namespace);
       expect(bytes(caption(name, "call", error, namespace))).toBe(cap + 1);
       expect(() => createOllamaNativeAdapter(provider()).buildRequest(request(history(name, "call", 1, error, namespace))))
-        .toThrow(TranslatorBudgetExceededError);
+        .toThrow(OllamaLateAttributionBudgetError);
     });
   }
+
+  test("the refusal reports the full 256 KiB limit and the proxy-owned guidance, not the bytes left", () => {
+    const first = padded("first", "one", cap / 2);
+    const second = padded("second", "two", cap / 2) + "x";
+    let thrown: unknown;
+    try {
+      createOllamaNativeAdapter(provider()).buildRequest(request([...history(first, "one"), ...history(second, "two")]));
+    } catch (error) { thrown = error; }
+    expect(thrown).toBeInstanceOf(OllamaLateAttributionBudgetError);
+    expect(thrown).toBeInstanceOf(TranslatorBudgetExceededError);
+    expect((thrown as OllamaLateAttributionBudgetError).limitBytes).toBe(cap);
+    expect((thrown as OllamaLateAttributionBudgetError).kind).toBe("request_copies");
+    expect((thrown as OllamaLateAttributionBudgetError).publicMessage).toBe(OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE);
+  });
 
   test("the exact budget accumulates across repeated output and different settled calls", () => {
     const first = padded("first", "one", cap / 4);
@@ -230,3 +244,4 @@ describe("ollama-native — omit sentinel under the ultra boundary", () => {
     expect(JSON.parse(String(body)).think).toBe(false);
   });
 });
+

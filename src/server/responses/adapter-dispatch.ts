@@ -92,7 +92,8 @@ import {
 } from "../../providers/opencode-zen-rate-limit";
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { consumeComboFailure } from "./core-combo-failure";
-import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
+import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
+import { OllamaLateAttributionBudgetError } from "../../adapters/ollama-native";
 import { isFixedCodexAccount } from "./core-codex-account";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import {
@@ -342,6 +343,7 @@ export async function prepareAdapterExchange(
     cleanupUpstreamAbort();
     upstream.abort();
     if (options.abortSignal?.aborted) return clientCancelledResponse();
+    if (err instanceof OllamaLateAttributionBudgetError) return lateAttributionLimitResponse();
     // An adapter can also throw the shared translator budget while sizing generated
     // request content (e.g. Ollama late-tool attribution); keep its established 413.
     if (isTranslatorBudgetExceededError(err)) {
@@ -621,6 +623,7 @@ export async function prepareAdapterExchange(
           cleanupUpstreamAbort();
           upstream.abort();
           if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
+          if (err instanceof OllamaLateAttributionBudgetError) return { failed: lateAttributionLimitResponse() };
           if (isTranslatorBudgetExceededError(err)) {
             return { failed: formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
               code: "translation_buffer_limit",
