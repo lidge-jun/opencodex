@@ -55,7 +55,7 @@ Le rôle **Child** exige également qu’OpenCodex fonctionne en mode autonome s
 
 - **Connected** signifie que le tunnel SSH est prêt et que Child peut utiliser la liaison Home.
 - **Reconnecting** signifie que le tunnel est réessayé. Les requêtes peuvent temporairement renvoyer `503` avec `Retry-After`. Sur un Child connecté depuis son propre tableau de bord, une requête attend d’abord jusqu’à 15 secondes le retour du tunnel.
-- **Failed** signifie que la liaison nécessite une intervention. Vérifiez l’authentification SSH, la clé d’hôte confirmée, la redirection ou le délai indiqué. Un Child connecté depuis son propre tableau de bord réessaie de lui-même après une mise en veille, une panne ou un redémarrage : environ une fois par minute après un délai dépassé ou une erreur de redirection, et toutes les cinq minutes après une erreur d’authentification. Une clé d’hôte modifiée n’est jamais réessayée.
+- **Failed** signifie que la liaison nécessite une intervention. Vérifiez l’authentification SSH, la clé d’hôte confirmée, la redirection ou le délai indiqué. Le côté qui ouvre le tunnel SSH réessaie de lui-même après une mise en veille, une panne ou un redémarrage (Home pour un Child qu’il a ajouté, le Child pour une liaison qu’il a rejointe depuis son propre tableau de bord) : environ une fois par minute après un délai dépassé ou une erreur de redirection, et toutes les cinq minutes après une erreur d’authentification. Une clé d’hôte modifiée n’est jamais réessayée.
 
 Une liaison en échec ne bascule pas silencieusement vers un fournisseur local.
 
