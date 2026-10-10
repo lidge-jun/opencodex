@@ -73,3 +73,61 @@
   .remote-event { max-width: 100%; }
   .remote-pairing-code { letter-spacing: .05em; }
 }
+
+/* Session layout is shared by the browser dashboard and the desktop webview. */
+.remote-chats-workspace { margin-top: var(--space-6); min-width: 0; }
+.remote-chats-toolbar { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-3); }
+.remote-chats-toolbar h3 { margin: 0; font-size: var(--text-section); }
+.remote-chats-toolbar p, .remote-split-limit { margin: 0; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); }
+.remote-chats-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: var(--space-3); align-items: stretch; }
+.remote-session-rail { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius); background: var(--rail); min-width: 0; max-height: 720px; overflow: auto; }
+.remote-session-row { border: 1px solid transparent; border-radius: var(--radius-sm); background: var(--surface); cursor: grab; }
+.remote-session-row.is-active { border-color: var(--accent-ring); background: var(--accent-soft); }
+.remote-session-open { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-width: 0; padding: var(--space-3); color: var(--text); background: transparent; border: 0; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
+.remote-session-open:hover { background: var(--raised-hover); }
+.remote-session-open > span { display: grid; min-width: 0; gap: var(--space-1); }
+.remote-session-open strong, .remote-session-open small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-session-open strong { font-size: var(--text-control); font-weight: var(--weight-semibold); }
+.remote-session-open small { color: var(--muted); font-size: var(--text-caption); }
+.remote-session-open svg { flex: 0 0 auto; width: var(--icon-sm); height: var(--icon-sm); color: var(--muted); }
+.remote-session-split-actions { display: flex; justify-content: flex-end; padding: 0 var(--space-2) var(--space-2); gap: var(--space-1); }
+.remote-session-split-actions .btn { min-height: 28px; padding: var(--space-1) var(--space-2); }
+.remote-session-split-actions svg, .remote-pane-close svg { width: var(--icon-sm); height: var(--icon-sm); }
+.remote-pane-surface { min-width: 0; height: clamp(560px, 75vh, 900px); overflow: auto; border-radius: var(--radius); }
+.remote-split-branch { display: grid; min-width: 0; height: 100%; }
+.remote-split-branch--row { grid-template-columns: minmax(0, calc(var(--split-ratio) * 100% - 4px)) 8px minmax(0, 1fr); min-width: 528px; }
+.remote-split-branch--column { grid-template-rows: minmax(0, calc(var(--split-ratio) * 100% - 4px)) 8px minmax(0, 1fr); }
+.remote-split-child { min-width: 0; min-height: 0; overflow: auto; }
+.remote-split-divider { position: relative; background: transparent; touch-action: none; cursor: col-resize; }
+.remote-split-branch--column > .remote-split-divider { cursor: row-resize; }
+.remote-split-divider::after { content: ""; position: absolute; inset: 0 3px; background: var(--border); border-radius: var(--radius-xs); }
+.remote-split-branch--column > .remote-split-divider::after { inset: 3px 0; }
+.remote-split-divider:hover::after, .remote-split-divider:focus-visible::after { background: var(--accent); }
+.remote-split-divider:focus-visible, .remote-session-open:focus-visible, .remote-chat-pane-name:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+.remote-chat-pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.remote-chat-pane.is-active { border-color: var(--accent-ring); }
+.remote-chat-pane-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.remote-chat-pane-name { display: flex; align-items: center; flex: 1; min-width: 0; gap: var(--space-2); cursor: grab; }
+.remote-chat-pane-name > div { display: grid; min-width: 0; }
+.remote-chat-pane-name strong { font-size: var(--text-control); }
+.remote-chat-pane-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--text-caption); }
+.remote-chat-pane-name svg { flex: 0 0 auto; width: var(--icon-sm); height: var(--icon-sm); color: var(--muted); }
+.remote-chat-access { color: var(--muted); font-size: var(--text-caption); margin-top: var(--space-2); }
+.remote-chat-pane .remote-events { flex: 1 1 180px; min-height: 100px; max-height: none; }
+.remote-chat-pane > :not(.remote-events) { flex-shrink: 0; }
+.remote-chat-pane .remote-composer textarea { min-height: 44px; height: 64px; }
+.remote-pane-drop-targets { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
+.remote-pane-drop { position: absolute; display: grid; place-items: center; color: var(--accent); font-size: var(--text-label); font-weight: var(--weight-semibold); background: color-mix(in srgb, var(--accent-soft) 94%, var(--surface)); border: 2px dashed var(--accent-ring); }
+.remote-pane-drop.is-over { background: var(--accent-soft); border-color: var(--accent); border-style: solid; }
+.remote-pane-drop--left { inset: 0 70% 0 0; }
+.remote-pane-drop--right { inset: 0 0 0 70%; }
+.remote-pane-drop--up { inset: 0 30% 50%; }
+.remote-pane-drop--down { inset: 50% 30% 0; }
+@media (max-width: 980px) {
+  .remote-chats-layout { grid-template-columns: 1fr; }
+  .remote-session-rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); max-height: 220px; }
+}
+@media (max-width: 760px) {
+  .remote-session-split-actions .btn, .remote-pane-close { min-height: 44px; min-width: 44px; }
+  .remote-chat-pane .remote-console-actions .btn { min-height: 44px; }
+}

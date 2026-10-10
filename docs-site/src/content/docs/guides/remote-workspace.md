@@ -171,6 +171,27 @@ Prompt submission acknowledges acceptance immediately; the dashboard polls the s
 cancels an active Executor command, and prevents a late response from reopening the stopped
 session.
 
+## Work with sessions side by side
+
+The session list on the left opens a session in the focused pane. Drag a session to the left,
+right, top, or bottom edge of another pane to split the conversation area. You can show up to
+four different sessions at once. An already visible session moves between panes instead of
+opening a duplicate composer.
+
+Use **Split right** or **Split below** next to a session for the keyboard-accessible alternative.
+Drag a divider to resize the panes, or focus the divider and use its arrow keys. Each session
+keeps its own draft, submission state, and Stop action, so a pending turn in one pane does not
+block a different session. **Close pane** changes the layout only; it does not stop the session.
+
+The pane layout is restored for this Hub in the same browser. Only session identifiers and pane
+positions are saved; draft text and model output are not written to browser storage. Reloading
+the page clears unsent drafts.
+
+This view is shared by the browser dashboard and the OpenCodex desktop dashboard. CLI users
+can open the dashboard with `ocx gui` and select **Remote Workspace** after its normal Hub setup.
+It does not change the terminal interface of `codex` or the conversation layout inside the
+separate official ChatGPT/Codex desktop app.
+
 ## Restart and reconnect behavior
 
 The Hub persists bounded session metadata and a small recent event snapshot. After a Hub restart,
