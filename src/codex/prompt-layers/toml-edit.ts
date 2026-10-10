@@ -393,4 +393,3 @@ export function setRootString(content: string, key: string, value: string | null
 export function setTableBool(content: string, table: string, key: string, value: boolean | null): string {
   return checkedEdit(content, setTableBoolLines(content, table, key, value), [...table.split("."), key], value);
 }
-

@@ -381,4 +381,3 @@ export function expectingImage(hooks: AtomicWriteHooks, expectedHash: string): A
     },
   };
 }
-
