@@ -72,6 +72,13 @@ fn update_pending(app: &AppHandle) -> bool {
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open-dashboard", "Open Dashboard", true, None::<&str>)?;
     let browser = MenuItem::with_id(app, "open-browser", "Open in Browser", true, None::<&str>)?;
+    let cli_command = MenuItem::with_id(
+        app,
+        "terminal-command",
+        "Terminal command…",
+        true,
+        None::<&str>,
+    )?;
     let login = CheckMenuItem::with_id(
         app,
         "start-at-login",
@@ -110,6 +117,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             &show_usage,
             &open,
             &browser,
+            &cli_command,
             &PredefinedMenuItem::separator(app)?,
             &login,
             &stop,
@@ -188,6 +196,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 let anchor = tray_anchor(app);
                 let _ = popup::show(app, endpoint, anchor);
             }
+            "terminal-command" => crate::cli_command::show_page(app),
             "open-dashboard" => {
                 crate::startup::open_dashboard(app);
             }

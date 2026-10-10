@@ -4,8 +4,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoPath } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 /**
+ * Every spawnSync below is bounded by the shared spawned-child deadline: Bun's test
+ * timeout cannot interrupt a synchronous wait, so an unbounded child that wedges on
+ * a lock or a runner stall pins its whole batch until the shard deadline cuts it
+ * (Linux test 1/4, run 37730984813). A bounded child fails this one test instead.
+ *
  * Local push validation ("bun run prepush") typechecks the root project only:
  * tsconfig.json has no project references, so "bun x tsc --noEmit" never parses
  * gui/. A gui compile error therefore ships silently and first surfaces in CI's
@@ -33,6 +39,7 @@ describe("gui typecheck if-changed gate", () => {
     const dryRun = (files: string): string => {
       const probe = Bun.spawnSync([process.execPath, typecheckGuiIfChangedScript], {
         env: { ...process.env, TYPECHECK_DRY_RUN: "1", TYPECHECK_FILES: files },
+        timeout: INTERNAL_DEADLINE_MS, killSignal: "SIGKILL",
       });
       return probe.stdout.toString().trim();
     };
@@ -49,6 +56,7 @@ describe("gui typecheck if-changed gate", () => {
         TYPECHECK_FILES: "gui/src/App.tsx",
         TYPECHECK_CMD: stubCompiler,
       },
+      timeout: INTERNAL_DEADLINE_MS, killSignal: "SIGKILL",
     });
     expect(failing.exitCode).toBe(23);
 
@@ -59,6 +67,7 @@ describe("gui typecheck if-changed gate", () => {
         TYPECHECK_FILES: "gui/src/App.tsx",
         TYPECHECK_CMD: JSON.stringify(["ocx-gui-typecheck-missing-compiler"]),
       },
+      timeout: INTERNAL_DEADLINE_MS, killSignal: "SIGKILL",
     });
     expect(missing.exitCode).toBe(1);
 
@@ -68,6 +77,7 @@ describe("gui typecheck if-changed gate", () => {
         TYPECHECK_FILES: "scripts/x.ts\nREADME.md",
         TYPECHECK_CMD: stubCompiler,
       },
+      timeout: INTERNAL_DEADLINE_MS, killSignal: "SIGKILL",
     });
     expect(skipping.exitCode).toBe(0);
   });
@@ -90,7 +100,7 @@ describe("gui typecheck if-changed gate", () => {
       const dir = mkdtempSync(join(tmpdir(), "ocx-gui-typecheck-"));
       fixtures.push(dir);
       const git = (...args: string[]): void => {
-        const run = Bun.spawnSync(["git", ...args], { cwd: dir, env: gitEnv() });
+        const run = Bun.spawnSync(["git", ...args], { cwd: dir, env: gitEnv(), timeout: INTERNAL_DEADLINE_MS });
         if (run.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${run.stderr.toString()}`);
       };
       const commit = (path: string): void => {
@@ -108,7 +118,7 @@ describe("gui typecheck if-changed gate", () => {
       const decide = (): string => {
         const env = { ...gitEnv(), TYPECHECK_DRY_RUN: "1" };
         delete env.TYPECHECK_FILES;
-        const probe = Bun.spawnSync([process.execPath, join(dir, "scripts", "typecheck-gui-if-changed.ts")], { cwd: dir, env });
+        const probe = Bun.spawnSync([process.execPath, join(dir, "scripts", "typecheck-gui-if-changed.ts")], { cwd: dir, env, timeout: INTERNAL_DEADLINE_MS, killSignal: "SIGKILL" });
         return probe.stdout.toString().trim();
       };
       return { dir, git, commit, decide };

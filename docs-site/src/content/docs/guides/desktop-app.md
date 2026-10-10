@@ -71,10 +71,70 @@ registration, including installations under `Program Files`. Previously enabled
 registrations are updated once on launch. Startup entries you disabled in the tray
 or Task Manager remain disabled.
 
+## Using the ocx CLI with the desktop app
+
+On a stable macOS app, Windows installation, or installed Linux deb, Desktop automatically
+configures its bundled `ocx` for new terminals at launch. Open **Terminal command** beside
+**Desktop update** in the dashboard sidebar, or **Terminal command…** in the tray menu,
+to turn it off, repair it, or remove it. Turning off **Use Desktop's ocx command in new
+terminals** removes the managed configuration; **Remove terminal command** also keeps
+the off choice for future launches. AppImage and development launches do not configure it.
+
+macOS and Linux use a shim in `~/.opencodex-desktop/bin`, a shared `path.sh` helper and
+managed blocks in zsh, bash and fish startup files. Desktop records ownership and recovery
+information in `~/.opencodex-desktop/cli.json`; deleting that record does not remove the
+command or its shell blocks. The Linux deb's `/usr/bin/ocx` remains unchanged. Windows
+prepends the installation directory to the user `Path`, preserving its other entries.
+A command in the Windows system `Path` can still take precedence; Desktop reports that
+conflict as partial configuration and does not change the system `Path`.
+
+After enabling or repairing, open a new terminal. Check `type -a ocx` on macOS/Linux,
+or `Get-Command ocx -All` and `where.exe ocx` on Windows. Existing shells, aliases,
+absolute commands and later PATH changes can still select another executable.
+Configuration persists after Desktop quits. If the bundle is missing, the POSIX shim
+fails with repair/removal guidance instead of silently selecting another `ocx`.
+
+On POSIX, the shim preserves shell-exported Anthropic settings when launch-proof tools
+are available. If proof generation fails, and for Windows direct execution, the bundled
+CLI retains its existing stripping of untrusted Anthropic environment settings.
+
+On macOS and Linux, `ocx status` shows `Runtime supervisor: OpenCodex Desktop` when
+it verifies that the desktop app runs its bundled proxy, even without recorded ownership.
+Turn on **Start at Login** in the OpenCodex menu instead of installing a background
+service. Startup safety credits the app only when its login registration is verified;
+if it cannot be verified, follow the Desktop guidance in status.
+
+The bundled CLI is `/Applications/OpenCodex.app/Contents/MacOS/ocx` on macOS and
+`/usr/bin/ocx` for the Linux deb package. Run that executable with `status` to check
+the app's proxy. Windows supervision detection is unsupported.
+
+While the CLI detects Desktop supervising the proxy, `ocx service install`, `repair`,
+`start`, and `restart` refuse before changing the service, even without recorded ownership
+or verified login registration. Quit OpenCodex, then run `ocx service install` to move
+startup management to the CLI. A duplicate `ocx start` names the Desktop supervisor.
+
+Use **Check for Updates…** in the tray to update the app's bundle. `ocx update` refuses
+package replacement while Desktop supervises the proxy, even for a separate npm/Bun install;
+quit OpenCodex first to update that install. An accepted `ocx restart` reports that Desktop
+starts the replacement and waits for it to become healthy. A newer PATH CLI cannot use
+`ocx restart` to replace the app's proxy with its own runtime.
+
+Terminal `ocx stop` still stops the proxy, but Desktop may start it again after a short
+backoff. Use **Stop proxy** or **Quit** in the tray to keep it stopped. Ordinary stop prints
+this reminder on stderr; `ocx stop --json` skips the supervision probe and reminder.
+
+These guards are early warnings in current CLIs and runtimes; older versions can lack them,
+and Windows does not support the supervision probe. A probe that saw Desktop but could not
+finish verification also blocks the operation. Once blocked, a later inconclusive probe
+does not clear it; a check must positively show no Desktop supervision. With no prior
+Desktop evidence, an inconclusive or unsupported probe keeps the existing command behavior.
+Recorded-ownership guards still apply independently.
+
 ## Startup safety on macOS and Linux
 
-Startup safety reports **Desktop app** protection when OpenCodex's recorded ownership,
-**Start at Login** registration, and live supervision of its bundled proxy all match.
+Startup safety reports **Desktop app** protection when fresh diagnostics verify
+live supervision of the bundled proxy and that same app's **Start at Login** registration.
+Recorded desktop ownership is preserved separately; supervision does not create a claim.
 On Linux, the pinned autostart backend writes the login entry to
 `~/.config/autostart/OpenCodex.desktop`, even when `$XDG_CONFIG_HOME` is set. Startup
 safety reads that entry and the desktop install-id under `~/.config`. When
@@ -194,6 +254,12 @@ The macOS app includes the OpenCodex WidgetKit extension. See the
 local snapshot details.
 
 ## Uninstall
+
+Before uninstalling a supported Desktop installation, open **Terminal command** in the
+dashboard or tray and choose **Remove terminal command**. Desktop removes only its unchanged
+managed configuration. Modified blocks or files are preserved and reported; resolve those
+issues before deleting the app. Uninstalling the app directly does not guarantee cleanup
+of shell files or the user `Path`.
 
 On macOS, drag `OpenCodex.app` from Applications to the Trash. On Windows, remove
 OpenCodex from **Installed apps**. On Debian-based Linux systems, run:

@@ -100,6 +100,25 @@ import {
 
 const REQUEST_LOG_ID_RESPONSE_HEADER = "x-opencodex-request-id";
 
+/** Messages clients persist request-id; the upstream diagnostic id has a separate namespace. */
+export function withMessagesRequestLogId(response: Response, requestId: string): Response {
+  const upstreamId = response.headers.get("request-id");
+  const correlated = withRequestLogId(response, requestId);
+  correlated.headers.delete("x-opencodex-upstream-request-id");
+  if (upstreamId && /^req_[A-Za-z0-9_-]{1,128}$/.test(upstreamId)) {
+    correlated.headers.set("x-opencodex-upstream-request-id", upstreamId);
+  }
+  correlated.headers.set("request-id", requestId);
+  const exposed = correlated.headers.get("Access-Control-Expose-Headers") ?? "";
+  const names = exposed.split(",").map(name => name.trim().toLowerCase());
+  const additions = ["request-id", ...(correlated.headers.has("x-opencodex-upstream-request-id")
+    ? ["x-opencodex-upstream-request-id"] : [])].filter(name => !names.includes(name));
+  if (additions.length) {
+    correlated.headers.set("Access-Control-Expose-Headers", [exposed, ...additions].filter(Boolean).join(", "));
+  }
+  return correlated;
+}
+
 export function withRequestLogId(response: Response, requestId: string): Response {
   const headers = new Headers(response.headers);
   headers.set(REQUEST_LOG_ID_RESPONSE_HEADER, requestId);

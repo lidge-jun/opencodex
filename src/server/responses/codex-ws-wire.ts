@@ -49,6 +49,7 @@ const WS_CLOSE_MESSAGE_TOO_BIG = 1009;
 
 const codexWsUpstreamResponses = new WeakSet<Response>();
 const quotaObservedResponses = new WeakSet<Response>();
+const codexWsPreludeProjections = new WeakSet<Response>();
 
 /** Quota arrived directly at its captured account; do not replay old HTTP prelude headers. */
 export function isCodexWsQuotaObservedResponse(response: Response): boolean {
@@ -60,6 +61,14 @@ export function isCodexWsUpstreamResponse(response: Response): boolean {
   return codexWsUpstreamResponses.has(response);
 }
 
+/** Pre-response projection; its headers retain the exchange's prelude snapshot. */
+export function markCodexWsPreludeProjection(response: Response): void {
+  codexWsPreludeProjections.add(response);
+}
+
+export function isCodexWsPreludeProjection(response: Response): boolean {
+  return codexWsPreludeProjections.has(response);
+}
 
 export function markCodexWsResponse(response: Response, observed: boolean): void {
   codexWsUpstreamResponses.add(response);

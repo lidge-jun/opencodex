@@ -161,6 +161,8 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
+  comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
   /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */
   comboDispatchPermit?: SingleUseDispatchPermit;
   /** Internal handoff: this combo was selected by shadow-call interception. */

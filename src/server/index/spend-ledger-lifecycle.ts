@@ -37,7 +37,8 @@ export interface SpendLedgerServerLifecycle {
 export function acquireSpendLedgerServerLifecycle(configDir: string): SpendLedgerServerLifecycle {
   const owner: SpendLedgerOwnerLease = acquireSpendLedgerOwner(configDir);
   // Advisory: a synced state directory makes the journal's hard-link guard refuse intermittently
-  // (#6314). Said once at startup instead of being discovered from a 502.
+  // (#6314), including Google Drive syncing the native Desktop or Documents folder. Said once
+  // at startup instead of being discovered from a 502. The nlink guard itself is unchanged.
   warnIfSyncedStateDirectory(configDir);
   // Each entry returns whatever the listener's own stop returned. Typed as void-or-promise
   // because the rollback below has to WAIT on it: declaring it `() => void` let the call site

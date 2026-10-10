@@ -177,10 +177,10 @@ describe("native Chat candidates in a combo", () => {
   });
 
   test.each([
-    ["native", "low", "unset", "high"],
-    ["native", "xhigh", "unset", "high"],
+    ["native", "low", "unset", "high->low"],
+    ["native", "xhigh", "unset", "high->xhigh"],
     ["native", "high", "unset", "high"],
-    ["native", "low", "medium", "high->medium"],
+    ["native", "low", "medium", "high->low->medium"],
     ["bridge", "low", "unset", "high->low"],
     ["bridge", "xhigh", "unset", "high->xhigh"],
     ["bridge", "low", "medium", "high->low->medium"],
@@ -205,7 +205,7 @@ describe("native Chat candidates in a combo", () => {
 
     expect(response.status).toBe(200);
     expect(a.bodies).toHaveLength(1);
-    expect(a.bodies[0]!.reasoning_effort).toBe(pin ?? (native ? "high" : selected));
+    expect(a.bodies[0]!.reasoning_effort).toBe(pin ?? selected);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.jevDecision?.selected).toEqual({ provider: "a", model: "m1", effort: selected });
     expect(rows[0]!.requestedEffort).toBe(label);

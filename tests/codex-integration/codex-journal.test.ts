@@ -916,7 +916,7 @@ describe("codex-journal", () => {
     // outcome the removal wanted.
     expect(body).toContain('=== "ENOENT"');
     // And completeness still gates journal deletion.
-    expect(body).toContain("if (complete) removeJournal();");
+    expect(body).toMatch(/if \(complete\) \{\s*try \{ publishCodexArtifact\(JOURNAL_PATH, held, \(_path, hooks\) => removeJournal\(hooks\)\)/);
   });
 
   test("a sibling instance neither restores, injects over, nor drops the live owner's journal", () => {

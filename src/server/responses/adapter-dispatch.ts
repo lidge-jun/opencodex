@@ -170,6 +170,9 @@ export async function prepareAdapterExchange(
     | "workflowRootId"
     | "claimAmbiguousResend"
     | "sendsUsed"
+    | "targetSendsUsed"
+    | "initialSendAllowance"
+    | "noteInitialDispatch"
   >,
 ) {
   const { options, config, logCtx, req } = requestContext;
@@ -374,24 +377,33 @@ export async function prepareAdapterExchange(
       const compactPrepaid = options.compactionRecoveryAttempted ? sendBudgetState.pendingHopPermit : undefined;
       if (compactPrepaid) sendBudgetState.pendingHopPermit = undefined;
       let compactPrepaidUsed = false;
+      // A combo-owned or compaction-prepaid send is settled by the physical-dispatch receipt
+      // when spend enforcement is off. Enforced spend and direct requests keep the shared
+      // physical-send reporter, which already owns the permit lifecycle there.
+      // Stable per request: a Combo or compaction permit comes from `reserveDispatch`, which starts
+      // (and freezes) the spend policy first, so `spendEnforced` cannot change before dispatch.
+      const receiptMode = !sendBudgetState.adapterSendBudget?.spendEnforced
+        && Boolean(options.comboInitialSend || compactPrepaid);
       // Combo and emergency compaction admission already book this target's first send.
       // Its configured initial ceiling is target-local; the shared remainder below still
       // accounts for earlier targets without deducting their sends from this target twice.
       const initialSendCap = transientPolicy || resetPolicy
+        || (options.comboAttempt && route.provider.adapter === "google")
         ? transientSendCapFor(transientPolicy?.attempts,
           (options.comboAttempt || compactPrepaid) ? 0 : sendBudgetState.sendsUsed)
         : 1;
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
-      upstreamResponse = await fetchWithRetryPolicy(
+      try { upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
           // Unconfigured generic sends may omit the counting reporter. Capture policy
           // independently so a later recovery still belongs to this request's start.
           sendBudgetState.adapterSendBudget?.startRequest?.({
             poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
           });
-          if (compactPrepaid && !compactPrepaidUsed) {
+          // Receipt mode books the physical send at executor admission instead of here.
+          if (!receiptMode && compactPrepaid && !compactPrepaidUsed) {
             if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
             compactPrepaidUsed = true;
           }
@@ -405,6 +417,14 @@ export async function prepareAdapterExchange(
               dispatchOverride: oauthDispatch(builtInitialRequest),
               providerName: route.providerName,
               modelId: route.modelId,
+              onPhysicalDispatch: () => {
+                // Preserve the unconfigured direct-adapter accounting contract; Combo admission
+                // and explicit retry/compaction budgets require a receipt for their booked send.
+                if (receiptMode) {
+                  sendBudgetState.noteInitialDispatch(compactPrepaid && !compactPrepaidUsed ? compactPrepaid : undefined);
+                  compactPrepaidUsed = true;
+                }
+              },
               beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                 ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
             }));
@@ -413,22 +433,24 @@ export async function prepareAdapterExchange(
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
-          ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid
+          ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
             ? {
               // A pending compaction permit already booked this leg's first physical send.
-              ...(transientPolicy || resetPolicy || compactPrepaid
+              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
                 ? {
                   attempts: Math.min(initialSendCap,
-                    remainingTransientSendBudget(initialSendCap) + (compactPrepaid ? 1 : 0)),
+                    sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
                 }
                 : {}),
-              // Keep the exact combo or compaction receipt on the helper callback. The reporter
-              // also settles the request and workflow counters for reset-only retries.
-              onSendsConsumed: transientSendReporter(compactPrepaid ?? options.comboDispatchPermit),
+              // Reporter path: direct requests and enforced spend. Receipt-mode sends are
+              // settled by `onPhysicalDispatch`, so a reporter here would count them twice.
+              ...(receiptMode
+                ? {}
+                : { onSendsConsumed: transientSendReporter(compactPrepaid ?? options.comboDispatchPermit) }),
             }
             : {}),
         },
-      );
+      ); } finally { compactPrepaid?.release(); }
     }
   } catch (err) {
     cleanupUpstreamAbort();
@@ -609,8 +631,7 @@ export async function prepareAdapterExchange(
           const helperCountsSends = sendBudgetState.adapterSendBudget?.spendEnforced === true || refetchTransientPolicy !== null || resetReplayPolicyFor(route.provider) !== null;
           const prepaid = sendBudgetState.pendingHopPermit;
           const configuredTotal = refetchTransientPolicy?.attempts;
-          const refetchCap = transientSendCapFor(configuredTotal,
-            sendBudgetState.sendsUsed - (prepaid ? 1 : 0));
+          const refetchCap = transientSendCapFor(configuredTotal, sendBudgetState.targetSendsUsed);
           // An exact total includes a booked hop, even when it consumed the last base slot.
           // Keep that funded send while forbidding the final reserve from widening the total.
           const prepaidLastSlot = helperCountsSends && configuredTotal !== undefined && prepaid
@@ -1076,7 +1097,7 @@ export async function prepareAdapterExchange(
       // Anthropic OAuth: recover a rate limit or proven account entitlement refusal
       // before output, within the shared request and account rotation limits.
       while (
-        (upstreamResponse.status === 429 || upstreamResponse.status === 403)
+        (upstreamResponse.status === 429 || upstreamResponse.status === 403 || upstreamResponse.status === 401)
         && anthropicInstance
         && transportState.anthropicPoolAccountId
       ) {
@@ -1101,7 +1122,7 @@ export async function prepareAdapterExchange(
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-         const result = await rebuildAndRefetch("anthropic-oauth-429");
+         const result = await rebuildAndRefetch(upstreamResponse.status === 401 ? "oauth-401" : "anthropic-oauth-429");
          if ("failed" in result) return result.failed;
          upstreamResponse = result;
           if (isNonReplayableResponse(upstreamResponse)) continue recovery;

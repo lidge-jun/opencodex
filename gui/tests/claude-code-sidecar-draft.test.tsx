@@ -49,6 +49,7 @@ const BASE_STATE: ClaudeCodeState = {
   maxContextTokens: null,
   autoContext: true,
   autoCompactWindow: null,
+  contextAccounting: "1m",
   injectAgents: true,
   smallFastModel: "",
   effectiveModelEnv: {},

@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { omoJsoncPath, readOmoRoleModels, writeOmoRoleModel } from "../../src/clients/omo-role-models";
+import { omoJsoncPath, omoReasoningFor, readOmoRoleModels, writeOmoRoleModel } from "../../src/clients/omo-role-models";
 import { hasJsoncComments } from "../../src/lib/jsonc";
 
 let dir: string | null = null;
@@ -39,6 +39,25 @@ describe("omo role models", () => {
     const path = file("{}");
     expect(writeOmoRoleModel("librarian", "m", path)).toBe("written");
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ "[codex]": { agents: { librarian: { model: "m" } } } });
+  });
+
+  test("reasoning is set, kept, or removed with the model", () => {
+    const path = file('{ "[codex]": { "agents": { "plan": { "model": "a", "reasoning": "low" } } } }');
+    const entry = () => JSON.parse(readFileSync(path, "utf8"))["[codex]"].agents.plan;
+    expect(writeOmoRoleModel("plan", "a", path, "low")).toBe("unchanged");
+    expect(writeOmoRoleModel("plan", "b", path)).toBe("written");
+    expect(entry()).toEqual({ model: "b", reasoning: "low" });
+    expect(writeOmoRoleModel("plan", "b", path, "xhigh")).toBe("written");
+    expect(entry()).toEqual({ model: "b", reasoning: "xhigh" });
+    expect(writeOmoRoleModel("plan", "b", path, null)).toBe("written");
+    expect(entry()).toEqual({ model: "b" });
+  });
+
+  test("Codex efforts map to the levels LazyCodex accepts", () => {
+    expect(omoReasoningFor("none")).toBe("off");
+    expect(omoReasoningFor("xhigh")).toBe("xhigh");
+    expect(omoReasoningFor("max")).toBe("max");
+    expect(omoReasoningFor("ultra")).toBeNull();
   });
 
   test("a bare codex key, which LazyCodex ignores, is neither read nor written", () => {

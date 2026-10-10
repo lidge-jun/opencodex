@@ -34,8 +34,14 @@ opencodex 內嵌 Bun runtime（目前為 **1.3.14**）。記憶體成長由已�
 
 1. **等待內嵌 runtime 更新。** 一旦某個 Bun 發行版可驗證承載這些修復，opencodex 會升級內嵌 runtime，並自動啟用較安全的串流路徑。
 
-2. **以 `OPENCODEX_BUN_PATH` 執行你信任的 Bun runtime。** 這是未驗證領域——你是在我們尚未測試的 runtime 上執行 opencodex；風險自負。對服務安裝很重要：覆寫是在**服務產物產生時**讀取，而非服務啟動時。請設定環境變數，然後從同一個 shell 重新執行 `ocx service repair`，讓路徑寫入持久的服務定義。僅設定環境變數對已安裝的服務無效。
+2. **以 `OPENCODEX_BUN_PATH` 使用可信的 Bun runtime。** 在同一 shell 啟動 `ocx` 前設定變數，再執行 `ocx service repair` 將所選 runtime 寫入服務定義。之後載入的專案 `.env` 不會改變選擇。僅修改環境變數不會更新已安裝的服務。
 
 3. **以 `streamMode: "eager-relay"` 選擇加入有界 relay。** 兩種方式：編輯 `config.json`（加入 `"streamMode": "eager-relay"`），或呼叫管理 API——`PUT /api/settings` 搭配 `{"streamMode":"eager-relay"}` 會套用到新回合且無需重啟。**當機風險警告：** 在 Bun 1.3.14 上，這會使用受 #32111 影響的串流形態，可能在串流中途讓程序當機（任何 OS，不限 Windows）。服務管理員會重啟它，但進行中的請求會失敗。`"legacy-tee"` 會釘住目前預設；`"auto"`（預設）讓 runtime 閘門決定。
 
 若你在真實 Windows 工作負載上嘗試上述任一作法，請在 [#314](https://github.com/lidge-jun/opencodex/issues/314) 回報前後的 `ocx doctor` 記憶體區段——這正是此緩解等待的驗證。
+
+## Windows 所選 runtime 寫入被拒絕
+
+Windows 服務安裝、修復及 Codex shim 安裝、更新會檢查所選執行檔能否在 OpenCodex 設定根目錄內建立並移除目錄。這是寫入政策檢查，而非記憶體修復。失敗時會在停止服務、下載、暫存以及寫入權杖或啟動器前拒絕操作。shim 自動修復會延後並顯示指引，啟動繼續。正常或停用的 shim 不會檢查。不自動尋找其他 runtime。 首次排程安裝會在此檢查前登錄工作並認領設定根目錄；被拒絕時會復原新登錄，已認領的根目錄保留以便重試。
+
+> 所選 Bun runtime 無法在設定目錄內建立並移除目錄。Windows 應用程式政策可能禁止來自此執行檔位置的寫入。在啟動 `ocx` 前，將 `OPENCODEX_BUN_PATH` 設為政策允許的可信 Bun 執行檔，或以 `npm install -g @bitkyc08/opencodex` 重新安裝後重試。未選擇其他 runtime。

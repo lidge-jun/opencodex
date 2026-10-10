@@ -8,6 +8,7 @@ import {
   clearPendingConfigObjectChildDeletions,
   prepareConfigObjectChildDeletionRebase,
   clearPendingConfigTopLevelDeletions,
+  clearConfigTopLevelDeletionIntent,
   configHasRebaseProvenance,
   configRebaseDeletionKeys,
   CONFIG_REBASE_PROVENANCE_KEY,
@@ -41,6 +42,22 @@ const claudeCodeBaseline = new WeakMap<OcxConfig, unknown>();
  * reconciliation paths below.
  */
 const liveConfigBaseline = new WeakMap<OcxConfig, OcxConfig>();
+
+/** Adopt a committed manual selection without advancing unrelated live merge baselines. */
+export function adoptPersistedCodexAccountSelection(
+  config: OcxConfig,
+  persisted: Pick<OcxConfig, "activeCodexAccountId" | "activeCodexAccountPinned">,
+): void {
+  const keys = ["activeCodexAccountId", "activeCodexAccountPinned"] as const;
+  const baseline = liveConfigBaseline.get(config);
+  for (const key of keys) {
+    config[key] = persisted[key];
+    // Retain known absent keys: a later disk-only selection is a new edit, not stale intent.
+    if (baseline) baseline[key] = persisted[key];
+  }
+  clearConfigTopLevelDeletionIntent(config, keys);
+  if (baseline) clearConfigTopLevelDeletionIntent(baseline, keys);
+}
 
 /**
  * Adopt a committed discovery decision and its merge baseline as one synchronous step.

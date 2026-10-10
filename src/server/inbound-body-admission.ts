@@ -181,6 +181,7 @@ export function runAdmittedBodyWork(
       addFinalRequestLog(refusalLog.requestId, refusalLog.start, refusalLog.logCtx, refused.status, {
         closeReason: "terminal",
       });
+      refusalLog.onLogged?.();
     }
     return withCors(refused, req, policy);
   });

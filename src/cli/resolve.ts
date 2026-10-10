@@ -59,6 +59,7 @@ import {
 } from "../service/ownership-compatibility";
 import { observeManagingClis } from "../service/managing-cli";
 import { SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION } from "../service/install-state-contract.mjs";
+import { inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
 import { computeVersionSkew, type VersionSkew } from "./version-skew";
 
 /** Wire version of the resolve document. Bump only on an incompatible shape change. */
@@ -123,6 +124,12 @@ export interface ResolveJson {
    * takeover. Additive within ocx-resolve/1; older shells ignore it and read as unknown.
    */
   versionSkew?: VersionSkew;
+  supervisor?: {
+    kind: "desktop" | "none" | "unknown" | "unsupported";
+    supervisorPid?: number;
+    runtimePid?: number;
+    app?: string;
+  };
 }
 
 export type ResolveTakeover =
@@ -160,6 +167,7 @@ export interface ResolveIo {
   observeManagers?: (
     state: ServiceInstallState | null,
   ) => Readonly<Record<ManagingCliRole, ManagingCliObservation>>;
+  inspectSupervision?: typeof inspectDesktopSupervision;
   stdout?: { log: (s: string) => void };
   stderr?: { error: (s: string) => void };
 }
@@ -187,6 +195,7 @@ export function buildResolveJson(
   cliVersion: string,
   ownership: ServiceOwnershipResolution,
   takeover: ResolveTakeover,
+  supervision?: ReturnType<typeof inspectDesktopSupervision>,
 ): ResolveJson {
   const configured = config.port ?? RESOLVE_DEFAULT_PORT;
   return {
@@ -199,6 +208,9 @@ export function buildResolveJson(
       source: live ? live.source : "config",
     },
     liveness: livenessJson(live),
+    ...(live && supervision ? { supervisor: supervision.kind === "desktop"
+      ? { kind: supervision.kind, supervisorPid: supervision.supervisorPid, runtimePid: supervision.runtimePid, app: supervision.app }
+      : { kind: supervision.kind } } : {}),
     ownership,
     takeover,
     // A proven absence has nothing to skew against; the field is omitted there rather
@@ -216,7 +228,8 @@ function reportHuman(json: ResolveJson, stdout: { log: (s: string) => void }): v
   if (live.status === "live") {
     const pidText = live.pid === null ? "unknown" : String(live.pid);
     const versionText = live.version ?? "unknown version";
-    stdout.log(`Proxy live on port ${json.port.effective} (PID ${pidText}, ${versionText}); effective port ${json.port.effective}.`);
+    const supervisor = json.supervisor?.kind === "desktop" ? `; supervisor: desktop (pid ${json.supervisor.supervisorPid})` : "";
+    stdout.log(`Proxy live on port ${json.port.effective} (PID ${pidText}, ${versionText}); effective port ${json.port.effective}${supervisor}.`);
   } else {
     stdout.log(`No live proxy (absence proven); effective port ${json.port.effective} (configured).`);
   }
@@ -353,7 +366,17 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
       };
     }
   }
-  const json = buildResolveJson(diagnostics.config, live, configHome, cliVersion(), ownership, takeover);
+  let supervision: ReturnType<typeof inspectDesktopSupervision> | undefined;
+  if (live) {
+    try {
+      supervision = live.pid === null ? { kind: "unknown", reason: "pid-unavailable", desktopSeen: false }
+        : (io.inspectSupervision ?? inspectDesktopSupervision)({ targetPid: live.pid });
+    } catch {
+      // Supervision is independent evidence; its failure cannot invalidate established liveness.
+      supervision = { kind: "unknown", reason: "probe-failed", desktopSeen: false };
+    }
+  }
+  const json = buildResolveJson(diagnostics.config, live, configHome, cliVersion(), ownership, takeover, supervision);
   if (args.json) stdout.log(JSON.stringify(json));
   else reportHuman(json, stdout);
   return 0;

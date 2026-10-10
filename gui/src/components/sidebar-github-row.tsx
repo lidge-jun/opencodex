@@ -1,5 +1,5 @@
 /**
- * Sidebar footer row: the GitHub link plus two circular satellite buttons.
+ * Sidebar footer row: the GitHub link plus circular satellite buttons.
  *
  * Star: reflects the real state from `gh` rather than always inviting a click.
  * Already starred renders a filled, non-interactive marker; an unauthenticated
@@ -15,7 +15,7 @@
  */
 import { useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
-import { IconDownload, IconGithub, IconStar } from "../icons";
+import { IconDownload, IconGithub, IconStar, IconTerminal } from "../icons";
 import { useT } from "../i18n/shared";
 import { isDesktopShell, updateBadgeUrl } from "../lib/desktop-shell";
 
@@ -47,10 +47,13 @@ async function readJson<T>(url: string, signal: AbortSignal): Promise<T | null> 
 export function SidebarGithubRow({
   apiBase,
   onOpenUpdate,
+  onOpenTerminalCommand,
 }: {
   apiBase: string;
   /** Opens desktop updates in the app shell, or the package update surface in a browser. */
   onOpenUpdate: () => void;
+  /** Opens the local terminal-command settings in the desktop app shell. */
+  onOpenTerminalCommand: () => void;
 }) {
   const t = useT();
   const [starring, setStarring] = useState(false);
@@ -157,6 +160,17 @@ export function SidebarGithubRow({
           <IconDownload aria-hidden="true" />
           {updateAvailable && <span className="sidebar-orb-dot" aria-hidden="true" />}
         </button>
+        {isDesktopShell() && (
+          <button
+            type="button"
+            className="sidebar-orb"
+            onClick={onOpenTerminalCommand}
+            aria-label={t("sidebar.terminalCommand")}
+            title={t("sidebar.terminalCommand")}
+          >
+            <IconTerminal aria-hidden="true" />
+          </button>
+        )}
       </div>
     </div>
   );

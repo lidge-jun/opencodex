@@ -212,6 +212,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // untranslated `~$`); the templates are pure placeholders on purpose.
   "logs.cost.approximate",
   "logs.cost.lowerBound",
+  // A token count ("200k") reads the same in every locale; the 1M choice carries the translated "default".
+  "claude.contextAccounting200k",
 ]);
 
 test("zh-TW ships no untranslated English placeholders beyond the intentional allowlist", async () => {

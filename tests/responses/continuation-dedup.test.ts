@@ -318,7 +318,7 @@ describe("replay overlap: contracts held elsewhere", () => {
       "spillWrites", "spillWriteFailures", "spillReadFailures",
       "spillWriteStatus", "spillWriteConsecutiveFailures",
       "spillLastWriteFailureCode", "spillLastWriteFailureOrigin",
-      "spillAclRetryReturnedTimeouts", "spillAclTimeoutMemoRefusals",
+      "spillAclRetryReturnedTimeouts", "spillAclTimeoutMemoRefusals", "spillCapacityRefusals", "spillHeadroomEvictions",
       "spillLastWriteFailureAt", "spillLastWriteSuccessAt", "replayScopeMismatchDrops",
     ].sort());
   });

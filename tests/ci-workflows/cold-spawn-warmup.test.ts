@@ -55,9 +55,26 @@ type Disposition = WarmupDisposition;
  * `tests/helpers/cold-spawn-warmup.ts`. `warmed: false` needs a reason that survives review.
  */
 const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
+  "tests/ci-workflows/ci-gui-typecheck-gate.test.ts": {
+    warmed: false,
+    why:
+      "Its children run scripts/typecheck-gui-if-changed.ts, which imports only node builtins, "
+      + "or git itself, so an import scan has no repository module graph to warm and a registered "
+      + "warm-up would fail closed. The spawnSync bounds exist because an unbounded child pinned "
+      + "Linux test 1/4 batch 4 until the 120s shard deadline cut it (run 37730984813).",
+  },
   "tests/ci-workflows/test-runner.test.ts": {
     warmed: true,
     why: "one throwaway lane pays Bun's test-runner bootstrap before the captured-output lane is timed",
+  },
+  "tests/ci-workflows/release-version-sources.test.ts": {
+    warmed: false,
+    why:
+      "Its children run scripts/release-version-sources.ts, which imports only node builtins, "
+      + "or a bash -c guard fragment, so an import scan has no repository module graph to warm "
+      + "and a registered warm-up would fail closed. The spawnSync bounds exist because an "
+      + "unbounded child pinned Linux test 1/4 batch 6 until the 120s shard deadline cut it "
+      + "(run 37736425700).",
   },
   "tests/cli/cli-connect-readiness.test.ts": {
     warmed: true,
@@ -66,6 +83,10 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
   "tests/cli/cli-models.test.ts": {
     warmed: true,
     why: "every ocx subcommand here loads the same src/cli/index.ts static graph",
+  },
+  "tests/cli/cli-update-badge.test.ts": {
+    warmed: true,
+    why: "the badge child loads the same src/cli/index.ts static graph as the other ocx commands",
   },
   "tests/clients/client-connect.test.ts": {
     warmed: true,
@@ -86,15 +107,6 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
       + "launcher, so the cold cost is shell and process startup rather than a repository module "
       + "graph, and an import scan has nothing to warm. The generated shim never loads a repository "
       + "module in the child: the point of the file is what the shell does with an exit status.",
-  },
-  "tests/codex-integration/codex-shim.test.ts": {
-    warmed: false,
-    why:
-      "Its Windows children are a cmd.exe or PowerShell driver tree, so the cold cost is shell and "
-      + "process startup rather than a repository module graph, and an import scan has nothing to warm. "
-      + "The file also sits exactly on its file-size ratchet cap of 2388 lines in "
-      + "tests/fixtures/file-size-baseline.json, and that cap only moves downward, so a warm-up cannot "
-      + "be added here without unrelated deletions. Left for a separate change.",
   },
 };
 

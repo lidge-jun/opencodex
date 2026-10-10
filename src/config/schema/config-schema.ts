@@ -299,6 +299,10 @@ export const configSchema = z.object({
   codexAccountAutoSwitchThresholds: z.unknown().optional().transform(salvageCodexAccountAutoSwitchThresholds),
   // An invalid optional preference must not discard providers or credential rows.
   codexAccountPriorityFailback: z.boolean().optional().catch(false),
+  // Absent or invalid keeps the sliding window on. Explicit false restores consecutive-only steering.
+  codexFailureWindow: z.boolean().optional().catch(undefined),
+  codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),
+  codexWsReuseAcrossTurns: z.boolean().optional().catch(false),
   activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.

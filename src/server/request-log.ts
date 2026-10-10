@@ -232,6 +232,8 @@ export interface RequestLogContext {
    * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
   upstreamError?: string;
+  upstreamErrorCode?: string;
+  upstreamRequestId?: string;
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
   /** Recognized structured terminal code whose exact identity must survive status mapping. */
@@ -342,6 +344,8 @@ export interface RequestLogEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Secret-redacted upstream error reason, surfaced in /api/logs and the GUI detail modal. */
   upstreamError?: string;
+  upstreamErrorCode?: string;
+  upstreamRequestId?: string;
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
@@ -1095,6 +1099,24 @@ export function inspectResponseLogSsePayloadParsed(
  * a non-streaming JSON error body. We keep the FIRST non-empty reason (the original failure) and
  * run it through redactSecretString so secrets never reach /api/logs. Pure; safe on any text.
  */
+const UPSTREAM_DIAGNOSTIC_TOKEN = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function noteBoundedDiagnostic(
+  logCtx: RequestLogContext,
+  field: "upstreamErrorCode" | "upstreamRequestId",
+  value: unknown,
+): void {
+  if (logCtx[field] !== undefined) return;
+  if (typeof value !== "string" || !UPSTREAM_DIAGNOSTIC_TOKEN.test(value)) return;
+  logCtx[field] = value;
+  const status = logCtx.terminalHttpStatus;
+  if (status === undefined || status >= 500) console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${logCtx.upstreamErrorCode ? ` code=${logCtx.upstreamErrorCode}` : ""}${logCtx.upstreamRequestId ? ` request_id=${logCtx.upstreamRequestId}` : ""}`);
+}
+
+export function noteUpstreamRequestId(logCtx: RequestLogContext, headers: Headers): void {
+  noteBoundedDiagnostic(logCtx, "upstreamRequestId", headers.get("openai-request-id") ?? headers.get("x-request-id"));
+}
+
 function captureUpstreamError(logCtx: RequestLogContext, text: string | null): void {
   if (!text) return;
   let parsed: unknown | undefined;
@@ -1114,14 +1136,19 @@ function captureUpstreamErrorParsed(
   if (parsed !== undefined && parsed !== null) {
     const json = parsed as {
       type?: unknown;
-      error?: { message?: unknown };
-      last_error?: { message?: unknown };
+      error?: { message?: unknown; code?: unknown };
+      last_error?: { message?: unknown; code?: unknown };
       response?: {
         error?: { type?: unknown; code?: unknown; message?: unknown };
         incomplete_details?: { reason?: unknown; message?: unknown };
       };
     };
     captureTerminalHttpStatus(logCtx, json);
+    noteBoundedDiagnostic(
+      logCtx,
+      "upstreamErrorCode",
+      json.error?.code ?? json.response?.error?.code ?? json.last_error?.code,
+    );
     const reason = json?.response?.incomplete_details?.reason;
     if (json.type === "response.incomplete"
       && logCtx.terminalIncompleteReason === undefined
@@ -1593,6 +1620,8 @@ export function addFinalRequestLog(
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}),
+    ...(logCtx.upstreamErrorCode ? { upstreamErrorCode: logCtx.upstreamErrorCode } : {}),
+    ...(logCtx.upstreamRequestId ? { upstreamRequestId: logCtx.upstreamRequestId } : {}),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),

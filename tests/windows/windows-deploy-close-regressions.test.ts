@@ -72,6 +72,26 @@ describe("systemd detection tolerates a no-DBUS SSH session (F9)", () => {
     // The version probe passing + a runtime dir existing is enough — not a hard fail on the --user probe.
     expect(src).toMatch(/catch \{ \/\* no user bus in this session \*\/ \}\s*\n\s*return userRuntimeDir\(\) !== null;/);
   });
+  test("isSystemd rejects an empty runtime dir when discovery and the user-bus probe fail", () => {
+    const detection = src.slice(src.indexOf("function userRuntimeDir()"), src.indexOf("export function installSystemd()"));
+    const code = new Bun.Transpiler({ loader: "ts" }).transformSync(detection.replace(/export /g, ""));
+    const commands: string[] = [];
+    const paths: string[] = [];
+    const env = { XDG_RUNTIME_DIR: "", DBUS_SESSION_BUS_ADDRESS: "" };
+    const isSystemd = new Function("process", "existsSync", "execSync", `${code}\nreturn isSystemd;`)(
+      { env, getuid: () => 12345 },
+      (path: string) => { paths.push(path); return false; },
+      (command: string) => {
+        commands.push(command);
+        if (command === "systemctl --version") return "systemd 255";
+        throw new Error("No user bus");
+      },
+    ) as () => boolean;
+    expect(isSystemd()).toBe(false);
+    expect(commands).toEqual(["systemctl --version", "systemctl --user show-environment"]);
+    expect(paths).toEqual(["/run/user/12345", "/run/user/12345"]);
+    expect(env).toEqual({ XDG_RUNTIME_DIR: "", DBUS_SESSION_BUS_ADDRESS: "" });
+  });
   test("install ensures the user-bus env before touching systemctl --user", () => {
     expect(src).toMatch(/function installSystemd\(\): void \{\s*\n\s*ensureUserBusEnv\(\);/);
   });

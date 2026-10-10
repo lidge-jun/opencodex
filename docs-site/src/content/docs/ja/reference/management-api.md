@@ -325,7 +325,7 @@ CLI コマンドは Anthropic OAuth アカウントを id または一意の別�
 | `PUT /api/codex-auth/accounts/pause` | アカウントと、同じ ID 情報を持つ既存のメイン／プールのエントリを手動で一時停止または再開する。`affectedAccountIds` を返す | 400 無効なアカウント／状態、404 アカウントが見つからない、503 メインの ID 情報が使用中または読み取り不能 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 1 つのアカウントまたはすべてのアカウントのランタイム クールダウンをクリアする | 400 無効な ID |
-| `GET, PUT /api/codex-auth/active` |アクティブなアカウントを読み取るか選択します | 400 アカウントが無効または欠落しています。 409 一時停止/レガシー行の競合 |
+| `GET, PUT /api/codex-auth/active` |アクティブなアカウントを読み取るか選択します | 400 アカウントが無効または欠落しています。 409 一時停止/レガシー行の競合、または `account_selection_unavailable` |
 | `PUT /api/codex-auth/auto-switch` | `id` を省略した `{ threshold }` でグローバルしきい値、`{ id, threshold }` でアカウント別の上書き値を設定する。`id: '__main__'` は Codex Desktop アカウントを指定する。`id` を指定した場合、`threshold: null` は上書き値を削除してグローバル値の継承に戻す | 400 無効な ID/しきい値、404 アカウントなし |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex アカウントプールの選択戦略を更新 | 400 無効な戦略/構成 |
 | `PUT /api/codex-auth/failover` |アカウントのフェイルオーバーしきい値を設定する | 400 無効なしきい値 |
@@ -336,6 +336,15 @@ CLI コマンドは Anthropic OAuth アカウントを id または一意の別�
 | `POST /api/codex-auth/login/code` | Codex ログイン フローの手動コードを送信する | 400 無効なフロー/コード |
 | `POST /api/codex-auth/login/cancel` | `{ "flowId": "..." }` で指定した保留中の Codex ログインのみキャンセルする | 400 フロー ID が未指定、不明、または保留中ではない |
 | `GET /api/codex-auth/login-status` |フローまたはアカウントのログイン状態をポーリングする。新規アカウント完了時は回復が必要な場合だけ `catalogRefreshPending: true` を含みます。 |不明なフローは `expired` を報告します。アクティブなフローは `idle` を報告しません |
+
+`PUT /api/codex-auth/active` には `{ "accountId": "<id>" }` が必要です。選択をクリアするには、
+明示的に `{ "accountId": null }` を指定します。別のプロセスが保存済みのアカウントを変更していても、
+現在のアカウントの再選択は明示的な選択として扱われます。サーバーは無関係な保存済み設定を保持し、
+ダッシュボードの読み込み後に削除または一時停止されたアカウントの選択を拒否します。保存済み設定が
+利用できないか無効な場合、実行中の選択とアカウントへのアフィニティは変更されません。
+設定を再読み込みしてから再試行してください。成功レスポンスはコミット済みの選択を示します。
+既存のクォータとフェイルオーバーのルールによりピン留めが解除される場合は引き続きあります。
+`pinDrained` は、現在判明しているピン留め解除の理由を示します。
 
 新規 account の config row は保存されたものの credential setup を完了できない場合、OAuth の
 `login-status` は `status: "error"` と

@@ -1,0 +1,26 @@
+# 029 — wp3 outcome: Windows on mini
+
+Source `d17a9f2239`. Two Sol lanes under 021: W-a (the only writer, session-1 harness) and W-b (read-only against
+the live Desktop 2.77.0 runtime). Raw evidence stays in the worktree scratch `.tmp/evidence/mini-{a,b}/`.
+
+| Row | Result | Evidence |
+|---|---|---|
+| W1 Rust `cli_command` tests | **coordinator-reported, raw output unavailable** — `27 passed; 0 failed` on `x86_64-pc-windows-msvc` | recorded in 001; the raw output was not retained |
+| Install eligibility | **works** — `stable_bundle(C:\Program Files\OpenCodex\opencodex-desktop.exe)` → `kind: windows-install`, CLI `C:\Program Files\OpenCodex\ocx.exe`; the per-machine MSI qualifies | mini-a `harness-bundle.txt` |
+| W3 real HKCU write (module level, `perform_selected` from an /IT task in session 1) | **works** — HKCU `Path` gained the staging directory first, `REG_EXPAND_SZ` kept, persisted `notifyPending:false` after the broadcast; Status `phase: partial` with `machine-path-conflict` (see F7) | mini-a `harness-install.txt`, `state-after.json` |
+| W4 new terminal pickup (release QA) | **works** — after the write, a Windows Terminal tab (`wt -w new new-tab --reloadEnvironment`, parent `WindowsTerminal.exe`, session 1), an Explorer-launched `cmd` (parent `explorer.exe`, session 1) and a Task Scheduler `cmd` all carried the staging directory and `where ocx` returned `%USERPROFILE%\ocx-probe-desktop\ocx.exe` **first**, ahead of nvm4w; before the write all three found nvm4w first. The SSH shell (session 0) stayed stale, as expected | mini-a `probe-pre-*.txt`, `probe-post-*.txt` |
+| W5 machine conflict | **broken (diagnostic, F7)** — `machine_conflict()` (`cli_command_windows.rs:805`) expands Machine `Path` with the Desktop's own environment and reports `machine-path-conflict` for `%NVM_SYMLINK%` (`C:\nvm4w\nodejs\ocx.cmd`). Fresh logon environments on mini keep `%NVM_HOME%;%NVM_SYMLINK%` literal (Machine `Path` is `REG_EXPAND_SZ` and both variables exist at machine scope), so nvm4w's `ocx` only arrives through the User `Path`, after the Desktop entry. The Desktop would show "partial" while its `ocx` actually wins | mini-a `machine-path.json`, `harness-plan.txt`, `probe-post-wt.txt` |
+| W6 removal (module level) | **works** — `Action::Remove` → `enabled:false`, `phase: disabled`, `windows: null`; raw `Path` text and kind equal the baseline byte for byte; HKCU window 0.18 min | mini-a `harness-remove.txt`, `cli-after-remove.json`, `state-final.json` |
+| Packaged Desktop launch, Tauri home lookup, install-id minting, CLI page actions | **unverified** — single instance with the user's live 2.77.0 (`lib.rs:298`); SSH-versus-session-1 broadcast difference also unobserved | — |
+| W7 handoff | **by design** — package launcher never hands off on Windows (`windows-path-only`); `status` prints `package handoff=disabled on Windows (user Path selects Desktop)`; synthetic ready record → `packageHandoff: disabled-on-windows`, `path-first-not-desktop` | mini-b `live.out`, `synthetic.out` |
+| W7 status/doctor/resolve with the live Desktop | **broken (F2)** — `resolve --json` `supervisor: {"kind":"unsupported"}` and `inspectDesktopSupervision()` → `unsupported` while `Win32_Process` shows sidecar 33476 is the child of `opencodex-desktop` 22680, both under `C:\Program Files\OpenCodex`, session 1. `status` tells the user to restart the proxy with `ocx service restart` (version skew 2.82.0 vs 2.77.0), reports `Restart safety: AT RISK` and `run 'ocx service repair'`; `doctor` (isolated `CODEX_HOME`) recommends `ocx service repair` and `ocx service restart` — the advice #6802 suppresses on macOS/Linux | mini-b `live.out`, `doctor.out` |
+| W8 refuse-to-compete (#6809) | **not active on Windows (F2)** — by code: `ocx stop` takes the ordinary stop path (no Desktop warning, `desktop-runtime-guidance.ts:27`), `service install` passes `desktop-command-guard.ts:24` and may clear existing managers and the tracked listener, `update` gets no Desktop veto from `runtime-ownership.mjs:45`. Not run live | mini-b report |
+| W9 focused tests | **broken (tests, F6)** — 246 pass / 23 skip / 3 fail. `codex-shim-runtime-preflight.test.ts:86`, `:111` and `service-runtime-preflight.test.ts:120` expect the absolute `process.execPath` in generated `.cmd` files, but both generators intentionally render paths under the profile as `%LOCALAPPDATA%\...`/`%USERPROFILE%\...` (`src/lib/win-paths.ts`); any Windows machine whose Bun lives in the default `~\.bun\bin` fails, while CI's tool-cache Bun passes | mini-b `tests.out` |
+| W10 PATH-Bun fallback | **works** — Bun 1.4.2 first on PATH: `opencodex: using PATH Bun 1.4.2.`, exit 0; user's 1.3.14 only: `the \`bun\` dependency is not installed.`, exit 1, no Desktop CLI named (F4 also holds on Windows) | mini-b `w10_run.out` |
+
+Host state after wp3: raw HKCU `Path` and kind equal the baseline; no `ocx-probe-261010-*` tasks; staging directory,
+temp homes, lane clone `b` and W-a's source patch removed; Desktop PID 22680 and sidecar 33476 unchanged in session 1;
+ports 10100/10200/52599 unchanged. The coordinator removes `%TEMP%\ocx-probe-261010` at closeout.
+
+Secret handling: W-a's full `reg export HKCU\Environment` contained an authentication-token value; the raw copy was
+deleted on mini and locally, and only a PATH-only export is kept.

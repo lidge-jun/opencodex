@@ -34,6 +34,7 @@ import {
   updateJobPath,
   type UpdateJobState,
 } from "../../src/update/job";
+import type { SupervisionEvidence } from "../../src/service/desktop-supervision.mjs";
 import { runUpdateRestartWithOwnershipLease } from "../../src/update/restart-ownership";
 import { serviceStatePaths, type ServiceOwnershipResolution } from "../../src/service/state";
 import { isolationBudgetMs, watchdogMs } from "../helpers/ci-watchdog";
@@ -866,4 +867,50 @@ describe("lease fixture containment and cleanup controls", () => {
       expect(canRemoveSandbox(box)).toBe(true);
     }, watchdogMs(20_000));
   }
+});
+
+
+describe("dashboard restart live Desktop veto", () => {
+  const desktop: SupervisionEvidence = {
+    kind: "desktop", runtimePid: 321, supervisorPid: 123, app: "/fixture/opencodex-desktop", proxy: "/fixture/ocx",
+  };
+  const unowned = (): ServiceOwnershipResolution => ({ kind: "none", revision: 0 });
+
+  test("Desktop and target-bound desktopSeen refuse before restart despite absent durable ownership", async () => {
+    for (const evidence of [desktop, { kind: "unknown", reason: "probe-failed", desktopSeen: true } as const]) {
+      const box = sandbox();
+      let mutations = 0;
+      const result = await runUpdateRestartWithOwnershipLease(unowned, async () => { mutations++; }, () => evidence);
+      expect(result).toEqual({ kind: "veto", notice: expect.stringContaining("OpenCodex Desktop runs this proxy") });
+      expect(mutations).toBe(0); expect(existsSync(box.lockDir)).toBe(false);
+    }
+  });
+
+  test("released refresh and direct fallback share a latch until none positively clears it", async () => {
+    const box = sandbox();
+    const evidence: SupervisionEvidence[] = [
+      { kind: "none" }, desktop, { kind: "unknown", reason: "probe-failed", desktopSeen: false },
+      { kind: "unsupported" }, { kind: "none" },
+    ];
+    let reads = 0;
+    const result = await runUpdateRestartWithOwnershipLease(unowned, async lease => {
+      expect(lease.vetoAgain()).toContain("OpenCodex Desktop");
+      lease.releaseForServiceManager();
+      expect(lease.reacquireForDirectStart()).toEqual({ notice: expect.stringContaining("OpenCodex Desktop"), failed: false });
+      expect(lease.vetoAgain()).toContain("OpenCodex Desktop");
+      expect(lease.vetoAgain()).toBeNull();
+      return "cleared";
+    }, () => { reads++; return evidence.shift()!; });
+    expect(result).toEqual({ kind: "ran", value: "cleared" });
+    expect(reads).toBe(5); expect(existsSync(box.lockDir)).toBe(false);
+  });
+
+  test("none, unsupported and plain unknown activate restart normally", async () => {
+    for (const evidence of [{ kind: "none" }, { kind: "unsupported" },
+      { kind: "unknown", reason: "probe-failed", desktopSeen: false }] as const) {
+      sandbox(); let mutations = 0;
+      const result = await runUpdateRestartWithOwnershipLease(unowned, async () => ++mutations, () => evidence);
+      expect(result).toEqual({ kind: "ran", value: 1 }); expect(mutations).toBe(1);
+    }
+  });
 });

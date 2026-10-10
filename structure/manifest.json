@@ -164,12 +164,13 @@
       "path": "transports/byte-accounting.md",
       "tier": 3,
       "title": "Byte Accounting",
-      "scope": "Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget.",
+      "scope": "Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget, plus durable spill admission.",
       "documents": [
         "src/adapters/",
         "src/chat/",
         "src/lib/",
-        "src/server/"
+        "src/server/",
+        "src/responses/"
       ]
     },
     {
@@ -514,6 +515,20 @@
       "documents": [
         "desktop/",
         "src/server/management/companion-routes.ts"
+      ]
+    },
+    {
+      "path": "desktop-terminal-command.md",
+      "tier": 6,
+      "title": "Desktop-owned terminal command",
+      "scope": "Desktop-owned ocx command on PATH: record and journal, POSIX shim and shell blocks, Windows user Path, private-path ACL policy, and the local Terminal command page.",
+      "documents": [
+        "desktop/src-tauri/src/cli_command.rs",
+        "desktop/src-tauri/src/cli_command_record.rs",
+        "desktop/src-tauri/src/cli_command_posix.rs",
+        "desktop/src-tauri/src/cli_command_windows.rs",
+        "desktop/ui/cli.html",
+        "desktop/ui/cli.js"
       ]
     },
     {

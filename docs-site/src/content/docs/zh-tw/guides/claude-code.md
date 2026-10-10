@@ -339,7 +339,7 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 代�
 也同樣可解析。已儲存的舊 id 仍會路由，但 Claude Code 對它仍按 200k 計算。把已儲存的 `claude-ocx-`
 重新選一次對應的 `ocx-claude-`，跳脫的 `claude-ocx2-` 重新選一次 `ocx-claude2-`，即可同時用上真實上下文
 視窗與 compact。
-擁有權威 1M 上下文視窗的模型會多出一個 `…[1m]` 選擇器列：選中後 Claude Code 會按完整 1M 上下文
+權威上下文視窗為 1M 或不低於預設壓縮閾值（829,800）的模型會多出一個 `…[1m]` 選擇器列：選中後 Claude Code 會按完整 1M 上下文
 計算該模型（自動壓縮仍開啟）——代理在路由前會去掉該標記。
 選中後會儲存到 Claude Code 的 `settings.json` `model` 欄位；入站請求會將別名解析回路由
 模型。在較舊的 Claude Code 版本中，選擇器保持原生——可透過 `ANTHROPIC_MODEL` 設定槽位，或在
@@ -369,8 +369,9 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 
 ### 上下文變體 `[1m]` 標記
 
-權威上下文視窗為 1M 的模型（或者啟用自動上下文時，視窗大於 200k 且至少達到壓縮閾值的模型）
-會多出一個帶 `…[1m]` 的選擇器條目。選擇它後，Claude Code 會按完整的 1M 上下文計算。
+權威上下文視窗為 1M 或不低於預設壓縮閾值（829,800）的模型會多出一個帶 `…[1m]` 的選擇器條目。
+該下限是固定的，修改壓縮值不會降低它；Anthropic 路由上的 Claude 模型必須真正達到 1M；關閉自動上下文後只對 1M 模型生效。
+超出真實視窗時會回傳 `prompt is too long` 錯誤，Claude Code 會自動壓縮。選擇它後，Claude Code 會按完整的 1M 上下文計算。
 代理會在進行別名解析和路由之前移除不區分大小寫的 `[1m]` 字尾。
 
 ## 自動上下文（突破 200k 上限的大上下文模型）
@@ -378,8 +379,8 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 對於任何無法識別的模型，Claude Code 都會按 200k token 計算。預設開啟的**自動上下文**可解決
 這一問題：
 
-1. 實際視窗大於 200k **且**至少達到自動壓縮閾值的模型，其選擇器條目和環境變數槽位會帶有
-   `[1m]` 標記。
+1. 啟動環境槽位會在實際視窗大於 200k **且**至少達到所設定的自動壓縮閾值時帶上
+   `[1m]` 標記。探索列表和 Desktop 選擇器條目不跟隨該閾值：它們使用固定的 829,800 token 下限（Anthropic 路由上的 Claude 模型必須真正達到 1M）。
 2. 系統會注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（預設 `829800`，範圍 `100000`–`1000000`），
    使對話在該位置自動進行摘要。
 
@@ -392,8 +393,20 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 可以在 Claude 頁面調整壓縮值。**警告：**如果將其提高到超過模型的實際視窗，該模型將無法正常
 工作——聊天會在觸發摘要之前報錯。
 
-低於 1M 的原生 Anthropic 模型絕不會被自動標記。你自行匯出的值始終優先（代理會使用**你的**
-值來判斷哪些模型可以安全標記）。手動編輯設定時填入的無效值會回退到 829,800。
+低於 1M 的原生 Anthropic 模型絕不會被自動標記。你自行匯出的壓縮值在啟動槽位標記上始終優先（代理會使用**你的**
+值來判斷哪些模型可以安全標記）。探索列表忽略該匯出值並保持固定下限。手動編輯設定時填入的無效值會回退到 829,800。
+
+### 上下文計算方式（預設 1M，200k 需選擇啟用）
+
+`claudeCode.contextAccounting` 決定 opencodex 預設選用的值。未設定（`1m`，預設）時，長上下文模型在啟動環境槽位、
+Desktop 選擇器、Desktop 3P（`prefer1m`）和產生的子代理中按 1M 提供。設為 `200k` 即可退出：不再自動加上 `[1m]` 標記，
+不注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，Desktop 3P 保留 `supports1m` 但移除 `prefer1m`。你自己標記 `[1m]` 的選擇仍可使用
+（產生的子代理和強制子代理仍會移除模型視窗無法承載的標記），探索清單中真正 1M 模型的 `· 1M` 條目也仍然存在。`200k` 優先於
+自動上下文：你自行匯出的壓縮值不會重新啟用自動標記，但 opencodex 不會改動你匯出的值。
+
+```bash
+ocx claude config set --context-accounting 200k
+```
 
 ### 有效模型環境變數
 
@@ -509,7 +522,7 @@ Search 和圖像描述沿用儲存庫已有的 Claude Code OAuth fingerprint 先
 
 ## 推理強度
 
-Claude Code 的 `/effort` 設定會完整保留並傳遞給適配器：
+對於從 Messages 轉換為 Responses 的請求，Claude Code 的 `/effort` 設定依下表對映：
 
 | 傳輸格式 | 對映 |
 | --- | --- |
@@ -517,7 +530,9 @@ Claude Code 的 `/effort` 設定會完整保留並傳遞給適配器：
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`，≤16384→`medium`，更高→`high` |
 | `thinking.type: "disabled"` | `reasoning: { effort: "none" }`；省略摘要 |
 
-解析後的值會顯示在請求日誌的 **Reasoning effort** 列中。
+對於轉換後的請求，對映得到的等級會顯示在請求日誌的 **Reasoning effort** 欄中。
+受管理的原生 Messages 請求在沒有可識別的 `output_config.effort` 時，將啟用的 thinking 預算記錄為
+`budget:<tokens>`；此日誌記錄不會變更傳輸的請求本文。
 
 ## 入站轉換（Messages → Responses）
 
@@ -640,7 +655,7 @@ OAuth 活動帳號未標記 `needsReauth`。顯式選擇 Anthropic 卻沒有可�
 `ANTHROPIC_BASE_URL` 可能已經過時。請開啟一個新終端，或重新執行 `ocx claude`。
 
 **大模型仍受 200k 上下文上限限制**——在選擇器中選擇 `[1m]` 變體，或啟用自動上下文
-（預設開啟）。如果選擇器中沒有 `[1m]` 條目，該模型的權威上下文視窗可能低於自動壓縮閾值。
+（預設開啟）。如果選擇器中沒有 `[1m]` 條目，該模型的權威上下文視窗可能低於固定的 829,800 token 下限。
 
 **技能載入導致 token 數量過高**——內建的 `claude-api` 技能（約 136k token）會在提及
 Claude 模型時自動載入。對於原生透傳，這是正常現象；對於已路由模型，opencodex 預設會將其
@@ -663,10 +678,12 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
 
 Explicit gateway selectors on a generated agent request take precedence over its legacy `ocx-route` fallback, even if the saved force setting changes after launch. For shell or settings overrides of generated roster agents, use an explicit gateway alias; bare Claude ids retain the older-client fallback behavior. Native aliases restore their bare model before the existing credential and model-map checks. Connected launches validate force targets against a fresh authenticated gateway catalog; failed discovery skips automatic force injection, and cached context windows alone never prove availability.
+
+僅在輸出開始前的回應中，僅當 HTTP 401 的 authentication_error（無 error.code） 訊息完全等於 “OAuth access token has been revoked.” 時，發送請求的 OAuth 帳戶會被標記為需要重新登入，並清除工作階段綁定。輸出開始前，可在既有發送限制內切換到同一池的可用帳戶；沒有替代帳戶時回傳原始 401，該帳戶在重新登入前不會被選取。其他 401 的處理保持不變。

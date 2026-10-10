@@ -174,6 +174,13 @@ A provider web search still in flight at that truncated terminal is finalized as
 
 `src/adapters/anthropic.ts` maps a `refusal` or `content_filter` stop reason to an explicit `incomplete` adapter event with `reason: "content_filter"` and `retryable: false` instead of `done` with that stopReason (#4312). Codex otherwise treats a filter incomplete without retryable as a dropped stream and retries a refusal that cannot succeed. Partial output, tool-call integrity, and usage are preserved; `max_tokens` remains a `done` so a legitimate truncation can continue.
 
+The translated Anthropic stream ends at `message_stop` after emitting its existing terminal
+classification and usage. The parser does not inspect later records in that response body;
+pre-terminal named pings, data-only pings and SSE comments remain heartbeats. Iterator closure
+releases decoder reservations, attempts reader cancellation and unlocking on a best-effort basis,
+and closes any remaining tool-call budget entry. A never-settling cancellation can delay direct-parser
+cleanup. `src/web-search/progress-stream.ts` continues to reject post-terminal adapter events.
+
 Chat helper admission in `src/server/responses/core.ts` follows the
 [deferred stored-main contract](../providers/openai-tiers.md): only a needed Direct OpenAI helper
 claims stored main, after terminal vision, routed vision and search exclusions.

@@ -9,7 +9,7 @@ import { CODEX_RESPONSES_HTTP_URL, type PreparedCodexWsRequest } from "./codex-w
 import { CodexWsCorrelation } from "./codex-ws-correlation";
 import type { CodexWsSession } from "./codex-ws-session";
 import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES,
-  MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage,
+  MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, markCodexWsPreludeProjection, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage,
   codexWsCreateFrameExceedsLimit, codexWsFailureDetail, codexWsPreResponseFailure, markCodexWsStage, codexWsOcxVersion,
   markCodexWsSocketDeath, type CodexWsFailureStage, type CodexWsStageRecord } from "./codex-ws-wire";
 
@@ -23,6 +23,7 @@ interface ExchangeOptions {
   sseFallback: typeof globalThis.fetch;
   onQuota?: CodexWsQuotaObserver;
   beforeDispatch?: (headers: Headers) => void;
+  onPhysicalDispatch?: () => void;
   /** Bun version string the caller gated on; stamped onto the stage record. */
   bunVersion?: string;
 }
@@ -44,7 +45,8 @@ function rejectionHeaders(source: Record<string, unknown>, prelude: Headers): He
     }
   }
   // Reuse the metadata owner's count/value/family budgets and window freshness
-  // rules, without publishing quota twice. The unmarked HTTP response owns it.
+  // rules, without publishing quota twice. Pool bookkeeping consumes the HTTP
+  // projection; plain-main publication belongs only to the WS observer.
   const projected = new CodexWsMetadata();
   try {
     for (const values of [Object.fromEntries(prelude), source]) {
@@ -240,6 +242,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         // are left out: their channel may already have sent continuation frames on this socket, so
         // the create frame alone no longer describes the turn.
         if (socketDied && !nativeControl) markCodexWsSocketDeath(failureResponse, stage);
+        markCodexWsPreludeProjection(failureResponse);
         resolve(failureResponse);
         return;
       }
@@ -411,6 +414,17 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         failStream(error);
         return;
       }
+      try { options.onPhysicalDispatch?.(); } catch (error) {
+        // Admission refused before the frame left. This is a pre-open rejection,
+        // not a transport failure and not an authorization to replay over SSE.
+        settledPreOpen = true;
+        sent = false;
+        terminal = true;
+        cleanup();
+        session.dispose();
+        reject(error);
+        return;
+      }
       try {
         ws.send(frameText);
         sentAt = Date.now();
@@ -501,6 +515,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
             cleanup();
             try { controller.close(); } catch { /* unused stream already closed */ }
             session.dispose();
+            markCodexWsPreludeProjection(rejection);
             resolve(rejection);
             return;
           }

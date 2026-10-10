@@ -36,7 +36,7 @@ import {
   buildAnthropicMessagesPassthroughRequest,
   type AnthropicMessagesPassthroughRequest,
 } from "../adapters/anthropic/passthrough";
-import { resolveInboundModel } from "../claude/inbound";
+import { effortFromOutputConfig, resolveInboundModel } from "../claude/inbound";
 import { anthropicErrorBody, anthropicErrorResponse, claudeOverflowSsePayload, claudePromptTooLongMessage, collectAnthropicMessage, isContextOverflowText, isThroughputLimitText } from "../claude/outbound";
 import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -108,6 +108,7 @@ import {
 import {
   noteProviderAttemptSend,
   recordAttemptCredentialSource,
+  recordAttemptRequestedEffort,
   recordFirstOutput,
   recordKeyAttemptFailure,
   recordKeyWireAttemptUsage,
@@ -120,6 +121,7 @@ import { workflowRefusalResponse } from "./workflow-refusal";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { admissionModelDeniedResponse, type AdmissionModelScope } from "./admission-model-scope";
 import { nativeMessagesToolScopeDenial } from "./messages-native-scope";
+import { retainUpstreamMessagesRequestId } from "./messages-response-headers";
 
 export {
   isNativeMessagesRouteEligible,
@@ -318,6 +320,15 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   logCtx.requestedModel = requestedModel;
   if (route.routeReason === "model-alias" || route.modelId !== requestedModel) logCtx.requestedAlias = requestedModel;
   logCtx.requestedServiceTier = typeof body.service_tier === "string" ? body.service_tier : undefined;
+  if (logCtx.requestedEffort === undefined) {
+    const effort = effortFromOutputConfig(body.output_config);
+    const thinking = isRec(body.thinking) ? body.thinking : undefined;
+    const budget = thinking?.budget_tokens;
+    if (effort !== undefined) logCtx.requestedEffort = effort;
+    else if (thinking?.type === "disabled") logCtx.requestedEffort = "none";
+    else if (thinking?.type === "enabled" && typeof budget === "number"
+      && Number.isSafeInteger(budget) && budget > 0) logCtx.requestedEffort = `budget:${budget}`;
+  }
   // Reserve spend the way native Chat does: an input estimate that never enters usage, and the
   // caller's own output ceiling.
   if (logCtx.usageLogInputTokens === undefined) {
@@ -333,6 +344,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     adapter: "anthropic",
   });
   attemptHandle.seal(logCtx.accountLogLabel);
+  recordAttemptRequestedEffort(logCtx);
   const { attempt } = attemptHandle;
   const finalLog = createFinalRequestLog(logIds, logCtx);
   const finishLog: FinishLog = (status, message, meta = { closeReason: "non_stream" }) => {
@@ -501,7 +513,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       && nativeMessagesDeclineReason({ ...route, provider: routed }, body, config, selector) === undefined;
   };
 
-  const send = async (recovery?: "rate-limit-429" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
+  const send = async (recovery?: "rate-limit-429" | "oauth-401" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
     if (requestTransientPolicy && remaining <= 0) {
       throw new Error("native Messages transient send budget exhausted before recovery dispatch");
@@ -673,7 +685,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     const oauthRetryKey = {};
     const triedAccountIds = new Set<string>();
     let oauthFailovers = 0;
-    while (oauthBinding && (response.status === 429 || response.status === 403)) {
+    while (oauthBinding && (response.status === 429 || response.status === 403 || response.status === 401)) {
       const sendingBinding = oauthBinding;
       const expectedRecoverySelection = sendingBinding.selection;
       triedAccountIds.add(sendingBinding.snapshot.accountId);
@@ -691,7 +703,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         canRetry: transientSendAvailable() && oauthFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
       });
       if (!nextAccountId) break;
-      const recovery = response.status === 403 ? "oauth-account-403" : "rate-limit-429";
+      const recovery = response.status === 401 ? "oauth-401" : response.status === 403 ? "oauth-account-403" : "rate-limit-429";
       discard(response);
       oauthBinding = await resolveNativeOAuthBindingForInstance(nativeInstance!, config, { routeTarget,
         sessionKey: options.sessionKey, model: route.modelId, candidateAccountId: nextAccountId,
@@ -740,7 +752,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       upstream.abort();
       return fail(499, "Client cancelled request", "api_error");
     }
-    return nativeMessagesErrorResponse(response, bodyText, finishLog);
+    return retainUpstreamMessagesRequestId(nativeMessagesErrorResponse(response, bodyText, finishLog), response.headers);
   }
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
@@ -770,10 +782,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       // rewrite buffers whole frames, so it sits after the tap: stall detection keeps timing raw
       // upstream bytes. Real Anthropic pools refuse pre-stream in that wording and keep one relay.
       const clientStream = nativeInstance ? relayed : relaySseWithPayloadRewrite(relayed, claudeOverflowSsePayload, translatorBudget);
-      return new Response(clientStream, {
+      return retainUpstreamMessagesRequestId(new Response(clientStream, {
         status: 200,
         headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", Connection: "keep-alive" },
-      });
+      }), response.headers);
     }
     // A non-streaming caller whose upstream streamed anyway: fold the stream into one message.
     const tapState: { closeReason?: FinalRequestLogMeta["closeReason"]; meta?: FinalRequestLogMeta } = {};
@@ -799,7 +811,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         return fail(502, text, "api_error");
       }
       finishLog(200);
-      return Response.json(message);
+      return retainUpstreamMessagesRequestId(Response.json(message), response.headers);
     } catch (error) {
       cleanupAbort();
       upstream.abort();
@@ -857,12 +869,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const serialized = JSON.stringify(message);
   finishLog(200);
   if (requestedStream) {
-    return new Response(messageAsSse(message), {
+    return retainUpstreamMessagesRequestId(new Response(messageAsSse(message), {
       status: 200,
       headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" },
-    });
+    }), response.headers);
   }
-  return new Response(serialized, { status: 200, headers: { "Content-Type": "application/json" } });
+  return retainUpstreamMessagesRequestId(new Response(serialized, { status: 200, headers: { "Content-Type": "application/json" } }), response.headers);
 }
 
 /** A folded stream error that refuses an oversized input (same gate as the SSE rewrite). */

@@ -31,6 +31,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "sidecar.poolA",
   "sidecar.poolB",
   "provider.name.anthropic2",
+  // A token count ("200k") reads the same in French; the 1M choice carries the translated "par défaut".
+  "claude.contextAccounting200k",
   // Units, symbols, protocol values, machine labels, and product names.
   "integrations.cursor.noControl",
   "uptime.hour",

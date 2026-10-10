@@ -304,7 +304,7 @@ function atomicWriteFileToTarget(
       }
       try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
     },
-    rename: renameAtomicFile,
+    rename: (source, destination) => renameAtomicFile(source, destination, undefined, "config", hooks),
     truncate: tempPath => truncateSync(tempPath, 0),
     unlink: unlinkSync,
   };

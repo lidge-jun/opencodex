@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { atomicWriteFile } from "../../config/atomic-write";
+import { assertNotRealClaudeConfigUnderTest } from "../../lib/test-home-guard";
 import { claudeConfigDir } from "../auth-detect";
 import { invalidateClaudeCodeServedCatalog } from "./cli-catalog";
 
@@ -112,6 +113,8 @@ export function inspectClaudeInterceptSettings(
 }
 
 function writeSettings(path: string, doc: SettingsDoc): void {
+  // An armed test process must not rewrite the real Claude settings.json (#6775).
+  assertNotRealClaudeConfigUnderTest(dirname(path), path);
   mkdirSync(dirname(path), { recursive: true });
   // The managed env embeds the proxy token, so the file must stay owner-only:
   // atomicWriteFile applies the real NTFS ACL on Windows where chmod is a no-op.

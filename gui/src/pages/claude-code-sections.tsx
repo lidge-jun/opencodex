@@ -116,14 +116,37 @@ export function ClaudeCodeSettingsCard({
 
       <div className="setting-row">
         <div className="setting-label">
-          <span className="title">{t("claude.autoContext")}</span>
-          <span className="desc">{t("claude.autoContextDesc")}</span>
-          {state.maxContextTokens !== null && <span className="desc" style={{ color: "var(--muted)" }}>{t("claude.autoContextInert")}</span>}
+          <span className="title">{t("claude.contextAccounting")}</span>
+          <span className="desc">{t("claude.contextAccountingDesc")}</span>
         </div>
-        <SettingToggle label={t("claude.autoContext")} checked={state.autoContext} onChange={autoContext => onStateChange({ ...state, autoContext })} />
+        <div className="setting-controls">
+          <Select
+            value={state.contextAccounting}
+            options={[
+              { value: "1m", label: t("claude.contextAccounting1m") },
+              { value: "200k", label: t("claude.contextAccounting200k") },
+            ]}
+            onChange={v => onStateChange({ ...state, contextAccounting: v === "200k" ? "200k" : "1m" })}
+            label={t("claude.contextAccounting")}
+            style={{ minWidth: 140 }}
+            align="right"
+            portal
+          />
+        </div>
       </div>
 
-      {state.autoContext && (
+      {state.contextAccounting === "1m" && (
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="title">{t("claude.autoContext")}</span>
+            <span className="desc">{t("claude.autoContextDesc")}</span>
+            {state.maxContextTokens !== null && <span className="desc" style={{ color: "var(--muted)" }}>{t("claude.autoContextInert")}</span>}
+          </div>
+          <SettingToggle label={t("claude.autoContext")} checked={state.autoContext} onChange={autoContext => onStateChange({ ...state, autoContext })} />
+        </div>
+      )}
+
+      {state.contextAccounting === "1m" && state.autoContext && (
         <div className="setting-row">
           <div className="setting-label">
             <span className="title">{t("claude.autoCompactWindow")}</span>

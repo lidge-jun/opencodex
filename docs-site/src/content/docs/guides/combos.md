@@ -512,12 +512,13 @@ target/effort, a coarse decision gate, latency, optional confidence/probability,
 Automated tests use mocked TypeSafe responses plus a no-key fail-open smoke; a live TypeSafe decision
 requires an operator-supplied key and is not run implicitly.
 
-When JEV's selected effort is applied to the Responses child, request and attempt logs show a
-differing effort as `high->xhigh` or `high->low`. Later effort adjustments remain in the chain,
-such as `high->xhigh->medium`. An unchanged effort or a target without effort control keeps the
-existing label; fallback attempts do not inherit the initial JEV effort. With the opt-in
-`protocols.rollout.nativeChatCombos` path, native Chat children currently do not apply JEV's
-selected effort; their labels retain the caller's effort and any native child adjustments instead.
+JEV's selected effort applies to the first Responses child and to native Chat children on the opt-in
+`protocols.rollout.nativeChatCombos` path. It replaces caller effort and removes conflicting thinking
+controls and caller `service_tier`; an explicit no-effort choice removes effort even when the Combo has
+a forced default. Provider effort pins, caps and wire normalization still apply afterward.
+Request and attempt logs show a differing applied effort as `high->xhigh` or `high->low`, retaining later
+adjustments such as `high->xhigh->medium`. An unchanged effort or a no-effort choice keeps the existing
+label. Later fallback targets use ordinary Combo policy from the original request, without another JEV call.
 
 After the Combo has served requests, open **Models → Combos → jev-auto → Stats** to inspect JEV's
 picks without replacing the normal model picker or Usage page. The tab separates backend-reported decision
