@@ -3,14 +3,13 @@ title: Spend Ledger Refused in a Synced Folder
 description: Why requests can fail with "Spend-ledger storage could not be opened safely" when the opencodex state directory is inside iCloud Drive or another synced folder, and how to fix it.
 ---
 
-Some macOS users saw requests fail intermittently with HTTP 502 and this message, while
-other requests in the same session succeeded:
+Spend-ledger storage refusals return HTTP 503 with error type `server_error` and code
+`spend_ledger_storage_unavailable`. This is a local storage problem; it does not count against
+provider or account health. Request logs attribute it as `local-refusal`. An already streaming response carries the same code in its terminal
+error event. Other requests in the same session may succeed if the file condition is temporary.
 
-```text
-Provider unreachable: Spend-ledger storage could not be opened safely.
-```
-
-Current builds say which file and which check refused it, for example:
+Older builds reported HTTP 502 with a misleading "Provider unreachable" prefix. Current builds
+say which file and which check refused it, for example:
 
 ```text
 Spend-ledger storage could not be opened safely (journal: extra-hard-link).

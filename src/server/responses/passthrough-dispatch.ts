@@ -1,3 +1,4 @@
+import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { createSteeringSettingsNormalizer } from "./native-steering-policy";
 import { nativeResponseControlEligible } from "./native-response-control";
 import { NativeInjectionReplay } from "./native-injection-replay";
@@ -930,7 +931,7 @@ export async function preparePassthroughExchange(
         }
         return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
       }
-      const localRefusal = mapCodexAuthContextErrorToResponse(refusal, {
+      const localRefusal = spendLedgerStorageErrorResponse(err, logCtx) ?? mapCodexAuthContextErrorToResponse(refusal, {
         now: Date.now(), accountSelector: route.codexAccountNamespace,
       });
       if (localRefusal) {
