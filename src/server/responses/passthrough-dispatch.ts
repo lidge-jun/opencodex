@@ -8,7 +8,7 @@ import type {
   PassthroughAdmissionState,
 } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
-import type { ResponsesTransport } from "./request-transport";
+import { CopilotAutoAdapterHandoff, type ResponsesTransport } from "./request-transport";
 import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { transientSendCapFor } from "./request-send-budget";
@@ -833,7 +833,7 @@ export async function preparePassthroughExchange(
         httpOnly: true,
         providerName: route.providerName,
         modelId: route.modelId,
-        dispatchOverride: oauthDispatch(request),
+        dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
         beforeDispatch: headers => {
           if (signal.aborted) throw signal.reason;
           if (!transportState.selectionIsCurrent(transportState.requestBindings.get(request))) {
@@ -907,7 +907,7 @@ export async function preparePassthroughExchange(
         describeOutboundBodyRefusal(result),
       );
     };
-    const transportFailureResponse = (err: unknown): Response => {
+    const transportFailureResponse = (err: unknown): Response | PassthroughAdapterHandoff => {
       cleanupUpstreamAbort();
       upstream.abort();
       if (options.abortSignal?.aborted || req.signal.aborted) {
@@ -927,6 +927,10 @@ export async function preparePassthroughExchange(
           ?? formatErrorResponse(429, "request_send_budget_exhausted", err.message);
       }
       const refusal = unwrapUpstreamRetryEvidenceError(err);
+      if (refusal instanceof CopilotAutoAdapterHandoff) {
+        bindRefreshedAdapter(refusal.adapter);
+        return handoffToChat(refusal.adapter);
+      }
       const copilotRefusal = copilotRefusalResponse(refusal);
       if (copilotRefusal) {
         releaseUpstreamHostAdmission(nativeHostState.lease);
@@ -1023,7 +1027,7 @@ export async function preparePassthroughExchange(
               nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                 && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                 ? options.nativeControl : undefined,
-              dispatchOverride: oauthDispatch(request),
+              dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
               providerName: route.providerName,
               modelId: route.modelId,
               onPhysicalDispatch: receiptMode ? sendBudgetState.noteInitialDispatch : undefined,
@@ -1054,7 +1058,7 @@ export async function preparePassthroughExchange(
     // At most one reasoning-effort downgrade per request.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
     /** Rebind the refreshed wire before transferring this request to the Chat pipeline. */
-    const bindRefreshedAdapter = (refreshedAdapter: typeof transportState.adapter) => {
+    function bindRefreshedAdapter(refreshedAdapter: typeof transportState.adapter) {
       bindRouteReasoningReplayScope({
         parsed,
         providerName: route.providerName,
@@ -1070,15 +1074,15 @@ export async function preparePassthroughExchange(
         logCtx.accountLogLabel,
       );
       recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, refreshedAdapter.name);
-    };
+    }
     /** Transfer adapter ownership without retaining the native abort link or request cache. */
-    const handoffToChat = (refreshedAdapter: typeof transportState.adapter) => {
+    function handoffToChat(refreshedAdapter: typeof transportState.adapter) {
       cleanupUpstreamAbort();
       upstream.abort();
       transportState.adapter = transportState.activeAdapter = transportState.runTurnAdapter = refreshedAdapter;
       transportState.invalidateSameTargetRequest();
       return { kind: "adapter-handoff" as const };
-    };
+    }
     let oauth401ReplayAttempted = transportState.oauth401ReplayAttempted;
     let codex401ReplayKind: "main" | "stored" | null = null;
     // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
@@ -1088,7 +1092,7 @@ export async function preparePassthroughExchange(
     let rateLimitRetries = 0;
     const rebuildAndRefetch = async (
       recovery: AttemptRecoveryKind,
-    ): Promise<Response | { failed: Response }> => {
+    ): Promise<Response | { failed: Response | PassthroughAdapterHandoff }> => {
       const retryAdapter = resolveSelectionAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
         config.cacheRetention,
@@ -1158,7 +1162,7 @@ export async function preparePassthroughExchange(
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
-                dispatchOverride: oauthDispatch(request),
+                dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
@@ -1265,7 +1269,7 @@ export async function preparePassthroughExchange(
             nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
               && responseEffects.plaintextV2AgentMessageToolNames.size === 0
               ? options.nativeControl : undefined,
-            dispatchOverride: oauthDispatch(request),
+            dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
             providerName: route.providerName,
             modelId: route.modelId,
             onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
@@ -1410,7 +1414,7 @@ export async function preparePassthroughExchange(
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
-                dispatchOverride: oauthDispatch(request),
+                dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
@@ -1557,7 +1561,7 @@ export async function preparePassthroughExchange(
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
-                dispatchOverride: oauthDispatch(request),
+                dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),

@@ -54,7 +54,7 @@ async function accounts() {
   return { a, b };
 }
 /** Return an Auto provider config and send ledger; options drive refusal, expiry, rotation, and tool events through both inference wires. */
-function fixture(options: { nativeFirst?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void; onSession?: (count: number) => void; malformedSessionAt?: number; negotiationRetryAfter?: string } = {}) {
+function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void; onSession?: (count: number) => void; malformedSessionAt?: number; negotiationRetryAfter?: string } = {}) {
   const sent: Array<{ host: string; path: string; token: string | null; body: any; signal?: AbortSignal | null }> = [];
   let inferenceCount = 0;
   let sessionCount = 0;
@@ -73,14 +73,15 @@ function fixture(options: { nativeFirst?: boolean; native429?: boolean; onNative
     }
     const account = new Headers(init?.headers).get("authorization")?.includes("-b") ? "b" : "a";
     const renewed = new Headers(init?.headers).get("authorization")!.includes("-renewed");
-    const model = options.chatRefresh && renewed ? "gpt-5.4" : account === "a" ? "gpt-4o" : "gpt-5.4";
-    const session = `synthetic-session-${account}${options.chatRefresh && renewed ? "-renewed" : ""}`;
+    const expiredNative = options.nativeExpiry && intentCount > 0;
+    const model = expiredNative || options.chatRefresh && renewed ? "gpt-5.4" : account === "a" ? "gpt-4o" : "gpt-5.4";
+    const session = `synthetic-session-${account}${expiredNative || options.chatRefresh && renewed ? "-renewed" : ""}`;
     const headers = new Headers(init?.headers);
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     expect(headers.get("authorization")).toStartWith(`Bearer synthetic-access-${account}`);
     sent.push({ host: destination.host, path: destination.pathname, token: headers.get("copilot-session-token"), body, signal: init?.signal });
     if (destination.pathname === "/models") return Response.json({ data: [{ id: model, model_picker_enabled: false,
-      supported_endpoints: [options.native429 ? (account === "a" ? "/responses" : "/chat/completions") : options.chatRefresh ? (renewed ? "/responses" : "/chat/completions") : options.nativeFirst ? (headers.get("authorization")!.includes("-renewed") ? "/chat/completions" : "/responses") : account === "a" ? "/chat/completions" : "/responses"] }] });
+      supported_endpoints: [options.nativeExpiry ? (expiredNative ? "/chat/completions" : "/responses") : options.native429 ? (account === "a" ? "/responses" : "/chat/completions") : options.chatRefresh ? (renewed ? "/responses" : "/chat/completions") : options.nativeFirst ? (headers.get("authorization")!.includes("-renewed") ? "/chat/completions" : "/responses") : account === "a" ? "/chat/completions" : "/responses"] }] });
     if (destination.pathname === "/models/session") {
       sessionCount++;
       options.onSession?.(sessionCount);
@@ -96,6 +97,8 @@ function fixture(options: { nativeFirst?: boolean; native429?: boolean; onNative
     }
     expect(body.model).toBe(model);
     expect(headers.get("copilot-session-token")).toBe(session);
+    if (options.nativeExpiry && options.negotiationRefusal === 401)
+      expect(headers.get("authorization")).toBe("Bearer synthetic-access-a-renewed");
     inferenceCount++;
     if (options.nativeFirst && options.closedNativeBody && inferenceCount === 1)
       return Response.json({ error: { message: "native-inference-secret" } }, { status: 401 });
@@ -110,7 +113,7 @@ function fixture(options: { nativeFirst?: boolean; native429?: boolean; onNative
       usage: { input_tokens: 2, output_tokens: 1 } });
     if (options.renewedChatRefusal && destination.pathname === "/chat/completions")
       return Response.json({ error: { message: "must-not-echo" } }, { status: 401 });
-    if (options.nativeFirst && !body.stream) return Response.json({ id: "chat-fixture", model,
+    if ((options.nativeFirst || options.nativeExpiry) && !body.stream) return Response.json({ id: "chat-fixture", model,
       choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
       usage: { prompt_tokens: 2, completion_tokens: 1 } });
     const tool = options.tool && inferenceCount === (options.nativeFirst ? 2 : 1);
@@ -122,10 +125,46 @@ function fixture(options: { nativeFirst?: boolean; native429?: boolean; onNative
     ...(options.key ? { apiKey: "synthetic-access-a", apiKeyPool: [{ id: "a", key: "synthetic-access-a" }, { id: "b", key: "synthetic-access-b" }] } : {}), baseUrl: "https://api.githubcopilot.com", models: ["gpt-4o"],
     defaultModel: "gpt-4o", selectedModels: ["gpt-4o"], fetch: executor,
   } }, oauthAccountFailover: { enabled: true } } as OcxConfig;
-  if (options.key || options.negotiationRefusal || options.nativeFirst || options.chatRefresh) globalThis.fetch = executor;
+  if (options.key || options.negotiationRefusal || options.nativeFirst || options.nativeExpiry || options.chatRefresh) globalThis.fetch = executor;
   return { config, sent, get cancelledNativeBodies() { return cancelledNativeBodies; }, get refreshCount() { return refreshCount; } };
 }
 describe("Copilot Auto through the Responses pipeline", () => {
+  test.each([[false, false], [true, false], [false, true], [true, true]])(
+    "expired native session hands off to Chat before inference with stream=%s negotiation401=%s", async (stream, negotiation401) => {
+      await accounts();
+      const actualNow = Date.now;
+      let offset = 0;
+      Date.now = () => actualNow() + offset;
+      try {
+        const f = fixture({ nativeExpiry: true, advanceAfterIntent: () => { offset = 61_000; },
+          ...(negotiation401 ? { negotiationRefusal: 401, negotiationRefusalAt: 2 } : {}) });
+        f.config.providers["github-copilot"]!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+        const logCtx: RequestLogContext = { model: "", provider: "" };
+        const response = await handleResponses(request("hello", stream), f.config, logCtx);
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        if (stream) {
+          expect(text).toContain("event: response.output_text.delta");
+          expect(text).toContain('"delta":"ok"');
+          expect(text).toContain("event: response.completed");
+        } else {
+          const result = JSON.parse(text);
+          expect(result.object).toBe("response");
+          expect(result.status).toBe("completed");
+          expect(result.output[0].content[0]).toMatchObject({ type: "output_text", text: "ok" });
+        }
+        expect(text).not.toContain('"choices"');
+        expect(text).not.toContain("must-not-echo");
+        expect(logCtx.providerAdapter).toBe("openai-chat");
+        expect(logCtx.model).toBe("gpt-5.4");
+        const inference = f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path));
+        expect(inference).toHaveLength(1);
+        expect(inference[0]).toMatchObject({ path: "/chat/completions", token: "synthetic-session-a-renewed",
+          body: { model: "gpt-5.4", stream } });
+        expect(f.sent.filter(call => call.path === "/models/session")).toHaveLength(negotiation401 ? 3 : 2);
+        expect(f.refreshCount).toBe(negotiation401 ? 1 : 0);
+      } finally { Date.now = actualNow; }
+    });
   test.each([false, true])("passthrough OAuth refresh migrates Responses to Chat with stream=%s", async stream => {
     await accounts();
     const f = fixture({ nativeFirst: true });

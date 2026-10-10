@@ -90,6 +90,13 @@ import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
 import { clientCancelledResponse } from "./core-errors";
 import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
 
+/** Return a renewed Chat wire to the native owner before sending inference. */
+export class CopilotAutoAdapterHandoff extends Error {
+  constructor(readonly adapter: ProviderAdapter) {
+    super("Copilot Auto dispatch requires the Chat adapter");
+  }
+}
+
 /** Owns live credential selection and adapter bindings for one request. */
 export async function prepareResponsesTransport(
   requestContext: Pick<ResponsesRequestContext, "config" | "logCtx" | "options" | "req">,
@@ -619,7 +626,7 @@ export async function prepareResponsesTransport(
     } finally { producer?.close(); }
   };
   /** Fence the physical send, with bounded credential/session rebuilds and safe negotiated refusals. */
-  const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed): ProviderFetchOptions["dispatchOverride"] => {
+  const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed, owner: "adapter" | "passthrough" = "adapter"): ProviderFetchOptions["dispatchOverride"] => {
     if (route.provider.authMode === "forward") return undefined;
     return /** Dispatch with the current binding and session, rebuilding at most three times before returning a safe refusal. */ async (input, init, execute) => {
       let destination = input;
@@ -695,6 +702,9 @@ export async function prepareResponsesTransport(
           const refusal = copilotRefusalResponse(error);
           if (refusal) return refusal;
           throw error;
+        }
+        if (owner === "passthrough" && route.providerName === "github-copilot" && nextAdapter.name === "openai-chat") {
+          throw new CopilotAutoAdapterHandoff(nextAdapter);
         }
         // Rebind before rebuilding: the rebuild's bridged-search restore and continuation
         // restore key on the serving identity, which must be the refreshed route's, not the
