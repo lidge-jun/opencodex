@@ -17,6 +17,8 @@ type RemoteLinkUiState = "off" | "role-select" | "adding-child" | "confirming-ho
 export interface RemoteLinkProps {
   apiBase: string;
   sessionReady: boolean;
+  pairingRecoveryAvailable?: boolean;
+  onRequestPairing?: () => void;
   workspaceAvailable?: boolean;
   onOpenWorkspace?: () => void;
   /** Called once the Child runtime answers after a join; the page reloads as that runtime. */
@@ -127,7 +129,7 @@ function LinkErrorNotice({ error }: { error: LinkActionError }): ReactElement {
   return <Notice tone="err"><span className="remote-link-error">{t(error.key)}</span>{error.hint && <span className="remote-link-hint">{t("remoteLink.reason.generic")} <code>{error.hint}</code></span>}</Notice>;
 }
 
-export default function RemoteLink({ apiBase, sessionReady, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
+export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
   const t = useT();
   const [uiState, setUiState] = useState<RemoteLinkUiState>("off");
   const [role, setRole] = useState<RemoteLinkRole>("home");
@@ -158,6 +160,9 @@ export default function RemoteLink({ apiBase, sessionReady, workspaceAvailable =
   const restartPidRef = useRef<number | null>(null);
   const restartingRef = useRef(false);
   const [restartSlow, setRestartSlow] = useState(false);
+  const pairingRecoveryAction = pairingRecoveryAvailable && onRequestPairing && (!sessionReady || statusError !== null)
+    ? <button type="button" className="link-btn" onClick={onRequestPairing}>{t("connection.pairing.title")}</button>
+    : null;
 
   const startLinkAttempt = useCallback((): LinkAttempt => {
     linkAttemptRef.current?.controller.abort();
@@ -396,13 +401,13 @@ export default function RemoteLink({ apiBase, sessionReady, workspaceAvailable =
   const roleLabel: TKey = status?.role === "home" || choseHome ? "remoteLink.role.home" : status?.role === "child" ? "remoteLink.role.child" : "remoteLink.role.standalone";
   const primaryActionDisabled = role === "child" && !childSelectable;
 
-  if (!sessionReady) return <div className="remote-link-page"><div className="page-head"><h2>{t("link.title")}</h2></div><Notice tone="warn">{t("link.sessionRequired")}</Notice></div>;
+  if (!sessionReady) return <div className="remote-link-page"><div className="page-head"><h2>{t("link.title")}</h2></div><Notice tone="warn">{t("link.sessionRequired")}</Notice>{pairingRecoveryAction && <div className="panel">{pairingRecoveryAction}</div>}</div>;
 
   return (
     <div className="remote-link-page">
       <div className="page-head"><div><h2>{t("link.title")}</h2><p className="page-sub">{t("link.subtitle")}</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => void refreshStatus()} disabled={busy !== null}><IconRefresh />{t("link.refresh")}</button></div>
       {workspaceAvailable && <section className="panel remote-link-workspace-card"><div><strong>{t("remoteLink.workspaceMoved.title")}</strong><p>{t("remoteLink.workspaceMoved.body")}</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={onOpenWorkspace ?? (() => { window.location.hash = "remote-workspace"; })}>{t("remoteLink.workspaceMoved.open")}</button></section>}
-      {statusError && <Notice tone="err"><span className="remote-link-error">{t(statusError)}</span></Notice>}
+      {statusError && <><Notice tone="err"><span className="remote-link-error">{t(statusError)}</span></Notice>{pairingRecoveryAction && <section className="panel">{pairingRecoveryAction}</section>}</>}
       {statusRows.length === 0 && uiState === "off" && <section className="panel remote-link-off-preview"><div className="remote-link-switch-row"><div><strong>{t("link.switch")}</strong><p className="remote-link-info">{t("link.switchOffHint")}</p></div><button type="button" role="switch" className="remote-link-switch" aria-checked="false" aria-label={t("link.switch")} onClick={() => setUiState("role-select")} /></div><div className="remote-link-preview-content" aria-hidden="true"><div className="remote-link-preview-row"><div className="remote-link-preview-lines"><span /><span /><span /></div><span className="remote-link-status">{t("remoteLink.status.idle")}</span></div><div className="remote-link-preview-row"><div className="remote-link-preview-lines"><span /><span /></div><span className="remote-link-status">{t("remoteLink.role.child")}</span></div></div></section>}
       {uiState === "role-select" && <section className="panel remote-link-panel"><div><h3>{t("link.role.title")}</h3><p className="remote-link-info">{t("link.role.hint")}</p></div><div className="remote-link-role-grid" role="radiogroup" aria-label={t("link.role.title")}><button ref={element => { roleRefs.current[0] = element; }} type="button" role="radio" tabIndex={role === "home" ? 0 : -1} aria-checked={role === "home"} className="remote-link-role-card" onClick={() => setRole("home")} onKeyDown={event => { if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(0, event.key); } }}><strong>{t("link.role.home")}</strong><span>{t("link.role.homeHint")}</span></button><button ref={element => { roleRefs.current[1] = element; }} type="button" role="radio" tabIndex={childSelectable && role === "child" ? 0 : -1} aria-checked={role === "child"} aria-disabled={!childSelectable} className="remote-link-role-card" onClick={() => { if (childSelectable) { setRole("child"); void openSheet(); } }} onKeyDown={event => { if (childSelectable && ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(1, event.key); } }}><strong>{t("link.role.child")}</strong><span>{t("link.role.childHint")}</span></button></div>{!standaloneRuntime && <Notice tone="warn">{t("remoteLink.childDisabled")}</Notice>}{standaloneRuntime && status !== null && !status.joinAvailable && <Notice tone="warn">{t(joinDeniedKey)}</Notice>}<button type="button" className="btn btn-primary" disabled={primaryActionDisabled || status?.role === "child"} onClick={() => void openSheet()}>{role === "child" ? t("remoteLink.findHome.action") : t("link.continue")}</button></section>}
       {uiState === "role-select" && canPairLocally && status?.joinAvailable === false && status.joinDenied === "pairing_required" && (
