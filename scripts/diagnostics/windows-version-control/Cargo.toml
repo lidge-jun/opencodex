@@ -3,8 +3,13 @@ name = "ocx-version-control"
 version = "0.1.0"
 edition = "2024"
 publish = false
+autotests = false
 
 [workspace]
+
+[[test]]
+name = "async_contracts"
+path = "tests/async_contracts.test.rs"
 
 [[bin]]
 name = "ocx-catalog-fixture"
