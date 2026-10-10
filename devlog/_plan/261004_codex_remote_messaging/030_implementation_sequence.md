@@ -2,7 +2,8 @@
 
 Status: the agreed remote slice is implemented locally on
 `feat/codex-remote-contribution`; bounded qualification and source review are
-recorded in the local PR packet. Neither publication nor deployment is authorized.
+recorded in the local PR packet. Publication is user-authorized; deployment and
+maintainer acceptance remain separate.
 
 ## Completed implementation sequence
 
@@ -30,6 +31,9 @@ recorded in the local PR packet. Neither publication nor deployment is authorize
     qualified bounded helper settlement and persistent/transient helper slots.
     Final focused validation passed 283 tests with six skips and no failures;
     broader changed-test selection remains incomplete at its bounded ceiling.
+11. Rebased onto upstream `dev` `0dd7451976e40f1e80e023e3c604e38d1966a68e`
+    before publication. All five contribution patches carried unchanged, verified
+    by range-diff. Rebased qualification is recorded separately in the PR packet.
 
 ## Maintainer adjustment points
 
