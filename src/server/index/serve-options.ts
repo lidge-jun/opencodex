@@ -1594,8 +1594,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // `policy`, not `config`: this route is now served on the unauthenticated loopback
         // listener too (#4236), and only the receiving listener's view produces CORS headers
         // that match the admission decision made above.
-        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
-          await handleChatCompletions(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
+        // Promote a caller `x-session-id` before admission, as Responses and Messages do (#6520):
+        // the ChatGPT bridge forwards only canonical session headers, so the raw marker is lost.
+        const sessionReq = withCallerSessionIdentity(req, admission);
+        return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => withCors(
+          await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
           req,
           policy,
         ), { requestId, start, logCtx });
