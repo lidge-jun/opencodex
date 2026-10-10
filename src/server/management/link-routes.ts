@@ -538,6 +538,9 @@ async function reconnect(ctx: ManagementContext, state: LinkRouteState, id: stri
     return fail("link_not_home_initiated", "Only a Home-initiated link has a tunnel this computer can restart.", 409);
   }
   try {
+    // A reverse forward may only target a port the link listener owns, as when a link is applied.
+    await state.listener.ensureStarted();
+    if (state.listener.status().state !== "listening") return fail("listener_unavailable", "The link listener is unavailable.", 503);
     await state.supervisor.ensureStarted();
     if (!await state.supervisor.reconnect(id)) return fail("link_unavailable", "The link tunnel could not be restarted.", 503);
   } catch {
