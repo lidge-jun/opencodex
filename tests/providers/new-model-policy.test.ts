@@ -34,6 +34,20 @@ describe("new-model policy", () => {
     expect(r.newIds).toEqual(["d"]); expect(r.arrivals).toEqual([{ id: "d", at: now }]); expect(r.slugsToDisable).toEqual([]);
   });
 
+  test.each(["off", "on"] as const)("Copilot Auto and mixed arrivals obey %s like other providers", policy => {
+    const baseline = { ids: ["gpt-4o"], removed: [], updatedAt: now };
+    for (const provider of ["github-copilot", "unknown-provider"]) {
+      const result = applyNewModelPolicy({ provider, discoveredIds: ["auto", "gpt-4o", "new-model"], baseline, policy, now });
+      expect(result.slugsToDisable).toEqual(policy === "off" ? [`${provider}/auto`, `${provider}/new-model`] : []);
+      expect(result.newIds).toEqual(["auto", "new-model"]);
+      expect(result.nextBaseline.ids).toEqual(["auto", "gpt-4o", "new-model"]);
+      expect(result.arrivals).toEqual([{ id: "auto", at: now }, { id: "new-model", at: now }]);
+      const repeated = applyNewModelPolicy({ provider, discoveredIds: result.nextBaseline.ids, baseline: result.nextBaseline, policy, now });
+      expect(repeated.slugsToDisable).toEqual([]);
+      expect(repeated.newIds).toEqual([]);
+    }
+  });
+
   test("degraded providers do not poison a persisted baseline", () => {
     const config = { port: 10100, defaultProvider: "vendor", providers: { vendor: {} }, modelDiscovery: { newModelPolicy: "off" as const, knownModels: { vendor: { ids: ["a", "b"], removed: [], updatedAt: now } } } };
     expect(reconcileSuccessfulModelDiscoveries({ config, models: [{ provider: "vendor", id: "a" }], authoritativeProviders: [], now })).toBe(false);

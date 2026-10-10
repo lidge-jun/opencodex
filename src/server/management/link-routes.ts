@@ -14,6 +14,7 @@ import { projectLinkStatus, type LinkStatusDto } from "../../link/status-project
 import { isLinkPort } from "../../link/ports";
 import { joinHome, type ClientLinkJoinDeps } from "../../client/link-join";
 import { clientLinkTunnelStatus } from "../../client/link-tunnel";
+import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { issueApiKeyInProcess, revokeApiKeyInProcess, type IssuedApiKey } from "./oauth-account-routes";
@@ -228,10 +229,12 @@ async function compensateNewLink(ctx: ManagementContext, state: LinkRouteState, 
   if (!revoked) {
     try { await state.supervisor.stopLink(record.id); } catch { /* retain the record and failure marker */ }
     try {
-      const current = readStoreFor(ctx);
-      if (!current.links.some(link => link.id === record.id)) {
-        writeStoreFor(ctx, { ...current, links: [...current.links, record] });
-      }
+      withConfigMutationLockSync(() => {
+        const current = readStoreFor(ctx);
+        if (!current.links.some(link => link.id === record.id)) {
+          writeStoreFor(ctx, { ...current, links: [...current.links, record] });
+        }
+      });
     } catch {
       // The in-memory marker still makes the residual visible when persistence is unavailable.
     }
@@ -239,11 +242,16 @@ async function compensateNewLink(ctx: ManagementContext, state: LinkRouteState, 
   }
   try { await state.supervisor.stopLink(record.id); } catch { return compensationFailure(ctx, state, record, "stop"); }
   try {
-    const current = readStoreFor(ctx);
-    const next = { ...current, links: current.links.filter(link => link.id !== record.id) };
-    if (next.links.length !== current.links.length) {
-      writeStoreFor(ctx, next);
-    }
+    // Read→filter→write stays one section of the shared mutation lock: a sibling
+    // route's create must not land between the read and the rename and vanish.
+    const next = withConfigMutationLockSync(() => {
+      const current = readStoreFor(ctx);
+      const filtered = { ...current, links: current.links.filter(link => link.id !== record.id) };
+      if (filtered.links.length !== current.links.length) {
+        writeStoreFor(ctx, filtered);
+      }
+      return filtered;
+    });
     clearCompensationFailed(record.id, compensationPath());
     state.compensationFailures?.delete(record.id);
     if (next.links.length === 0) await state.listener.close();
@@ -362,14 +370,20 @@ async function apply(ctx: ManagementContext, state: LinkRouteState): Promise<Res
   const record = { id, alias: body.alias, direction: "hub-initiated" as const, hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date((ctx.deps.now ?? Date.now)()).toISOString() };
   let store: LinkStore;
   try {
-    const current = readStoreFor(ctx);
-    if (current.links.some(link => link.alias === body.alias && link.direction === "hub-initiated")) {
+    // Duplicate-check and append under one mutation-lock section: two writers
+    // racing this check could otherwise both pass it and append, losing one link.
+    const writeOutcome = withConfigMutationLockSync((): "dup" | "written" => {
+      const current = readStoreFor(ctx);
+      if (current.links.some(link => link.alias === body.alias && link.direction === "hub-initiated")) return "dup";
+      store = { ...current, links: [...current.links, record] };
+      writeStoreFor(ctx, store);
+      return "written";
+    });
+    if (writeOutcome === "dup") {
       const compensation = await compensateNewLink(ctx, state, record);
       if (compensation) return compensation;
       return fail("link_exists", "A link for this alias already exists.", 409);
     }
-    store = { ...current, links: [...current.links, record] };
-    writeStoreFor(ctx, store);
     await state.listener.ensureStarted();
     if (state.listener.status().state !== "listening") {
       const compensation = await compensateNewLink(ctx, state, record);
@@ -430,13 +444,18 @@ async function issue(ctx: ManagementContext): Promise<Response> {
   const record = { id, alias: body.alias, direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: body.tunnelPort, apiKeyId: issued.id, createdAt: new Date((ctx.deps.now ?? Date.now)()).toISOString() };
   let failureCode = "link_issue_failed";
   try {
-    const current = readStoreFor(ctx);
-    if (current.links.some(link => link.id === id)) throw new Error("link id collision");
-    if (current.links.some(link => link.alias === body.alias && link.direction === "client-initiated")) {
+    // Same atomic duplicate-check+append as the hub-initiated branch.
+    const writeOutcome = withConfigMutationLockSync((): "dup" | "written" => {
+      const current = readStoreFor(ctx);
+      if (current.links.some(link => link.id === id)) throw new Error("link id collision");
+      if (current.links.some(link => link.alias === body.alias && link.direction === "client-initiated")) return "dup";
+      writeStoreFor(ctx, { ...current, links: [...current.links, record] });
+      return "written";
+    });
+    if (writeOutcome === "dup") {
       const compensation = await compensateNewLink(ctx, state, record);
       return compensation ?? fail("link_exists", "A link for this alias already exists.", 409);
     }
-    writeStoreFor(ctx, { ...current, links: [...current.links, record] });
     await state.listener.ensureStarted();
     if (state.listener.status().state !== "listening") {
       failureCode = "listener_unavailable";
@@ -538,9 +557,12 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
   let next: LinkStore;
   try {
-    const latest = readStoreFor(ctx);
-    next = { ...latest, links: latest.links.filter(link => link.id !== id) };
-    if (next.links.length !== latest.links.length) writeStoreFor(ctx, next);
+    next = withConfigMutationLockSync(() => {
+      const latest = readStoreFor(ctx);
+      const filtered = { ...latest, links: latest.links.filter(link => link.id !== id) };
+      if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
+      return filtered;
+    });
     clearCompensationFailed(id, compensationPath());
   } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
   state.compensationFailures?.delete(id);

@@ -1,6 +1,6 @@
 # 000 — Plan and live manifest
 
-Unit: `devlog/_plan/260908_provider_runtime_stack`. Session `01a080e2-1dfc-7082-bff8-5043215bdd35`.
+Unit: `devlog/_fin/260908_provider_runtime_stack`. Session `01a080e2-1dfc-7082-bff8-5043215bdd35`.
 Snapshot: 2026-09-08T12:00Z (fetch), `origin/dev` = `29bb221c3`
 (`Merge pull request #4021 from lidge-jun/codex/release-248-record`).
 Carry worktree: `/private/tmp/ocx-prs-stack-01a080e2` (linked worktree of the main checkout;

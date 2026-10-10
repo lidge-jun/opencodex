@@ -99,7 +99,7 @@ export function museUsageWindowsToQuota(usage: unknown): ProviderQuota | null {
  *
  * Kept as a thin adapter over the shared mapper: the frame nests the same two windows
  * under `subscription`, the muse-code/key response nests them under `subs_usage`
- * (devlog/_plan/260912_muse_device_oauth/001 C). Two parsers would drift, and the
+ * (devlog/_fin/260912_muse_device_oauth/001 C). Two parsers would drift, and the
  * five-hour-window discrimination above is the part that must not.
  */
 export function parseMuseSubscriptionUsage(payload: unknown): ProviderQuota | null {

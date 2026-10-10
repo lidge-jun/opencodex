@@ -35,7 +35,7 @@ Close the three implementable unimplemented backlog items identified in the
   and live rewrites.
 - devlog/_plan/260912_accounts/080_reauth_api.md and 090_reauth_ui.md —
   accepted Accounts-lane design drafts this unit adopts for L2/L3.
-- devlog/_plan/260912_history_containment/ — refusal contract this unit
+- devlog/_fin/260912_history_containment/ — refusal contract this unit
   must preserve.
 
 ## Constraints (hard)

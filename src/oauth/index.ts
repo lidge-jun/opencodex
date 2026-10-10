@@ -360,7 +360,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
  * Removed provider ids that still name a live successor.
  *
  * `devin-cli` was merged into `devin` (import-first login absorbed the CLI
- * credential import; devlog/_plan/260913_devin_provider_merge). The id can
+ * credential import; devlog/_fin/260913_devin_provider_merge). The id can
  * still arrive here from a saved config row or a stored credential slot that
  * the startup migration has not rekeyed yet, and from a user typing the old
  * name at `ocx login`. It is deliberately NOT an OAUTH_PROVIDERS entry:

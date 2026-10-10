@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../../../src/adapters/google";
 import { isVertexTruncatedTurn, isVertexTruncationReason, vertexTruncationErrorMessage } from "../../../src/adapters/google-truncation";
 import { bridgeToResponsesSSE } from "../../../src/bridge";
+import { guardEmptyCompletionEventStream } from "../../../src/server/responses/empty-completion-guard";
 import type { AdapterEvent, OcxProviderConfig } from "../../../src/types";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 
@@ -50,6 +51,17 @@ describe("vertex parseStream fail-closed truncation", () => {
     const last = events[events.length - 1];
     expect(last.type).toBe("error");
     expect(events.some(e => e.type === "done")).toBe(false);
+    // A started call may already be in the client's hands, so this is never replayed.
+    expect(last).not.toHaveProperty("replaySafeBeforeOutput");
+  });
+
+  test("a truncation after a started tool call is never marked replay-safe", async () => {
+    const events = await collect(vertexProvider, [
+      { candidates: [{ content: { parts: [{ functionCall: { name: "get_x", args: {} } }] }, finishReason: "MALFORMED_FUNCTION_CALL" }] },
+    ]);
+    const last = events[events.length - 1];
+    expect(last.type).toBe("error");
+    expect(last).not.toHaveProperty("replaySafeBeforeOutput");
   });
 
   test("clean STOP stream yields done with reported usage", async () => {
@@ -94,6 +106,21 @@ describe("vertex parseStream fail-closed truncation", () => {
     const last = events[events.length - 1];
     expect(last.type).toBe("error");
     expect(events.some(e => e.type === "done")).toBe(false);
+    // #6876: nothing actionable was emitted, so the opt-in empty-completion guard may replay it.
+    expect(last).toMatchObject({ type: "error", replaySafeBeforeOutput: true, usage: { inputTokens: 5, outputTokens: 0 } });
+  });
+
+  test("the guard replays a real pre-output malformed turn and meters both attempts", async () => {
+    const first = createGoogleAdapter(vertexProvider).parseStream(sseResponse([
+      { candidates: [{ finishReason: "MALFORMED_FUNCTION_CALL" }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 0 } },
+    ]));
+    const retry = createGoogleAdapter(vertexProvider).parseStream(sseResponse([
+      { candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1 } },
+    ]));
+    const events: AdapterEvent[] = [];
+    for await (const event of guardEmptyCompletionEventStream({ firstEvents: first, continuation: () => retry })) events.push(event);
+    expect(events.some(e => e.type === "error")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "done", usage: { inputTokens: 10, outputTokens: 1 } });
   });
 
   test("usage-only final chunk (no candidates) is not dropped", async () => {
@@ -123,6 +150,7 @@ describe("vertex parseResponse fail-closed truncation (non-streaming)", () => {
     const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
     expect(events[events.length - 1].type).toBe("error");
     expect(events.some(e => e.type === "done")).toBe(false);
+    expect(events[events.length - 1]).toMatchObject({ replaySafeBeforeOutput: true, usage: { inputTokens: 5, outputTokens: 0 } });
   });
 
   test("clean STOP non-stream response yields done", async () => {

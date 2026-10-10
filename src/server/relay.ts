@@ -6,13 +6,14 @@ import {
   isCyberPolicyCode,
   isCyberPolicyMessage,
   isTerminalRefusalCode,
+  recognizedUpstreamError,
   safetyRefusalCodeFromMessage,
   terminalRefusalFallbackMessage,
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
-import { carryReplayRefusal } from "../lib/upstream-retry";
+import { carryReplayRefusal, isReplayRefusalResponse } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
 import {
   addRequestLog,
@@ -168,25 +169,28 @@ export function failedTailFrame(encoder: TextEncoder, err: unknown, maskCredenti
  * classifies this terminal by `error.code` alone and retries everything outside
  * its fatal set (codex-rs/codex-api/src/sse/responses.rs:423-450), so stamping
  * `upstream_server_error` on a refusal delivered it as a retryable disconnect
- * and drove the reconnect loop in #5176. Without a refusal code the terminal is
- * unchanged: a genuine transport failure stays retryable, which is what it is.
+ * and drove the reconnect loop in #5176. Without a refusal code the terminal
+ * carries only recognized rate-limit/overload classes; unknown codes stay generic.
  */
 export function upstreamErrorTailFrame(
   encoder: TextEncoder,
   message: string,
   refusalCode?: string,
   maskCredential?: (text: string) => string,
+  errorType?: string,
+  errorCode?: string,
 ): Uint8Array {
   return encoder.encode(
-    `event: response.failed\ndata: ${upstreamErrorFailedPayload(message, refusalCode, maskCredential)}\n\n`,
+    `event: response.failed\ndata: ${upstreamErrorFailedPayload(message, refusalCode, maskCredential, errorType, errorCode)}\n\n`,
   );
 }
 
-function upstreamErrorFailedPayload(message: string, refusalCode?: string, maskCredential?: (text: string) => string): string {
+function upstreamErrorFailedPayload(message: string, refusalCode?: string, maskCredential?: (text: string) => string, errorType?: string, errorCode?: string): string {
   const diagnostic = redactSecretString(message);
+  const recognized = recognizedUpstreamError({ type: errorType, code: errorCode });
   const error = {
-    type: refusalCode === undefined ? "upstream_error" : "invalid_request_error",
-    code: refusalCode === undefined ? "upstream_server_error" : (maskCredential?.(refusalCode) ?? refusalCode),
+    type: refusalCode === undefined ? (recognized?.type ?? "upstream_error") : "invalid_request_error",
+    code: refusalCode === undefined ? (recognized?.code ?? "upstream_server_error") : (maskCredential?.(refusalCode) ?? refusalCode),
     message: (maskCredential?.(diagnostic) ?? diagnostic).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   return JSON.stringify({
@@ -549,6 +553,8 @@ export function relaySseWithFailedTail(
                   upstreamError,
                   terminalBoundary.upstreamRefusalCode(),
                   opts?.maskCredential,
+                  terminalBoundary.upstreamErrorType(),
+                  terminalBoundary.upstreamErrorCode(),
                 ));
               controller.enqueue(doneFrame(encoder));
             }
@@ -898,6 +904,11 @@ export function responseWithDeferredRequestLog(
   logCtx: RequestLogContext,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): Response {
+  // A synthetic 429 is a transport verdict, not evidence that the provider declined the turn.
+  if (isReplayRefusalResponse(response)) {
+    logCtx.causeHint = "transport-ambiguous";
+    logCtx.terminalSource = "synthetic";
+  }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (isUsageDebugEnabled() && !logCtx.usageDebugContentType && contentType) {
     logCtx.usageDebugContentType = contentType;

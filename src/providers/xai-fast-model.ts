@@ -7,7 +7,7 @@ import type { FastWire, OcxParsedRequest, OcxProviderConfig, TierDecision } from
  * on two lanes (same effort ladder, image input, 500k limit and advertised defaults). Measured live on
  * 2026-09-30: build-fast is 1.5-1.7x faster end to end, while `service_tier: "priority"` on grok-4.7 bought
  * no measurable speed and cost ~5.9x the ticks per output token (build-fast costs ~2x).
- * Evidence: devlog/_plan/260930_grok47_build_unify/010_probe-evidence.md.
+ * Evidence: devlog/_fin/260930_grok47_build_unify/010_probe-evidence.md.
  *
  * So on the OAuth lane only, a Fast grok-4.7 request is SERIALIZED as the build-fast id and sends no tier.
  * The logical id stays grok-4.7 everywhere else (parsed.modelId, route, policy, usage attempt), so effort,

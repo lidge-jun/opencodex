@@ -648,3 +648,55 @@ describe("link management routes", () => {
     expect(h.events.indexOf("reload")).toBeLessThan(h.events.findIndex(event => event === "connect"));
   });
 });
+
+/**
+ * The link store's read-modify-write runs under the shared config mutation lock:
+ * while another process holds it the DELETE must fail fast and keep the record.
+ */
+test("remove refuses while a cross-process holder owns the config mutation lock", async () => {
+  temp = mkdtempSync(join(tmpdir(), "ocx-link-lock-"));
+  const previousHome = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = temp;
+  const { pathToFileURL } = await import("node:url");
+  const { repoPath, repoRoot } = await import("../helpers/repo-root");
+  const { watchdogMs } = await import("../helpers/ci-watchdog");
+  const readyPath = join(temp, "holder-ready");
+  const releasePath = join(temp, "holder-release");
+  const configModuleUrl = pathToFileURL(repoPath("src/config.ts")).href;
+  const childSource = `
+    import { existsSync, writeFileSync } from "node:fs";
+    import { withConfigMutationLockSync } from ${JSON.stringify(configModuleUrl)};
+    withConfigMutationLockSync(() => {
+      writeFileSync(${JSON.stringify(readyPath)}, "ready");
+      while (!existsSync(${JSON.stringify(releasePath)})) Bun.sleepSync(10);
+    });
+  `;
+  const child = Bun.spawn([process.execPath, "-e", childSource], {
+    cwd: repoRoot(),
+    env: { ...process.env, OPENCODEX_HOME: temp },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  try {
+    const deadline = performance.now() + watchdogMs(5_000);
+    while (!existsSync(readyPath) && performance.now() < deadline) await Bun.sleep(10);
+    expect(existsSync(readyPath)).toBe(true);
+    const h = harness();
+    const existing = { id: "lnk_0123456789abcdef", alias: "home", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" };
+    h.deps.writeLinkStore!({ ...h.store, links: [existing] });
+    const runner: SshRunner = {
+      async run() { return { code: 0, stdout: "", stderr: "" }; },
+      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
+    };
+    const response = await call("/api/link/lnk_0123456789abcdef", "DELETE", {}, { ...h.deps, sshRunner: runner }, "admin-token", true, null, true, h.config);
+    expect(response?.status).toBe(503);
+    expect(await response!.json()).toMatchObject({ error: { code: "link_remove_failed" } });
+    expect(h.store.links).toHaveLength(1);
+  } finally {
+    writeFileSync(releasePath, "release");
+    await child.exited.catch(() => {});
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+  }
+});

@@ -16,7 +16,7 @@ The work under test, all squash-merged on `dev` by 2026-10-09:
 | #6816 | b89bbfb083 | Desktop owns the `ocx` terminal command on PATH (`desktop/src-tauri/src/cli_command*.rs`) |
 | #6818 | 3618baac41 | package launchers hand off to the Desktop `ocx`; `status`/`doctor` report PATH selection |
 
-The macOS proof is recorded in `devlog/_plan/261009_desktop_owned_path_cli/049_outcome.md`. That note leaves four
+The macOS proof is recorded in `devlog/_fin/261009_desktop_owned_path_cli/049_outcome.md`. That note leaves four
 items to release QA: packaged click-through of the CLI page, fish on a real login, the Linux deb path, and Windows
 terminal pickup after a real registry write. It also records that #6818 deliberately does not hand off on Windows
 and that `desktop-supervision.mjs` returns `unsupported` on `win32`, so the #6802/#6809 authority and guards are

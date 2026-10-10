@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeInterceptCaCertPath, claudeInterceptStateDir, ensureLocalInterceptCa } from "../../src/claude/intercept/local-ca";
 import { setLocalCaFileHooksForTests } from "../../src/claude/intercept/local-ca-files";
+import { hardenSecretDir } from "../../src/lib/windows-secret-acl";
 
 const roots: string[] = [];
 function fixture(): string {
@@ -87,6 +88,7 @@ test("local CA ignores predictable predecessor temp names and leaves external fi
   const root = fixture();
   const dir = claudeInterceptStateDir(root);
   mkdirSync(dir, { mode: 0o700 });
+  hardenSecretDir(dir, { required: true });
   const oldTemp = join(dir, `ca.key.${process.pid}.tmp`);
   writeFileSync(oldTemp, "reserved predecessor", { mode: 0o600 });
   const ca = ensureLocalInterceptCa(root);

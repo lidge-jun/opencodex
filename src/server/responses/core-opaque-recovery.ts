@@ -465,13 +465,13 @@ export function resetStreamedOpaqueBlobLogContext(logCtx: RequestLogContext): vo
 export type OpaqueBlobRecoveryGuard = { attempted: boolean };
 
 
-export type OpaqueBlobRecoveryResult =
+export type OpaqueBlobRecoveryResult<Failure = Response> =
   | { kind: "skipped" }
   | { kind: "recovered"; response: Response }
-  | { kind: "failed"; response: Response };
+  | { kind: "failed"; response: Failure };
 
 
-export async function attemptOpaqueBlobRecovery(
+export async function attemptOpaqueBlobRecovery<Failure = Response>(
   args: {
     response: Response;
     outboundBody?: string;
@@ -480,8 +480,8 @@ export async function attemptOpaqueBlobRecovery(
     guard: OpaqueBlobRecoveryGuard;
     signal: AbortSignal;
   },
-  rebuild: (kind: AttemptRecoveryKind) => Promise<Response | { failed: Response }>,
-): Promise<OpaqueBlobRecoveryResult> {
+  rebuild: (kind: AttemptRecoveryKind) => Promise<Response | { failed: Failure }>,
+): Promise<OpaqueBlobRecoveryResult<Failure>> {
   const errorBody = await opaqueBlobRejectionBodyForRecovery(
     args.response,
     args.outboundBody,

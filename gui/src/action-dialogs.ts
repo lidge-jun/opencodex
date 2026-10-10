@@ -9,7 +9,7 @@
  * and every result report written against those three was silently declined or silently
  * swallowed while the same dashboard worked in a browser, which is why the failure read as
  * "the app is broken" rather than "the dashboard is broken".
- * See devlog/_plan/260921_app_runtime_ownership/050_webview_dialogs.md.
+ * See devlog/_fin/260921_app_runtime_ownership/050_webview_dialogs.md.
  *
  * These helpers keep the call-site shape the platform dialogs had — ask, await an answer,
  * act on it — so the surrounding control flow survives the replacement unchanged, above

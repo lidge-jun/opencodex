@@ -11,8 +11,25 @@ A shared-quota Anthropic 429 or classified pre-output account 403 records the se
 
 The Anthropic helper sends share the same routing authority: `getAnthropicSidecarAccessToken` resolves the vision-describe and web-search sidecars' helper model through the same first-match route decision, so a routed send authenticates as the route's own account rather than whatever pool account happens to be active. A strict route with no eligible account fails the helper locally instead of silently falling back to the active outsider, matching the primary-traffic contract; callers without a pool config keep the plain stored-credential path.
 
-GitHub Copilot `modelContextTiers` is selected per upstream model. The Chat and Responses adapters set `contextTier` only when the canonical routed provider is `github-copilot`
-and a tier is configured. Otherwise passthrough retains caller-supplied values. The server carries provider identity
+## GitHub Copilot Auto selection
+
+`src/providers/github-copilot-transport.ts` retains the credential-specific destination and headers. Automatic selection requires a nonempty catalog whose every valid row explicitly has `model_picker_enabled: false`; missing or malformed permissions retain named routes. Named picker projection removes only explicitly false rows.
+Auto-only discovery supplies `github-copilot/auto` without deleting saved manual preferences; ordinary catalog allowlists, pending/disabled state and new-model policy still govern visibility. There is no provider mode setting or literal-model override of permission evidence.
+Before adapter construction, Auto creates a session and resolves intent against the captured credential and API origin.
+The selected model determines Chat versus Responses wire; session tokens remain request-local, unsaved, and isolated across accounts and origins.
+Negotiation uses local defensive budgets, not GitHub service limits: 512 catalog/pool/candidate entries, 256 UTF-16 units per identifier, 1 MiB per success body and eight seconds per call including pacing, fetch and body read.
+Only the latest user text is sent to intent routing, capped at 32,768 UTF-16 units; inference retains its full input. Header tokens accept at most 32,768 printable ASCII characters. Catalog caching is credential/origin-bound, at most 32 entries and 60 seconds; request-local sessions expire at the earlier server expiry or 60 seconds, with at least one second remaining at negotiation.
+Credential-changing retries repeat selection; Chat inference-401 refresh renegotiates with the refreshed credential before rebuilding the selected adapter and session.
+Same-account inference-401 refresh or pre-output OAuth-429 account rotation can move native Copilot Responses to the known `openai-chat` adapter; only that Copilot adapter receives the handoff.
+The old refusal body is cancelled and its controller unlinked/aborted; native execution releases its host lease before handing off.
+Core continues the existing adapter/sidecar/delivery pipeline with the same admission, translator, request state and send budget, invalidating the old request without recursive route or admission setup.
+A reserved 429 hop transfers with the request: Chat releases its provisional permit and rebooks an externally counted dispatch at the actual URL/model; the send reporter settles used permits and finally paths refund unused permits, including early sidecar/build exits.
+The inference-401 guard survives handoff, preventing another refresh from either the Chat replay or its negotiation; initial negotiation retains its independently bounded 401 recovery.
+Key-pool replacement, native OAuth-refresh and 429-replacement negotiation share safe refusal projection: cancellation takes precedence as 499; typed 401/403/429 retain their status and validated Retry-After.
+Contained failures unlink/abort upstream work, release host/probe leases and refund untransferred hops; other negotiation failures use fixed 502 text without exposing session credentials or refusal bodies.
+The sidecar rotation hook contains failed replacement negotiation and retains its original upstream refusal, matching the existing OAuth sidecar recovery boundary.
+
+GitHub Copilot `modelContextTiers` is selected per upstream model. The Chat and Responses adapters set `contextTier` only when the canonical routed provider is `github-copilot` and a tier is configured. Otherwise passthrough retains caller-supplied values. The server carries provider identity
 through initial builds, retries, continuations, and sidecar builds.
 
 The coding-agent stream parser buffers each tool-use block by its content-block index
@@ -118,23 +135,15 @@ wire type for a known field or a varint longer than ten bytes, keep last-good; a
 with nothing measurable is authoritative-empty. Only Devin's credential host extends its quota
 cache identity; generic OAuth pause still suppresses per-account probes.
 
-Kiro AWS SSO token refresh in `src/oauth/kiro.ts` retains HTTP 400 `invalid_request` as
-refresh-attention evidence separate from terminal grant errors. Matching rotated CLI credentials
-are tried before the failure reaches `src/oauth/index.ts`. `src/oauth/store.ts` persists the
-failed credential generation under its mutation lock, respecting replacement, config reconciliation,
-and operator pause. Once that generation's access token expires, account summaries project
-`needsReauth: true` and the active login projects `loggedIn: false`. `src/oauth/health.ts` uses
-the same generation/expiry predicate with its supplied observation time, so account-list health
-and CLI diagnostics project `reauth_required` with `refresh_failed`; `ocx doctor` warns with a
-login action. The internal terminal flag
-stays clear so a later refresh remains eligible; successful refresh or credential replacement
-clears the evidence. Desktop input errors, network failures, and 5xx responses create no evidence.
-No upstream description or credential metadata enters the status response.
+Kiro AWS SSO token refresh in `src/oauth/kiro.ts` retains HTTP 400 `invalid_request` as refresh-attention evidence separate from terminal grant errors. Matching rotated CLI credentials
+are tried before the failure reaches `src/oauth/index.ts`. `src/oauth/store.ts` persists the failed credential generation under its mutation lock, respecting replacement, config reconciliation,
+and operator pause. Once that generation's access token expires, account summaries project `needsReauth: true` and the active login projects `loggedIn: false`. `src/oauth/health.ts` uses
+the same generation/expiry predicate with its supplied observation time, so account-list health and CLI diagnostics project `reauth_required` with `refresh_failed`; `ocx doctor` warns with a
+login action. The internal terminal flag stays clear so a later refresh remains eligible; successful refresh or credential replacement
+clears the evidence. Desktop input errors, network failures, and 5xx responses create no evidence. No upstream description or credential metadata enters the status response.
 
-Kiro's account quota cache persists quota and an optional exhaustion verdict under one
-opaque account key and a non-secret login identity. Hydration admits only matching live
-accounts and bounds quota and verdict independently by reset and ten-minute TTL; a failed
-probe keeps the same-login last-good display bar. The protected OAuth store rotates
+Kiro's account quota cache persists quota and an optional exhaustion verdict under one opaque account key and a non-secret login identity. Hydration admits only matching live
+accounts and bounds quota and verdict independently by reset and ten-minute TTL; a failed probe keeps the same-login last-good display bar. The protected OAuth store rotates
 `ProviderAccount.loginId` on every explicit login, preserves it across credential refresh,
 and uses `addedAt` for legacy rows without one.
 
@@ -498,20 +507,16 @@ One search makes at most three physical sends in total: connection-reset recover
 OpenAI helpers recheck the resolved [stored-account credit policy](codex-account-controls.md#stored-account-authentication-policy) immediately before every physical send, including those retries. An unchanged caller-owned Direct credential is not governed by stored-pool consent.
 A leg whose
 upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes
-any cell it opened rather than leaving it in progress. Assistant text is not treated as a search
-instruction.
+any cell it opened rather than leaving it in progress. Assistant text is not treated as a search instruction.
 
 `src/web-search/passthrough-bridge.ts` withholds at most 8,388,608 UTF-16 code units of
 SSE data payloads per leg; this is not a byte or total-heap measurement. A companion cap of
 65,536 events is derived from that budget at a realistic 128-code-unit serialized delta, so it
 only bounds per-event object overhead the character budget cannot see rather than refusing a
-large client-executed tool call streamed as fine-grained argument deltas. The first over-budget
-event fails the leg before releasing any held tool call, and reports that refusal as the
-bridge's own bound rather than as an upstream read failure.
-Read failures and exhausted continuation budgets use the same cleanup: discard held calls and
+large client-executed tool call streamed as fine-grained argument deltas. The first over-budget event fails the leg before releasing any held tool call, and reports that refusal as the
+bridge's own bound rather than as an upstream read failure. Read failures and exhausted continuation budgets use the same cleanup: discard held calls and
 close every search cell opened by the current leg as failed before one failed terminal and DONE.
-Successful release serializes held events lazily rather than building another full frame array;
-release, discard, and the next leg reset the held payload counter and identity sets.
+Successful release serializes held events lazily rather than building another full frame array; release, discard, and the next leg reset the held payload counter and identity sets.
 `tests/web-search/web-search-progress-stream.test.ts` covers both bounds, identity-only deltas,
 upstream cancellation, cell closure, the exact event boundary, and mixed terminal controls.
 
@@ -525,8 +530,7 @@ than a vendor-specific override. This is a model and settings rule, not a creden
 backend's credential locator, so no key crosses backends. `reasoning` and `xSearch` are not gated —
 `reasoning` is a generic effort level and `xSearch` is xai-only with no per-backend default and no
 `webSearchBridge` equivalent. `resolveSidecarBackend` lives in `src/web-search/sidecar-providers.ts`
-rather than the `src/web-search/index.ts` barrel so the bridge can answer this question without a
-value import of the barrel; the barrel re-exports it.
+rather than the `src/web-search/index.ts` barrel so the bridge can answer this question without a value import of the barrel; the barrel re-exports it.
 `tests/web-search/web-search-passthrough-bridge.test.ts` covers the mismatch and matching cases for
 anthropic, xai, and gemini, plus the unset-backend default.
 
@@ -540,14 +544,11 @@ keeps a self-hosted Ollama on `127.0.0.1` working. Both checks are synchronous a
 resolve no DNS, so a hostname that resolves into metadata or private space is a disclosed residual
 rather than a blocked case. That residual is strictly larger than `baseUrl`'s: `baseUrl` also runs
 the async `providerDestinationResolvedError` at management write, which the endpoint does not, and
-parity there would still leave the hand-edited-file path uncovered because the plan-time boundary is
-synchronous. The plan-time check is the
-authorization boundary rather than a second opinion: a hand-edited config file, `ocx config set`,
-and `ocx config import` all reach `configSchema` only and never call
+parity there would still leave the hand-edited-file path uncovered because the plan-time boundary is synchronous. The plan-time check is the
+authorization boundary rather than a second opinion: a hand-edited config file, `ocx config set`, and `ocx config import` all reach `configSchema` only and never call
 `providerWebSearchBridgeConfigError`, and `resolveOllamaWebSearchEndpoint` is the only reader of
 this field in the tree, so a value that survives file load still cannot be spent. It refuses
-silently by design; config-time is where the operator is told why. The planner requires the
-provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
+silently by design; config-time is where the operator is told why. The planner requires the provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
 
 ## Meta Responses tool selection
 
@@ -556,10 +557,8 @@ uses `src/adapters/openai-responses/muse-tool-choice.ts` to normalize `tool_choi
 `auto` selection keeps its meaning. Explicit `none` sets `tools` to an empty list, removes
 `additional_tools` items from `input`, and omits `tool_choice` and `parallel_tool_calls` from the
 outgoing body. Forced, named, and `allowed_tools` selections fail with HTTP 400 before the
-upstream send because Muse supports only `auto`. Filtering a required tool never changes the
-caller's obligation into `none` or `auto`. This rule applies only to the Meta Responses
-destination. The input body, historical tool calls and results, and non-Meta requests keep their
-existing meaning.
+upstream send because Muse supports only `auto`. Filtering a required tool never changes the caller's obligation into `none` or `auto`. This rule applies only to the Meta Responses
+destination. The input body, historical tool calls and results, and non-Meta requests keep their existing meaning.
 
 ## Shared type declarations
 
@@ -574,8 +573,7 @@ config load, management writes and fetch, so no boundary accepts a value another
 
 `src/types/config.ts` declares the optional per-phase `memoryModels` setting;
 `src/types/request.ts` carries the selected phase through combo handoffs without changing the
-public request model. [Memory phase routing](transports/responses-failover.md#memory-phase-routing)
-owns the selection rule.
+public request model. [Memory phase routing](transports/responses-failover.md#memory-phase-routing) owns the selection rule.
 
 Preflight heartbeat retention keeps `replayUnsafe` sticky in the replayed tail, so a second preflight cannot forget earlier side effects after the original marker is evicted.
 

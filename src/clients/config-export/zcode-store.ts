@@ -1,6 +1,6 @@
 // ZCode personal provider store export.
 import type { ExportContext, ManagedContribution, ManagedFragment } from "./contracts";
-import { authoritativeContextWindow, inputModalitiesForClient, normalizeExportModels } from "./model-metadata";
+import { authoritativeContextWindow, inputModalitiesForClient, normalizeExportModels, zcodeSelectableEfforts } from "./model-metadata";
 import { OPENCODE_PROVIDER_ID, LOOPBACK_API_KEY_PLACEHOLDER } from "./constants";
 import { formatSelectorConjunction } from "../../integrations/merge";
 
@@ -49,10 +49,30 @@ export interface ZcodeStoreProviderRule {
   };
 }
 
+/**
+ * One model rule, as the client's own store loader accepts it.
+ *
+ * The capability fields are the client's schema, not ours: ZCode 3.14's CLI
+ * bundle parses each `providerModelRules` entry with a strict object whose
+ * `config.properties` admits `inputFormat.{supportsText..supportsPdf}` (booleans)
+ * and whose `config.optionSpecs` admits `reasoningLevel.values` (non-empty,
+ * deduplicated) plus an optional compiled `map`. With no `map`, the chosen level
+ * is validated against `values` and forwarded verbatim to the wire field the
+ * `openai-responses` api type uses — `reasoning.effort`, which is exactly the
+ * Codex vocabulary our ladder already carries, so no mapping is emitted.
+ */
 export interface ZcodeStoreModelRule {
   providerId: string;
   modelId: string;
-  config: { properties: { contextWindow: number } };
+  config: {
+    properties: {
+      contextWindow?: number;
+      inputFormat?: { supportsImage: true };
+    };
+    optionSpecs?: {
+      reasoningLevel: { values: string[] };
+    };
+  };
 }
 
 /**
@@ -77,7 +97,7 @@ export function zcodeStoreSchemaEstablished(parsed: unknown): boolean {
  * carrying only the model would match another provider's rule for the same
  * model. The conjunction grammar reserves `,` and `]`, and a model id holding
  * either cannot be addressed unambiguously — that row ships without its
- * context window rather than with a selector that points somewhere else.
+ * model rule rather than with a selector that points somewhere else.
  */
 function modelRuleSelector(modelId: string): string | null {
   return formatSelectorConjunction([
@@ -128,12 +148,18 @@ export function buildZcodeStoreProviderRule(ctx: ExportContext): ZcodeStoreProvi
 
 /**
  * Everything this project owns inside the store: one provider rule, plus one
- * model rule per row that has an authoritative context window.
+ * model rule per row that has anything authoritative to assert.
  *
- * A row without one ships no model rule at all, which is the same
- * authoritative-window rule the legacy block follows — an emitted stand-in
- * would be a guessed capability. Reasoning ladders have no counterpart here
- * that this project has observed the client produce, so none is written.
+ * A model rule now exists when the row has any of: an authoritative context
+ * window, image input, or a selectable effort ladder. A row with none of the
+ * three ships no rule at all, which is the same no-guessed-capability rule the
+ * legacy block follows. Image input is asserted only when the catalog declares
+ * it — `supportsImage: true` is what gates the client's attachment UI, and a
+ * text-only row keeps the client's own defaults rather than being pinned to
+ * `false`. `reasoningLevel.values` carries the same ladder (minus the `none`
+ * sentinel) the legacy block's `reasoning.variants` carries, so both surfaces
+ * offer the picker the catalog declared instead of the store silently losing
+ * reasoning and vision the way #5348 lost the provider itself.
  */
 export function buildZcodeStoreContribution(ctx: ExportContext): ManagedContribution {
   const fragments: ManagedFragment[] = [{
@@ -141,15 +167,24 @@ export function buildZcodeStoreContribution(ctx: ExportContext): ManagedContribu
     value: buildZcodeStoreProviderRule(ctx),
   }];
   for (const model of normalizeExportModels(ctx.models)) {
-    if (inputModalitiesForClient("pi", model.inputModalities) === null) continue;
+    const input = inputModalitiesForClient("pi", model.inputModalities);
+    if (input === null) continue;
     const contextWindow = authoritativeContextWindow(model.contextWindow);
-    if (contextWindow === undefined) continue;
+    const supportsImage = input.includes("image");
+    const efforts = zcodeSelectableEfforts(model.reasoningEfforts);
+    if (contextWindow === undefined && !supportsImage && efforts === undefined) continue;
     const selector = modelRuleSelector(model.namespaced);
     if (selector === null) continue;
     const rule: ZcodeStoreModelRule = {
       providerId: OPENCODE_PROVIDER_ID,
       modelId: model.namespaced,
-      config: { properties: { contextWindow } },
+      config: {
+        properties: {
+          ...(contextWindow !== undefined ? { contextWindow } : {}),
+          ...(supportsImage ? { inputFormat: { supportsImage: true } } : {}),
+        },
+        ...(efforts !== undefined ? { optionSpecs: { reasoningLevel: { values: efforts } } } : {}),
+      },
     };
     fragments.push({ path: [...ZCODE_STORE_MODEL_RULES_PATH, selector], value: rule });
   }

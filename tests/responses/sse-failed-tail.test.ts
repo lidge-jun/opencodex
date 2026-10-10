@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { inspectResponseLogJson, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
-import { MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
+import { consumeForInspection, createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
+import { classifyCodexUpstreamOutcome } from "../../src/codex/routing/cooldown-math";
+import { codexWsUpstreamFetch, streamingInit } from "../helpers/ws-upstream-fixtures";
 import { TERMINAL_REFUSAL_FALLBACK_MESSAGE } from "../../src/lib/errors";
 import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import { createOutboundCredentialMask } from "../../src/server/responses/terminal-error-redaction";
@@ -711,4 +714,122 @@ describe("upstream refusal terminal mapping (#5176)", () => {
       expect(out).not.toContain('"code":"upstream_reset"');
     },
   );
+});
+
+
+describe("bare upstream rate-limit/overload EOF diagnostics (#6740)", () => {
+  const cases = [
+    ["server_error", "server_is_overloaded", "server_error", "server_is_overloaded", 503],
+    ["overloaded_error", "overloaded_error", "overloaded_error", "overloaded_error", 503],
+    ["rate_limit_error", "rate_limit_exceeded", "rate_limit_error", "rate_limit_exceeded", 429],
+    ["rate_limit_error", "rate_limit_error", "rate_limit_error", "rate_limit_error", 429],
+    ["overloaded_error", undefined, "overloaded_error", "server_is_overloaded", 503],
+    ["rate_limit_error", undefined, "rate_limit_error", "rate_limit_exceeded", 429],
+    ["server_error", "server_error", "upstream_error", "upstream_server_error", 502],
+    ["rate_limit_error", "unknown_code", "upstream_error", "upstream_server_error", 502],
+    ["server_error", undefined, "upstream_error", "upstream_server_error", 502],
+  ] as const;
+  for (const mode of ["tee", "eager"] as const) {
+    test.each(cases)(`${mode} preserves only recognized class %s / %s`, async (type, code, expectedType, expectedCode, status) => {
+      const message = "upstream diagnostic fixture";
+      const bare = `event: error\ndata: ${JSON.stringify({ type: "error", error: { type, code, message } })}\n\n`;
+      const src = sourceStream([bare.slice(0, 15), bare.slice(15)]);
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const out = await drain(mode === "tee"
+        ? relaySseWithFailedTail(src, new AbortController())
+        : relaySseEagerBounded(src, new AbortController(), parityHooks));
+      const payload = out.split("event: response.failed\ndata: ")[1]!.split("\n")[0]!;
+      const terminal = JSON.parse(payload).response;
+      expect(terminal.error).toEqual({ type: expectedType, code: expectedCode, message });
+      expect(terminal.last_error).toEqual(terminal.error);
+      expect(terminalEvents(out)).toEqual(["response.failed"]);
+      expect(doneEvents(out)).toHaveLength(1);
+      expect(out).not.toContain('"retryable":false');
+      inspectResponseLogJson(log, payload);
+      expect(log.terminalHttpStatus).toBe(status);
+    });
+  }
+});
+
+
+describe("genuine relay terminals supersede provisional bare errors", () => {
+  for (const mode of ["tee", "eager"] as const) {
+    test.each([
+      ["rate_limit_error", "rate_limit_exceeded", "server_error", "server_is_overloaded", 503, "transient"],
+      ["server_error", "server_is_overloaded", "invalid_request_error", "invalid_prompt", 400, "caller"],
+    ] as const)(`${mode} reports the genuine terminal to the pool classifier after %s`, async (bareType, bareCode, type, code, status, healthClass) => {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const outcomes: number[] = [];
+      const onTerminal = () => outcomes.push(log.terminalHttpStatus ?? 502);
+      const src = sourceStream([
+        `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: bareType, code: bareCode, message: "bare diagnostic" } })}\n\n`,
+        `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { status: "failed", error: { type, code, message: "genuine terminal" } } })}\n\n`,
+      ]);
+      let relayed: ReadableStream<Uint8Array>;
+      let inspectionDone: Promise<void> = Promise.resolve();
+      if (mode === "tee") {
+        const [client, inspection] = src.tee();
+        inspectionDone = new Promise(resolve => consumeForInspection(inspection, onTerminal, undefined, resolve, log));
+        relayed = relaySseWithFailedTail(client, new AbortController());
+      } else {
+        const inspector = createSseInspector({ logCtx: log, onTerminal });
+        relayed = relaySseEagerBounded(src, new AbortController(), { ...parityHooks,
+          inspectChunk: chunk => inspector.feed(chunk), finishInspection: () => inspector.finish(),
+          sawTerminal: () => inspector.reported(),
+        });
+      }
+      const text = await drain(relayed);
+      await inspectionDone;
+      expect(outcomes).toEqual([status]);
+      expect(classifyCodexUpstreamOutcome(outcomes[0]!)).toBe(healthClass);
+      expect(log.terminalHttpStatus).toBe(status);
+      expect(terminalEvents(text)).toEqual(["response.failed"]);
+      expect(doneEvents(text)).toHaveLength(1);
+    });
+  }
+});
+
+describe("Codex WebSocket bare-error diagnostics never dispatch a second request", () => {
+  for (const mode of ["tee", "eager"] as const) {
+    test.each([
+      ["rate_limit_error", "rate_limit_exceeded"],
+      ["server_error", "server_is_overloaded"],
+      ["server_error", "server_error"],
+    ] as const)(`${mode} retains one response.create after %s / %s`, async (type, code) => {
+      const originalWebSocket = globalThis.WebSocket;
+      let httpDispatches = 0;
+      const sockets: DiagnosticWebSocket[] = [];
+      class DiagnosticWebSocket extends EventTarget {
+        sent: string[] = [];
+        readyState = 0;
+        constructor() {
+          super();
+          sockets.push(this);
+          queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event("open")); });
+        }
+        send(frame: string) {
+          this.sent.push(frame);
+          queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+            type: "error", error: { type, code, message: "upstream diagnostic fixture" },
+          }) })));
+        }
+        close() { this.readyState = 3; }
+      }
+      globalThis.WebSocket = DiagnosticWebSocket as unknown as typeof WebSocket;
+      try {
+        const response = await codexWsUpstreamFetch("https://chatgpt.com/backend-api/codex/responses", streamingInit(),
+          (async () => { httpDispatches++; throw new Error("post-send HTTP replay is forbidden"); }) as typeof fetch);
+        const body = response.body!;
+        const text = await drain(mode === "tee" ? relaySseWithFailedTail(body, new AbortController())
+          : relaySseEagerBounded(body, new AbortController(), parityHooks));
+        await Promise.resolve();
+        expect(sockets).toHaveLength(1);
+        expect(sockets[0]!.sent).toHaveLength(1);
+        expect(JSON.parse(sockets[0]!.sent[0]!).type).toBe("response.create");
+        expect(httpDispatches).toBe(0);
+        expect(terminalEvents(text)).toEqual(["response.failed"]);
+        expect(doneEvents(text)).toHaveLength(1);
+      } finally { globalThis.WebSocket = originalWebSocket; }
+    });
+  }
 });

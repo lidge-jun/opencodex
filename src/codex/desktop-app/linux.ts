@@ -1,7 +1,7 @@
 /**
  * Linux adapter for the Codex desktop-app restart.
  *
- * Measured shape (devlog/_plan/260913_cross_platform_desktop_app_restart/001_platform_topology.md):
+ * Measured shape (devlog/_fin/260913_cross_platform_desktop_app_restart/001_platform_topology.md):
  *
  *   /usr/bin/chatgpt -> /usr/lib/chatgpt/codex-launcher  (2-line sh script)
  *   that execs /usr/lib/chatgpt/ChatGPT

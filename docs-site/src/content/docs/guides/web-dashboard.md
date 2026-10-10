@@ -143,6 +143,11 @@ timer. Requests already sent upstream retain their original credentials.
 
 ### Filtering request logs
 
+A proxy replay refusal keeps HTTP 429 and error code `upstream_reset_replay_refused`, but
+its request and attempt failure cause is `transport-ambiguous`, with resend permission
+`refused-ambiguous`: the upstream may already have processed the turn. A genuine provider
+429 remains `rate-limit` with resend permission `permitted`.
+
 Logs filters combine surface, intercepted requests, provider, exact model, status, time,
 speed, and conversation ID over the currently loaded request ring. Provider and model
 choices also include fallback attempts; model matching ignores case and surrounding spaces

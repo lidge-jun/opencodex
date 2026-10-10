@@ -1,7 +1,7 @@
 /**
  * `ocx resolve` — the machine-readable runtime resolution surface for an embedding shell.
  *
- * D5 of devlog/_plan/260921_app_runtime_ownership/: the desktop shell must stop resolving
+ * D5 of devlog/_fin/260921_app_runtime_ownership/: the desktop shell must stop resolving
  * the config home, the port and liveness itself. The tuned probe budgets in
  * src/server/proxy-liveness.ts exist because a shell-side reimplementation answered
  * "nobody listening" twice and started duplicate proxies; this verb exposes that module's

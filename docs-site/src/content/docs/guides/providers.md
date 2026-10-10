@@ -190,7 +190,7 @@ ocx login zed          # Zed native-app callback login (experimental)
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
 ocx login orcarouter-oauth # OrcaRouter browser consent + PKCE
 ocx login devin       # Cognition/Devin: import Devin CLI credential, else Auth0 browser sign-in
-ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
+ocx login github-copilot  # GitHub device flow → Copilot token (Copilot account)
 ocx login codex        # Codex account pool (aliases: chatgpt, openai; needs a running proxy)
 ocx logout <provider>
 ```
@@ -380,6 +380,12 @@ from provider enforcement, rate limits, or account actions.
    wins, and an older refresh result cannot overwrite it.
 
 Terminal refresh failures mark the account as needing reauthentication instead of retrying forever.
+
+For the native main Codex credential in `CODEX_HOME/auth.json`, cancelling a request stops a
+waiting refresh before the token exchange starts. An exchange already started finishes within
+its own 30-second timeout and saves successful access and refresh tokens before reporting the
+request's cancellation. This preserves the rotated refresh token for later requests; a concurrent
+external credential replacement still takes precedence.
 
 **Cooldowns (Codex pool).** Upstream `429` / quota responses set a hard cooldown from
 `Retry-After`, quota `reset` headers (capped), or a short default backoff. Accounts on an explicit
@@ -608,6 +614,8 @@ public `GET /v1/models` and keeps active Chat Completions models (plus the Respo
 Create a key in the [OpenGateway dashboard](https://opengateway.ai/api-keys), then run
 `ocx provider add opengateway` or select **OpenGateway** in the dashboard. Chat requests
 use the configured Bearer key; the public model list does not validate that key.
+On the Responses wire OpenGateway rejects replayed native custom tool calls, so the preset
+lowers Codex custom tools such as code-mode `exec` to function tools before sending them.
 
 **TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
 OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),
@@ -1283,7 +1291,25 @@ device-flow login for a short-lived Copilot API token — not a pasted API key. 
 a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI
 Gateway** needs your account + gateway ids filled into the URL.
 
-Copilot fronts a mixed-wire catalog: the following models (`gpt-5.3-codex`, `gpt-5.4`,
+Copilot automatically uses Auto when every valid row in a nonempty account catalog explicitly
+reports that manual selection is unavailable. Missing or malformed permissions retain named routes;
+the picker removes only explicitly denied rows. Auto-only discovery supplies `github-copilot/auto`,
+and GitHub selects the actual model per request. This does not change subscription permissions.
+Ordinary model allowlists, pending/disabled state and new-model policy also apply to Auto visibility.
+If saved selections or policy hide Auto, select or enable the Auto row before using it. Existing
+manual preferences remain saved. A model named `auto` alone does not override account evidence.
+
+Auto follows the session and intent protocol in the public
+[VS Code Copilot Chat implementation](https://github.com/microsoft/vscode-copilot-chat/blob/7b70532a4cbdfa61c2b30fe4ccffda3d89336a4d/src/platform/endpoint/node/automodeService.ts).
+This is an experimental client integration, not a documented third-party API contract;
+GitHub may change the protocol or account permissions. Auto uses the selected model’s
+advertised endpoint for each request. Intent routing sends only the latest user text, capped locally
+at 32,768 UTF-16 code units; the actual inference keeps the full input. Negotiation has local
+defensive budgets of 512 catalog/pool/candidate entries, 1 MiB per successful response and eight
+seconds per call, including pacing and body reads. These are OpenCodex safeguards, not documented
+GitHub limits; oversized catalogs, slow negotiation or a truncated intent excerpt can affect compatibility.
+
+For named selections, Copilot fronts a mixed-wire catalog: the following models (`gpt-5.3-codex`, `gpt-5.4`,
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) reject
 `/chat/completions` for agent traffic, so opencodex routes those models over the
 Responses API by built-in default while every other Copilot model stays on chat

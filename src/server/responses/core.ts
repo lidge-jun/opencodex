@@ -28,7 +28,6 @@ import { deliverAdapterResponse } from "./adapter-delivery";
 import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { runWithCompactionRecovery } from "./compaction-recovery";
-
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -75,7 +74,6 @@ export async function handleResponses(
     if (!options.comboInitialSend?.producerOwned) options.comboInitialSend?.permit.release();
   }
 }
-
 export async function handleComboResponses(
   req: Request,
   rawBody: unknown,
@@ -94,7 +92,6 @@ export async function handleComboResponses(
     requestDispatchers,
   );
 }
-
 /** Compose request phases while retaining the original admission-finally ownership. */
 async function handleResponsesInner(
   req: Request,
@@ -107,6 +104,7 @@ async function handleResponsesInner(
     pendingHostAdmissionLease: null,
     authCtx: { kind: "main", accountId: null },
   };
+  let releasePendingSend = () => {};
   try {
     const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
     if (requestState instanceof Response) return requestState;
@@ -124,7 +122,7 @@ async function handleResponsesInner(
     const sendBudgetState = createResponsesSendBudget(requestContext);
     if (sendBudgetState instanceof Response) return sendBudgetState;
     if ("passthrough" in transportState.adapter && transportState.adapter.passthrough && !sidecarState.routedCompaction) {
-      return await executePassthroughResponse(
+      const passthroughResult = await executePassthroughResponse(
         requestContext,
         admissionState,
         requestState,
@@ -133,6 +131,9 @@ async function handleResponsesInner(
         responseEffects,
         sendBudgetState,
       );
+      if (passthroughResult instanceof Response) return passthroughResult;
+      const unclaimedHop = sendBudgetState.pendingHopPermit;
+      releasePendingSend = () => { if (sendBudgetState.pendingHopPermit === unclaimedHop) { unclaimedHop?.release(); sendBudgetState.pendingHopPermit = undefined; } };
     }
     const sidecarPlans = await executeResponsesSidecars(
       requestContext,
@@ -182,15 +183,14 @@ async function handleResponsesInner(
       continuationState,
     );
   } finally {
+    releasePendingSend();
     if (admissionState.pendingHostAdmissionLease) {
       releaseUpstreamHostAdmission(admissionState.pendingHostAdmissionLease);
       releaseCodexAuthContextProbeLease(admissionState.authCtx);
     }
   }
 }
-
 const requestDispatchers: ResponsesDispatchers = { handleResponses, handleComboResponses };
-
 export { adapterNeedsForcedContinuation } from "./core-replay";
 export {
   sidecarOutcomeRecorder, codexLogAccountId, usesCodexForwardPoolAuth, preAuthUpstreamHostCircuitKey,

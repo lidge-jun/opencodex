@@ -4,7 +4,7 @@
  * `devin-cli` used to be a local provider whose adapter spawned `devin acp`;
  * it later became an account provider on the shared `devin` adapter, and the
  * registry id itself has since merged into `devin` outright
- * (devlog/_plan/260913_devin_provider_merge).
+ * (devlog/_fin/260913_devin_provider_merge).
  *
  * Only the adapter repair still lives here. The `authMode` half — rewriting
  * `"local"` to `"oauth"` on the registry-id row — moved into

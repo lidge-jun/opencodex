@@ -227,9 +227,9 @@ reopened. `ocx status` reports the same drift, also while the loop is gated off,
 It says nothing in a sibling's home, whose routing names the owner beside it, and it promises only
 `ocx sync`, because it cannot see whether a healer runs, is gated, or is paused.
 
-The native main slot also accepts one same-identity device reauth (#3898):
-`/api/codex-auth/main/reauth-device` (start/status/cancel) plus
-`ocx account main reauth`. The grant is the OpenAI deviceauth grant already
+Native-main refresh follows the [rotation contract](providers/openai-accounts.md#native-main-refresh-cancellation).
+Same-identity device reauth (#3898) instead obtains a new login grant through
+`/api/codex-auth/main/reauth-device` (start/status/cancel) plus `ocx account main reauth`. It uses the OpenAI deviceauth grant already
 used for pool accounts, but nothing routes through the pool login surface —
 `/api/codex-auth/login` keeps rejecting `__main__` — and the commit is a
 sibling of the refresh write: same-identity check against the snapshot

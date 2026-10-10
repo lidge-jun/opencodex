@@ -7,13 +7,15 @@ import { saveCredential, getAccountSet, setActiveAccount } from "../../src/oauth
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { rememberResponseState, clearResponseStateForTests } from "../../src/responses/state";
 import { admitWorkflowTurn, workflowBudgetSnapshot, resetWorkflowBudgetsForTest } from "../../src/lib/workflow-budget";
-import type { RequestLogContext } from "../../src/server/request-log";
+import { beginRequestAttempt, type RequestLogContext, type RequestLogEntry } from "../../src/server/request-log";
 import type { HandleResponsesOptions } from "../../src/server/responses/core-options";
 import { handleResponses } from "../../src/server/responses";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable, replayRefusalResponse } from "../../src/lib/upstream-retry";
+import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable, replayRefusalResponse, retainReplayRefusal } from "../../src/lib/upstream-retry";
+import { requestLogDto } from "../../src/server/management/shared";
+import { responseWithDeferredRequestLog } from "../../src/server/relay";
 import { sanitizeNonReplayableUpstreamError } from "../../src/server/responses/non-replayable-error";
 
 async function probe(options: {
@@ -597,5 +599,125 @@ describe("translated reset replay boundaries and accounting", () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
+  });
+});
+
+function tracked(response: Response) {
+  const attempt = beginRequestAttempt(1, "fixture-provider", "fixture-model", "openai-responses");
+  const logCtx: RequestLogContext = {
+    model: "fixture-model", provider: "fixture-provider", activeAttempt: attempt, attempts: [attempt],
+  };
+  const entries: RequestLogEntry[] = [];
+  const result = responseWithDeferredRequestLog(response, "ocx-replay-attribution", Date.now(), logCtx,
+    entry => entries.push(entry));
+  return { result, entries, logCtx, attempt };
+}
+
+function expectAttribution(entry: RequestLogEntry, cause: string, permission: string) {
+  expect(entry.failureCause).toBe(cause);
+  expect(entry.attempts?.at(-1)?.failureCause).toBe(cause);
+  const dto = requestLogDto(entry);
+  expect(dto.resendPermission).toBe(permission);
+  expect((dto.attempts as Record<string, unknown>[]).at(-1)?.resendPermission).toBe(permission);
+}
+
+describe("deferred replay refusal attribution", () => {
+  test("synthetic refusal records ambiguous execution without changing the client response", async () => {
+    const original = replayRefusalResponse();
+    const payload = await original.clone().text();
+    const { result, entries, attempt } = tracked(original);
+    expect(entries).toHaveLength(0);
+    expect(result.status).toBe(429);
+    expect([...result.headers]).toEqual([...original.headers]);
+    expect(result.headers.get("x-should-retry")).toBe("false");
+    expect(result.headers.get("retry-after")).toBeNull();
+    expect(isReplayRefusalResponse(result)).toBe(true);
+    expect(await result.text()).toBe(payload);
+    expect(entries).toHaveLength(1);
+    const entry = entries[0]!;
+    expectAttribution(entry, "transport-ambiguous", "refused-ambiguous");
+    expect(entry.status).toBe(429);
+    expect(entry.terminalSource).toBe("synthetic");
+    expect(entry.errorCode).toBe("upstream_reset_replay_refused");
+    expect(attempt.errorCode).toBe("upstream_reset_replay_refused");
+  });
+
+  test("marker wins when the refusal message is unfamiliar", async () => {
+    const payload = JSON.stringify({ error: { message: "Fixture diagnostic without replay keywords" } });
+    const { result, entries } = tracked(retainReplayRefusal(new Response(payload, {
+      status: 429, headers: { "content-type": "application/json" },
+    })));
+    expect(await result.text()).toBe(payload);
+    expect(entries).toHaveLength(1);
+    expectAttribution(entries[0]!, "transport-ambiguous", "refused-ambiguous");
+    expect(entries[0]!.errorCode).toBe("upstream_reset_replay_refused");
+    expect(entries[0]!.terminalSource).toBe("synthetic");
+  });
+
+  test("a bodyless marked refusal still supplies closed attribution facts", () => {
+    const original = retainReplayRefusal(new Response(null, { status: 429 }));
+    const { result, entries } = tracked(original);
+    expect(result).toBe(original);
+    expect(entries).toHaveLength(1);
+    expectAttribution(entries[0]!, "transport-ambiguous", "refused-ambiguous");
+    expect(entries[0]!.errorCode).toBe("upstream_reset_replay_refused");
+    expect(entries[0]!.terminalSource).toBe("synthetic");
+  });
+
+  test("an empty marked refusal supplies attribution without JSON diagnostics", async () => {
+    const { result, entries } = tracked(retainReplayRefusal(new Response("", {
+      status: 429, headers: { "content-type": "application/json" },
+    })));
+    expect(await result.text()).toBe("");
+    expect(entries).toHaveLength(1);
+    expectAttribution(entries[0]!, "transport-ambiguous", "refused-ambiguous");
+    expect(entries[0]!.errorCode).toBe("upstream_reset_replay_refused");
+    expect(entries[0]!.terminalSource).toBe("synthetic");
+  });
+
+  test("unmarked upstream refusal wording cannot prove an ambiguous transport failure", async () => {
+    const payload = JSON.stringify({ error: {
+      code: "upstream_reset_replay_refused",
+      message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
+    } });
+    const { result, entries, logCtx } = tracked(new Response(payload, {
+      status: 429, headers: { "content-type": "application/json", "retry-after": "7" },
+    }));
+    expect(isReplayRefusalResponse(result)).toBe(false);
+    expect(result.status).toBe(429);
+    expect(result.headers.get("retry-after")).toBe("7");
+    expect(await result.text()).toBe(payload);
+    expect(entries).toHaveLength(1);
+    expect(logCtx.causeHint).toBeUndefined();
+    expect(entries[0]!.terminalSource).toBeUndefined();
+    expectAttribution(entries[0]!, "rate-limit", "permitted");
+  });
+
+  for (const code of ["rate_limit_exceeded", "upstream_reset_replay_refused"]) {
+    test(`genuine upstream 429 remains a rate limit even with code ${code}`, async () => {
+      const payload = JSON.stringify({ error: { code, message: "Fixture provider throttled" } });
+      const original = new Response(payload, {
+        status: 429, headers: { "content-type": "application/json", "retry-after": "7" },
+      });
+      const { result, entries, logCtx } = tracked(original);
+      expect(isReplayRefusalResponse(result)).toBe(false);
+      expect(result.status).toBe(429);
+      expect(result.headers.get("retry-after")).toBe("7");
+      expect(await result.text()).toBe(payload);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.errorCode).toBe("rate_limit_exceeded");
+      expect(entries[0]!.terminalSource).toBeUndefined();
+      expect(logCtx.causeHint).toBeUndefined();
+      expectAttribution(entries[0]!, "rate-limit", "permitted");
+    });
+  }
+
+  test("client cancellation retains precedence over a marked refusal", async () => {
+    const { result, entries } = tracked(replayRefusalResponse());
+    await result.body!.cancel();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.status).toBe(499);
+    expect(entries[0]!.errorCode).toBe("client_closed_request");
+    expectAttribution(entries[0]!, "client-cancelled", "refused-futile");
   });
 });

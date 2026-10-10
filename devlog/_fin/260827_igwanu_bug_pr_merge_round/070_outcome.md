@@ -96,7 +96,7 @@ incorrect correction is worse than the original error.
 ## Follow-ups outside this round's scope
 
 - The same pre-disclosure OAuth material exists in
-  `devlog/_plan/260826_wp7e_presence_driven_oauth_failover/` and
+  `devlog/_fin/260826_wp7e_presence_driven_oauth_failover/` and
   `devlog/_plan/260827_dev_hardening/`. Pre-existing, other work streams, needs
   separate authority. **Escalated, not silently rewritten.**
 - `CL-07 task effectiveness producer > inactivity timeout is bounded for trusted

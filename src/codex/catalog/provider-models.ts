@@ -1,3 +1,6 @@
+import { fetchCopilotAutoModels, copilotPickerModels, copilotRequiresAuto } from "../../providers/github-copilot-auto";
+import { resolveGithubCopilotTransport } from "../../providers/github-copilot-transport";
+import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { isAnthropicOAuthInstance } from "../../providers/anthropic-instance";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
@@ -164,6 +167,7 @@ export function observedModelsAuthResolver(
     },
   };
 }
+/** Project captured discovery through config hints and retention; Auto-only Copilot exposes only Auto. */
 export async function fetchProviderModelsWithAuth(
   captured: CapturedProviderGather,
   ttlMs: number,
@@ -282,6 +286,27 @@ export async function fetchProviderModelsWithAuth(
       : { apiKey: await resolveModelsAuthToken(name, prov), observed: false }
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
+  if (name === "github-copilot" && apiKey) {
+    const transport = resolveGithubCopilotTransport({ ...prov, apiKey }, prov.authMode === "oauth"
+      ? resolveCopilotApiBaseUrl(auth.oauthApiBaseUrl) : undefined);
+    try {
+      const models = await fetchCopilotAutoModels(transport, AbortSignal.timeout(8_000), undefined, ttlMs);
+      const picker = copilotPickerModels(prov, models).map(/** Apply configured hints to the permission-filtered account catalog without changing upstream metadata. */
+        model => applyProviderConfigHints(name, prov, {
+        id: model.id, provider: name,
+        ...catalogHintsFromModelsApiItem(name, model as ProviderModelsApiItem),
+      }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias));
+      if (!isCurrentCacheGeneration()) return observed(configured, "degraded");
+      markProviderDiscoveryOk(name, picker.length);
+      // Retain callable manual/combo selectors, but do not advertise named selection
+      // for an Auto-only account even when its saved configuration still contains it.
+      return observed(copilotRequiresAuto(prov, models)
+        ? picker : withConfiguredRetention(picker, { warnDrops: true }), "authoritative");
+    } catch {
+      if (isCurrentCacheGeneration()) markProviderDiscoveryFailed(name, { reason: "provider" });
+      return observed(configured, "degraded");
+    }
+  }
   const maySendAnthropicDiscovery = () => {
     if (!isAnthropicOAuthInstance(name) || prov.authMode !== "oauth") return true;
     if (!mayResolveModelsOAuth(name, prov)) return false;

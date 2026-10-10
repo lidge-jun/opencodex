@@ -603,7 +603,7 @@ test("PUT round-trips three-state authMode (devlog 260720 + 260726_claude_auth_a
     get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
     expect(get.authMode).toBe("subscription");
     // Under Claude Code's own login it passes through natively and keeps its 1M window.
-    expect(sonnetTier(get)).toBe("claude-sonnet-5[1m]");
+    expect(sonnetTier(get)).toBe("claude-sonnet-5-5[1m]");
 
     // "auto" is the return path: it deletes the key so detection drives the mode again.
     const auto = await fetch(new URL("/api/claude-code", server.url), {

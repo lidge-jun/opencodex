@@ -218,18 +218,18 @@ describe("native Claude tiers on the passthrough (#5755)", () => {
   test("an empty config marks the Opus, Sonnet and Fable tiers and leaves Haiku unset", () => {
     expect(effectiveModelEnv(undefined, buildClaudeContextWindows([], [], undefined, passthrough))).toEqual({
       ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5[1m]",
-      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5[1m]",
       ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1[1m]",
     });
   });
 
   test("another provider's row for the same id only counts when the router decides", () => {
-    const kiro = [{ provider: "kiro", id: "claude-sonnet-5", contextWindow: 200_000 }];
+    const kiro = [{ provider: "kiro", id: "claude-sonnet-5-5", contextWindow: 200_000 }];
     const native = buildClaudeContextWindows([], kiro, undefined, passthrough);
-    expect(native["claude-sonnet-5"]).toBe(1_000_000);
-    expect(effectiveModelEnv(undefined, native).ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5[1m]");
+    expect(native["claude-sonnet-5-5"]).toBe(1_000_000);
+    expect(effectiveModelEnv(undefined, native).ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5-5[1m]");
     const routed = buildClaudeContextWindows([], kiro);
-    expect(routed["claude-sonnet-5"]).toBe(200_000);
+    expect(routed["claude-sonnet-5-5"]).toBe(200_000);
     expect(effectiveModelEnv(undefined, routed)).toEqual({});
   });
 
@@ -246,9 +246,9 @@ describe("native Claude tiers on the passthrough (#5755)", () => {
   });
 
   test("an anthropic row capped under 1M and a modelMap entry keep their ids unmarked", () => {
-    const capped = buildClaudeContextWindows([], [{ provider: "anthropic", id: "claude-sonnet-5", contextWindow: 200_000 }], undefined, passthrough);
+    const capped = buildClaudeContextWindows([], [{ provider: "anthropic", id: "claude-sonnet-5-5", contextWindow: 200_000 }], undefined, passthrough);
     expect(effectiveModelEnv(undefined, capped).ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
-    const mapped = buildClaudeContextWindows([], [], undefined, { modelMap: { "claude-sonnet-5": "kiro/claude-sonnet-5" } });
+    const mapped = buildClaudeContextWindows([], [], undefined, { modelMap: { "claude-sonnet-5-5": "kiro/claude-sonnet-5-5" } });
     expect(effectiveModelEnv(undefined, mapped).ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
     expect(effectiveModelEnv(undefined, mapped).ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5-5[1m]");
   });
