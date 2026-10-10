@@ -8,16 +8,20 @@
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import type { Root } from "react-dom/client";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import { LanguageProvider } from "../src/i18n/provider";
+import { useGrokResetCoupons, type GrokResetCouponController } from "../src/hooks/useGrokResetCoupons";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 
 const domGlobals = ["document", "window", "navigator", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousDomGlobals: Record<(typeof domGlobals)[number], unknown>;
 let testWindow: Window;
 let mountedRoots: Root[];
+let testApiBase: string;
+let testSequence = 0;
+const HOLD_STORAGE_KEY = "ocx.grok-coupon-holds.v1";
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -79,7 +83,7 @@ function installFetch(): void {
   }) as typeof fetch;
 }
 
-async function mountPanel(accounts: Array<Record<string, unknown>>): Promise<HTMLElement> {
+async function mountPanel(accounts: Array<Record<string, unknown>>, apiBase = testApiBase): Promise<HTMLElement> {
   const host = testWindow.document.createElement("div");
   testWindow.document.body.appendChild(host as never);
   const { createRoot } = await import("react-dom/client");
@@ -101,7 +105,7 @@ async function mountPanel(accounts: Array<Record<string, unknown>>): Promise<HTM
       <LanguageProvider>
         <ProviderAuthPanel
           item={ITEM}
-          apiBase="http://proxy"
+          apiBase={apiBase}
           oauth={{ loggedIn: true }}
           accounts={accounts as never}
           authHandlers={handlers}
@@ -132,6 +136,18 @@ async function openDialog(host: HTMLElement, index = 0): Promise<void> {
   await act(async () => { badges(host)[index].click(); await flush(); });
 }
 
+async function tryRedeemFromDialog(host: HTMLElement): Promise<void> {
+  const redeem = [...host.querySelectorAll<HTMLButtonElement>(".modal-card button")]
+    .find(button => (button.textContent ?? "").includes("Use 1 coupon"));
+  if (redeem) {
+    await act(async () => { redeem.click(); await flush(); });
+    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+  } else {
+    expect(dialogText(host)).toContain("outcome is unknown");
+    expect([...host.querySelectorAll(".modal-card button")].some(button => (button.textContent ?? "").includes("Use coupon"))).toBe(false);
+  }
+}
+
 const ACCOUNT = (id: string, extra: Record<string, unknown> = {}) => ({
   id, email: `${id}@example.com`, active: false, ...extra,
 });
@@ -146,6 +162,7 @@ beforeEach(() => {
   previousDomGlobals = Object.fromEntries(
     domGlobals.map((key) => [key, Reflect.get(globalThis, key)]),
   ) as typeof previousDomGlobals;
+  testApiBase = `http://proxy-${++testSequence}`;
   testWindow = new Window({ url: "http://localhost/" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
@@ -220,7 +237,7 @@ test("redeeming spends the nearest-expiry coupon with a client-minted UUIDv4", a
 
 test("a replayed failure is reported as a failure, never as a completed reset", async () => {
   harness.coupons.set("acct-a", [COUPON("restok_a1", 10)]);
-  harness.consumeReply = async () => json({ code: "redeem_failed", replayed: true, tokenId: "restok_a1" });
+  harness.consumeReply = async () => json({ code: "fetch_resets_failed", replayed: true, tokenId: "restok_a1" });
   const host = await mountPanel([ACCOUNT("acct-a")]);
 
   await openDialog(host);
@@ -287,10 +304,10 @@ test("a transport-rejected redemption stops posting, re-reads the account, and o
   expect([...host.querySelectorAll(".modal-card button")].some(b => (b.textContent ?? "").includes("Use 1 coupon"))).toBe(false);
 });
 
-for (const [code, status] of [["attempt_unresolved", 502], ["redeem_failed", 502], ["attempt_in_progress", 409], ["attempt_reconcile_failed", 502], ["operation_state_changed", 409], ["missing_code", 200]] as const) {
+for (const [code, status] of [["attempt_unresolved", 502], ["redeem_failed", 502], ["attempt_in_progress", 409], ["attempt_reconcile_failed", 502], ["operation_state_changed", 409], ["attempt_mark_failed", 502], ["operation_token_mismatch", 409], ["ledger_unavailable", 503], ["missing_code", 200]] as const) {
   test(`a returned ${code} stays unknown across dialog close and reopen`, async () => {
     harness.coupons.set("acct-a", [COUPON("restok_a1", 10)]);
-    harness.consumeReply = async () => json(code === "missing_code" ? { success: true } : { error: { code } }, status);
+    harness.consumeReply = async () => json(code === "missing_code" ? { success: true } : { operationId: harness.consumes.at(-1)?.operationId, error: { code } }, status);
     const host = await mountPanel([ACCOUNT("acct-a")]);
     await openDialog(host);
     await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
@@ -318,8 +335,7 @@ test("closing and reopening during dispatch cannot post a new operation", async 
   try {
     await act(async () => { host.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!.click(); await flush(); });
     await openDialog(host);
-    await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
-    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+    await tryRedeemFromDialog(host);
     expect(harness.consumes).toHaveLength(1);
   } finally {
     await act(async () => { for (const finish of finishers) finish(json({ code: "redeemed" })); await flush(); });
@@ -337,8 +353,7 @@ for (const code of ["redeemed", "coupon_unavailable"] as const) {
     await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
     await act(async () => { host.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!.click(); await flush(); });
     await openDialog(host);
-    await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
-    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+    await tryRedeemFromDialog(host);
     expect(harness.consumes).toHaveLength(1);
     expect(dialogText(host)).toContain("outcome is unknown");
     try {
@@ -378,15 +393,14 @@ for (const code of ["redeemed", "coupon_unavailable"] as const) {
       await openDialog(host);
       await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
       await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
-      expect(dialogText(host)).not.toContain("outcome is unknown");
+      expect(dialogText(host)).toContain("outcome is unknown");
       expect(harness.consumes).toHaveLength(2);
       expect(harness.consumes[1].operationId).not.toBe(harness.consumes[0].operationId);
       await act(async () => { harness.holdReads = false; harness.releaseRead.shift()!(); await flush(); });
       // Finishing the older GET must not retire the newer pending redemption.
       await act(async () => { host.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!.click(); await flush(); });
       await openDialog(host);
-      await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
-      await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+      await tryRedeemFromDialog(host);
       expect(harness.consumes).toHaveLength(2);
       expect(dialogText(host)).toContain("outcome is unknown");
       await act(async () => { finish(json({ code: "redeemed" })); await flush(); });
@@ -413,11 +427,10 @@ for (const code of ["coupon_unavailable", "auth_failed", "fetch_resets_failed"])
     await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
     await act(async () => { host.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!.click(); await flush(); });
     await openDialog(host);
-    await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
-    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+    await tryRedeemFromDialog(host);
     expect(harness.consumes).toHaveLength(1);
     expect(dialogText(host)).toContain("outcome is unknown");
-    await act(async () => { finish(json({ error: { code } }, 409)); await flush(); });
+    await act(async () => { finish(json({ error: { code } }, code === "fetch_resets_failed" ? 502 : 409)); await flush(); });
     expect(dialogText(host)).not.toContain("outcome is unknown");
     await act(async () => { host.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!.click(); await flush(); });
     await openDialog(host);
@@ -467,4 +480,230 @@ test("no more than three coupon reads are in flight at once", async () => {
   });
   expect(badges(host).map(badge => badge.dataset.grokCouponBadge)).toEqual(["1", "1", "1", "1", "1"]);
   expect(harness.peakInFlight).toBeLessThanOrEqual(3);
+});
+
+
+// Direct controllers exercise admission even when the UI hides the redeem button.
+async function mountController(apiBase = testApiBase, accountId = "acct-a") {
+  const seen: { current: GrokResetCouponController | null } = { current: null };
+  function Probe() {
+    const controller = useGrokResetCoupons({ apiBase, accountIds: [accountId], enabled: true });
+    useLayoutEffect(() => { seen.current = controller; }, [controller]);
+    return null;
+  }
+  const host = testWindow.document.createElement("div");
+  testWindow.document.body.appendChild(host as never);
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(host as unknown as HTMLElement);
+  mountedRoots.push(root);
+  await act(async () => { root.render(<Probe />); await flush(); });
+  return {
+    get current() { return seen.current!; },
+    async unmount() {
+      await act(async () => { root.unmount(); await flush(); });
+      mountedRoots.splice(mountedRoots.indexOf(root), 1);
+    },
+  };
+}
+
+const attempt = (tokenId = "restok_a1") => ({ tokenId, operationId: crypto.randomUUID() });
+
+async function redeemController(controller: Awaited<ReturnType<typeof mountController>>, request = attempt(), accountId = "acct-a") {
+  let outcome!: Awaited<ReturnType<GrokResetCouponController["redeem"]>>;
+  await act(async () => { outcome = await controller.current.redeem(accountId, request); await flush(); });
+  return outcome;
+}
+
+for (const code of ["attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed", "redeem_failed", "attempt_mark_failed", "operation_token_mismatch", "ledger_unavailable"]) {
+  test(`an unresolved 200 ${code} preserves the original operation`, async () => {
+    const controller = await mountController();
+    const request = attempt();
+    harness.consumeReply = async () => json({ code, operationId: request.operationId });
+    expect((await redeemController(controller, request)).uncertain).toBe(true);
+    expect((await redeemController(controller)).operationId).toBe(request.operationId);
+    expect(harness.consumes).toHaveLength(1);
+  });
+}
+
+for (const code of [null, 17, {}, " "]) {
+  test(`a malformed 200 code ${JSON.stringify(code)} holds across remount`, async () => {
+    const controller = await mountController();
+    const request = attempt();
+    harness.consumeReply = async () => json({ code });
+    await redeemController(controller, request);
+    await controller.unmount();
+    const remounted = await mountController();
+    expect(remounted.current.uncertain["acct-a"]).toEqual(request);
+    expect((await redeemController(remounted)).operationId).toBe(request.operationId);
+    expect(harness.consumes).toHaveLength(1);
+  });
+}
+
+test("remount during dispatch retains the hold written before POST", async () => {
+  const controller = await mountController();
+  const request = attempt();
+  let finish!: (response: Response) => void;
+  let storedBeforePost: unknown;
+  harness.consumeReply = () => {
+    storedBeforePost = JSON.parse(testWindow.sessionStorage.getItem(HOLD_STORAGE_KEY) ?? "{}")[`${testApiBase}\u0000acct-a`];
+    return new Promise(resolve => { finish = resolve; });
+  };
+  let pending!: ReturnType<GrokResetCouponController["redeem"]>;
+  await act(async () => { pending = controller.current.redeem("acct-a", request); await flush(); });
+  try {
+    await controller.unmount();
+    const remounted = await mountController();
+    expect(remounted.current.uncertain["acct-a"]).toEqual(request);
+    expect(storedBeforePost).toEqual(request);
+    expect((await redeemController(remounted)).operationId).toBe(request.operationId);
+    expect(harness.consumes).toHaveLength(1);
+  } finally {
+    await act(async () => { finish(json({ code: "redeemed" })); await pending; await flush(); });
+  }
+});
+
+for (const storageDenied of [false, true]) {
+  test(`an unresolved hold survives remount with storage ${storageDenied ? "denied" : "available"}`, async () => {
+    if (storageDenied) Object.defineProperty(testWindow, "sessionStorage", {
+      configurable: true, get() { throw new Error("storage denied"); },
+    });
+    const controller = await mountController();
+    const request = attempt();
+    harness.consumeReply = async () => json({ error: { code: "attempt_unresolved" } }, 502);
+    await redeemController(controller, request);
+    await controller.unmount();
+    const remounted = await mountController();
+    expect(remounted.current.uncertain["acct-a"]).toEqual(request);
+    expect((await redeemController(remounted)).operationId).toBe(request.operationId);
+    expect(harness.consumes).toHaveLength(1);
+  });
+}
+
+test("holds are isolated by API base and account", async () => {
+  const controller = await mountController();
+  const request = attempt();
+  harness.consumeReply = async () => json({ error: { code: "attempt_unresolved" } }, 502);
+  await redeemController(controller, request);
+  await controller.unmount();
+  const remounted = await mountController();
+  const otherApi = await mountController(`${testApiBase}/other`);
+  const otherAccount = await mountController(testApiBase, "acct-b");
+  expect(remounted.current.uncertain["acct-a"]).toEqual(request);
+  expect(otherApi.current.uncertain["acct-a"]).toBeUndefined();
+  expect(otherAccount.current.uncertain["acct-b"]).toBeUndefined();
+  harness.consumeReply = async () => json({ code: "redeemed" });
+  expect((await redeemController(otherApi)).ok).toBe(true);
+  expect((await redeemController(otherAccount, attempt("restok_b1"), "acct-b")).ok).toBe(true);
+  expect((await redeemController(remounted)).operationId).toBe(request.operationId);
+  expect(harness.consumes).toHaveLength(3);
+});
+
+for (const code of ["redeemed", "coupon_unavailable"]) {
+  test(`late definitive ${code} clears the remounted hold and admits one fresh POST`, async () => {
+    const controller = await mountController();
+    const request = attempt();
+    let finish!: (response: Response) => void;
+    harness.consumeReply = () => new Promise(resolve => { finish = resolve; });
+    let pending!: ReturnType<GrokResetCouponController["redeem"]>;
+    await act(async () => { pending = controller.current.redeem("acct-a", request); await flush(); });
+    try {
+      await controller.unmount();
+      const remounted = await mountController();
+      expect(remounted.current.uncertain["acct-a"]).toEqual(request);
+      expect((await redeemController(remounted)).operationId).toBe(request.operationId);
+      expect(harness.consumes).toHaveLength(1);
+      await act(async () => { finish(code === "redeemed" ? json({ code }) : json({ error: { code } }, 409)); await pending; await flush(); });
+      expect(remounted.current.uncertain["acct-a"]).toBeUndefined();
+      expect(JSON.parse(testWindow.sessionStorage.getItem(HOLD_STORAGE_KEY) ?? "{}")[`${testApiBase}\u0000acct-a`]).toBeUndefined();
+      harness.consumeReply = async () => json({ code: "redeemed" });
+      const next = attempt();
+      expect((await redeemController(remounted, next)).ok).toBe(true);
+      expect(harness.consumes).toHaveLength(2);
+      expect(harness.consumes[1].operationId).toBe(next.operationId);
+      expect(next.operationId).not.toBe(request.operationId);
+    } finally {
+      await act(async () => { finish(json({ code: "redeemed" })); await flush(); });
+    }
+  });
+}
+
+test("#6897 a different persisted hold never replaces a live unresolved hold", async () => {
+  const controller = await mountController();
+  const live = attempt();
+  const stale = attempt("restok_a2");
+  harness.consumeReply = async () => json({ operationId: live.operationId, error: { code: "attempt_unresolved" } }, 502);
+  expect((await redeemController(controller, live)).uncertain).toBe(true);
+  await controller.unmount();
+  testWindow.sessionStorage.setItem(HOLD_STORAGE_KEY, JSON.stringify({ [`${testApiBase}\u0000acct-a`]: stale }));
+  const remounted = await mountController();
+  expect(remounted.current.uncertain["acct-a"]).toEqual(live);
+  expect((await redeemController(remounted)).operationId).toBe(live.operationId);
+  expect(harness.consumes).toHaveLength(1);
+});
+
+test("#6897 a different persisted hold cannot replace a pending hold or survive its definitive clear", async () => {
+  const controller = await mountController();
+  const pendingAttempt = attempt();
+  const stale = attempt("restok_a2");
+  let finish!: (response: Response) => void;
+  harness.consumeReply = () => new Promise(resolve => { finish = resolve; });
+  let pending!: ReturnType<GrokResetCouponController["redeem"]>;
+  await act(async () => { pending = controller.current.redeem("acct-a", pendingAttempt); await flush(); });
+  try {
+    await controller.unmount();
+    testWindow.sessionStorage.setItem(HOLD_STORAGE_KEY, JSON.stringify({ [`${testApiBase}\u0000acct-a`]: stale }));
+    const remounted = await mountController();
+    expect(remounted.current.uncertain["acct-a"]).toEqual(pendingAttempt);
+    await act(async () => { finish(json({ code: "redeemed" })); await pending; await flush(); });
+    expect(remounted.current.uncertain["acct-a"]).toBeUndefined();
+    expect(JSON.parse(testWindow.sessionStorage.getItem(HOLD_STORAGE_KEY) ?? "{}")[`${testApiBase}\u0000acct-a`]).toBeUndefined();
+  } finally {
+    await act(async () => { finish(json({ code: "redeemed" })); await flush(); });
+  }
+});
+
+test("#6897 capacity anchored to the operation stays unknown; a 200 ledger refusal code holds", async () => {
+  const controller = await mountController();
+  const anchored = attempt();
+  harness.consumeReply = async () => json({ operationId: anchored.operationId, error: { code: "capacity" } }, 503);
+  expect((await redeemController(controller, anchored)).uncertain).toBe(true);
+  const other = await mountController(testApiBase, "acct-b");
+  const replayed = attempt();
+  harness.consumeReply = async () => json({ code: "ledger_unavailable", replayed: true });
+  expect((await redeemController(other, replayed, "acct-b")).uncertain).toBe(true);
+  expect(harness.consumes).toHaveLength(2);
+});
+
+for (const code of ["future_uncertain_code", "Redeemed"]) {
+  test(`#6897 an unrecognized 200 code ${code} keeps the hold`, async () => {
+    const controller = await mountController();
+    const request = attempt();
+    harness.consumeReply = async () => json({ code, replayed: true });
+    expect((await redeemController(controller, request)).uncertain).toBe(true);
+    expect((await redeemController(controller)).operationId).toBe(request.operationId);
+    expect(harness.consumes).toHaveLength(1);
+  });
+}
+
+for (const hold of [
+  { tokenId: "", operationId: crypto.randomUUID() },
+  { tokenId: "restok_a1", operationId: "not-a-uuid" },
+  { tokenId: "restok_a1", operationId: "00000000-0000-1000-8000-000000000000" },
+]) {
+  test(`invalid hydrated hold ${JSON.stringify(hold)} permits a fresh operation`, async () => {
+    testWindow.sessionStorage.setItem(HOLD_STORAGE_KEY, JSON.stringify({ [`${testApiBase}\u0000acct-a`]: hold }));
+    const controller = await mountController();
+    expect(controller.current.uncertain["acct-a"]).toBeUndefined();
+    expect((await redeemController(controller)).ok).toBe(true);
+    expect(harness.consumes).toHaveLength(1);
+  });
+}
+
+test("a valid persisted UUIDv4 hold refuses a new POST", async () => {
+  const request = attempt();
+  testWindow.sessionStorage.setItem(HOLD_STORAGE_KEY, JSON.stringify({ [`${testApiBase}\u0000acct-a`]: request }));
+  const controller = await mountController();
+  expect(controller.current.uncertain["acct-a"]).toEqual(request);
+  expect((await redeemController(controller)).operationId).toBe(request.operationId);
+  expect(harness.consumes).toHaveLength(0);
 });

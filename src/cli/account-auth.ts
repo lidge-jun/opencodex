@@ -441,6 +441,18 @@ async function resetCredits(argv: string[], deps: RuntimeApiDeps): Promise<void>
   printData(result, wantsJson);
 }
 
+/** Codes that leave a coupon operation unconfirmed: the caller must keep its operationId. */
+const UNCONFIRMED_COUPON_CODES: ReadonlySet<string> = new Set([
+  "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed",
+  "redeem_failed", "attempt_mark_failed", "operation_token_mismatch",
+]);
+/** Pre-dispatch ledger refusals: unconfirmed when anchored to an operation, never a settled code. */
+const LEDGER_REFUSAL_CODES: ReadonlySet<string> = new Set(["ledger_unavailable", "capacity"]);
+/** The only codes the ledger records as a definitive outcome; any other settled code is unconfirmed. */
+const DEFINITIVE_SETTLED_CODES: ReadonlySet<string> = new Set([
+  "redeemed", "auth_failed", "fetch_resets_failed", "no_coupons_available", "coupon_unavailable", "token_unresolved",
+]);
+
 async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   // The account id is optional here (the server falls back to the selected xAI
@@ -467,6 +479,7 @@ async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<v
   rejectArgs(args, USAGE);
   const accountId = rawId ? (rawId === "main" ? "__main__" : rawId) : undefined;
   const effectiveOperationId = consume ? operationId ?? crypto.randomUUID() : undefined;
+  const unconfirmed = () => new RuntimeApiError(`Coupon redemption outcome is unconfirmed. Preserve --operation-id ${effectiveOperationId}; reuse it to inspect this attempt and do not create a replacement operation.`, 503, null);
   let result: unknown;
   try {
     result = consume
@@ -476,14 +489,25 @@ async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<v
       : await runtimeRequest(`/api/grok/reset-coupons${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`, {}, deps);
   } catch (error) {
     const apiError = error instanceof RuntimeApiError ? error : undefined;
-    const body = apiError?.body as { error?: { code?: string } } | null | undefined;
+    const body = apiError?.body as { operationId?: unknown; error?: { code?: string } } | null | undefined;
     const code = body && typeof body === "object" ? body.error?.code : undefined;
+    const carriesOperation = !!body && typeof body === "object" && typeof body.operationId === "string";
     if (consume && (!apiError || (!apiError.code && (
-      (!code && apiError.status >= 500) || ["attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed", "redeem_failed"].includes(code ?? "")
+      (!code && apiError.status >= 500) || UNCONFIRMED_COUPON_CODES.has(code ?? "")
+      || (LEDGER_REFUSAL_CODES.has(code ?? "") && carriesOperation)
     )))) {
       throw new RuntimeApiError(`Coupon redemption outcome is unconfirmed. Preserve --operation-id ${effectiveOperationId}; reuse it to inspect this attempt and do not create a replacement operation.`, apiError?.status ?? 503, apiError?.body ?? null);
     }
     throw error;
+  }
+  if (consume) {
+    // A 200 can replay a recorded refusal; only "redeemed" is a successful spend.
+    const settled = result && typeof result === "object" ? (result as { code?: unknown }).code : undefined;
+    if (typeof settled !== "string" || !DEFINITIVE_SETTLED_CODES.has(settled)) throw unconfirmed();
+    if (settled !== "redeemed") {
+      printData(result, wantsJson);
+      throw new RuntimeApiError(`Coupon was not redeemed (${settled}).`, 409, result);
+    }
   }
   printData(result, wantsJson);
 }

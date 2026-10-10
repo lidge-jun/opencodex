@@ -17,7 +17,7 @@
  *   client that reads only `replayed` tells the user a failed redemption
  *   succeeded.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createBoundedFetch } from "../bounded-fetch";
 
 export interface GrokResetCoupon {
@@ -46,7 +46,7 @@ export interface GrokCouponAttempt { tokenId: string; operationId: string }
 export interface GrokResetCouponController {
   /** Absent id means "not read yet"; consumers render that as loading. */
   entries: Record<string, GrokCouponEntry>;
-  /** Held in the account controller so closing the modal cannot mint a new spend. */
+  /** Shared for the browser session so remounting cannot mint a new spend. */
   uncertain: Record<string, GrokCouponAttempt>;
   refresh: (accountId: string) => Promise<void>;
   redeem: (accountId: string, request: { tokenId: string; operationId: string }) => Promise<GrokRedeemOutcome>;
@@ -55,6 +55,80 @@ export interface GrokResetCouponController {
 const READ_TIMEOUT_MS = 20_000;
 const REDEEM_TIMEOUT_MS = 30_000;
 const MAX_READS_IN_FLIGHT = 3;
+const HOLD_STORAGE_KEY = "ocx.grok-coupon-holds.v1";
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UNRESOLVED_COUPON_CODES = new Set([
+  "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed",
+  "operation_state_changed", "redeem_failed", "attempt_mark_failed", "operation_token_mismatch",
+]);
+const LEDGER_REFUSAL_CODES = new Set(["ledger_unavailable", "capacity"]);
+/** The only codes the ledger records as a definitive outcome; any other settled code keeps the hold. */
+const DEFINITIVE_SETTLED_CODES = new Set([
+  "redeemed", "auth_failed", "fetch_resets_failed", "no_coupons_available", "coupon_unavailable", "token_unresolved",
+]);
+
+// The Map is the admission authority even if sessionStorage is denied. Snapshot
+// identity changes only on a write, allowing old controllers to notify new ones.
+let couponHolds = new Map<string, GrokCouponAttempt>();
+const holdListeners = new Set<() => void>();
+let lastStoredHolds: string | null | undefined;
+
+function validHold(value: unknown): value is GrokCouponAttempt {
+  if (!value || typeof value !== "object") return false;
+  const { tokenId, operationId } = value as Record<string, unknown>;
+  return typeof tokenId === "string" && tokenId.trim() !== ""
+    && typeof operationId === "string" && UUID_V4.test(operationId);
+}
+
+function holdSnapshot(): ReadonlyMap<string, GrokCouponAttempt> {
+  try {
+    const stored = window.sessionStorage.getItem(HOLD_STORAGE_KEY);
+    if (stored !== lastStoredHolds) {
+      lastStoredHolds = stored;
+      const parsed: unknown = stored === null ? null : JSON.parse(stored);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        for (const [key, value] of Object.entries(parsed)) {
+          if (!key.includes("\u0000") || !validHold(value)) continue;
+          // Storage only restores holds this page has lost; it never replaces a live hold.
+          if (couponHolds.has(key)) continue;
+          couponHolds = new Map(couponHolds).set(key, { tokenId: value.tokenId, operationId: value.operationId });
+        }
+      }
+    }
+  } catch { /* Storage access or invalid JSON cannot erase an in-memory hold. */ }
+  return couponHolds;
+}
+
+function subscribeHolds(listener: () => void): () => void {
+  holdListeners.add(listener);
+  return () => { holdListeners.delete(listener); };
+}
+
+function publishHolds(): void {
+  try {
+    const stored = JSON.stringify(Object.fromEntries(couponHolds));
+    window.sessionStorage.setItem(HOLD_STORAGE_KEY, stored);
+    lastStoredHolds = stored;
+  } catch { /* The Map remains authoritative when persistence is unavailable. */ }
+  for (const listener of holdListeners) listener();
+}
+
+function writeHold(key: string, attempt: GrokCouponAttempt): void {
+  couponHolds = new Map(couponHolds).set(key, { ...attempt });
+  publishHolds();
+}
+
+function clearHold(key: string, operationId: string): void {
+  if (holdSnapshot().get(key)?.operationId !== operationId) return;
+  couponHolds = new Map(couponHolds);
+  couponHolds.delete(key);
+  publishHolds();
+}
+
+function unresolvedCode(code: string, body: unknown): boolean {
+  return UNRESOLVED_COUPON_CODES.has(code) || (LEDGER_REFUSAL_CODES.has(code)
+    && Boolean(body && typeof body === "object" && "operationId" in body));
+}
 
 function parseCoupons(value: unknown): GrokResetCoupon[] | null {
   if (!value || typeof value !== "object") return null;
@@ -81,7 +155,7 @@ function errorCode(value: unknown): string {
     const error = (value as { error?: unknown }).error;
     if (error && typeof error === "object") {
       const code = (error as { code?: unknown }).code;
-      if (typeof code === "string" && code !== "") return code;
+      if (typeof code === "string" && code.trim() !== "") return code;
     }
   }
   return "redeem_failed";
@@ -90,7 +164,7 @@ function errorCode(value: unknown): string {
 function settledCode(value: unknown): string | null {
   if (value && typeof value === "object") {
     const code = (value as { code?: unknown }).code;
-    if (typeof code === "string" && code !== "") return code;
+    if (typeof code === "string" && code.trim() !== "") return code;
   }
   return null;
 }
@@ -113,9 +187,12 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
   enabled: boolean;
 }): GrokResetCouponController {
   const [entries, setEntries] = useState<Record<string, GrokCouponEntry>>({});
-  const [uncertain, setUncertain] = useState<Record<string, GrokCouponAttempt>>({});
-  const uncertainRef = useRef(new Map<string, GrokCouponAttempt>());
-  const activeRedeems = useRef(new Map<string, GrokCouponAttempt>());
+  const holds = useSyncExternalStore(subscribeHolds, holdSnapshot, holdSnapshot);
+  const uncertain = useMemo(() => {
+    const prefix = `${apiBase}\u0000`;
+    return Object.fromEntries([...holds].filter(([key]) => key.startsWith(prefix))
+      .map(([key, value]) => [key.slice(prefix.length), value]));
+  }, [apiBase, holds]);
   /** Roster epoch: bumped only by the effect and its cleanup. */
   const epoch = useRef(0);
   /** Per-account request token, so one row's retry cannot cancel another row's read. */
@@ -184,25 +261,16 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
     accountId: string,
     request: { tokenId: string; operationId: string },
   ): Promise<GrokRedeemOutcome> => {
-    const hold = (attempt: GrokCouponAttempt, code = "attempt_unresolved"): GrokRedeemOutcome => {
-      uncertainRef.current.set(accountId, attempt);
-      setUncertain(current => ({ ...current, [accountId]: attempt }));
-      return { ok: false, code, replayed: false, operationId: attempt.operationId, uncertain: true };
-    };
-    const held = uncertainRef.current.get(accountId) ?? activeRedeems.current.get(accountId);
+    const key = `${apiBase}\u0000${accountId}`;
+    const hold = (attempt: GrokCouponAttempt, code = "attempt_unresolved"): GrokRedeemOutcome => (
+      { ok: false, code, replayed: false, operationId: attempt.operationId, uncertain: true }
+    );
+    const held = holdSnapshot().get(key);
     if (held) return hold(held);
-    activeRedeems.current.set(accountId, request);
-    const clearMatchingHold = () => {
-      // Once definitive, a follow-up GET must not make this attempt look active.
-      if (activeRedeems.current.get(accountId) === request) activeRedeems.current.delete(accountId);
-      if (uncertainRef.current.get(accountId)?.operationId === request.operationId) uncertainRef.current.delete(accountId);
-      setUncertain(current => {
-        if (current[accountId]?.operationId !== request.operationId) return current;
-        const next = { ...current };
-        delete next[accountId];
-        return next;
-      });
-    };
+    // Record intent before dispatch. Uncertain completions leave this entry in
+    // place; they never reinsert an older attempt over a newer operation.
+    writeHold(key, request);
+    const clearMatchingHold = () => clearHold(key, request.operationId);
     const bounded = createBoundedFetch(REDEEM_TIMEOUT_MS);
     try {
       const response = await fetch(`${apiBase}/api/grok/reset-coupons/consume`, {
@@ -212,15 +280,17 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
         signal: bounded.signal,
       });
       if (!response.ok) {
-        const code = errorCode(await response.json().catch(() => null));
-        if (["attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed", "redeem_failed"].includes(code)) return hold(request, code);
+        const failure: unknown = await response.json().catch(() => null);
+        const code = errorCode(failure);
+        if (unresolvedCode(code, failure)) return hold(request, code);
         clearMatchingHold();
         return { ok: false, code, replayed: false };
       }
-      const data = await response.json().catch(() => null) as unknown;
+      const data: unknown = await response.json().catch(() => null);
       const replayed = Boolean(data && typeof data === "object" && (data as { replayed?: unknown }).replayed === true);
       const code = settledCode(data);
-      if (code === null) return hold(request);
+      // Fail closed: an unrecognized or unresolved settled code cannot release the operation.
+      if (code === null || !DEFINITIVE_SETTLED_CODES.has(code)) return hold(request, code ?? "attempt_unresolved");
       clearMatchingHold();
       await read(accountId, epoch.current);
       return { ok: code === "redeemed", code, replayed };
@@ -230,7 +300,6 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
       return hold(request, "aborted");
     } finally {
       bounded.clear();
-      if (activeRedeems.current.get(accountId) === request) activeRedeems.current.delete(accountId);
     }
   }, [apiBase, read]);
 
