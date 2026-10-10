@@ -690,7 +690,9 @@ ocx agent roles set explorer xai/grok-4.5
 `ocx agent roles set <role> <model> --effort <level>` also sets the role's reasoning effort: it
 rewrites the role file's `model_reasoning_effort` line and writes `[codex].agents.<role>.reasoning`
 in omo.jsonc when LazyCodex has that level (`ultra` stays in the role file only, and an older
-`reasoning` is removed). A Save that changes only the model leaves both effort values as they were.
+`reasoning` is removed). A Save that changes only the model leaves both effort values as they were. A PUT with `"effort": null`
+removes the role file's `model_reasoning_effort` line and the omo.jsonc `reasoning`, so the role runs
+on its model's default effort.
 
 ### Auto-assign
 
