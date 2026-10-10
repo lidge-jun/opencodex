@@ -84,11 +84,23 @@ test.each(["", "bad type", "secret\nvalue", "x".repeat(129), { unsafe: "type" }]
   },
 );
 
-test("upstream error type accepts the 128-character bound and keeps the first valid type", () => {
+test("upstream error type records only a known class and keeps the first one", () => {
   const log = context();
   inspectResponseLogJson(log, JSON.stringify({ error: { type: "x".repeat(128) } }));
+  expect(log.upstreamErrorType).toBeUndefined();
   inspectResponseLogJson(log, JSON.stringify({ error: { type: "server_error" } }));
-  expect(log.upstreamErrorType).toBe("x".repeat(128));
+  inspectResponseLogJson(log, JSON.stringify({ error: { type: "rate_limit_error" } }));
+  expect(log.upstreamErrorType).toBe("server_error");
+});
+
+test("an opaque configured credential echoed as the error type is never recorded", () => {
+  const fixture = "private-provider-key-" + "G".repeat(32);
+  const log = context();
+  let row: RequestLogEntry | undefined;
+  inspectResponseLogJson(log, JSON.stringify({ error: { type: fixture, message: "fixture" } }));
+  addFinalRequestLog("probe", Date.now(), log, 503, undefined, entry => { row = entry; });
+  expect(log.upstreamErrorType).toBeUndefined();
+  expect(JSON.stringify(row)).not.toContain(fixture);
 });
 
 
@@ -187,4 +199,3 @@ for (const field of ["error", "last_error", "response"] as const) {
     expect(warnings.join("\n")).not.toContain(fixture);
   });
 }
-
