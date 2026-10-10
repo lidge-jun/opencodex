@@ -296,7 +296,7 @@ Drives no management route.
 
 ### `ocx message hosts remove`
 
-Usage: `ocx message hosts remove <alias-or-machine-uuid> [--json]`
+Usage: `ocx message hosts remove <alias-or-machine-uuid> [--transaction <uuid>] [--json]`
 
 Revoke local admission first and report any unconfirmed remote cleanup explicitly.
 
@@ -306,6 +306,7 @@ Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--transaction` | string | Remove only this exact enrollment; refuse a replacement transaction. |
 | `--json` | boolean | Emit local and remote revocation outcomes. |
 
 ### `ocx message hosts abandon`

@@ -144,9 +144,16 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
 }
 /** Revoke locally first, then attempt exact remote revocation; unknown cleanup never restores local admission. */
 export async function removeRemoteHost(store: RemoteMessageStore, selector: string, budget: MessageBudget,
-  capacity: RemoteCapacity, runner: RemoteControlRunner = runRemoteHelper, removeJournal = unlinkSync) {
-  const state = store.requireEnabled(), peer = store.peer(selector);
-  store.mutate(current => {
+  capacity: RemoteCapacity, runner: RemoteControlRunner = runRemoteHelper, removeJournal = unlinkSync,
+  expectedTransaction?: string) {
+  let peer!: RemoteState["peers"][number];
+  const state = store.mutate(current => {
+    const matches = current.peers.filter(item => item.alias === selector || item.machine.id === selector);
+    if (matches.length !== 1) throw remoteError("unknown_peer", "No unique enrolled messaging peer matches this exact host.");
+    peer = matches[0]!;
+    if (expectedTransaction !== undefined && (!isThreadId(expectedTransaction) || peer.transaction !== expectedTransaction)) {
+      throw remoteError("enrollment_conflict", "The peer no longer matches the cleanup transaction; no peer was removed.");
+    }
     forgetPendingTransaction(store, peer.transaction, removeJournal);
     current.peers = current.peers.filter(item => item.transaction !== peer.transaction);
   });
@@ -161,5 +168,5 @@ export async function removeRemoteHost(store: RemoteMessageStore, selector: stri
     } catch { /* Receipt explicitly preserves unconfirmed remote cleanup. */ }
   }
   return { protocol: REMOTE_PROTOCOL, machine: peer.machine, locallyRemoved: true, remote,
-    ...(remote === "unconfirmed" ? { remoteCleanupCommand: `ocx message hosts remove ${state.machine.id} --json` } : {}) };
+    ...(remote === "unconfirmed" ? { remoteCleanupCommand: `ocx message hosts remove ${state.machine.id} --transaction ${peer.transaction} --json` } : {}) };
 }

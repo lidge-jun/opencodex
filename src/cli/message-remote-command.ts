@@ -50,7 +50,7 @@ export async function runRemoteMessageCommand(args: RemoteMessageArgs, env: Node
       } else if (args.action === "hosts-probe") emit({ ssh: args.ssh, fingerprint: (await probeRemoteHost(args.ssh, budget, capacity)).fingerprint });
       else if (args.action === "hosts-add") emit(await enrollRemoteHost(store, args.alias, args.ssh, args.fingerprint, budget, capacity));
       else if (args.action === "hosts-remove") {
-        const receipt = await removeRemoteHost(store, args.host, budget, capacity); emit(receipt);
+        const receipt = await removeRemoteHost(store, args.host, budget, capacity, undefined, undefined, args.transaction); emit(receipt);
         return receipt.remote === "removed" ? 0 : 3;
       } else if (args.action === "_control") {
         emit(handleEnrollmentControl(store, JSON.parse(await readMessageInput(Bun.stdin.stream(), budget))));

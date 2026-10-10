@@ -4,7 +4,8 @@ The remote modules in `src/messaging/` implement explicitly enrolled Codex peers
 owner is `src/cli/message-remote-command.ts`, dynamically imported only after
 `src/cli/message-remote-args.ts` accepts an explicit remote command. Normal proxy
 startup, local messaging without a host, module imports and read-only peer listings
-activate no listener, SSH process, persistent state or timer.
+activate no listener, SSH process, persistent state or background timer. Explicit
+read/list commands allocate only their bounded command deadline and signal handlers.
 
 ## Identity, capabilities and storage
 
@@ -49,6 +50,9 @@ It does not remove enrolled peers, retry enrollment or claim remote cleanup. Old
 cannot publish from an abandoned journal or remove a replacement journal. Stale journals are
 not automatically discarded. A correlated receiver capacity refusal carries no capability,
 commits no new peer and reaches the initiator as `peer_capacity`, not an uncertain SSH outcome.
+Generated cleanup commands include `hosts remove --transaction`; removal checks that exact
+transaction under the mutation lock before changing state or contacting the remote node.
+An old receipt therefore cannot revoke a replacement enrollment of the same machine.
 
 ## Connection-bound authenticated gateway
 
@@ -116,13 +120,20 @@ overload waiting queue. Capacity is reserved before tracked work and released on
 Transport/parser buffers have their separate fixed frame/connection bounds; the
 2 MiB counter is not a measurement of the runtime's total heap usage.
 
-Setup shares one 30-second batch deadline across peers and both directions;
-refresh batches share ten seconds. `src/messaging/remote-process.ts` propagates
-cancellation through owned process groups, sends TERM then KILL and cancels retained
+Setup shares one 30-second batch deadline across peers and both directions. All initiated
+return leases receive a joined final renewal before startup succeeds; that round stays
+within the original setup deadline. Final and periodic renewals are bounded to five seconds,
+with a ten-second maintenance interval, preserving headroom within the 25-second lease.
+`src/messaging/remote-process.ts` propagates
+cancellation through owned process groups, sends TERM and (while the leader remains alive)
+KILL, and cancels retained
 pipes. Idempotent stop joins the same cleanup flight; helpers close in parallel
 under a three-second cleanup ceiling. Cancelled helper operations settle after that
-cleanup flight even if physical exit remains unresolved; such children retain their
-helper reservation and report incomplete cleanup, not proven absence. Published tunnel
+cleanup flight even if direct-child exit or natural pipe EOF remains unresolved; such helpers
+retain their reservation and report incomplete cleanup, not proven absence. Cancelling a
+pipe is not natural EOF. A historical process-group ID is not signalled after its leader exits;
+descendants that detach or close inherited pipes are outside the observed child/pipe guarantee.
+Published tunnel
 pairs remain owned after route withdrawal, so owner shutdown joins their cleanup and
 reports its failures. Existing daemons, proxies and unrelated SSH clients
 are never signalled. Owner generation changes and lease-refresh failures retire

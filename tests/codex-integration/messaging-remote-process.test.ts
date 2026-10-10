@@ -36,11 +36,13 @@ test("Linux inspection allows absent IPv6 tables but refuses failed or public li
   } finally { budget.dispose(); }
 });
 
-function fakeProcess(options: { exitCode?: number; output?: string; inputFailure?: boolean; asyncInputFailure?: boolean; exitOnSignal?: boolean } = {}) {
+function fakeProcess(options: { exitCode?: number; output?: string; inputFailure?: boolean; asyncInputFailure?: boolean; exitOnSignal?: boolean; holdPipes?: boolean } = {}) {
   let finish!: (code: number) => void, exitCode = options.exitCode ?? null;
   const signals: NodeJS.Signals[] = [];
   const exited = new Promise<number>(resolve => { finish = resolve; });
+  const controllers: ReadableStreamDefaultController<Uint8Array>[] = [];
   const stream = (text = "") => new ReadableStream<Uint8Array>({ start(controller) {
+    controllers.push(controller);
     if (text) controller.enqueue(new TextEncoder().encode(text));
     if (exitCode !== null) controller.close();
   } });
@@ -49,12 +51,13 @@ function fakeProcess(options: { exitCode?: number; output?: string; inputFailure
       write() { if (options.inputFailure) throw new Error("private fixture input diagnostic"); return 0; },
       end() { return options.asyncInputFailure ? Promise.reject(new Error("private fixture input diagnostic")) : 0; },
     } };
-  const exit = (code: number) => { exitCode = code; finish(code); };
+  const endPipes = () => { for (const controller of controllers) { try { controller.close(); } catch { /* Already cancelled. */ } } };
+  const exit = (code: number) => { exitCode = code; if (!options.holdPipes) endPipes(); finish(code); };
   if (exitCode !== null) finish(exitCode);
   const deps: RemoteHelperOptions = { spawn: () => child, signalGroup(_pid, signal) {
     signals.push(signal); if (options.exitOnSignal) exit(0);
   } };
-  return { child, deps, signals, exit };
+  return { child, deps, signals, exit, endPipes };
 }
 
 for (const inputFailure of [false, true]) {
@@ -76,9 +79,35 @@ for (const inputFailure of [false, true]) {
       expect(physicallyExited).toBe(false);
       expect(capacity.snapshot()).toEqual({ connections: 0, requests: 0, helpers: 1, outputBytes: 0 });
     } finally { clearTimeout(timer); fixture.exit(0); budget.dispose(); await fixture.child.exited; }
-    expect(capacity.snapshot().helpers).toBe(0);
+    // Forced cancellation of pipes cannot later prove natural EOF, even after leader exit.
+    expect(capacity.snapshot().helpers).toBe(1);
   }, 10000);
 }
+
+for (const exitOnSignal of [false, true]) test(`leader exit joins natural descendant pipe EOF without historical group signals (TERM=${exitOnSignal})`, async () => {
+  const fixture = fakeProcess({ holdPipes: true, exitOnSignal }), capacity = new RemoteCapacity();
+  const helper = spawnRemoteHelper(["fixture"], capacity, undefined, undefined, {}, fixture.deps);
+  if (!exitOnSignal) { fixture.exit(0); await fixture.child.exited; }
+  let settled = false;
+  const closing = helper.close().then(() => { settled = true; });
+  await Bun.sleep(550);
+  expect(settled).toBe(false); expect(fixture.signals).toEqual(exitOnSignal ? ["SIGTERM"] : []);
+  expect(capacity.snapshot().helpers).toBe(1);
+  fixture.endPipes(); await closing;
+  expect(capacity.snapshot().helpers).toBe(0); expect(fixture.signals).toEqual(exitOnSignal ? ["SIGTERM"] : []);
+});
+
+test("leader exit with held pipes reports bounded incomplete cleanup and keeps capacity after cancellation", async () => {
+  const fixture = fakeProcess({ holdPipes: true }), capacity = new RemoteCapacity();
+  const helper = spawnRemoteHelper(["fixture"], capacity, undefined, undefined, {}, fixture.deps);
+  fixture.exit(0); await fixture.child.exited;
+  const started = performance.now();
+  await expect(helper.close()).rejects.toThrow("cleanup budget");
+  expect(performance.now() - started).toBeLessThan(REMOTE_LIMITS.shutdownMs + 1000);
+  expect(fixture.signals).toEqual([]); expect(capacity.snapshot().helpers).toBe(1);
+  fixture.endPipes(); await Bun.sleep(0);
+  expect(capacity.snapshot().helpers).toBe(1);
+}, 6000);
 
 for (const asyncInputFailure of [false, true]) test(`a failed ${asyncInputFailure ? "async stdin end" : "stdin write"} retains ownership through successful cleanup`, async () => {
   const fixture = fakeProcess({ inputFailure: !asyncInputFailure, asyncInputFailure, exitOnSignal: true }), capacity = new RemoteCapacity(), budget = new MessageBudget();

@@ -39,7 +39,7 @@ A declaration may carry `usage`, the exact synopsis for a verified leaf. `capabi
 
 `ocx models auto-review status` and `ocx models auto-review set` read and update the global approval reviewer through the same management route as the Models panel. A refresh that can be retried is reported as pending and points to `ocx sync`; a failed refresh preserves the saved-settings receipt, exits 1, and directs operators to resolve the issue before syncing.
 
-The agents/routing leaf declares local `message sessions` and `message send`, plus explicit remote enable/disable/status, hosts (including exact-transaction abandonment) and serve commands. Session details distinguish local Unix discovery from authenticated loopback peer routes. Local transport belongs to [local messaging](local-messaging.md#command-local-cli); enrolled peers and foreground lifetime belong to [remote messaging](remote-messaging.md). Declarations import no messaging handlers and preserve baseline capability order. The operating-reference generator places these verbs in the agents/routing chapter.
+The agents/routing leaf declares local `message sessions` and `message send`, plus explicit remote enable/disable/status, hosts (including exact-transaction abandonment and guarded removal) and serve commands. Session details distinguish local Unix discovery from authenticated loopback peer routes. Local transport belongs to [local messaging](local-messaging.md#command-local-cli); enrolled peers and foreground lifetime belong to [remote messaging](remote-messaging.md). Declarations import no messaging handlers and preserve baseline capability order. The operating-reference generator places these verbs in the agents/routing chapter.
 
 ## Generated operating reference
 

@@ -46,6 +46,67 @@ test("pending enrollment abandonment requires one exact transaction UUID and no 
     ["hosts", "abandon", "--transaction", transaction, "--transaction", transaction]]) expect(parseRemoteMessageArgs(argv)).toBeNull();
 });
 
+test("transaction-qualified removal rejects malformed and duplicate guards while preserving ordinary syntax", () => {
+  const transaction = crypto.randomUUID();
+  expect(parseRemoteMessageArgs(["hosts", "remove", "worker", "--json"]))
+    .toEqual({ action: "hosts-remove", host: "worker", json: true });
+  expect(parseRemoteMessageArgs(["hosts", "remove", "worker", "--transaction", transaction, "--json"]))
+    .toEqual({ action: "hosts-remove", host: "worker", transaction, json: true });
+  for (const argv of [["hosts", "remove", "worker", "--transaction"],
+    ["hosts", "remove", "worker", "--transaction", "worker"],
+    ["hosts", "remove", "worker", "--transaction", transaction, "--transaction", transaction]]) {
+    expect(parseRemoteMessageArgs(argv)).toBeNull();
+  }
+});
+
+for (const receiptSource of ["remove", "abandon"] as const) {
+  test.skipIf(process.platform === "win32")(`old ${receiptSource} cleanup receipt cannot revoke a replacement enrollment or journal`, async () => {
+    const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();
+    pair.aStore.mutate(state => { state.peers = []; }); pair.bStore.mutate(state => { state.peers = []; });
+    const ssh = fakeSsh(pair, receiptSource === "abandon");
+    const add = () => enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, ssh.runner);
+    let runners = 0;
+    const cleanup: RemoteControlRunner = async (_argv, _budget, _capacity, stdin) => {
+      runners++; return JSON.stringify(handleEnrollmentControl(pair.aStore, JSON.parse(stdin!)));
+    };
+    try {
+      let receipt: { remoteCleanupCommand?: string }, oldTransaction: string;
+      if (receiptSource === "abandon") {
+        await expect(add()).rejects.toThrow("retained");
+        oldTransaction = pendingRemoteEnrollment(pair.aStore)!.transaction;
+        receipt = abandonRemoteEnrollment(pair.aStore, oldTransaction);
+      } else {
+        await add(); oldTransaction = pair.aStore.peer("worker").transaction;
+        receipt = await removeRemoteHost(pair.aStore, "worker", budget, capacity, async () => { throw new Error("lost"); });
+      }
+      const machineId = pair.aStore.requireEnabled().machine.id;
+      handleEnrollmentControl(pair.bStore, { protocol: REMOTE_PROTOCOL, action: "remove", params: { machineId, transaction: oldTransaction } });
+      await add();
+      const replacement = pair.bStore.peer(machineId);
+      expect(replacement.transaction).not.toBe(oldTransaction);
+      pair.bStore.mutate(state => { Object.assign(state.peers[0]!, { ssh: "fixture", hostKey: "fixture ssh-ed25519 Zml4dHVyZQ==\n", fingerprint: "SHA256:fixture" }); });
+      const state = pair.bStore.requireEnabled(), journalPath = join(pair.bStore.directory, "enrollment.json");
+      writeRemoteFile(journalPath, JSON.stringify({ alias: "pending", ssh: "fixture", fingerprint: "SHA256:fixture",
+        generation: state.generation, request: { protocol: REMOTE_PROTOCOL, action: "enroll", params: {
+          machine: state.machine, transaction: replacement.transaction, returnCapability: capability(), port: state.port } } }));
+      const beforeA = readRemoteFile(pair.aStore.path), beforeB = readRemoteFile(pair.bStore.path), journal = readRemoteFile(journalPath);
+      const parsed = parseRemoteMessageArgs(receipt.remoteCleanupCommand!.split(" ").slice(2));
+      expect(parsed).toEqual({ action: "hosts-remove", host: machineId, transaction: oldTransaction, json: true });
+      if (parsed?.action !== "hosts-remove") throw new Error("fixture cleanup command did not parse");
+      for (const guard of [parsed.transaction, "malformed"]) {
+        await expect(removeRemoteHost(pair.bStore, parsed.host, budget, capacity, cleanup, undefined, guard))
+          .rejects.toMatchObject({ code: "enrollment_conflict" });
+        expect(readRemoteFile(pair.aStore.path)).toBe(beforeA); expect(readRemoteFile(pair.bStore.path)).toBe(beforeB);
+        expect(readRemoteFile(journalPath)).toBe(journal); expect(runners).toBe(0);
+      }
+      const removed = await removeRemoteHost(pair.bStore, machineId, budget, capacity, cleanup, undefined, replacement.transaction);
+      expect(removed.remote).toBe("removed"); expect(runners).toBe(1);
+      expect(pair.aStore.requireEnabled().peers).toHaveLength(0); expect(pair.bStore.requireEnabled().peers).toHaveLength(0);
+      expect(readRemoteFile(journalPath)).toBeNull();
+    } finally { budget.dispose(); await pair.close(); }
+  });
+}
+
 test.skipIf(process.platform === "win32")("receiver capacity is a correlated refusal, retains recoverable intent and preserves idempotent enrollment", async () => {
   const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();
   pair.aStore.mutate(state => { state.peers = []; });
@@ -83,7 +144,7 @@ test.skipIf(process.platform === "win32")("explicit abandon works across disable
     pair.aStore.disable(); expect(pendingRemoteEnrollment(pair.aStore)?.stale).toBe(true);
     const receipt = abandonRemoteEnrollment(pair.aStore, pending.transaction);
     expect(receipt.remote).toBe("unconfirmed"); expect(receipt.locallyAbandoned).toBe(true);
-    expect(receipt.remoteCleanupCommand).toBe(`ocx message hosts remove ${pair.aStore.read()!.machine.id} --json`);
+    expect(receipt.remoteCleanupCommand).toBe(`ocx message hosts remove ${pair.aStore.read()!.machine.id} --transaction ${pending.transaction} --json`);
     expect(pendingRemoteEnrollment(pair.aStore)).toBeNull(); expect(ssh.controls).toBe(1);
     expect(pair.bStore.requireEnabled().peers).toHaveLength(1);
     const port = pair.aStore.read()!.port; pair.aStore.enable(port);
@@ -291,10 +352,11 @@ test.skipIf(process.platform === "win32")("unconfirmed fingerprint sends no capa
     await expect(enrollRemoteHost(pair.aStore, "new", "fixture", "SHA256:other", budget, capacity, ssh.runner)).rejects.toThrow("confirmed");
     expect(ssh.controls).toBe(0);
     pair.aStore.mutate(state => { Object.assign(state.peers[0]!, { ssh: "fixture", hostKey: "fixture ssh-ed25519 Zml4dHVyZQ==\n", fingerprint: "SHA256:fixture" }); });
+    const transaction = pair.aStore.peer("worker").transaction;
     const receipt = await removeRemoteHost(pair.aStore, "worker", budget, capacity, async () => { throw new Error("lost"); });
     expect(receipt.locallyRemoved).toBe(true); expect(receipt.remote).toBe("unconfirmed");
     expect(pair.aStore.requireEnabled().peers).toHaveLength(0);
-    expect(receipt.remoteCleanupCommand).toBe(`ocx message hosts remove ${pair.aStore.requireEnabled().machine.id} --json`);
+    expect(receipt.remoteCleanupCommand).toBe(`ocx message hosts remove ${pair.aStore.requireEnabled().machine.id} --transaction ${transaction} --json`);
   } finally { budget.dispose(); await pair.close(); }
 });
 
