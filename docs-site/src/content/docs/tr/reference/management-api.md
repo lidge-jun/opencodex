@@ -94,15 +94,9 @@ hatalar" sütunu bu tabloyu tekrarlamak yerine rotaya özgü ek sonuçları list
 
 Deneme, kullanımdan önce deftere kalıcı olarak kaydedilir. Yalnızca üst hizmetten doğrulanmış başarılı kullanım yanıtı alınırsa `redeemed` kaydedilir; kuponun listeden kaybolması bu işlemin başarılı olduğunu kanıtlamaz. Zaman aşımı veya sonuç kaydı hatasından sonra yeniden deneme yalnızca kullanılabilirliği sorgular, kuponu tekrar kullanmaz ve `attempt_unresolved` döndürür. Yakın tarihli deneme `attempt_in_progress` döndürür. Geç tamamlanan incelemenin reddi yalnızca hâlâ `open` olan bir işleme yazılır; durum değişmişse `operation_state_changed` döner ve kalıcı durumu okumak için aynı işlem kimliğiyle yeniden denenmelidir. Okunamayan veya kilitlenemeyen defter, kullanım yapmadan `ledger_unavailable` döndürür.
 
+Doğrulanamayan kullanım HTTP 502, `error.code: "attempt_unresolved"` ve geçerli `operationId` döndürür. Bu kimliği koruyun; yeni kimlik farklı bir işlem başlatır. CLI kimliği göndermeden önce üretir ve teslimat veya yanıt belirsizse aynı `--operation-id` değerini koruma yönergesi verir. Birinci sürüm defterdeki eski `open` kayıtları ve doğrulanmamış `redeem_failed` kayıtları belirsiz denemeler olarak karantinaya alınır; yeniden kullanıma izin vermezler.
 
-Kontrol paneli her iki kupon yolunu da **Providers > xAI Grok > Accounts**
-üzerinden yürütür: oturum açmış her hesap satırı, kalan kupon sayısını gösteren
-bir bilet rozeti taşır ve rozet, geçerlilik pencerelerini listeleyen ve süresi
-dolmaya en yakın kuponu kullanan bir iletişim kutusu açar. İletişim kutusu
-istemci tarafından üretilen bir `operationId` gönderir ve yeniden denemek yerine
-zaman aşımından sonra göndermeyi durdurur; çünkü günlük kaydı hâlâ açık olan
-bir kullanım yeniden yürütülür. `ocx account grok-reset-coupons` uçbirim
-eşdeğeri olarak kalır.
+**Providers > xAI Grok > Accounts** bölümünde her hesabın bilet rozeti kalan kuponları ve geçerlilik aralıklarını gösterir. İletişim kutusu istemcinin ürettiği bir `operationId` gönderir. Teslimat veya sonuç belirsizse hesap denetleyicisi bağlı kaldığı sürece, iletişim kutusu kapatılıp yeniden açılsa bile aynı denemeyi korur. Yenileme yalnızca GET gönderir ve başka bir kullanım POST isteğine izin vermez. Uçbirim karşılığı `ocx account grok-reset-coupons` komutudur.
 
 Claude kullanım sıfırlamaları **Providers > Anthropic > Accounts** üzerinden aynı
 şekilde çalışır. Oturum açmış her hesap satırında kalan sıfırlamaları gösteren

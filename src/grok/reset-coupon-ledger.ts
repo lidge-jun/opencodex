@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { atomicWriteFile } from "../config/atomic-write";
+import { closeSync, fsyncSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { atomicWriteFileStreamed } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import { getConfigDir } from "../config/paths";
 
@@ -41,7 +41,7 @@ interface GrokResetCouponOperationState {
 }
 
 interface GrokResetCouponLedger {
-  version: 1;
+  version: 2;
   operations: Record<string, GrokResetCouponOperationState>;
 }
 
@@ -54,12 +54,12 @@ function readGrokCouponLedger(filePath: string): GrokResetCouponLedger {
   let raw: string;
   try { raw = readFileSync(filePath, "utf-8"); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, operations: {} };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 2, operations: {} };
     throw new Error("Grok coupon ledger is unavailable; existing records were preserved.");
   }
   try {
-    const parsed = JSON.parse(raw) as GrokResetCouponLedger;
-    if (!parsed || parsed.version !== 1 || !parsed.operations
+    const parsed = JSON.parse(raw) as Omit<GrokResetCouponLedger, "version"> & { version: unknown };
+    if (!parsed || (parsed.version !== 1 && parsed.version !== 2) || !parsed.operations
       || typeof parsed.operations !== "object" || Array.isArray(parsed.operations)) throw new Error();
     for (const op of Object.values(parsed.operations)) {
       if (!op || typeof op.accountId !== "string" || !op.accountId
@@ -69,7 +69,17 @@ function readGrokCouponLedger(filePath: string): GrokResetCouponLedger {
         || (op.code !== undefined && typeof op.code !== "string")
         || (op.tokenValidityEnd !== undefined && !Number.isFinite(op.tokenValidityEnd))) throw new Error();
     }
-    return parsed;
+    if (parsed.version === 1) {
+      for (const op of Object.values(parsed.operations)) {
+        // Old opens (and transport failures recorded as failed) may already
+        // have dispatched. Only version-two opens prove pre-dispatch state.
+        if (op.status === "open" || (op.status === "failed" && op.code === "redeem_failed")) {
+          op.status = "attempted";
+          delete op.code;
+        }
+      }
+    }
+    return { version: 2, operations: parsed.operations };
   } catch {
     throw new Error("Grok coupon ledger is unreadable; existing records were preserved.");
   }
@@ -83,7 +93,18 @@ function writeGrokCouponLedger(filePath: string, ledger: GrokResetCouponLedger, 
   ledger.operations = Object.fromEntries(
     Object.entries(ledger.operations).filter(([, op]) => op.updatedAt > retentionCutoff),
   );
-  atomicWriteFile(filePath, JSON.stringify(ledger, null, 2));
+  atomicWriteFileStreamed(filePath, descriptor => writeFileSync(descriptor, JSON.stringify(ledger, null, 2)), {
+    afterRename: target => {
+      // The shared streamed writer flushes the temp. A spend claim must also
+      // refuse on a POSIX directory-sync failure before dispatch, rather than
+      // relying on that writer's best-effort parent sync. Windows has no
+      // portable directory descriptor and retains the writer's platform contract.
+      if (process.platform === "win32") return;
+      const descriptor = openSync(dirname(target), "r");
+      try { fsyncSync(descriptor); }
+      finally { closeSync(descriptor); }
+    },
+  });
 }
 
 const MAX_GROK_RESET_COUPON_OPERATION_IDS = 256;

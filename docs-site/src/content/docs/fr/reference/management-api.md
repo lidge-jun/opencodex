@@ -89,14 +89,9 @@ résultats propres à chaque route, sans répéter ce tableau.
 
 La tentative est enregistrée durablement avant l’échange. Seule une réponse de succès confirmée par le service en amont permet d’enregistrer `redeemed` ; la disparition du coupon de la liste ne prouve pas que cette opération a réussi. Après un délai dépassé ou un résultat non enregistré, les nouvelles requêtes vérifient seulement la disponibilité, sans nouvel échange, et renvoient `attempt_unresolved`. Une tentative récente renvoie `attempt_in_progress`. Un refus issu d’une inspection tardive ne peut régler qu’une opération encore `open` ; sinon, `operation_state_changed` demande de réessayer avec le même identifiant pour lire son état durable. Un registre illisible ou verrouillé renvoie `ledger_unavailable` sans lancer d’échange.
 
+Un échange non confirmé renvoie HTTP 502 avec `error.code: "attempt_unresolved"` et l’`operationId` effectif. Conservez cet identifiant : un nouvel identifiant lancerait une autre opération. La CLI crée l’identifiant avant l’envoi et indique de conserver le même `--operation-id` si la livraison ou la réponse est incertaine. Les anciens enregistrements `open` du registre version un et les `redeem_failed` non confirmés sont isolés comme tentatives incertaines et n’autorisent aucun nouvel échange.
 
-Le tableau de bord pilote les deux chemins de coupon depuis **Providers > xAI Grok > Accounts** : chaque
-ligne de compte connecté porte un badge de ticket indiquant le nombre de coupons restants, et le
-badge ouvre une boîte de dialogue qui liste les fenêtres de validité et échange le coupon le plus
-proche de l'expiration. La boîte de dialogue envoie un `operationId` émis par le client, et cesse
-d'envoyer après un délai d'attente au lieu de réessayer, car un échange dont l'enregistrement du
-journal est encore ouvert s'exécuterait de nouveau. `ocx account grok-reset-coupons` reste l'équivalent
-en terminal.
+Dans **Providers > xAI Grok > Accounts**, le badge de ticket de chaque compte affiche les coupons restants et leurs fenêtres de validité. Le dialogue envoie un `operationId` créé par le client. Si la livraison ou le résultat est incertain, le contrôleur du compte conserve cette tentative tant qu’il reste monté, même après fermeture puis réouverture du dialogue. L’actualisation utilise uniquement GET et n’autorise aucun autre POST d’échange. `ocx account grok-reset-coupons` est l’équivalent en terminal.
 
 Les réinitialisations de l’utilisation de Claude fonctionnent de la même manière depuis **Providers > Anthropic > Accounts**. Chaque ligne de compte connecté porte un badge de ticket indiquant le nombre de réinitialisations restantes, et la boîte de dialogue en utilise une après une seconde confirmation. Une réinitialisation recharge les limites sur 5 heures et sur une semaine sans déplacer le jour de réinitialisation hebdomadaire. Si une demande ne reçoit pas de réponse, la boîte de dialogue conserve son `operationId` et propose de réessayer avec le même identifiant pendant dix minutes, comme le fait le client Claude Code pour reprendre une demande ; toute nouvelle opération pour la même attribution est refusée jusque-là. L’utilisation est réservée au tableau de bord : le jeton administrateur seul reçoit `403 session_required`.
 

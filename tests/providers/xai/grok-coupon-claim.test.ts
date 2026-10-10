@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -31,9 +32,10 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 function identity() { return { accountId: "fixture-account", tokenId: TOKEN.tokenId, operationId: OP }; }
-function request(omitToken = false): ManagementContext {
+function request(omitToken = false, omitOperation = false): ManagementContext {
   const url = new URL("http://localhost/api/grok/reset-coupons/consume");
-  const body = { ...identity(), tokenId: omitToken ? undefined : TOKEN.tokenId };
+  const body = { ...identity(), tokenId: omitToken ? undefined : TOKEN.tokenId,
+    operationId: omitOperation ? undefined : OP };
   const req = new Request(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return { req, url, config: {}, deps: {}, version: "test" } as ManagementContext;
 }
@@ -48,6 +50,108 @@ function confirmedRedemption() {
 function busySettlement() {
   return new ConfigMutationLockError("Config mutation already in progress", { cause: { code: "SQLITE_BUSY" } });
 }
+
+test("the attempted claim flushes its file and parent before redemption", async () => {
+  const sync = fs.fsyncSync;
+  const flushed: string[] = [];
+  const flush = spyOn(fs, "fsyncSync").mockImplementation(fd => {
+    flushed.push(fs.fstatSync(fd).isDirectory() ? "directory" : "file");
+    sync(fd);
+  });
+  const redeem = confirmedRedemption().mockImplementation(async () => {
+    expect(flushed).toContain("file");
+    if (process.platform !== "win32") expect(flushed).toContain("directory");
+    expect(JSON.parse(readFileSync(ledger.grokCouponJournalPath(), "utf8")).operations[OP].status).toBe("attempted");
+    return { success: true, status: 0 };
+  });
+  const remaining = spyOn(coupons, "getGrokRemainingResets").mockImplementation(async () => {
+    // Ignore the initial open: these flushes must belong to the attempted claim.
+    flushed.length = 0;
+    return { tokens: [TOKEN] };
+  });
+  spies.push(flush, remaining);
+  expect((await handleGrokCouponRoutes(request()))!.status).toBe(200);
+  expect(redeem).toHaveBeenCalledTimes(1);
+});
+
+for (const failure of ["file", "directory"] as const) {
+  test.skipIf(failure === "directory" && process.platform === "win32")(`a claim ${failure} fsync failure prevents redemption`, async () => {
+    const redeem = confirmedRedemption();
+    const sync = fs.fsyncSync;
+    const remaining = spyOn(coupons, "getGrokRemainingResets").mockImplementation(async () => {
+      const flush = spyOn(fs, "fsyncSync").mockImplementation(fd => {
+        if (fs.fstatSync(fd).isDirectory() === (failure === "directory")) throw new Error("fixture flush failure");
+        sync(fd);
+      });
+      spies.push(flush);
+      return { tokens: [TOKEN] };
+    });
+    spies.push(remaining);
+    const response = await handleGrokCouponRoutes(request());
+    expect(response!.status).toBe(500);
+    expect((await response!.json()).error.code).toBe("attempt_mark_failed");
+    expect(redeem).not.toHaveBeenCalled();
+  });
+}
+
+for (const tokenId of [TOKEN.tokenId, undefined]) {
+  test(`a legacy version-one open with ${tokenId ? "known" : "unknown"} token never dispatches`, async () => {
+    writeFileSync(ledger.grokCouponJournalPath(), JSON.stringify({ version: 1, operations: {
+      [OP]: { accountId: "fixture-account", tokenId, status: "open", createdAt: Date.now() - 120_000, updatedAt: Date.now() - 120_000 },
+    } }));
+    const redeem = confirmedRedemption();
+    const response = await handleGrokCouponRoutes(request());
+    expect(response!.status).toBe(409);
+    expect((await response!.json()).error.code).toBe("attempt_unresolved");
+    expect(redeem).not.toHaveBeenCalled();
+  });
+}
+
+test("a legacy redemption failure with unconfirmed delivery is quarantined", async () => {
+  writeFileSync(ledger.grokCouponJournalPath(), JSON.stringify({ version: 1, operations: {
+    [OP]: { ...identity(), status: "failed", code: "redeem_failed", createdAt: Date.now() - 120_000, updatedAt: Date.now() - 120_000 },
+  } }));
+  const redeem = confirmedRedemption();
+  const response = await handleGrokCouponRoutes(request());
+  expect(response!.status).toBe(409);
+  expect((await response!.json()).error.code).toBe("attempt_unresolved");
+  expect(redeem).not.toHaveBeenCalled();
+});
+
+for (const [status, code] of [["settled", "redeemed"], ["failed", "coupon_unavailable"]] as const) {
+  test(`a legacy definitive ${status} outcome retains its replay`, async () => {
+    writeFileSync(ledger.grokCouponJournalPath(), JSON.stringify({ version: 1, operations: {
+      [OP]: { ...identity(), status, code, createdAt: Date.now(), updatedAt: Date.now() },
+    } }));
+    const redeem = confirmedRedemption();
+    const response = await handleGrokCouponRoutes(request());
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toMatchObject({ code, replayed: true });
+    expect(redeem).not.toHaveBeenCalled();
+  });
+}
+
+test("new pre-dispatch opens are stored in version two and remain claimable", () => {
+  expect(ledger.openGrokResetCouponOperation(identity()).kind).toBe("execute");
+  expect(JSON.parse(readFileSync(ledger.grokCouponJournalPath(), "utf8")).version).toBe(2);
+  expect(ledger.openGrokResetCouponOperation(identity()).kind).toBe("execute");
+  expect(ledger.markGrokResetCouponAttempt(OP, TOKEN.tokenId)).toBe(true);
+  expect(ledger.openGrokResetCouponOperation(identity()).kind).toBe("replay");
+});
+
+test("uncertain redemption returns the generated operation id as its retry anchor", async () => {
+  const redeem = confirmedRedemption().mockRejectedValue(new Error("fixture connection reset"));
+  const response = await handleGrokCouponRoutes(request(false, true));
+  const body = await response!.json();
+  expect(response!.status).toBe(502);
+  expect(body.operationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  expect(body.error.code).toBe("attempt_unresolved");
+  expect(JSON.parse(readFileSync(ledger.grokCouponJournalPath(), "utf8")).operations[body.operationId].status).toBe("attempted");
+  const ctx = request();
+  ctx.req = new Request(ctx.url, { method: "POST", body: JSON.stringify({ ...identity(), operationId: body.operationId }) });
+  expect((await handleGrokCouponRoutes(ctx))!.status).toBe(409);
+  expect(redeem).toHaveBeenCalledTimes(1);
+});
 
 test("confirmed redemption settles after a real child releases the config mutation lock", async () => {
   const redeem = confirmedRedemption();
@@ -263,7 +367,7 @@ test("an unconfirmed HTTP 200 redemption preserves attempted state rather than r
   spies.push(auth, remaining, redeem);
   const response = await handleGrokCouponRoutes(request());
   expect(response!.status).toBe(502);
-  expect((await response!.json()).error.code).toBe("redeem_failed");
+  expect((await response!.json()).error.code).toBe("attempt_unresolved");
   expect(ledger.openGrokResetCouponOperation(identity())).toMatchObject({ kind: "replay", code: undefined });
   expect(JSON.parse(readFileSync(ledger.grokCouponJournalPath(), "utf8")).operations[OP].status).toBe("attempted");
   expect(redeem).toHaveBeenCalledTimes(1);

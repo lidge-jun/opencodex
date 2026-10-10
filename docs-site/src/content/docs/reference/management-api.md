@@ -93,13 +93,9 @@ route-specific results rather than repeating this table.
 
 An attempt is durably claimed before redemption. Only a confirmed upstream redemption response can record `redeemed`; a coupon missing from the remaining list does not prove this operation succeeded. After a timeout or missing settlement, retries inspect availability without redeeming again and return `attempt_unresolved`; a recent attempt returns `attempt_in_progress`. A late inspection refusal settles only an operation still `open`; otherwise `operation_state_changed` asks the caller to retry the same operation ID and read its durable state. An unreadable or locked ledger returns `ledger_unavailable` without dispatching a redemption.
 
+An unconfirmed redemption returns HTTP 502 with `error.code: "attempt_unresolved"` and the effective `operationId`. Preserve that ID; a replacement ID would start a different operation. The CLI creates the ID before sending and prints `--operation-id` guidance if delivery or the response is uncertain. Legacy version-one `open` records and unconfirmed `redeem_failed` records are quarantined as uncertain; they never authorize another redemption.
 
-The dashboard drives both coupon paths from **Providers > xAI Grok > Accounts**: each
-signed-in account row carries a ticket badge with its remaining coupon count, and the
-badge opens a dialog that lists validity windows and redeems the coupon closest to
-expiry. The dialog sends a client-minted `operationId`, and it stops sending after a
-timeout instead of retrying, because a redemption whose journal record is still open
-would execute again. `ocx account grok-reset-coupons` remains the terminal equivalent.
+The dashboard at **Providers > xAI Grok > Accounts** lists remaining coupons and their validity windows from each account’s ticket badge. It sends a client-minted `operationId`. After uncertain delivery or an unknown-outcome response, the account controller retains that attempt while it remains mounted, including across dialog close/reopen. Availability refreshes issue GET only and never authorize another consume POST. `ocx account grok-reset-coupons` is the terminal equivalent.
 
 Claude usage resets work the same way from **Providers > Anthropic > Accounts**. Each
 signed-in account row carries a ticket badge with its remaining resets, and the dialog

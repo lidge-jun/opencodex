@@ -75,12 +75,9 @@ Authorization: Bearer <admin-token>
 
 兑换前会将尝试持久记录在账本中。只有收到上游确认兑换成功的响应，才会记录 `redeemed`；券从列表中消失不能证明本次操作成功。超时或结果保存失败后，重试只查询可用性，不会再次兑换，并返回 `attempt_unresolved`；近期尝试返回 `attempt_in_progress`。迟到的检查拒绝只能写入仍处于 `open` 的操作；状态已变更时返回 `operation_state_changed`，应使用相同操作 ID 重试以读取持久状态。账本无法读取或锁定时返回 `ledger_unavailable`，不执行兑换。
 
+无法确认兑换结果时，返回 HTTP 502、`error.code: "attempt_unresolved"` 和实际的 `operationId`。请保留该 ID；新 ID 会启动另一项操作。CLI 在发送前生成 ID，并在请求送达或响应不确定时提示保留同一个 `--operation-id`。第一版账本的旧 `open` 记录和结果未确认的 `redeem_failed` 记录会被隔离为不确定尝试，不允许再次兑换。
 
-仪表板从 **Providers > xAI Grok > Accounts** 驱动这两条优惠券路径：每个已登录账号行
-都带有显示剩余优惠券数量的票据徽章，该徽章会打开一个对话框，列出有效期窗口并兑换
-最接近到期的优惠券。该对话框会发送客户端生成的 `operationId`，并在超时后停止发送而不是
-重试，因为 journal 记录仍处于打开状态的兑换会再次执行。`ocx account grok-reset-coupons`
-仍然是对应的终端命令。
+在 **Providers > xAI Grok > Accounts** 中，每个账号的票据徽章可查看剩余优惠券及有效期。对话框发送客户端生成的 `operationId`。请求送达或结果不确定时，账号控制器在保持挂载期间保留同一次尝试，关闭并重新打开对话框也会保留。刷新只发送 GET，不允许额外的兑换 POST。对应的终端命令是 `ocx account grok-reset-coupons`。
 
 Claude 用量重置同样可以从 **Providers > Anthropic > Accounts** 操作。每个已登录账号行都带有显示剩余重置次数的票据徽章，对话框会在再次确认后使用一次重置机会。重置会恢复 5 小时和每周用量额度，但不会改变每周额度的重置日期。如果请求未及时返回结果，对话框会保留其 `operationId`，并在十分钟内提供使用同一 ID 重试的选项；Claude Code 客户端也以此方式恢复。在此期间，同一重置机会的新操作会被拒绝。重置机会只能通过仪表板使用：仅凭管理员令牌会收到 `403 session_required`。
 

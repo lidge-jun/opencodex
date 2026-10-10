@@ -276,8 +276,54 @@ test("a transport-rejected redemption stops posting, re-reads the account, and o
   expect(harness.reads.filter(id => id === "acct-a").length).toBe(2);
   expect([...host.querySelectorAll(".modal-card button")].some(b => (b.textContent ?? "").includes("Use coupon"))).toBe(false);
 
+  harness.coupons.set("acct-a", []);
   await act(async () => { buttonWithText(host, "Re-read account").click(); await flush(); });
   expect(harness.consumes.length).toBe(1);
+  expect(dialogText(host)).toContain("original redemption remains unconfirmed");
+  expect(dialogText(host)).not.toContain("redemption went through");
+  await act(async () => { buttonWithText(host, "Close").click(); await flush(); });
+  await openDialog(host);
+  expect(dialogText(host)).toContain("outcome is unknown");
+  expect([...host.querySelectorAll(".modal-card button")].some(b => (b.textContent ?? "").includes("Use 1 coupon"))).toBe(false);
+});
+
+for (const [code, status] of [["attempt_unresolved", 502], ["redeem_failed", 502], ["attempt_in_progress", 409], ["attempt_reconcile_failed", 502], ["missing_code", 200]] as const) {
+  test(`a returned ${code} stays unknown across dialog close and reopen`, async () => {
+    harness.coupons.set("acct-a", [COUPON("restok_a1", 10)]);
+    harness.consumeReply = async () => json(code === "missing_code" ? { success: true } : { error: { code } }, status);
+    const host = await mountPanel([ACCOUNT("acct-a")]);
+    await openDialog(host);
+    await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
+    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+    expect(dialogText(host)).toContain("outcome is unknown");
+    const held = harness.consumes[0].operationId;
+    await act(async () => { buttonWithText(host, "Close").click(); await flush(); });
+    await openDialog(host);
+    expect(dialogText(host)).toContain("outcome is unknown");
+    await act(async () => { buttonWithText(host, "Re-read account").click(); await flush(); });
+    expect(harness.consumes).toHaveLength(1);
+    expect(harness.consumes[0].operationId).toBe(held);
+    expect([...host.querySelectorAll(".modal-card button")].some(b => (b.textContent ?? "").includes("Use coupon"))).toBe(false);
+  });
+}
+
+test("closing and reopening during dispatch cannot post a new operation", async () => {
+  harness.coupons.set("acct-a", [COUPON("restok_a1", 10)]);
+  const finishers: Array<(response: Response) => void> = [];
+  harness.consumeReply = () => new Promise(resolve => { finishers.push(resolve); });
+  const host = await mountPanel([ACCOUNT("acct-a")]);
+  await openDialog(host);
+  await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
+  await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+  try {
+    await act(async () => { host.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!.click(); await flush(); });
+    await openDialog(host);
+    await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
+    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+    expect(harness.consumes).toHaveLength(1);
+  } finally {
+    await act(async () => { for (const finish of finishers) finish(json({ code: "redeemed" })); await flush(); });
+  }
 });
 
 test("one row's retry does not cancel another row's in-flight read", async () => {

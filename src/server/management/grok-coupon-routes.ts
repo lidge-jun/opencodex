@@ -199,6 +199,12 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
           config,
         );
       }
+      if (opRecord.tokenId === undefined) {
+        // Legacy opens may already have dispatched without recording a token.
+        return jsonResponse({ operationId: effectiveOpId, error: {
+          code: "attempt_unresolved", message: "The prior operation has no recorded token; preserve this operationId and do not create a replacement attempt",
+        } }, 409, req, config);
+      }
       // "attempted" with no recorded outcome: the spend call fired (or the
       // process died right after the mark) but nothing was settled. Never
       // replay this as a success — reconcile against upstream instead. A
@@ -207,27 +213,12 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
       if (requestedTokenId !== undefined && requestedTokenId !== opRecord.tokenId) {
         // The retry names a different coupon than the one marked: spending
         // either of them would surprise the caller — refuse and let them
-        // retry with the recorded token or a fresh operationId.
+        // retry with the recorded token and preserve the operationId.
         return jsonResponse(
           {
             error: {
               code: "operation_token_mismatch",
-              message: "Operation was attempted with a different coupon; retry with the same tokenId or a new operationId",
-            },
-          },
-          409,
-          req,
-          config,
-        );
-      }
-      if (opRecord.tokenId === undefined) {
-        // An attempted record always stores its token — an absent one means
-        // the ledger was hand-edited; refuse rather than guess at a spend.
-        return jsonResponse(
-          {
-            error: {
-              code: "attempt_unresolved",
-              message: "Attempted operation has no recorded token; retry with a new operationId",
+              message: "Operation was attempted with a different coupon; preserve the operationId and retry with the recorded tokenId",
             },
           },
           409,
@@ -243,7 +234,7 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
         // no additional upstream inspection is needed until that window ends.
         // Older attempts are inspected without another redemption.
         return jsonResponse(
-          {
+          { operationId: effectiveOpId,
             error: {
               code: "attempt_in_progress",
               message: "A redemption attempt for this operation is recent and may still be running; retry later",
@@ -260,7 +251,7 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
         remainingTokens = remaining.tokens;
       } catch (err) {
         return jsonResponse(
-          { error: { code: "attempt_reconcile_failed", message: err instanceof Error ? err.message : String(err) } },
+          { operationId: effectiveOpId, error: { code: "attempt_reconcile_failed", message: err instanceof Error ? err.message : String(err) } },
           502,
           req,
           config,
@@ -269,7 +260,7 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
       // Availability cannot identify which request consumed a coupon. Even a
       // missing, still-valid token does not confirm this operation succeeded.
       const listed = remainingTokens.some((t) => t.tokenId === opRecord.tokenId);
-      return jsonResponse({ error: {
+      return jsonResponse({ operationId: effectiveOpId, error: {
         code: "attempt_unresolved",
         message: listed
           ? "The prior redemption may still complete; its listed coupon will not be redeemed again"
@@ -434,7 +425,10 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
         // A transport error cannot prove that the irreversible request failed.
         // Keep "attempted" so a later retry can inspect without dispatching again.
         return jsonResponse(
-          { error: { code: "redeem_failed", message: err instanceof Error ? err.message : String(err) } },
+          { operationId: effectiveOpId, accountId, tokenId: resolvedTokenId, error: {
+            code: "attempt_unresolved",
+            message: "Redemption delivery is unconfirmed; reuse this operationId to inspect its state and do not create a replacement attempt",
+          } },
           502,
           req,
           config,
@@ -442,7 +436,7 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
       }
 
       // A confirmed redemption remains successful even when settlement fails.
-      // The durable attempted record makes later retries reconciliation-only.
+      // The existing claim protects retries if settlement does not land.
       let settlementRecorded = false;
       for (let attempt = 0; attempt < 5; attempt += 1) {
         try {
