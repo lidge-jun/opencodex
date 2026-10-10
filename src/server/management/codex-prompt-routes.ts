@@ -30,11 +30,14 @@ import {
   composeProjection,
   computePromptProbeStateFingerprint,
   findInvalidCharacter,
+  importBaseVariant,
   inspectOwnership,
   normalizeBody,
   previewAdopt,
+  previewBaseImport,
   previewSalvage,
   readPromptLayers,
+  recoverPromptJournal,
   salvageProjection,
   selectBaseVariant,
   setToggle,
@@ -76,6 +79,7 @@ const WRITE_ERROR_STATUS: Record<WriteError, number> = {
   unknown_layer: 400,
   store_unreadable: 409,
   invalid_characters: 400,
+  body_too_large: 400,
   write_superseded: 409,
   // Not the caller's fault and not a race: the filesystem refused the write and the
   // transaction rolled itself back. 500 rather than 409 — retrying the same request
@@ -84,6 +88,8 @@ const WRITE_ERROR_STATUS: Record<WriteError, number> = {
   recovery_required: 409,
   locked: 409,
   unsafe: 422,
+  import_body_changed: 409,
+  unsupported_form: 409,
 };
 
 /** Read-only view for the route test that asserts every mapping is a client error. */
@@ -335,7 +341,12 @@ export async function handleCodexPromptRoutes(ctx: ManagementContext): Promise<R
     if (!body) return fail(ctx, "invalid_body", 400, "expected a JSON object");
     const id = body.id;
     if (typeof id !== "string") return fail(ctx, "invalid_body", 400, "id must be a string");
-    if (typeof body.enabled !== "boolean") return fail(ctx, "invalid_body", 400, "enabled must be a boolean");
+    // `null` is the restore-the-default verb: it deletes the line instead of
+    // writing the documented default back as a literal, so a later upstream
+    // change to the default still reaches this file.
+    if (typeof body.enabled !== "boolean" && body.enabled !== null) {
+      return fail(ctx, "invalid_body", 400, "enabled must be a boolean or null");
+    }
     const revision = revisionOf(body);
     if (!revision) return fail(ctx, "stale_revision", 409, "revision required");
 
@@ -386,6 +397,109 @@ export async function handleCodexPromptRoutes(ctx: ManagementContext): Promise<R
       selection = { kind: "variant", id: body.id };
     }
     return settle(ctx, selectBaseVariant(selection, revision, paths(ctx)));
+  }
+
+  if (url.pathname === "/api/codex-prompt/base/import" && req.method === "POST") {
+    // The adopt flow for `model_instructions_file`: preview first, write only on
+    // confirmation. The verb exists because /base/select refuses the `external`
+    // state by design — that refusal is about SILENT retargeting, and an
+    // explicit, previewed import is precisely the opt-in it protects.
+    //
+    // The preview carries the SERIALIZED variant file — `# {title}\n{body}` —
+    // not just the body: the heading is part of what Codex will read, so the
+    // thing confirmed must be the whole stored text, title included. Both byte
+    // counts are reported and separately named: `bodyBytes` is the budget the
+    // 64 KiB cap applies to, `serializedBytes` is the complete file.
+    const body = await readBody(ctx);
+    if (!body) return fail(ctx, "invalid_body", 400, "expected a JSON object");
+    const readState = readPromptLayers(paths(ctx));
+    if (!readState.readable) {
+      return fail(ctx, "config_unreadable", 409, "the configuration file exists but could not be read", { path: readState.configPath });
+    }
+    // The title is validated before anything is previewed or written: a caller
+    // that supplies one gets the same contract as a custom-layer title —
+    // 1-80 characters on a single line.
+    if (body.title !== undefined) {
+      const t = body.title;
+      if (typeof t !== "string" || t.trim().length === 0
+        || t.length > MAX_TITLE_CHARS || /[\r\n]/.test(t)) {
+        return fail(ctx, "invalid_title", 400, "title must be 1-80 characters on a single line");
+      }
+    }
+    const preview = previewBaseImport(paths(ctx), typeof body.title === "string" ? body.title : undefined);
+    if (preview.reason === "nothing_to_import") {
+      return fail(ctx, "nothing_to_import", 409,
+        "model_instructions_file is absent or already points at a managed variant");
+    }
+    if (preview.reason === "unsupported_form") {
+      return fail(ctx, "import_unsupported_form", 409, preview.detail, {
+        path: preview.rawPath,
+      });
+    }
+    if (preview.reason === "file_unreadable") {
+      return fail(ctx, "import_file_unreadable", 409, preview.detail, {
+        path: preview.resolvedPath ?? preview.rawPath,
+      });
+    }
+    if (preview.reason === "invalid_characters") {
+      return fail(ctx, "invalid_characters", 400, preview.detail, { path: preview.resolvedPath });
+    }
+    // Same boundary as every other write to this key: the 64 KiB cap applies to
+    // the BODY alone — the title heading lives outside that budget, unchanged
+    // from the managed-variant contract.
+    if (preview.reason === "body_too_large" || utf8Bytes(preview.body!) > MAX_BODY_BYTES) {
+      return fail(ctx, "body_too_large", 400, `the file body exceeds ${MAX_BODY_BYTES} bytes`, {
+        path: preview.resolvedPath,
+      });
+    }
+    if (preview.reason === "slots_full") {
+      return fail(ctx, "variant_slots_full", 409,
+        `at most ${MAX_BASE_VARIANTS} base variants; delete one first`, {
+          maxBaseVariants: MAX_BASE_VARIANTS,
+          serialized: preview.serialized,
+          resolvedPath: preview.resolvedPath,
+        });
+    }
+    if (body.confirm !== true) {
+      // Preview writes nothing, by construction: previewBaseImport is a pure read.
+      return jsonResponse({
+        ok: true,
+        changed: false,
+        preview: {
+          rawPath: preview.rawPath,
+          resolvedPath: preview.resolvedPath,
+          serialized: preview.serialized,
+          serializedBytes: utf8Bytes(preview.serialized!),
+          bodyBytes: utf8Bytes(preview.body!),
+          suggestedTitle: preview.suggestedTitle,
+          effectiveTitle: preview.effectiveTitle,
+          previewSha256: preview.previewSha256,
+        },
+      }, 200, req, ctx.config);
+    }
+    const revision = revisionOf(body);
+    if (!revision) return fail(ctx, "stale_revision", 409, "revision required");
+    // The preview hash is REQUIRED — a confirm that does not name exactly what
+    // was previewed (serialized text, title included) cannot be checked against
+    // it and is refused without writing.
+    const previewSha256 = body.previewSha256;
+    if (typeof previewSha256 !== "string" || !/^[0-9a-f]{64}$/.test(previewSha256)) {
+      return fail(ctx, "import_preview_required", 400,
+        "confirm requires the previewSha256 returned by a preview of the same title");
+    }
+    if (previewSha256 !== preview.previewSha256) {
+      // The file or the selected title moved between preview and confirm. Refuse
+      // rather than import a serialization nobody previewed.
+      return fail(ctx, "import_body_changed", 409,
+        "the preview no longer matches; preview it again", {
+          resolvedPath: preview.resolvedPath,
+        });
+    }
+    return settle(ctx, importBaseVariant(
+      { title: typeof body.title === "string" ? body.title : undefined, previewSha256 },
+      revision,
+      paths(ctx),
+    ));
   }
 
   if (url.pathname === "/api/codex-prompt/base" && req.method === "PUT") {
@@ -568,11 +682,28 @@ export async function handleCodexPromptRoutes(ctx: ManagementContext): Promise<R
       return settle(ctx, adoptDeveloperInstructions(revision, paths(ctx)));
     }
 
-    // journal-present: recovery lives inside WP1's commit and is not exported.
-    // Any ordinary mutation replays it on its own path, so the honest answer is
-    // to name the state rather than duplicate the transaction here.
+    if (drift === "journal-present") {
+      // Recovery as its own locked operation — never a disguised layers write.
+      // The GUI used to replay recovery through a byte-identical custom PUT,
+      // which projected custom=[] over a config still carrying instructions
+      // whenever the store file was missing.
+      if (!confirm) {
+        return jsonResponse({
+          ok: true,
+          changed: false,
+          preview: { drift, storePath: snapshot.storePath },
+        }, 200, req, ctx.config);
+      }
+      if (!revision) return fail(ctx, "stale_revision", 409, "revision required");
+      if (revision !== snapshot.revision) {
+        return fail(ctx, "stale_revision", 409, "the configuration moved since it was read");
+      }
+      return settle(ctx, recoverPromptJournal(paths(ctx)));
+    }
+
+    // A drift kind this build does not repair: name it rather than guess.
     return fail(ctx, "repair_unsupported", 409,
-      "a write journal is present; recovery runs automatically on the next write", {
+      "this drift has no repair on this route", {
         drift, storePath: snapshot.storePath,
       });
   }

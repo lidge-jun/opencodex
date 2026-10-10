@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import { useDataSurface } from "../data-surface";
 import { setClientResourceData } from "../client-resource";
@@ -11,7 +11,16 @@ import CustomLayerRow from "../components/codex-set/CustomLayerRow";
 import CustomLayerDialog from "../components/codex-set/CustomLayerDialog";
 import PresetPicker from "../components/codex-set/PresetPicker";
 import BaseVariantDialog, { type BaseSelectionDto, type BaseVariantDto } from "../components/codex-set/BaseVariantDialog";
-import { MAX_LAYERS, moveLayer, newLayerId, type Draft } from "../components/codex-set/custom-layer-state";
+import {
+  composeBodies,
+  MAX_COMPOSED_BYTES,
+  MAX_LAYERS,
+  moveLayer,
+  newLayerId,
+  undoWindowMs,
+  utf8Length,
+  type Draft,
+} from "../components/codex-set/custom-layer-state";
 
 /**
  * The Prompt panel of Codex Set (WP3).
@@ -58,6 +67,18 @@ export interface CustomLayerDto {
   title: string;
   body: string;
   enabled: boolean;
+}
+
+/**
+ * What /api/codex-prompt/text returns. `failure` carries the server's classified
+ * reason; its absence on a failed response means the probe was busy or cancelled
+ * rather than broken, which is the one case where an immediate retry makes sense.
+ */
+export interface PromptProbeDto {
+  ok: boolean;
+  layers?: Record<string, { text: string | null; reason: string; bytes: number; sourcePath?: string }>;
+  failure?: { kind: string; command?: string; detail?: string };
+  detail?: string;
 }
 
 export interface PromptSnapshotDto {
@@ -129,12 +150,46 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
    * directly.
    */
   const [presetSeed, setPresetSeed] = useState<{ title: string; body: string } | null>(null);
+  const [baseImportPreview, setBaseImportPreview] = useState<{
+    rawPath: string | null;
+    resolvedPath: string | null;
+    /** The exact file text a confirm would install, `# {title}\n{body}`. */
+    serialized: string;
+    serializedBytes: number;
+    bodyBytes: number;
+    suggestedTitle: string | null;
+    /** The title the serialized text (and its hash) was built with. */
+    effectiveTitle: string | null;
+    previewSha256: string;
+  } | null>(null);
+  const [baseImportRefusal, setBaseImportRefusal] = useState<string | null>(null);
+  /**
+   * Stale-response guard for the import flow. Every request bumps the counter;
+   * a response that arrives carrying an older number is dropped, so a preview
+   * that resolves after the dialog closed — or after a newer preview — cannot
+   * resurrect itself.
+   */
+  const baseImportSeq = useRef(0);
+  const baseImportConfirmPending = useRef(false);
+  /** Debounce handle for title edits, which re-preview so the hash rebinds. */
+  const baseImportTitleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
    * Rendered layer text, fetched lazily on first dialog open. It shells out to
    * `codex debug prompt-input`, so it is not part of the panel load - a user who
    * never opens a layer never pays for it.
    */
-  const [layerText, setLayerText] = useState<{ ok: boolean; layers?: Record<string, { text: string | null; reason: string; bytes: number; sourcePath?: string }> } | null>(null);
+  const [layerText, setLayerText] = useState<PromptProbeDto | null>(null);
+
+  /**
+   * The just-deleted layer, kept for a short window so delete is not a one-way
+   * door. Ten seconds is long enough to notice the notice, short enough that
+   * restoring it cannot surprise someone mid-edit.
+   */
+  const [deletedLayer, setDeletedLayer] = useState<{ layer: CustomLayerDto; index: number } | null>(null);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+  }, []);
 
   /**
    * Drop the measured text after any write. It describes the configuration that
@@ -155,7 +210,12 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
   const snapshot = resource.data;
   const state = resource.state;
 
-  const onToggle = async (id: string, enabled: boolean) => {
+  /**
+   * `enabled: null` is the restore-default verb: the key line is deleted rather
+   * than rewritten, so the documented default is followed again instead of being
+   * frozen by a literal that happens to match it today.
+   */
+  const onToggle = async (id: string, enabled: boolean | null) => {
     if (!snapshot) return;
     setBusyId(id);
     setError("");
@@ -199,8 +259,8 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
    * tab or a hand edit moved the file, so re-read rather than retry - a retry would
    * overwrite whatever moved it.
    */
-  const writeBase = async (path: string, payload: Record<string, unknown>): Promise<void> => {
-    if (!snapshot || busyId !== null) return;
+  const writeBase = async (path: string, payload: Record<string, unknown>): Promise<boolean> => {
+    if (!snapshot || busyId !== null) return false;
     setBusyId("base");
     setError("");
     try {
@@ -214,23 +274,149 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
         if (body.code === "stale_revision") {
           resource.refresh();
           setError(t("codexSet.prompt.staleRevision"));
-          return;
+          return false;
         }
         setError(body.message ?? t("codexSet.prompt.writeFailed"));
         resource.refresh();
-        return;
+        return false;
       }
       setClientResourceData(resourceKey, body.snapshot);
       // The base prompt is a prompt layer like any other, so the measured text that
       // described the old one is no longer about this configuration.
       invalidateLayerText();
       setLayerText(null);
+      return true;
     } catch {
       setError(t("codexSet.prompt.writeFailed"));
       resource.refresh();
+      return false;
     } finally {
       setBusyId(null);
     }
+  };
+
+  /**
+   * Adopt-shaped flow for `model_instructions_file`: the picker refuses to
+   * retarget a key somebody else set, and this is the explicit opt-in — preview
+   * the file body, confirm, and it becomes a managed variant the key is
+   * repointed at.
+   *
+   * `previewSha256` binds the confirmation to the exact SERIALIZED text —
+   * heading line included — the preview displayed, and the route requires it.
+   * A `title` re-previews with that spelling so the hash rebinds to the user's
+   * choice rather than the filename-derived suggestion.
+   */
+  const importBase = async (confirm: boolean, title?: string) => {
+    if (!snapshot || baseImportConfirmPending.current) return;
+    if (confirm) {
+      baseImportConfirmPending.current = true;
+      if (baseImportTitleTimer.current) {
+        clearTimeout(baseImportTitleTimer.current);
+        baseImportTitleTimer.current = null;
+      }
+    }
+    const seq = ++baseImportSeq.current;
+    // A read-only preview must keep the title editable; its sequence drops
+    // stale responses. Only confirmation needs the mutation guard.
+    if (confirm) setBusyId("base-import");
+    setError("");
+    try {
+      const res = await fetch(apiBase + "/api/codex-prompt/base/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(confirm
+          ? {
+            confirm: true,
+            revision: snapshot.revision,
+            ...(title !== undefined ? { title } : {}),
+            previewSha256: baseImportPreview?.previewSha256,
+          }
+          : { confirm: false, ...(title !== undefined ? { title } : {}) }),
+      });
+      const body = await res.json() as {
+        ok?: boolean; code?: string; message?: string;
+        snapshot?: PromptSnapshotDto;
+        preview?: {
+          rawPath: string | null; resolvedPath: string | null;
+          serialized: string; serializedBytes: number; bodyBytes: number;
+          suggestedTitle: string | null; effectiveTitle: string | null; previewSha256: string;
+        };
+      };
+      // Only read-only previews expire with their view. A confirm must settle
+      // the shared snapshot even when Close already fetched pre-write state.
+      const responseIsCurrent = confirm || seq === baseImportSeq.current;
+      if (!responseIsCurrent) return;
+      if (!res.ok || !body.ok) {
+        // A refusal can describe a state the snapshot no longer matches — the
+        // file moved, the key was adopted elsewhere, a journal appeared.
+        // Re-read so the panel shows the truth it was refused on.
+        resource.refresh();
+        if (body.code === "stale_revision") {
+          setError(t("codexSet.prompt.staleRevision"));
+          return;
+        }
+        // A refusal lands beside the affordance, not in the page-level error
+        // notice: the user is deciding about THIS file, so the reason belongs
+        // where the file is described.
+        setBaseImportRefusal(body.code === "import_body_changed"
+          ? t("codexSet.base.importChanged")
+          : (body.message ?? t("codexSet.base.importFailed")));
+        if (confirm) setBaseImportPreview(null);
+        return;
+      }
+      if (body.snapshot) {
+        setClientResourceData(resourceKey, body.snapshot);
+        invalidateLayerText();
+        setBaseImportPreview(null);
+        setBaseImportRefusal(null);
+        return;
+      }
+      // Preview only: nothing has been written, and the user still has to confirm.
+      setBaseImportRefusal(null);
+      setBaseImportPreview(body.preview ?? null);
+    } catch {
+      // The response is lost and the outcome is UNCERTAIN — the confirm may
+      // have landed anyway. Reconcile against the file rather than trusting
+      // the stale preview the dialog still holds.
+      const requestIsCurrent = confirm || seq === baseImportSeq.current;
+      if (!requestIsCurrent) return;
+      setError(t("codexSet.prompt.writeFailed"));
+      resource.refresh();
+    } finally {
+      if (confirm) baseImportConfirmPending.current = false;
+      if (confirm || seq === baseImportSeq.current) {
+        setBusyId(current => current === "base-import" ? null : current);
+      }
+    }
+  };
+
+  /** A title edit re-previews (debounced): the hash must bind that spelling. */
+  const importTitleChange = (title: string) => {
+    if (baseImportConfirmPending.current) return;
+    baseImportSeq.current += 1;
+    if (baseImportTitleTimer.current) clearTimeout(baseImportTitleTimer.current);
+    baseImportTitleTimer.current = setTimeout(() => {
+      baseImportTitleTimer.current = null;
+      void importBase(false, title);
+    }, 350);
+  };
+
+  const closeBaseDialog = () => {
+    // Closing expires previews. A confirm keeps its write guard and settles
+    // when it finishes; this refresh can still precede the server-side write.
+    baseImportSeq.current += 1;
+    if (baseImportTitleTimer.current) {
+      clearTimeout(baseImportTitleTimer.current);
+      baseImportTitleTimer.current = null;
+    }
+    setOpenLayerId(null);
+    setBaseImportPreview(null);
+    setBaseImportRefusal(null);
+    // Only release the import's own busy marker — an unrelated write must keep its guard.
+    if (!baseImportConfirmPending.current) {
+      setBusyId(current => current === "base-import" ? null : current);
+    }
+    resource.refresh();
   };
 
   /**
@@ -338,9 +524,11 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
 
   /**
    * Drift is REPORTED by GET and resolved only here, on an explicit,
-   * revision-checked POST. Two of the four states are repairable from WP1 exports;
-   * the route refuses the other two by name rather than duplicating its journal
-   * transaction, and the panel surfaces whatever it says.
+   * revision-checked POST. Every state the route repairs goes through this one
+   * call: journal-present replays the journal as a locked recovery-only
+   * operation — never a layers write, which used to project an empty
+   * developer_instructions whenever the store file was missing — and the panel
+   * surfaces whatever the route says.
    */
   const repair = async (confirm: boolean) => {
     if (!snapshot || snapshot.drift === null) return;
@@ -352,8 +540,14 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(confirm ? { confirm: true, revision: snapshot.revision } : { confirm: false }),
       });
-      const body = await res.json() as { ok?: boolean; message?: string; snapshot?: PromptSnapshotDto };
+      const body = await res.json() as { ok?: boolean; code?: string; message?: string; snapshot?: PromptSnapshotDto };
       if (!res.ok || !body.ok) {
+        if (body.code === "stale_revision") {
+          resource.refresh();
+          invalidateLayerText();
+          setError(t("codexSet.prompt.staleRevision"));
+          return;
+        }
         setError(body.message ?? t("codexSet.prompt.repairFailed"));
         return;
       }
@@ -441,15 +635,15 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
         // so every row would silently lose its byte count and every dialog would
         // claim the layer sent nothing.
         if (!res.ok) {
-          if (!cancelled) setLayerText({ ok: false });
+          if (!cancelled) setLayerText({ ok: false, failure: { kind: "request-failed" } });
           return;
         }
-        const body = await res.json() as { ok: boolean; layers?: Record<string, { text: string | null; reason: string; bytes: number }> };
+        const body = await res.json() as PromptProbeDto;
         if (!cancelled) setLayerText(body);
       } catch {
         // A failed probe is a missing body, not a broken page. An abort lands here too, and the
         // flag is what keeps it from writing state into an unmounted panel.
-        if (!cancelled) setLayerText({ ok: false });
+        if (!cancelled) setLayerText({ ok: false, failure: { kind: "request-failed" } });
       }
     })();
     return () => { cancelled = true; controller.abort(); };
@@ -459,6 +653,18 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
     <div className="panel codex-set-prompt">
       <div className="row">
         <strong>{t("codexSet.prompt.title")}</strong>
+        {/*
+          Manual re-measure: the probe runs once on mount, so a user who fixes
+          codex or a file mid-session had no way to ask again short of reloading.
+        */}
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          disabled={layerText === null || busyId !== null}
+          onClick={invalidateLayerText}
+        >
+          {t("codexSet.prompt.remeasure")}
+        </button>
       </div>
       {/*
         Fixed copy from devlog 003 section 3. Neither "applies immediately" nor
@@ -527,6 +733,7 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
             busy={busyId === descriptor.id}
             writesRefused={snapshot?.readable === false}
             onToggle={(id, enabled) => { void onToggle(id, enabled); }}
+            onReset={id => { void onToggle(id, null); }}
             onSelectBase={descriptor.class === "base" && snapshot ? (useDefault => {
               // Turning it OFF has to pick something concrete. With no variant yet the
               // switch cannot act, so it opens the picker instead of writing a key that
@@ -567,6 +774,7 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
                 busy={busyId === descriptor.id}
                 writesRefused={snapshot?.readable === false}
                 onToggle={(id, enabled) => { void onToggle(id, enabled); }}
+                onReset={id => { void onToggle(id, null); }}
                 onOpen={setOpenLayerId}
               />
             ))}
@@ -592,19 +800,26 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
             selection={snapshot.baseSelection}
             maxVariants={snapshot.maxBaseVariants}
             busy={busyId !== null || !snapshot.readable}
+            importPreview={baseImportPreview}
+            importRefusal={baseImportRefusal}
             onSelect={sel => { void writeBase("/api/codex-prompt/base/select", sel); }}
-            onSave={input => { void writeBase("/api/codex-prompt/base", input); }}
+            onSave={input => writeBase("/api/codex-prompt/base", input)}
             onDelete={id => { void writeBase("/api/codex-prompt/base", { id, delete: true }); }}
-            onClose={() => setOpenLayerId(null)}
+            onImport={(confirm, title) => { void importBase(confirm, title); }}
+            onImportTitle={importTitleChange}
+            onClose={closeBaseDialog}
           />
         ) : (
         <PromptLayerDialog
           descriptor={openDescriptor}
           toggle={snapshot?.toggles.find(s => s.id === openDescriptor.id)}
           text={layerText?.layers?.[openDescriptor.id]}
+          probe={layerText}
           busy={busyId !== null}
           onToggle={(id, enabled) => { void onToggle(id, enabled); }}
+          onReset={id => { void onToggle(id, null); }}
           onClose={() => setOpenLayerId(null)}
+          onRemeasure={invalidateLayerText}
         />
         )
       )}
@@ -674,13 +889,23 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
           )}
 
           {/*
-            model_instructions_file is reported, never written: it replaces the base
-            prompt outright, so the panel states that something outside opencodex
-            has taken it over.
+            "Replaced outside opencodex" is only true for the EXTERNAL selection:
+            a managed variant also sets model_instructions_file, but that file is
+            one this panel wrote, and the base row already says so.
           */}
-          {snapshot.modelInstructionsFile !== null && (
+          {snapshot.baseSelection.kind === "external" && (
             <p className="muted small codex-set-custom__replaced">
-              {t("codexSet.custom.baseReplaced", { path: snapshot.modelInstructionsFile })}
+              {t("codexSet.custom.baseReplaced", { path: snapshot.baseSelection.path })}
+              {" "}
+              {/* The affordance lives in the base prompt's own dialog; pointing
+                  there beats duplicating the whole preview-confirm flow here. */}
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => setOpenLayerId("base-instructions")}
+              >
+                {t("codexSet.custom.baseReplacedOpen")}
+              </button>
             </p>
           )}
 
@@ -702,8 +927,66 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
             ))}
           </ul>
 
+          {/*
+            The composed meter and preview: this page is the prompt budget, so the
+            number that actually ships - the joined developer_instructions against
+            its 128 KB cap - belongs on it. Over the cap the next write would be
+            refused, so it renders as an error, not a stat.
+          */}
+          {snapshot.custom.length > 0 && (() => {
+            const composed = composeBodies(snapshot.custom);
+            const composedBytes = utf8Length(composed);
+            return (
+              <>
+                <p className={composedBytes > MAX_COMPOSED_BYTES ? "notice notice-err" : "muted small"}>
+                  {t("codexSet.custom.composedSize", { bytes: composedBytes, max: MAX_COMPOSED_BYTES })}
+                </p>
+                {composed.length > 0 && (
+                  <details className="codex-set-custom__preview">
+                    <summary className="muted small">{t("codexSet.custom.composedPreview")}</summary>
+                    <pre className="api-code codex-set-custom__preview-body">{composed}</pre>
+                  </details>
+                )}
+              </>
+            );
+          })()}
+
+          {deletedLayer && (
+            // Short-lived undo for a delete that has no trash. The layer is
+            // re-inserted at its old index so order-sensitive prompts survive.
+            <div className="notice codex-set-custom__deleted" role="status">
+              <span>{t("codexSet.custom.deletedNamed", { title: deletedLayer.layer.title })}</span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busyId !== null}
+                onClick={() => {
+                  const { layer, index } = deletedLayer;
+                  const next = [...snapshot.custom];
+                  next.splice(Math.min(index, next.length), 0, layer);
+                  // Suspend expiry while the write is in flight: a click near the
+                  // deadline whose response lands after it must not strand the
+                  // notice — and on failure the window restarts so a retry stays
+                  // possible instead of the layer being silently unrecoverable.
+                  if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+                  undoTimerRef.current = null;
+                  void (async () => {
+                    const done = await writeCustom(next, layer.id);
+                    if (!done) {
+                      undoTimerRef.current = setTimeout(() => setDeletedLayer(null), undoWindowMs());
+                      return;
+                    }
+                    setDeletedLayer(null);
+                  })();
+                }}
+              >
+                {t("common.undo")}
+              </button>
+            </div>
+          )}
+
           {confirmingDelete && (
-            // Confirm first: a body can be long and there is no undo.
+            // Confirm first: a body can be long, and the undo window is short.
             // The named prompt below is also the accessible name: an alertdialog
             // without one is announced as an unnamed dialog, which defeats the point
             // of naming the row in the first place.
@@ -724,8 +1007,18 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
                 className="btn btn-danger btn-sm"
                 onClick={() => {
                   const id = confirmingDelete;
+                  const index = snapshot.custom.findIndex(l => l.id === id);
+                  const removed = index >= 0 ? snapshot.custom[index]! : null;
                   setConfirmingDelete(null);
-                  void writeCustom(snapshot.custom.filter(l => l.id !== id), id);
+                  void (async () => {
+                    const done = await writeCustom(snapshot.custom.filter(l => l.id !== id), id);
+                    // The undo offer only stands once the delete actually landed:
+                    // restoring a row that was never removed would just be a write.
+                    if (!done || !removed) return;
+                    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+                    setDeletedLayer({ layer: removed, index });
+                    undoTimerRef.current = setTimeout(() => setDeletedLayer(null), undoWindowMs());
+                  })();
                 }}
               >
                 {t("common.delete")}

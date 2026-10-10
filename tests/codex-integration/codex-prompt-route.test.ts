@@ -7,11 +7,13 @@
  * fixture changed does not prove nothing else did.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { LAYER_INVENTORY, readPromptLayers } from "../../src/codex/prompt-layers";
+import { encodeJournal, hashBytes, type JournalRecord } from "../../src/codex/prompt-journal";
+import { journalPathFor } from "../../src/codex/prompt-layers/paths";
 import {
   promptTextProbeSpawnAttemptsForTests,
   resetPromptTextProbeForTests,
@@ -469,13 +471,72 @@ describe("POST /api/codex-prompt/repair", () => {
     expect(dirFiles).toHaveLength(0);
   });
 
-  test("21a. journal-present is refused as repair_unsupported", async () => {
-    const fx = fixture(ownedConfig("Be brief."), storeJson([]));
-    writeFileSync(fx.storePath.replace(/\.json$/, "") + ".journal", "{}", "utf8");
+  test("21a. journal-present runs a locked recovery, never a layers write", async () => {
+    // The missing-store/post-image case: the store file is absent while the
+    // config still carries the projected instructions, and a journal from an
+    // earlier toggle write (which touches neither) is committed on disk but was
+    // never deleted. The old GUI repair sent custom=[] through /custom and
+    // projected an empty developer_instructions over the surviving text. The
+    // recovery-only operation replays the journal — committed here — and the
+    // config comes out byte-identical.
+    const configBytes = ownedConfig("Be brief.");
+    const fx = fixture(configBytes); // deliberately no store file
+    const record: JournalRecord = {
+      configPath: fx.configPath,
+      storePath: fx.storePath,
+      preConfig: hashBytes(configBytes),
+      postConfig: hashBytes(configBytes),
+      preStore: hashBytes(null),
+      postStore: hashBytes(null),
+      preConfigBytes: configBytes,
+      postConfigBytes: configBytes,
+      preStoreBytes: null,
+      postStoreBytes: null,
+    };
+    const journalPath = journalPathFor(fx.storePath);
+    writeFileSync(journalPath, encodeJournal(record), "utf8");
+    const get = await call("GET", "/api/codex-prompt", fx);
+    expect(get.body.drift).toBe("journal-present");
+    const res = await call("POST", "/api/codex-prompt/repair", fx, { confirm: true, revision: get.body.revision });
+    expect(res.status).toBe(200);
+    // Recovery committed the journal. Nothing else moved: the projected
+    // instructions survive byte-for-byte and no empty store file materialised.
+    expect(existsSync(journalPath)).toBe(false);
+    expect(read(fx.configPath)).toBe(configBytes);
+    expect(existsSync(fx.storePath)).toBe(false);
+    // The drift now names its real next state — the projection lives but the
+    // store does not — instead of silently flattening layers to [].
+    expect(res.body.snapshot.drift).toBe("store-missing");
+  });
+
+  test("21a2. a journal whose target matches neither image is refused intact", async () => {
+    // Recovery cannot account for the missing store: the journal expected
+    // post-image bytes there. It refuses rather than guess, leaving both the
+    // surviving config text AND the journal (the recovery evidence) on disk.
+    const configBytes = ownedConfig("Be brief.");
+    const fx = fixture(configBytes);
+    // Both journal store images are non-null and differ, so a missing file
+    // matches neither — the state recovery must refuse rather than guess at.
+    const record: JournalRecord = {
+      configPath: fx.configPath,
+      storePath: fx.storePath,
+      preConfig: hashBytes(configBytes),
+      postConfig: hashBytes(configBytes),
+      preStore: hashBytes("{\"layers\":[{\"old\":true}]}"),
+      postStore: hashBytes("{\"layers\":[{\"new\":true}]}"),
+      preConfigBytes: configBytes,
+      postConfigBytes: configBytes,
+      preStoreBytes: "{\"layers\":[{\"old\":true}]}",
+      postStoreBytes: "{\"layers\":[{\"new\":true}]}",
+    };
+    const journalPath = journalPathFor(fx.storePath);
+    writeFileSync(journalPath, encodeJournal(record), "utf8");
     const res = await call("POST", "/api/codex-prompt/repair", fx, { confirm: true, revision: await revision(fx) });
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe("repair_unsupported");
-    expect(res.body.drift).toBe("journal-present");
+    expect(res.body.code).toBe("recovery_required");
+    expect(existsSync(journalPath)).toBe(true);
+    expect(read(fx.configPath)).toBe(configBytes);
+    expect(existsSync(fx.storePath)).toBe(false);
   });
 
   test("21b. owned-malformed refuses mode replace and offers adopt", async () => {
@@ -642,11 +703,14 @@ describe("020 coverage completions", () => {
       unknown_layer: 400,
       store_unreadable: 409,
       invalid_characters: 400,
+      body_too_large: 400,
       write_superseded: 409,
       write_failed: 500,
       recovery_required: 409,
       locked: 409,
       unsafe: 422,
+      unsupported_form: 409,
+      import_body_changed: 409,
     });
   });
 

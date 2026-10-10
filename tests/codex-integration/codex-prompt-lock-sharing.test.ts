@@ -76,6 +76,37 @@ for (const code of ["EPERM", "EBUSY", "EACCES"]) for (const stage of stages) for
 }
 
 for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+  test(`stale rename: ${code} retry fences distinct 64-bit file IDs`, () => {
+    const { path, body } = setup(); fs.writeFileSync(path, body);
+    // NTFS IDs may exceed Number's exact integer range. Keep the real stat
+    // provider's representation while modeling two IDs that round alike.
+    const before = 2n ** 54n, after = before + 1n;
+    expect(Number(before)).toBe(Number(after));
+    const nativeStat = ownerDefaults.lstat;
+    let replaced = false, attempts = 0;
+    const lstat: LockDeps["lstat"] = p => {
+      const stat = nativeStat(p);
+      if (p === path) {
+        const id = replaced ? after : before;
+        Object.assign(stat, { ino: typeof stat.ino === "bigint" ? id : Number(id) });
+      }
+      return stat;
+    };
+    const rename = fs.renameSync;
+    const sleep = spyOn(Bun, "sleepSync").mockImplementation(() => {
+      if (replaced) return;
+      rename(path, path + ".original"); fs.writeFileSync(path, body);
+      replaced = true;
+    }); restores.push(() => sleep.mockRestore());
+    const renameSpy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(from) === path && ++attempts === 1) throw sharing(code);
+      rename(from, to);
+    }); restores.push(() => renameSpy.mockRestore());
+    expect(tryAcquire(path, { ...deps, lstat })).toEqual({ ok: false, error: "locked" });
+    expect(replaced).toBe(true); expect(attempts).toBe(1);
+    expect(fs.readFileSync(path, "utf8")).toBe(body);
+    expect(fs.readFileSync(path + ".original", "utf8")).toBe(body);
+  });
   test(`namespace metadata ${code} is bounded contention`, () => {
     const { path } = setup(); let attempts = 0;
     const sleep = spyOn(Bun, "sleepSync").mockImplementation(() => {}); restores.push(() => sleep.mockRestore());

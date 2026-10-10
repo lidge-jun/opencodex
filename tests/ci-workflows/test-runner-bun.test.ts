@@ -120,7 +120,7 @@ describe("pinned test runner Bun", () => {
 
   test("GUI package uses the pinned wrapper, preserving cwd, filters and failures", () => {
     const guiPackage = JSON.parse(readFileSync(repoPath("gui", "package.json"), "utf8"));
-    expect(guiPackage.scripts.test).toBe("bun ../scripts/test-with-pinned-bun.ts tests");
+    expect(guiPackage.scripts.test).toBe("bun ../scripts/test-with-pinned-bun.ts --isolate tests");
     const root = mkdtempSync(join(tmpdir(), "ocx-gui-test-runner-"));
     const file = join(root, "runner.test.ts");
     const cwd = repoPath("gui");

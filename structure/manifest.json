@@ -129,6 +129,16 @@
       ]
     },
     {
+      "path": "codex-prompts.md",
+      "tier": 2,
+      "title": "Codex Prompts",
+      "scope": "Prompt-layer repair, base import previews and bounded text-probe sources.",
+      "documents": [
+        "src/codex/",
+        "src/server/"
+      ]
+    },
+    {
       "path": "local-messaging.md",
       "tier": 3,
       "title": "Local Codex Messaging",
