@@ -9,6 +9,7 @@ import * as oauth from "../../../src/oauth";
 import * as oauthStore from "../../../src/oauth/store";
 import { handleAccountAuthCommand } from "../../../src/cli/account-auth";
 import * as coupons from "../../../src/grok/reset-coupons";
+import { encodeGrpcWebEnvelope } from "../../../src/grok/grpc-web";
 import * as ledger from "../../../src/grok/reset-coupon-ledger";
 import { ConfigMutationLockError, readConfigGenerationInCurrentMutationTransaction, withConfigMutationLockSync } from "../../../src/config/mutation-lock";
 import { handleGrokCouponRoutes } from "../../../src/server/management/grok-coupon-routes";
@@ -450,6 +451,33 @@ test("an unconfirmed HTTP 200 redemption preserves attempted state rather than r
   expect(JSON.parse(readFileSync(ledger.grokCouponJournalPath(), "utf8")).operations[OP].status).toBe("attempted");
   expect(redeem).toHaveBeenCalledTimes(1);
 });
+
+function couponTrailer(text: string): Uint8Array {
+  const frame = encodeGrpcWebEnvelope(new TextEncoder().encode(text));
+  frame[0] = 0x80;
+  return frame;
+}
+for (const [description, body] of [
+  ["conflicting statuses 3 then 0", couponTrailer("grpc-status:3\r\ngrpc-status:0\r\n")],
+  ["a data frame after a zero trailer", new Uint8Array([...couponTrailer("grpc-status:0\r\n"), ...encodeGrpcWebEnvelope(new Uint8Array(0))])],
+] as const) {
+  test(`#6897 a redemption reply with ${description} stays attempted and unresolved`, async () => {
+    const realRedeem = coupons.redeemGrokResetCoupon;
+    const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockResolvedValue({ accessToken: "fixture-access-token" } as never);
+    const remaining = spyOn(coupons, "getGrokRemainingResets").mockResolvedValue({ tokens: [TOKEN] } as never);
+    const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockImplementation(options => realRedeem({
+      ...options, fetchFn: async () => new Response(body.slice(), { status: 200 }),
+    }));
+    spies.push(auth, remaining, redeem);
+    const response = await handleGrokCouponRoutes(request());
+    expect(response!.status).toBe(502);
+    expect(await response!.json()).toMatchObject({ operationId: OP, error: { code: "attempt_unresolved" } });
+    expect(JSON.parse(readFileSync(ledger.grokCouponJournalPath(), "utf8")).operations[OP].status).toBe("attempted");
+    const retry = await handleGrokCouponRoutes(request());
+    expect(retry!.status).toBe(409);
+    expect(redeem).toHaveBeenCalledTimes(1);
+  });
+}
 
 test("a stale attempt with a still-listed token is inspected without a second spend", async () => {
   ledger.openGrokResetCouponOperation(identity());
@@ -903,4 +931,3 @@ test("an unreadable ledger during omitted-account lookup keeps the caller on its
   expect(response.status).toBe(409);
   expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
 });
-
