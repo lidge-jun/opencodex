@@ -412,6 +412,10 @@ export async function handleCodexPromptRoutes(ctx: ManagementContext): Promise<R
     // 64 KiB cap applies to, `serializedBytes` is the complete file.
     const body = await readBody(ctx);
     if (!body) return fail(ctx, "invalid_body", 400, "expected a JSON object");
+    const readState = readPromptLayers(paths(ctx));
+    if (!readState.readable) {
+      return fail(ctx, "config_unreadable", 409, "the configuration file exists but could not be read", { path: readState.configPath });
+    }
     // The title is validated before anything is previewed or written: a caller
     // that supplies one gets the same contract as a custom-layer title —
     // 1-80 characters on a single line.

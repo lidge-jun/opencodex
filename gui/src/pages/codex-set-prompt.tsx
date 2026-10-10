@@ -316,7 +316,9 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
       }
     }
     const seq = ++baseImportSeq.current;
-    setBusyId("base-import");
+    // A read-only preview must keep the title editable; its sequence drops
+    // stale responses. Only confirmation needs the mutation guard.
+    if (confirm) setBusyId("base-import");
     setError("");
     try {
       const res = await fetch(apiBase + "/api/codex-prompt/base/import", {
@@ -633,7 +635,7 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
         // so every row would silently lose its byte count and every dialog would
         // claim the layer sent nothing.
         if (!res.ok) {
-          if (!cancelled) setLayerText({ ok: false });
+          if (!cancelled) setLayerText({ ok: false, failure: { kind: "request-failed" } });
           return;
         }
         const body = await res.json() as PromptProbeDto;
@@ -641,7 +643,7 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
       } catch {
         // A failed probe is a missing body, not a broken page. An abort lands here too, and the
         // flag is what keeps it from writing state into an unmounted panel.
-        if (!cancelled) setLayerText({ ok: false });
+        if (!cancelled) setLayerText({ ok: false, failure: { kind: "request-failed" } });
       }
     })();
     return () => { cancelled = true; controller.abort(); };

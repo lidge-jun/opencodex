@@ -736,3 +736,41 @@ test("a blank title preview refusal preserves the editable title", async () => {
     expect(input.value).toBe("Corrected");
   } finally { await act(async () => { root.unmount(); }); }
 });
+
+test("a delayed title preview keeps typing focused and discards its stale response", async () => {
+  const pending: Array<{ title: string; finish: (response: Response) => void }> = [];
+  const calls = stubRoutes(call => {
+    if (call.url.endsWith("/import")) {
+      if (call.body?.title !== undefined) return new Promise<Response>(finish => {
+        pending.push({ title: String(call.body!.title), finish });
+      });
+      return json({ ok: true, preview: PREVIEW });
+    }
+    return json(snapshot(EXTERNAL));
+  });
+  const { container, root } = await mount();
+  try {
+    const dlg = await openBaseDialog(container);
+    await act(async () => { importButton(dlg).click(); });
+    const input = dlg.querySelector("input") as HTMLInputElement;
+    input.focus();
+    await act(async () => { editImportTitle(dlg, "First edit"); });
+    await act(async () => { await Bun.sleep(420); });
+    expect(pending).toHaveLength(1);
+    expect(input.disabled).toBe(false);
+    expect(document.activeElement).toBe(input);
+    expect(importButton(dlg).disabled).toBe(true);
+    await act(async () => { editImportTitle(dlg, "Second edit"); });
+    await act(async () => { await Bun.sleep(420); });
+    expect(pending).toHaveLength(2);
+    const preview = (title: string) => json({ ok: true, preview: { ...PREVIEW, effectiveTitle: title, serialized: `# ${title}\nImported base.` } });
+    await act(async () => { pending[1].finish(preview("Second edit")); });
+    expect(dlg.querySelector("pre")!.textContent).toContain("# Second edit");
+    await act(async () => { pending[0].finish(preview("First edit")); });
+    expect(dlg.querySelector("pre")!.textContent).toContain("# Second edit");
+    expect(input.value).toBe("Second edit");
+    expect(document.activeElement).toBe(input);
+    expect(importButton(dlg).disabled).toBe(false);
+    expect(calls.filter(call => call.body?.confirm)).toHaveLength(0);
+  } finally { await act(async () => { root.unmount(); }); }
+});

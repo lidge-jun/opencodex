@@ -13,6 +13,8 @@ file's directory for selection and uncertain-write cleanup. Import cleanup prese
 files still referenced after `write_superseded` or `recovery_required`, together with
 the journal. The line editor in `src/codex/prompt-layers/toml-edit.ts` decodes quoted
 keys before matching assignments and preserves trailing whitespace and comments.
+Composite array/table values and multiline strings refuse before publication;
+the scalar editor never replaces only the opening line of a value span.
 
 `src/codex/prompt-layers/import-source.ts` opens an external source nonblocking,
 checks the opened descriptor is regular, and reads at most 128 KiB plus one refusal
@@ -25,6 +27,9 @@ previews and settles the shared snapshot even after Close; a lost response trigg
 a fresh read after the mutation finishes. A title-preview refusal preserves the last
 preview and its editor so the title can be corrected, while confirmation stays bound
 to the last accepted title and hash.
+Read-only title previews keep the input enabled and focused. Config read failures
+are reported before an import absence, and HTTP/network probe failures retain a
+request-failure classification rather than claiming another probe is busy.
 
 ## Prompt text probe
 

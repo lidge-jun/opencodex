@@ -106,6 +106,37 @@ précédentes et une identité non-Codex revendiquée en coréen.
 Ces avertissements ne bloquent jamais l’enregistrement. Si vous souhaitez remplacer le comportement
 de Codex, vous le pouvez ; l’avertissement permet simplement d’en faire une décision plutôt qu’un accident.
 
+## Variantes du prompt de base
+
+Le prompt de base est le texte propre à Codex, avant les couches additionnelles.
+Le sélecteur propose le prompt par défaut et jusqu’à deux variantes enregistrées dans
+`~/.codex/opencodex-prompt-base/`. L’option par défaut ne contient aucun texte à modifier :
+la choisir supprime `model_instructions_file` de votre configuration.
+
+:::caution
+Une variante **remplace** les instructions de base de Codex. Pour ajouter des consignes
+sans perdre ce comportement, utilisez plutôt une [couche personnalisée](#couches-personnalisées).
+:::
+
+L’éditeur conserve les modifications non enregistrées quand vous passez d’une option à
+l’autre et demande confirmation avant de les abandonner à la fermeture. Le corps est
+mesuré pendant la saisie et limité à 64 KiB par variante.
+
+### Si un autre fichier remplace déjà le prompt de base
+
+Si `model_instructions_file` désigne un fichier écrit par vous ou par un autre outil,
+le sélecteur indique son chemin et refuse de modifier silencieusement la clé.
+**Importer comme variante** affiche d’abord le texte exact qui sera installé : un titre
+sur une ligne `# `, puis le corps avec les fins de ligne et les tabulations normalisées.
+Vous pouvez modifier le titre avant de confirmer. Le corps normalisé est limité à
+64 KiB (`bodyBytes`) ; le fichier complet, titre compris, est légèrement plus grand
+(`serializedBytes`). Un hash lie la confirmation à cet aperçu. Si le fichier ou le titre
+change, l’importation refuse d’installer un texte que vous n’avez pas vu. Vous pouvez
+également supprimer la clé vous-même pour revenir au prompt par défaut.
+
+Les changements s’appliquent aux nouvelles sessions ; les sessions déjà ouvertes
+conservent leur prompt initial.
+
 ## Instructions écrites en dehors d’opencodex
 
 Si `developer_instructions` existe déjà et n’a pas été écrit par opencodex, le panneau ne le
@@ -146,6 +177,7 @@ Elles se trouvent dans le `config.toml` de Codex, pas dans la configuration prop
 | `include_apps_instructions` | `true` | Applications |
 | `skills.include_instructions` | `true` | Compétences |
 | `developer_instructions` | non défini | Vos couches personnalisées, jointes dans l'ordre |
+| `model_instructions_file` | non défini | Prompt de base lorsqu’une variante est sélectionnée |
 
 L'écriture se fait ligne par ligne : vos commentaires et votre mise en forme sont conservés, et une clé qu'opencodex ne connaît pas est laissée telle quelle plutôt que supprimée.
 
@@ -155,3 +187,5 @@ Une ligne portant une valeur explicite propose aussi **Réinitialiser**, qui sup
 plutôt que d'y réécrire la valeur par défaut. C'est le seul état qui continue de suivre la valeur par
 défaut si Codex la change plus tard — écrire `key = true` figerait la valeur d'aujourd'hui comme un
 remplacement.
+
+Cet éditeur de valeurs simples refuse les tableaux, les tables en ligne et les chaînes sur plusieurs lignes avant d’écrire ou de réinitialiser une clé, en conservant les octets d’origine. Un import signale explicitement une configuration illisible. Les aperçus du titre en lecture seule laissent le champ modifiable ; la confirmation reste liée à un aperçu de ce titre. Un échec HTTP ou réseau de la mesure est signalé comme un échec, pas comme une autre mesure en cours.

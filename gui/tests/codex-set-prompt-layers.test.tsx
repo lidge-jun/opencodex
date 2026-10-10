@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { en } from "../src/i18n/en";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import CodexSetPrompt from "../src/pages/codex-set-prompt";
 import { LAYER_INVENTORY } from "../../src/codex/prompt-layers";
@@ -84,6 +85,26 @@ function stubRoutes(handler: (call: { url: string; method: string; body: unknown
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+}
+
+for (const failure of ["http", "network", "busy"]) {
+  test(`a ${failure} prompt-text failure retains its actual failure category`, async () => {
+    stubRoutes(call => {
+      if (call.url.endsWith("/text")) {
+        if (failure === "network") return Promise.reject(new TypeError("fixture offline")) as never;
+        return failure === "http" ? json({ error: "fixture unavailable" }, 503) : json({ ok: false });
+      }
+      return json(snapshot());
+    });
+    const { container, root } = await mount();
+    try {
+      await act(async () => { (row(container, "permissions")!.querySelector(".codex-set-prompt__name") as HTMLButtonElement).click(); });
+      const dialog = document.querySelector("dialog.modal-overlay")!;
+      const text = dialog.querySelector(".codex-set-layer-dialog__no-text")!.textContent;
+      expect(text).toBe(en[failure === "busy" ? "codexSet.dialog.probeBusy" : "codexSet.dialog.probeFailed"]);
+      if (failure !== "busy") expect(text).not.toContain(en["codexSet.dialog.probeBusy"]);
+    } finally { await act(async () => { root.unmount(); }); }
+  });
 }
 
 async function mount(): Promise<{ root: Root; container: HTMLElement }> {

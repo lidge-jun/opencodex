@@ -113,6 +113,36 @@ Bunlar uyarıdır ve kaydetmeyi asla engellemez. Codex'i geçersiz kılmak
 istiyorsanız bunu yapabilirsiniz; uyarı yalnızca bunun bir kaza değil, bilinçli
 bir karar olmasını sağlar.
 
+## Temel istem varyantları
+
+Temel istem, ek katmanlardan önce Codex’in kendi talimatlarıdır. Seçici, varsayılan
+istemi ve `~/.codex/opencodex-prompt-base/` içinde saklanan en fazla iki varyantı sunar.
+Varsayılan seçenekte düzenlenecek metin yoktur; onu seçmek `model_instructions_file`
+anahtarını yapılandırmanızdan kaldırır.
+
+:::caution
+Bir varyant Codex’in temel talimatlarının **yerini alır**. Mevcut davranışı koruyarak
+talimat eklemek için özel bir katman kullanın.
+:::
+
+Düzenleyici, seçenekler arasında gezinirken kaydedilmemiş değişiklikleri korur ve
+kapatırken bunları silmeden önce onay ister. Yazarken gövde boyutu ölçülür; her
+varyantın gövdesi en fazla 64 KiB olabilir.
+
+### Temel istemi zaten başka bir dosya değiştiriyorsa
+
+`model_instructions_file` sizin veya başka bir aracın yazdığı bir dosyayı gösteriyorsa,
+seçici yolu gösterir ve anahtarı sessizce başka bir dosyaya yönlendirmez.
+**Varyant olarak içe aktar** önce kurulacak metnin tamamını gösterir: `# ` satırında
+başlık, ardından satır sonları ve sekmeleri normalleştirilmiş gövde. Onaylamadan önce
+başlığı düzenleyebilirsiniz. Normalleştirilmiş gövde en fazla 64 KiB (`bodyBytes`)
+olabilir; başlıkla birlikte dosyanın tamamı biraz daha büyüktür (`serializedBytes`).
+Onay bir hash ile bu önizlemeye bağlanır. Dosya veya başlık değişirse, görmediğiniz
+metni kurmak yerine içe aktarma reddedilir. Varsayılana dönmek için anahtarı kendiniz
+kaldırabilirsiniz.
+
+Değişiklikler yeni oturumlarda geçerli olur; açık oturumlar başlangıçtaki istemi korur.
+
 ## opencodex dışında yazılan talimatlar
 
 `developer_instructions` zaten varsa ve opencodex tarafından yazılmadıysa panel
@@ -155,6 +185,7 @@ Bunlar opencodex'in kendi yapılandırmasında değil, Codex'in `config.toml` do
 | `include_apps_instructions` | `true` | Uygulamalar |
 | `skills.include_instructions` | `true` | Beceriler |
 | `developer_instructions` | ayarlanmamış | Sırayla birleştirilen özel katmanlarınız |
+| `model_instructions_file` | ayarlanmamış | Bir varyant seçildiğinde temel istem |
 
 Yazma işlemi satır bazlıdır: yorumlarınız ve biçimlendirmeniz korunur, opencodex'in tanımadığı bir anahtar silinmek yerine olduğu gibi bırakılır.
 
@@ -163,3 +194,5 @@ Bulunmayan bir anahtar `false` olarak değil, varsayılanı olarak okunur. Panel
 Açık bir değer taşıyan satır ayrıca **Varsayılana sıfırla** sunar; bu, varsayılanı geri yazmak yerine
 anahtar satırını siler. Codex varsayılanı daha sonra değiştirirse onu takip etmeye devam eden tek durum
 budur — `key = true` yazmak bugünün varsayılanını bir geçersiz kılma olarak dondurur.
+
+Basit değer düzenleyicisi, anahtarı yazmadan veya sıfırlamadan önce dizileri, satır içi tabloları ve çok satırlı dizeleri reddederek özgün baytları korur. İçe aktarma, okunamayan yapılandırmayı açıkça bildirir. Salt okunur başlık önizlemesi sırasında alan düzenlenebilir; onay hâlâ o başlığa bağlı bir önizleme gerektirir. Ölçümdeki HTTP veya ağ hataları, başka bir ölçümün sürdüğü mesajı yerine hata olarak gösterilir.

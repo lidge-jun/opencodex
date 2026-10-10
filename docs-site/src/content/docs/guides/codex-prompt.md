@@ -155,7 +155,6 @@ The variant editor has the same guardrails as the custom-layer editor: unsaved
 edits are kept while you move between options, closing with edits asks before
 discarding them, and the body is counted against the 64 KiB per-variant limit
 while you type.
-:::
 
 ### If something else already replaced your base prompt
 
@@ -262,3 +261,5 @@ A row that carries an explicit value also offers **Reset to <default>**, which
 deletes the key line rather than writing the default back. That is the only
 state that keeps following the default if Codex changes it later — writing
 `key = true` would freeze today's default as an override.
+
+This scalar editor refuses arrays, inline tables and multiline strings before writing or resetting a key, preserving the original bytes. An import reports an unreadable configuration explicitly. Read-only title previews keep the title field editable; confirmation still requires a preview bound to that title. HTTP or network measurement failures are shown as failures rather than as another probe being busy.

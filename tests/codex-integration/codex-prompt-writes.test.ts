@@ -343,21 +343,37 @@ describe("toggle restore-default (enabled: null)", () => {
     expect(() => Bun.TOML.parse(read(fx.configPath)!)).not.toThrow();
   });
 
-  test("a multi-line toggle value is refused before any write", async () => {
-    const configBytes = 'include_apps_instructions = """\ntrue\n"""\n';
-    const fx = fixture(configBytes);
-    const res = await call("PUT", "/api/codex-prompt/toggle", fx, {
-      id: "apps", enabled: true, revision: await revision(fx),
-    });
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe("unsupported_form");
-    // Refused BEFORE writing: the file is byte-identical, no journal left.
-    expect(read(fx.configPath)).toBe(configBytes);
-    expect(existsSync(fx.storePath.replace(/\.json$/, ".journal"))).toBe(false);
-  });
+  for (const value of ['"""\ntrue\n"""', '[\n  true,\n]', '[ # keep this array\n  true,\n]', '{ enabled = true }']) {
+    for (const id of ["apps", "skills"]) {
+      for (const enabled of [true, null]) {
+        test(`a ${id} composite or multi-line value refuses ${enabled} before any write: ${value}`, async () => {
+          const configBytes = id === "apps" ? `include_apps_instructions = ${value}\n`
+            : `[skills]\ninclude_instructions = ${value}\n`;
+          expect(() => Bun.TOML.parse(configBytes)).not.toThrow();
+          const fx = fixture(configBytes);
+          const res = await call("PUT", "/api/codex-prompt/toggle", fx, { id, enabled, revision: await revision(fx) });
+          expect(res.status).toBe(409);
+          expect(res.body.code).toBe("unsupported_form");
+          expect(read(fx.configPath)).toBe(configBytes);
+          expect(existsSync(journalPathFor(fx.storePath))).toBe(false);
+          expect(existsSync(fx.storePath)).toBe(false);
+        });
+      }
+    }
+  }
 });
 
 describe("POST /api/codex-prompt/base/import", () => {
+  test("an unreadable config refuses import with its actual read failure", async () => {
+    const fx = fixture();
+    mkdirSync(fx.configPath);
+    const res = await call("POST", "/api/codex-prompt/base/import", fx, { confirm: false });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("config_unreadable");
+    expect(readdirSync(fx.configPath)).toEqual([]);
+    expect(existsSync(fx.storePath)).toBe(false);
+    expect(existsSync(journalPathFor(fx.storePath))).toBe(false);
+  });
   /** An external pointer plus the file it names, inside the fixture's own dir. */
   function externalFixture(body: string, name = "somebody-elses.md"): { fx: Fixture; externalPath: string } {
     const root = mkdtempSync(join(tmpdir(), "ocx-prompt-ext-"));

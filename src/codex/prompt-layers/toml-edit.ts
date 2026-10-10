@@ -105,6 +105,9 @@ function splitValueComment(head: AssignmentHead, line: string): { value: string;
     if (end === -1) throw new UnsupportedTomlForm(line);
     value = rest.slice(0, end + 1);
   } else {
+    // Composite values may continue onto another line. This scalar editor
+    // refuses them instead of replacing only their opener and orphaning the tail.
+    if (first === "[" || first === "{") throw new UnsupportedTomlForm(line);
     const m = /^[^\s#]+/.exec(rest);
     if (!m) throw new UnsupportedTomlForm(line);
     value = m[0];

@@ -208,7 +208,7 @@ export default function PromptLayerDialog({
                             ? t("codexSet.dialog.probeUnsupported")
                             : probe.failure?.kind === "output-invalid"
                               ? t("codexSet.dialog.probeInvalid")
-                              : probe.failure?.kind === "execution-failed"
+                              : probe.failure?.kind === "execution-failed" || probe.failure?.kind === "request-failed"
                                 ? t("codexSet.dialog.probeFailed")
                                 : t("codexSet.dialog.probeBusy"))
                         : t("codexSet.dialog.textUnavailable")}
