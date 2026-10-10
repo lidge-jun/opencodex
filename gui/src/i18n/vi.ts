@@ -486,6 +486,8 @@ export const vi: Record<TKey, string> = {
   "dash.shadowCallTooltip": "Ứng dụng Codex thực hiện các lệnh gọi helper ngầm để tạo tiêu đề chuỗi, tạo commit message và điều phối các kĩ năng. Helper model có thể thay đổi giữa các phiên bản client, do đó opencodex chặn mọi model trong tập hợp này: {models}. Hãy bật tính năng này để chuyển hướng các lệnh gọi đó đến model bạn chọn.",
   "models.shadowCallIntercept": "Shadow Call Intercept",
   "models.shadowCallInterceptHint": "Chặn các lệnh gọi helper nền ({models}) của ứng dụng Codex để tạo tiêu đề và commit messages, và chuyển hướng chúng đến model bạn chọn.",
+  "models.autoReviewOverride": "Ghi đè duyệt tự động",
+  "models.autoReviewOverrideHint": "Chọn model Codex dùng cho việc duyệt tự động (trình duyệt phê duyệt). Áp dụng cho mọi hàng trong catalog khi đồng bộ; autoReviewModel ở cấp nhà cung cấp vẫn được ưu tiên trên các hàng đó.",
   "dash.sidecarBackend": "Backend",
   "dash.sidecarModel": "Model",
   "dash.backendAuto": "Tự động",

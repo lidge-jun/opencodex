@@ -271,6 +271,26 @@ export function isValidAutoReviewModel(value: unknown): value is string {
   return typeof value === "string" && autoReviewModelTargetConfigError(value) === null;
 }
 
+/**
+ * Validate the global auto-review override block the Models settings panel writes.
+ *
+ * `enabled` is optional so a save may carry only the model during an edit; `model` follows the
+ * same selector rules as the provider-scoped field, and an empty value clears the override.
+ */
+export function autoReviewOverrideConfigError(value: unknown, field = "autoReviewOverride"): string | null {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return `${field} must be a plain object with own properties`;
+  }
+  const block = value as Record<string, unknown>;
+  if (block.enabled !== undefined && typeof block.enabled !== "boolean") {
+    return `${field}.enabled must be a boolean`;
+  }
+  return autoReviewModelTargetConfigError(block.model, `${field}.model`, true);
+}
+
 /** Canonical model key used for map matching, duplicate detection, and route tombstones. */
 export function canonicalAutoReviewModelKey(modelId: string): string {
   return encodeRoutedModelId(modelId.trim());

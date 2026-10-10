@@ -121,6 +121,7 @@ import {
 } from "../../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { shadowCallTargetError } from "./shadow-call-validation";
+import { autoReviewOverrideConfigError } from "../../config/provider-validation";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -1268,6 +1269,30 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       model: sci.model ?? "",
       sourceModels: shadowSourceModels(sci.sourceModels),
     });
+  }
+
+  if (url.pathname === "/api/auto-review-settings" && req.method === "GET") {
+    const override = config.autoReviewOverride ?? {};
+    return jsonResponse({ enabled: override.enabled === true, model: override.model ?? "" });
+  }
+
+  if (url.pathname === "/api/auto-review-settings" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
+    const body = raw as { enabled?: unknown; model?: unknown };
+    const shapeError = autoReviewOverrideConfigError(body, "body");
+    if (shapeError) return jsonResponse({ error: shapeError }, 400);
+    config.autoReviewOverride = { ...config.autoReviewOverride };
+    if (typeof body.enabled === "boolean") config.autoReviewOverride.enabled = body.enabled;
+    if (typeof body.model === "string") {
+      const trimmed = body.model.trim();
+      if (trimmed === "") delete config.autoReviewOverride.model;
+      else config.autoReviewOverride.model = trimmed;
+    }
+    saveConfigPreservingClaudeCode(config);
+    const override = config.autoReviewOverride;
+    return jsonResponse({ ok: true, enabled: override.enabled === true, model: override.model ?? "" });
   }
   return null;
 }

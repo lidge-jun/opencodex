@@ -482,6 +482,8 @@ export const ko: Record<TKey, string> = {
   "dash.shadowCallTooltip": "Codex 앱은 스레드 제목 자동 생성, 커밋 메시지 생성, 스킬 오케스트레이션 같은 내부 작업을 백그라운드로 호출합니다. 이때 쓰는 모델은 클라이언트 버전마다 달라서 opencodex는 {models}를 모두 가로챕니다. 이 설정을 켜면 해당 호출이 선택한 모델로 넘어갑니다.",
   "models.shadowCallIntercept": "쉐도우 호출 가로채기",
   "models.shadowCallInterceptHint": "Codex 앱의 백그라운드 호출({models}, 제목·커밋 메시지)을 가로채 선택한 모델로 바꿉니다.",
+  "models.autoReviewOverride": "자동 검토 재정의",
+  "models.autoReviewOverrideHint": "Codex의 자동 검토(승인 검토자)에 사용할 모델을 지정합니다. 카탈로그 동기화 시 모든 행에 적용되며, 공급자별 autoReviewModel이 해당 행에서 계속 우선합니다.",
   "dash.sidecarBackend": "백엔드",
   "dash.sidecarModel": "모델",
   "dash.backendAuto": "자동",

@@ -823,6 +823,19 @@ export interface OcxConfig {
    sourceModels?: string[];
  };
   /**
+   * Global auto-review (approval reviewer) selector for every catalog row, written by the
+   * Models settings panel. During catalog sync OpenCodex stamps it as
+   * `auto_review_model_override` on rows that carry no provider-scoped stamp, so an enabled block
+   * wins over Codex's own root `auto_review_model`; disabling it restores that fallback.
+   * `autoReviewModel` keeps its precedence on its own provider's rows.
+   */
+  autoReviewOverride?: {
+    /** When true, the configured model replaces the reviewer on every unowned row. */
+    enabled?: boolean;
+    /** Public catalog selector in `provider/model` form; blank or absent clears the override. */
+    model?: string;
+  };
+  /**
    * Optional map of blocked model IDs to their replacement model IDs.
    * When configured, incoming requests targeting a blocked model (including
    * account-namespaced and concrete routes) are redirected to the replacement

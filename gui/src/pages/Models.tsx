@@ -76,6 +76,8 @@ import {
   freeOnlyInForce,
   modelPricingKnown,
   REASONING_EFFORT_LEVELS,
+  routedModelOptions,
+  type AutoReviewData,
   type ModelRow,
   type ProviderContextCapsResponse,
   type ShadowCallData,
@@ -453,6 +455,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
+  const [autoReview, setAutoReview] = useState<AutoReviewData | null>(null);
+  const [autoReviewSaving, setAutoReviewSaving] = useState(false);
 
   // App owns the in-session view mode; fallback to persisted mode for isolated renders/tests.
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -474,6 +478,11 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     );
   }, [models, shadowCall?.model, shadowCall?.sourceModels, shadowModelOptions]);
 
+  const autoReviewOptions = useMemo(
+    () => [{ value: "", label: "—" }, ...routedModelOptions(shadowModelOptions, models, autoReview?.model)],
+    [models, shadowModelOptions, autoReview?.model],
+  );
+
   const loadShadowCall = useCallback(async () => {
     const bounded = createBoundedFetch(15_000);
     try {
@@ -481,6 +490,16 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       const data = await readJsonIfOk<ShadowCallData>(r);
       if (data) setShadowCall(data);
     } catch { /* old server / network: keep the section disabled */ }
+    finally { bounded.clear(); }
+  }, [apiBase]);
+
+  const loadAutoReview = useCallback(async () => {
+    const bounded = createBoundedFetch(15_000);
+    try {
+      const r = await fetch(`${apiBase}/api/auto-review-settings`, { signal: bounded.signal });
+      const data = await readJsonIfOk<AutoReviewData>(r);
+      if (data) setAutoReview(data);
+    } catch { /* old server / network: keep the row disabled */ }
     finally { bounded.clear(); }
   }, [apiBase]);
 
@@ -722,6 +741,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     if (!catalogActive) return;
     const timeout = window.setTimeout(() => {
       void loadShadowCall();
+      void loadAutoReview();
       void loadV2();
       // Preset previews belong to the same tab. Loaded once rather than polled: the rules are
       // shipped code and the catalog poll above already refreshes the rows they describe.
@@ -747,7 +767,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     // gui/.oxlintrc.json (override) and gui/doctor.config.json (ignore.overrides). An in-file
     // react-doctor-disable comment was tried and removed - it changed nothing, and
     // react/react-compiler penalises a component for carrying suppressions at all.
-  }, [catalogActive, loadShadowCall, loadV2]);
+  }, [catalogActive, loadShadowCall, loadAutoReview, loadV2]);
 
   const groups = useMemo(
     () => buildProviderModelGroups(models, providers),
@@ -1081,6 +1101,21 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       });
     } finally {
       setShadowCallSaving(false);
+    }
+  };
+
+  const saveAutoReview = async (patch: Partial<AutoReviewData>) => {
+    if (!autoReview || autoReviewSaving) return;
+    setAutoReviewSaving(true);
+    setAutoReview({ ...autoReview, ...patch });
+    try {
+      await fetch(`${apiBase}/api/auto-review-settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+    } finally {
+      setAutoReviewSaving(false);
     }
   };
 
@@ -1967,6 +2002,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           </div>
         </div>
 
+        <div className="models-shadow-row row muted text-control" aria-busy={!autoReview || undefined}>
+          <span className="models-shadow-label">{t("models.autoReviewOverride")} <Tooltip content={t("models.autoReviewOverrideHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.autoReviewOverrideHint")}>ⓘ</span></Tooltip></span>
+          <Switch on={autoReview?.enabled ?? false} onClick={() => void saveAutoReview({ enabled: !autoReview?.enabled })} disabled={!autoReview || autoReviewSaving} label={t("models.autoReviewOverride")} />
+          <div className="models-shadow-model-slot">
+            <Select value={autoReview?.model ?? ""} options={autoReviewOptions} onChange={v => { setAutoReview(c => c ? { ...c, model: v } : c); void saveAutoReview({ model: v }); }} disabled={!autoReview || autoReviewSaving || !autoReview.enabled} label={t("models.autoReviewOverride")} />
+          </div>
+        </div>
+
         {(v2Loading || v2) && (
           <div className="models-v2-mode-row row">
             <span className="muted text-control">{t("models.v2Label")}</span>
@@ -2552,6 +2595,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         warn={!!(v2?.enabled && v2.agentsMaxThreadsConflict) || v2Note !== "" || pickerResource.state.showError}
         summary={modelsSettingsSummary(t, { multiAgentMode: v2?.multiAgentMode, v2Threads: v2?.maxConcurrentThreadsPerSession, keepNativeOnV1: v2?.keepNativeChatGptOnV1 === true,
           shadowEnabled: shadowCall?.enabled === true, shadowModel: shadowCall?.model, windowOn: allCapped, windowValue: contextCapValue, newModelsOff: modelDiscovery?.policy === "off", aliasesOn: aliases.defaults.global,
+          autoReviewEnabled: autoReview?.enabled === true, autoReviewModel: autoReview?.model,
           pickerMode: modelPickerOrderMode(pickerSettings?.pickerAvailable ?? [], pickerSettings?.pickerOrder ?? [], pickerSettings?.pickerOrderMode) })}>
         {controlsBlock}
       </ModelsSettingsPanel>
