@@ -187,7 +187,75 @@ impl Record {
 pub struct Store {
     pub root: PathBuf,
     pub rc_allowed: Vec<PathBuf>,
-    _lock: fs::File,
+    _lock: LockGuard,
+}
+struct LockGuard {
+    file: fs::File,
+}
+impl LockGuard {
+    fn unlock(&self) -> i32 {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            // LOCK_UN releases the shared file description even if a fork retains a duplicate.
+            unsafe { flock(self.file.as_raw_fd(), 8) }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            let mut v = Overlapped::zero();
+            unsafe { UnlockFileEx(self.file.as_raw_handle(), 0, 1, 0, &mut v) }
+        }
+    }
+    #[cfg(test)]
+    fn release_for_test(&self) -> i32 {
+        self.unlock()
+    }
+}
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = self.unlock();
+    }
+}
+#[cfg(windows)]
+#[repr(C)]
+struct Overlapped {
+    internal: usize,
+    high: usize,
+    offset: u32,
+    offset_high: u32,
+    event: *mut std::ffi::c_void,
+}
+#[cfg(windows)]
+impl Overlapped {
+    fn zero() -> Self {
+        Self {
+            internal: 0,
+            high: 0,
+            offset: 0,
+            offset_high: 0,
+            event: std::ptr::null_mut(),
+        }
+    }
+}
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn LockFileEx(
+        h: *mut std::ffi::c_void,
+        flags: u32,
+        reserved: u32,
+        low: u32,
+        high: u32,
+        overlapped: *mut Overlapped,
+    ) -> i32;
+    fn UnlockFileEx(
+        h: *mut std::ffi::c_void,
+        reserved: u32,
+        low: u32,
+        high: u32,
+        overlapped: *mut Overlapped,
+    ) -> i32;
 }
 #[cfg(unix)]
 unsafe extern "C" {
@@ -533,7 +601,7 @@ pub fn atomic(path: &Path, before: Option<&[u8]>, after: &[u8], mode: u32) -> Re
     let _ = fs::remove_file(tmp);
     result
 }
-fn lock(root: &Path) -> Result<fs::File> {
+fn lock(root: &Path) -> Result<LockGuard> {
     let p = root.join("cli.lock");
     let existed = fs::symlink_metadata(&p).is_ok();
     if fs::symlink_metadata(&p).is_ok() {
@@ -561,7 +629,7 @@ fn lock(root: &Path) -> Result<fs::File> {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
-        // LOCK_EX | LOCK_NB: OS releases the lock on close/process death; no stale PID deletion.
+        // LOCK_EX | LOCK_NB: immediate exclusion; the guard unlocks before closing.
         if unsafe { flock(f.as_raw_fd(), 2 | 4) } != 0 {
             return Err("lock-busy".into());
         }
@@ -569,37 +637,13 @@ fn lock(root: &Path) -> Result<fs::File> {
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
-        #[repr(C)]
-        struct Overlapped {
-            internal: usize,
-            high: usize,
-            offset: u32,
-            offset_high: u32,
-            event: *mut std::ffi::c_void,
-        }
-        #[link(name = "kernel32")]
-        unsafe extern "system" {
-            fn LockFileEx(
-                h: *mut std::ffi::c_void,
-                flags: u32,
-                reserved: u32,
-                low: u32,
-                high: u32,
-                overlapped: *mut Overlapped,
-            ) -> i32;
-        }
-        let mut v = Overlapped {
-            internal: 0,
-            high: 0,
-            offset: 0,
-            offset_high: 0,
-            event: std::ptr::null_mut(),
-        };
+        let mut v = Overlapped::zero();
         if unsafe { LockFileEx(f.as_raw_handle(), 1 | 2, 0, 1, 0, &mut v) } == 0 {
             return Err("lock-busy".into());
         }
     }
-    Ok(f)
+    // A failed acquisition must only close its own file, never unlock another owner.
+    Ok(LockGuard { file: f })
 }
 impl Store {
     pub fn open(root: PathBuf, rc_allowed: Vec<PathBuf>) -> Result<Self> {
@@ -1805,6 +1849,120 @@ pub(crate) mod tests {
         }
         r.bundle.as_mut().unwrap().cli_executable = format!("/{}", "x".repeat(4096));
         assert!(s.validate(&r, false).is_err());
+    }
+    #[test]
+    fn lock_drop_releases_and_held_store_excludes_second_open() {
+        let t = Temp::new();
+        let s = t.store();
+        let root = s.root.clone();
+        assert_eq!(
+            Store::open(root.clone(), vec![]).err().as_deref(),
+            Some("lock-busy")
+        );
+        drop(s);
+        let reopened = Store::open(root.clone(), vec![]).unwrap();
+        assert_eq!(
+            Store::open(root, vec![]).err().as_deref(),
+            Some("lock-busy")
+        );
+        drop(reopened);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn lock_drop_releases_even_with_duplicate_file_description() {
+        let t = Temp::new();
+        let s = t.store();
+        let root = s.root.clone();
+        let duplicate = s._lock.file.try_clone().unwrap();
+        drop(s);
+        let reopened = Store::open(root.clone(), vec![]).unwrap();
+        assert_eq!(
+            Store::open(root, vec![]).err().as_deref(),
+            Some("lock-busy")
+        );
+        assert_eq!(reopened._lock.release_for_test(), 0);
+        drop(duplicate);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn lock_drop_releases_during_concurrent_process_spawns() {
+        use std::{
+            process::Command,
+            sync::{atomic::AtomicBool, atomic::Ordering, Barrier},
+            thread,
+        };
+        // Present on macOS and on Linux runners; macOS has no /bin/true.
+        const TRUE: &str = "/usr/bin/true";
+        let t = Temp::new();
+        let root = t.store().root.clone();
+        let stop = AtomicBool::new(false);
+        let ready = Barrier::new(5);
+        let mut busy = 0;
+        let mut errors = Vec::new();
+        let spawns = thread::scope(|scope| {
+            let workers: Vec<_> = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        ready.wait();
+                        let mut spawns = 0;
+                        while !stop.load(Ordering::Relaxed) {
+                            assert!(Command::new(TRUE).status().unwrap().success());
+                            spawns += 1;
+                        }
+                        spawns
+                    })
+                })
+                .collect();
+            ready.wait();
+            for _ in 0..2000 {
+                // Each cycle opens, drops and reopens, without waiting or retrying a busy lock.
+                for _ in 0..2 {
+                    match Store::open(root.clone(), vec![]) {
+                        Ok(store) => drop(store),
+                        Err(e) if e == "lock-busy" => busy += 1,
+                        Err(e) => errors.push(e),
+                    }
+                }
+            }
+            stop.store(true, Ordering::Relaxed);
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .sum::<usize>()
+        });
+        eprintln!("lock stress: cycles=2000, spawners=4, spawns={spawns}, lock-busy={busy}");
+        assert!(spawns >= 4, "process spawners did not run");
+        assert!(errors.is_empty(), "unexpected open errors: {errors:?}");
+        assert_eq!(busy, 0);
+    }
+    #[test]
+    fn failed_open_after_lock_acquisition_releases_lock() {
+        let t = Temp::new();
+        let s = t.store();
+        let root = s.root.clone();
+        atomic(&root.join("cli.json"), None, b"{", 0o600).unwrap();
+        drop(s);
+        assert_eq!(
+            Store::open(root.clone(), vec![]).err().as_deref(),
+            Some("record-invalid")
+        );
+        let guard = lock(&root).unwrap();
+        assert_eq!(lock(&root).err().as_deref(), Some("lock-busy"));
+        drop(guard);
+        let _guard = lock(&root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn lock_guard_windows_explicit_release_allows_second_handle_to_relock() {
+        let t = Temp::new();
+        let s = t.store();
+        assert_ne!(s._lock.release_for_test(), 0);
+        let root = s.root.clone();
+        let second = lock(&root).unwrap();
+        drop(s);
+        assert_eq!(lock(&root).err().as_deref(), Some("lock-busy"));
+        assert_ne!(second.release_for_test(), 0);
+        let _third = lock(&root).unwrap();
     }
     #[test]
     fn lock_and_atomic_write_preserve_concurrent_user_edits() {
