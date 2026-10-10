@@ -1,5 +1,5 @@
 import { OCX_SECTION_MARKER } from "../injected-marker";
-import { decodeBasicString } from "./encoding";
+import { decodeBasicString, matchKeyHead } from "./encoding";
 
 /**
  * Decoded string entries of a root-scope TOML array.
@@ -130,10 +130,9 @@ export function tableLines(content: string, header: string): string[] | null {
 }
 
 export function boolInLines(lines: string[], key: string): boolean | null {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`^\\s*${escaped}\\s*=\\s*(true|false)\\s*(?:#.*)?$`);
   for (const line of lines) {
-    const m = pattern.exec(line);
+    const head = matchKeyHead(line, key);
+    const m = head === null ? null : /^(true|false)\s*(?:#.*)?$/.exec(head.rest);
     if (m) return m[1] === "true";
   }
   return null;

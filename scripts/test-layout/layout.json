@@ -654,7 +654,7 @@
     "codex-priority-failback.test.ts": "codex-integration",
     "codex-idle-window.test.ts": "codex-integration",
     "codex-prompt-adopt.test.ts": "codex-integration",
-    "codex-prompt-base-variants.test.ts": "codex-integration", "codex-prompt-writes.test.ts": "codex-integration",
+    "codex-prompt-base-variants.test.ts": "codex-integration", "codex-prompt-writes.test.ts": "codex-integration", "codex-prompt-scalar-scope.test.ts": "codex-integration",
     "codex-prompt-journal.test.ts": "codex-integration",
     "codex-prompt-layers-read.test.ts": "codex-integration",
     "codex-prompt-layers-write.test.ts": "codex-integration",

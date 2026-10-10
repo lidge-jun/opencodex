@@ -774,3 +774,33 @@ test("a delayed title preview keeps typing focused and discards its stale respon
     expect(calls.filter(call => call.body?.confirm)).toHaveLength(0);
   } finally { await act(async () => { root.unmount(); }); }
 });
+
+for (const [title, body] of [["Terse", "a\tb"], ["Terse", "a\r\nb"], ["  Renamed  ", "new body"]]) {
+  test(`a successful canonical existing edit closes cleanly: ${JSON.stringify([title, body])}`, async () => {
+    let variants = [VARIANTS[0]!];
+    stubRoutes(call => {
+      if (call.method === "PUT") {
+        variants = [{ ...variants[0]!, title: String(call.body?.title).trim(), body: String(call.body?.body) }];
+        return json({ ok: true, snapshot: snapshot({ baseVariants: variants }) });
+      }
+      return json(snapshot({ baseVariants: variants }));
+    });
+    const { container, root } = await mount();
+    try {
+      const dlg = await openBaseDialog(container);
+      const next = dlg.querySelectorAll(".codex-set-base-dialog__nav button")[1] as HTMLButtonElement;
+      await act(async () => { next.click(); });
+      await act(async () => {
+        typeInto(dlg.querySelector("input") as HTMLInputElement, title!);
+        typeInto(dlg.querySelector("textarea") as HTMLTextAreaElement, body!);
+      });
+      await act(async () => { actionButton(dlg, "save").click(); });
+      expect((dlg.querySelector("input") as HTMLInputElement).value).toBe(variants[0]!.title);
+      expect((dlg.querySelector("textarea") as HTMLTextAreaElement).value).toBe(variants[0]!.body);
+      // Navigation must not re-park the pre-normalized draft.
+      await act(async () => { next.click(); });
+      await act(async () => { actionButton(dlg, "close").click(); });
+      expect(document.querySelector("dialog.codex-set-base-dialog")).toBeNull();
+    } finally { await act(async () => { root.unmount(); }); }
+  });
+}

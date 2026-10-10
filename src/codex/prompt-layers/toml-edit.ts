@@ -1,5 +1,5 @@
 import { OCX_SECTION_MARKER } from "../injected-marker";
-import { decodeTomlBasicString, encodeBasicString } from "./encoding";
+import { encodeBasicString, matchKeyHead } from "./encoding";
 import { TABLE_HEADER, ANY_DEV_INSTRUCTIONS, DEV_INSTRUCTIONS_KEY } from "./toml-read";
 
 /** Line editing, not re-serialization: the user's comments and layout survive. */
@@ -37,8 +37,8 @@ function joinLines(lines: string[], eol: "\r\n" | "\n"): string {
   return eol === "\n" ? text : text.replace(/\n/g, "\r\n");
 }
 
-function firstTableIndex(lines: string[]): number {
-  const idx = lines.findIndex(l => TABLE_HEADER.test(l));
+function firstTableIndex(lines: string[], starts?: readonly boolean[]): number {
+  const idx = lines.findIndex((l, i) => (starts === undefined || starts[i] === true) && TABLE_HEADER.test(l));
   return idx === -1 ? lines.length : idx;
 }
 
@@ -62,19 +62,45 @@ interface AssignmentHead {
 }
 
 /**
- * `<indent><key>=` at the start of a line, with the key written bare or inside
- * either quote style. Quoted keys are real TOML (`"model_instructions_file" = "x"`
- * assigns the same key) — a matcher that only knew the bare spelling used to
- * skip the line and append a second assignment, which TOML then refused as a
- * duplicate key.
+ * For each line, whether it begins outside every string and composite span.
+ *
+ * The editors below match assignments and table headers line by line, so a line
+ * that sits inside a `"""…"""` value or a multi-line array is prose, not syntax:
+ * `"model_instructions_file" = "x"` written inside `developer_instructions` must
+ * never be edited as the real key. Only lines that start at top level are
+ * candidates. A span that never closes means the scope of every later line is
+ * unknown, so the whole edit refuses instead of guessing.
  */
-function matchKeyHead(line: string, key: string): AssignmentHead | null {
-  const m = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)\s*=\s*/.exec(line);
-  if (!m) return null;
-  const token = m[1]!;
-  const decoded = token.startsWith('"') ? decodeTomlBasicString(token)
-    : token.startsWith("'") ? token.slice(1, -1) : token;
-  return decoded === key ? { prefix: m[0], rest: line.slice(m[0].length) } : null;
+function lexicalLineStarts(lines: readonly string[]): boolean[] {
+  const starts: boolean[] = [];
+  let open: string | null = null;
+  let depth = 0;
+  const refuse = () => { throw new UnsupportedTomlForm("configuration contains an unterminated string or composite value"); };
+  for (const line of lines) {
+    starts.push(open === null && depth === 0);
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i]!;
+      if (open !== null) {
+        if (char === "\\" && (open === '"' || open === '"""')) { i += 1; continue; }
+        if (char !== open[0]) continue;
+        if (open.length === 1) { open = null; continue; }
+        let run = 0;
+        while (line[i + run] === char) run += 1;
+        // Up to two quotes may sit inside the value just before the closing three.
+        if (run >= 3) { open = null; i += run - 1; }
+        else i += run - 1;
+      } else if (char === "#") break;
+      else if (char === '"' || char === "'") {
+        open = line.startsWith(char.repeat(3), i) ? char.repeat(3) : char;
+        i += open.length - 1;
+      } else if (char === "[" || char === "{") depth += 1;
+      else if (char === "]" || char === "}") { depth -= 1; if (depth < 0) refuse(); }
+    }
+    // Single-line strings cannot cross a newline.
+    if (open !== null && open.length === 1) refuse();
+  }
+  if (open !== null || depth !== 0) refuse();
+  return starts;
 }
 
 /**
@@ -126,8 +152,11 @@ function splitValueComment(head: AssignmentHead, line: string): { value: string;
 export function rootKeyValueForm(content: string, key: string): "absent" | "simple" | "unsupported" {
   const { body } = splitBom(content);
   const lines = splitLines(body);
-  const limit = firstTableIndex(lines);
+  let starts: boolean[];
+  try { starts = lexicalLineStarts(lines); } catch { return "unsupported"; }
+  const limit = firstTableIndex(lines, starts);
   for (let i = 0; i < limit; i += 1) {
+    if (!starts[i]) continue;
     const head = matchKeyHead(lines[i]!, key);
     if (!head) continue;
     try {
@@ -176,9 +205,10 @@ export function setRootBool(content: string, key: string, value: boolean | null)
   const eol = dominantEol(content);
   const { bom, body } = splitBom(content);
   const lines = splitLines(body);
-  const limit = firstTableIndex(lines);
+  const starts = lexicalLineStarts(lines);
+  const limit = firstTableIndex(lines, starts);
   for (let i = 0; i < limit; i += 1) {
-    if (!matchKeyHead(lines[i]!, key)) continue;
+    if (!starts[i] || !matchKeyHead(lines[i]!, key)) continue;
     applyLineEdit(lines, i, key, value === null ? null : String(value));
     return bom + joinLines(lines, eol);
   }
@@ -198,9 +228,10 @@ export function setRootString(content: string, key: string, value: string | null
   const eol = dominantEol(content);
   const { bom, body } = splitBom(content);
   const lines = splitLines(body);
-  const limit = firstTableIndex(lines);
+  const starts = lexicalLineStarts(lines);
+  const limit = firstTableIndex(lines, starts);
   for (let i = 0; i < limit; i += 1) {
-    if (!matchKeyHead(lines[i]!, key)) continue;
+    if (!starts[i] || !matchKeyHead(lines[i]!, key)) continue;
     applyLineEdit(lines, i, key, value === null ? null : encodeBasicString(value));
     return bom + joinLines(lines, eol);
   }
@@ -220,8 +251,10 @@ export function setTableBool(content: string, table: string, key: string, value:
   const eol = dominantEol(content);
   const { bom, body } = splitBom(content);
   const lines = splitLines(body);
+  const starts = lexicalLineStarts(lines);
   const escaped = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const start = lines.findIndex(l => new RegExp(`^\\s*\\[${escaped}\\]\\s*(?:#.*)?$`).test(l));
+  const header = new RegExp(`^\\s*\\[${escaped}\\]\\s*(?:#.*)?$`);
+  const start = lines.findIndex((l, i) => starts[i] === true && header.test(l));
   if (start === -1) {
     if (value === null) return bom + joinLines(lines, eol);
     const tail = lines.length > 0 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
@@ -229,9 +262,9 @@ export function setTableBool(content: string, table: string, key: string, value:
     return bom + joinLines(lines, eol);
   }
   let end = start + 1;
-  while (end < lines.length && !TABLE_HEADER.test(lines[end]!)) end += 1;
+  while (end < lines.length && !(starts[end] && TABLE_HEADER.test(lines[end]!))) end += 1;
   for (let i = start + 1; i < end; i += 1) {
-    if (!matchKeyHead(lines[i]!, key)) continue;
+    if (!starts[i] || !matchKeyHead(lines[i]!, key)) continue;
     applyLineEdit(lines, i, key, value === null ? null : String(value));
     return bom + joinLines(lines, eol);
   }

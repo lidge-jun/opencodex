@@ -161,7 +161,7 @@ export default function BaseVariantDialog({
     const pendingSave = pendingSaveRef.current;
     const landed = pendingSave !== null && (pendingSave.id !== null
       ? variants.some(v => v.id === pendingSave.id && v.title === pendingSave.title && v.body === pendingSave.body)
-      : variants.some(v => !previousIds.has(v.id) && v.title === pendingSave.title && v.body === pendingSave.body));
+      : variants.some(v => !previousIds.has(v.id) && v.title === (pendingSave.title || v.id) && v.body === pendingSave.body));
 
     if (lastKeyRef.current !== editingKey && lastKeyRef.current !== null) {
       const outgoing = liveRef.current;
@@ -331,9 +331,11 @@ export default function BaseVariantDialog({
 
   const saveNow = async (targetKey: string | null) => {
     if (busy || problem !== null || body.trim().length === 0 || targetKey !== editingKey) return;
+    const submitted = { title, body };
+    const savedTitle = title.replace(/[\r\n]+/g, " ").trim() || slot.variant?.id || "";
     // Recorded BEFORE the write so the variants effect can reconcile by id
     // whichever way the snapshot arrives while the request is in flight.
-    pendingSaveRef.current = { id: slot.variant?.id ?? null, title, body: normalized };
+    pendingSaveRef.current = { id: slot.variant?.id ?? null, title: savedTitle, body: normalized };
     const saved = await onSave({ id: slot.variant?.id ?? null, title, body: normalized });
     if (!saved) {
       // Nothing landed: every draft is still live work, and a pending
@@ -343,6 +345,15 @@ export default function BaseVariantDialog({
     }
     const savedKey = targetKey ?? NEW_SLOT_KEY;
     draftsRef.current.delete(savedKey);
+    // An existing slot keeps its identity, so the slot-change effect cannot
+    // replace raw input with the canonical values just saved. Preserve newer
+    // edits or a different visible slot if either changed during the request.
+    if (savedKey !== NEW_SLOT_KEY && lastKeyRef.current === targetKey
+      && liveRef.current.title === submitted.title && liveRef.current.body === submitted.body) {
+      liveRef.current = { title: savedTitle, body: normalized };
+      setTitle(savedTitle);
+      setBody(normalized);
+    }
     if (discardAction?.kind === "save") {
       // "Discard the others and save" resolves only now that the save landed:
       // the other parked drafts are the discarded ones, and the confirmation

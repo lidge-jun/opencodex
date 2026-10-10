@@ -13,8 +13,14 @@ file's directory for selection and uncertain-write cleanup. Import cleanup prese
 files still referenced after `write_superseded` or `recovery_required`, together with
 the journal. The line editor in `src/codex/prompt-layers/toml-edit.ts` decodes quoted
 keys before matching assignments and preserves trailing whitespace and comments.
-Composite array/table values and multiline strings refuse before publication;
-the scalar editor never replaces only the opening line of a value span.
+`src/codex/prompt-layers/encoding.ts` shares decoded assignment-key matching with
+toggle reads, so quoted writes and their returned snapshots agree. Scalar edits
+first classify every line by lexical scope across the whole file: a line that
+starts inside a multiline string or a multi-line composite is prose, never an
+assignment or table header, so assignment-shaped text inside
+`developer_instructions` is not edited. A string or composite that never closes
+refuses the whole edit before publication, and a composite or multiline target
+value also refuses. Delimiters in quoted strings and comments do not change scope.
 
 `src/codex/prompt-layers/import-source.ts` opens an external source nonblocking,
 checks the opened descriptor is regular, and reads at most 128 KiB plus one refusal
@@ -30,6 +36,9 @@ to the last accepted title and hash.
 Read-only title previews keep the input enabled and focused. Config read failures
 are reported before an import absence, and HTTP/network probe failures retain a
 request-failure classification rather than claiming another probe is busy.
+`gui/src/components/codex-set/BaseVariantDialog.tsx` reconciles successful existing
+edits to the canonical saved title and body only while the visible draft still
+matches the submitted input. Refusals and newer edits keep their drafts.
 
 ## Prompt text probe
 

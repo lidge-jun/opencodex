@@ -119,3 +119,13 @@ export function decodeTomlBasicString(literal: string): string | null {
   }
   return out;
 }
+
+/** Shared scalar assignment matching; quoted and escaped keys retain their spelling. */
+export function matchKeyHead(line: string, key: string): { prefix: string; rest: string } | null {
+  const m = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)\s*=\s*/.exec(line);
+  if (!m) return null;
+  const token = m[1]!;
+  const decoded = token.startsWith('"') ? decodeTomlBasicString(token)
+    : token.startsWith("'") ? token.slice(1, -1) : token;
+  return decoded === key ? { prefix: m[0], rest: line.slice(m[0].length) } : null;
+}
