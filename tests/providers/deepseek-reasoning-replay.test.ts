@@ -319,7 +319,19 @@ describe("dropped plaintext reasoning notice", () => {
     notePlaintextReasoningDropped({ adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" } as OcxProviderConfig, warn);
     notePlaintextReasoningDropped({ ...customVllm(), authMode: "oauth" } as OcxProviderConfig, warn);
     notePlaintextReasoningDropped({ ...customVllm(), adapter: "openai-chat" } as OcxProviderConfig, warn);
+    // Hand-configured openai-responses rows pointing at Azure's per-resource hosts.
+    for (const baseUrl of [
+      "https://contoso.openai.azure.com/openai/v1",
+      "https://contoso.services.ai.azure.com/openai/v1",
+      "https://contoso.cognitiveservices.azure.com/openai/v1",
+    ]) notePlaintextReasoningDropped({ ...customVllm(), baseUrl } as OcxProviderConfig, warn);
     expect(messages).toEqual([]);
+  });
+
+  test("a lookalike host outside Azure is still treated as custom", () => {
+    const messages: string[] = [];
+    notePlaintextReasoningDropped({ ...customVllm(), baseUrl: "https://openai.azure.com.example.net/v1" } as OcxProviderConfig, message => messages.push(message));
+    expect(messages).toHaveLength(1);
   });
 
   test("the passthrough serializer still blanks a custom provider's reasoning and emits the notice", () => {

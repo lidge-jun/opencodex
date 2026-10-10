@@ -27,10 +27,32 @@ function destinationHost(baseUrl: unknown): string | undefined {
   }
 }
 
+/** Azure OpenAI and Azure AI Foundry serve OpenAI-operated models under per-resource hosts. */
+const AZURE_OPENAI_HOST_SUFFIXES = [".openai.azure.com", ".services.ai.azure.com", ".cognitiveservices.azure.com"];
+
+function hostnameOf(url: string): string | undefined {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+/** A templated preset (`https://{resource}.openai.azure.com/...`) matches by host pattern. */
+function templatedHostMatches(template: string, hostname: string): boolean {
+  const host = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i.exec(template)?.[1];
+  if (!host || !/\{[^}]*\}/.test(host)) return false;
+  const pattern = host.toLowerCase().split(/\{[^}]*\}/).map(part => part.replace(/[.*+?^$()|[\]\\]/g, "\\$&")).join("[^.]+");
+  return new RegExp(`^${pattern}$`).test(hostname);
+}
+
 function isRegistryDestination(baseUrl: string): boolean {
   const endpoint = normalizedProviderEndpoint(baseUrl);
+  const hostname = hostnameOf(baseUrl);
+  if (hostname && AZURE_OPENAI_HOST_SUFFIXES.some(suffix => hostname.endsWith(suffix))) return true;
   return PROVIDER_REGISTRY.some(entry =>
     normalizedProviderEndpoint(entry.baseUrl) === endpoint
+    || (hostname !== undefined && templatedHostMatches(entry.baseUrl, hostname))
     || (entry.destinationAliases ?? []).some(alias => normalizedProviderEndpoint(alias.baseUrl) === endpoint));
 }
 
