@@ -685,6 +685,39 @@ describe("POST /api/codex-prompt/base/import", () => {
     expect(read(join(fx.baseVariantDir, copy!))).toBe("# somebody-elses\napproved body");
   });
 
+  test.skipIf(process.platform === "win32")("a refused import keeps its copy when a peer selected it through a symlink", async () => {
+    const { fx } = externalFixture("approved body");
+    const preview = await previewImport(fx);
+    const rev = await revision(fx);
+    // Same race as above, but the peer names the copy through an alias: a
+    // lexical path comparison would call the copy unreferenced and delete the
+    // file the live config now reads.
+    const lockPath = configWriteLockPath(fx.configPath);
+    const alias = join(fx.baseVariantDir, "..", "live-base.md");
+    const write = fs.writeFileSync;
+    let peerConfig: string | null = null;
+    const spy = spyOn(fs, "writeFileSync").mockImplementation(((path: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+      write(path, data, options);
+      if (peerConfig === null && String(path) === lockPath) {
+        symlinkSync(join(fx.baseVariantDir, readdirSync(fx.baseVariantDir)[0]!), alias);
+        peerConfig = `model_instructions_file = ${JSON.stringify(alias)}\n`;
+        write(fx.configPath, peerConfig, "utf8");
+      }
+    }) as typeof fs.writeFileSync);
+    let res: Awaited<ReturnType<typeof call>>;
+    try {
+      res = await call("POST", "/api/codex-prompt/base/import", fx, {
+        confirm: true, revision: rev, previewSha256: preview.body.preview.previewSha256,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(peerConfig).not.toBeNull();
+    expect(res.status).toBe(409);
+    expect(read(fx.configPath)).toBe(peerConfig);
+    expect(read(alias)).toBe("# somebody-elses\napproved body");
+  });
+
   test("the hash binds the title: confirming a different spelling is refused", async () => {
     const { fx } = externalFixture("Ship the external base.");
     const preview = await previewImport(fx); // previews the suggested title

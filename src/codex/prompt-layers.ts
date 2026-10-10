@@ -26,7 +26,7 @@
  * CODEX_HOME is resolved at CALL time (the `features.ts:58-67` pattern) so tests
  * can point fixtures via env or an explicit path.
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { expandUserPath } from "../config";
@@ -1174,10 +1174,21 @@ function variantStillReferenced(id: string, path: string, opts?: Paths): boolean
   const selection = resolveBaseSelection(configBytes, readBaseVariants(opts), opts);
   if (selection.kind === "variant") return selection.id === id;
   if (selection.kind !== "external") return false;
+  let selected: string;
   try {
-    return resolve(dirname(activeConfigPath(opts)), expandUserPath(selection.path)) === resolve(path);
+    selected = resolve(dirname(activeConfigPath(opts)), expandUserPath(selection.path));
   } catch {
     return true;
+  }
+  if (selected === resolve(path)) return true;
+  // A lexical match is not the only way to name the file: a symlink (or a
+  // symlinked directory) resolves to it too, and resolve() does not follow
+  // links. Compare canonical destinations. Only a selection that provably does
+  // not exist rules the copy out; any other failure keeps it.
+  try {
+    return realpathSync(selected) === realpathSync(path);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
   }
 }
 
