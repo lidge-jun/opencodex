@@ -12,6 +12,10 @@ export const QODER_GLOBAL_MODELS = [
   "GLM-5.2",
 ] as const;
 
+export const QODER_GLOBAL_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  QODER_GLOBAL_MODELS.map(model => [model, ["text", "image"]]),
+);
+
 /** Live Qoder CN roster captured from the official CLI on 2026-09-03. */
 export const QODER_CN_MODELS = [
   "Qwen3.8-Max",

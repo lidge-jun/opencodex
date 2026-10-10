@@ -581,15 +581,12 @@ file part whose inline base64 bytes now have a lossless carrier; the native Chat
 unchanged. No audio transport and no automatic URL fetch is added, and no client filename,
 payload, URL or metadata is included in the new error messages.
 
-The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images as
-real image blocks rather than flattening them to the text `[image]`, and orders image
-blocks chronologically — history before current — so attachment order matches the
-prose the model reads beside them. Vendor tool execution stays disabled on both
+The shared coding-agent projection in `src/adapters/coding-agent/` (CodeBuddy, Qoder) carries supported tool-result image references as
+real image blocks. Current tool-result prose marks supported images as `[image attached below]` and unsupported references as `[image omitted: unsupported reference]`; historical tool-result prose retains `[image]` while supported references are also emitted as image blocks. In multi-turn projection, image blocks follow conversation order — history before current. Vendor tool execution stays disabled on both
 adapters. CodeBuddy refuses an unquoted, line-oriented full-width-bar DSML `calls`
 container followed by a named bare or namespaced invoke control line in either output channel; it
 preserves preceding answer text, never promotes vendor prose into execution authority,
-and leaves discussed or quoted literals and code examples untouched. Qoder's explicit
-refusal of original images is unchanged.
+and leaves discussed or quoted literals and code examples untouched. Qoder handling in `src/adapters/qoder/` uses the shared native image projection for Global image-bearing requests that reach the adapter; the static Global seed models declare image capability. Qoder CN keeps its sidecar classification and rejects residual raw-image requests that reach the adapter. OpenCodex serializes image blocks in conversation order, with history before the current turn. Because Qoder runs with `--no-session-persistence`, prior images are re-projected on later turns; in observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied, a known limitation of the current stateless Qoder projection path.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 

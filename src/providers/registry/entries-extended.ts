@@ -23,7 +23,7 @@ import {
   CODEBUDDY_GLOBAL_MODEL_REASONING_EFFORTS,
   CODEBUDDY_REASONING_EFFORTS,
 } from "../codebuddy-models";
-import { QODER_CN_MODELS, QODER_GLOBAL_MODELS, QODER_REASONING_EFFORTS } from "../qoder-models";
+import { QODER_CN_MODELS, QODER_GLOBAL_MODELS, QODER_GLOBAL_MODEL_INPUT_MODALITIES, QODER_REASONING_EFFORTS } from "../qoder-models";
 import type { ProviderRegistryEntry } from "./types";
 import {
   ZAI_GLM_53_MODELS,
@@ -1468,7 +1468,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     models: [...QODER_GLOBAL_MODELS],
     liveModels: true,
     reasoningEfforts: [...QODER_REASONING_EFFORTS],
-    noVisionModels: [...QODER_GLOBAL_MODELS],
+    modelInputModalities: QODER_GLOBAL_MODEL_INPUT_MODALITIES,
     note: "Official Qoder Global CLI using QODER_PERSONAL_ACCESS_TOKEN. Models are discovered per account with `qoder --list-models`; the documented roster is a degraded fallback. The CLI runs single-turn with tools, MCP, settings hooks, and session persistence disabled. Requires `npm install -g @qoder-ai/qodercli`.",
   },
   {
