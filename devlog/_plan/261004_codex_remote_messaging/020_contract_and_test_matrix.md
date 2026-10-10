@@ -27,7 +27,8 @@ that the combined real-SSH/real-native matrix ran.
 ## Fixed aggregate contracts
 
 One foreground owner covers at most four peers, 16 admitted connections, 32 active
-requests, eight helpers and 2 MiB accounted input/output. Connections admit at
+requests, ten helpers (eight persistent tunnel children plus two transient control
+or inspection children) and 2 MiB accounted input/output. Connections admit at
 most four pending requests, frames at most 1 MiB, state at most 128 KiB and helper
 stdout/stderr at most 64 KiB each. There is no waiting queue. Full capacity refuses
 before allocation, and release is idempotent.
@@ -36,7 +37,9 @@ Setup uses one 30-second budget across peers and stages. Authentication is bound
 to five seconds, route refresh to ten seconds, leases to 25 seconds. Connections
 last at most 30 seconds. Owned cleanup has a three-second ceiling with TERM then
 KILL; concurrent shutdown joins the same flight. Escaped process groups are not
-claimed to be terminated; retained pipes are canceled.
+claimed to be terminated; retained pipes are canceled. Logical helper operations
+settle after bounded cleanup; unresolved physical children retain their reservation.
+Withdrawn published routes remain part of the owner's final cleanup join.
 
 ## Regression mapping
 
@@ -44,9 +47,10 @@ claimed to be terminated; retained pipes are canceled.
 | --- | --- |
 | messaging-remote-contract.test.ts | Direction/nonce/identity proofs; exact RPC admission; metadata projection; no native attachment before auth; replacement listener gets no client proof/body; upgrade and capacity refusal; revocation. |
 | messaging-remote-store.test.ts | Absent reads stay absent, strict bounded schema, private ownership/mode/symlink/file guards, locking, secret omission. |
-| messaging-remote-enrollment.test.ts | Explicit receiver enable, immutable transaction, fingerprint mismatch, lost-reply reconciliation, post-commit cancellation, full registry refusal and unconfirmed local-first removal. |
-| messaging-remote-send.test.ts | Same connection, machine-aware replies, return-only receiver, strict correlation/rejection, unload, missing/revoked routes, lost/malformed receipts, no replay. |
-| messaging-remote-lifecycle.test.ts | Inert imports and pure parser, owned helper cancellation/TERM/KILL, shared cleanup and output overflow; unpublished tunnel cleanup joins both helpers before startup rejects, including cleanup failure. |
+| messaging-remote-enrollment.test.ts | Explicit receiver enable, immutable transaction, fingerprint mismatch, lost-reply reconciliation, generation-bound journal ownership, concurrent completion, removal and journal-failure ordering, full registry refusal. |
+| messaging-remote-send.test.ts | Same connection, machine-aware replies, return-only receiver, strict receipts, unload, source admission revalidation after awaits, lost/malformed receipts, no replay. |
+| messaging-remote-lifecycle.test.ts | Inert imports and pure parser, owned cancellation, shared cleanup/output limits; published and unpublished tunnel cleanup joins both helpers, including failure. |
+| messaging-remote-process.test.ts | Bounded logical settlement for unresolved exit and failed stdin, retained physical reservations, persistent/transient caps and injected Darwin listener inspection. |
 | messaging-remote-interop.test.ts | Opt-in generated-key loopback SSH enrollment, duplex delivery and zero owned reservations after cleanup. |
 | messaging-remote-native.test.ts | Opt-in explicit stock binary, real queue/turn contract in isolated home, synthetic provider and return delivery. |
 
@@ -61,6 +65,10 @@ parallel lane after 900 seconds, exit 124; serial lanes were not reached. The
 local PR packet records the resource exception, observed failures, focused
 coverage and commands instead of claiming a passing full suite. No ratchet,
 timeout or required check was relaxed.
+
+A later bounded `test:changed` attempt selected 979 of 2,222 files and exceeded its
+explicit 180-second runner ceiling, exit 124, without a final count receipt. It is
+also incomplete, not passing; final focused regressions cover subsequent changes.
 
 Required exact-head hosted CI once publication is authorized and macOS
 interoperability remain outstanding. Local checks and independent source review

@@ -1,7 +1,7 @@
 import { open } from "node:fs/promises";
 import { MessageBudget } from "./budget";
 import { RemoteCapacity, remoteError, validPort } from "./remote-contract";
-import { runRemoteHelper } from "./remote-process";
+import { runRemoteHelper, type RemoteHelperOptions } from "./remote-process";
 
 /** Select a candidate only; actual forwarding and authenticated readiness must still succeed. */
 export function remotePortCandidate(): number {
@@ -11,10 +11,12 @@ export function remotePortCandidate(): number {
   return port;
 }
 /** Refuse GatewayPorts/public binds; neither port existence nor this scan proves endpoint identity. */
-export async function remotePortIsLoopback(port: number, budget: MessageBudget, capacity: RemoteCapacity): Promise<boolean> {
+export async function remotePortIsLoopback(port: number, budget: MessageBudget, capacity: RemoteCapacity,
+  inspector: { platform?: NodeJS.Platform; helper?: RemoteHelperOptions } = {}): Promise<boolean> {
   if (!validPort(port)) return false;
   budget.throwIfEnded();
-  if (process.platform === "linux") {
+  const platform = inspector.platform ?? process.platform;
+  if (platform === "linux") {
     const found: string[] = [], hex = port.toString(16).toUpperCase().padStart(4, "0");
     for (const path of ["/proc/net/tcp", "/proc/net/tcp6"]) {
       const fd = await open(path, "r");
@@ -33,8 +35,9 @@ export async function remotePortIsLoopback(port: number, budget: MessageBudget, 
     }
     return found.length > 0 && found.every(address => address === "0100007F" || address === "00000000000000000000000001000000");
   }
-  if (process.platform === "darwin") {
-    const output = await runRemoteHelper(["/usr/sbin/lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fn"], budget, capacity);
+  if (platform === "darwin") {
+    const output = await runRemoteHelper(["/usr/sbin/lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fn"], budget, capacity,
+      undefined, undefined, { ...inspector.helper, successCodes: [0, 1] });
     const addresses = output.split("\n").filter(line => line.startsWith("n"));
     return addresses.length > 0 && addresses.every(line => line === `n127.0.0.1:${port}` || line === `n[::1]:${port}`);
   }

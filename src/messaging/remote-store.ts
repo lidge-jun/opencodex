@@ -55,12 +55,12 @@ export class RemoteMessageStore {
       return state;
     });
   }
-  /** Lock, validate and publish one bounded state mutation; no implicit enabling. */
-  mutate(action: (state: RemoteState) => void): RemoteState {
+  /** Publish under one lock, then complete related journal cleanup before releasing ownership. */
+  mutate(action: (state: RemoteState) => void, afterPublish?: () => void): RemoteState {
     this.requireEnabled();
     return withRemoteLock(this.directory, () => {
       const state = this.requireEnabled(); action(state);
-      writeRemoteFile(this.path, JSON.stringify(parseRemoteState(state))); return state;
+      writeRemoteFile(this.path, JSON.stringify(parseRemoteState(state))); afterPublish?.(); return state;
     });
   }
   /** Disabling revokes current admission and invalidates every owner generation. */
@@ -76,6 +76,17 @@ export class RemoteMessageStore {
     const peers = this.requireEnabled().peers.filter(peer => peer.alias === selector || peer.machine.id === selector);
     if (peers.length !== 1) throw remoteError("unknown_peer", "No unique enrolled messaging peer matches this exact host.");
     return peers[0]!;
+  }
+  /** Revalidate captured route authority after awaits without retiring unrelated peer routes. */
+  requireCurrentPeer(state: RemoteState, peer: RemotePeer): void {
+    const current = this.requireEnabled();
+    const enrolled = current.peers.find(item => item.machine.id === peer.machine.id);
+    if (current.generation !== state.generation || current.machine.id !== state.machine.id
+      || current.controlKey !== state.controlKey || current.port !== state.port || !enrolled
+      || enrolled.transaction !== peer.transaction || enrolled.incoming !== peer.incoming
+      || enrolled.outgoing !== peer.outgoing || enrolled.port !== peer.port) {
+      throw remoteError("peer_revoked", "Messaging route authority changed before dispatch; no new work was sent.");
+    }
   }
   /** Listings never include capabilities, known-hosts records or private configuration paths. */
   publicState() {

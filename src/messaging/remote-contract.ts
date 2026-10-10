@@ -2,7 +2,8 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { isRecord, isThreadId, LocalMessagingError } from "./types";
 
 export const REMOTE_PROTOCOL = "ocx-message-remote/1";
-export const REMOTE_LIMITS = Object.freeze({ peers: 4, connections: 16, requests: 32, helpers: 8,
+export const REMOTE_LIMITS = Object.freeze({ peers: 4, connections: 16, requests: 32, helpers: 10,
+  persistentHelpers: 8, transientHelpers: 2,
   outputBytes: 2 * 1024 * 1024, frameBytes: 1024 * 1024, storeBytes: 128 * 1024, authMs: 5000,
   leaseMs: 25000, shutdownMs: 3000 });
 export interface MessageMachine { id: string; name: string }
@@ -61,6 +62,17 @@ export function matchesProof(actual: unknown, expected: string): boolean {
 /** One foreground owner's reservations are shared across peers and both tunnel directions. */
 export class RemoteCapacity {
   private used = { connections: 0, requests: 0, helpers: 0, outputBytes: 0 };
+  private helperSlots = { persistent: 0, transient: 0 };
+  /** Keep transient inspectors/control commands available alongside all eight tunnel children. */
+  reserveHelper(purpose: "persistent" | "transient"): () => void {
+    const limit = purpose === "persistent" ? REMOTE_LIMITS.persistentHelpers : REMOTE_LIMITS.transientHelpers;
+    if (this.helperSlots[purpose] >= limit) {
+      throw remoteError("remote_capacity", "The messaging owner's aggregate helper purpose limit was reached.");
+    }
+    const free = this.reserve("helpers"); this.helperSlots[purpose]++;
+    let released = false;
+    return () => { if (!released) { released = true; this.helperSlots[purpose]--; free(); } };
+  }
   /** Reserve before allocating/spawning; overload creates no hidden waiting queue. */
   reserve(kind: keyof RemoteCapacity["used"], amount = 1): () => void {
     if (!Number.isSafeInteger(amount) || amount < 1 || this.used[kind] + amount > REMOTE_LIMITS[kind]) {

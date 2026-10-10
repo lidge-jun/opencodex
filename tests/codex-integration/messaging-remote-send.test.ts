@@ -3,6 +3,38 @@ import { MessageBudget } from "../../src/messaging/budget";
 import { sendRemoteMessage, remoteSessions } from "../../src/messaging/remote-send";
 import { LocalFixtureRpcError, LOCAL_OTHER, LOCAL_TARGET, NO_REPLY } from "../helpers/messaging-local";
 import { remoteMessagingPair } from "../helpers/messaging-remote";
+import { capability } from "../../src/messaging/remote-contract";
+
+for (const stage of ["sender", "discovery", "revalidation"] as const) {
+  for (const action of ["remove", "disable", "replace"] as const) {
+    test.skipIf(process.platform === "win32")(`source ${action} during ${stage} refuses dispatch without remote revocation`, async () => {
+      let entered!: () => void, release!: () => void, reads = 0;
+      const ready = new Promise<void>(resolve => { entered = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const pause = async () => { entered(); await gate; return undefined; };
+      const pair = remoteMessagingPair(async call => {
+        if (stage !== "sender" && call.method === "thread/read" && ++reads === (stage === "discovery" ? 1 : 2)) return pause();
+      }, async call => { if (stage === "sender" && call.method === "thread/read") return pause(); });
+      const owners = await pair.owners(), budget = new MessageBudget();
+      const sending = sendRemoteMessage(pair.aStore, { host: "worker", thread: LOCAL_TARGET, kind: "request", body: "fixture" },
+        { home: pair.a.codexHome, senderId: LOCAL_OTHER }, budget);
+      try {
+        await ready;
+        if (action === "disable") pair.aStore.disable();
+        else pair.aStore.mutate(state => {
+          if (action === "remove") state.peers = [];
+          else Object.assign(state.peers[0]!, { transaction: crypto.randomUUID(), incoming: capability(), outgoing: capability() });
+        });
+        release();
+        const receipt = await sending;
+        expect(receipt.status).toBe("not_sent");
+        expect(receipt.error?.code).toBe(action === "disable" ? "remote_disabled" : "peer_revoked");
+        expect(pair.b.calls.filter(call => call.method === "thread/queue/add")).toHaveLength(0);
+        expect(pair.bStore.requireEnabled().peers).toHaveLength(1);
+      } finally { release(); await sending; budget.dispose(); await owners.close(); await pair.close(); }
+    });
+  }
+}
 
 test.skipIf(process.platform === "win32")("remote discovery/queue share one proven destination connection and generate a machine-aware reply route", async () => {
   const pair = remoteMessagingPair(), owners = await pair.owners(), budget = new MessageBudget();

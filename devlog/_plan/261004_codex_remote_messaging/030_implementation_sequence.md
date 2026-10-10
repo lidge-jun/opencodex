@@ -26,6 +26,10 @@ recorded in the local PR packet. Neither publication nor deployment is authorize
 9. Recorded the full-suite 900-second timeout as incomplete evidence with a
    proportionate resource exception. Hosted CI, macOS qualification and maintainer
    acceptance remain outstanding; no unrun tier is reported as passing.
+10. Refined transaction ownership, source admission and published cleanup joins;
+    qualified bounded helper settlement and persistent/transient helper slots.
+    Final focused validation passed 283 tests with six skips and no failures;
+    broader changed-test selection remains incomplete at its bounded ceiling.
 
 ## Maintainer adjustment points
 

@@ -22,6 +22,127 @@ function fakeSsh(pair: ReturnType<typeof remoteMessagingPair>, loseFirst = false
   return { runner, requests, get controls() { return controls; } };
 }
 
+function pausedControl(runner: RemoteControlRunner, loseReply = false) {
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const paused: RemoteControlRunner = async (...args) => {
+    const result = await runner(...args);
+    if (args[3]) { entered(); await gate; if (loseReply) throw new Error("lost fixture reply"); }
+    return result;
+  };
+  return { ready, release, runner: paused };
+}
+
+test.skipIf(process.platform === "win32")("SSH control removal revokes a pending enrollment before either overlapping completion publishes", async () => {
+  const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();
+  pair.aStore.mutate(state => { state.peers = []; }); pair.bStore.mutate(state => { state.peers = []; });
+  const ssh = fakeSsh(pair), first = pausedControl(ssh.runner), second = pausedControl(ssh.runner);
+  const one = enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, first.runner);
+  void one.catch(() => {}); await first.ready;
+  const two = enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, second.runner);
+  void two.catch(() => {}); await second.ready;
+  try {
+    const pending = JSON.parse(readRemoteFile(join(pair.aStore.directory, "enrollment.json"))!);
+    handleEnrollmentControl(pair.aStore, { protocol: REMOTE_PROTOCOL, action: "remove",
+      params: { machineId: pair.bStore.requireEnabled().machine.id, transaction: pending.request.params.transaction } });
+    expect(readRemoteFile(join(pair.aStore.directory, "enrollment.json"))).toBeNull();
+    first.release(); second.release();
+    await expect(one).rejects.toThrow("completion is uncertain");
+    await expect(two).rejects.toThrow("completion is uncertain");
+    expect(pair.aStore.requireEnabled().peers).toHaveLength(0);
+  } finally { first.release(); second.release(); await Promise.allSettled([one, two]); budget.dispose(); await pair.close(); }
+});
+
+for (const removal of ["local", "control"] as const) {
+  test.skipIf(process.platform === "win32")(`failed ${removal} journal invalidation cannot publish peer absence and remains explicitly retryable`, async () => {
+    const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();
+    pair.aStore.mutate(state => { state.peers = []; }); pair.bStore.mutate(state => { state.peers = []; });
+    const ssh = fakeSsh(pair), paused = pausedControl(ssh.runner);
+    const first = enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, ssh.runner);
+    await first;
+    const peer = pair.aStore.peer("worker");
+    const journal = { alias: "worker", ssh: "fixture", fingerprint: "SHA256:fixture", generation: pair.aStore.requireEnabled().generation,
+      request: ssh.requests[0] };
+    // Model successful enrollment publication with its recovery journal left behind.
+    writeRemoteFile(join(pair.aStore.directory, "enrollment.json"), JSON.stringify(journal));
+    const delayed = enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, paused.runner);
+    void delayed.catch(() => {}); await paused.ready;
+    const request = { protocol: REMOTE_PROTOCOL, action: "remove", params: { machineId: peer.machine.id, transaction: peer.transaction } };
+    const deny = () => { throw new Error("fixture journal unlink denied"); };
+    try {
+      if (removal === "local") await expect(removeRemoteHost(pair.aStore, "worker", budget, capacity, async () => { throw new Error("lost"); }, deny)).rejects.toThrow("unlink denied");
+      else expect(() => handleEnrollmentControl(pair.aStore, request, deny)).toThrow("unlink denied");
+      expect(pair.aStore.peer("worker").transaction).toBe(peer.transaction);
+      expect(readRemoteFile(join(pair.aStore.directory, "enrollment.json"))).not.toBeNull();
+      if (removal === "local") await removeRemoteHost(pair.aStore, "worker", budget, capacity, async () => { throw new Error("lost"); });
+      else handleEnrollmentControl(pair.aStore, request);
+      expect(readRemoteFile(join(pair.aStore.directory, "enrollment.json"))).toBeNull();
+      paused.release(); await expect(delayed).rejects.toThrow("completion is uncertain");
+      expect(pair.aStore.requireEnabled().peers).toHaveLength(0);
+    } finally { paused.release(); await delayed.catch(() => {}); budget.dispose(); await pair.close(); }
+  });
+}
+
+for (const revoke of ["local", "control"] as const) {
+  test.skipIf(process.platform === "win32")(`delayed enrollment cannot restore ${revoke} revocation or a retained recovery journal`, async () => {
+    const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();
+    pair.aStore.mutate(state => { state.peers = []; }); pair.bStore.mutate(state => { state.peers = []; });
+    const ssh = fakeSsh(pair), first = pausedControl(ssh.runner), second = pausedControl(ssh.runner);
+    const add = (runner: RemoteControlRunner) => enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, runner);
+    const one = add(first.runner); await first.ready;
+    const saved = readRemoteFile(join(pair.aStore.directory, "enrollment.json"))!;
+    const two = add(second.runner); void two.catch(() => {}); await second.ready;
+    try {
+      first.release(); await one;
+      // Simulate publication succeeding with journal cleanup left to recovery.
+      writeRemoteFile(join(pair.aStore.directory, "enrollment.json"), saved);
+      const peer = pair.aStore.peer("worker");
+      if (revoke === "local") await removeRemoteHost(pair.aStore, "worker", budget, capacity, async () => { throw new Error("lost"); });
+      else handleEnrollmentControl(pair.aStore, { protocol: REMOTE_PROTOCOL, action: "remove",
+        params: { machineId: peer.machine.id, transaction: peer.transaction } });
+      expect(readRemoteFile(join(pair.aStore.directory, "enrollment.json"))).toBeNull();
+      second.release(); await expect(two).rejects.toThrow("completion is uncertain");
+      expect(pair.aStore.requireEnabled().peers).toHaveLength(0);
+    } finally { first.release(); second.release(); await Promise.allSettled([one, two]); budget.dispose(); await pair.close(); }
+  });
+}
+
+test.skipIf(process.platform === "win32")("old enrollment completion cannot delete a newer lost-reply recovery transaction", async () => {
+  const pair = remoteMessagingPair(), third = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();
+  pair.aStore.mutate(state => { state.peers = []; }); pair.bStore.mutate(state => { state.peers = []; });
+  third.bStore.mutate(state => { state.peers = []; });
+  const ssh = fakeSsh(pair), first = pausedControl(ssh.runner), second = pausedControl(ssh.runner);
+  const one = enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, first.runner);
+  await first.ready;
+  const two = enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, second.runner);
+  await second.ready; first.release(); await one;
+  const otherSsh = fakeSsh(third), other = pausedControl(otherSsh.runner, true);
+  const next = enrollRemoteHost(pair.aStore, "third", "fixture", "SHA256:fixture", budget, capacity, other.runner);
+  void next.catch(() => {}); await other.ready;
+  try {
+    const pending = readRemoteFile(join(pair.aStore.directory, "enrollment.json"));
+    second.release(); await two;
+    expect(readRemoteFile(join(pair.aStore.directory, "enrollment.json"))).toBe(pending);
+    other.release(); await expect(next).rejects.toThrow("retained");
+    await enrollRemoteHost(pair.aStore, "third", "fixture", "SHA256:fixture", budget, capacity, otherSsh.runner);
+    expect(otherSsh.requests[1]).toEqual(otherSsh.requests[0]);
+    expect(pair.aStore.requireEnabled().peers).toHaveLength(2);
+  } finally { first.release(); second.release(); other.release(); await Promise.allSettled([one, two, next]); budget.dispose(); await Promise.all([pair.close(), third.close()]); }
+});
+
+test.skipIf(process.platform === "win32")("disable and re-enable cannot adopt an earlier generation's pending enrollment", async () => {
+  const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();
+  pair.aStore.mutate(state => { state.peers = []; }); pair.bStore.mutate(state => { state.peers = []; });
+  const ssh = fakeSsh(pair, true);
+  try {
+    await expect(enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, ssh.runner)).rejects.toThrow("retained");
+    const port = pair.aStore.requireEnabled().port; pair.aStore.disable(); pair.aStore.enable(port);
+    await expect(enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, ssh.runner)).rejects.toThrow("reconcile it explicitly");
+    expect(ssh.controls).toBe(1); expect(pair.aStore.requireEnabled().peers).toHaveLength(0);
+  } finally { budget.dispose(); await pair.close(); }
+});
+
 test.skipIf(process.platform === "win32")("enrollment is receiver-issued, explicit, idempotent by transaction and never overwrites a peer", async () => {
   const pair = remoteMessagingPair(), state = pair.aStore.requireEnabled(), transaction = crypto.randomUUID(), key = capability();
   const request = { protocol: REMOTE_PROTOCOL, action: "enroll", params: { machine: state.machine, transaction, returnCapability: key, port: state.port } };

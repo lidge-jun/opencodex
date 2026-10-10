@@ -28,10 +28,15 @@ private SSH stdio exchanges receiver-issued capabilities independently in each
 direction; ordinary CLI receipts omit them. Capability possession authenticates
 an enrollment, not an individual same-uid agent session or user approval.
 
-One saved enrollment transaction survives a lost remote reply. Repeating the
+One generation-bound saved enrollment transaction survives a lost remote reply. Repeating the
 same add command reconciles the identical transaction and capabilities; a new
 alias/identity cannot replace an existing peer silently. Local removal revokes
-admission before attempting remote cleanup. Unconfirmed remote cleanup is reported
+admission and forgets its matching journal before attempting remote cleanup. Completion
+checks exact journal ownership under the state mutation lock; enrollment publication
+precedes journal cleanup. Revocation instead invalidates its matching journal before
+publishing peer absence; cleanup failure leaves the prior state and reports failure.
+An already-completed identical peer can converge without touching a
+newer journal, but a missing journal cannot authorize adding a peer. Unconfirmed remote cleanup is reported
 explicitly and never restores local authorization. Read commands do not enable,
 create an identity, install software, rotate credentials or start the recipient.
 
@@ -85,7 +90,8 @@ or a guarantee that the target stays connected; every data connection proves ide
 GatewayPorts configurations. Port selection alone does not prove readiness.
 
 The owner shares fixed total limits across peers and both route directions:
-16 connections, 32 active/pending requests, eight helpers and 2 MiB accounted
+16 connections, 32 active/pending requests, ten helpers (eight persistent tunnel children
+plus two transient control/inspection children) and 2 MiB accounted
 retained output/input buffers. Per-connection RPC concurrency is four; frames are
 at most 1 MiB, helper streams 64 KiB and persistent state 128 KiB. There is no
 overload waiting queue. Capacity is reserved before tracked work and released once.
@@ -96,8 +102,11 @@ Setup shares one 30-second batch deadline across peers and both directions;
 refresh batches share ten seconds. `src/messaging/remote-process.ts` propagates
 cancellation through owned process groups, sends TERM then KILL and cancels retained
 pipes. Idempotent stop joins the same cleanup flight; helpers close in parallel
-under a three-second cleanup ceiling. An unkillable helper reports incomplete
-cleanup, not proven absence. Existing daemons, proxies and unrelated SSH clients
+under a three-second cleanup ceiling. Cancelled helper operations settle after that
+cleanup flight even if physical exit remains unresolved; such children retain their
+helper reservation and report incomplete cleanup, not proven absence. Published tunnel
+pairs remain owned after route withdrawal, so owner shutdown joins their cleanup and
+reports its failures. Existing daemons, proxies and unrelated SSH clients
 are never signalled. Owner generation changes and lease-refresh failures retire
 the owner; restarting it is explicit and never replays a message.
 
@@ -108,6 +117,10 @@ local daemon and the target on one proven destination connection. The shared
 envelope includes a machine UUID in the wrapper-generated reply command, never
 routing from a peer body. Missing sender context produces no invented reply route.
 Sender identity remains descriptive, not session authentication or delegated authority.
+Source admission rechecks enabled generation, machine and exact peer capabilities
+after route lookup, before transport attachment and immediately before queue dispatch.
+Revocation after dispatch cannot recall a message in flight; queued/unknown semantics
+remain unchanged. Loaded discovery also rejects source authority changes during lookup.
 Receipts preserve not_sent/queued/unknown and omit body/native output. Queued means
 submission, not processing, and may wait for a busy turn to finish.
 
@@ -116,6 +129,8 @@ Offline contracts live in `tests/codex-integration/messaging-remote-contract.tes
 `tests/codex-integration/messaging-remote-enrollment.test.ts`,
 `tests/codex-integration/messaging-remote-send.test.ts` and
 `tests/codex-integration/messaging-remote-lifecycle.test.ts`.
+Helper settlement and persistent/transient capacity contracts live in
+`tests/codex-integration/messaging-remote-process.test.ts`.
 Opt-in `tests/codex-integration/messaging-remote-interop.test.ts` qualifies a
 disposable loopback sshd with generated keys, isolated homes and strict native
 fixtures. `tests/codex-integration/messaging-remote-native.test.ts` qualifies an

@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { connect, createServer, type Socket } from "node:net";
 import { MessageBudget } from "../../src/messaging/budget";
 import { RemoteCapacity, remoteError } from "../../src/messaging/remote-contract";
 import { runRemoteHelper, spawnRemoteHelper } from "../../src/messaging/remote-process";
-import { startRemoteOwner } from "../../src/messaging/remote-owner";
+import { resolveRemoteRoute, startRemoteOwner } from "../../src/messaging/remote-owner";
 import { remoteMessagingPair } from "../helpers/messaging-remote";
 import { parseRemoteMessageArgs } from "../../src/cli/message-remote-args";
 import { repoPath } from "../helpers/repo-root";
@@ -46,6 +47,68 @@ for (const rejectCleanup of [false, true]) {
       await expect(result).rejects.toThrow(rejectCleanup ? "fixture cleanup incomplete" : "configuration changed");
       expect(completed.sort()).toEqual([0, 1]);
     } finally { await Promise.allSettled(closes.map(close => close())); await pair.close(); }
+  });
+}
+
+for (const rejectCleanup of [false, true]) {
+  test.skipIf(process.platform === "win32")(`retired published tunnels remain owned until both helpers close (cleanup rejection=${rejectCleanup})`, async () => {
+    const pair = remoteMessagingPair(), closes: (() => Promise<void>)[] = [], exits: (() => void)[] = [], completed: number[] = [];
+    pair.aStore.mutate(state => { Object.assign(state.peers[0]!, { ssh: "fixture", hostKey: "fixture ssh-ed25519 Zml4dHVyZQ==\n", fingerprint: "SHA256:fixture" }); });
+    let releaseSibling!: () => void, siblingClosing!: () => void;
+    const gate = new Promise<void>(resolve => { releaseSibling = resolve; });
+    const started = new Promise<void>(resolve => { siblingClosing = resolve; });
+    let owner: Awaited<ReturnType<typeof startRemoteOwner>> | undefined, receiver: typeof owner;
+    const budget = new MessageBudget();
+    try {
+      receiver = await startRemoteOwner(pair.bStore, pair.b.codexHome, []);
+      const receiverPort = receiver.port;
+      owner = await startRemoteOwner(pair.aStore, pair.a.codexHome, ["worker"], undefined, {
+        run: async () => JSON.stringify({ port: pair.aStore.requireEnabled().port }),
+        spawn: (argv, capacity) => {
+          const index = closes.length, free = capacity.reserve("helpers"), sockets = new Set<Socket>();
+          const forward = argv.indexOf("-L");
+          // Only the outbound path needs forwarding; the return path reaches this isolated owner's listener directly.
+          const listener = forward < 0 ? undefined : createServer(incoming => {
+            const outgoing = connect(receiverPort, "127.0.0.1");
+            for (const socket of [incoming, outgoing]) {
+              sockets.add(socket); socket.on("close", () => sockets.delete(socket));
+              socket.on("error", () => { incoming.destroy(); outgoing.destroy(); });
+            }
+            incoming.pipe(outgoing).pipe(incoming);
+          }).listen(Number(argv[forward + 1]!.split(":")[1]), "127.0.0.1");
+          let finish!: (code: number) => void, closing: Promise<void> | undefined;
+          const exited = new Promise<number>(resolve => { finish = resolve; });
+          const close = () => closing ??= (async () => {
+            if (index === 1) { siblingClosing(); await gate; }
+            for (const socket of sockets) socket.destroy();
+            if (listener) await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+            completed.push(index); free(); finish(0);
+            if (rejectCleanup && index === 1) throw remoteError("cleanup_incomplete", "fixture cleanup incomplete");
+          })();
+          closes.push(close); exits.push(() => finish(0));
+          return { pid: 0, exited, output: Promise.resolve(""), close };
+        },
+      });
+      await resolveRemoteRoute(pair.aStore, "worker", budget);
+      exits[0]!(); await started;
+      await expect(resolveRemoteRoute(pair.aStore, "worker", budget)).rejects.toThrow("No live messaging route");
+      const closing = owner.close();
+      expect(closing).toBe(owner.close());
+      const settled = closing.then(() => "closed", () => "rejected");
+      expect(await Promise.race([settled, Bun.sleep(30).then(() => "pending")])).toBe("pending");
+      expect(completed).not.toContain(1);
+      releaseSibling();
+      if (rejectCleanup) {
+        await expect(closing).rejects.toThrow("cleanup did not complete cleanly");
+        await expect(owner.finished).rejects.toThrow("cleanup did not complete cleanly");
+      } else { await closing; await owner.finished; }
+      expect(completed.sort()).toEqual([0, 1]);
+      expect(owner.capacity.snapshot().helpers).toBe(0);
+    } finally {
+      releaseSibling(); budget.dispose();
+      await Promise.allSettled([owner?.close(), receiver?.close(), ...closes.map(close => close())]);
+      await pair.close();
+    }
   });
 }
 

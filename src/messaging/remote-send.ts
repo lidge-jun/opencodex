@@ -12,8 +12,13 @@ import { isThreadId, LocalMessagingError } from "./types";
 /** Remote discovery is explicit and loaded-only; it uses a live owner route and one proven connection. */
 export async function remoteSessions(store: RemoteMessageStore, host: string, budget: MessageBudget) {
   const route = await resolveRemoteRoute(store, host, budget);
+  store.requireCurrentPeer(route.state, route.peer);
   const rpc = await LocalMessageRpc.attach(await authenticatedRemoteSocket(route.state, route.endpoint, budget), budget);
-  try { return { machine: route.peer.machine, sessions: await discoverLoaded(rpc, budget) }; }
+  try {
+    const sessions = await discoverLoaded(rpc, budget);
+    store.requireCurrentPeer(route.state, route.peer);
+    return { machine: route.peer.machine, sessions };
+  }
   finally { rpc.close(); }
 }
 /** Attribute locally, discover/revalidate/queue remotely on one socket, and never replay an unknown result. */
@@ -37,6 +42,7 @@ export async function sendRemoteMessage(store: RemoteMessageStore,
       finally { local.close(); }
     }
     receipt.sender = sender ? { threadId: sender.id, name: sender.name, identitySource: "CODEX_THREAD_ID" } : null;
+    store.requireCurrentPeer(route.state, route.peer);
     rpc = await LocalMessageRpc.attach(await authenticatedRemoteSocket(route.state, route.endpoint, budget), budget);
     const target = resolveLoaded(await discoverLoaded(rpc, budget), options);
     receipt.target = { threadId: target.id, name: target.name };
@@ -44,6 +50,7 @@ export async function sendRemoteMessage(store: RemoteMessageStore,
     const fresh = await rpc.readThread(target.id);
     if (fresh.status === "notLoaded") throw new LocalMessagingError("target_not_loaded", "The destination unloaded before remote submission.");
     budget.throwIfEnded();
+    store.requireCurrentPeer(route.state, route.peer);
     Object.assign(receipt, await rpc.queueMessage(target.id, envelope.text, receipt.messageId));
   } catch (error) { receipt.error = messageFailure(error); }
   finally { rpc?.close(); }

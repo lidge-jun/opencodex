@@ -154,16 +154,24 @@ ocx message disable --json
 Removal revokes local admission first; an unconfirmed remote cleanup exits 3 and
 requires removal on that peer too. Disable retires the current owner generation;
 dispatch refuses new work immediately, and the foreground owner notices changed
-configuration within its ten-second maintenance interval. Already accepted native
-work is not cancelled or recalled. A lost enrollment response retains one private
+configuration within its ten-second maintenance interval. The sender checks local
+authority again immediately before dispatch; revocation after dispatch cannot recall
+an in-flight message or already accepted native work. A lost enrollment response retains one private
 transaction: repeat the exact same add command to reconcile, rather than enrolling
-under another name. Crash mutation locks fail closed and need operator recovery;
+under another name within the same enabled generation. Disable/re-enable or port
+changes invalidate that recovery generation. Completed or revoked transactions cannot
+restore a removed peer or erase another enrollment's recovery record.
+Crash mutation locks fail closed and need operator recovery;
 the wrapper never guesses that an old lock is abandoned.
 
 The foreground owner shares finite connection/request/helper/buffer limits across
-all peers and rejects overload without an unbounded queue. Setup is bounded by
+all peers and rejects overload without an unbounded queue: at most eight tunnel
+children and two transient control/inspection helpers, ten total. Setup is bounded by
 30 seconds across the whole selected peer batch. Cancellation stops only owned
 SSH helpers/listeners; it leaves Codex daemons, threads and unrelated proxies alone.
+Cleanup joins withdrawn tunnel routes too. A helper that cannot exit within the
+three-second cleanup ceiling reports incomplete cleanup; its reservation is retained
+until physical exit, not reported as a successful stop.
 Same-uid processes can read private enrollment state; machine authentication does
 not establish non-forgeable per-agent identity. Native traffic bypassing this gateway
 is not controlled by it.
