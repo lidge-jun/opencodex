@@ -7,6 +7,7 @@ import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, isRealBunBinary, bundledB
 import { findPathBun } from "../../src/lib/bun-path-runtime.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 // realpath the temp root: on macOS /var is a symlink to /private/var, so a path built
 // from mkdtemp compares unequal to the same path resolved through process.cwd().
@@ -72,7 +73,8 @@ describe("bundledBunPath / durableBunPath", () => {
     delete env.OPENCODEX_BUN_PATH;
     delete env.OCX_PATH_DOTENV_LOADED;
     const pkg = JSON.parse(readFileSync(repoPath("package.json"), "utf8"));
-    const selected = findPathBun({ env, pinnedVersion: pkg.dependencies.bun, deadlineMs: 2000 });
+    // A copied bun.exe on a loaded win32 runner missed this 2s probe at 2.4s.
+    const selected = findPathBun({ env, pinnedVersion: pkg.dependencies.bun, deadlineMs: process.platform === "win32" ? INTERNAL_DEADLINE_MS : 2000 });
     expect(selected).not.toBeNull();
     const lateOverride = join(root, "dotenv-bun.exe");
     writeFileSync(lateOverride, Buffer.alloc(1_000_000));
