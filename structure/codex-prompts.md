@@ -23,6 +23,16 @@ refuses the whole edit before publication, and a composite or multiline target
 value also refuses. Delimiters in quoted strings and comments do not change scope.
 Toggle reads use the same scan (`scopedBool` in `toml-read.ts`, scanner in
 `encoding.ts`), so a write and the snapshot read back agree.
+An edit is also checked before publication: if the result would leave the target table
+header ambiguous or duplicated (for example a quoted or spaced `[skills]` header next to
+a `[skills]` token inside a multiline string), the edit is refused and the file is left
+byte-identical, instead of publishing TOML that a byte-hash check alone cannot reject.
+
+Journal recovery, commit and rollback recheck the target's current content before every
+rename attempt, including each retry after a transient sharing error such as `EBUSY`.
+If a peer has rewritten the target in place since the image was recorded, the rename is
+not attempted: the newer bytes and the journal are kept and the operation reports
+`recovery_required`. This applies to both the config and the store target.
 
 `src/codex/prompt-layers/import-source.ts` opens an external source nonblocking,
 checks the opened descriptor is regular, and reads at most 128 KiB plus one refusal

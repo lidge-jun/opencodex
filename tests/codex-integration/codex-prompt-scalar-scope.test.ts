@@ -1,8 +1,8 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { importBaseVariant, previewBaseImport, readPromptLayers, recoverPromptJournal, setToggle } from "../../src/codex/prompt-layers";
+import { importBaseVariant, previewBaseImport, readPromptLayers, recoverPromptJournal, setToggle, writeCustomLayers } from "../../src/codex/prompt-layers";
 import { journalPathFor } from "../../src/codex/prompt-layers/paths";
 import { encodeJournal, hashBytes } from "../../src/codex/prompt-journal";
 import * as atomic from "../../src/lib/windows-atomic-replace";
@@ -186,6 +186,59 @@ for (const entry of ["recovery", "ordinary-write"] as const) {
 }
 
 
+
+for (const phase of ["fresh commit", "rollback"] as const) {
+  test(phase + ": config retry refuses newer in-place peer bytes and keeps the journal", () => {
+    const paths = fixture('model = "original"\n');
+    const preStore = JSON.stringify({ version: 1, layers: [] });
+    writeFileSync(paths.storePath, preStore);
+    const journal = journalPathFor(paths.storePath);
+    expect(existsSync(journal)).toBe(false);
+    const revision = readPromptLayers(paths).revision;
+    const newer = 'model = "peer edit during retry"\n';
+    const rename = atomic.renameAtomicFile;
+    let configPublishes = 0, attempts = 0, peerEdits = 0, storeFailed = false;
+    let preparedJournal = "";
+    const hook = spyOn(atomic, "renameAtomicFile").mockImplementation((source, destination, io, publisher, hooks) => {
+      if (destination === realpathSync(paths.storePath) && phase === "rollback") {
+        // Config has landed; fail the second target to enter transaction rollback.
+        storeFailed = true;
+        throw Object.assign(new Error("fixture store write failed"), { code: "EIO" });
+      }
+      if (destination !== realpathSync(paths.configPath)) return rename(source, destination, io, publisher, hooks);
+      configPublishes += 1;
+      if (configPublishes !== (phase === "fresh commit" ? 1 : 2)) return rename(source, destination, io, publisher, hooks);
+      return rename(source, destination, {
+        platform: "win32",
+        rename: (a, b) => {
+          attempts += 1;
+          if (attempts === 1) throw Object.assign(new Error("fixture sharing violation"), { code: "EBUSY" });
+          renameSync(a, b);
+        },
+        sleep: () => {
+          preparedJournal = readFileSync(journal, "utf8");
+          const inode = statSync(paths.configPath).ino;
+          writeFileSync(paths.configPath, newer);
+          expect(statSync(paths.configPath).ino).toBe(inode);
+          peerEdits += 1;
+        },
+      }, publisher, hooks);
+    });
+    let result;
+    try {
+      result = writeCustomLayers([{ id: "active", title: "Custom", body: "new projection", enabled: true }], revision, paths);
+    } finally { hook.mockRestore(); }
+    expect(peerEdits).toBe(1);
+    expect(storeFailed).toBe(phase === "rollback");
+    expect(configPublishes).toBe(phase === "fresh commit" ? 1 : 2);
+    expect(readFileSync(paths.configPath, "utf8")).toBe(newer);
+    expect(existsSync(journal)).toBe(true);
+    expect(readFileSync(journal, "utf8")).toBe(preparedJournal);
+    expect(result).toMatchObject({ ok: false, error: "recovery_required" });
+    expect(readFileSync(paths.storePath, "utf8")).toBe(preStore);
+    expect(attempts).toBe(1); // Revalidation refuses before the second rename.
+  });
+}
 
 // Debate round 2 reviewer findings: Bun-unparseable input and TOML date/time values.
 const I64 = "model_context_window = 9223372036854775807\n";
