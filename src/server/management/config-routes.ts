@@ -122,6 +122,7 @@ import {
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { shadowCallTargetError } from "./shadow-call-validation";
 import { autoReviewOverrideConfigError } from "../../config/provider-validation";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -1273,7 +1274,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
   if (url.pathname === "/api/auto-review-settings" && req.method === "GET") {
     const override = config.autoReviewOverride ?? {};
-    return jsonResponse({ enabled: override.enabled === true, model: override.model ?? "" });
+    return jsonResponse({ enabled: override.enabled === true, model: override.model?.trim() ?? "" });
   }
 
   if (url.pathname === "/api/auto-review-settings" && req.method === "PUT") {
@@ -1283,16 +1284,25 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const body = raw as { enabled?: unknown; model?: unknown };
     const shapeError = autoReviewOverrideConfigError(body, "body");
     if (shapeError) return jsonResponse({ error: shapeError }, 400);
-    config.autoReviewOverride = { ...config.autoReviewOverride };
-    if (typeof body.enabled === "boolean") config.autoReviewOverride.enabled = body.enabled;
-    if (typeof body.model === "string") {
-      const trimmed = body.model.trim();
-      if (trimmed === "") delete config.autoReviewOverride.model;
-      else config.autoReviewOverride.model = trimmed;
+    const rollback = captureConfigTopLevelRollback(config, ["autoReviewOverride"]);
+    try {
+      config.autoReviewOverride = { ...config.autoReviewOverride };
+      if (typeof body.enabled === "boolean") config.autoReviewOverride.enabled = body.enabled;
+      if (typeof body.model === "string") {
+        const trimmed = body.model.trim();
+        if (trimmed === "") delete config.autoReviewOverride.model;
+        else config.autoReviewOverride.model = trimmed;
+      }
+      (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
+    } catch (error) {
+      if (!(error instanceof ConfigWritePublishedError)) rollback();
+      throw error;
     }
-    saveConfigPreservingClaudeCode(config);
+    // The catalog carries the reviewer stamps, so the new selector has to reach it now; the
+    // disposition travels in the body like every other catalog-affecting route.
+    const catalogRefresh = await convergeCodexCatalog();
     const override = config.autoReviewOverride;
-    return jsonResponse({ ok: true, enabled: override.enabled === true, model: override.model ?? "" });
+    return jsonResponse({ ok: true, enabled: override.enabled === true, model: override.model ?? "", catalogRefresh });
   }
   return null;
 }

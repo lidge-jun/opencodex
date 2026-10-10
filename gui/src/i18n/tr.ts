@@ -490,6 +490,7 @@ export const tr: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "Codex App'in başlıklar ve commit mesajları için yaptığı arka plan çağrılarını ({models}) yakalar ve seçtiğiniz modele yönlendirir.",
   "models.autoReviewOverride": "Otomatik inceleme geçersiz kılma",
   "models.autoReviewOverrideHint": "Codex’in otomatik incelemesi (onay gözden geçiren) için kullanılacak modeli seçer. Katalog eşitlemesinde tüm satırlara uygulanır; sağlayıcıya özel autoReviewModel kendi satırlarında yine önceliklidir.",
+  "models.autoReviewPending": "Beklemede",
   "dash.sidecarBackend": "Arka uç",
   "dash.sidecarModel": "Model",
   "dash.backendAuto": "Otomatik",

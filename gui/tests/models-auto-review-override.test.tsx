@@ -6,7 +6,7 @@ import type { TFn } from "../src/i18n/shared";
 /**
  * The Models settings panel folds the global auto-review override. Two properties matter:
  * the dropdown offers routed rows (the selector must name a provider-namespaced catalog row),
- * and the summary surfaces the control only while it actually changes the reviewer.
+ * and the summary keeps an enabled control visible, including its pending model state.
  */
 const t = ((key: string) => key) as unknown as TFn;
 
@@ -36,6 +36,15 @@ test("summary names the auto-review override only while it is on", () => {
     id: "auto-review",
     label: "models.autoReviewOverride",
     value: "9router/ocg-muse-spark-1.3-contributor",
+  });
+});
+
+test("an enabled override with no model reads as pending instead of vanishing", () => {
+  const pending = modelsSettingsSummary(t, { ...base, autoReviewEnabled: true, autoReviewModel: "" });
+  expect(pending.find(item => item.id === "auto-review")).toEqual({
+    id: "auto-review",
+    label: "models.autoReviewOverride",
+    value: "models.autoReviewPending",
   });
 });
 

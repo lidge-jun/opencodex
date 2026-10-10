@@ -256,10 +256,11 @@ export function autoReviewModelTargetConfigError(
   field = "autoReviewModel",
   allowClear = false,
 ): string | null {
-  if (value === undefined || (allowClear && (value === null || value === ""))) return null;
+  if (value === undefined || (allowClear && value === null)) return null;
   if (typeof value !== "string") return `${field} must be a string`;
   const trimmed = value.trim();
-  if (!trimmed) return `${field} must be nonblank`;
+  // `allowClear` callers trim then delete, so whitespace-only is a clear, not a blank selector.
+  if (!trimmed) return allowClear ? null : `${field} must be nonblank`;
   if (trimmed.length > 1024 || AUTO_REVIEW_MODEL_CONTROL_CHARS.test(trimmed)) {
     return `${field} must be a catalog selector without whitespace or control characters`;
   }

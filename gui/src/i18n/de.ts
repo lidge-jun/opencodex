@@ -480,6 +480,7 @@ export const de: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "Fängt die Hintergrund-Hilfsaufrufe der Codex-App ({models}) ab und leitet sie an das gewählte Modell um.",
   "models.autoReviewOverride": "Auto-Review-Überschreibung",
   "models.autoReviewOverrideHint": "Legt fest, welches Modell Codex für die automatische Prüfung (Approval-Reviewer) verwendet. Wird beim Katalog-Abgleich auf alle Zeilen angewendet; ein autoReviewModel auf Anbieterebene hat weiterhin Vorrang.",
+  "models.autoReviewPending": "Ausstehend",
   "dash.sidecarBackend": "Backend",
   "dash.sidecarModel": "Modell",
   "dash.backendAuto": "Automatisch",

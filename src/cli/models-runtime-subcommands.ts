@@ -28,6 +28,7 @@ export const MODELS_RUNTIME_SUBCOMMANDS = [
   "new-arrivals",
   "context",
   "shadow",
+  "auto-review",
   "order",
   "display-name",
 ] as const;

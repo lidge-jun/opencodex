@@ -48,6 +48,7 @@ const USAGE = `Usage:
   ocx models new-arrivals [--json]
 ${MODELS_CONTEXT_USAGE}
   ocx models shadow <status|set> [model|-] [--enabled <on|off>] [--json]
+  ocx models auto-review <status|set> [model|-] [--enabled <on|off>] [--json]
 
 Prices are USD per 1M tokens. Omitted cache rates default to 0.
 Price selectors use the exact upstream model ID after the first slash.`;
@@ -566,6 +567,35 @@ async function shadow(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, ["Shadow-call settings updated."]);
 }
 
+async function autoReview(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const action = (args.shift() ?? "status").toLowerCase();
+  const wantsJson = takeFlag(args, "--json");
+  if (action === "status") {
+    rejectArgs(args, USAGE);
+    const result = await runtimeRequest("/api/auto-review-settings", {}, deps);
+    printData(result, wantsJson);
+    return;
+  }
+  if (action !== "set") throw new CliUsageError("unknown auto-review action " + action, USAGE);
+  const modelRaw = args[0] && !args[0].startsWith("--") ? args.shift() : undefined;
+  const enabled = takeBooleanOption(args, "--enabled");
+  rejectArgs(args, USAGE);
+  const body: Record<string, unknown> = {};
+  if (modelRaw !== undefined) body.model = modelRaw === "-" ? "" : modelRaw;
+  if (enabled !== undefined) body.enabled = enabled;
+  if (Object.keys(body).length === 0) throw new CliUsageError("model and/or --enabled is required", USAGE);
+  const result = await runtimeRequest<{ catalogRefresh?: { status?: string } }>(
+    "/api/auto-review-settings", { method: "PUT", body: JSON.stringify(body) }, deps,
+  );
+  printData(result, wantsJson, [
+    "Auto-review settings updated.",
+    ...(result.catalogRefresh?.status !== "committed"
+      ? ["Settings saved, but the Codex model catalog refresh is pending. Run ocx sync to retry."]
+      : []),
+  ]);
+}
+
 export async function handleModelsRuntimeCommand(sub: string, argv: string[], deps: RuntimeApiDeps = {}): Promise<number | null> {
   if (sub === "order" || sub === "display-name") {
     const { handleModelsOrderCommand, handleModelsDisplayNameCommand } = await import("./models-order");
@@ -589,6 +619,7 @@ export async function handleModelsRuntimeCommand(sub: string, argv: string[], de
   else if (sub === "new-arrivals") action = () => newArrivals(argv, deps);
   else if (sub === "context") action = () => context(argv, deps);
   else if (sub === "shadow") action = () => shadow(argv, deps);
+  else if (sub === "auto-review") action = () => autoReview(argv, deps);
   if (!action) return null;
   return runCliAction(action);
 }

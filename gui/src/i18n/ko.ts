@@ -484,6 +484,7 @@ export const ko: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "Codex 앱의 백그라운드 호출({models}, 제목·커밋 메시지)을 가로채 선택한 모델로 바꿉니다.",
   "models.autoReviewOverride": "자동 검토 재정의",
   "models.autoReviewOverrideHint": "Codex의 자동 검토(승인 검토자)에 사용할 모델을 지정합니다. 카탈로그 동기화 시 모든 행에 적용되며, 공급자별 autoReviewModel이 해당 행에서 계속 우선합니다.",
+  "models.autoReviewPending": "보류 중",
   "dash.sidecarBackend": "백엔드",
   "dash.sidecarModel": "모델",
   "dash.backendAuto": "자동",

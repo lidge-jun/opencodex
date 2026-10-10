@@ -498,6 +498,7 @@ export const en = {
   "models.shadowCallInterceptHint": "Intercepts Codex App's background helper calls ({models}) for titles and commit messages and redirects them to your chosen model.",
   "models.autoReviewOverride": "Auto-review override",
   "models.autoReviewOverrideHint": "Chooses the model Codex uses for auto-review (the approval reviewer). Applied to every catalog row at sync; a provider-scoped autoReviewModel still takes precedence on its own rows.",
+  "models.autoReviewPending": "Pending",
   "dash.sidecarBackend": "Backend",
   "dash.sidecarModel": "Model",
   "dash.backendAuto": "Auto",

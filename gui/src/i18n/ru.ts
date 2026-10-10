@@ -489,6 +489,7 @@ export const ru: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "Перехватывает фоновые служебные вызовы Codex App ({models}: заголовки, сообщения коммитов) и перенаправляет их на выбранную вами модель.",
   "models.autoReviewOverride": "Переопределение авто-проверки",
   "models.autoReviewOverrideHint": "Задаёт модель, которую Codex использует для автоматической проверки (ревьюера подтверждений). Применяется ко всем строкам каталога при синхронизации; autoReviewModel на уровне провайдера по-прежнему имеет приоритет.",
+  "models.autoReviewPending": "Ожидание",
   "dash.sidecarBackend": "Бэкенд",
   "dash.sidecarModel": "Модель",
   "dash.backendAuto": "Авто",

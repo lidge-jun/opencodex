@@ -365,6 +365,7 @@ export const zhTW: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "攔截 Codex 應用的背景 helper 呼叫（{models}）以生成標題與提交訊息，並將它們重定向到您選擇的模型。",
   "models.autoReviewOverride": "自動審查覆寫",
   "models.autoReviewOverrideHint": "指定 Codex 自動審查（核准審查模型）所使用的模型。同步型錄時套用到所有資料列；提供者層級的 autoReviewModel 在這些資料列上仍具優先權。",
+  "models.autoReviewPending": "待定",
   "dash.sidecarBackend": "後端",
   "dash.sidecarModel": "模型",
   "dash.backendAuto": "自動",

@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 47.
+Declared capabilities: 49.
 
 ### `ocx models price`
 
@@ -799,6 +799,45 @@ State-changing: yes.
 JSON mode: `payload`.
 
 - At least a model or --enabled is required; - clears the model with an empty string. Enabling shadow calls can cause subsequent inference calls.
+
+### `ocx models auto-review status`
+
+Usage: `ocx models auto-review status [--json]`
+
+Read the global auto-review model and enabled state.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/auto-review-settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit auto-review settings. |
+
+JSON mode: `payload`.
+
+### `ocx models auto-review set`
+
+Usage: `ocx models auto-review set [model|-] [--enabled <on|off>] [--json]`
+
+Set the global auto-review model or enabled state.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/auto-review-settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--enabled` | string | on or off; takes a value. |
+| `--json` | boolean | Emit the settings receipt. |
+
+JSON mode: `payload`.
+
+- At least a model or --enabled is required; - clears the model with an empty string.
 
 ### `ocx alias list`
 

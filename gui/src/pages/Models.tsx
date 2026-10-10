@@ -77,7 +77,6 @@ import {
   modelPricingKnown,
   REASONING_EFFORT_LEVELS,
   routedModelOptions,
-  type AutoReviewData,
   type ModelRow,
   type ProviderContextCapsResponse,
   type ShadowCallData,
@@ -91,6 +90,7 @@ import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-so
 import { ModelCatalogDelivery } from "./models-catalog-state";
 import { CustomModelsSummary, InfoHint, ModelsSettingsPanel } from "./models-settings-panel";
 import { modelsSettingsSummary } from "./models-settings-summary";
+import { useAutoReviewSettings } from "./use-auto-review-settings";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -328,6 +328,13 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     setStatus(message);
     setFeedbackGen(g => g + 1);
   }, []);
+  const { data: autoReview, saving: autoReviewSaving, load: loadAutoReview, save: saveAutoReview } =
+    useAutoReviewSettings(apiBase, t, publishFeedback);
+  useEffect(() => {
+    if (catalogActive) return;
+    // A hidden mounted panel may still hold the previous server's reviewer settings.
+    void loadAutoReview();
+  }, [apiBase, catalogActive, loadAutoReview]);
   // Transient action feedback as a fixed toast: appearing or auto-clearing it never shifts
   // the workspace below (the old inline Notice pushed the whole model grid down by its
   // height on every apply). The timer itself just clears the status again.
@@ -455,8 +462,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
-  const [autoReview, setAutoReview] = useState<AutoReviewData | null>(null);
-  const [autoReviewSaving, setAutoReviewSaving] = useState(false);
 
   // App owns the in-session view mode; fallback to persisted mode for isolated renders/tests.
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -490,16 +495,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       const data = await readJsonIfOk<ShadowCallData>(r);
       if (data) setShadowCall(data);
     } catch { /* old server / network: keep the section disabled */ }
-    finally { bounded.clear(); }
-  }, [apiBase]);
-
-  const loadAutoReview = useCallback(async () => {
-    const bounded = createBoundedFetch(15_000);
-    try {
-      const r = await fetch(`${apiBase}/api/auto-review-settings`, { signal: bounded.signal });
-      const data = await readJsonIfOk<AutoReviewData>(r);
-      if (data) setAutoReview(data);
-    } catch { /* old server / network: keep the row disabled */ }
     finally { bounded.clear(); }
   }, [apiBase]);
 
@@ -1101,21 +1096,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       });
     } finally {
       setShadowCallSaving(false);
-    }
-  };
-
-  const saveAutoReview = async (patch: Partial<AutoReviewData>) => {
-    if (!autoReview || autoReviewSaving) return;
-    setAutoReviewSaving(true);
-    setAutoReview({ ...autoReview, ...patch });
-    try {
-      await fetch(`${apiBase}/api/auto-review-settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-    } finally {
-      setAutoReviewSaving(false);
     }
   };
 
@@ -2014,7 +1994,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           <div className="models-row-actions">
             <Switch on={autoReview?.enabled ?? false} onClick={() => void saveAutoReview({ enabled: !autoReview?.enabled })} disabled={!autoReview || autoReviewSaving} label={t("models.autoReviewOverride")} />
             <div className="models-shadow-model-slot">
-              <Select value={autoReview?.model ?? ""} options={autoReviewOptions} onChange={v => { setAutoReview(c => c ? { ...c, model: v } : c); void saveAutoReview({ model: v }); }} disabled={!autoReview || autoReviewSaving || !autoReview.enabled} label={t("models.autoReviewOverride")} />
+              <Select value={autoReview?.model ?? ""} options={autoReviewOptions} onChange={v => void saveAutoReview({ model: v })} disabled={!autoReview || autoReviewSaving || !autoReview.enabled} label={t("models.autoReviewOverride")} />
             </div>
           </div>
         </div>

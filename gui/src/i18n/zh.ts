@@ -484,6 +484,7 @@ export const zh: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "拦截 Codex 应用的后台辅助调用（{models}）并重定向到所选模型。",
   "models.autoReviewOverride": "自动审查覆盖",
   "models.autoReviewOverrideHint": "指定 Codex 自动审查（审批审查模型）使用的模型。同步目录时应用于所有行；提供方级的 autoReviewModel 在这些行上仍然优先。",
+  "models.autoReviewPending": "待定",
   "dash.sidecarBackend": "后端",
   "dash.sidecarModel": "模型",
   "dash.backendAuto": "自动",

@@ -489,6 +489,7 @@ export const ja: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "Codex App のバックグラウンドヘルパー呼び出し({models}: タイトル、コミットメッセージ)を傍受し、選択したモデルにリダイレクトします。",
   "models.autoReviewOverride": "自動レビューの上書き",
   "models.autoReviewOverrideHint": "Codex の自動レビュー（承認レビュアー）が使うモデルを指定します。カタログ同期時にすべての行へ適用され、プロバイダー固有の autoReviewModel がその行では引き続き優先されます。",
+  "models.autoReviewPending": "保留中",
   "dash.sidecarBackend": "バックエンド",
   "dash.sidecarModel": "モデル",
   "dash.backendAuto": "自動",

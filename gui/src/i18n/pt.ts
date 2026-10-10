@@ -502,6 +502,7 @@ export const pt: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "Intercepta as chamadas auxiliares em segundo plano do Codex App ({models}) para títulos e mensagens de commit e as redireciona ao modelo escolhido.",
   "models.autoReviewOverride": "Substituição da revisão automática",
   "models.autoReviewOverrideHint": "Define o modelo que o Codex usa na revisão automática (revisor de aprovação). Aplicado a todas as linhas do catálogo na sincronização; um autoReviewModel no provedor continua tendo prioridade nas próprias linhas.",
+  "models.autoReviewPending": "Pendente",
   "dash.sidecarBackend": "Backend",
   "dash.sidecarModel": "Modelo",
   "dash.backendAuto": "Automático",

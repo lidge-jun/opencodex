@@ -208,6 +208,17 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
     details: ["At least a model or --enabled is required; - clears the model with an empty string. Enabling shadow calls can cause subsequent inference calls."],
   },
   {
+    command: ["models", "auto-review", "status"], summary: "Read the global auto-review model and enabled state.",
+    usage: "ocx models auto-review status [--json]", routes: [{ method: "GET", path: "/api/auto-review-settings" }], mutates: false, json: "payload",
+    flags: [{ name: "--json", value: "boolean", summary: "Emit auto-review settings." }],
+  },
+  {
+    command: ["models", "auto-review", "set"], summary: "Set the global auto-review model or enabled state.",
+    usage: "ocx models auto-review set [model|-] [--enabled <on|off>] [--json]", routes: [{ method: "PUT", path: "/api/auto-review-settings" }], mutates: true, json: "payload",
+    flags: [{ name: "--enabled", value: "string", summary: "on or off; takes a value." }, { name: "--json", value: "boolean", summary: "Emit the settings receipt." }],
+    details: ["At least a model or --enabled is required; - clears the model with an empty string."],
+  },
+  {
     command: ["alias", "list"], summary: "Read provider and model aliases.",
     usage: "ocx alias list [--json]", routes: [{ method: "GET", path: "/api/aliases" }], mutates: false, json: "payload",
     flags: [{ name: "--json", value: "boolean", summary: "Emit alias maps and provenance." }],
