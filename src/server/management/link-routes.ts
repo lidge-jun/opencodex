@@ -557,41 +557,46 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   const body = await readManagementJsonBodyOr(ctx.req, {});
   if (!isRecord(body) || Object.keys(body).some(key => key !== "force") || (body.force !== undefined && typeof body.force !== "boolean")) return fail("invalid_body", "force must be a boolean.", 400);
   const force = body.force === true;
-  await state.supervisor.stopLink(id);
-  const restartTunnel = async (): Promise<void> => {
-    try {
-      await state.supervisor.ensureStarted();
-      await state.supervisor.reload();
-    } catch (error) {
-      console.warn(`[link] tunnel restart failed linkId=${id}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-  if (!force && record.direction === "hub-initiated") {
-    try {
-      const result = await runnerFor(ctx).run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"]), knownHostsFile: knownHostsFile(ctx) }), { timeoutMs: 30_000 });
-      if (result.code !== 0) {
-        await restartTunnel();
-        return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshFailureHint(result.stderr));
-      }
-    } catch (error) {
-      await restartTunnel();
-      return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshRunnerErrorHint(error));
-    }
-  }
-  if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
-  let next: LinkStore;
+  const release = state.supervisor.holdLink?.(id);
   try {
-    next = withConfigMutationLockSync(() => {
-      const latest = readStoreFor(ctx);
-      const filtered = { ...latest, links: latest.links.filter(link => link.id !== id) };
-      if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
-      return filtered;
-    });
-    clearCompensationFailed(id, compensationPath());
-  } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
-  state.compensationFailures?.delete(id);
-  if (next.links.length === 0) await state.listener.close();
-  return Response.json({ linkId: id });
+    await state.supervisor.stopLink(id);
+    const restartTunnel = async (): Promise<void> => {
+      release?.();
+      try {
+        await state.supervisor.ensureStarted();
+        await state.supervisor.reload();
+      } catch (error) {
+        console.warn(`[link] tunnel restart failed linkId=${id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    if (!force && record.direction === "hub-initiated") {
+      try {
+        const result = await runnerFor(ctx).run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"]), knownHostsFile: knownHostsFile(ctx) }), { timeoutMs: 30_000 });
+        if (result.code !== 0) {
+          await restartTunnel();
+          return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshFailureHint(result.stderr));
+        }
+      } catch (error) {
+        await restartTunnel();
+        return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshRunnerErrorHint(error));
+      }
+    }
+    if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
+    let next: LinkStore;
+    try {
+      next = withConfigMutationLockSync(() => {
+        const latest = readStoreFor(ctx);
+        const filtered = { ...latest, links: latest.links.filter(link => link.id !== id) };
+        if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
+        return filtered;
+      });
+      clearCompensationFailed(id, compensationPath());
+    } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
+    state.compensationFailures?.delete(id);
+    await state.supervisor.reload();
+    if (next.links.length === 0) await state.listener.close();
+    return Response.json({ linkId: id });
+  } finally { release?.(); }
 }
 
 export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: LinkRouteState): Promise<Response | null> {

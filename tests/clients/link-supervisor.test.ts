@@ -46,6 +46,98 @@ function baseStore(...links: LinkStore["links"]): LinkStore {
   return { version: 1, listenerPort: 19001, links };
 }
 
+test.each(["remove", "reload", "R1 reload removal", "R1b client-owned reload", "R2 stop", "store removal", "store record change", "store listener change"] as const)("reconnect with deferred exit cannot outrun %s", async action => {
+  const fake = fakeRunner();
+  const link = record("hub-initiated", "lnk_0123456789abcdef");
+  let store = baseStore(link);
+  const live = new Set<SshChild>();
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: { ...fake.runner, spawnTunnel(argv) {
+      const child = fake.runner.spawnTunnel(argv);
+      live.add(child);
+      void child.exited.then(() => live.delete(child));
+      return child;
+    } },
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    setTimer: () => 1 as unknown as ReturnType<typeof setInterval>, clearTimer: () => {},
+  });
+  supervisor.start();
+  fake.children[0]!.child.kill = () => {};
+  const reconnect = supervisor.reconnect(link.id);
+  // Let reconnect reach the deferred exit, even if lifecycle work is queued.
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+  let mutation: Promise<void>;
+  let settled = false;
+  if (action === "remove") {
+    mutation = supervisor.stopLink(link.id);
+    store = baseStore();
+  } else if (action === "reload") {
+    store = { ...baseStore({ ...link, alias: "new-child", tunnelPort: 19003 }), listenerPort: 19004 };
+    mutation = supervisor.reload();
+  } else if (action === "R1 reload removal" || action === "R1b client-owned reload") {
+    store = action === "R1 reload removal" ? baseStore()
+      : baseStore({ ...link, direction: "client-initiated", hostKeyFingerprint: null });
+    mutation = supervisor.reload();
+  } else if (action === "R2 stop") mutation = supervisor.stop();
+  else {
+    store = action === "store removal" ? baseStore()
+      : action === "store record change" ? baseStore({ ...link, alias: "new-child", tunnelPort: 19003 })
+      : { ...baseStore(link), listenerPort: 19004 };
+    mutation = reconnect.then(() => {});
+  }
+  void mutation.then(() => { settled = true; });
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+  const settledBeforeExit = settled;
+  const spawnedBeforeExit = fake.children.length;
+  const liveBeforeExit = live.size;
+  fake.children[0]!.resolve(143);
+  try {
+    expect(await reconnect).toBe(false);
+    await mutation;
+    expect(settledBeforeExit).toBe(false);
+    expect(spawnedBeforeExit).toBe(1);
+    expect(liveBeforeExit).toBe(1);
+    expect(live.size).toBe(action === "reload" ? 1 : 0);
+    expect(fake.children).toHaveLength(action === "reload" ? 2 : 1);
+    if (action === "reload") {
+      expect(fake.children[1]!.child.argv).toContain("new-child");
+      expect(fake.children[1]!.child.argv).toContain("127.0.0.1:19003:127.0.0.1:19004");
+      expect(supervisor.status()[0]!.pid).toBe(fake.children[1]!.child.pid);
+    }
+    if (action === "R1 reload removal") expect(supervisor.status()).toEqual([]);
+    if (action === "R1b client-owned reload") expect(supervisor.status()).toEqual([
+      { linkId: link.id, direction: "client-initiated", state: "client-owned", pid: null },
+    ]);
+  } finally { await mutation; await supervisor.stop(); }
+});
+
+test("reconnect queued behind a draining reload uses its updated tunnel port", async () => {
+  const fake = fakeRunner();
+  const link = record("hub-initiated", "lnk_0123456789abcdef");
+  let store = baseStore(link);
+  const supervisor = createLinkSupervisor({ readStore: () => store, runner: fake.runner,
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    setTimer: () => 1 as unknown as ReturnType<typeof setInterval>, clearTimer: () => {},
+  });
+  supervisor.start();
+  fake.children[0]!.child.kill = () => {};
+  store = baseStore({ ...link, tunnelPort: 19003 });
+  const reloading = supervisor.reload();
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+  const restarting = supervisor.reconnect(link.id);
+  expect(fake.children).toHaveLength(1);
+  fake.children[0]!.resolve(143);
+  try {
+    await reloading;
+    expect(await restarting).toBe(true);
+    expect(fake.children).toHaveLength(3);
+    expect(fake.children[2]!.child.argv).toContain("127.0.0.1:19003:127.0.0.1:19001");
+    expect(supervisor.status()[0]!.pid).toBe(fake.children[2]!.child.pid);
+    await expect(fake.children[1]!.child.exited).resolves.toBe(143);
+  } finally { await reloading; await restarting; await supervisor.stop(); }
+});
+
 test("spawns only hub links with the exact reverse forward argv", () => {
   const fake = fakeRunner();
   const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));

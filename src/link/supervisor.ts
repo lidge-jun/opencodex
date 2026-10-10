@@ -35,6 +35,8 @@ export interface LinkSupervisor {
   ensureStarted(): Promise<void>;
   reload(): Promise<void>;
   stopLink(linkId: string): Promise<void>;
+  /** Reserve a link against reconnects and automatic spawns for a removal transaction. */
+  holdLink?(linkId: string): () => void;
   /**
    * Restart one Home-initiated tunnel now: stop its child, forget the backoff or failed state,
    * and spawn a fresh attempt. False when the link is not a Home-initiated link of this store.
@@ -150,13 +152,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   let started = false;
   let stopping = false;
   let lifecycleFlight: Promise<void> | undefined;
+  let lifecycleRevision = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   const states = new Map<string, TunnelState>();
   const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number }>();
-  /** Per-link spawn counter. An exit or stop that resumes after a newer spawn is stale. */
+  /** Per-link generation, advanced by spawns and explicit stop/removal reservations. */
   const generations = new Map<string, number>();
+  const linkRevisions = new Map<string, number>();
   /** Reconnects in flight, so overlapping requests for one link restart it once. */
   const reconnects = new Map<string, Promise<boolean>>();
+  const holds = new Map<string, number>();
   const orphanUnverified = new Set<string>();
   /** The generation of the child whose exit is still being classified, per link. */
   const exiting = new Map<string, number>();
@@ -220,7 +225,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   const spawnFor = (record: LinkRecord): void => {
-    if (stopping || record.direction !== "hub-initiated" || children.has(record.id)) return;
+    if (stopping || holds.has(record.id) || record.direction !== "hub-initiated" || children.has(record.id)) return;
     // Only a fresh link or a due attempt spawns. A reload must neither skip the backoff nor start
     // a second child while an exited one is still reporting its stderr.
     const prior = states.get(record.id);
@@ -276,10 +281,11 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   const tick = (): void => {
-    if (stopping) return;
+    if (stopping || lifecycleFlight) return;
     const current = now();
     for (const record of store.links) {
       if (record.direction !== "hub-initiated") continue;
+      if (holds.has(record.id)) continue;
       // The exit is still being classified. Failing the link on the outage clock now would make
       // a later host-key or auth exit land on a failed state that ignores it.
       if (exiting.has(record.id)) continue;
@@ -331,27 +337,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     syncTimer();
   };
 
-  let queuedLifecycle: (() => void | Promise<void>) | undefined;
   const runLifecycle = (operation: () => void | Promise<void>): Promise<void> => {
-    if (lifecycleFlight) {
-      queuedLifecycle = operation;
-      return lifecycleFlight;
-    }
-    lifecycleFlight = (async () => {
-      let next: (() => void | Promise<void>) | undefined = operation;
-      while (next) {
-        await next();
-        next = queuedLifecycle;
-        queuedLifecycle = undefined;
-      }
-    })().finally(() => {
-      lifecycleFlight = undefined;
-      queuedLifecycle = undefined;
+    // Every caller keeps its own operation and completion; no later reload can replace a stop.
+    const flight = (lifecycleFlight ?? Promise.resolve()).catch(() => {}).then(operation).finally(() => {
+      if (lifecycleFlight === flight) lifecycleFlight = undefined;
     });
-    return lifecycleFlight;
+    lifecycleFlight = flight;
+    return flight;
   };
 
-  const stopLink = async (linkId: string): Promise<void> => {
+  const stopChild = async (linkId: string): Promise<void> => {
     const current = children.get(linkId);
     if (!current) {
       states.set(linkId, IDLE);
@@ -362,8 +357,25 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     current.child.kill("SIGTERM");
     await current.child.exited;
     conditionalRemovePidfile(linkId, current.child.pid);
-    // A reconnect may have spawned a replacement while this child was exiting; keep its state.
+    // A stop or removal reservation made while this child exited owns the next state.
     if (generations.get(linkId) === generation) states.set(linkId, IDLE);
+  };
+
+  const invalidateLink = (linkId: string): void => {
+    linkRevisions.set(linkId, (linkRevisions.get(linkId) ?? 0) + 1);
+    generations.set(linkId, (generations.get(linkId) ?? 0) + 1);
+  };
+
+  const holdLink = (linkId: string): (() => void) => {
+    holds.set(linkId, (holds.get(linkId) ?? 0) + 1);
+    invalidateLink(linkId);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (holds.get(linkId) ?? 1) - 1;
+      if (remaining) holds.set(linkId, remaining); else holds.delete(linkId);
+    };
   };
 
   return {
@@ -375,6 +387,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       return runLifecycle(begin);
     },
     async reload() {
+      lifecycleRevision += 1;
       await runLifecycle(async () => {
         if (stopping) return;
         if (!started) {
@@ -392,7 +405,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         store = nextStore;
         for (const [linkId] of [...children]) {
           if (nextInstances.has(linkId) && !changed.has(linkId)) continue;
-          await stopLink(linkId);
+          await stopChild(linkId);
           states.delete(linkId);
           orphanUnverified.delete(linkId);
           recordInstances.delete(linkId);
@@ -413,22 +426,32 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         syncTimer();
       });
     },
-    stopLink,
+    stopLink(linkId: string) {
+      invalidateLink(linkId);
+      return runLifecycle(() => stopChild(linkId));
+    },
+    holdLink,
     reconnect(linkId: string) {
       const inFlight = reconnects.get(linkId);
       if (inFlight) return inFlight;
-      const flight = (async () => {
-        // runLifecycle keeps only the latest queued operation, so a reconnect waits for a running
-        // reload instead of queueing behind it where a second reload could replace it.
-        if (lifecycleFlight) await lifecycleFlight;
-        if (stopping || !started) return false;
+      const linkRevision = linkRevisions.get(linkId);
+      let restarted = false;
+      const flight = runLifecycle(async () => {
+        if (stopping || !started || holds.has(linkId) || linkRevisions.get(linkId) !== linkRevision) return;
         const record = store.links.find(link => link.id === linkId && link.direction === "hub-initiated");
-        if (!record) return false;
-        await stopLink(linkId);
-        if (stopping) return false;
-        spawnFor(record);
-        return true;
-      })().finally(() => { reconnects.delete(linkId); });
+        if (!record) return;
+        // A preceding reload may have spawned a new generation; it is the current one we drain.
+        const generation = generations.get(linkId);
+        const revision = lifecycleRevision;
+        const instance = recordInstance(record, store.listenerPort);
+        await stopChild(linkId);
+        const latest = readStore();
+        const fresh = latest.links.find(link => link.id === linkId && link.direction === "hub-initiated");
+        if (stopping || holds.has(linkId) || generations.get(linkId) !== generation
+          || lifecycleRevision !== revision || !fresh || recordInstance(fresh, latest.listenerPort) !== instance) return;
+        spawnFor(fresh);
+        restarted = true;
+      }).then(() => restarted).finally(() => { reconnects.delete(linkId); });
       reconnects.set(linkId, flight);
       return flight;
     },
@@ -463,20 +486,12 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         clearTimer(timer);
         timer = undefined;
       }
-      const active = [...children.entries()];
-      for (const [linkId, current] of active) {
-        children.delete(linkId);
-        current.child.kill("SIGTERM");
-      }
-      await Promise.all(active.map(async ([linkId, current]) => {
-        await current.child.exited;
-        conditionalRemovePidfile(linkId, current.child.pid);
-        states.set(linkId, IDLE);
-      }));
-      for (const record of store.links) {
-        if (record.direction === "hub-initiated") states.set(record.id, IDLE);
-      }
-      if (lifecycleFlight) await lifecycleFlight;
+      await runLifecycle(async () => {
+        await Promise.all([...children.keys()].map(stopChild));
+        for (const record of store.links) {
+          if (record.direction === "hub-initiated") states.set(record.id, IDLE);
+        }
+      });
     },
   };
 }

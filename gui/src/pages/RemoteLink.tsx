@@ -369,8 +369,8 @@ export default function RemoteLink({ apiBase, sessionReady, workspaceAvailable =
     } catch (error) {
       setActionError(linkActionError(error));
     } finally {
-      setBusy(null);
       await refreshStatus();
+      setBusy(null);
     }
   };
 
