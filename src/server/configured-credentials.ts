@@ -33,7 +33,9 @@ export interface ConfiguredCredentials {
   matches(value: string): boolean;
 }
 
-interface Snapshot extends ConfiguredCredentials {
+interface Snapshot {
+  /** The only object handed out: cache metadata (including env values) stays private here. */
+  readonly view: ConfiguredCredentials;
   readonly signature: string;
   readonly envNames: readonly string[];
   readonly envFingerprint: string;
@@ -136,13 +138,16 @@ function build(configPath: string, authPath: string, signature: string, now: num
   if (isRecord(auth.value)) walkAuth(auth.value, 0);
 
   const names = [...envNames].sort();
+  const view: ConfiguredCredentials = Object.freeze({
+    complete,
+    matches: (value: string) => credentialSetMatches(values, candidate => values.has(candidate), value),
+  });
   return {
+    view,
     signature,
     envNames: names,
     envFingerprint: envFingerprint(names),
     builtAt: now,
-    complete,
-    matches: value => credentialSetMatches(values, candidate => values.has(candidate), value),
   };
 }
 
@@ -155,7 +160,7 @@ export function configuredCredentials(now = Date.now()): ConfiguredCredentials {
   const stale = !cached
     || cached.signature !== signature
     || cached.envFingerprint !== envFingerprint(cached.envNames)
-    || (!cached.complete && now - cached.builtAt >= INCOMPLETE_RETRY_MS);
+    || (!cached.view.complete && now - cached.builtAt >= INCOMPLETE_RETRY_MS);
   if (stale) cached = build(configPath, authPath, signature, now);
-  return cached!;
+  return cached!.view;
 }

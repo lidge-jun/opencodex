@@ -23,14 +23,62 @@ export const CREDENTIAL_SUBSTRING_MIN_LENGTH = 8;
 const CREDENTIAL_HEADER_NAME = /api[-_]?key|secret|passw|credential|auth|(?:^|[-_])token$/i;
 const CORRELATION_HEADER_NAME = /^(?:x-(?:client-)?request-id|request-id|traceparent|tracestate)$/i;
 const AUTH_SCHEMES = new Set(["bearer", "basic", "token", "digest", "apikey", "api-key", "key", "sso-key", "negotiate", "dpop"]);
-/** RFC 9110 auth-param: token BWS "=" BWS ( token / quoted-string ); also cookie and k=v pairs. */
-const AUTH_PARAM = /([!#$%&'*+.^_`|~0-9A-Za-z-]+)[ \t]*=[ \t]*("(?:[^"\\]|\\.)*"|[^\s,;"]*)/g;
+const TOKEN_CHAR = /[!#$%&'*+.^_`|~0-9A-Za-z-]/;
 const BASIC_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const PRINTABLE_USER_PASS = /^[\x20-\x7e]*:[\x20-\x7e]*$/;
 
 /** True for a header (or config field) name whose value is a credential by its name. */
 export function isCredentialName(name: string): boolean {
   return SENSITIVE_KEY_PATTERN.test(name) || CREDENTIAL_HEADER_NAME.test(name);
+}
+
+/**
+ * Values of RFC 9110 auth-params (token BWS "=" BWS ( token / quoted-string )), cookie pairs and
+ * other name=value pairs, in one linear pass: every character is visited a bounded number of times,
+ * so a long header value cannot stall the event loop.
+ */
+function parameterValues(value: string): string[] {
+  const out: string[] = [];
+  const n = value.length;
+  let unclosedFrom = n; // no closing quote exists for any opening quote at or after this index
+  let i = 0;
+  while (i < n) {
+    if (!TOKEN_CHAR.test(value[i]!)) { i++; continue; }
+    while (i < n && TOKEN_CHAR.test(value[i]!)) i++;
+    let j = i;
+    while (j < n && (value[j] === " " || value[j] === "\t")) j++;
+    if (value[j] !== "=") { i = j; continue; }
+    j++;
+    while (j < n && (value[j] === " " || value[j] === "\t")) j++;
+    if (value[j] === "\"") {
+      let k = j + 1;
+      let text = "";
+      let closed = false;
+      if (j < unclosedFrom) {
+        while (k < n) {
+          const char = value[k]!;
+          if (char === "\\" && k + 1 < n) { text += value[k + 1]; k += 2; continue; }
+          if (char === "\"") { closed = true; break; }
+          text += char;
+          k++;
+        }
+      }
+      if (closed) {
+        if (text) out.push(text);
+        i = k + 1;
+      } else {
+        unclosedFrom = Math.min(unclosedFrom, j);
+        i = j + 1;
+      }
+      continue;
+    }
+    const start = j;
+    while (j < n && !/[\s,;"]/.test(value[j]!)) j++;
+    const raw = value.slice(start, j);
+    if (raw && !/^=+$/.test(raw)) out.push(raw);
+    i = j;
+  }
+  return out;
 }
 
 /**
@@ -43,10 +91,7 @@ export function credentialComponents(value: string): string[] {
   const whole = value.trim();
   if (!whole) return [];
   const out = new Set([whole]);
-  for (const [, , raw] of whole.matchAll(AUTH_PARAM)) {
-    const param = raw!.startsWith('"') ? raw!.slice(1, -1).replace(/\\(.)/g, "$1") : raw!;
-    if (param && !/^=+$/.test(param)) out.add(param);
-  }
+  for (const param of parameterValues(whole)) out.add(param);
   let previous: string | undefined;
   for (const part of whole.split(/[\s,;]+/)) {
     if (!part) continue;

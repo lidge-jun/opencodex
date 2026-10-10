@@ -244,6 +244,15 @@ describe("outbound credential registry", () => {
     expect(credentialComponents('Digest username = "u1", response = "r sp\\"q-0123456789"')).toContain('r sp"q-0123456789');
     expect(credentialComponents("Basic dXNlcjpwYXNzd29yZA==")).not.toContain("=");
     expect(credentialComponents("  ")).toEqual([]);
+    expect(credentialComponents('a="unclosed b=after-0123')).toContain("after-0123");
+    expect(credentialComponents('a="x\\\\" b="after-quoted"')).toContain("after-quoted");
+  });
+  test("parameter extraction stays linear on megabyte header values", () => {
+    const mib = 1 << 20;
+    const started = performance.now();
+    for (const value of ["t".repeat(mib), `a="${"t".repeat(mib)}`, 'a="'.repeat(mib / 3), "k=".repeat(mib / 2)]) credentialComponents(value);
+    // A quadratic scan of these inputs takes minutes; linear extraction finishes well inside this bound.
+    expect(performance.now() - started).toBeLessThan(5_000);
     const reg = new OutboundCredentialRegistry();
     reg.remember({ "x-gateway-credential": "Token opaque-part-1" });
     expect(reg.matches("opaque-part-1")).toBe(true);
@@ -738,5 +747,21 @@ describe("configured credential source", () => {
     const configured = configuredCredentials();
     expect(configured.matches("configured-key-value")).toBe(true);
     for (const label of ["oauth", "openai-responses"]) expect(configured.matches(label)).toBe(false);
+  });
+
+  test("the returned view carries no cache metadata or environment values", () => {
+    const name = "OCX_6911_VIEW_ENV_KEY";
+    const previous = process.env[name];
+    try {
+      process.env[name] = "env-view-" + randomBytes(8).toString("hex");
+      writeConfig({ providers: { p: { apiKey: "$" + name } } });
+      const view = configuredCredentials();
+      expect(view.matches(process.env[name]!)).toBe(true);
+      expect(Object.keys(view).sort()).toEqual(["complete", "matches"]);
+      expect(JSON.stringify(view)).not.toContain(process.env[name]!);
+    } finally {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
   });
 });
