@@ -1291,8 +1291,8 @@ export function injectGrokConfig(
         publishConfigWrite(configPath, held, (destination, hooks) => atomicWriteFileNoFollow(destination, output, undefined, {
           ...hooks,
           validateBeforeRename: () => {
-            hooks.validateBeforeRename?.(destination);
             try {
+              hooks.validateBeforeRename?.(destination);
               if (!refreshOnly.admit() || !lstatSync(configPath).isFile()
                 || readFileSync(configPath, "utf8") !== rawContent) throw new Error();
             } catch { throw new GrokRefreshOnlyRefusal(); }
