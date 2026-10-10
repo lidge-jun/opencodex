@@ -50,6 +50,17 @@ describe("vertex parseStream fail-closed truncation", () => {
     const last = events[events.length - 1];
     expect(last.type).toBe("error");
     expect(events.some(e => e.type === "done")).toBe(false);
+    // A started call may already be in the client's hands, so this is never replayed.
+    expect(last).not.toHaveProperty("replaySafeBeforeOutput");
+  });
+
+  test("a truncation after a started tool call is never marked replay-safe", async () => {
+    const events = await collect(vertexProvider, [
+      { candidates: [{ content: { parts: [{ functionCall: { name: "get_x", args: {} } }] }, finishReason: "MALFORMED_FUNCTION_CALL" }] },
+    ]);
+    const last = events[events.length - 1];
+    expect(last.type).toBe("error");
+    expect(last).not.toHaveProperty("replaySafeBeforeOutput");
   });
 
   test("clean STOP stream yields done with reported usage", async () => {
@@ -94,6 +105,8 @@ describe("vertex parseStream fail-closed truncation", () => {
     const last = events[events.length - 1];
     expect(last.type).toBe("error");
     expect(events.some(e => e.type === "done")).toBe(false);
+    // #6876: nothing actionable was emitted, so the opt-in empty-completion guard may replay it.
+    expect(last).toMatchObject({ type: "error", replaySafeBeforeOutput: true });
   });
 
   test("usage-only final chunk (no candidates) is not dropped", async () => {
@@ -123,6 +136,7 @@ describe("vertex parseResponse fail-closed truncation (non-streaming)", () => {
     const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
     expect(events[events.length - 1].type).toBe("error");
     expect(events.some(e => e.type === "done")).toBe(false);
+    expect(events[events.length - 1]).toMatchObject({ replaySafeBeforeOutput: true });
   });
 
   test("clean STOP non-stream response yields done", async () => {
