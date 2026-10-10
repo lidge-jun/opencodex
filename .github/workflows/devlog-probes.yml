@@ -1,0 +1,44 @@
+name: devlog probes
+
+# Runs the offline unit probes that live beside a devlog plan. The suite exists so
+# an exact-head gate actually executes the research fixtures a docs PR cites
+# instead of leaving them as locally-verified-only claims.
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - "devlog/**/probes/**"
+      - ".github/workflows/devlog-probes.yml"
+
+concurrency:
+  group: devlog-probes-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.x"
+      - name: aiohttp for socket fixtures (required; the socket suite imports it unconditionally)
+        run: python -m pip install aiohttp
+      - name: Run every discovered probe suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r -d '' dir; do
+            found=1
+            echo "== probes: $dir"
+            (cd "$dir" && python -m unittest discover -s . -p 'test_*.py' -v)
+          done < <(find devlog -type d -name probes -print0)
+          if [[ "$found" -eq 0 ]]; then
+            echo "no devlog probe directories present"
+          fi
