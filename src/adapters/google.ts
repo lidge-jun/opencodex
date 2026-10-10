@@ -176,7 +176,11 @@ function resolveDirectGeminiWireModelId(modelId: string, applyRenames: boolean):
 function resolveVertexApiKey(optKey?: string): string | undefined {
   // A `gcp-sa:` marker is the keychain-backed credential reference (see gcp-adc): it is not
   // API-key material, so it must not be sent as x-goog-api-key — the ADC branch below handles it.
-  const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A" && !optKey.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)
+  // AND the marker means the operator named one credential explicitly: the GOOGLE_CLOUD_API_KEY
+  // env fallback must NOT fire (it would silently route this provider's inference through the
+  // ambient env key instead of the configured service account).
+  if (optKey && optKey.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) return undefined;
+  const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A"
     ? optKey
     : undefined;
   return realKey || process.env.GOOGLE_CLOUD_API_KEY;

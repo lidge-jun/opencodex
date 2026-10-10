@@ -91,10 +91,17 @@ describe("splitCredentialPaste", () => {
     expect(() => splitCredentialPaste("C:\\Users\\me\\sa.json")).toThrow(/file path/i);
   });
 
-  test("a single-line brace-leading NON-credential literal falls back to a plain key (never eaten)", () => {
-    // parseGcpCredentialJson contract: a literal API key starting with `{` is never eaten.
-    expect(splitCredentialPaste('{"type": "external_account"}')).toEqual(['{"type": "external_account"}']);
+  test("a single-line brace-leading NON-JSON literal falls back to a plain key (never eaten)", () => {
+    // parseGcpCredentialJson contract: a literal key starting with `{` is never eaten —
+    // but only for NON-JSON values. Prana review: a parseable JSON with an unrecognized type
+    // must be rejected, not saved as plaintext (it would go to the wire as a key).
     expect(splitCredentialPaste("{abc:def}")).toEqual(["{abc:def}"]);
+  });
+
+  test("a single-line PARSEABLE JSON with an unrecognized type is REJECTED (prana finding 2)", () => {
+    // `external_account` is a real JSON object — saving it as a plaintext literal key would
+    // send it verbatim to the wire. Reject with guidance instead.
+    expect(() => splitCredentialPaste('{"type": "external_account"}')).toThrow();
   });
 
   test("a MULTILINE JSON without a recognized type field is rejected with guidance", () => {
@@ -277,5 +284,34 @@ describe("gcp-adc marker source", () => {
     // With no marker and no env/file ADC, the resolver reaches the metadata-server attempt and
     // fails with the standard ADC guidance — proving the no-marker path is unchanged.
     await expect(getVertexAccessToken()).rejects.toThrow(/Application Default Credentials/);
+  });
+
+  test("a marker does NOT fall back to GOOGLE_CLOUD_API_KEY when ADC resolution succeeds via keychain", async () => {
+    // Prana review: with a marker set, the vertex adapter must suppress the env fast path —
+    // the keychain credential wins over the ambient env key (request-per-request ownership).
+    const kp = await globalThis.crypto.subtle.generateKey(
+      { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+      true,
+      ["sign", "verify"],
+    );
+    const pkcs8 = await globalThis.crypto.subtle.exportKey("pkcs8", kp.privateKey);
+    const b64 = Buffer.from(pkcs8).toString("base64").match(/.{1,64}/g)!.join("\n");
+    const pem = `-----BEGIN PRIVATE KEY-----\n${b64}\n-----END PRIVATE KEY-----\n`;
+    const serviceAccount = JSON.stringify({
+      type: "service_account",
+      client_email: "svc@example.test",
+      private_key: pem,
+      private_key_id: "k1",
+    });
+    setProviderKeychainEntryFactoryForTests((service, account) => ({
+      getPassword: () => (account === "p/own" ? serviceAccount : null),
+      setPassword: () => {},
+      deletePassword: () => true,
+    }));
+    isolateHostAdc();
+    oauthCalls = 0; // this describe's counter is shared across tests — reset for this probe
+    const tok = await getVertexAccessToken({ markerAccount: "p/own" });
+    expect(tok).toBe("marker-tok");
+    expect(oauthCalls).toBe(1);
   });
 });

@@ -162,6 +162,63 @@ describe("routed marker reaches the ADC request path (router + adapter, end to e
       globalThis.fetch = realFetch;
     }
   });
+
+  test("marker suppresses the GOOGLE_CLOUD_API_KEY env fallback (explicit credential wins)", async () => {
+    // A marker names ONE credential explicitly — the ambient env fallback must not silently
+    // route this provider's inference through the env key instead of the named service account.
+    // Without this guard, a marker + env key would send the ENV key as x-goog-api-key (review
+    // finding: fallback fires after the marker skips the fast path).
+    const prevEnvKey = process.env.GOOGLE_CLOUD_API_KEY;
+    process.env.GOOGLE_CLOUD_API_KEY = "ambient-env-key-should-not-be-used";
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "env-fallback-tok", expires_in: 3600 }), { status: 200 });
+      }
+      return new Response("nope", { status: 404 });
+    }) as typeof fetch;
+    const sawEnvKey = { value: false };
+    const spyFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      if (url.includes("oauth2")) {
+        return new Response(JSON.stringify({ access_token: "adc-tok", expires_in: 3600 }), { status: 200 });
+      }
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      if (headers["x-goog-api-key"] === "ambient-env-key-should-not-be-used") sawEnvKey.value = true;
+      return new Response("nope", { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      // Keychain serves the marker credential; env key is set. The adapter must use ADC
+      // (marker-named credential), never the env key.
+      const kp = await globalThis.crypto.subtle.generateKey(
+        { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+        true, ["sign", "verify"],
+      );
+      const pkcs8 = await globalThis.crypto.subtle.exportKey("pkcs8", kp.privateKey);
+      const b64 = Buffer.from(pkcs8).toString("base64").match(/.{1,64}/g)!.join("\n");
+      const pem = `-----BEGIN PRIVATE KEY-----\n${b64}\n-----END PRIVATE KEY-----\n`;
+      const serviceAccount = JSON.stringify({ type: "service_account", client_email: "svc@example.test", private_key: pem, private_key_id: "k1" });
+      setProviderKeychainEntryFactoryForTests((service, account) => ({
+        getPassword: () => (account === "p/mk1" ? serviceAccount : null),
+        setPassword: () => {},
+        deletePassword: () => true,
+      }));
+
+      const provider = { adapter: "google", baseUrl: "https://x", googleMode: "vertex", apiKey: "gcp-sa:p/mk1", project: "proj-1", location: "global" } as OcxProviderConfig;
+      const req = await createGoogleAdapter(provider).buildRequest(parsed());
+      // ADC branch: Bearer + no env key on the fast path
+      expect(req.headers["x-goog-api-key"]).toBeUndefined();
+      expect((req.headers["Authorization"] ?? "").startsWith("Bearer adc-tok")).toBe(true);
+      expect(sawEnvKey.value).toBe(false);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (prevEnvKey === undefined) delete process.env.GOOGLE_CLOUD_API_KEY;
+      else process.env.GOOGLE_CLOUD_API_KEY = prevEnvKey;
+    }
+  });
 });
 
 async function generateKeyPair(): Promise<CryptoKeyPair> {

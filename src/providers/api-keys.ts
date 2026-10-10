@@ -92,15 +92,19 @@ export function splitCredentialPaste(value: string): Array<string | { credential
     }
   }
   if (depth !== 0 || start >= 0) throw new Error("Invalid credential JSON: the pasted text ends inside a JSON object.");
-  // Single unrecognized object on a single line = a plain key starting with `{` (never eaten).
-  // Multi-line or multi-object pastes that fail validation get the guidance error instead.
+  // Single unrecognized object on a single line = a plain key starting with `{` (never eaten) —
+  // BUT only when it is NOT real JSON: a parseable JSON object with an unrecognized `type`
+  // (e.g. `external_account`) is a credential the user believes is valid, and saving it as a
+  // plaintext literal key would send it to the wire. Distinguish by parse success, not shape.
   const singleLine = !/[\r\n]/.test(trimmed);
-  if (objects.length === 1 && singleLine && spans[0]!.end === trimmed.length - 1 && !parseGcpCredentialJson(objects[0]!)) {
+  const isRealJson = (() => {
+    try { JSON.parse(objects[0]!); return true; } catch { return false; }
+  })();
+  if (objects.length === 1 && singleLine && spans[0]!.end === trimmed.length - 1 && !parseGcpCredentialJson(objects[0]!) && !isRealJson) {
     return [trimmed];
   }
-  // Non-separator content BETWEEN objects is rejected, not silently discarded: everything
-  // between one object's close and the next object's open (and before the first) must be a
-  // separator character.
+  // Non-separator content BETWEEN and AFTER objects is rejected, not silently discarded:
+  // everything between/after one object's close must be a separator character.
   for (let i = 0; i < spans.length; i++) {
     if (i === 0) {
       if (!/^[\s,]*$/.test(trimmed.slice(0, spans[0]!.start))) {
@@ -112,6 +116,12 @@ export function splitCredentialPaste(value: string): Array<string | { credential
     if (!/^[\s,]*$/.test(gap)) {
       throw new Error("Unrecognized credential JSON: unexpected content between JSON objects. Paste credential JSON(s) separated by commas or newlines, or a plain API key.");
     }
+  }
+  // Tail gap: content after the LAST object's close up to EOF must also be separators —
+  // trailing garbage (`<json> garbage`) is rejected rather than silently kept.
+  const tailGap = trimmed.slice(spans[spans.length - 1]!.end + 1);
+  if (!/^[\s,]*$/.test(tailGap)) {
+    throw new Error("Unrecognized credential JSON: unexpected content after the last JSON object. Paste credential JSON(s) separated by commas or newlines, or a plain API key.");
   }
   return objects.map((json) => {
     if (!parseGcpCredentialJson(json)) {
