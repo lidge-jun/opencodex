@@ -459,6 +459,78 @@ test("reconnect restarts a Home tunnel at once, from a failed state or over a li
   expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(false);
 });
 
+test("an old exit still draining after a reconnect never rewrites the new child's state", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  const oldStderr = deferred<string>();
+  Object.defineProperty(fake.children[0]!.child, "stderr", { value: oldStderr.promise });
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  current = 6_000;
+  expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(true);
+  expect(fake.children).toHaveLength(2);
+  fake.children[1]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[1]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  const reconnecting = supervisor.status()[0]!.state;
+  expect(reconnecting).toMatchObject({ kind: "reconnecting", since: 6_000, retryAt: 7_000 });
+  oldStderr.resolve("Host key verification failed.");
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(supervisor.status()[0]!.state).toEqual(reconnecting);
+  current = 7_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(3);
+  await supervisor.stop();
+});
+
+test("overlapping reconnects for one link restart it once and keep the new child supervised", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  // The live child takes a while to exit after SIGTERM.
+  (fake.children[0]!.child as { kill: () => void }).kill = () => {};
+  current = 8_000;
+  const first = supervisor.reconnect("lnk_0123456789abcdef");
+  const second = supervisor.reconnect("lnk_0123456789abcdef");
+  fake.children[0]!.resolve(143);
+  expect(await Promise.all([first, second])).toEqual([true, true]);
+  expect(fake.children).toHaveLength(2);
+  expect(supervisor.status()[0]).toMatchObject({ state: { kind: "connecting", since: 8_000 }, pid: fake.children[1]!.child.pid });
+  current = 13_000;
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 13_000 });
+  await supervisor.stop();
+});
+
 test("a reload neither skips the reconnect backoff nor a failed link's retry delay", async () => {
   const fake = fakeRunner();
   const timers: Array<() => void> = [];

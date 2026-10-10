@@ -153,9 +153,13 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   let timer: ReturnType<typeof setInterval> | undefined;
   const states = new Map<string, TunnelState>();
   const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number }>();
+  /** Per-link spawn counter. An exit or stop that resumes after a newer spawn is stale. */
+  const generations = new Map<string, number>();
+  /** Reconnects in flight, so overlapping requests for one link restart it once. */
+  const reconnects = new Map<string, Promise<boolean>>();
   const orphanUnverified = new Set<string>();
-  /** Links whose child has exited but whose stderr is not classified yet. */
-  const exiting = new Set<string>();
+  /** The generation of the child whose exit is still being classified, per link. */
+  const exiting = new Map<string, number>();
   const recordInstances = new Map<string, string>();
 
   const reconcileApiKeys = (): void => {
@@ -235,6 +239,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         knownHostsFile: linkKnownHostsPath(),
       });
       const child = runner.spawnTunnel(argv);
+      const generation = (generations.get(record.id) ?? 0) + 1;
+      generations.set(record.id, generation);
+      // An older child's exit still being classified no longer speaks for this link.
+      exiting.delete(record.id);
       children.set(record.id, { child, argv, spawnedAt: now() });
       orphanUnverified.delete(record.id);
       setEvent(record.id, { type: "spawn", now: now() });
@@ -244,16 +252,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         children.delete(record.id);
         conditionalRemovePidfile(record.id, child.pid);
         if (stopping) return;
-        exiting.add(record.id);
+        exiting.set(record.id, generation);
         try {
           let stderr = "";
           // An unreadable stderr (the runner rejects it past its size cap) still reports the exit.
           try { stderr = child.stderr ? await child.stderr : ""; } catch { /* classified as unknown */ }
           // A reconnect may have started a fresh child meanwhile; its own lifecycle owns the state.
-          if (children.has(record.id)) return;
+          if (generations.get(record.id) !== generation) return;
           setEvent(record.id, { type: "exit", now: now(), stderrClass: classifySshStderr(stderr) });
         } finally {
-          exiting.delete(record.id);
+          if (exiting.get(record.id) === generation) exiting.delete(record.id);
         }
       }).catch(() => {
         if (children.get(record.id)?.child !== child) return;
@@ -349,11 +357,13 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       states.set(linkId, IDLE);
       return;
     }
+    const generation = generations.get(linkId);
     children.delete(linkId);
     current.child.kill("SIGTERM");
     await current.child.exited;
     conditionalRemovePidfile(linkId, current.child.pid);
-    states.set(linkId, IDLE);
+    // A reconnect may have spawned a replacement while this child was exiting; keep its state.
+    if (generations.get(linkId) === generation) states.set(linkId, IDLE);
   };
 
   return {
@@ -404,17 +414,23 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       });
     },
     stopLink,
-    async reconnect(linkId: string) {
-      // runLifecycle keeps only the latest queued operation, so a reconnect waits for a running
-      // reload instead of queueing behind it where a second reload could replace it.
-      if (lifecycleFlight) await lifecycleFlight;
-      if (stopping || !started) return false;
-      const record = store.links.find(link => link.id === linkId && link.direction === "hub-initiated");
-      if (!record) return false;
-      await stopLink(linkId);
-      if (stopping) return false;
-      spawnFor(record);
-      return true;
+    reconnect(linkId: string) {
+      const inFlight = reconnects.get(linkId);
+      if (inFlight) return inFlight;
+      const flight = (async () => {
+        // runLifecycle keeps only the latest queued operation, so a reconnect waits for a running
+        // reload instead of queueing behind it where a second reload could replace it.
+        if (lifecycleFlight) await lifecycleFlight;
+        if (stopping || !started) return false;
+        const record = store.links.find(link => link.id === linkId && link.direction === "hub-initiated");
+        if (!record) return false;
+        await stopLink(linkId);
+        if (stopping) return false;
+        spawnFor(record);
+        return true;
+      })().finally(() => { reconnects.delete(linkId); });
+      reconnects.set(linkId, flight);
+      return flight;
     },
     notifyAuthenticatedRequest(apiKeyId: string) {
       for (const record of store.links) {

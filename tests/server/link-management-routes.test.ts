@@ -531,6 +531,12 @@ describe("link management routes", () => {
     expect(missing?.status).toBe(404);
     expect(await missing!.json()).toMatchObject({ error: { code: "link_not_found" } });
     expect((await call("/api/link/not-a-link/reconnect", "POST", undefined, deps, "admin-token", true, null, true, h.config))?.status).toBe(400);
+    h.setListenerState("failed");
+    const unbound = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(unbound?.status).toBe(503);
+    expect(await unbound!.json()).toMatchObject({ error: { code: "listener_unavailable" } });
+    expect(reconnected).toHaveLength(2);
+    h.setListenerState("listening");
     restartable = false;
     const refused = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
     expect(refused?.status).toBe(503);
