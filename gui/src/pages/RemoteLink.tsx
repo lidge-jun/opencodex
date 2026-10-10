@@ -365,9 +365,9 @@ export default function RemoteLink({ apiBase, sessionReady, workspaceAvailable =
     if (rows.length === 0) { await refreshStatus(); return; }
     setBusy("reconnect"); setActionError(null);
     try {
-      for (const row of rows) await requestLinkJson<{ linkId: string }>(apiBase, `/api/link/${encodeURIComponent(row.id)}/reconnect`, { method: "POST" });
-    } catch (error) {
-      setActionError(linkActionError(error));
+      const results = await Promise.allSettled(rows.map(row => requestLinkJson<{ linkId: string }>(apiBase, `/api/link/${encodeURIComponent(row.id)}/reconnect`, { method: "POST" })));
+      const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (rejected) setActionError(linkActionError(rejected.reason));
     } finally {
       await refreshStatus();
       setBusy(null);
