@@ -44,6 +44,7 @@ let requestAdminToken: AdminTokenPrompt = promptForAdminToken;
 let rebootstrapTimeoutMs = SESSION_REBOOTSTRAP_TIMEOUT_MS;
 let resolutionWatchdogMs = RESOLUTION_WATCHDOG_MS;
 const runtimes = new Map<ApiPlane, TargetRuntime>();
+const sessionHandoffOwners = new WeakMap<ApiSessionState, object>();
 
 function reportSessionEvent(plane: ApiPlane, event: string): void {
   if (typeof window === "undefined") return;
@@ -65,6 +66,14 @@ function updateSession(state: TargetRuntime, session: ApiSessionState): void {
 
 function blankSession(): ApiSessionState {
   return { token: null, csrfToken: null, browserOrigin: null, serverOrigin: null };
+}
+
+/** Automatic invalidation retains rollback authority; login, logout and target changes do not. */
+function invalidateSession(state: TargetRuntime): void {
+  const cleared = blankSession();
+  const owner = sessionHandoffOwners.get(state.session);
+  if (owner) sessionHandoffOwners.set(cleared, owner);
+  updateSession(state, cleared);
 }
 
 function ensureTargets(): ApiTargets {
@@ -94,7 +103,7 @@ function runtime(plane: ApiPlane): TargetRuntime {
 
 function clearSessionIfCurrent(plane: ApiPlane, expected: string | null): void {
   const state = runtime(plane);
-  if (expected !== null && state.session.token === expected) updateSession(state, blankSession());
+  if (expected !== null && state.session.token === expected) invalidateSession(state);
 }
 
 function storeSession(
@@ -107,7 +116,7 @@ function storeSession(
   const state = runtime(plane);
   if (!token?.startsWith("ocx_session_") || !csrfToken
     || browserOrigin !== window.location.origin || serverOrigin !== state.target.serverOrigin) {
-    updateSession(state, blankSession());
+    invalidateSession(state);
     return false;
   }
   updateSession(state, { token, csrfToken, browserOrigin, serverOrigin });
@@ -121,7 +130,11 @@ export function hasApiSession(plane: ApiPlane): boolean {
 
 export async function logoutApiSession(plane: ApiPlane): Promise<boolean> {
   const state = runtime(plane);
-  if (!state.session.token?.startsWith("ocx_session_")) return false;
+  if (!state.session.token?.startsWith("ocx_session_")) {
+    // An explicit logout also wins when a pending candidate was already invalidated.
+    sessionHandoffOwners.delete(state.session);
+    return false;
+  }
   const bounded = createBoundedFetch(SESSION_REBOOTSTRAP_TIMEOUT_MS);
   try {
     const response = await window.fetch(`${state.target.baseUrl}/api/session/logout`, {
@@ -184,19 +197,24 @@ export function installApiSessionFromHtml(plane: ApiPlane, html: string): boolea
 export function beginApiSessionHandoff(plane: ApiPlane) {
   const state = runtime(plane);
   let previous: ApiSessionState | null = state.session;
-  let candidate: ApiSessionState | null = null;
+  const owner = {};
+  const release = () => {
+    const current = runtime(plane);
+    if (sessionHandoffOwners.get(current.session) === owner) sessionHandoffOwners.delete(current.session);
+    previous = null;
+  };
   return {
     install(html: string): boolean {
       const accepted = installApiSessionFromHtml(plane, html);
-      candidate = state.session;
+      sessionHandoffOwners.set(state.session, owner);
       return accepted;
     },
-    commit(): void { previous = null; candidate = null; },
+    commit: release,
     rollback(): void {
-      // A cancelled/obsolete handoff must not overwrite another target or a newer login.
+      // Background 401 recovery may have cleared the candidate without replacing its owner.
       const current = runtime(plane);
-      if (previous && sameTarget(current.target, state.target) && current.session === candidate) updateSession(current, previous);
-      previous = null; candidate = null;
+      if (previous && sameTarget(current.target, state.target) && sessionHandoffOwners.get(current.session) === owner) updateSession(current, previous);
+      release();
     },
   };
 }

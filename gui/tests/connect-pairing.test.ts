@@ -323,12 +323,14 @@ test("cancelled Remote Link validation forwards the abort signal and rejects a l
 });
 
 async function withPairingValidation(
-  firstValidation: () => Response,
+  firstValidation: () => Response | Promise<Response>,
   check: (fixture: {
     container: HTMLDivElement; input: HTMLInputElement; submit: () => Promise<void>;
     retry: () => Promise<void>; close: () => Promise<void>; sessionIs: (kind: string) => Promise<boolean>;
+    background401: () => Promise<void>; replaceSession: () => void; logout: () => Promise<boolean>; replaceTarget: () => void;
     counts: { posts: number; validations: number; connected: number; bootstraps: number };
   }) => Promise<void>,
+  bootstrapResponse: () => Response = () => new Response(null, { status: 401 }),
 ) {
   const keys = ["window", "document", "navigator", "sessionStorage", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
   const previous = Object.fromEntries(keys.map(key => [key, Reflect.get(globalThis, key)]));
@@ -347,11 +349,12 @@ async function withPairingValidation(
   const mockFetch = (async (input, init) => {
     const url = String(input);
     if (url.endsWith("/opencodex-session")) {
-      if (init?.method !== "POST") { counts.bootstraps++; return new Response(null, { status: 401 }); }
+      if (init?.method !== "POST") { counts.bootstraps++; return bootstrapResponse(); }
       counts.posts++;
       return new Response(html("candidate"), { headers: { "content-type": "text/html" } });
     }
     const headers = new Headers(init?.headers);
+    if (url.endsWith("/api/background")) return new Response(null, { status: 401 });
     if (url.endsWith("/api/link/status")) {
       expect(headers.get("x-opencodex-api-key")).toBe("ocx_session_candidate");
       if (++counts.validations === 1) return firstValidation();
@@ -361,7 +364,9 @@ async function withPairingValidation(
     return Response.json({ previous: headers.get("x-opencodex-api-key") === "ocx_session_previous"
       && headers.get("x-opencodex-csrf-token") === "previous-csrf"
       && headers.get("x-opencodex-gui-origin") === "http://localhost",
-      candidate: headers.get("x-opencodex-api-key") === "ocx_session_candidate" });
+      candidate: headers.get("x-opencodex-api-key") === "ocx_session_candidate",
+      replacement: headers.get("x-opencodex-api-key") === "ocx_session_replacement",
+      missing: !headers.has("x-opencodex-api-key") });
   }) as typeof fetch;
   Object.defineProperty(win, "fetch", { configurable: true, value: mockFetch });
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: mockFetch });
@@ -395,6 +400,13 @@ async function withPairingValidation(
         button!.click();
       }),
       close: () => act(async () => root.render(null)),
+      background401: () => act(async () => { expect((await win.fetch(`${targets.shared.baseUrl}/api/background`)).status).toBe(401); }),
+      replaceSession: () => { api.installApiSessionFromHtml("shared", html("replacement")); },
+      logout: () => api.logoutApiSession("shared"),
+      replaceTarget: () => {
+        api.configureApiTargets(standaloneApiTargets("https://other-hub.example.test"));
+        api.configureApiTargets(targets);
+      },
       sessionIs: async kind => (await (await win.fetch(`${targets.shared.baseUrl}/api/check-session`, { method: "POST" })).json())[kind] === true,
     });
   } finally {
@@ -405,9 +417,10 @@ async function withPairingValidation(
   }
 }
 
-test.each(["network", "5xx", "malformed"] as const)("%s validation failure retries the installed session without another pairing POST", async failure => {
+test.each(["network", "5xx", "malformed", "challenge"] as const)("%s validation failure retries the installed session without another pairing POST", async failure => {
   await withPairingValidation(() => {
     if (failure === "network") throw new Error("offline");
+    if (failure === "challenge") return new Response(null, { status: 403, headers: { "cf-mitigated": "challenge" } });
     return failure === "5xx" ? new Response(null, { status: 503 }) : Response.json({ invalid: true });
   }, async ({ container, input, submit, retry, close, sessionIs, counts }) => {
     await submit();
@@ -451,4 +464,55 @@ test.each([401, 403])("validation HTTP %i restores the previous shared session",
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("cannot manage Remote Link");
     expect(winStorageHasSession()).toBe(false);
   });
+});
+
+test.each(["rejection", "cancellation"] as const)("background 401 recovery preserves rollback ownership on %s", async outcome => {
+  let release!: (response: Response) => void;
+  await withPairingValidation(() => new Promise<Response>(resolve => { release = resolve; }),
+    async ({ container, submit, background401, close, sessionIs, counts }) => {
+      await submit();
+      expect(await sessionIs("candidate")).toBe(true);
+      await background401();
+      expect(counts.bootstraps).toBe(1);
+      expect(await sessionIs("candidate")).toBe(false);
+      if (outcome === "cancellation") await close();
+      await act(async () => { release(new Response(null, { status: 401 })); });
+      if (outcome === "rejection") expect(container.querySelector('[role="alert"]')?.textContent).toContain("cannot manage Remote Link");
+      expect(await sessionIs("previous")).toBe(true);
+      expect(counts.connected).toBe(0);
+      expect(winStorageHasSession()).toBe(false);
+    });
+});
+
+test.each(["new-login", "logout", "invalidated-logout", "target"] as const)("pending rollback yields to %s", async replacement => {
+  let release!: (response: Response) => void;
+  await withPairingValidation(() => new Promise<Response>(resolve => { release = resolve; }),
+    async ({ submit, background401, replaceSession, logout, replaceTarget, sessionIs }) => {
+      await submit();
+      if (replacement === "logout") expect(await logout()).toBe(true);
+      else {
+        await background401();
+        if (replacement === "new-login") replaceSession();
+        else if (replacement === "invalidated-logout") expect(await logout()).toBe(false);
+        else replaceTarget();
+      }
+      await act(async () => { release(new Response(null, { status: 401 })); });
+      expect(await sessionIs("previous")).toBe(false);
+      expect(await sessionIs("candidate")).toBe(false);
+      expect(await sessionIs("replacement")).toBe(replacement === "new-login");
+      expect(await sessionIs("missing")).toBe(replacement !== "new-login");
+    });
+});
+
+test("a malformed recovery bootstrap does not lose pending cancellation ownership", async () => {
+  let release!: (response: Response) => void;
+  await withPairingValidation(() => new Promise<Response>(resolve => { release = resolve; }),
+    async ({ submit, background401, close, sessionIs, counts }) => {
+      await submit();
+      await background401();
+      expect(counts.bootstraps).toBe(1);
+      await close();
+      await act(async () => { release(new Response(null, { status: 401 })); });
+      expect(await sessionIs("previous")).toBe(true);
+    }, () => new Response("<html></html>", { headers: { "content-type": "text/html" } }));
 });
