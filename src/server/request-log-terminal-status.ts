@@ -90,10 +90,8 @@ function captureTerminalHttpStatus(
     logCtx.terminalHttpStatus = status;
     if (type === "error") provisionalStatuses.set(logCtx, status);
   };
-  if (type === "response.completed") {
-    noteStatus(200);
-    return;
-  }
+  // A completed terminal only retires provisional bare-error evidence; it records no status.
+  if (type === "response.completed") return;
   const responseError = json.response?.error;
   const responseDetails = json.response?.incomplete_details;
   const candidates: Array<{ type?: unknown; code?: unknown; message?: unknown } | undefined> = [
@@ -140,7 +138,8 @@ function captureTerminalHttpStatus(
       code: candidates.find(candidate => typeof candidate?.code === "string")?.code,
       type: candidates.slice(0, -1).find(candidate => typeof candidate?.type === "string")?.type,
     });
-    noteStatus(httpStatusFromTerminalError(structured));
+    // Unrecognized bare errors leave the status to explicit event fields (combo preflight).
+    if (structured) noteStatus(structured.httpStatus);
     return;
   }
   if (type !== "response.failed" || !responseError || typeof responseError !== "object") return;

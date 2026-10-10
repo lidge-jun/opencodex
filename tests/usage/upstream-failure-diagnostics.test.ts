@@ -37,9 +37,10 @@ for (const shape of ["error", "last_error", "response"] as const) {
     ["overloaded_error", "overloaded_error", 503],
     ["rate_limit_error", undefined, 429],
     ["overloaded_error", undefined, 503],
-    ["server_error", "server_error", 502],
-    ["rate_limit_error", "unknown_code", 502],
-    ["server_error", undefined, 502],
+    // An unrecognized bare error records no status; combo preflight reads explicit event fields.
+    ["server_error", "server_error", undefined],
+    ["rate_limit_error", "unknown_code", undefined],
+    ["server_error", undefined, undefined],
   ] as const)(`bare ${shape} class %s / %s maps status and retains original diagnostics`, (type, code, status) => {
     const log = context();
     const error = { type, code, message: "bounded diagnostic fixture" };
@@ -61,7 +62,7 @@ test.each(["rate_limit_exceeded", "rate_limit_error", "server_is_overloaded", "o
   "flat bare error %s maps by code without recording its event discriminator as a class", code => {
     const log = context();
     inspectResponseLogJson(log, JSON.stringify({ type: "error", code, message: "diagnostic fixture" }));
-    expect(log.terminalHttpStatus).toBe(code.startsWith("rate_limit") ? 429 : code === "server_error" ? 502 : 503);
+    expect(log.terminalHttpStatus).toBe(code.startsWith("rate_limit") ? 429 : code === "server_error" ? undefined : 503);
     expect(log.upstreamErrorCode).toBe(code);
     expect(log.upstreamErrorType).toBeUndefined();
   },
@@ -111,7 +112,7 @@ test("an explicit unknown code outranks a recognized class in a lower-priority e
   inspectResponseLogJson(log, JSON.stringify({ type: "error",
     error: { type: "server_error", code: "unknown_code", message: "transport diagnostic" },
     response: { error: { type: "rate_limit_error", code: "rate_limit_exceeded" } } }));
-  expect(log.terminalHttpStatus).toBe(502);
+  expect(log.terminalHttpStatus).toBeUndefined();
   expect(log.upstreamErrorType).toBe("server_error");
   expect(log.upstreamErrorCode).toBe("unknown_code");
 });
@@ -158,6 +159,6 @@ test("genuine success clears the provisional policy error code", () => {
   inspectResponseLogJson(log, JSON.stringify({ type: "error", error: { code: "cyber_policy" } }));
   expect(log.terminalErrorCode).toBe("cyber_policy");
   inspectResponseLogJson(log, JSON.stringify({ type: "response.completed", response: { status: "completed" } }));
-  expect(log.terminalHttpStatus).toBe(200);
+  expect(log.terminalHttpStatus).toBeUndefined();
   expect(log.terminalErrorCode).toBeUndefined();
 });
