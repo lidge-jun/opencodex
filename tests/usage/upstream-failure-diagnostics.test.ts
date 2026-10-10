@@ -734,7 +734,9 @@ describe("configured credential source", () => {
     expect(configuredCredentials().complete).toBe(true);
     writeConfig("null");
     expect(configuredCredentials().complete).toBe(false);
-    writeConfig({ providers: [] });
+    // A different byte length from the next write: the cache signature is ino:size:mtimeMs, and
+    // two same-size in-place rewrites can share one mtime tick on Windows.
+    writeConfig({ providers: [null] });
     expect(configuredCredentials().complete).toBe(false);
     writeConfig({ providers: {} });
     expect(configuredCredentials().complete).toBe(true);
