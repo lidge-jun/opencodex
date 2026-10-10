@@ -75,7 +75,7 @@ Authorization: Bearer <admin-token>
 
 如果提供 `tokenId`，它必须是非空字符串；无效值会在读取凭据或打开账本前返回 `400 invalid_token_id`。在 30 天保留期内，使用相同 `operationId` 重试且省略 `accountId` 时，即使当前账号已更改，也会使用记录的账号。可执行的 `open` 操作重试且省略 `tokenId` 时，会使用记录的令牌。明确指定不同账号或令牌仍会被拒绝。收到确定的失败后，仪表盘会清除该待处理请求对应的临时保留状态，允许明确确认新的尝试；真正未知的结果仍保持保留。
 
-兑换前会将尝试持久记录在账本中。只有收到上游确认兑换成功的响应，才会记录 `redeemed`；券从列表中消失不能证明本次操作成功。超时或结果保存失败后，重试只查询可用性，不会再次兑换，并返回 `attempt_unresolved`；近期尝试返回 `attempt_in_progress`。迟到的检查拒绝只能写入仍处于 `open` 的操作；状态已变更时返回 `operation_state_changed`，应使用相同操作 ID 重试以读取持久状态。账本无法读取或锁定时返回 `ledger_unavailable`，不执行兑换。
+兑换前会将尝试持久记录在账本中。只有收到上游确认兑换成功的响应，才会记录 `redeemed`；券从列表中消失不能证明本次操作成功。超时或结果保存失败后，重试只查询可用性，不会再次兑换，并返回 `attempt_unresolved`；近期尝试返回 `attempt_in_progress`。迟到的检查拒绝只能写入仍处于 `open` 的操作。在同一事务中，账号与券标识符相符的已确认最终结果会以 HTTP 200 和原始代码重放。结果未确认或身份不匹配时返回 `operation_state_changed`，请保留相同操作 ID 以进行恢复。账本无法读取或锁定时返回 `ledger_unavailable`，不执行兑换。
 
 无法确认兑换结果时，返回 HTTP 502、`error.code: "attempt_unresolved"` 和实际的 `operationId`。请保留该 ID；新 ID 会启动另一项操作。CLI 在发送前生成 ID，并在请求送达或响应不确定时提示保留同一个 `--operation-id`。第一版账本的旧 `open` 记录和结果未确认的 `redeem_failed` 记录会被隔离为不确定尝试，不允许再次兑换。
 

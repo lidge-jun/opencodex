@@ -9,7 +9,7 @@ import * as oauthStore from "../../../src/oauth/store";
 import { handleAccountAuthCommand } from "../../../src/cli/account-auth";
 import * as coupons from "../../../src/grok/reset-coupons";
 import * as ledger from "../../../src/grok/reset-coupon-ledger";
-import { ConfigMutationLockError } from "../../../src/config/mutation-lock";
+import { ConfigMutationLockError, readConfigGenerationInCurrentMutationTransaction } from "../../../src/config/mutation-lock";
 import { handleGrokCouponRoutes } from "../../../src/server/management/grok-coupon-routes";
 import type { ManagementContext } from "../../../src/server/management/context";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -493,9 +493,10 @@ for (const refusal of ["no_coupons_available", "coupon_unavailable"] as const) {
         releaseInspection({ tokens: [] });
         const result = (await loser)!;
         expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(before);
-        expect(result.status).toBe(409);
+        expect(result.status).toBe(winnerState === "settled" ? 200 : 409);
         const body = await result.json();
-        expect(body.error.code).toBe("operation_state_changed");
+        if (winnerState === "settled") expect(body).toMatchObject({ code: "redeemed", replayed: true, tokenId: TOKEN.tokenId });
+        else expect(body.error.code).toBe("operation_state_changed");
         expect(body.success).toBeUndefined();
         expect(redeem).toHaveBeenCalledTimes(1);
       } finally {
@@ -506,4 +507,70 @@ for (const refusal of ["no_coupons_available", "coupon_unavailable"] as const) {
       expect(ledger.openGrokResetCouponOperation(identity())).toMatchObject({ kind: "replay", code: "redeemed" });
     });
   }
+}
+
+for (const omitToken of [false, true]) {
+  test(`concurrent definitive refusals replay the terminal winner (omit token ${omitToken})`, async () => {
+    let release!: (value: { tokens: typeof TOKEN[] }) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let calls = 0;
+    const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockResolvedValue({ accessToken: "fixture-access-token" } as never);
+    const remaining = spyOn(coupons, "getGrokRemainingResets").mockImplementation(() => {
+      if (++calls === 1) { entered(); return new Promise(resolve => { release = resolve; }); }
+      return Promise.resolve({ tokens: [] });
+    });
+    const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockResolvedValue({ success: true, status: 0 });
+    spies.push(auth, remaining, redeem);
+    const loser = handleGrokCouponRoutes(request(omitToken));
+    await started;
+    try {
+      const code = omitToken ? "no_coupons_available" : "coupon_unavailable";
+      expect((await (await handleGrokCouponRoutes(request(omitToken)))!.json()).error.code).toBe(code);
+      const before = readFileSync(ledger.grokCouponJournalPath(), "utf8");
+      release({ tokens: [] });
+      const response = (await loser)!;
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ code, replayed: true });
+      expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(before);
+      expect(redeem).not.toHaveBeenCalled();
+    } finally { release({ tokens: [] }); await loser; }
+  });
+}
+
+for (const [status, code, accountId, tokenId, replay] of [
+  ["failed", "auth_failed", "fixture-account", TOKEN.tokenId, true],
+  ["settled", "redeemed", "fixture-account", TOKEN.tokenId, true],
+  ["failed", "coupon_unavailable", "another-account", TOKEN.tokenId, false],
+  ["failed", "coupon_unavailable", "fixture-account", "another-token", false],
+  ["attempted", "redeemed", "fixture-account", TOKEN.tokenId, false],
+  ["failed", undefined, "fixture-account", TOKEN.tokenId, false],
+  ...["redeem_failed", "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed"]
+    .map(code => ["failed", code, "fixture-account", TOKEN.tokenId, false] as const),
+] as const) {
+  test(`preflight winner replay guards ${status}/${code}/${accountId}/${tokenId}`, () => {
+    const path = ledger.grokCouponJournalPath();
+    const before = JSON.stringify({ version: 2, operations: { [OP]: {
+      status, code, accountId, tokenId, createdAt: Date.now(), updatedAt: Date.now(),
+    } } });
+    writeFileSync(path, before);
+    const read = fs.readFileSync;
+    let journalReads = 0;
+    const guardedRead = spyOn(fs, "readFileSync").mockImplementation((...args: Parameters<typeof read>) => {
+      if (args[0] === path) {
+        // The terminal decision reads one snapshot while the real mutation transaction is held.
+        expect(() => readConfigGenerationInCurrentMutationTransaction()).not.toThrow();
+        journalReads += 1;
+      }
+      return read(...args as [never, never]);
+    });
+    spies.push(guardedRead);
+    const result = ledger.settleGrokResetCouponPreflightRefusal({
+      ...identity(), code: "coupon_unavailable", status: "failed", expectedStatus: "open",
+    });
+    expect(result).toMatchObject(replay ? { kind: "replay", code, tokenId } : { kind: "changed" });
+    expect(journalReads).toBe(1);
+    guardedRead.mockRestore();
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
 }

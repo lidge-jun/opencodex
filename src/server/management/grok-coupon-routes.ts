@@ -25,6 +25,7 @@ import {
   markGrokResetCouponAttempt,
   openGrokResetCouponOperation,
   recordGrokResetCouponSettlement,
+  settleGrokResetCouponPreflightRefusal,
   type GrokResetCouponOperationRecord,
 } from "../../grok/reset-coupon-ledger";
 
@@ -314,10 +315,14 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
 
     const settlePreflightRefusal = (code: string, tokenId?: string): Response | null => {
       try {
-        if (recordGrokResetCouponSettlement({
+        const result = settleGrokResetCouponPreflightRefusal({
           operationId: effectiveOpId, accountId, tokenId, code,
           status: "failed", expectedStatus: "open",
-        })) return null;
+        });
+        if (result.kind === "recorded") return null;
+        if (result.kind === "replay") return jsonResponse({
+          code: result.code, replayed: true, tokenId: result.tokenId, settledAt: result.settledAt,
+        }, 200, req, config);
         return jsonResponse({ error: {
           code: "operation_state_changed",
           message: "Another request changed this operation during inspection; retry the same operationId to read its durable state",

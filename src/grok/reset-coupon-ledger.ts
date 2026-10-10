@@ -228,6 +228,31 @@ type GrokResetCouponSettlement = { operationId: string; accountId: string; code:
   | { tokenId: string; status: "success"; expectedStatus: "attempted" }
 );
 
+type GrokResetCouponPreflightResult =
+  | { kind: "recorded" | "changed" }
+  | { kind: "replay"; code: string; tokenId?: string; settledAt: number };
+
+/** Settle a refusal or inspect its winner without releasing the mutation transaction. */
+export function settleGrokResetCouponPreflightRefusal(
+  settlement: Extract<GrokResetCouponSettlement, { status: "failed" }>,
+  now = Date.now(),
+  journalPath?: string,
+): GrokResetCouponPreflightResult {
+  return withConfigMutationLockSync(() => {
+    const filePath = journalPath ?? grokCouponJournalPath();
+    const ledger = readGrokCouponLedger(filePath);
+    if (recordSettlement(ledger, filePath, settlement, now)) return { kind: "recorded" };
+    const existing = ledger.operations[settlement.operationId];
+    if (existing && existing.accountId === settlement.accountId
+      && (settlement.tokenId === undefined || existing.tokenId === undefined || existing.tokenId === settlement.tokenId)
+      && (existing.status === "settled" || existing.status === "failed") && existing.code
+      && !["redeem_failed", "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed"].includes(existing.code)) {
+      return { kind: "replay", code: existing.code, tokenId: existing.tokenId, settledAt: existing.updatedAt };
+    }
+    return { kind: "changed" };
+  });
+}
+
 /** A preflight refusal cannot replace a claim or a terminal result. */
 export function recordGrokResetCouponSettlement(
   settlement: GrokResetCouponSettlement,
@@ -237,18 +262,24 @@ export function recordGrokResetCouponSettlement(
   return withConfigMutationLockSync(() => {
     const filePath = journalPath ?? grokCouponJournalPath();
     const ledger = readGrokCouponLedger(filePath);
-    const existing = ledger.operations[settlement.operationId];
-    if (!existing || existing.status !== settlement.expectedStatus
-      || existing.accountId !== settlement.accountId
-      || (settlement.tokenId !== undefined && existing.tokenId !== undefined && existing.tokenId !== settlement.tokenId)
-      || (settlement.status === "success" && existing.tokenId !== settlement.tokenId)) return false;
-
-    existing.status = settlement.status === "success" ? "settled" : "failed";
-    existing.code = settlement.code;
-    if (settlement.tokenId !== undefined) existing.tokenId = settlement.tokenId;
-    existing.updatedAt = now;
-
-    writeGrokCouponLedger(filePath, ledger, now);
-    return true;
+    return recordSettlement(ledger, filePath, settlement, now);
   });
+}
+
+function recordSettlement(
+  ledger: GrokResetCouponLedger, filePath: string, settlement: GrokResetCouponSettlement, now: number,
+): boolean {
+  const existing = ledger.operations[settlement.operationId];
+  if (!existing || existing.status !== settlement.expectedStatus
+    || existing.accountId !== settlement.accountId
+    || (settlement.tokenId !== undefined && existing.tokenId !== undefined && existing.tokenId !== settlement.tokenId)
+    || (settlement.status === "success" && existing.tokenId !== settlement.tokenId)) return false;
+
+  existing.status = settlement.status === "success" ? "settled" : "failed";
+  existing.code = settlement.code;
+  if (settlement.tokenId !== undefined) existing.tokenId = settlement.tokenId;
+  existing.updatedAt = now;
+
+  writeGrokCouponLedger(filePath, ledger, now);
+  return true;
 }

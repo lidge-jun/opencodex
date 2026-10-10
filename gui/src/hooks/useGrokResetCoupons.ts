@@ -193,6 +193,8 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
     if (held) return hold(held);
     activeRedeems.current.set(accountId, request);
     const clearMatchingHold = () => {
+      // Once definitive, a follow-up GET must not make this attempt look active.
+      if (activeRedeems.current.get(accountId) === request) activeRedeems.current.delete(accountId);
       if (uncertainRef.current.get(accountId)?.operationId === request.operationId) uncertainRef.current.delete(accountId);
       setUncertain(current => {
         if (current[accountId]?.operationId !== request.operationId) return current;

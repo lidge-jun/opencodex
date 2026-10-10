@@ -75,7 +75,7 @@ Authorization: Bearer <admin-token>
 
 `tokenId`를 보내면 비어 있지 않은 문자열이어야 합니다. 잘못된 값은 자격 증명을 읽거나 원장을 열기 전에 `400 invalid_token_id`로 거절됩니다. 30일 보존 기간 안에서 같은 `operationId` 재시도가 `accountId`를 생략하면 활성 계정이 바뀌어도 기록된 계정을 사용합니다. 실행 가능한 `open` 재시도가 `tokenId`를 생략하면 기록된 토큰을 사용합니다. 다른 계정이나 토큰을 명시하면 계속 거절됩니다. 대시보드는 확정 실패 뒤 해당 대기 요청에서 생긴 추측성 보류를 해제하여 새 작업을 명시적으로 확인할 수 있게 합니다. 실제 불확정 결과는 계속 보류합니다.
 
-교환 전에 ledger에 시도를 기록해 한 요청만 교환을 진행합니다. upstream의 교환 성공 응답이 확인된 경우에만 `redeemed`를 기록하며, 목록에서 쿠폰이 사라졌다는 사실만으로 이 operation의 성공을 판단하지 않습니다. 타임아웃이나 결과 저장 실패 후 재시도는 다시 교환하지 않고 가용성만 조회한 뒤 `attempt_unresolved`를 반환하며, 최근 시도는 `attempt_in_progress`를 반환합니다. 늦게 끝난 검사로 인한 거절은 아직 `open`인 operation에만 기록합니다. 상태가 바뀌었으면 `operation_state_changed`를 반환하며 같은 operation ID로 재시도해 저장된 상태를 읽어야 합니다. ledger를 읽거나 잠글 수 없으면 교환 없이 `ledger_unavailable`을 반환합니다.
+교환 전에 ledger에 시도를 기록해 한 요청만 교환을 진행합니다. upstream의 교환 성공 응답이 확인된 경우에만 `redeemed`를 기록하며, 목록에서 쿠폰이 사라졌다는 사실만으로 이 operation의 성공을 판단하지 않습니다. 타임아웃이나 결과 저장 실패 후 재시도는 다시 교환하지 않고 가용성만 조회한 뒤 `attempt_unresolved`를 반환하며, 최근 시도는 `attempt_in_progress`를 반환합니다. 늦게 끝난 검사로 인한 거절은 아직 `open`인 operation에만 기록합니다. 같은 트랜잭션 안에서 계정과 토큰이 일치하는 확정된 최종 결과는 원래 코드와 HTTP 200으로 재생합니다. 결과가 미확정이거나 계정·토큰이 일치하지 않으면 `operation_state_changed`를 반환하며 같은 operation ID를 보존해 복구해야 합니다. ledger를 읽거나 잠글 수 없으면 교환 없이 `ledger_unavailable`을 반환합니다.
 
 결과를 확인하지 못한 사용 요청은 HTTP 502와 `error.code: "attempt_unresolved"`, 실제 `operationId`를 반환합니다. 이 ID를 보존하세요. 새 ID는 다른 작업을 시작합니다. CLI는 전송 전에 ID를 생성하고, 전송이나 응답이 불확실하면 같은 `--operation-id`를 보존하라는 안내를 출력합니다. 구버전 원장의 `open` 기록과 결과가 확인되지 않은 `redeem_failed` 기록은 불확정 상태로 격리되어 재사용 요청을 허용하지 않습니다.
 
