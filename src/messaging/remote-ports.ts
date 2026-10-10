@@ -3,6 +3,11 @@ import { MessageBudget } from "./budget";
 import { RemoteCapacity, remoteError, validPort } from "./remote-contract";
 import { runRemoteHelper, type RemoteHelperOptions } from "./remote-process";
 
+type RemoteProcFile = {
+  read(buffer: Buffer, offset: number, length: number, position: null): Promise<{ bytesRead: number }>;
+  close(): Promise<void>;
+};
+
 /** Select a candidate only; actual forwarding and authenticated readiness must still succeed. */
 export function remotePortCandidate(): number {
   const listener = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data(socket) { socket.end(); } } });
@@ -12,14 +17,20 @@ export function remotePortCandidate(): number {
 }
 /** Refuse GatewayPorts/public binds; neither port existence nor this scan proves endpoint identity. */
 export async function remotePortIsLoopback(port: number, budget: MessageBudget, capacity: RemoteCapacity,
-  inspector: { platform?: NodeJS.Platform; helper?: RemoteHelperOptions } = {}): Promise<boolean> {
+  inspector: { platform?: NodeJS.Platform; helper?: RemoteHelperOptions;
+    openProc?: (path: string) => Promise<RemoteProcFile> } = {}): Promise<boolean> {
   if (!validPort(port)) return false;
   budget.throwIfEnded();
   const platform = inspector.platform ?? process.platform;
   if (platform === "linux") {
     const found: string[] = [], hex = port.toString(16).toUpperCase().padStart(4, "0");
     for (const path of ["/proc/net/tcp", "/proc/net/tcp6"]) {
-      const fd = await open(path, "r");
+      let fd: RemoteProcFile;
+      try { fd = await (inspector.openProc ?? (path => open(path, "r")))(path); }
+      catch (error) {
+        if (path === "/proc/net/tcp6" && (error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
       try {
         const bytes = Buffer.alloc(4 * 1024 * 1024 + 1); let size = 0;
         while (size < bytes.length) {

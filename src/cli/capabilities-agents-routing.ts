@@ -7,7 +7,7 @@ export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
     routes: [], flags: [{ name: "--json", value: "boolean", summary: "Emit a versioned session directory." }, { name: "--host", value: "string", summary: "Exact enrolled peer alias or machine UUID; requires a live foreground owner." }],
     mutates: false, json: "envelope",
     bannerLines: ["ocx message <sub>           Codex queued messages, explicit SSH peers and foreground ownership"],
-    details: ["Linux/macOS Unix socket only. Uses effective CODEX_HOME; starts no daemon and returns no partial directory."],
+    details: ["Linux/macOS only. Local discovery uses the effective CODEX_HOME Unix socket; --host uses the live foreground owner's authenticated loopback route. Starts no daemon and returns no partial directory."],
   },
   {
     command: ["message", "send"],
@@ -51,6 +51,10 @@ export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
   { command: ["message", "hosts", "remove"], usage: "ocx message hosts remove <alias-or-machine-uuid> [--json]",
     summary: "Revoke local admission first and report any unconfirmed remote cleanup explicitly.", routes: [],
     flags: [{ name: "--json", value: "boolean", summary: "Emit local and remote revocation outcomes." }], mutates: true, json: "envelope" },
+  { command: ["message", "hosts", "abandon"], usage: "ocx message hosts abandon --transaction <uuid> [--json]",
+    summary: "Abandon an exact pending local enrollment; remote cleanup remains unconfirmed (exit 3).", routes: [],
+    flags: [{ name: "--transaction", value: "string", required: true, summary: "Exact pending UUID from hosts list or status; never an alias." },
+      { name: "--json", value: "boolean", summary: "Emit local abandonment and explicit remote-cleanup guidance." }], mutates: true, json: "envelope" },
   {
     command: ["agent", "status"],
     usage: "ocx agent status [--json]",

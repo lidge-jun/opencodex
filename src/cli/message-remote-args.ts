@@ -1,6 +1,7 @@
 import { validAlias, validPort, REMOTE_LIMITS } from "../messaging/remote-contract";
 import { isSshAlias } from "../link/ssh-argv";
 import { parseMessageArgs, type MessageArgs } from "./message-args";
+import { isThreadId } from "../messaging/types";
 
 export type RemoteMessageArgs = { action: "enable"; port?: number; json: boolean }
   | { action: "disable" | "status" | "hosts-list" | "_control" | "_port"; json: boolean }
@@ -8,6 +9,7 @@ export type RemoteMessageArgs = { action: "enable"; port?: number; json: boolean
   | { action: "hosts-probe"; ssh: string; json: boolean }
   | { action: "hosts-add"; alias: string; ssh: string; fingerprint: string; json: boolean }
   | { action: "hosts-remove"; host: string; json: boolean }
+  | { action: "hosts-abandon"; transaction: string; json: boolean }
   | { action: "remote-operation"; host: string; local: MessageArgs; json: boolean };
 
 /** Pure remote syntax validation precedes state, home selection, listeners or SSH allocation. */
@@ -20,7 +22,7 @@ export function parseRemoteMessageArgs(argv: readonly string[]): RemoteMessageAr
     return local ? { action: "remote-operation", host: argv[hostIndex + 1]!, local, json: local.json } : null;
   }
   if (action === "hosts") {
-    if (!["list", "probe", "add", "remove"].includes(argv[1] ?? "")) return null;
+    if (!["list", "probe", "add", "remove", "abandon"].includes(argv[1] ?? "")) return null;
     action = `hosts-${argv[1]}`; start = 2;
     if (action === "hosts-add" || action === "hosts-remove") { positional = argv[start++]; if (!validAlias(positional)) return null; }
   }
@@ -31,7 +33,8 @@ export function parseRemoteMessageArgs(argv: readonly string[]): RemoteMessageAr
     seen.add(flag);
     if (flag === "--json") continue;
     const allowed = action === "enable" ? ["--port"] : action === "serve" ? ["--host"]
-      : action === "hosts-probe" ? ["--ssh"] : action === "hosts-add" ? ["--ssh", "--fingerprint"] : [];
+      : action === "hosts-probe" ? ["--ssh"] : action === "hosts-add" ? ["--ssh", "--fingerprint"]
+        : action === "hosts-abandon" ? ["--transaction"] : [];
     if (!allowed.includes(flag)) return null;
     const value = argv[++index]; if (!value || value.startsWith("--")) return null;
     flags[flag] = value; if (flag === "--host") hosts.push(value);
@@ -47,6 +50,7 @@ export function parseRemoteMessageArgs(argv: readonly string[]): RemoteMessageAr
     return { action: action as "disable", json };
   }
   if (action === "hosts-remove") return { action, host: positional!, json };
+  if (action === "hosts-abandon" && isThreadId(flags["--transaction"])) return { action, transaction: flags["--transaction"]!, json };
   if ((action === "hosts-probe" || action === "hosts-add") && flags["--ssh"] && isSshAlias(flags["--ssh"])) {
     if (action === "hosts-probe") return { action, ssh: flags["--ssh"], json };
     if (/^SHA256:[A-Za-z0-9+/=]{1,64}$/.test(flags["--fingerprint"] ?? "")) return {

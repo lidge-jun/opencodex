@@ -15,7 +15,9 @@ start a listener or daemon. Reads preserve absent state. Unknown fields, duplica
 identities/aliases/transactions and oversized state refuse rather than repair.
 `src/messaging/remote-files.ts` verifies owned private directories, trusted
 ancestors, bounded no-follow single-link files and fatal UTF-8. Root-controlled
-OS directory aliases are allowed only with trusted resolved ancestors.
+OS directory aliases are allowed only with trusted resolved ancestors. An existing trusted
+configuration parent may be 0755; only the owned messaging subtree must be 0700, and enable
+does not chmod the existing parent.
 Mutations acquire an exclusive directory lock and atomically publish private
 files. Crash locks are not automatically reaped by age. Filesystem calls are not
 claimed to resist unrestricted same-uid access or privileged path replacement.
@@ -39,6 +41,14 @@ An already-completed identical peer can converge without touching a
 newer journal, but a missing journal cannot authorize adding a peer. Unconfirmed remote cleanup is reported
 explicitly and never restores local authorization. Read commands do not enable,
 create an identity, install software, rotate credentials or start the recipient.
+
+`src/messaging/remote-enrollment-recovery.ts` projects pending alias, transaction and stale
+generation only. `hosts abandon --transaction` removes exactly the inspected journal under
+the mutation lock, including while disabled; a different or missing transaction refuses.
+It does not remove enrolled peers, retry enrollment or claim remote cleanup. Old completions
+cannot publish from an abandoned journal or remove a replacement journal. Stale journals are
+not automatically discarded. A correlated receiver capacity refusal carries no capability,
+commits no new peer and reaches the initiator as `peer_capacity`, not an uncertain SSH outcome.
 
 ## Connection-bound authenticated gateway
 
@@ -86,8 +96,16 @@ return-route registration succeed. A return-only receiver needs no SSH credentia
 Generation-bound return leases expire after 25 seconds and refresh every ten
 seconds while the initiating owner is alive. Leased is not a processing receipt
 or a guarantee that the target stays connected; every data connection proves identity.
+An unexpired generation cannot be displaced while its old return endpoint still authenticates.
+A conflicting new lease is probed first; a bounded one-second authentication check of the old
+endpoint permits takeover only on authentication failure or timeout, with current-peer and
+route-identity rechecks. Local cancellation/capacity failures do not authorize takeover.
+Transient old-endpoint unreachability can allow takeover; lease generation is not individual
+session authority. Initiated routes remain conflicts.
 `src/messaging/remote-ports.ts` refuses public reverse binds, including sshd
 GatewayPorts configurations. Port selection alone does not prove readiness.
+Linux inspection requires the IPv4 listener table; only an absent IPv6 table is treated as
+empty. Permission, read and other inspection failures remain fail-closed.
 
 The owner shares fixed total limits across peers and both route directions:
 16 connections, 32 active/pending requests, ten helpers (eight persistent tunnel children
@@ -109,6 +127,9 @@ pairs remain owned after route withdrawal, so owner shutdown joins their cleanup
 reports its failures. Existing daemons, proxies and unrelated SSH clients
 are never signalled. Owner generation changes and lease-refresh failures retire
 the owner; restarting it is explicit and never replays a message.
+Unexpected published tunnel exit withdraws its exact route and retires the owner after joined
+cleanup. Deliberate peer removal withdraws the route before closing its helpers and does not
+retire unrelated routes.
 
 ## Remote attribution and evidence
 

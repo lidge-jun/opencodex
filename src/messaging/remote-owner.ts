@@ -6,7 +6,7 @@ import { remotePortIsLoopback } from "./remote-ports";
 import { LocalMessageRpc } from "./rpc";
 import type { RemoteMessageStore } from "./remote-store";
 import { startRemoteTunnels, type RemoteTunnelPair, type RemoteTunnelDeps } from "./remote-tunnels";
-import { isThreadId } from "./types";
+import { isThreadId, LocalMessagingError } from "./types";
 
 interface Route { peer: RemotePeer; port: number; generation: string; expiry: number; ready: boolean; tunnels?: RemoteTunnelPair }
 /** Local owner-control capability never leaves this configuration home or enters remote enrollment. */
@@ -62,9 +62,26 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
       if (!validPort(lease.port) || !isThreadId(lease.generation)) throw new Error();
       if (!await remotePortIsLoopback(lease.port, budget, capacity)) throw new Error();
       await probe(peer, lease.port, budget);
-      check(); budget.throwIfEnded();
+      check(); budget.throwIfEnded(); store.requireCurrentPeer(state, peer);
       const existing = routes.get(peer.machine.id);
-      if (existing?.tunnels || (existing && existing.generation !== lease.generation && existing.expiry > performance.now())) throw new Error();
+      if (existing?.tunnels) throw new Error();
+      if (existing && existing.generation !== lease.generation && existing.expiry > performance.now()) {
+        if (existing.port === lease.port) throw new Error();
+        // A live generation keeps its lease. Native availability is not owner identity evidence.
+        const release = capacity.reserve("connections"); let oldBudget: MessageBudget | undefined;
+        let authenticated = false;
+        try {
+          oldBudget = new MessageBudget(budget.remainingMs(1000), budget.signal);
+          try {
+            const socket = await authenticatedRemoteSocket(check(), peerEndpoint(existing.peer, existing.port), oldBudget);
+            socket.terminate(); authenticated = true;
+          } catch (error) {
+            if (!(error instanceof LocalMessagingError) || !["remote_auth_failed", "operation_timeout"].includes(error.code)) throw error;
+          }
+        } finally { oldBudget?.dispose(); release(); }
+        check(); budget.throwIfEnded(); store.requireCurrentPeer(state, peer);
+        if (authenticated || routes.get(peer.machine.id) !== existing) throw new Error();
+      }
       routes.set(peer.machine.id, { peer, port: lease.port, generation: lease.generation, ready: true, expiry: performance.now() + REMOTE_LIMITS.leaseMs });
       return { leased: true, generation: lease.generation };
     },
@@ -104,10 +121,12 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
         // Before publication this local scope, not the routes map, owns the join.
         await tunnels.close(); throw error;
       }
+      void tunnels.exited.then(() => {
+        if (!stopping && routes.get(peer.machine.id) === route) { routes.delete(peer.machine.id); abort(); }
+      });
       // The data connection proves both the peer and native initialization before ready publication.
       await probe(peer, route.port, setup); await register(route, setup);
       check(); setup.throwIfEnded(); route.ready = true;
-      void tunnels.exited.then(() => { if (routes.get(peer.machine.id) === route) routes.delete(peer.machine.id); });
     }
   } catch (error) { await close(); throw error; }
   finally { setup.dispose(); }

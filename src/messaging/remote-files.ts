@@ -6,19 +6,24 @@ import { remoteError, REMOTE_LIMITS } from "./remote-contract";
 
 /** Check the entire path ancestry before using the private messaging subtree. */
 export function checkRemoteDirectory(path: string): void {
+  checkDirectory(path, true);
+}
+/** The configuration home needs trusted ancestry; only messaging's own leaf must be private. */
+function checkDirectory(path: string, privateLeaf: boolean): void {
   if (!["linux", "darwin"].includes(process.platform) || !isAbsolute(path)) {
     throw remoteError("unsupported_platform", "Remote messaging requires a private Linux or macOS configuration home.");
   }
   try {
     const final = lstatSync(path);
-    if (!final.isDirectory() || final.isSymbolicLink() || final.uid !== process.getuid!() || (final.mode & 0o077)) throw new Error();
+    if (!final.isDirectory() || final.isSymbolicLink()
+      || (privateLeaf && (final.uid !== process.getuid!() || (final.mode & 0o077)))) throw new Error();
     // Root-controlled OS aliases (/tmp and /var on macOS) are not user-controlled redirects.
     for (let entry = path; ; entry = dirname(entry)) {
       const stat = lstatSync(entry);
       if (stat.isSymbolicLink()) { if (stat.uid !== 0) throw new Error(); }
       else if (!stat.isDirectory() || (stat.uid !== process.getuid!() && stat.uid !== 0)
         || ((stat.mode & 0o022) !== 0 && !(stat.uid === 0 && (stat.mode & 0o1000) !== 0))
-        || (entry === path && (stat.uid !== process.getuid!() || (stat.mode & 0o077) !== 0))) throw new Error();
+        || (privateLeaf && entry === path && (stat.uid !== process.getuid!() || (stat.mode & 0o077) !== 0))) throw new Error();
       if (entry === "/") break;
     }
     for (let entry = realpathSync(path); ; entry = dirname(entry)) {
@@ -40,9 +45,10 @@ export function createRemoteDirectory(path: string): void {
   const parent = dirname(path);
   if (!remotePathExists(parent)) {
     if (!remotePathExists(dirname(parent))) throw remoteError("unsafe_remote_storage", "Messaging configuration parent must already exist.");
+    checkDirectory(dirname(parent), false);
     mkdirSync(parent, { mode: 0o700 });
   }
-  checkRemoteDirectory(parent);
+  checkDirectory(parent, false);
   if (!remotePathExists(path)) mkdirSync(path, { mode: 0o700 });
   checkRemoteDirectory(path);
 }

@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { MessageBudget } from "../../src/messaging/budget";
 import { RemoteCapacity, remoteError } from "../../src/messaging/remote-contract";
+import { remoteControl, peerEndpoint } from "../../src/messaging/remote-auth";
+import { remotePortCandidate } from "../../src/messaging/remote-ports";
 import { runRemoteHelper, spawnRemoteHelper } from "../../src/messaging/remote-process";
 import { resolveRemoteRoute, startRemoteOwner } from "../../src/messaging/remote-owner";
 import { remoteMessagingPair } from "../helpers/messaging-remote";
@@ -50,14 +52,15 @@ for (const rejectCleanup of [false, true]) {
   });
 }
 
-for (const rejectCleanup of [false, true]) {
-  test.skipIf(process.platform === "win32")(`retired published tunnels remain owned until both helpers close (cleanup rejection=${rejectCleanup})`, async () => {
+for (const [rejectCleanup, deliberateRemoval] of [[false, false], [true, false], [false, true]] as const) {
+  test.skipIf(process.platform === "win32")(`retired published tunnels remain owned until both helpers close (cleanup rejection=${rejectCleanup}, peer removal=${deliberateRemoval})`, async () => {
     const pair = remoteMessagingPair(), closes: (() => Promise<void>)[] = [], exits: (() => void)[] = [], completed: number[] = [];
+    const other = deliberateRemoval ? remoteMessagingPair() : undefined;
     pair.aStore.mutate(state => { Object.assign(state.peers[0]!, { ssh: "fixture", hostKey: "fixture ssh-ed25519 Zml4dHVyZQ==\n", fingerprint: "SHA256:fixture" }); });
     let releaseSibling!: () => void, siblingClosing!: () => void;
     const gate = new Promise<void>(resolve => { releaseSibling = resolve; });
     const started = new Promise<void>(resolve => { siblingClosing = resolve; });
-    let owner: Awaited<ReturnType<typeof startRemoteOwner>> | undefined, receiver: typeof owner;
+    let owner: Awaited<ReturnType<typeof startRemoteOwner>> | undefined, receiver: typeof owner, otherOwner: typeof owner;
     const budget = new MessageBudget();
     try {
       receiver = await startRemoteOwner(pair.bStore, pair.b.codexHome, []);
@@ -90,27 +93,89 @@ for (const rejectCleanup of [false, true]) {
         },
       });
       await resolveRemoteRoute(pair.aStore, "worker", budget);
-      exits[0]!(); await started;
-      await expect(resolveRemoteRoute(pair.aStore, "worker", budget)).rejects.toThrow("No live messaging route");
-      const closing = owner.close();
-      expect(closing).toBe(owner.close());
-      const settled = closing.then(() => "closed", () => "rejected");
+      await expect(remoteControl(pair.bStore.requireEnabled(),
+        peerEndpoint(pair.bStore.peer(pair.aStore.requireEnabled().machine.id), owner.port), "message/lease",
+        { port: receiverPort, generation: crypto.randomUUID() }, budget)).rejects.toThrow();
+      if (other) {
+        const transaction = crypto.randomUUID(), machine = other.bStore.requireEnabled().machine;
+        const original = pair.aStore.peer("worker"), remote = pair.bStore.peer(pair.aStore.requireEnabled().machine.id);
+        pair.aStore.mutate(state => { state.peers.push({ ...original, alias: "colleague", machine, transaction,
+          port: other.bStore.requireEnabled().port, ssh: null, hostKey: null, fingerprint: null }); });
+        other.bStore.mutate(state => { state.peers = [{ ...remote, transaction }]; });
+        otherOwner = await startRemoteOwner(other.bStore, other.b.codexHome, []);
+        await remoteControl(other.bStore.requireEnabled(), peerEndpoint(other.bStore.peer(remote.machine.id), owner.port),
+          "message/lease", { port: otherOwner.port, generation: crypto.randomUUID() }, budget);
+        pair.aStore.mutate(state => { state.peers = state.peers.filter(peer => peer.alias !== "worker"); });
+      } else exits[0]!();
+      await started;
+      await expect(resolveRemoteRoute(pair.aStore, "worker", budget)).rejects.toThrow();
+      // The unexpected exit itself must retire the owner, without an explicit caller close.
+      const settled = owner.finished.then(() => "closed", () => "rejected");
       expect(await Promise.race([settled, Bun.sleep(30).then(() => "pending")])).toBe("pending");
       expect(completed).not.toContain(1);
       releaseSibling();
+      if (other) {
+        await closes[1]!();
+        const route = await resolveRemoteRoute(pair.aStore, "colleague", budget);
+        expect(route.endpoint.port).toBe(otherOwner!.port);
+        expect(await Promise.race([settled, Bun.sleep(30).then(() => "pending")])).toBe("pending");
+        await owner.close();
+      }
       if (rejectCleanup) {
-        await expect(closing).rejects.toThrow("cleanup did not complete cleanly");
         await expect(owner.finished).rejects.toThrow("cleanup did not complete cleanly");
-      } else { await closing; await owner.finished; }
+        await expect(owner.close()).rejects.toThrow("cleanup did not complete cleanly");
+      } else { await owner.finished; await owner.close(); }
+      expect(owner.close()).toBe(owner.close());
       expect(completed.sort()).toEqual([0, 1]);
       expect(owner.capacity.snapshot().helpers).toBe(0);
     } finally {
       releaseSibling(); budget.dispose();
-      await Promise.allSettled([owner?.close(), receiver?.close(), ...closes.map(close => close())]);
-      await pair.close();
+      await Promise.allSettled([owner?.close(), receiver?.close(), otherOwner?.close(), ...closes.map(close => close())]);
+      await Promise.all([pair.close(), other?.close()]);
     }
-  });
+  }, 15000);
 }
+
+test.skipIf(process.platform === "win32")("an immediate restart replaces only a stale return path and rejects old-generation renewals", async () => {
+  const pair = remoteMessagingPair(), generation = crypto.randomUUID(), nextGeneration = crypto.randomUUID();
+  let source: Awaited<ReturnType<typeof startRemoteOwner>> | undefined, receiver: typeof source;
+  const sockets = new Set<Socket>();
+  const alternative = createServer(incoming => {
+    const outgoing = connect(source!.port, "127.0.0.1");
+    for (const socket of [incoming, outgoing]) {
+      sockets.add(socket); socket.on("close", () => sockets.delete(socket));
+      socket.on("error", () => { incoming.destroy(); outgoing.destroy(); });
+    }
+    incoming.pipe(outgoing).pipe(incoming);
+  });
+  const budget = new MessageBudget();
+  const lease = (port: number, generation: string) => remoteControl(pair.aStore.requireEnabled(),
+    peerEndpoint(pair.aStore.peer("worker"), receiver!.port), "message/lease", { port, generation }, budget);
+  try {
+    source = await startRemoteOwner(pair.aStore, pair.a.codexHome, []);
+    receiver = await startRemoteOwner(pair.bStore, pair.b.codexHome, []);
+    await lease(source.port, generation);
+    await expect(lease(source.port, nextGeneration)).rejects.toThrow();
+    const alternativePort = remotePortCandidate();
+    await new Promise<void>(resolve => alternative.listen(alternativePort, "127.0.0.1", resolve));
+    // A second proven port cannot replace an unexpired generation while its original path authenticates.
+    await expect(lease(alternativePort, nextGeneration)).rejects.toThrow();
+    const oldPort = source.port;
+    await source.close();
+    pair.aStore.mutate(state => { state.port = remotePortCandidate(); });
+    source = await startRemoteOwner(pair.aStore, pair.a.codexHome, []);
+    expect(source.port).not.toBe(oldPort);
+    expect(await lease(source.port, nextGeneration)).toEqual({ leased: true, generation: nextGeneration });
+    for (let attempt = 0; attempt < 2; attempt++) await expect(lease(source.port, generation)).rejects.toThrow();
+    await expect(lease(oldPort, generation)).rejects.toThrow();
+    const route = await resolveRemoteRoute(pair.bStore, pair.aStore.requireEnabled().machine.id, budget);
+    expect(route.endpoint.port).toBe(source.port);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    if (alternative.listening) await new Promise<void>(resolve => alternative.close(() => resolve()));
+    budget.dispose(); await Promise.allSettled([source?.close(), receiver?.close()]); await pair.close();
+  }
+});
 
 test("remote parser rejects ambiguous/malformed usage without runtime allocation", () => {
   for (const args of [["enable", "--port", "80"], ["serve", "--host", "a", "--host", "a"],
