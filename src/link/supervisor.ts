@@ -7,6 +7,8 @@ import { createSshRunner, type SshChild, type SshRunner } from "./ssh-runner";
 import {
   classifySshStderr,
   dueForSpawn,
+  failedTunnel,
+  HOME_TUNNEL_RETRY_POLICY,
   IDLE,
   reduceTunnel,
   type TunnelState,
@@ -33,6 +35,11 @@ export interface LinkSupervisor {
   ensureStarted(): Promise<void>;
   reload(): Promise<void>;
   stopLink(linkId: string): Promise<void>;
+  /**
+   * Restart one Home-initiated tunnel now: stop its child, forget the backoff or failed state,
+   * and spawn a fresh attempt. False when the link is not a Home-initiated link of this store.
+   */
+  reconnect(linkId: string): Promise<boolean>;
   status(): readonly LinkTunnelStatus[];
   notifyAuthenticatedRequest?(apiKeyId: string): void;
   stop(): Promise<void>;
@@ -67,6 +74,20 @@ export interface LinkSupervisorDeps {
 
 const TIMER_MS = 1_000;
 const SPAWN_GRACE_MS = 5_000;
+/**
+ * A retry runs while the network may still be down, and ssh can wait out its whole ConnectTimeout
+ * (10 s for the TCP connect, the SSH handshake and key exchange, see ssh-argv.ts) before it exits.
+ * A retry is promoted only once it has outlived that, so an attempt that never reached the Child
+ * does not read connected and restart the outage clock. Like the first attempt's five seconds,
+ * liveness is a heuristic: authentication and the forward request come after ConnectTimeout, so
+ * one that stalls past the grace reads connected until ssh exits.
+ */
+const RETRY_GRACE_MS = 15_000;
+
+/** A retry whose ssh child is still running: reconnecting, or failed under the retry policy. */
+function retryInFlight(state: TunnelState): boolean {
+  return (state.kind === "reconnecting" || state.kind === "failed") && state.inFlight === true;
+}
 
 function sameArgv(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -131,8 +152,14 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   let lifecycleFlight: Promise<void> | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   const states = new Map<string, TunnelState>();
-  const children = new Map<string, { child: SshChild; argv: readonly string[] }>();
+  const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number }>();
+  /** Per-link spawn counter. An exit or stop that resumes after a newer spawn is stale. */
+  const generations = new Map<string, number>();
+  /** Reconnects in flight, so overlapping requests for one link restart it once. */
+  const reconnects = new Map<string, Promise<boolean>>();
   const orphanUnverified = new Set<string>();
+  /** The generation of the child whose exit is still being classified, per link. */
+  const exiting = new Map<string, number>();
   const recordInstances = new Map<string, string>();
 
   const reconcileApiKeys = (): void => {
@@ -187,14 +214,17 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   const setEvent = (linkId: string, event: Parameters<typeof reduceTunnel>[1]): TunnelState => {
-    const next = reduceTunnel(states.get(linkId) ?? IDLE, event, deps.random);
+    const next = reduceTunnel(states.get(linkId) ?? IDLE, event, deps.random, HOME_TUNNEL_RETRY_POLICY);
     states.set(linkId, next);
     return next;
   };
 
   const spawnFor = (record: LinkRecord): void => {
     if (stopping || record.direction !== "hub-initiated" || children.has(record.id)) return;
-    if (states.get(record.id)?.kind === "failed") return;
+    // Only a fresh link or a due attempt spawns. A reload must neither skip the backoff nor start
+    // a second child while an exited one is still reporting its stderr.
+    const prior = states.get(record.id);
+    if (prior && prior.kind !== "idle" && !dueForSpawn(prior, now())) return;
     if (store.listenerPort === null) {
       states.set(record.id, { kind: "failed", since: now(), reason: "forward" });
       return;
@@ -209,7 +239,11 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         knownHostsFile: linkKnownHostsPath(),
       });
       const child = runner.spawnTunnel(argv);
-      children.set(record.id, { child, argv });
+      const generation = (generations.get(record.id) ?? 0) + 1;
+      generations.set(record.id, generation);
+      // An older child's exit still being classified no longer speaks for this link.
+      exiting.delete(record.id);
+      children.set(record.id, { child, argv, spawnedAt: now() });
       orphanUnverified.delete(record.id);
       setEvent(record.id, { type: "spawn", now: now() });
       writePidfile(pidfilePath(record.id), { version: 1, linkId: record.id, pid: child.pid, argv });
@@ -218,9 +252,17 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         children.delete(record.id);
         conditionalRemovePidfile(record.id, child.pid);
         if (stopping) return;
-        const stderr = child.stderr ? await child.stderr : "";
-        const next = setEvent(record.id, { type: "exit", now: now(), stderrClass: classifySshStderr(stderr) });
-        if (next.kind === "failed") return;
+        exiting.set(record.id, generation);
+        try {
+          let stderr = "";
+          // An unreadable stderr (the runner rejects it past its size cap) still reports the exit.
+          try { stderr = child.stderr ? await child.stderr : ""; } catch { /* classified as unknown */ }
+          // A reconnect may have started a fresh child meanwhile; its own lifecycle owns the state.
+          if (generations.get(record.id) !== generation) return;
+          setEvent(record.id, { type: "exit", now: now(), stderrClass: classifySshStderr(stderr) });
+        } finally {
+          if (exiting.get(record.id) === generation) exiting.delete(record.id);
+        }
       }).catch(() => {
         if (children.get(record.id)?.child !== child) return;
         children.delete(record.id);
@@ -228,7 +270,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         if (!stopping) setEvent(record.id, { type: "exit", now: now(), stderrClass: "network" });
       });
     } catch {
-      states.set(record.id, { kind: "failed", since: now(), reason: "forward" });
+      const at = now();
+      states.set(record.id, failedTunnel("forward", at, HOME_TUNNEL_RETRY_POLICY, prior?.kind === "failed" ? prior.since : at));
     }
   };
 
@@ -237,14 +280,29 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     const current = now();
     for (const record of store.links) {
       if (record.direction !== "hub-initiated") continue;
-      const next = setEvent(record.id, { type: "tick", now: current });
+      // The exit is still being classified. Failing the link on the outage clock now would make
+      // a later host-key or auth exit land on a failed state that ignores it.
+      if (exiting.has(record.id)) continue;
+      const before = states.get(record.id) ?? IDLE;
       const child = children.get(record.id);
-      if (next.kind === "failed" && child) {
+      // Promotion is checked before the outage limit, so a child that has outlived its grace by the
+      // time this tick runs (at the limit, or late after a sleep) is promoted rather than killed.
+      // An idle Child may send no catalog request for hours; for a retry, staying up past the
+      // retry grace is the proof instead, as five seconds is for a first attempt.
+      if (child && ((before.kind === "connecting" && current - before.since >= SPAWN_GRACE_MS)
+        || (retryInFlight(before) && current - child.spawnedAt >= RETRY_GRACE_MS))) {
+        setEvent(record.id, { type: "ready", now: current });
+        continue;
+      }
+      const next = setEvent(record.id, { type: "tick", now: current });
+      if (next.kind === "failed" && !next.inFlight && child && retryInFlight(before)) {
+        // A retry started just before the outage limit has not had its grace yet. It carries on as
+        // the failed state's retry instead of being killed with a link that may already be back.
+        states.set(record.id, { ...next, inFlight: true });
+      } else if (next.kind === "failed" && !next.inFlight && child) {
         child.child.kill("SIGTERM");
         children.delete(record.id);
         conditionalRemovePidfile(record.id, child.child.pid);
-      } else if (next.kind === "connecting" && child && current - next.since >= SPAWN_GRACE_MS) {
-        setEvent(record.id, { type: "ready", now: current });
       } else if (dueForSpawn(next, current)) {
         spawnFor(record);
       }
@@ -299,11 +357,13 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       states.set(linkId, IDLE);
       return;
     }
+    const generation = generations.get(linkId);
     children.delete(linkId);
     current.child.kill("SIGTERM");
     await current.child.exited;
     conditionalRemovePidfile(linkId, current.child.pid);
-    states.set(linkId, IDLE);
+    // A reconnect may have spawned a replacement while this child was exiting; keep its state.
+    if (generations.get(linkId) === generation) states.set(linkId, IDLE);
   };
 
   return {
@@ -354,11 +414,31 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       });
     },
     stopLink,
+    reconnect(linkId: string) {
+      const inFlight = reconnects.get(linkId);
+      if (inFlight) return inFlight;
+      const flight = (async () => {
+        // runLifecycle keeps only the latest queued operation, so a reconnect waits for a running
+        // reload instead of queueing behind it where a second reload could replace it.
+        if (lifecycleFlight) await lifecycleFlight;
+        if (stopping || !started) return false;
+        const record = store.links.find(link => link.id === linkId && link.direction === "hub-initiated");
+        if (!record) return false;
+        await stopLink(linkId);
+        if (stopping) return false;
+        spawnFor(record);
+        return true;
+      })().finally(() => { reconnects.delete(linkId); });
+      reconnects.set(linkId, flight);
+      return flight;
+    },
     notifyAuthenticatedRequest(apiKeyId: string) {
       for (const record of store.links) {
         if (record.direction === "hub-initiated" && record.apiKeyId === apiKeyId && children.has(record.id)) {
           const state = states.get(record.id);
-          if (state?.kind === "connecting" || state?.kind === "reconnecting") setEvent(record.id, { type: "ready", now: now() });
+          if (state?.kind === "connecting" || state?.kind === "reconnecting" || (state && retryInFlight(state))) {
+            setEvent(record.id, { type: "ready", now: now() });
+          }
         }
       }
     },

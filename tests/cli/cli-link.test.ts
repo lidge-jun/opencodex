@@ -212,6 +212,32 @@ describe("ocx link", () => {
     }
   });
 
+  test("reconnect posts to the link's reconnect route and prints only the link id", async () => {
+    const calls: RequestCall[] = [];
+    const output = captureOutput();
+    try {
+      const code = await runLinkCommand(["reconnect", "--link-id", issueResponse.linkId, "--json"], {
+        baseUrl: "http://127.0.0.1:19101",
+        fetchImpl: fakeFetch({ linkId: issueResponse.linkId }, calls),
+        readAdminToken: () => "ocx_admin_test-token",
+      });
+      expect(code).toBe(0);
+      expect(JSON.parse(output.stdout[0]!)).toEqual({ linkId: issueResponse.linkId });
+      expect(calls[0]?.url).toBe(`http://127.0.0.1:19101/api/link/${issueResponse.linkId}/reconnect`);
+      expect(calls[0]?.init?.method).toBe("POST");
+      const refused = await runLinkCommand(["reconnect", "--link-id", issueResponse.linkId], {
+        baseUrl: "http://127.0.0.1:19101",
+        fetchImpl: fakeFetch({ error: { code: "link_not_home_initiated" } }, [], 409),
+        readAdminToken: () => "ocx_admin_test-token",
+      });
+      expect(refused).not.toBe(0);
+      expect(await runLinkCommand(["reconnect", "--link-id", "not-a-link"], { baseUrl: "http://127.0.0.1:19101" })).not.toBe(0);
+      expect(output.stdout).toHaveLength(1);
+    } finally {
+      output.restore();
+    }
+  });
+
   test("rejects malformed status responses", async () => {
     const output = captureOutput();
     try {
@@ -228,7 +254,7 @@ describe("ocx link", () => {
     }
   });
 
-  test("registers the canonical command and all four capability leaves", () => {
+  test("registers the canonical command and all five capability leaves", () => {
     expect(findCommand("link")?.name).toBe("link");
     expect(DISPATCH_COMMANDS).toContain("link");
     expect(CAPABILITIES.filter(cap => cap.command[0] === "link").map(cap => cap.command.join(" "))).toEqual([
@@ -236,6 +262,7 @@ describe("ocx link", () => {
       "link issue",
       "link status",
       "link revoke",
+      "link reconnect",
     ]);
   });
 });

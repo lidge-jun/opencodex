@@ -489,6 +489,62 @@ describe("link management routes", () => {
     expect(h.store.links).toHaveLength(1);
   });
 
+  test("reconnect restarts a Home-initiated tunnel for either principal and refuses everything else", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-reconnect-"));
+    const h = harness();
+    const reconnected: string[] = [];
+    let restartable = true;
+    const deps: ManagementApiDeps = {
+      ...h.deps,
+      linkSupervisor: () => ({ ...supervisor(h.events), reconnect: async (id: string) => { reconnected.push(id); return restartable; } }),
+    };
+    h.deps.writeLinkStore!({ ...h.store, links: [{
+      id: "lnk_0123456789abcdef",
+      alias: "child",
+      direction: "hub-initiated",
+      hostKeyFingerprint: "SHA256:abcdefghijklmnop",
+      tunnelPort: 2200,
+      apiKeyId: "key-1",
+      createdAt: "2026-09-25T00:00:00.000Z",
+    }, {
+      id: "lnk_fedcba9876543210",
+      alias: "home",
+      direction: "client-initiated",
+      hostKeyFingerprint: null,
+      tunnelPort: 2201,
+      apiKeyId: "key-2",
+      createdAt: "2026-09-25T00:00:00.000Z",
+    }] });
+    const path = "/api/link/lnk_0123456789abcdef/reconnect";
+    const ok = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(ok?.status).toBe(200);
+    expect(await ok!.json()).toEqual({ linkId: "lnk_0123456789abcdef" });
+    expect(h.events).toContain("supervisor");
+    expect((await call(path, "POST", undefined, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    expect(reconnected).toEqual(["lnk_0123456789abcdef", "lnk_0123456789abcdef"]);
+    expect((await call(path, "POST", undefined, deps, "admin-token", false, null, true, h.config))?.status).toBe(403);
+    expect((await call(path, "POST", undefined, deps, "admin-token", true, "tailscale-identity", true, h.config))?.status).toBe(403);
+    const childOwned = await call("/api/link/lnk_fedcba9876543210/reconnect", "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(childOwned?.status).toBe(409);
+    expect(await childOwned!.json()).toMatchObject({ error: { code: "link_not_home_initiated" } });
+    const missing = await call("/api/link/lnk_0000000000000000/reconnect", "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(missing?.status).toBe(404);
+    expect(await missing!.json()).toMatchObject({ error: { code: "link_not_found" } });
+    expect((await call("/api/link/not-a-link/reconnect", "POST", undefined, deps, "admin-token", true, null, true, h.config))?.status).toBe(400);
+    h.setListenerState("failed");
+    const unbound = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(unbound?.status).toBe(503);
+    expect(await unbound!.json()).toMatchObject({ error: { code: "listener_unavailable" } });
+    expect(reconnected).toHaveLength(2);
+    h.setListenerState("listening");
+    restartable = false;
+    const refused = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(refused?.status).toBe(503);
+    expect(await refused!.json()).toMatchObject({ error: { code: "link_unavailable" } });
+    expect(reconnected).toHaveLength(3);
+    expect(h.store.links).toHaveLength(2);
+  });
+
   test("issue starts the supervisor once a recovered listener binds", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-issue-recover-"));
     const h = harness();
