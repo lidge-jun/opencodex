@@ -9,9 +9,10 @@ import { join } from "node:path";
 import { localMessagingFixture, LOCAL_OTHER, LOCAL_TARGET, localFixtureThread, type LocalCall } from "./messaging-local";
 
 /** Two isolated native Unix fixtures and private stores; no user's homes, SSH keys or agents. */
-export function remoteMessagingPair(handler?: (call: LocalCall) => unknown | Promise<unknown>) {
-  const a = localMessagingFixture(call => call.method === "thread/loaded/list"
-    ? { data: [LOCAL_OTHER], nextCursor: null } : call.method === "thread/read" ? { thread: localFixtureThread(LOCAL_OTHER, "sender") } : undefined);
+export function remoteMessagingPair(handler?: (call: LocalCall) => unknown | Promise<unknown>,
+  senderHandler?: (call: LocalCall) => unknown | Promise<unknown>) {
+  const a = localMessagingFixture(async call => await senderHandler?.(call) ?? (call.method === "thread/loaded/list"
+    ? { data: [LOCAL_OTHER], nextCursor: null } : call.method === "thread/read" ? { thread: localFixtureThread(LOCAL_OTHER, "sender") } : undefined));
   const b = localMessagingFixture(handler);
   const aStore = new RemoteMessageStore(join(a.root, "ocx")), bStore = new RemoteMessageStore(join(b.root, "ocx"));
   const aState = aStore.enable(remotePortCandidate()), bState = bStore.enable(remotePortCandidate());

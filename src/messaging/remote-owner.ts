@@ -22,6 +22,7 @@ export async function resolveRemoteRoute(store: RemoteMessageStore, selector: st
   if (matches.length !== 1) throw remoteError("route_unavailable", "No live messaging route exists for this enrolled peer; run the explicit foreground owner.");
   const route = exactRecord(matches[0], ["machineId", "transaction", "port", "kind"]);
   if (route.transaction !== peer.transaction || !validPort(route.port) || !["initiated", "leased"].includes(String(route.kind))) throw remoteError("invalid_remote_route", "Messaging route does not match the current enrollment.");
+  store.requireCurrentPeer(state, peer);
   return { state, peer, endpoint: peerEndpoint(peer, route.port) };
 }
 
@@ -30,6 +31,8 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
   tunnelDeps: RemoteTunnelDeps = {}) {
   const state = store.requireEnabled(), generation = crypto.randomUUID(), controller = new AbortController();
   const capacity = new RemoteCapacity(), routes = new Map<string, Route>(), operations = new Set<Promise<unknown>>();
+  // Availability may retire before cleanup settles; retain every published pair's join and failure.
+  const ownedTunnels = new Set<RemoteTunnelPair>();
   let finish!: () => void, finishError!: (error: Error) => void;
   const finished = new Promise<void>((resolve, reject) => { finish = resolve; finishError = reject; });
   void finished.catch(() => {});
@@ -76,8 +79,8 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
   };
   const close = (): Promise<void> => closing ??= (async () => {
     stopping = true; clearInterval(timer); parent?.removeEventListener("abort", abort); controller.abort();
-    const results = await Promise.allSettled([bridge.close(), ...[...routes.values()].map(route => route.tunnels?.close()), ...operations]);
-    routes.clear();
+    const results = await Promise.allSettled([bridge.close(), ...[...ownedTunnels].map(tunnels => tunnels.close()), ...operations]);
+    routes.clear(); ownedTunnels.clear();
     if (results.some(result => result.status === "rejected")) {
       const error = remoteError("cleanup_incomplete", "Messaging owner cleanup did not complete cleanly.");
       finishError(error); throw error;
@@ -96,7 +99,7 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
       const tunnels = await startRemoteTunnels(store, peer, setup, capacity, controller.signal, tunnelDeps);
       const route: Route = { peer, port: tunnels.localPort, generation, expiry: Infinity, ready: false, tunnels };
       try {
-        check(); setup.throwIfEnded(); routes.set(peer.machine.id, route);
+        check(); setup.throwIfEnded(); ownedTunnels.add(tunnels); routes.set(peer.machine.id, route);
       } catch (error) {
         // Before publication this local scope, not the routes map, owns the join.
         await tunnels.close(); throw error;
@@ -104,7 +107,7 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
       // The data connection proves both the peer and native initialization before ready publication.
       await probe(peer, route.port, setup); await register(route, setup);
       check(); setup.throwIfEnded(); route.ready = true;
-      void tunnels.exited.then(() => { routes.delete(peer.machine.id); });
+      void tunnels.exited.then(() => { if (routes.get(peer.machine.id) === route) routes.delete(peer.machine.id); });
     }
   } catch (error) { await close(); throw error; }
   finally { setup.dispose(); }

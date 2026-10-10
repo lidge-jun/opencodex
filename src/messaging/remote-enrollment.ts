@@ -13,6 +13,16 @@ import { isThreadId } from "./types";
 
 export type RemoteControlRunner = (argv: readonly string[], budget: MessageBudget, capacity: RemoteCapacity,
   stdin?: string) => Promise<string>;
+
+/** Forget only the revoked transaction, while the state mutation lock is still owned. */
+function forgetPendingTransaction(store: RemoteMessageStore, transaction: string, removeJournal = unlinkSync): void {
+  const path = join(store.directory, "enrollment.json"), text = readRemoteFile(path);
+  if (text === null) return;
+  const saved = exactRecord(JSON.parse(text), ["alias", "ssh", "fingerprint", "generation", "request"]);
+  const request = exactRecord(saved.request, ["protocol", "action", "params"]);
+  const params = exactRecord(request.params, ["machine", "transaction", "returnCapability", "port"]);
+  if (params.transaction === transaction) removeJournal(path);
+}
 /** Offer one host fingerprint without enrollment or persistent state; clean only this probe's scratch directory. */
 export async function probeRemoteHost(ssh: string, budget: MessageBudget, capacity: RemoteCapacity,
   runner: RemoteControlRunner = runRemoteHelper) {
@@ -29,7 +39,7 @@ export async function probeRemoteHost(ssh: string, budget: MessageBudget, capaci
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 /** Versioned private stdio control: invoked over confirmed SSH, never the network messaging gateway. */
-export function handleEnrollmentControl(store: RemoteMessageStore, input: unknown): unknown {
+export function handleEnrollmentControl(store: RemoteMessageStore, input: unknown, removeJournal = unlinkSync): unknown {
   const raw = exactRecord(input, ["protocol", "action", "params"]);
   if (raw.protocol !== REMOTE_PROTOCOL) throw remoteError("remote_incompatible", "Remote messaging protocol versions differ.");
   const state = store.requireEnabled();
@@ -55,7 +65,11 @@ export function handleEnrollmentControl(store: RemoteMessageStore, input: unknow
   if (raw.action === "remove") {
     const params = exactRecord(raw.params, ["machineId", "transaction"]);
     if (!isThreadId(params.machineId) || !isThreadId(params.transaction)) throw new Error();
-    store.mutate(current => { current.peers = current.peers.filter(peer => peer.machine.id !== params.machineId || peer.transaction !== params.transaction); });
+    store.mutate(current => {
+      // Invalidate recovery before publishing absence, including an enrollment not yet locally published.
+      forgetPendingTransaction(store, params.transaction as string, removeJournal);
+      current.peers = current.peers.filter(peer => peer.machine.id !== params.machineId || peer.transaction !== params.transaction);
+    });
     return { protocol: REMOTE_PROTOCOL, removed: true };
   }
   throw remoteError("invalid_control", "Unsupported messaging enrollment control operation.");
@@ -71,20 +85,21 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
   const pending = withRemoteLock(store.directory, () => {
     const existing = readRemoteFile(pendingPath);
     if (existing !== null) {
-      const saved = exactRecord(JSON.parse(existing), ["alias", "ssh", "fingerprint", "request"]);
+      const saved = exactRecord(JSON.parse(existing), ["alias", "ssh", "fingerprint", "generation", "request"]);
       if (saved.alias !== alias || saved.ssh !== ssh || saved.fingerprint !== fingerprint) throw remoteError("enrollment_pending", "Reconcile the existing messaging enrollment before starting another.");
       return saved;
     }
     const current = store.requireEnabled();
+    if (current.generation !== state.generation) throw remoteError("enrollment_pending", "Local configuration changed during the probe; repeat explicitly.");
     if (current.peers.some(peer => peer.alias === alias)) throw remoteError("enrollment_conflict", "This messaging alias is already enrolled.");
     if (current.peers.length >= REMOTE_LIMITS.peers) throw remoteError("peer_capacity", "Remove an enrolled peer before adding another.");
-    const saved = { alias, ssh, fingerprint, request: { protocol: REMOTE_PROTOCOL, action: "enroll",
+    const saved = { alias, ssh, fingerprint, generation: current.generation, request: { protocol: REMOTE_PROTOCOL, action: "enroll",
       params: { machine: state.machine, transaction: crypto.randomUUID(), returnCapability: capability(), port: state.port } } };
     budget.throwIfEnded(); writeRemoteFile(pendingPath, JSON.stringify(saved)); return saved;
   });
   const request = exactRecord(pending.request, ["protocol", "action", "params"]);
   const params = exactRecord(request.params, ["machine", "transaction", "returnCapability", "port"]);
-  if (request.protocol !== REMOTE_PROTOCOL || request.action !== "enroll" || !validMachine(params.machine)
+  if (pending.generation !== state.generation || request.protocol !== REMOTE_PROTOCOL || request.action !== "enroll" || !validMachine(params.machine)
     || params.machine.id !== state.machine.id || !isThreadId(params.transaction) || !validCapability(params.returnCapability)
     || params.port !== state.port) throw remoteError("enrollment_pending", "Pending enrollment no longer matches this node; reconcile it explicitly.");
   writeRemoteFile(hostsPath, offered.hostKey);
@@ -95,31 +110,40 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
     ["protocol", "transaction", "machine", "port", "capability"]);
     if (reply.protocol !== REMOTE_PROTOCOL || reply.transaction !== params.transaction || !validMachine(reply.machine)
       || reply.machine.id === state.machine.id || !validPort(reply.port) || !validCapability(reply.capability)) throw new Error();
-  } catch { throw remoteError("enrollment_unknown", "Remote enrollment may have committed. Its saved transaction is retained; repeat the same add command to reconcile, not create a replacement."); }
+  } catch { throw remoteError("enrollment_unknown", "Remote enrollment may have committed. Reconcile the retained transaction, if present; do not create a replacement automatically."); }
   const machine = reply.machine as RemoteState["machine"];
   try {
     budget.throwIfEnded();
+    const savedText = JSON.stringify(pending);
+    let ownsJournal = false;
     store.mutate(current => {
-    if (current.generation !== state.generation) throw remoteError("enrollment_unknown", "Local configuration changed during enrollment; the remote transaction is retained.");
-    const existing = current.peers.find(peer => peer.alias === alias || peer.machine.id === machine.id);
-    if (existing) {
-      if (existing.transaction !== params.transaction || existing.outgoing !== reply.capability) throw remoteError("enrollment_conflict", "The remote identity is already enrolled differently.");
-      return;
-    }
-    current.peers.push({ alias, machine, transaction: params.transaction as string, incoming: params.returnCapability as string,
-      outgoing: reply.capability as string, port: reply.port as number, ssh, hostKey: offered.hostKey, fingerprint });
-    });
-    withRemoteLock(store.directory, () => { if (readRemoteFile(pendingPath) !== null) unlinkSync(pendingPath); });
+      if (current.generation !== state.generation) throw remoteError("enrollment_unknown", "Local configuration changed during enrollment; the remote transaction is retained.");
+      ownsJournal = readRemoteFile(pendingPath) === savedText;
+      const existing = current.peers.find(peer => peer.alias === alias || peer.machine.id === machine.id);
+      if (existing) {
+        if (existing.alias !== alias || existing.machine.id !== machine.id || existing.transaction !== params.transaction
+          || existing.incoming !== params.returnCapability || existing.outgoing !== reply.capability
+          || existing.port !== reply.port || existing.ssh !== ssh || existing.fingerprint !== fingerprint
+          || existing.hostKey !== offered.hostKey) throw remoteError("enrollment_conflict", "The remote identity is already enrolled differently.");
+        return;
+      }
+      if (!ownsJournal) throw remoteError("enrollment_unknown", "This enrollment no longer owns the saved transaction.");
+      current.peers.push({ alias, machine, transaction: params.transaction as string, incoming: params.returnCapability as string,
+        outgoing: reply.capability as string, port: reply.port as number, ssh, hostKey: offered.hostKey, fingerprint });
+    }, () => { if (ownsJournal) forgetPendingTransaction(store, params.transaction as string); });
   } catch {
-    throw remoteError("enrollment_unknown", "Remote enrollment committed, but local completion is uncertain. Repeat the same add command to reconcile the retained transaction.");
+    throw remoteError("enrollment_unknown", "Remote enrollment committed, but local completion is uncertain. Inspect current enrollment and any retained transaction before an explicit retry.");
   }
   return { protocol: REMOTE_PROTOCOL, alias, machine, enrolled: true };
 }
 /** Revoke locally first, then attempt exact remote revocation; unknown cleanup never restores local admission. */
 export async function removeRemoteHost(store: RemoteMessageStore, selector: string, budget: MessageBudget,
-  capacity: RemoteCapacity, runner: RemoteControlRunner = runRemoteHelper) {
+  capacity: RemoteCapacity, runner: RemoteControlRunner = runRemoteHelper, removeJournal = unlinkSync) {
   const state = store.requireEnabled(), peer = store.peer(selector);
-  store.mutate(current => { current.peers = current.peers.filter(item => item.transaction !== peer.transaction); });
+  store.mutate(current => {
+    forgetPendingTransaction(store, peer.transaction, removeJournal);
+    current.peers = current.peers.filter(item => item.transaction !== peer.transaction);
+  });
   let remote: "removed" | "unconfirmed" = "unconfirmed";
   if (peer.ssh) {
     const path = join(store.directory, "revocation_known_hosts"); writeRemoteFile(path, peer.hostKey!);
