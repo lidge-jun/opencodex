@@ -34,6 +34,25 @@ opencodex 会把持久化配置存放在 `$OPENCODEX_HOME/config.json`，通常�
 
 路由有自己独立的顺序化解析规则；见 [Routing](/reference/configuration/routing/)。
 
+## 原生推理密文保留
+
+仪表盘概览提供“切换模型时保留”和“切换账号时保留”两个独立开关，默认均关闭。也可以在 `config.json` 中配置：
+
+```jsonc
+{
+  "nativeReasoningRetention": {
+    "modelSwitch": true,
+    "accountSwitch": false
+  }
+}
+```
+
+上面的例子允许在同一原生 ChatGPT 目标和凭据下，发生已知模型切换时转发推理 `encrypted_content`。跨账号保留属于实验性选项；模型和账号同时变化时必须同时开启两个开关。策略按实际选中的原生 Combo 成员或账号池重试目标判断，不适用于第三方或 API-key provider。
+
+允许转发不代表上游一定接受或复用推理。已检测到的解密拒绝仍执行现有的有限清理恢复，拒绝缓存优先于开关。旧响应和会话引用、外部推理项 ID、上传文件的账号限制及缓存隔离保持各自的归属规则。原生压缩块继续沿用现有清理行为，原生 `/v1/responses/compact` 的直接转发清理也不改变。
+
+仪表盘和 `PUT /api/native-reasoning-retention` 的修改对后续请求生效。PUT 接受部分布尔字段，JSON `null` 恢复默认值；未知字段或类型错误会被拒绝。使用本地 `ocx config set/unset` 修改后需重启代理。完整说明见 [Native reasoning retention](/reference/configuration/server/#native-reasoning-retention)。
+
 ## 配置域
 
 - [Providers](/reference/configuration/providers/) — provider 条目、认证、端点、目录、allowlist、上下文限制、配额和 provider 特定选项。

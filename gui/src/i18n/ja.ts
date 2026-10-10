@@ -4,6 +4,15 @@ import type { TKey } from "./en";
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  "nativeReasoningRetention.title": "OpenAI ネイティブ推論の保持",
+  "nativeReasoningRetention.description": "公式 ChatGPT バックエンドへのネイティブリクエストにのみ適用され、Combo やアカウントプール内の実際の宛先変更も含みます。以前の暗号化推論を再送できますが、再利用はバックエンドに依存します。両方とも既定ではオフです。",
+  "nativeReasoningRetention.modelSwitch": "モデル切り替え時に暗号化推論を保持",
+  "nativeReasoningRetention.accountSwitch": "アカウント切り替え時に暗号化推論を保持（実験的）",
+  "nativeReasoningRetention.accountHint": "暗号文を保持しても、別のアカウントから以前の応答 ID やファイルにアクセスできるわけではありません。リクエストの成功は推論の再利用を証明しません。 ネイティブ圧縮の処理は変わりません。",
+  "nativeReasoningRetention.reset": "既定値に戻す",
+  "nativeReasoningRetention.loadFailed": "ネイティブ推論の設定を読み込めませんでした。",
+  "nativeReasoningRetention.saveFailed": "ネイティブ推論の設定を保存できませんでした。",
+  "nativeReasoningRetention.saved": "ネイティブ推論の設定を保存しました。",
   "sidecar.pool": "アカウントプール",
   "sidecar.poolCurrent": "現在のリクエストのプール",
   "sidecar.poolA": "Anthropic",

@@ -210,6 +210,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/config", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/diagnostics/project-config", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/settings", module: "server/management/config-routes", mutates: false },
+  { method: "GET", path: "/api/native-reasoning-retention", module: "server/management/native-reasoning-retention-routes", mutates: false, exempt: { reason: "local-transport", why: "The CLI reads the same nativeReasoningRetention policy through ocx config get; no separate HTTP-specific settings verb is required." } },
+  { method: "PUT", path: "/api/native-reasoning-retention", module: "server/management/native-reasoning-retention-routes", mutates: true, exempt: { reason: "deferred-verb", why: "A dedicated live CLI verb for this policy is deferred to native-reasoning-retention-live-cli; ocx config set/unset currently edits the same block on disk without live convergence.", owner: "native-reasoning-retention-live-cli", ownerDoc: "structure/transports/native-reasoning-retention.md" } },
   { method: "GET", path: "/api/shadow-call-settings", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/sidecar-settings", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/startup-health", module: "server/management/config-routes", mutates: false },

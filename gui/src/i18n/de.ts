@@ -5,6 +5,15 @@ import type { TKey } from "./en";
  * German i18n catalog, generated from en.ts. Must match the `TKey` set (compile-checked).
  */
 export const de: Record<TKey, string> = {
+  "nativeReasoningRetention.title": "Native OpenAI-Denkdaten behalten",
+  "nativeReasoningRetention.description": "Nur für native Anfragen an das offizielle ChatGPT-Backend, auch bei tatsächlichen Zielwechseln in Combos und Kontopools. Alte verschlüsselte Denkdaten können erneut gesendet werden; die Wiederverwendung hängt vom Backend ab. Beide Optionen sind standardmäßig aus.",
+  "nativeReasoningRetention.modelSwitch": "Verschlüsselte Denkdaten bei Modellwechsel behalten",
+  "nativeReasoningRetention.accountSwitch": "Verschlüsselte Denkdaten bei Kontowechsel behalten (experimentell)",
+  "nativeReasoningRetention.accountHint": "Das Behalten der Daten gibt anderen Konten keinen Zugriff auf alte Antwort-IDs oder Dateien. Eine erfolgreiche Anfrage beweist keine Wiederverwendung der Denkdaten. Die native Kontextkomprimierung bleibt unverändert.",
+  "nativeReasoningRetention.reset": "Standard wiederherstellen",
+  "nativeReasoningRetention.loadFailed": "Native Denkdateneinstellungen konnten nicht geladen werden.",
+  "nativeReasoningRetention.saveFailed": "Native Denkdateneinstellungen konnten nicht gespeichert werden.",
+  "nativeReasoningRetention.saved": "Native Denkdateneinstellungen gespeichert.",
   "sidecar.pool": "Kontopool",
   "sidecar.poolCurrent": "Pool der aktuellen Anfrage",
   "sidecar.poolA": "Anthropic",

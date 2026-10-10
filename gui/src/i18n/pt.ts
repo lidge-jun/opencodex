@@ -6,6 +6,15 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const pt: Record<TKey, string> = {
+  "nativeReasoningRetention.title": "Retenção de raciocínio nativo OpenAI",
+  "nativeReasoningRetention.description": "Somente para solicitações nativas ao backend oficial do ChatGPT, incluindo mudanças do destino real em Combos e pools de contas. Permite reenviar o raciocínio criptografado anterior; a reutilização depende do backend. As duas opções ficam desativadas por padrão.",
+  "nativeReasoningRetention.modelSwitch": "Manter o raciocínio criptografado ao trocar de modelo",
+  "nativeReasoningRetention.accountSwitch": "Manter o raciocínio criptografado ao trocar de conta (experimental)",
+  "nativeReasoningRetention.accountHint": "Preservar o conteúdo criptografado não dá a outras contas acesso aos IDs de respostas ou arquivos anteriores. Uma solicitação bem-sucedida não comprova a reutilização do raciocínio. O tratamento da compactação nativa permanece inalterado.",
+  "nativeReasoningRetention.reset": "Restaurar padrões",
+  "nativeReasoningRetention.loadFailed": "Não foi possível carregar as configurações de raciocínio nativo.",
+  "nativeReasoningRetention.saveFailed": "Não foi possível salvar as configurações de raciocínio nativo.",
+  "nativeReasoningRetention.saved": "Configurações de raciocínio nativo salvas.",
   "sidecar.pool": "Pool de contas",
   "sidecar.poolCurrent": "Pool da solicitação atual",
   "sidecar.poolA": "Anthropic",

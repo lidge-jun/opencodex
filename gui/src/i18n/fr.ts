@@ -4,6 +4,15 @@ import type { TKey } from "./en";
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
+  "nativeReasoningRetention.title": "Conservation du raisonnement natif OpenAI",
+  "nativeReasoningRetention.description": "Uniquement pour les requêtes natives vers le backend officiel ChatGPT, y compris les changements de cible dans les Combos et les pools de comptes. Permet de renvoyer le raisonnement chiffré antérieur ; sa réutilisation dépend du backend. Les deux options sont désactivées par défaut.",
+  "nativeReasoningRetention.modelSwitch": "Conserver le raisonnement chiffré lors du changement de modèle",
+  "nativeReasoningRetention.accountSwitch": "Conserver le raisonnement chiffré lors du changement de compte (expérimental)",
+  "nativeReasoningRetention.accountHint": "Conserver le texte chiffré ne donne pas aux autres comptes accès aux anciens identifiants de réponse ou fichiers. Une requête réussie ne prouve pas la réutilisation du raisonnement. Le traitement de la compression native reste inchangé.",
+  "nativeReasoningRetention.reset": "Rétablir les valeurs par défaut",
+  "nativeReasoningRetention.loadFailed": "Impossible de charger les paramètres du raisonnement natif.",
+  "nativeReasoningRetention.saveFailed": "Impossible de sauvegarder les paramètres du raisonnement natif.",
+  "nativeReasoningRetention.saved": "Paramètres du raisonnement natif sauvegardés.",
   "sidecar.pool": "Pool de comptes",
   "sidecar.poolCurrent": "Pool de la requête actuelle",
   "sidecar.poolA": "Anthropic",

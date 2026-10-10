@@ -6,6 +6,15 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const vi: Record<TKey, string> = {
+  "nativeReasoningRetention.title": "Giữ lại suy luận gốc OpenAI",
+  "nativeReasoningRetention.description": "Chỉ áp dụng cho yêu cầu gốc đến backend ChatGPT chính thức, bao gồm đổi đích thực tế trong Combo và nhóm tài khoản. Cho phép gửi lại suy luận đã mã hóa trước đó; việc tái sử dụng phụ thuộc vào backend. Cả hai tùy chọn mặc định đều tắt.",
+  "nativeReasoningRetention.modelSwitch": "Giữ suy luận đã mã hóa khi đổi mô hình",
+  "nativeReasoningRetention.accountSwitch": "Giữ suy luận đã mã hóa khi đổi tài khoản (thử nghiệm)",
+  "nativeReasoningRetention.accountHint": "Giữ bản mã không cho tài khoản khác quyền truy cập ID phản hồi hoặc tệp cũ. Yêu cầu thành công không chứng minh suy luận đã được tái sử dụng. Cách xử lý nén ngữ cảnh gốc không thay đổi.",
+  "nativeReasoningRetention.reset": "Khôi phục mặc định",
+  "nativeReasoningRetention.loadFailed": "Không thể tải cài đặt suy luận gốc.",
+  "nativeReasoningRetention.saveFailed": "Không thể lưu cài đặt suy luận gốc.",
+  "nativeReasoningRetention.saved": "Đã lưu cài đặt suy luận gốc.",
   "sidecar.pool": "Nhóm tài khoản",
   "sidecar.poolCurrent": "Nhóm của yêu cầu hiện tại",
   "sidecar.poolA": "Anthropic",

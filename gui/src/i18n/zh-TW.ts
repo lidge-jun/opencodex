@@ -2,6 +2,15 @@ import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  "nativeReasoningRetention.title": "OpenAI 原生推理保留",
+  "nativeReasoningRetention.description": "僅適用於官方 ChatGPT 後端的原生請求，包括 Combo 與帳號池中的實際目標切換。允許傳送舊推理密文；能否重用由後端決定。兩個選項預設關閉。",
+  "nativeReasoningRetention.modelSwitch": "切換模型時保留推理密文",
+  "nativeReasoningRetention.accountSwitch": "切換帳號時保留推理密文（實驗性）",
+  "nativeReasoningRetention.accountHint": "保留密文不會讓其他帳號取得舊回應 ID 或檔案的存取權限。請求成功也不能證明推理已被重用。 原生壓縮的處理方式保持不變。",
+  "nativeReasoningRetention.reset": "還原預設",
+  "nativeReasoningRetention.loadFailed": "無法載入原生推理設定。",
+  "nativeReasoningRetention.saveFailed": "無法儲存原生推理設定。",
+  "nativeReasoningRetention.saved": "原生推理設定已儲存。",
   "sidecar.pool": "帳戶池",
   "sidecar.poolCurrent": "使用目前請求的帳戶池",
   "sidecar.poolA": "Anthropic",

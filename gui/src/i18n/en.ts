@@ -6,6 +6,15 @@
  * `{var}` are plain interpolations.
  */
 export const en = {
+  "nativeReasoningRetention.title": "Native OpenAI reasoning retention",
+  "nativeReasoningRetention.description": "Only for native requests to the official ChatGPT backend, including actual target changes in Combos and account pools. Allows old encrypted reasoning to be replayed; reuse depends on the backend. Both options are off by default.",
+  "nativeReasoningRetention.modelSwitch": "Keep encrypted reasoning when switching models",
+  "nativeReasoningRetention.accountSwitch": "Keep encrypted reasoning when switching accounts (experimental)",
+  "nativeReasoningRetention.accountHint": "Preserving ciphertext does not share stored response IDs or files across accounts. A successful request does not prove reasoning reuse. Native compaction handling is unchanged.",
+  "nativeReasoningRetention.reset": "Restore defaults",
+  "nativeReasoningRetention.loadFailed": "Could not load native reasoning settings.",
+  "nativeReasoningRetention.saveFailed": "Could not save native reasoning settings.",
+  "nativeReasoningRetention.saved": "Native reasoning settings saved.",
   "sidecar.pool": "Pool",
   "sidecar.poolCurrent": "Current request's pool",
   "sidecar.poolA": "Anthropic",
