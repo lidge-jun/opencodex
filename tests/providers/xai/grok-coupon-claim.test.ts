@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import * as oauth from "../../../src/oauth";
 import * as coupons from "../../../src/grok/reset-coupons";
 import * as ledger from "../../../src/grok/reset-coupon-ledger";
+import { ConfigMutationLockError } from "../../../src/config/mutation-lock";
 import { handleGrokCouponRoutes } from "../../../src/server/management/grok-coupon-routes";
 import type { ManagementContext } from "../../../src/server/management/context";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -35,6 +36,136 @@ function request(omitToken = false): ManagementContext {
   const body = { ...identity(), tokenId: omitToken ? undefined : TOKEN.tokenId };
   const req = new Request(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return { req, url, config: {}, deps: {}, version: "test" } as ManagementContext;
+}
+
+function confirmedRedemption() {
+  const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockResolvedValue({ accessToken: "fixture-access-token" } as never);
+  const remaining = spyOn(coupons, "getGrokRemainingResets").mockResolvedValue({ tokens: [TOKEN] });
+  const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockResolvedValue({ success: true, status: 0 });
+  spies.push(auth, remaining, redeem);
+  return redeem;
+}
+function busySettlement() {
+  return new ConfigMutationLockError("Config mutation already in progress", { cause: { code: "SQLITE_BUSY" } });
+}
+
+test("confirmed redemption settles after a real child releases the config mutation lock", async () => {
+  const redeem = confirmedRedemption();
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  let busyFailures = 0;
+  const realSettlement = ledger.recordGrokResetCouponSettlement;
+  const settle = spyOn(ledger, "recordGrokResetCouponSettlement").mockImplementation((...args) => {
+    try { return realSettlement(...args); }
+    catch (error) {
+      expect(error).toBeInstanceOf(ConfigMutationLockError);
+      expect((error as Error).cause).toMatchObject({ code: "SQLITE_BUSY" });
+      busyFailures += 1;
+      throw error;
+    }
+  });
+  spies.push(settle);
+  redeem.mockImplementation(async () => {
+    const moduleUrl = pathToFileURL(repoPath("src/config/mutation-lock.ts")).href;
+    const owned = Bun.spawn([process.execPath, "-e", `import { readSync } from "node:fs";
+      import { withConfigMutationLockSync } from ${JSON.stringify(moduleUrl)};
+      withConfigMutationLockSync(() => { process.stdout.write("held\\n"); readSync(0, Buffer.alloc(1), 0, 1, null); });`], {
+      env: { ...process.env, OPENCODEX_HOME: home }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    child = owned;
+    killTimer = setTimeout(() => owned.kill(), watchdogMs(10_000));
+    const reader = owned.stdout.getReader();
+    try { expect(new TextDecoder().decode((await reader.read()).value)).toBe("held\n"); }
+    finally { reader.releaseLock(); }
+    // The retry wait is a barrier: release the actual SQLite owner and wait
+    // for its exit before allowing the next settlement acquisition.
+    const sleep = spyOn(Bun, "sleep").mockImplementation(async () => {
+      owned.stdin.write("release");
+      owned.stdin.end();
+      expect(await owned.exited).toBe(0);
+    });
+    spies.push(sleep);
+    return { success: true, status: 0 };
+  });
+  try {
+    const response = await handleGrokCouponRoutes(request());
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toMatchObject({ code: "redeemed", settlementRecorded: true });
+    expect(busyFailures).toBe(1);
+    expect(settle).toHaveBeenCalledTimes(2);
+    const replay = await handleGrokCouponRoutes(request());
+    expect(await replay!.json()).toMatchObject({ code: "redeemed", replayed: true });
+    expect(redeem).toHaveBeenCalledTimes(1);
+  } finally {
+    clearTimeout(killTimer);
+    child?.kill();
+    if (child) await child.exited;
+  }
+});
+
+for (const [label, error] of [
+  ["ordinary write failure", new Error("fixture write failure")],
+  ["lock error without a cause", new ConfigMutationLockError("fixture unavailable")],
+  ["corrupt coordination database", new ConfigMutationLockError("fixture unavailable", { cause: { code: "SQLITE_CORRUPT" } })],
+  ["unopenable coordination database", new ConfigMutationLockError("fixture unavailable", { cause: { code: "SQLITE_CANTOPEN" } })],
+  ["busy cause outside the lock error class", new Error("fixture failure", { cause: { code: "SQLITE_BUSY" } })],
+] as const) {
+  test(`confirmed redemption stops settlement immediately on ${label}`, async () => {
+    const redeem = confirmedRedemption();
+    const settle = spyOn(ledger, "recordGrokResetCouponSettlement").mockImplementation(() => { throw error; });
+    const sleep = spyOn(Bun, "sleep").mockResolvedValue(undefined);
+    spies.push(settle, sleep);
+    const response = await handleGrokCouponRoutes(request());
+    expect(await response!.json()).toMatchObject({ code: "redeemed", settlementRecorded: false });
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    const attempted = readFileSync(ledger.grokCouponJournalPath(), "utf8");
+    expect(JSON.parse(attempted).operations[OP].status).toBe("attempted");
+    expect((await handleGrokCouponRoutes(request()))!.status).toBe(409);
+    expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(attempted);
+    expect(redeem).toHaveBeenCalledTimes(1);
+  });
+}
+
+test("confirmed redemption exhausts five local settlement attempts without another spend", async () => {
+  const redeem = confirmedRedemption();
+  const settle = spyOn(ledger, "recordGrokResetCouponSettlement").mockImplementation(() => { throw busySettlement(); });
+  const sleep = spyOn(Bun, "sleep").mockResolvedValue(undefined);
+  spies.push(settle, sleep);
+  const response = await handleGrokCouponRoutes(request());
+  expect(await response!.json()).toMatchObject({ code: "redeemed", settlementRecorded: false });
+  expect(settle).toHaveBeenCalledTimes(5);
+  expect(sleep.mock.calls).toEqual([[20], [20], [20], [20]]);
+  const attempted = readFileSync(ledger.grokCouponJournalPath(), "utf8");
+  expect(JSON.parse(attempted).operations[OP].status).toBe("attempted");
+  expect((await handleGrokCouponRoutes(request()))!.status).toBe(409);
+  expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(attempted);
+  expect(redeem).toHaveBeenCalledTimes(1);
+});
+
+for (const changed of ["account", "token", "status"] as const) {
+  test(`settlement retry stops when the ${changed} guard changes while waiting`, async () => {
+    const redeem = confirmedRedemption();
+    const realSettlement = ledger.recordGrokResetCouponSettlement;
+    const settle = spyOn(ledger, "recordGrokResetCouponSettlement").mockImplementation(realSettlement)
+      .mockImplementationOnce(() => { throw busySettlement(); });
+    let guardedBytes = "";
+    const sleep = spyOn(Bun, "sleep").mockImplementation(async () => {
+      const state = JSON.parse(readFileSync(ledger.grokCouponJournalPath(), "utf8"));
+      if (changed === "account") state.operations[OP].accountId = "another-fixture-account";
+      if (changed === "token") state.operations[OP].tokenId = "another-fixture-token";
+      if (changed === "status") Object.assign(state.operations[OP], { status: "settled", code: "redeemed" });
+      guardedBytes = JSON.stringify(state);
+      writeFileSync(ledger.grokCouponJournalPath(), guardedBytes);
+    });
+    spies.push(settle, sleep);
+    const response = await handleGrokCouponRoutes(request());
+    expect(await response!.json()).toMatchObject({ code: "redeemed", settlementRecorded: false });
+    expect(settle).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(guardedBytes);
+    expect(redeem).toHaveBeenCalledTimes(1);
+  });
 }
 
 test("only one independently opened request can claim the spend", () => {

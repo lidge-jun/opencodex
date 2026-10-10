@@ -11,6 +11,7 @@
 
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
+import { ConfigMutationLockError } from "../../config/mutation-lock";
 import { isCodexResetCreditOperationId } from "../../codex/reset-credit-recovery";
 import { getValidAccessSnapshotForAccount } from "../../oauth";
 import { listAccounts, captureOAuthAccountSelection } from "../../oauth/store";
@@ -442,18 +443,26 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
 
       // A confirmed redemption remains successful even when settlement fails.
       // The durable attempted record makes later retries reconciliation-only.
-      let settlementRecorded = true;
-      try {
-        settlementRecorded = recordGrokResetCouponSettlement({
-          operationId: effectiveOpId,
-          accountId,
-          tokenId: resolvedTokenId,
-          code: "redeemed",
-          status: "success",
-          expectedStatus: "attempted",
-        });
-      } catch {
-        settlementRecorded = false;
+      let settlementRecorded = false;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          settlementRecorded = recordGrokResetCouponSettlement({
+            operationId: effectiveOpId,
+            accountId,
+            tokenId: resolvedTokenId,
+            code: "redeemed",
+            status: "success",
+            expectedStatus: "attempted",
+          });
+          break;
+        } catch (error) {
+          // Retry only transient acquisition contention, never an unsafe or
+          // unreadable ledger, a changed claim, or the upstream redemption.
+          const cause = error instanceof ConfigMutationLockError ? error.cause : undefined;
+          if (!cause || typeof cause !== "object" || !("code" in cause)
+            || cause.code !== "SQLITE_BUSY" || attempt === 4) break;
+          await Bun.sleep(20);
+        }
       }
 
       return jsonResponse(
