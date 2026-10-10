@@ -667,10 +667,10 @@ role's model is actually decided. LazyCodex counts as installed when the `omo@si
 Codex plugin is enabled in `$CODEX_HOME/config.toml` and an installed copy under
 `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/` carries its `lazycodex-install.json`. A `~/.omo`
 folder on its own does not count, because Pi-based omo creates it too. Without LazyCodex the
-section is hidden and the command line reports it as not installed. Pick a model on a row and
-press Save:
+section is hidden and the command line reports it as not installed. Pick a model and a reasoning
+effort on a row and press Save:
 
-- opencodex rewrites only the root `model = "..."` line of that role's file. The role's
+- opencodex rewrites only the root `model = "..."` and `model_reasoning_effort = "..."` lines of that role's file. The role's
   instructions, comments, and other keys are left exactly as they were. A role with no pin gets
   one added near the top of the file.
 - The same value is written to `[codex].agents.<role>.model` in `~/.omo/omo.jsonc`, which
