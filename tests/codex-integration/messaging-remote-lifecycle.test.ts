@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { MessageBudget } from "../../src/messaging/budget";
-import { RemoteCapacity } from "../../src/messaging/remote-contract";
+import { RemoteCapacity, remoteError } from "../../src/messaging/remote-contract";
 import { runRemoteHelper, spawnRemoteHelper } from "../../src/messaging/remote-process";
+import { startRemoteOwner } from "../../src/messaging/remote-owner";
+import { remoteMessagingPair } from "../helpers/messaging-remote";
 import { parseRemoteMessageArgs } from "../../src/cli/message-remote-args";
 import { repoPath } from "../helpers/repo-root";
 
@@ -17,6 +19,35 @@ test("every remote module remains inert on import", async () => {
   expect(code).toBe(0); expect(out).toBe(""); expect(err).toBe("");
   expect(readFileSync(repoPath("src/cli/message-command.ts"), "utf8")).toContain('if (remote) return (await import("./message-remote-command"))');
 });
+
+for (const rejectCleanup of [false, true]) {
+  test.skipIf(process.platform === "win32")(`unpublished tunnels join both helpers on generation change (cleanup rejection=${rejectCleanup})`, async () => {
+    const pair = remoteMessagingPair(), closes: (() => Promise<void>)[] = [], completed: number[] = [];
+    pair.aStore.mutate(state => { Object.assign(state.peers[0]!, { ssh: "fixture", hostKey: "fixture ssh-ed25519 Zml4dHVyZQ==\n", fingerprint: "SHA256:fixture" }); });
+    try {
+      const result = startRemoteOwner(pair.aStore, pair.a.codexHome, ["worker"], undefined, {
+        run: async () => JSON.stringify({ port: pair.bStore.requireEnabled().port }),
+        spawn: (argv, capacity) => {
+          const index = closes.length, free = capacity.reserve("helpers");
+          const forward = argv.indexOf("-L");
+          const listener = forward >= 0 ? Bun.listen({ hostname: "127.0.0.1", port: Number(argv[forward + 1]!.split(":")[1]), socket: { data(socket) { socket.end(); } } }) : undefined;
+          let finish!: (code: number) => void, closing: Promise<void> | undefined;
+          const exited = new Promise<number>(resolve => { finish = resolve; });
+          const close = () => closing ??= (async () => {
+            await Bun.sleep(index === 0 ? 10 : 80);
+            listener?.stop(true); completed.push(index); free(); finish(0);
+            if (rejectCleanup && index === 0) throw remoteError("cleanup_incomplete", "fixture cleanup incomplete");
+          })();
+          closes.push(close);
+          if (index === 1) pair.aStore.mutate(state => { state.generation = crypto.randomUUID(); });
+          return { pid: 0, exited, output: Promise.resolve(""), close };
+        },
+      });
+      await expect(result).rejects.toThrow(rejectCleanup ? "fixture cleanup incomplete" : "configuration changed");
+      expect(completed.sort()).toEqual([0, 1]);
+    } finally { await Promise.allSettled(closes.map(close => close())); await pair.close(); }
+  });
+}
 
 test("remote parser rejects ambiguous/malformed usage without runtime allocation", () => {
   for (const args of [["enable", "--port", "80"], ["serve", "--host", "a", "--host", "a"],

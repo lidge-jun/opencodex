@@ -31,15 +31,30 @@ test.skipIf(!native || process.platform === "win32")("isolated real native daemo
   const budget = new MessageBudget();
   let nextId = 0;
   const request = (method: string, params: Record<string, unknown>) => new Promise<any>((resolve, reject) => {
-    const id = ++nextId, timer = setTimeout(() => { pending.delete(id); reject(new Error("native fixture control timeout")); }, 10000);
+    budget.throwIfEnded();
+    const id = ++nextId, timer = setTimeout(() => { pending.delete(id); reject(new Error("native fixture control timeout")); }, budget.remainingMs(10000));
     pending.set(id, { resolve, reject, timer }); socket!.send(JSON.stringify({ id, method, params }));
   });
+  const abortPending = () => {
+    for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error("native fixture ended")); }
+    pending.clear(); socket?.terminate();
+  };
+  budget.signal.addEventListener("abort", abortPending, { once: true });
   try {
     const path = join(home, "app-server-control", "app-server-control.sock");
     while (!existsSync(path)) { budget.throwIfEnded(); await Bun.sleep(25); }
     socket = localSocket(localDaemonEndpoint(home).url);
     await new Promise<void>((resolve, reject) => {
-      socket!.onopen = () => resolve(); socket!.onerror = () => reject(new Error("native fixture control unavailable"));
+      const finish = (error?: Error) => {
+        clearTimeout(timer); budget.signal.removeEventListener("abort", cancelled);
+        socket!.onopen = socket!.onerror = socket!.onclose = null;
+        if (error) reject(error); else resolve();
+      };
+      const cancelled = () => finish(new Error("native fixture cancelled"));
+      const timer = setTimeout(() => finish(new Error("native fixture connect timeout")), budget.remainingMs(5000));
+      budget.signal.addEventListener("abort", cancelled, { once: true });
+      socket!.onopen = () => finish(); socket!.onerror = socket!.onclose = () => finish(new Error("native fixture control unavailable"));
+      if (budget.signal.aborted) cancelled();
     });
     socket.onmessage = event => {
       const raw = JSON.parse(String(event.data)), call = pending.get(raw.id); if (!call) return;
@@ -56,6 +71,7 @@ test.skipIf(!native || process.platform === "win32")("isolated real native daemo
     expect(receipt.status).toBe("queued");
     let completed = false;
     for (let attempt = 0; attempt < 200; attempt++) {
+      budget.throwIfEnded();
       const result = await request("thread/read", { threadId: thread, includeTurns: true });
       if (result.thread.turns.some((turn: any) => turn.status === "completed" && JSON.stringify(turn).includes(receipt.messageId))) { completed = true; break; }
       await Bun.sleep(25);
@@ -66,8 +82,8 @@ test.skipIf(!native || process.platform === "win32")("isolated real native daemo
     { home, senderId: thread }, budget);
     expect(reply.status).toBe("queued");
   } finally {
-    for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error("native fixture closed")); }
-    pending.clear(); socket?.terminate(); await owners?.close(); await child.close(); budget.dispose();
+    budget.signal.removeEventListener("abort", abortPending); abortPending();
+    await owners?.close(); await child.close(); budget.dispose();
     await provider.stop(true); await pair.close();
   }
   expect(capacity.snapshot()).toEqual({ connections: 0, requests: 0, helpers: 0, outputBytes: 0 });
