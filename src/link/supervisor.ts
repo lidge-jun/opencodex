@@ -147,6 +147,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const states = new Map<string, TunnelState>();
   const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number }>();
   const orphanUnverified = new Set<string>();
+  /** Links whose child has exited but whose stderr is not classified yet. */
+  const exiting = new Set<string>();
   const recordInstances = new Map<string, string>();
 
   const reconcileApiKeys = (): void => {
@@ -235,11 +237,15 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         children.delete(record.id);
         conditionalRemovePidfile(record.id, child.pid);
         if (stopping) return;
-        let stderr = "";
-        // An unreadable stderr (the runner rejects it past its size cap) still reports the exit.
-        try { stderr = child.stderr ? await child.stderr : ""; } catch { /* classified as unknown */ }
-        const next = setEvent(record.id, { type: "exit", now: now(), stderrClass: classifySshStderr(stderr) });
-        if (next.kind === "failed") return;
+        exiting.add(record.id);
+        try {
+          let stderr = "";
+          // An unreadable stderr (the runner rejects it past its size cap) still reports the exit.
+          try { stderr = child.stderr ? await child.stderr : ""; } catch { /* classified as unknown */ }
+          setEvent(record.id, { type: "exit", now: now(), stderrClass: classifySshStderr(stderr) });
+        } finally {
+          exiting.delete(record.id);
+        }
       }).catch(() => {
         if (children.get(record.id)?.child !== child) return;
         children.delete(record.id);
@@ -257,6 +263,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     const current = now();
     for (const record of store.links) {
       if (record.direction !== "hub-initiated") continue;
+      // The exit is still being classified. Failing the link on the outage clock now would make
+      // a later host-key or auth exit land on a failed state that ignores it.
+      if (exiting.has(record.id)) continue;
       const before = states.get(record.id) ?? IDLE;
       const child = children.get(record.id);
       // Promotion is checked before the outage limit, so a child that has outlived its grace by the
