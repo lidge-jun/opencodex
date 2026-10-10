@@ -5,7 +5,7 @@ import { mapReasoningEffort } from "../../reasoning-effort";
 import { buildSystemPrompt, MAX_TOOL_BLOCK_STARTS } from "../coding-agent/protocol";
 import { buildCodingAgentToolCatalog, CodingAgentToolCatalogError } from "../coding-agent/tool-catalog";
 import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type CodingAgentToolBridgeInput } from "../coding-agent/turn";
-import { QODER_PROFILES, type QoderProfile } from "./profiles";
+import { QODER_PROFILES, resolveQoderProfile, type QoderProfile } from "./profiles";
 import { QoderScaffoldFilter, QODER_SCAFFOLD_ERROR_CODE, qoderScaffoldErrorMessage } from "./scaffold-guard";
 
 export type QoderAdapterDeps = CodingAgentDeps;
@@ -114,6 +114,22 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
       yield { type: "error", message: "Qoder adapter uses runTurn; the fetch/parseStream path is disabled." };
     },
     async runTurn(parsed, incoming, emit): Promise<void> {
+      if (resolveQoderProfile(provider.baseUrl)?.region === "cn") {
+        const hasImage = parsed.context.messages.some(message =>
+          Array.isArray(message.content) && message.content.some(part => part.type === "image"),
+        );
+        if (hasImage) {
+          emit({
+            type: "error",
+            message: "Qoder image input is not enabled because the CLI provider route has no verified multimodal contract.",
+            status: 400,
+            errorType: "invalid_request_error",
+            code: "unsupported_input_modality",
+            retryable: false,
+          });
+          return;
+        }
+      }
       let catalog: ReturnType<typeof buildCodingAgentToolCatalog>;
       try {
         catalog = buildCodingAgentToolCatalog(parsed, QODER_MCP_SERVER_NAME);

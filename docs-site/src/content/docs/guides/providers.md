@@ -1080,7 +1080,7 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Region Isolation:** Each preset accepts only its canonical destination (`https://qoder.com` or `https://qoder.cn`) and resolves its own executable. Credentials, model cache, usage, and health are independent; neither region falls back to the other. An older custom provider named `qoder` with a different destination keeps its existing adapter and URL.
 - **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
-- **Image Input:** Qoder Global forwards native images for models declared image-capable through the shared coding-agent projection; Qoder CN keeps its existing sidecar classification. OpenCodex serializes history before the current turn, but Qoder does not persist sessions, so prior images are replayed on later turns. In observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied.
+- **Image Input:** Qoder Global forwards native images for models declared image-capable through the shared coding-agent projection. Qoder CN keeps its existing sidecar classification, and any residual raw-image request that reaches the CN adapter is rejected as `unsupported_input_modality`. OpenCodex serializes history before the current turn, but Qoder does not persist sessions, so prior images are replayed on later turns. In observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied. Existing saved Global rows that still contain `noVisionModels` can continue to use the sidecar until the Qoder provider is removed and added again to refresh the seeded capability metadata.
 - **Quota:** No public quota API is used, so totals and reset times are unavailable. Insufficient-credit errors (vendor code 118) surface as HTTP 429 `insufficient_quota`.
 - **Operators:** Qoder Global is operated by BRIGHT ZENITH PRIVATE LIMITED under the [product service terms](https://qoder.com/product-service); Qoder CN by 通义云启（杭州）信息技术有限公司 with Alibaba Cloud. Verify `ocx provider test qoder` (or `qoder-cn`) after configuring.
 
@@ -1124,8 +1124,8 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   giving several people their own Claude usage needs one proxy user per sign-in.
 - **Input media:** the row publishes its models as text-only for v1. The CLI accepts an image frame
   on its stream-json input, but no headless turn has been shown to hand those bytes to the model, so
-  an image sent straight to this provider is refused (`unsupported_input_modality`, the same
-  refusal the Qoder presets make) instead of being silently dropped and answered blind. With the
+  an image sent straight to this provider is refused (`unsupported_input_modality`) instead of
+  being silently dropped and answered blind. With the
   vision sidecar on the request path, images are captioned into text before they reach the row.
 - **Isolation:** every turn runs in a scoped child environment with no inherited `ANTHROPIC_*`
   variable (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry,

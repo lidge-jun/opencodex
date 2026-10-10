@@ -570,6 +570,27 @@ describe("qoder adapter", () => {
     expect(isModelVisionSidecarConsumer(global as OcxProviderConfig, "Qwen3.8-Max")).toBe(false);
   });
 
+  test("keeps residual Qoder CN image input rejected before spawn", async () => {
+    let spawned = 0;
+    const adapter = createQoderAdapter(provider({ baseUrl: "https://qoder.cn" }), {
+      which: () => "/bin/qodercn",
+      spawn: () => {
+        spawned++;
+        return fakeChild([]);
+      },
+    });
+    const request = parsed({ context: { messages: [{ role: "user", content: [{ type: "image", imageUrl: "data:image/png;base64,AA==" }], timestamp: 0 }] } });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    expect(spawned).toBe(0);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      status: 400,
+      code: "unsupported_input_modality",
+      retryable: false,
+    });
+  });
+
   test("forwards Qoder image input through the shared coding-agent projection", async () => {
     let spawned = 0;
     let stdin = "";
