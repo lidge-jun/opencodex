@@ -71,6 +71,13 @@ export interface ApiTarget {
   serverOrigin: string;
   bootstrapPath: string;
   transport: SharedTransport;
+  /**
+   * Relay only: the connection generation this target was discovered from, as
+   * `apiKeyId|connectedAt` from /api/machine/status. Stamped on every relayed request so
+   * the machine listener can refuse before forwarding if the client reconnected to a
+   * different hub (or a newer generation of the same hub) after this target was resolved.
+   */
+  relayGeneration?: string;
 }
 
 export interface ApiTargets {
@@ -172,7 +179,10 @@ export function targetsFromMachineStatus(initialBase: string, status: MachineSta
   }
   const machine = target("machine", trimBase(initialBase), machineOrigin, "same-origin");
   const shared = status.managementTransport === "relay"
-    ? target("shared", `${trimBase(initialBase)}/api/machine/hub-relay`, sharedOrigin, "relay")
+    ? {
+      ...target("shared", `${trimBase(initialBase)}/api/machine/hub-relay`, sharedOrigin, "relay"),
+      relayGeneration: `${status.apiKeyId}|${status.connectedAt}`,
+    }
     : target("shared", sharedOrigin, sharedOrigin, "direct");
   return { connected: true, machine, shared, apiKeyId: status.apiKeyId, catalogSyncedAt: status.catalogSyncedAt };
 }

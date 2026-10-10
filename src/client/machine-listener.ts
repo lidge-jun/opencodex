@@ -14,7 +14,12 @@ import type { OcxClientConnectionConfig, OcxConfig } from "../types";
 import { disconnectClient, syncConnectedClient } from "./connect";
 import { isLinkConnection, readClientConnectionState } from "./state";
 import { handleMachineApi, type HubReachability, type MachineApiDeps } from "./machine-api";
-import { MACHINE_GUI_ORIGIN_HEADER, requireMachineAuth } from "./machine-auth";
+import {
+  MACHINE_GUI_ORIGIN_HEADER,
+  MACHINE_RELAY_EXPECTED_CONNECTION_HEADER,
+  MACHINE_RELAY_EXPECTED_ORIGIN_HEADER,
+  requireMachineAuth,
+} from "./machine-auth";
 import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, relayHubManagementRequest } from "./hub-relay";
 import { createLinkKeySource, handleLinkIngress, type LinkIngress, type LinkKeySourceDeps } from "./link-ingress";
 import type { LinkTunnelGate } from "./link-relay";
@@ -86,6 +91,29 @@ function readSidecarSafely(read: () => ClientLinkState | null): ClientLinkSideca
   try { return read(); } catch { return "invalid"; }
 }
 
+// The browser credential a relayed request carries was resolved against one specific hub
+// connection, but every relay verification shares the same local /api/machine/hub-relay URL.
+// The request must therefore name the connection it expects (hub origin plus the
+// apiKeyId|connectedAt generation from /api/machine/status), and this listener — captured at
+// bind, so it is exactly the connection an upstream fetch would use — refuses before any
+// upstream byte when that no longer matches. Without this, a reconnect to hub B between the
+// A-token lookup and the forward would hand B the A credential, and B's rejection would then
+// delete the still-valid A token (#4649 P1).
+function relayConnectionExpected(
+  headers: Headers,
+  connection: Pick<OcxClientConnectionConfig, "managementUrl" | "apiKeyId" | "connectedAt">,
+): boolean {
+  const expectedOrigin = headers.get(MACHINE_RELAY_EXPECTED_ORIGIN_HEADER)?.trim();
+  const expectedConnection = headers.get(MACHINE_RELAY_EXPECTED_CONNECTION_HEADER)?.trim();
+  if (!expectedOrigin || !expectedConnection) return false;
+  try {
+    return new URL(connection.managementUrl).origin === expectedOrigin
+      && expectedConnection === `${connection.apiKeyId}|${connection.connectedAt}`;
+  } catch {
+    return false;
+  }
+}
+
 export function startMachineListener(
   port?: number,
   deps: MachineListenerDeps = {},
@@ -149,6 +177,9 @@ export function startMachineListener(
         if (!relayEnabled) return json404(req);
         const authError = requireMachineAuth(req, managementAuth, config);
         if (authError) return authError;
+        if (!relayConnectionExpected(req.headers, connection)) {
+          return Response.json({ error: "hub relay connection changed" }, { status: 409 });
+        }
         const prefix = "/api/machine/hub-relay";
         const suffix = `${url.pathname.slice(prefix.length)}${url.search}`;
         const response = await relayHubManagementRequest(req, suffix, {

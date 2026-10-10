@@ -7,13 +7,83 @@ const ADMIN_TOKEN_DOCS_URL = "https://opencodex.me/guides/web-dashboard/#finding
 export type AdminTokenValidation = "accepted" | "rejected" | "unavailable";
 export type AdminTokenVerifier = (token: string) => Promise<AdminTokenValidation>;
 
+const REMEMBERED_ADMIN_TOKEN_KEY_PREFIX = "opencodex.remembered-admin-token";
+export const REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT = "opencodex-remembered-admin-token-changed";
+
+function notifyRememberedAdminTokenChanged(): void {
+  window.dispatchEvent(new window.Event(REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT));
+}
+
+/**
+ * Opt-in plaintext persistence in localStorage: this is what makes sign-in
+ * work in iOS standalone home-screen web apps, where Safari never offers
+ * password AutoFill or save. Readable by any script on this origin; the
+ * dashboard bundles no third-party scripts.
+ */
+/**
+ * Canonical identity of a management target: the server the credential belongs to,
+ * plus the transport it was submitted over. A token remembered for one target is
+ * never read while resolving another, so it can never be transmitted to a different
+ * server (the #4649 credential-storage review).
+ */
+export function rememberedAdminTokenScope(target: { serverOrigin: string; transport: string }): string {
+  return `${target.serverOrigin}|${target.transport}`;
+}
+
+export function rememberedAdminTokenKey(scope: string): string {
+  return `${REMEMBERED_ADMIN_TOKEN_KEY_PREFIX}:${scope}`;
+}
+
+// Only the exact legacy unscoped key and real scoped keys belong to this feature: a plain
+// prefix match would also count and delete decoys like
+// "opencodex.remembered-admin-token.decoy" that no code path here ever wrote (#4649 review).
+function isRememberedAdminTokenKey(key: string): boolean {
+  return key === REMEMBERED_ADMIN_TOKEN_KEY_PREFIX || key.startsWith(`${REMEMBERED_ADMIN_TOKEN_KEY_PREFIX}:`);
+}
+
+// The legacy unscoped key (exactly REMEMBERED_ADMIN_TOKEN_KEY_PREFIX) is never read
+// or migrated: an upgrade must not silently re-target a credential the user saved
+// before targets were distinguished. "Forget remembered admin token" removes it.
+export function getRememberedAdminToken(scope: string): string | null {
+  try { return localStorage.getItem(rememberedAdminTokenKey(scope)); } catch { return null; }
+}
+
+export function clearRememberedAdminToken(scope: string): void {
+  try { localStorage.removeItem(rememberedAdminTokenKey(scope)); } catch { /* storage may be disabled */ }
+  notifyRememberedAdminTokenChanged();
+}
+
+export function hasAnyRememberedAdminToken(): boolean {
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key !== null && isRememberedAdminTokenKey(key)) return true;
+    }
+  } catch { /* storage may be disabled */ }
+  return false;
+}
+
+export function clearAllRememberedAdminTokens(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key !== null && isRememberedAdminTokenKey(key)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch { /* storage may be disabled */ }
+  notifyRememberedAdminTokenChanged();
+}
+
 /**
  * Ask for the management credential with a real sign-in form so browsers and
- * password managers can offer save/autofill. OpenCodex itself still keeps the
- * submitted token in memory only; persistence remains entirely browser-owned.
+ * password managers can offer save/autofill. OpenCodex keeps the submitted
+ * token in memory only unless the user explicitly opts in to remembering it
+ * on this device (see the remember checkbox below).
  */
 export function promptForAdminToken(
   verifyToken: AdminTokenVerifier,
+  scope: string,
   locale: Locale = getActiveLocale(),
 ): Promise<string | null> {
   const messages = DICTS[locale];
@@ -91,6 +161,16 @@ export function promptForAdminToken(
     help.append(" ", docsLink);
     tokenField.append(help);
 
+    const rememberField = document.createElement("label");
+    rememberField.className = "field-label";
+    rememberField.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:var(--space-4);";
+    const remember = document.createElement("input");
+    remember.id = `${ADMIN_TOKEN_DIALOG_ID}-remember`;
+    remember.name = "remember";
+    remember.type = "checkbox";
+    if (getRememberedAdminToken(scope)) remember.checked = true;
+    rememberField.append(remember, document.createTextNode(messages["auth.adminTokenRemember"]));
+
     const validationError = document.createElement("div");
     validationError.className = "notice notice-err";
     validationError.setAttribute("role", "alert");
@@ -108,7 +188,7 @@ export function promptForAdminToken(
     submit.textContent = messages["common.ok"];
     actions.append(cancel, submit);
 
-    form.append(heading, accountField, tokenField, validationError, actions);
+    form.append(heading, accountField, tokenField, rememberField, validationError, actions);
     dialog.append(form);
 
     /*
@@ -147,6 +227,12 @@ export function promptForAdminToken(
       void verifyToken(token).then((result) => {
         if (settled) return;
         if (result === "accepted") {
+          if (remember.checked) {
+            try { localStorage.setItem(rememberedAdminTokenKey(scope), token); } catch { /* storage may be disabled */ }
+            notifyRememberedAdminTokenChanged();
+          } else {
+            clearRememberedAdminToken(scope);
+          }
           finish(token);
           return;
         }
