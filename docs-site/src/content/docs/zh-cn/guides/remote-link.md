@@ -55,7 +55,7 @@ Host devbox
 
 - **Connected** 表示 SSH 隧道已就绪，子机可以使用主机链接。
 - **Reconnecting** 表示正在重试隧道。重试期间请求可能暂时返回带有 `Retry-After` 的 `503`。在从自己的仪表板连接的 Child 上，请求会先最多等待 15 秒让隧道恢复。
-- **Failed** 表示链接需要处理。请检查 SSH 身份验证、已确认的主机密钥、转发或超时原因。建立 SSH 隧道的一方会在睡眠、故障或重启后自动重试（Home 添加的 Child 由 Home 重试，从自己的仪表板连接的 Child 由 Child 重试）：超时或转发错误后大约每分钟一次，身份验证错误后每五分钟一次。主机密钥变更时不会重试。
+- **Failed** 表示链接需要处理。请检查 SSH 身份验证、已确认的主机密钥、转发或超时原因。建立 SSH 隧道的一方会在睡眠、故障或重启后自动重试（Home 添加的 Child 由 Home 重试，从自己的仪表板连接的 Child 由 Child 重试）：超时或转发错误后大约每分钟一次，身份验证错误后每五分钟一次。主机密钥变更时不会重试。要立即重连，请在 Home 的仪表板中选择 **Retry**，或在 Home 上运行 `ocx link reconnect --link-id <id>`。这只会重启该链接的隧道，不会重启 OpenCodex。
 
 链接失败时不会静默切换到本地提供商。
 
@@ -82,6 +82,7 @@ ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
+ocx link reconnect --link-id <id> [--json]
 ```
 
 ## 相关指南

@@ -55,7 +55,7 @@ Bağlanmak bu bilgisayardaki OpenCodex'i yeniden başlatır. Zaten çalışan Co
 
 - **Connected**, SSH tünelinin hazır ve Child'ın Home bağlantısını kullanabilir olduğu anlamına gelir.
 - **Reconnecting**, tünelin yeniden denendiği anlamına gelir. Yeniden deneme sırasında istekler geçici olarak `Retry-After` ile birlikte `503` döndürebilir. Kendi panosundan bağlanan bir Child üzerinde istek önce tünelin geri gelmesi için en fazla 15 saniye bekler.
-- **Failed**, bağlantının ilgilenilmesi gerektiği anlamına gelir. SSH kimlik doğrulamasını, onaylanan ana bilgisayar anahtarını, yönlendirmeyi veya zaman aşımı nedenini kontrol edin. SSH tünelini açan taraf (eklediği Child için Home, kendi panosundan katıldığı bağlantı için Child); uyku, kesinti veya yeniden başlatmadan sonra kendiliğinden yeniden dener: zaman aşımı veya yönlendirme hatasından sonra yaklaşık dakikada bir, kimlik doğrulama hatasından sonra beş dakikada bir. Değişmiş bir ana bilgisayar anahtarı asla yeniden denenmez.
+- **Failed**, bağlantının ilgilenilmesi gerektiği anlamına gelir. SSH kimlik doğrulamasını, onaylanan ana bilgisayar anahtarını, yönlendirmeyi veya zaman aşımı nedenini kontrol edin. SSH tünelini açan taraf (eklediği Child için Home, kendi panosundan katıldığı bağlantı için Child); uyku, kesinti veya yeniden başlatmadan sonra kendiliğinden yeniden dener: zaman aşımı veya yönlendirme hatasından sonra yaklaşık dakikada bir, kimlik doğrulama hatasından sonra beş dakikada bir. Değişmiş bir ana bilgisayar anahtarı asla yeniden denenmez. Hemen yeniden denemek için Home panosunda **Retry** düğmesini seçin veya Home üzerinde `ocx link reconnect --link-id <id>` komutunu çalıştırın. Bu, OpenCodex'i yeniden başlatmadan yalnızca o bağlantının tünelini yeniden başlatır.
 
 Bağlantı başarısız olduğunda sistem sessizce yerel bir sağlayıcıya geçmez.
 
@@ -82,6 +82,7 @@ ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
+ocx link reconnect --link-id <id> [--json]
 ```
 
 ## İlgili kılavuzlar

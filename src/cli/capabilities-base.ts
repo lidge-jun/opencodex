@@ -66,6 +66,16 @@ export const CAPABILITIES: readonly Capability[] = [
     usage: "ocx link revoke --link-id <id> [--force --yes] [--json]",
   },
   {
+    command: ["link","reconnect"],
+    summary: "Restart a Home-initiated link's SSH tunnel now.",
+    routes: [{"method":"POST","path":"/api/link/{id}/reconnect"}],
+    flags: [{"name":"--link-id","value":"string","required":true,"summary":"Home-initiated link id whose tunnel to restart."},{"name":"--json","value":"boolean","summary":"Emit the restarted link id as JSON."}],
+    mutates: true,
+    json: "envelope",
+    usage: "ocx link reconnect --link-id <id> [--json]",
+    details: ["Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.","A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.","Always emits {linkId} JSON."],
+  },
+  {
     command: ["remote-workspace","pair"],
     summary: "Enroll this executor with one Hub using a one-time code from stdin and locally approved roots.",
     routes: [],

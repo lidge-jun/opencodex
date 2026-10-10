@@ -55,7 +55,7 @@ Home의 프로바이더를 사용할 컴퓨터에서 다음을 진행합니다.
 
 - **Connected**는 SSH 터널이 준비되어 Child가 Home 링크를 사용할 수 있다는 뜻입니다.
 - **Reconnecting**은 터널을 다시 연결하는 중이라는 뜻입니다. 재시도 중에는 요청이 일시적으로 `Retry-After`와 함께 `503`을 반환할 수 있습니다. 자기 대시보드에서 연결한 Child에서는 요청이 먼저 터널이 돌아오기를 최대 15초 기다립니다.
-- **Failed**는 조치가 필요하다는 뜻입니다. SSH 인증, 확인한 호스트 키, 포워딩 또는 타임아웃 사유를 확인하세요. SSH 터널을 띄운 쪽이 절전, 장애, 재시작 뒤에도 스스로 다시 시도합니다. Home이 추가한 Child라면 Home이, 자기 대시보드에서 연결한 Child라면 Child가 시도합니다. 타임아웃이나 포워딩 오류 뒤에는 약 1분마다, 인증 오류 뒤에는 5분마다 시도합니다. 호스트 키가 바뀐 경우에는 다시 시도하지 않습니다.
+- **Failed**는 조치가 필요하다는 뜻입니다. SSH 인증, 확인한 호스트 키, 포워딩 또는 타임아웃 사유를 확인하세요. SSH 터널을 띄운 쪽이 절전, 장애, 재시작 뒤에도 스스로 다시 시도합니다. Home이 추가한 Child라면 Home이, 자기 대시보드에서 연결한 Child라면 Child가 시도합니다. 타임아웃이나 포워딩 오류 뒤에는 약 1분마다, 인증 오류 뒤에는 5분마다 시도합니다. 호스트 키가 바뀐 경우에는 다시 시도하지 않습니다. 바로 다시 연결하려면 Home 대시보드에서 **Retry**를 누르거나 Home에서 `ocx link reconnect --link-id <id>`를 실행하세요. OpenCodex를 재시작하지 않고 그 링크의 터널만 다시 띄웁니다.
 
 링크가 실패해도 로컬 프로바이더로 조용히 전환하지 않습니다.
 
@@ -82,6 +82,7 @@ ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
+ocx link reconnect --link-id <id> [--json]
 ```
 
 ## 관련 가이드

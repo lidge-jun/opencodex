@@ -421,6 +421,44 @@ test("a host-key exit still draining stderr at the outage limit stays terminal",
   await supervisor.stop();
 });
 
+test("reconnect restarts a Home tunnel at once, from a failed state or over a live child", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"), record("client-initiated", "lnk_fedcba9876543210"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+  });
+  expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(false);
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  fake.children[0]!.stderr = "Error: remote port forwarding failed for listen port 19002";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "failed", retryAt: 65_000 });
+  current = 10_000;
+  expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(true);
+  expect(fake.children).toHaveLength(2);
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connecting", since: 10_000 });
+  current = 12_000;
+  expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(true);
+  await expect(fake.children[1]!.child.exited).resolves.toBe(143);
+  expect(fake.children).toHaveLength(3);
+  expect(supervisor.status()[0]).toMatchObject({ state: { kind: "connecting", since: 12_000 }, pid: fake.children[2]!.child.pid });
+  expect(await supervisor.reconnect("lnk_fedcba9876543210")).toBe(false);
+  expect(await supervisor.reconnect("lnk_0000000000000000")).toBe(false);
+  expect(fake.children).toHaveLength(3);
+  await supervisor.stop();
+  expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(false);
+});
+
 test("a reload neither skips the reconnect backoff nor a failed link's retry delay", async () => {
   const fake = fakeRunner();
   const timers: Array<() => void> = [];
