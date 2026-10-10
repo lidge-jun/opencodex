@@ -77,6 +77,7 @@
 .pwi-auth-row-main:disabled { cursor: default; opacity: 0.72; }
 .pwi-auth-row-main:focus-visible,
 .pwi-auth-row-remove:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.pwi-auth-row-heading { display: flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; flex-wrap: wrap; }
 .pwi-auth-row-label  { font-size: var(--text-control); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pwi-auth-row-remove {
   background: none; border: none; cursor: pointer; padding: 2px;

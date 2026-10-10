@@ -264,3 +264,43 @@ test("changing active account discards the previous refresh feedback", async () 
   expect(host.textContent).not.toContain("Quota check completed");
   expect(findButton("Refresh quotas")?.disabled).toBe(false);
 });
+
+test("Antigravity plan badge preserves Free and provider names and leaves pause controls intact", async () => {
+  win.localStorage.setItem("ocx-lang", "zh");
+  const item = { ...oauthItem, name: "google-antigravity" };
+  const handlers = authHandlers({ onPauseAccount: () => {} });
+  const row = { id: "ag-1", active: true, paused: false };
+  const view = (plan: string | null, paused = false, pausingAccountId: string | null = null) =>
+    <ProviderAuthPanel item={item} apiBase="" accounts={[{ ...row, plan, paused }]}
+      pausingAccountId={pausingAccountId} authHandlers={handlers} />;
+  const main = () => host.querySelector(".pwi-auth-row-main") as HTMLButtonElement;
+  const badge = () => main().querySelector(".pwi-auth-row-copy .badge");
+
+  await render(view("Free"));
+  expect(badge()?.textContent).toBe("Free");
+  expect(main().getAttribute("aria-label")).toContain("Free");
+  expect(main().getAttribute("aria-label")).toContain("当前");
+
+  await render(view("Google AI Pro"));
+  expect(badge()?.textContent).toBe("Google AI Pro");
+  expect(main().getAttribute("aria-label")).toContain("Google AI Pro");
+
+  await render(view("Google AI Ultra", true));
+  expect(badge()?.textContent).toBe("Google AI Ultra");
+  expect(main().disabled).toBe(true);
+  expect(findButton("恢复")).not.toBeNull();
+
+  await render(view("Google AI Pro", false, row.id));
+  expect(badge()?.textContent).toBe("Google AI Pro");
+  expect(main().disabled).toBe(true);
+  const pause = findButton("暂停");
+  expect(pause?.disabled).toBe(true);
+  expect(pause?.getAttribute("aria-busy")).toBe("true");
+
+  await render(view(null));
+  expect(badge()).toBeNull();
+  expect(main().closest(".pwi-auth-acct")?.textContent).not.toMatch(/null/i);
+  expect(main().getAttribute("aria-label")).not.toMatch(/null/i);
+  expect(main().getAttribute("aria-label")).not.toContain("Google AI");
+  expect(main().getAttribute("aria-label")).not.toContain("Free");
+});

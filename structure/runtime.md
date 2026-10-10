@@ -157,7 +157,7 @@ there. Feature code is grouped by responsibility:
 | Group | Directories |
 | --- | --- |
 | Data plane | `src/adapters/`, `src/responses/`, `src/chat/`, `src/claude/`, `src/grok/`, `src/images/`, `src/vision/`, `src/web-search/` |
-| Codex integration | `src/codex/`, `src/combos/`, `src/providers/`, `src/oauth/` |
+| Codex integration | `src/codex/`, `src/combos/`, `src/providers/`, `src/oauth/` — Antigravity `plan` observations follow [provider parsing](providers-and-adapters.md). `merged` in `src/oauth/index.ts` and `retainUnobservedPlan` in `src/oauth/store.ts` preserve the previous value only when incoming `plan` is `undefined`, including refresh, account-scoped reauthentication and same-identity upsert. Explicit `null` clears the stored plan; a string replaces it. Store normalization rejects U+0000–U+001F and U+007F–U+009F before trimming, then accepts 1–128 UTF-16 code units; invalid present values normalize to `null`. The field is display-only and never affects authentication, quota, routing, account selection, health or failover. |
 | Surfaces | `src/server/`, `src/cli/`, `src/tray/`, `src/github/` |
 | Evidence and contracts | `src/compatibility/`, `src/lab/` |
 | Support | `src/lib/`, `src/storage/` (Worker policy fixtures synchronize after loading the initial policy; `src/storage/policy.ts` bounds the test barrier at 10 seconds), `src/usage/`, `src/update/` ([package refresh](ops/service-and-sidecars.md#package-cache-refresh); `desktop-badge.ts` holds bounded process-local display state, never install authority), `src/generated/` |

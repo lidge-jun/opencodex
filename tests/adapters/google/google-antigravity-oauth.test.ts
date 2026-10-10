@@ -3,7 +3,8 @@ import { discoverAntigravityProject, refreshAntigravityToken } from "../../../sr
 import { mkdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getCredential, saveCredential } from "../../../src/oauth/store";
+import { getAccountCredential, getAccountSet, getCredential, saveCredential } from "../../../src/oauth/store";
+import { getValidAccessTokenForAccount, getLoginStatus } from "../../../src/oauth";
 import { ANTIGRAVITY_IDE_VERSION } from "../../../src/adapters/client-fingerprint";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -35,6 +36,21 @@ describe("antigravity project discovery", () => {
       return new Response("no", { status: 404 });
     });
     expect(await discoverAntigravityProject("tok")).toBe("proj-nested");
+  });
+
+  test.each(["network", "non-2xx", "invalid JSON"] as const)("loadCodeAssist %s follows base onboarding behavior", async mode => {
+    const { calls } = routeFetch(url => {
+      if (url.includes(":loadCodeAssist")) {
+        if (mode === "network") throw new Error("offline");
+        if (mode === "non-2xx") return new Response("unavailable", { status: 503 });
+        return new Response("not json");
+      }
+      if (url.includes(":onboardUser")) return Response.json({ done: true, response: { cloudaicompanionProject: "proj-onboarded" } });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    if (mode === "network") await expect(discoverAntigravityProject("tok")).rejects.toThrow("offline");
+    else await expect(discoverAntigravityProject("tok")).resolves.toBe("proj-onboarded");
+    expect(calls.filter(url => url.includes(":onboardUser"))).toHaveLength(mode === "network" ? 0 : 1);
   });
 
   test("falls back to onboardUser poll loop (not-done then done)", async () => {
@@ -133,6 +149,27 @@ describe("antigravity refresh", () => {
     expect(cred.expires - issuedAt).toBe(55 * 60 * 1000);
   });
 
+  test.each([
+    [{ id: "free-tier", name: "Free" }, "Free"],
+    [{ id: "paid-pro", name: "Google AI Pro" }, "Google AI Pro"],
+    [{ id: "paid-pro", name: " Google AI Pro " }, "Google AI Pro"],
+    [{ id: "fixture-ultra", name: "Google AI Ultra" }, "Google AI Ultra"],
+    [{ id: "paid", name: `Google AI ${"x".repeat(118)}` }, `Google AI ${"x".repeat(118)}`],
+    [{ id: "paid", name: `Google AI ${"x".repeat(119)}` }, null],
+    [{ id: "paid", name: "Google AI Pro\n" }, null],
+    [{ id: "paid", name: "Google AI Pro\u0085" }, null],
+    [{ id: "paid", name: 42 }, null],
+    [{ id: "unknown-product", name: "Other Product" }, null],
+    [undefined, null],
+  ] as const)("observes loadCodeAssist paidTier %p as %p", async (paidTier, expected) => {
+    routeFetch(url => {
+      if (url.includes("oauth2.googleapis.com/token")) return Response.json({ access_token: "fresh", expires_in: 3600 });
+      if (url.includes(":loadCodeAssist")) return Response.json({ cloudaicompanionProject: "proj", paidTier });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    expect((await refreshAntigravityToken("rt")).plan).toBe(expected);
+  });
+
   test("refresh failure carries status only, not the response body", async () => {
     routeFetch((url) => {
       if (url.includes("oauth2.googleapis.com/token")) return new Response("invalid_grant secret-detail", { status: 400 });
@@ -155,6 +192,81 @@ describe("antigravity credential persistence (projectId survives the store)", ()
     if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
     if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
     if (tmp) removeTreeWithRetry(tmp);
+  });
+
+  test.each([
+    ["request failure", "throw", "Google AI Pro"],
+    ["non-2xx", "status", "Google AI Pro"],
+    ["unparseable body", "invalid", "Google AI Pro"],
+    ["unknown product", "unknown", null],
+    ["oversized name", "oversized", null],
+    ["missing tier", "missing", null],
+    ["observed null then onboarding throws", "null-onboard", null],
+    ["observed Pro then onboarding throws", "pro-onboard", "Google AI Pro"],
+  ] as const)("refresh preserves or replaces the observed plan: %s", async (_label, mode, expected) => {
+    tmp = join(tmpdir(), `ag-plan-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(tmp, { recursive: true });
+    process.env.HOME = tmp;
+    process.env.OPENCODEX_HOME = join(tmp, "ocx");
+    await saveCredential("google-antigravity", {
+      access: "old", refresh: "rt", expires: Date.now() - 1000,
+      projectId: "proj-old", plan: mode === "pro-onboard" ? "Free" : "Google AI Pro",
+    });
+    const id = getAccountSet("google-antigravity")!.activeAccountId;
+    const { calls } = routeFetch(url => {
+      if (url.includes("oauth2.googleapis.com/token")) return Response.json({ access_token: "fresh", expires_in: 3600 });
+      if (url.includes(":loadCodeAssist")) {
+        if (mode === "throw") throw new Error("offline");
+        if (mode === "status") return new Response("failure", { status: 503 });
+        if (mode === "invalid") return new Response("not json");
+        const paidTier = mode === "unknown" || mode === "null-onboard"
+          ? { id: "other", name: "Other Product" }
+          : mode === "oversized" ? { id: "paid", name: `Google AI ${"x".repeat(119)}` }
+          : mode === "pro-onboard" ? { id: "pro", name: "Google AI Pro" } : undefined;
+        return Response.json({ ...(["unknown", "oversized", "missing"].includes(mode) ? { cloudaicompanionProject: "proj-new" } : {}), paidTier });
+      }
+      if (url.includes(":onboardUser")) {
+        if (mode.endsWith("-onboard")) throw new Error("onboarding unavailable");
+        return new Response("forbidden", { status: 403 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    expect(await getValidAccessTokenForAccount("google-antigravity", id)).toBe("fresh");
+    if (mode === "throw") expect(calls.some(url => url.includes(":onboardUser"))).toBe(false);
+    if (mode.endsWith("-onboard")) expect(calls.filter(url => url.includes(":onboardUser"))).toHaveLength(1);
+    expect(getAccountCredential("google-antigravity", id)?.plan).toBe(expected);
+    expect(getLoginStatus("google-antigravity").accounts?.[0]?.plan).toBe(expected);
+  });
+
+  test("plan normalization persists null, trims bounded names, rejects controls and accepts legacy records", async () => {
+    tmp = join(tmpdir(), `ag-store-plan-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(tmp, { recursive: true });
+    process.env.HOME = tmp;
+    process.env.OPENCODEX_HOME = join(tmp, "ocx");
+    const base = { access: "a", refresh: "r", expires: Date.now() + 3_600_000, email: "ag@example.test" };
+    await saveCredential("google-antigravity", base);
+    expect(getCredential("google-antigravity")?.plan).toBeUndefined();
+    expect(Object.hasOwn(getCredential("google-antigravity")!, "plan")).toBe(false);
+    for (const [input, expected] of [
+      [null, null],
+      ["  Google AI Pro  ", "Google AI Pro"],
+      [`Google AI ${"x".repeat(118)}`, `Google AI ${"x".repeat(118)}`],
+      ["bad\nplan", null],
+      ["\tGoogle AI Pro", null],
+      ["Google AI Pro\n", null],
+      ["Google AI Pro\x7f", null],
+      ["Google AI Pro\u0085", null],
+      ["x".repeat(129), null],
+      ["   ", null],
+      [42, null],
+    ] as const) {
+      await saveCredential("google-antigravity", { ...base, plan: input as string | null });
+      expect(getCredential("google-antigravity")?.plan).toBe(expected);
+      expect(Object.hasOwn(getCredential("google-antigravity")!, "plan")).toBe(true);
+    }
+    await saveCredential("google-antigravity", base);
+    expect(getCredential("google-antigravity")?.plan).toBeNull();
+    expect(Object.hasOwn(getCredential("google-antigravity")!, "plan")).toBe(true);
   });
 
   test("saveCredential + getCredential round-trips projectId (regression: was stripped by normalizeCredential)", async () => {

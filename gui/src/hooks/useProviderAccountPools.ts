@@ -27,6 +27,7 @@ export interface OAuthAccount extends AccountQuotaReading {
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
   expiresAt?: number;
+  plan?: string | null;
   health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;
