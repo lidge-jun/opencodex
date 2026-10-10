@@ -4,6 +4,38 @@ import { RemoteCapacity, REMOTE_LIMITS } from "../../src/messaging/remote-contra
 import { remotePortIsLoopback } from "../../src/messaging/remote-ports";
 import { runRemoteHelper, spawnRemoteHelper, type RemoteHelperOptions, type RemoteHelperProcess } from "../../src/messaging/remote-process";
 
+test("Linux inspection allows absent IPv6 tables but refuses failed or public listener inspection", async () => {
+  const budget = new MessageBudget(), capacity = new RemoteCapacity();
+  const table = (address: string) => `header\n 0: ${address}:5BA0 00000000:0000 0A\n`;
+  const inspect = async (options: { ipv6?: string; openError?: string; failedPath?: string; readError?: string; ipv4?: string }) => {
+    const opened: string[] = [], closed: string[] = [];
+    const result = remotePortIsLoopback(23456, budget, capacity, { platform: "linux", async openProc(path) {
+      opened.push(path);
+      if (options.openError && path === (options.failedPath ?? "/proc/net/tcp6")) throw Object.assign(new Error("fixture open"), { code: options.openError });
+      const bytes = Buffer.from(path.endsWith("tcp6") ? options.ipv6 ?? "header\n" : options.ipv4 ?? table("0100007F"));
+      let offset = 0;
+      return { async read(buffer, start, length) {
+        if (options.readError && path.endsWith("tcp6")) throw Object.assign(new Error("fixture read"), { code: options.readError });
+        const bytesRead = bytes.copy(buffer, start, offset, offset + length); offset += bytesRead; return { bytesRead };
+      }, async close() { closed.push(path); } };
+    } });
+    return { result: await result.catch(error => error), opened, closed };
+  };
+  try {
+    const absent = await inspect({ openError: "ENOENT" });
+    expect(absent.result).toBe(true); expect(absent.opened).toEqual(["/proc/net/tcp", "/proc/net/tcp6"]);
+    expect(absent.closed).toEqual(["/proc/net/tcp"]);
+    for (const code of ["EACCES", "EPERM", "EIO"]) expect((await inspect({ openError: code })).result.code).toBe(code);
+    expect((await inspect({ openError: "ENOENT", failedPath: "/proc/net/tcp" })).result.code).toBe("ENOENT");
+    const readFailure = await inspect({ readError: "ENOENT" });
+    expect(readFailure.result.code).toBe("ENOENT"); expect(readFailure.closed).toEqual(["/proc/net/tcp", "/proc/net/tcp6"]);
+    expect((await inspect({ ipv6: table("00000000000000000000000001000000") })).result).toBe(true);
+    expect((await inspect({ ipv6: table("00000000000000000000000000000000") })).result).toBe(false);
+    expect((await inspect({ ipv4: table("00000000"), openError: "ENOENT" })).result).toBe(false);
+    expect((await inspect({ ipv4: "header\n", openError: "ENOENT" })).result).toBe(false);
+  } finally { budget.dispose(); }
+});
+
 function fakeProcess(options: { exitCode?: number; output?: string; inputFailure?: boolean; asyncInputFailure?: boolean; exitOnSignal?: boolean } = {}) {
   let finish!: (code: number) => void, exitCode = options.exitCode ?? null;
   const signals: NodeJS.Signals[] = [];

@@ -3,6 +3,7 @@ import { MessageBudget } from "../messaging/budget";
 import { readMessageInput } from "../messaging/input";
 import { RemoteCapacity } from "../messaging/remote-contract";
 import { enrollRemoteHost, handleEnrollmentControl, probeRemoteHost, removeRemoteHost } from "../messaging/remote-enrollment";
+import { abandonRemoteEnrollment, pendingRemoteEnrollment } from "../messaging/remote-enrollment-recovery";
 import { remoteControl } from "../messaging/remote-auth";
 import { ownerEndpoint, startRemoteOwner } from "../messaging/remote-owner";
 import { remotePortCandidate } from "../messaging/remote-ports";
@@ -37,14 +38,15 @@ export async function runRemoteMessageCommand(args: RemoteMessageArgs, env: Node
     try {
       if (args.action === "enable") { store.enable(args.port ?? store.read()?.port ?? 39176); emit(store.publicState()); }
       else if (args.action === "disable") { store.disable(); emit(store.publicState()); }
-      else if (args.action === "hosts-list") emit(store.publicState());
+      else if (args.action === "hosts-list") emit({ ...store.publicState(), pendingEnrollment: pendingRemoteEnrollment(store) });
+      else if (args.action === "hosts-abandon") { emit(abandonRemoteEnrollment(store, args.transaction)); return 3; }
       else if (args.action === "status") {
         const state = store.read(); let running = false, routes: unknown = [];
         if (state?.enabled) {
           try { const result = await remoteControl(state, ownerEndpoint(state), "message/routes", {}, budget);
             running = true; routes = result; } catch { /* Disabled/offline is not activation or repair. */ }
         }
-        emit({ ...store.publicState(), running, routes });
+        emit({ ...store.publicState(), running, routes, pendingEnrollment: pendingRemoteEnrollment(store) });
       } else if (args.action === "hosts-probe") emit({ ssh: args.ssh, fingerprint: (await probeRemoteHost(args.ssh, budget, capacity)).fingerprint });
       else if (args.action === "hosts-add") emit(await enrollRemoteHost(store, args.alias, args.ssh, args.fingerprint, budget, capacity));
       else if (args.action === "hosts-remove") {

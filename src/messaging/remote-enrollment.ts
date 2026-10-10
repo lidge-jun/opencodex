@@ -48,7 +48,7 @@ export function handleEnrollmentControl(store: RemoteMessageStore, input: unknow
     if (!validMachine(params.machine) || params.machine.id === state.machine.id || !isThreadId(params.transaction)
       || !validCapability(params.returnCapability) || !validPort(params.port)) throw remoteError("invalid_enrollment", "Invalid messaging enrollment contract.");
     const machine = params.machine, transaction = params.transaction, returnCapability = params.returnCapability, port = params.port;
-    let incoming = "";
+    let incoming = "", full = false;
     const committed = store.mutate(current => {
       const existing = current.peers.find(peer => peer.machine.id === machine.id || peer.transaction === transaction);
       if (existing) {
@@ -56,10 +56,12 @@ export function handleEnrollmentControl(store: RemoteMessageStore, input: unknow
           || existing.port !== port) throw remoteError("enrollment_conflict", "An existing enrollment cannot be silently replaced.");
         incoming = existing.incoming; return;
       }
+      if (current.peers.length >= REMOTE_LIMITS.peers) { full = true; return; }
       incoming = capability();
       current.peers.push({ alias: `peer-${machine.id}`, machine, transaction, incoming, outgoing: returnCapability,
         port, ssh: null, hostKey: null, fingerprint: null });
     });
+    if (full) return { protocol: REMOTE_PROTOCOL, transaction, rejected: "peer_capacity" };
     return { protocol: REMOTE_PROTOCOL, transaction, machine: committed.machine, port: committed.port, capability: incoming };
   }
   if (raw.action === "remove") {
@@ -105,12 +107,16 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
   writeRemoteFile(hostsPath, offered.hostKey);
   let reply: Record<string, unknown>;
   try {
-    reply = exactRecord(JSON.parse(await runner(buildExecArgv({ alias: ssh, knownHostsFile: hostsPath,
-      argv: remoteOcxArgv(["message", "_control"]) }), budget, capacity, JSON.stringify(request))),
-    ["protocol", "transaction", "machine", "port", "capability"]);
-    if (reply.protocol !== REMOTE_PROTOCOL || reply.transaction !== params.transaction || !validMachine(reply.machine)
+    const value = JSON.parse(await runner(buildExecArgv({ alias: ssh, knownHostsFile: hostsPath,
+      argv: remoteOcxArgv(["message", "_control"]) }), budget, capacity, JSON.stringify(request)));
+    reply = exactRecord(value, value?.rejected !== undefined ? ["protocol", "transaction", "rejected"]
+      : ["protocol", "transaction", "machine", "port", "capability"]);
+    if (reply.protocol !== REMOTE_PROTOCOL || reply.transaction !== params.transaction) throw new Error();
+    if (reply.rejected !== undefined) { if (reply.rejected !== "peer_capacity") throw new Error(); }
+    else if (!validMachine(reply.machine)
       || reply.machine.id === state.machine.id || !validPort(reply.port) || !validCapability(reply.capability)) throw new Error();
   } catch { throw remoteError("enrollment_unknown", "Remote enrollment may have committed. Reconcile the retained transaction, if present; do not create a replacement automatically."); }
+  if (reply.rejected === "peer_capacity") throw remoteError("peer_capacity", "The remote node has no free messaging peer slot. Retry the same transaction after freeing a slot, or explicitly abandon it.");
   const machine = reply.machine as RemoteState["machine"];
   try {
     budget.throwIfEnded();

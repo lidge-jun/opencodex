@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 59.
+Declared capabilities: 60.
 
 ### `ocx agent subagents force`
 
@@ -156,7 +156,7 @@ Drives no management route.
 | `--json` | boolean | Emit a versioned session directory. |
 | `--host` | string | Exact enrolled peer alias or machine UUID; requires a live foreground owner. |
 
-- Linux/macOS Unix socket only. Uses effective CODEX_HOME; starts no daemon and returns no partial directory.
+- Linux/macOS only. Local discovery uses the effective CODEX_HOME Unix socket; --host uses the live foreground owner's authenticated loopback route. Starts no daemon and returns no partial directory.
 
 ### `ocx message send`
 
@@ -307,6 +307,21 @@ Drives no management route.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit local and remote revocation outcomes. |
+
+### `ocx message hosts abandon`
+
+Usage: `ocx message hosts abandon --transaction <uuid> [--json]`
+
+Abandon an exact pending local enrollment; remote cleanup remains unconfirmed (exit 3).
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--transaction` | string | Exact pending UUID from hosts list or status; never an alias. |
+| `--json` | boolean | Emit local abandonment and explicit remote-cleanup guidance. |
 
 ### `ocx agent status`
 

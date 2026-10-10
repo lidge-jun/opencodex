@@ -161,6 +161,25 @@ transaction: repeat the exact same add command to reconcile, rather than enrolli
 under another name within the same enabled generation. Disable/re-enable or port
 changes invalidate that recovery generation. Completed or revoked transactions cannot
 restore a removed peer or erase another enrollment's recovery record.
+If reconciliation is no longer possible, inspect `ocx message hosts list --json` or
+`ocx message status --json` for `pendingEnrollment` (alias, transaction UUID and whether
+its generation is stale), then explicitly abandon that exact local journal:
+
+```bash
+ocx message hosts abandon --transaction <pending-transaction-uuid> --json
+```
+
+Abandonment works while disabled too. It leaves existing peers unchanged, does not retry
+enrollment and exits 3 because remote cleanup is unconfirmed. Follow its cleanup guidance
+on the remote node if an orphan enrollment remains. Stale journals are not silently deleted.
+A full receiver returns `peer_capacity` without enrolling; free a slot and repeat the same
+transaction or explicitly abandon it. Malformed or lost control replies remain uncertain.
+Existing trusted 0755 configuration homes are accepted without chmod; messaging's own
+subdirectory remains private. An immediate owner restart can replace a stale return lease
+after the new endpoint authenticates and the old endpoint no longer authenticates within a
+one-second check. A still-authenticating old endpoint retains its lease until expiry;
+temporary unreachability can permit takeover, not replay. Unexpected tunnel loss visibly
+retires the foreground owner; deliberate peer removal leaves unrelated routes running.
 Crash mutation locks fail closed and need operator recovery;
 the wrapper never guesses that an old lock is abandoned.
 

@@ -11,7 +11,7 @@ export async function runMessageCommand(argv: readonly string[], env: NodeJS.Pro
   if (remote) return (await import("./message-remote-command")).runRemoteMessageCommand(remote, env);
   const args = parseMessageArgs(argv);
   if (!args) {
-    console.error("Usage: ocx message sessions [--host <peer>] [--json] | send (--thread <uuid> | --name <exact-name>) --stdin [--host <peer>] [--kind request|response|notification] [--in-reply-to <uuid>] [--json] | enable [--port <port>] | disable | status | hosts <probe|add|list|remove> | serve [--host <peer>]...");
+    console.error("Usage: ocx message sessions [--host <peer>] [--json] | send (--thread <uuid> | --name <exact-name>) --stdin [--host <peer>] [--kind request|response|notification] [--in-reply-to <uuid>] [--json] | enable [--port <port>] | disable | status | hosts <probe|add|list|remove|abandon> | serve [--host <peer>]...");
     return 64;
   }
   const controller = new AbortController();
