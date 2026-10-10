@@ -3,10 +3,12 @@ import { serializeManagementJson } from "./json-input";
 import { printSettingsResult, projectSettingsApply } from "./settings-result";
 import { CliUsageError, runtimeBaseUrl, runtimeRequest, takeFlag, takeOptionWithSyntax, type RuntimeApiDeps } from "./runtime-api";
 
-export const SYSTEM_PARITY_OPTIONS = ["--show-codex-credits", "--account-picker", "--main-account-hard-lock", "--ultra-fast-tier", "--fast-rows"] as const;
+export const SYSTEM_PARITY_OPTIONS = ["--show-codex-credits", "--account-picker", "--main-account-hard-lock", "--main-account-credits-override-hardlock", "--ultra-fast-tier", "--fast-rows"] as const;
 const BOOLEAN_FIELDS: Readonly<Record<string, string>> = {
   "--show-codex-credits": "showCodexCredits", "--account-picker": "codexAccountPickerEnabled",
-  "--main-account-hard-lock": "codexMainAccountHardLock", "--ultra-fast-tier": "ultraFastTier", "--fast-rows": "fastRows",
+  "--main-account-hard-lock": "codexMainAccountHardLock",
+  "--main-account-credits-override-hardlock": "codexMainAccountCreditsOverrideHardLock",
+  "--ultra-fast-tier": "ultraFastTier", "--fast-rows": "fastRows",
   "--auto-start": "codexAutoStart", "--desktop-authless": "codexDesktopAuthless", "--client-compaction": "codexClientCompaction",
 };
 function record(value: unknown): value is Record<string, unknown> {

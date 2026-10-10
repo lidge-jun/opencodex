@@ -265,3 +265,43 @@ test("with the default hard lock on, allowing credits does not lift the main loc
   await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
     .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
 });
+
+test("opt-in credit relief releases the hard-locked main login for a fresh spendable balance (#6845)", async () => {
+  const cfg = config();
+  delete cfg.codexMainAccountHardLock;
+  cfg.codexMainAccountCreditsOverrideHardLock = true;
+  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
+  mainWeekly(100, Date.now() + DAY_MS);
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+    .resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
+});
+
+test("opt-in credit relief needs both the toggle and the credits consent", async () => {
+  const cfg = config();
+  delete cfg.codexMainAccountHardLock;
+  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
+  mainWeekly(100, Date.now() + DAY_MS);
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+    .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+
+  const withoutConsent = config();
+  delete withoutConsent.codexMainAccountHardLock;
+  withoutConsent.codexMainAccountCreditsOverrideHardLock = true;
+  mainWeekly(100, Date.now() + DAY_MS);
+  await expect(resolveCodexAuthContext(new Headers(), withoutConsent, "pool"))
+    .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+});
+
+test("opt-in credit relief re-locks the main login once the balance observation ages out", async () => {
+  const cfg = config();
+  delete cfg.codexMainAccountHardLock;
+  cfg.codexMainAccountCreditsOverrideHardLock = true;
+  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
+  mainWeekly(100, Date.now() + DAY_MS);
+  const writer = captureMainQuotaWriter(accountId)!;
+  setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: Date.now() + DAY_MS,
+    credits: { hasCredits: true, balance: 42.5, observedAt: Date.now() - 300_001 } }, undefined, writer);
+  expect(hasSpendableCodexCredits(getAccountQuota(MAIN))).toBe(false);
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+    .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+});

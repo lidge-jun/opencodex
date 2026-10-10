@@ -8,7 +8,7 @@ import {
 import { hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
-import { isMainAccountHardLocked } from "./main-account-hard-lock";
+import { isMainAccountHardLocked, mainAccountCreditsReleaseHardLock } from "./main-account-hard-lock";
 
 export interface CodexAccountUsabilityOptions {
   /** Route using cached runtime state only; the caller must reject selected main before auth. */
@@ -80,7 +80,9 @@ export function codexAccountUnusableReason(
     return "model_not_entitled";
   }
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
-    if (isMainAccountHardLocked(config)) return "main_hard_locked";
+    // A hard lock released by fresh spendable credits (#6845) leaves main selectable here, so
+    // selection and admission agree; the release re-arms the moment the balance ages out.
+    if (isMainAccountHardLocked(config) && !mainAccountCreditsReleaseHardLock(config)) return "main_hard_locked";
     // Startup recovery owns the physical auth/vault boundary. Never parse or select
     // native __main__ while an encrypted switch journal is pending or inconclusive.
     if (!options.nativeMainSelectionOnly && isNativeMainTrafficBlocked()) return "main_traffic_blocked";

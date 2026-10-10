@@ -215,6 +215,9 @@ export const configSchema = z.object({
     short: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
     long: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
   }).optional().catch(undefined),
+  // Opt-in credit relief for the main lock (#6845): absence and malformed hand edits stay off,
+  // so the lock and the credits switch keep their independent defaults.
+  codexMainAccountCreditsOverrideHardLock: z.boolean().optional().catch(false),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),

@@ -594,6 +594,17 @@ export interface OcxConfig {
   codexMainAccountHardLock?: boolean;
   /** Per-window percentages: short defaults to 90, long to 98; integers 80..100, short <= long. */
   codexMainAccountHardLockThresholds?: { short?: number; long?: number };
+  /**
+   * Let a fresh spendable credit balance release the main-account hard lock (#6845).
+   *
+   * Off by default: the lock and the credits switch stay independent, exactly as the default
+   * tests pin. When on, a blocked main account whose credits are opted in (via
+   * `creditCodexAccountIds`) and freshly observed as spendable is allowed through instead of
+   * being refused, so the request reaches upstream and the overage draws ChatGPT credits. The
+   * release is only as fresh as the credit observation; a stale or refused balance re-arms the
+   * lock. This trades the lock's Send-preservation for credit spend and is the operator's call.
+   */
+  codexMainAccountCreditsOverrideHardLock?: boolean;
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */

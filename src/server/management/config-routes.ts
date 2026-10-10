@@ -424,6 +424,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // Absent means on by default: the GUI renders a switch enabled unless explicit false.
       fastRows: config.fastRows !== false,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
+      // Absent means the lock and the credits switch stay independent; true opts into relief.
+      codexMainAccountCreditsOverrideHardLock: config.codexMainAccountCreditsOverrideHardLock === true,
       mainAccountHardLock: { ...getMainAccountHardLockStatus(config),
         externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       // Absent means the historical auto-open, so the GUI can render the toggle
@@ -530,6 +532,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       fastRows?: unknown;
       codexMainAccountHardLock?: unknown;
       codexMainAccountHardLockThresholds?: unknown;
+      codexMainAccountCreditsOverrideHardLock?: unknown;
       codexDesktopAuthless?: unknown;
       codexClientCompaction?: unknown;
       compactionRouting?: unknown;
@@ -547,12 +550,13 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.fastRows === undefined
       && body.codexMainAccountHardLock === undefined
       && body.codexMainAccountHardLockThresholds === undefined
+      && body.codexMainAccountCreditsOverrideHardLock === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined
       && body.compactionRouting === undefined
       && body.compactionRecovery === undefined
       && body.memoryModels === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, or memoryModels" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexMainAccountCreditsOverrideHardLock, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, or memoryModels" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -578,6 +582,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.codexMainAccountHardLock !== undefined && typeof body.codexMainAccountHardLock !== "boolean") {
       return jsonResponse({ error: "codexMainAccountHardLock boolean is required" }, 400);
+    }
+    if (body.codexMainAccountCreditsOverrideHardLock !== undefined && typeof body.codexMainAccountCreditsOverrideHardLock !== "boolean") {
+      return jsonResponse({ error: "codexMainAccountCreditsOverrideHardLock boolean is required" }, 400);
     }
     let hardLockThresholds: OcxConfig["codexMainAccountHardLockThresholds"];
     if (body.codexMainAccountHardLockThresholds !== undefined) {
@@ -672,6 +679,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexMainAccountHardLockThresholds: Object.hasOwn(config, "codexMainAccountHardLockThresholds"),
       codexMainAccountHardLock: config.codexMainAccountHardLock,
       hasCodexMainAccountHardLock: Object.hasOwn(config, "codexMainAccountHardLock"),
+      codexMainAccountCreditsOverrideHardLock: config.codexMainAccountCreditsOverrideHardLock,
+      hasCodexMainAccountCreditsOverrideHardLock: Object.hasOwn(config, "codexMainAccountCreditsOverrideHardLock"),
       codexDesktopAuthless: config.codexDesktopAuthless,
       hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
       codexClientCompaction: config.codexClientCompaction,
@@ -717,6 +726,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (hardLockThresholds !== undefined) config.codexMainAccountHardLockThresholds = { ...hardLockThresholds };
       if (body.codexMainAccountHardLock === false) config.codexMainAccountHardLock = false;
       else if (body.codexMainAccountHardLock === true) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
+      // Opt-in credit relief is off by default, so `true` is the persisted decision and `false`
+      // deletes the key back to the default rather than writing a decision nobody made.
+      if (body.codexMainAccountCreditsOverrideHardLock === true) config.codexMainAccountCreditsOverrideHardLock = true;
+      else if (body.codexMainAccountCreditsOverrideHardLock === false) deleteConfigTopLevelKey(config, "codexMainAccountCreditsOverrideHardLock");
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
       if (body.codexClientCompaction === true) config.codexClientCompaction = true;
@@ -775,6 +788,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexMainAccountHardLock) {
         config.codexMainAccountHardLock = previousSettings.codexMainAccountHardLock;
       } else deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
+      if (previousSettings.hasCodexMainAccountCreditsOverrideHardLock) {
+        config.codexMainAccountCreditsOverrideHardLock = previousSettings.codexMainAccountCreditsOverrideHardLock;
+      } else deleteConfigTopLevelKey(config, "codexMainAccountCreditsOverrideHardLock");
       if (previousSettings.hasCodexDesktopAuthless) {
         config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
       } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");
@@ -840,6 +856,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // phases as "Off" while the server kept them.
       memoryModels: config.memoryModels ?? null,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
+      codexMainAccountCreditsOverrideHardLock: config.codexMainAccountCreditsOverrideHardLock === true,
       mainAccountHardLock: { ...getMainAccountHardLockStatus(config),
         externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       startupHealth: await readStartupHealthSnapshot(config),

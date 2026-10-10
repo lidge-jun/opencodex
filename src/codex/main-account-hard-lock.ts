@@ -1,6 +1,8 @@
 import type { OcxConfig } from "../types";
 import { getMainPolicyQuota } from "./quota";
-import { MAIN_ACCOUNT_HARD_LOCK_PERCENT, MAIN_ACCOUNT_HARD_LOCK_SHORT_PERCENT, MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "./quota-types";
+import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
+import { codexAccountUsesCreditsAfterLimit } from "./account-credit-use";
+import { hasSpendableCodexCredits, MAIN_ACCOUNT_HARD_LOCK_PERCENT, MAIN_ACCOUNT_HARD_LOCK_SHORT_PERCENT, MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "./quota-types";
 
 export { MAIN_ACCOUNT_HARD_LOCK_PERCENT };
 
@@ -91,4 +93,23 @@ export function getMainAccountHardLockStatus(
 
 export function isMainAccountHardLocked(config: PolicyConfig, now = Date.now()): boolean {
   return getMainAccountHardLockStatus(config, now).state === "blocked";
+}
+
+type CreditReleaseConfig = Pick<OcxConfig, "creditCodexAccountIds" | "codexMainAccountCreditsOverrideHardLock">;
+
+/**
+ * Whether a fresh spendable credit balance may release the main-account hard lock (#6845).
+ *
+ * Off by default and doubly gated: the operator must opt in with
+ * `codexMainAccountCreditsOverrideHardLock`, the account must be credit-consented, and a spendable
+ * balance must sit inside the credit freshness window. Any missing input leaves the lock armed, so
+ * a stale or refused balance re-locks the account instead of spending blind.
+ *
+ * Lives here so selection (`codexAccountUnusableReason`) and admission
+ * (`assertMainAccountPolicy`) read one definition and cannot disagree about whether the lock holds.
+ */
+export function mainAccountCreditsReleaseHardLock(config: CreditReleaseConfig, now = Date.now()): boolean {
+  return config.codexMainAccountCreditsOverrideHardLock === true
+    && codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)
+    && hasSpendableCodexCredits(getMainPolicyQuota(), now);
 }
