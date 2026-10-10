@@ -346,6 +346,6 @@ export function recoverStaleTestTempArtifactsOnce(
 /** Create the contained temp subtree used by every os.tmpdir() call in the child test process. */
 export function createContainedTestTemp(root: string): string {
   const contained = join(root, "tmp");
-  mkdirSync(contained, { recursive: true });
+  mkdirSync(contained, { recursive: true, mode: 0o700 });
   return contained;
 }

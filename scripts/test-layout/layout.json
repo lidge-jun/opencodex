@@ -2,6 +2,13 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "messaging-remote-contract.test.ts": "codex-integration",
+    "messaging-remote-store.test.ts": "codex-integration",
+    "messaging-remote-send.test.ts": "codex-integration",
+    "messaging-remote-enrollment.test.ts": "codex-integration",
+    "messaging-remote-lifecycle.test.ts": "codex-integration",
+    "messaging-remote-interop.test.ts": "codex-integration",
+    "messaging-remote-native.test.ts": "codex-integration",
     "messages-request-id-headers.test.ts": "claude-integration",
     "messages-request-id-endpoint.test.ts": "claude-integration",
     "anthropic-revoked-token.test.ts": "adapters/anthropic",
