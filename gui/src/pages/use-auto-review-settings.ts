@@ -7,7 +7,7 @@ import type { AutoReviewData } from "./models-shared";
 export interface AutoReviewSettingsController {
   data: AutoReviewData | null;
   saving: boolean;
-  load: () => Promise<AutoReviewData | null>;
+  load: (options?: { reconcile?: boolean }) => Promise<AutoReviewData | null>;
   save: (patch: Partial<AutoReviewData>) => Promise<void>;
 }
 
@@ -40,8 +40,9 @@ export function useAutoReviewSettings(
     };
   }, [apiBase]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ reconcile = false }: { reconcile?: boolean } = {}) => {
     const scope = requests.current;
+    if (scope.write && !reconcile) return null;
     scope.read?.controller.abort();
     scope.read?.clear();
     const bounded = createBoundedFetch(15_000);
@@ -51,8 +52,9 @@ export function useAutoReviewSettings(
       const response = await fetch(`${apiBase}/api/auto-review-settings`, { signal: bounded.signal });
       const next = await readJsonIfOk<AutoReviewData>(response);
       if (!next || typeof next.enabled !== "boolean" || typeof next.model !== "string") return null;
-      if (!bounded.signal.aborted && scope.apiBase === apiBase && scope.generation === generation && scope.read === bounded) {
-        setState({ apiBase, data: next, saving: false });
+      if (!bounded.signal.aborted && scope.apiBase === apiBase && scope.generation === generation && scope.read === bounded
+        && (!scope.write || reconcile)) {
+        setState({ apiBase, data: next, saving: scope.write !== null });
         return next;
       }
       return null;
@@ -65,12 +67,15 @@ export function useAutoReviewSettings(
 
   const save = useCallback(async (patch: Partial<AutoReviewData>) => {
     const scope = requests.current;
-    if (!data || saving || scope.apiBase !== apiBase) return;
+    if (!data || saving || scope.apiBase !== apiBase || scope.write) return;
     const confirmed = data;
-    const generation = scope.generation;
-    setState({ apiBase, data: { ...confirmed, ...patch }, saving: true });
     const bounded = createBoundedFetch(15_000);
     scope.write = bounded;
+    const generation = ++scope.generation;
+    scope.read?.controller.abort();
+    scope.read?.clear();
+    scope.read = null;
+    setState({ apiBase, data: { ...confirmed, ...patch }, saving: true });
     try {
       const response = await fetch(`${apiBase}/api/auto-review-settings`, {
         method: "PUT", headers: { "Content-Type": "application/json" }, signal: bounded.signal,
@@ -87,7 +92,7 @@ export function useAutoReviewSettings(
       }
     } catch (error) {
       if (scope.apiBase === apiBase && scope.generation === generation) {
-        const refreshed = await load();
+        const refreshed = await load({ reconcile: true });
         if (scope.apiBase !== apiBase || scope.generation !== generation) return;
         setState({ apiBase, data: refreshed ?? confirmed, saving: true });
         publishFeedback(false, error instanceof Error && error.message ? error.message : t("models.saveFailed"));

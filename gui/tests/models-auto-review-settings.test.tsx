@@ -85,6 +85,116 @@ test("A-to-B-to-A ignores the first base's late GET result", async () => {
   expect(controller.data).toEqual({ enabled: false, model: "fresh-a/model" });
 });
 
+test("a GET overlapping a save cannot replace its state or re-enable writes", async () => {
+  const staleRead = deferred<Response>();
+  const write = deferred<Response>();
+  let reads = 0;
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") return write.promise;
+    return ++reads === 1
+      ? response({ enabled: false, model: "confirmed/model" })
+      : staleRead.promise;
+  };
+  await paint("/a");
+  await act(async () => { await controller.load(); });
+
+  let pendingRead!: ReturnType<AutoReviewSettingsController["load"]>;
+  await act(async () => { pendingRead = controller.load(); });
+  let pendingSave!: Promise<void>;
+  await act(async () => { pendingSave = controller.save({ enabled: true }); });
+  await act(async () => { staleRead.resolve(response({ enabled: false, model: "stale/model" })); await pendingRead; });
+  const dataAfterRead = controller.data;
+  const savingAfterRead = controller.saving;
+  let secondSave!: Promise<void>;
+  await act(async () => { secondSave = controller.save({ model: "second/model" }); });
+  const writes = requests.filter(request => request.init?.method === "PUT").length;
+  await act(async () => {
+    write.resolve(response({ ok: true, enabled: true, model: "confirmed/model", catalogRefresh: { status: "committed" } }));
+    await Promise.all([pendingSave, secondSave]);
+  });
+
+  expect(dataAfterRead).toEqual({ enabled: true, model: "confirmed/model" });
+  expect(savingAfterRead).toBe(true);
+  expect(writes).toBe(1);
+});
+
+test("an ordinary GET started during a save is ignored", async () => {
+  const write = deferred<Response>();
+  let reads = 0;
+  respond = async (_url, init) => init?.method === "PUT"
+    ? write.promise
+    : response({ enabled: false, model: ++reads === 1 ? "confirmed/model" : "stale/model" });
+  await paint("/a");
+  await act(async () => { await controller.load(); });
+  let pendingSave!: Promise<void>;
+  await act(async () => { pendingSave = controller.save({ enabled: true }); });
+  let readResult: unknown;
+  await act(async () => { readResult = await controller.load(); });
+  const requestCount = requests.length;
+  const dataAfterRead = controller.data;
+  const savingAfterRead = controller.saving;
+  await act(async () => {
+    write.resolve(response({ ok: true, enabled: true, model: "confirmed/model", catalogRefresh: { status: "committed" } }));
+    await pendingSave;
+  });
+
+  expect(readResult).toBeNull();
+  expect(requestCount).toBe(2);
+  expect(dataAfterRead).toEqual({ enabled: true, model: "confirmed/model" });
+  expect(savingAfterRead).toBe(true);
+});
+
+test("a GET begun before a PUT stays stale if it completes after the PUT", async () => {
+  const lateRead = deferred<Response>();
+  let reads = 0;
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") return response({ ok: true, enabled: true, model: "saved/model", catalogRefresh: { status: "committed" } });
+    return ++reads === 1 ? response({ enabled: false, model: "confirmed/model" }) : lateRead.promise;
+  };
+  await paint("/a");
+  await act(async () => { await controller.load(); });
+  let pendingRead!: ReturnType<AutoReviewSettingsController["load"]>;
+  await act(async () => { pendingRead = controller.load(); });
+  const readSignal = requests.at(-1)!.init!.signal!;
+  await act(async () => { await controller.save({ enabled: true, model: "saved/model" }); });
+  expect(readSignal.aborted).toBe(true);
+  await act(async () => { lateRead.resolve(response({ enabled: false, model: "stale/model" })); await pendingRead; });
+
+  expect(controller.data).toEqual({ enabled: true, model: "saved/model" });
+  expect(controller.saving).toBe(false);
+});
+
+test("explicit reconciliation refreshes settings without ending a save", async () => {
+  const write = deferred<Response>();
+  const reconciliation = deferred<Response>();
+  let reads = 0;
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") return write.promise;
+    return ++reads === 1
+      ? response({ enabled: false, model: "confirmed/model" })
+      : reconciliation.promise;
+  };
+  await paint("/a");
+  await act(async () => { await controller.load(); });
+  let pendingSave!: Promise<void>;
+  await act(async () => { pendingSave = controller.save({ enabled: true }); });
+  let refresh!: ReturnType<AutoReviewSettingsController["load"]>;
+  await act(async () => { refresh = controller.load({ reconcile: true }); });
+  await act(async () => {
+    reconciliation.resolve(response({ enabled: false, model: "fresh/model" }));
+    await refresh;
+  });
+  const dataAfterRefresh = controller.data;
+  const savingAfterRefresh = controller.saving;
+  await act(async () => {
+    write.resolve(response({ ok: true, enabled: true, model: "confirmed/model", catalogRefresh: { status: "committed" } }));
+    await pendingSave;
+  });
+
+  expect(dataAfterRefresh).toEqual({ enabled: false, model: "fresh/model" });
+  expect(savingAfterRefresh).toBe(true);
+});
+
 test("failed save reloads the confirmed server value and reports the error", async () => {
   let reads = 0;
   respond = async (_url, init) => {

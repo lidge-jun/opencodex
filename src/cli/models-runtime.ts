@@ -585,14 +585,17 @@ async function autoReview(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (modelRaw !== undefined) body.model = modelRaw === "-" ? "" : modelRaw;
   if (enabled !== undefined) body.enabled = enabled;
   if (Object.keys(body).length === 0) throw new CliUsageError("model and/or --enabled is required", USAGE);
-  const result = await runtimeRequest<{ catalogRefresh?: { status?: string } }>(
+  const result = await runtimeRequest<{ catalogRefresh?: { status?: string; retryable?: boolean } }>(
     "/api/auto-review-settings", { method: "PUT", body: JSON.stringify(body) }, deps,
   );
+  const refresh = result.catalogRefresh;
   printData(result, wantsJson, [
     "Auto-review settings updated.",
-    ...(result.catalogRefresh?.status !== "committed"
-      ? ["Settings saved, but the Codex model catalog refresh is pending. Run ocx sync to retry."]
-      : []),
+    ...(refresh?.status === "failed"
+      ? ["Settings saved, but the Codex model catalog refresh failed. Resolve the refresh issue before running ocx sync."]
+      : refresh?.status === "skipped" && refresh.retryable === true
+        ? ["Settings saved, but the Codex model catalog refresh is pending. Run ocx sync to retry."]
+        : []),
   ]);
 }
 

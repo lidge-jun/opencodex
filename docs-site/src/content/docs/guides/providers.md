@@ -1367,8 +1367,10 @@ setting must be enabled and name a model. An enabled setting with no model remai
 leaves the Codex fallback in effect. The Models page reports a pending catalog refresh, which you
 can retry with `ocx sync`. From the CLI, read the setting with `ocx models auto-review status` or
 change it with `ocx models auto-review set <model|-> [--enabled <on|off>]`; use `-` to clear the
-model. To give a routed provider its own — usually cheaper — reviewer, set the selector on that
-provider row in `~/.opencodex/config.json`:
+model. CLI output recommends `ocx sync` when a refresh can be retried; a failed refresh is reported
+separately and should be resolved before syncing. To give a routed provider
+its own — usually cheaper — reviewer, set the selector on that provider row in
+`~/.opencodex/config.json`:
 
 ```json
 {

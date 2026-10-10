@@ -837,7 +837,7 @@ State-changing: yes.
 
 JSON mode: `payload`.
 
-- At least a model or --enabled is required; - clears the model with an empty string.
+- At least a model or --enabled is required; - clears the model with an empty string. Human output points to ocx sync when a catalog refresh can be retried and asks operators to resolve a failed refresh before syncing.
 
 ### `ocx alias list`
 

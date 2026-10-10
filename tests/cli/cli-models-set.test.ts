@@ -166,7 +166,7 @@ describe("models auto-review settings command", () => {
     expect(JSON.parse(result.stdout)).toEqual({ enabled: true, model: "router/reviewer" });
   });
 
-  test("writes the model and enabled state and reports a pending catalog refresh", async () => {
+  test("writes the model and enabled state and reports a retryable refresh as pending", async () => {
     const result = await invoke(["set", "router/reviewer", "--enabled", "on"], {
       ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "skipped", retryable: true },
     }, 200, "auto-review");
@@ -175,6 +175,24 @@ describe("models auto-review settings command", () => {
       path: "/api/auto-review-settings", method: "PUT", body: { enabled: true, model: "router/reviewer" },
     }]);
     expect(result.stdout).toContain("catalog refresh is pending");
+  });
+
+  test("reports a failed catalog refresh separately from a non-retryable skip", async () => {
+    const failed = await invoke(["set", "router/reviewer"], {
+      ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "failed", reason: "disk" },
+    }, 200, "auto-review");
+    expect(failed.code).toBe(0);
+    expect(failed.stdout).toContain("catalog refresh failed");
+    expect(failed.stdout).toContain("Resolve the refresh issue");
+    expect(failed.stdout).not.toContain("catalog refresh is pending");
+
+    const skipped = await invoke(["set", "router/reviewer"], {
+      ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "skipped", retryable: false },
+    }, 200, "auto-review");
+    expect(skipped.stdout).not.toContain("catalog refresh is pending");
+    expect(skipped.stdout).not.toContain("catalog refresh failed");
+    expect(skipped.stdout).not.toContain("ocx sync");
+    expect(skipped.stdout).not.toContain("ocx sync");
   });
 
   test("dash clears the saved model and an empty set makes no request", async () => {

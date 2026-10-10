@@ -216,7 +216,7 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
     command: ["models", "auto-review", "set"], summary: "Set the global auto-review model or enabled state.",
     usage: "ocx models auto-review set [model|-] [--enabled <on|off>] [--json]", routes: [{ method: "PUT", path: "/api/auto-review-settings" }], mutates: true, json: "payload",
     flags: [{ name: "--enabled", value: "string", summary: "on or off; takes a value." }, { name: "--json", value: "boolean", summary: "Emit the settings receipt." }],
-    details: ["At least a model or --enabled is required; - clears the model with an empty string."],
+    details: ["At least a model or --enabled is required; - clears the model with an empty string. Human output points to ocx sync when a catalog refresh can be retried and asks operators to resolve a failed refresh before syncing."],
   },
   {
     command: ["alias", "list"], summary: "Read provider and model aliases.",
