@@ -287,7 +287,7 @@ test("a transport-rejected redemption stops posting, re-reads the account, and o
   expect([...host.querySelectorAll(".modal-card button")].some(b => (b.textContent ?? "").includes("Use 1 coupon"))).toBe(false);
 });
 
-for (const [code, status] of [["attempt_unresolved", 502], ["redeem_failed", 502], ["attempt_in_progress", 409], ["attempt_reconcile_failed", 502], ["missing_code", 200]] as const) {
+for (const [code, status] of [["attempt_unresolved", 502], ["redeem_failed", 502], ["attempt_in_progress", 409], ["attempt_reconcile_failed", 502], ["operation_state_changed", 409], ["missing_code", 200]] as const) {
   test(`a returned ${code} stays unknown across dialog close and reopen`, async () => {
     harness.coupons.set("acct-a", [COUPON("restok_a1", 10)]);
     harness.consumeReply = async () => json(code === "missing_code" ? { success: true } : { error: { code } }, status);
@@ -326,6 +326,41 @@ test("closing and reopening during dispatch cannot post a new operation", async 
   }
 });
 
+for (const code of ["redeemed", "coupon_unavailable"] as const) {
+  test(`a reopened pending modal clears uncertainty immediately after ${code}`, async () => {
+    harness.coupons.set("acct-a", [COUPON("restok_a1", 10), COUPON("restok_a2", 20)]);
+    let finish!: (response: Response) => void;
+    harness.consumeReply = () => new Promise(resolve => { finish = resolve; });
+    const host = await mountPanel([ACCOUNT("acct-a")]);
+    await openDialog(host);
+    await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
+    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!.click(); await flush(); });
+    await openDialog(host);
+    await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
+    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+    expect(harness.consumes).toHaveLength(1);
+    expect(dialogText(host)).toContain("outcome is unknown");
+    try {
+      await act(async () => {
+        if (code === "redeemed") harness.coupons.set("acct-a", [COUPON("restok_a2", 20)]);
+        finish(code === "redeemed" ? json({ code }) : json({ error: { code } }, 409));
+        await flush();
+      });
+      expect(dialogText(host)).not.toContain("outcome is unknown");
+      expect(buttonWithText(host, "Use 1 coupon").disabled).toBe(false);
+      harness.consumeReply = async () => json({ code: "redeemed" });
+      await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
+      await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+      expect(harness.consumes).toHaveLength(2);
+      expect(harness.consumes[1].operationId).not.toBe(harness.consumes[0].operationId);
+      if (code === "redeemed") expect(harness.consumes[1].tokenId).toBe("restok_a2");
+    } finally {
+      await act(async () => { finish(json({ code: "redeemed" })); await flush(); });
+    }
+  });
+}
+
 for (const code of ["coupon_unavailable", "auth_failed", "fetch_resets_failed"]) {
   test(`a definitive ${code} releases a speculative pending hold`, async () => {
     harness.coupons.set("acct-a", [COUPON("restok_a1", 10)]);
@@ -342,7 +377,8 @@ for (const code of ["coupon_unavailable", "auth_failed", "fetch_resets_failed"])
     expect(harness.consumes).toHaveLength(1);
     expect(dialogText(host)).toContain("outcome is unknown");
     await act(async () => { finish(json({ error: { code } }, 409)); await flush(); });
-    await act(async () => { buttonWithText(host, "Close").click(); await flush(); });
+    expect(dialogText(host)).not.toContain("outcome is unknown");
+    await act(async () => { host.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!.click(); await flush(); });
     await openDialog(host);
     expect(dialogText(host)).not.toContain("outcome is unknown");
     expect(buttonWithText(host, "Use 1 coupon").disabled).toBe(false);

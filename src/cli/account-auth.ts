@@ -479,7 +479,7 @@ async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<v
     const body = apiError?.body as { error?: { code?: string } } | null | undefined;
     const code = body && typeof body === "object" ? body.error?.code : undefined;
     if (consume && (!apiError || (!apiError.code && (
-      (!code && apiError.status >= 500) || ["attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "redeem_failed"].includes(code ?? "")
+      (!code && apiError.status >= 500) || ["attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed", "redeem_failed"].includes(code ?? "")
     )))) {
       throw new RuntimeApiError(`Coupon redemption outcome is unconfirmed. Preserve --operation-id ${effectiveOperationId}; reuse it to inspect this attempt and do not create a replacement operation.`, apiError?.status ?? 503, apiError?.body ?? null);
     }

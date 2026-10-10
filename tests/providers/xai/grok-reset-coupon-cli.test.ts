@@ -63,6 +63,17 @@ describe("ocx account grok-reset-coupons", () => {
     expect(out.errors.join("\n")).toContain(`--operation-id ${(calls[0].body as { operationId: string }).operationId}`);
   });
 
+  test("a changed operation preserves its client-minted recovery id without another POST", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await handleAccountAuthCommand("grok-reset-coupons", ["main", "--consume", "--yes"], deps(() =>
+        new Response(JSON.stringify({ error: { code: "operation_state_changed" } }), { status: 409 }), calls))).toBeGreaterThan(0);
+    } finally { out.restore(); }
+    expect(calls).toHaveLength(1);
+    expect(out.errors.join("\n")).toContain(`--operation-id ${(calls[0].body as { operationId: string }).operationId}`);
+  });
+
   test("a lost response retains its client-minted operation id without another POST", async () => {
     const calls: Captured[] = [];
     const out = capture();

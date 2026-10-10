@@ -124,9 +124,8 @@ export function GrokResetCouponModal({ accountId, accountLabel, entry, controlle
   const [confirming, setConfirming] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
   const [checking, setChecking] = useState(false);
-  /** Set by an aborted redemption; while it holds, the dialog posts nothing. */
-  const [localUnknown, setUnknown] = useState<{ tokenId: string } | null>(null);
-  const unknown = controller.uncertain[accountId] ?? localUnknown;
+  /** The controller clears this hold when the original request definitively completes. */
+  const unknown = controller.uncertain[accountId];
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const operationIdRef = useRef<string | undefined>(undefined);
 
@@ -182,7 +181,7 @@ export function GrokResetCouponModal({ accountId, accountLabel, entry, controlle
     if (result.uncertain || result.code === "aborted") {
       if (result.operationId) operationIdRef.current = result.operationId;
       // Outcome unknown: hold the id, stop posting, and let the user re-read.
-      setUnknown({ tokenId: next.tokenId });
+      setConfirming(false);
       setOutcome(null);
       void controller.refresh(accountId);
       return;

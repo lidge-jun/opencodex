@@ -211,7 +211,7 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
       });
       if (!response.ok) {
         const code = errorCode(await response.json().catch(() => null));
-        if (["attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "redeem_failed"].includes(code)) return hold(request, code);
+        if (["attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed", "redeem_failed"].includes(code)) return hold(request, code);
         clearMatchingHold();
         return { ok: false, code, replayed: false };
       }
