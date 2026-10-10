@@ -305,3 +305,19 @@ test("pairing refuses a returned session bound to a different browser origin", a
     });
   }
 });
+
+
+test("cancelled Remote Link validation forwards the abort signal and rejects a late response", async () => {
+  const { validateRemoteLinkSession } = await import("../src/connect-pairing-transport");
+  const controller = new AbortController();
+  let release!: (response: Response) => void;
+  let observedSignal: AbortSignal | null | undefined;
+  const pending = validateRemoteLinkSession("https://hub.example.test", (async (_input, init) => {
+    observedSignal = init?.signal;
+    return new Promise<Response>(resolve => { release = resolve; });
+  }) as typeof fetch, controller.signal);
+  expect(observedSignal).toBe(controller.signal);
+  controller.abort();
+  release(Response.json({ role: "standalone", listener: { state: "off", port: null }, links: [], child: null }));
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+});

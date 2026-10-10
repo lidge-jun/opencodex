@@ -3554,7 +3554,7 @@ export const en = {
   "connection.pairing.notApiKey": "Paste a one-time pairing code here. Data API keys and admin tokens do not belong in this field.",
   "connection.pairing.networkError": "Could not reach the hub. Check the connection and retry; your code is still here.",
   "connection.pairing.requestError": "The hub could not complete the pairing request. Check its status and retry.",
-  "connection.pairing.responseError": "The hub did not return a valid session for this browser origin. Use the exact HTTPS address the pairing code was created for, or ask the operator for a fresh code.",
+  "connection.pairing.responseError": "The Hub did not return a valid pairing response. Retry or contact the operator.",
   "dash.authRequired": "Browser authentication is required to view this dashboard.",
   "dash.permissionDenied": "This browser is not permitted to read the dashboard. Check access settings with the server operator.",
   "dash.dataUnavailable": "Dashboard data could not be loaded. Check the connection and retry.",

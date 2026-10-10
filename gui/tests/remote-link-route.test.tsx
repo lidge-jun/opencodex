@@ -18,6 +18,8 @@ let linkStatusReads = 0;
 let pairingSessionHtml: string | null = null;
 let pairingStatus = 401;
 let linkStatusCode = 200;
+let linkStatusFailure: "offline" | "malformed" | null = null;
+let deferredStatus: ((signal?: AbortSignal | null) => Promise<Response>) | null = null;
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -66,6 +68,9 @@ function mountWindow(
     }
     if (url.includes("/api/link/status")) {
       linkStatusReads += 1;
+      if (deferredStatus) return deferredStatus(init?.signal);
+      if (linkStatusFailure === "offline") throw new TypeError("offline");
+      if (linkStatusFailure === "malformed") return jsonResponse({});
       if (linkStatusCode !== 200) return jsonResponse({ error: { code: linkStatusCode === 403 ? "forbidden" : "unknown" } }, linkStatusCode);
       return jsonResponse({ role: "standalone", listener: { state: "off", port: null }, links: [], child: null });
     }
@@ -86,6 +91,8 @@ beforeEach(() => {
   pairingSessionHtml = null;
   pairingStatus = 401;
   linkStatusCode = 200;
+  linkStatusFailure = null;
+  deferredStatus = null;
 });
 
 afterEach(async () => {
@@ -263,7 +270,10 @@ test("an authenticated remote hub with an automatic session can open manual pair
   const pairingButton = [...container.querySelectorAll("button")]
     .find(button => button.textContent?.trim() === "Connect this dashboard to the hub");
   expect(pairingButton).toBeDefined();
+  pairingButton?.focus();
+  expect(document.activeElement).toBe(pairingButton);
   await act(async () => { pairingButton?.click(); });
+  expect(document.activeElement).toBe(container.querySelector("#connect-pairing-code"));
 
   expect(container.querySelector(".connect-pairing")).not.toBeNull();
   expect(container.querySelector('[role="switch"]')).toBeNull();
@@ -303,4 +313,53 @@ test("a non-loopback standalone without a GUI session does not offer hub pairing
   expect(container.textContent).not.toContain("Connect this dashboard to the hub");
   expect(container.textContent).not.toContain("ocx gui pair --origin");
   expect(linkStatusReads).toBe(0);
+});
+
+
+for (const failure of ["offline", "malformed", 500, 503] as const) {
+  test(`Hub pairing recovery is unavailable for a ${failure} status failure`, async () => {
+    mountWindow("hub", { url: "https://opencodex.rhodiz.net/#remote" });
+    if (typeof failure === "number") linkStatusCode = failure; else linkStatusFailure = failure;
+    await mountApp();
+    await waitFor(() => container.querySelector(".remote-link-error") !== null || container.querySelector(".notice-err") !== null);
+    expect(container.textContent).not.toContain("Connect this dashboard to the hub");
+    expect(container.querySelector(".connect-pairing")).toBeNull();
+  });
+}
+
+for (const stage of ["headers", "body"] as const) test(`navigation during Remote Link validation (${stage}) cannot close a later recovery form`, async () => {
+  mountWindow("hub", { session: false, url: "https://opencodex.rhodiz.net/#remote" });
+  await mountApp();
+  await waitFor(() => container.textContent?.includes("Connect this dashboard to the hub") === true);
+  const action = () => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Connect this dashboard to the hub");
+  await act(async () => { action()?.click(); });
+  pairingSessionHtml = `<meta name="opencodex-session-token" content="ocx_session_operator_pairing"><meta name="opencodex-session-csrf" content="operator-csrf"><meta name="opencodex-session-origin" content="https://opencodex.rhodiz.net"><meta name="opencodex-session-server-origin" content="https://opencodex.rhodiz.net">`;
+  let release!: (response: Response) => void;
+  let validationSignal: AbortSignal | null | undefined;
+  deferredStatus = async signal => {
+    validationSignal = signal;
+    if (stage === "headers") return new Promise<Response>(resolve => { release = resolve; });
+    const response = jsonResponse({});
+    response.json = () => new Promise(resolve => { release = result => { void result.json().then(resolve); }; });
+    return response;
+  };
+  const input = container.querySelector("#connect-pairing-code") as HTMLInputElement;
+  Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(input, `ocx_pair_${"a".repeat(43)}`);
+  await act(async () => { input.dispatchEvent(new testWindow.Event("input", { bubbles: true })); });
+  await act(async () => { input.closest("form")!.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true })); });
+  await waitFor(() => release !== undefined);
+  await act(async () => {
+    window.location.hash = "#remote-workspace";
+    window.dispatchEvent(new testWindow.Event("hashchange"));
+  });
+  expect(container.querySelector(".connect-pairing")).toBeNull();
+  expect(validationSignal?.aborted).toBe(true);
+  await act(async () => {
+    window.location.hash = "#remote";
+    window.dispatchEvent(new testWindow.Event("hashchange"));
+  });
+  expect(container.querySelector(".connect-pairing")).not.toBeNull();
+  await act(async () => { release(jsonResponse({ role: "standalone", listener: { state: "off", port: null }, links: [], child: null })); });
+  expect(container.querySelector(".connect-pairing")).not.toBeNull();
+  expect(container.querySelector('[role="switch"]')).toBeNull();
 });

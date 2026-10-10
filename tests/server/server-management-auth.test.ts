@@ -1,3 +1,5 @@
+import { localManagementOrigin } from "../../src/lib/local-destinations";
+import { selectDefaultGuiUrl } from "../../src/cli/dispatch";
 import { request as httpRequest } from "node:http";
 import { getActiveTurnCount } from "../../src/server/lifecycle";
 // Holds INV-AUTH-01 from structure/overview.md; keep the id here if this file is split or renamed.
@@ -1936,4 +1938,35 @@ test("a body exactly at the limit is still accepted for parsing", async () => {
   } finally {
     await server.stop(true);
   }
+});
+
+
+test("ocx gui and local CLI management retain loopback sessions on Hub management ingress", async () => {
+  const cfg = hubConfig();
+  cfg.hostname = "127.0.0.1";
+  cfg.hub = { ...cfg.hub, managementIngress: { enabled: true, port: 10101 } };
+  saveConfig(cfg);
+  const state = initializeManagementAuthState(cfg);
+  const { server, managementPort } = await startEphemeralHubServer({ managementAuthState: state }, ["127.0.0.1", "127.0.0.1"]);
+  const liveCfg = { ...cfg, hub: { ...cfg.hub, managementIngress: { enabled: true, port: managementPort } } };
+  const base = localManagementOrigin(liveCfg, server.port);
+  expect(selectDefaultGuiUrl(liveCfg, null, () => "127.0.0.1")).toBe(base);
+  try {
+    const bootstrap = await fetch(`${base}/opencodex-session`);
+    expect(bootstrap.status).toBe(200);
+    const html = await bootstrap.text();
+    const token = /name="opencodex-session-token" content="([^"]+)"/.exec(html)?.[1];
+    expect(token).toBeDefined();
+    expect(html).toContain(`name="opencodex-session-server-origin" content="${base}"`);
+    expect((await fetch(`${base}/api/config`, { headers: {
+      Origin: base, "x-opencodex-api-key": token!, "x-opencodex-gui-origin": base,
+    } })).status).toBe(200);
+    expect((await fetch(`${base}/api/config`, { headers: {
+      "x-opencodex-api-key": "admin-secret",
+    } })).status).toBe(200);
+    expect((await fetch(`${base}/api/config`)).status).toBe(401);
+    expect((await fetch(`${base}/api/config`, { headers: {
+      Origin: "https://evil.example.test", "x-opencodex-api-key": "admin-secret",
+    } })).status).toBe(403);
+  } finally { await server.stop(true); }
 });

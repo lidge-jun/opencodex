@@ -135,6 +135,7 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
   const [role, setRole] = useState<RemoteLinkRole>("home");
   const [status, setStatus] = useState<RemoteLinkStatusWire | null>(null);
   const [statusError, setStatusError] = useState<TKey | null>(null);
+  const [statusAuthorizationFailed, setStatusAuthorizationFailed] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [discovery, setDiscovery] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [candidates, setCandidates] = useState<LinkCandidateView[]>([]);
@@ -160,7 +161,7 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
   const restartPidRef = useRef<number | null>(null);
   const restartingRef = useRef(false);
   const [restartSlow, setRestartSlow] = useState(false);
-  const pairingRecoveryAction = pairingRecoveryAvailable && onRequestPairing && (!sessionReady || statusError !== null)
+  const pairingRecoveryAction = pairingRecoveryAvailable && onRequestPairing && (!sessionReady || statusAuthorizationFailed)
     ? <button type="button" className="link-btn" onClick={onRequestPairing}>{t("connection.pairing.title")}</button>
     : null;
 
@@ -198,6 +199,7 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
       if (controller.signal.aborted || statusSequenceRef.current !== sequence) return;
       setStatus(value);
       setStatusError(null);
+      setStatusAuthorizationFailed(false);
       if (failedAction) {
         setUiState("failed");
       } else if (value.role === "child") {
@@ -211,6 +213,7 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
     } catch (error) {
       if (controller.signal.aborted || statusSequenceRef.current !== sequence) return;
       setStatusError(errorKey(error));
+      setStatusAuthorizationFailed(error instanceof LinkApiError && (error.status === 401 || error.status === 403));
     } finally {
       if (statusRequestRef.current?.sequence === sequence) statusRequestRef.current = null;
     }

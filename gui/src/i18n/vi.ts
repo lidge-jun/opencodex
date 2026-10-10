@@ -3478,7 +3478,7 @@ export const vi: Record<TKey, string> = {
   "connection.pairing.notApiKey": "Dán mã ghép nối dùng một lần vào đây. Khóa API dữ liệu và admin token không thuộc trường này.",
   "connection.pairing.networkError": "Không thể kết nối tới hub. Hãy kiểm tra kết nối và thử lại; mã của bạn vẫn còn ở đây.",
   "connection.pairing.requestError": "Hub không thể hoàn tất yêu cầu ghép nối. Hãy kiểm tra trạng thái và thử lại.",
-  "connection.pairing.responseError": "Hub không trả về phiên hợp lệ cho origin trình duyệt này. Hãy dùng đúng địa chỉ HTTPS đã tạo mã ghép nối hoặc xin người vận hành mã mới.",
+  "connection.pairing.responseError": "Hub không trả về phản hồi ghép nối hợp lệ. Hãy thử lại hoặc liên hệ người vận hành.",
   "dash.authRequired": "Cần xác thực trình duyệt để xem bảng điều khiển này.",
   "dash.permissionDenied": "Trình duyệt này không được phép đọc bảng điều khiển. Hãy kiểm tra cài đặt truy cập với người vận hành máy chủ.",
   "dash.dataUnavailable": "Không thể tải dữ liệu bảng điều khiển. Hãy kiểm tra kết nối và thử lại.",

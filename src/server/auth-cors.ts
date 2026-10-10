@@ -147,6 +147,15 @@ export function managementRequestOrigin(req: Request, config: OcxConfig): string
   const host = req.headers.get("Host");
   const parsedHost = parseHttpHost(host);
   if (!host || !parsedHost) return null;
+  if (isLoopbackHostname(parsedHost.hostname)) {
+    try {
+      const protocol = new URL(req.url).protocol;
+      if (protocol !== "http:" && protocol !== "https:") return null;
+      return new URL(`${protocol}//${host}`).origin;
+    } catch {
+      return null;
+    }
+  }
   if (trustedHubManagementRequests.has(req)) {
     if (config.runtimeRole !== "hub") return null;
     const canonical = canonicalHubManagementOrigin(config.hub?.managementPublicOrigin);
@@ -161,15 +170,6 @@ export function managementRequestOrigin(req: Request, config: OcxConfig): string
         return null;
       }
       return canonical;
-    } catch {
-      return null;
-    }
-  }
-  if (isLoopbackHostname(parsedHost.hostname)) {
-    try {
-      const protocol = new URL(req.url).protocol;
-      if (protocol !== "http:" && protocol !== "https:") return null;
-      return new URL(`${protocol}//${host}`).origin;
     } catch {
       return null;
     }

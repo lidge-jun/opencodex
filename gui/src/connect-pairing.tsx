@@ -9,18 +9,22 @@ export function ConnectPairingForm({
   onConnected,
   onPairingStart,
   local = false,
+  focusOnMount = false,
 }: {
   target: ApiTarget;
-  onConnected: () => void | Promise<void>;
+  onConnected: (signal: AbortSignal) => void | Promise<void>;
   /** Let a secret-bearing surface expire its previous disclosure lifetime. */
   onPairingStart?: () => void;
   /** Explicit local pairing for a standalone link join; never an automatic bootstrap. */
   local?: boolean;
+  focusOnMount?: boolean;
 }) {
   const t = useT();
   const [grant, setGrant] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PairingError["kind"] | null>(null);
+  const codeInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (focusOnMount) codeInput.current?.focus(); }, [focusOnMount]);
   const activeRequest = useRef<AbortController | null>(null);
   useEffect(() => () => activeRequest.current?.abort(), []);
   const copyFeedback = useCopyFeedback<string>();
@@ -39,7 +43,7 @@ export function ConnectPairingForm({
       await submitConnectPairing(target, grant, undefined, controller.signal);
       if (!controller.signal.aborted) {
         setGrant("");
-        await onConnected();
+        await onConnected(controller.signal);
       }
     } catch (failure) {
       if (!controller.signal.aborted) setError(failure instanceof PairingError ? failure.kind : "unreachable");
@@ -62,7 +66,7 @@ export function ConnectPairingForm({
     <p>{t("connection.pairing.notApiKey")}</p>
     <form onSubmit={submit} className="api-form-row">
       <label htmlFor="connect-pairing-code" className="field-label">{t("connection.pairing.code")}</label>
-      <input id="connect-pairing-code" name="pairingCode" value={grant}
+      <input ref={codeInput} id="connect-pairing-code" name="pairingCode" value={grant}
         onChange={(event: ChangeEvent<HTMLInputElement>) => setGrant(event.currentTarget.value)}
         autoComplete="off" spellCheck={false} disabled={busy} className="input mono"
         aria-invalid={Boolean(error) || undefined} aria-describedby={error ? "connect-pairing-error" : undefined} />

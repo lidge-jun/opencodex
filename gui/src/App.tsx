@@ -597,8 +597,9 @@ export default function App() {
                   <div className="alert alert-err" role="alert">{t("connection.machineUnavailable")}</div>
                 )}
                 {((targets.connected && !sharedSessionReady) || remotePairingFormOpen) && (
-                  <ConnectPairingForm key={`${targets.shared.serverOrigin}:${targets.shared.bootstrapPath}`} target={targets.shared} onConnected={async () => {
-                    if (remotePairingFormOpen) await validateRemoteLinkSession(sharedBase);
+                  <ConnectPairingForm key={`${targets.shared.serverOrigin}:${targets.shared.bootstrapPath}`} target={targets.shared} focusOnMount={remotePairingFormOpen} onConnected={async signal => {
+                    if (remotePairingFormOpen) await validateRemoteLinkSession(sharedBase, undefined, signal);
+                    signal.throwIfAborted();
                     setHubPairingOpen(false);
                     setSharedSessionReady(hasApiSession("shared"));
                     setSharedSessionEpoch(epoch => epoch + 1);

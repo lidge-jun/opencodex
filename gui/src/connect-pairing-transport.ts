@@ -103,17 +103,20 @@ export async function submitConnectPairing(
 }
 
 /** Accept pairing only after the new browser session can read the protected Remote Link status. */
-export async function validateRemoteLinkSession(apiBase: string, fetchImpl?: typeof fetch): Promise<void> {
+export async function validateRemoteLinkSession(apiBase: string, fetchImpl?: typeof fetch, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   const send = fetchImpl ?? ((input, init) => window.fetch(input, init));
   let response: Response;
   try {
     response = await send(`${apiBase}/api/link/status`, {
-      cache: "no-store",
+      cache: "no-store", signal,
       headers: { Accept: "application/json" },
     });
   } catch {
+    signal?.throwIfAborted();
     throw new PairingError("unreachable");
   }
+  signal?.throwIfAborted();
   if (!response.ok) {
     if (await isHtmlChallenge(response)) throw new PairingError("cloudflare-challenge");
     try { await response.body?.cancel(); } catch { /* best effort */ }
@@ -123,6 +126,12 @@ export async function validateRemoteLinkSession(apiBase: string, fetchImpl?: typ
   }
   if (await isHtmlChallenge(response)) throw new PairingError("cloudflare-challenge");
   if (!hasApiSession("shared")) throw new PairingError("invalid-response");
-  try { parseRemoteLinkStatus(await response.json()); }
-  catch { throw new PairingError("invalid-response"); }
+  try {
+    const status = await response.json();
+    signal?.throwIfAborted();
+    parseRemoteLinkStatus(status);
+  } catch {
+    signal?.throwIfAborted();
+    throw new PairingError("invalid-response");
+  }
 }
