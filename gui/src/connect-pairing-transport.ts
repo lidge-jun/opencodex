@@ -1,15 +1,53 @@
-import { installApiSessionFromHtml } from "./api";
+import { hasApiSession, installApiSessionFromHtml } from "./api";
 import type { ApiTarget } from "./api-targets";
+import { parseRemoteLinkStatus } from "./remote-link-api";
 
 const PAIRING_CODE = /^ocx_pair_[A-Za-z0-9_-]{43}$/;
 
 export class PairingError extends Error {
-  readonly kind: "invalid-code" | "refused" | "unreachable" | "request-failed" | "invalid-response";
+  readonly kind: "invalid-code" | "refused" | "origin-denied" | "cloudflare-challenge" | "remote-link-unauthorized" | "remote-link-forbidden" | "unreachable" | "request-failed" | "invalid-response";
   constructor(kind: PairingError["kind"]) {
     super(`pairing_${kind}`);
     this.kind = kind;
     this.name = "PairingError";
   }
+}
+
+const CHALLENGE_PREFIX_LIMIT = 16 * 1024;
+
+function isCloudflareChallenge(response: Response, body = ""): boolean {
+  if (response.headers.get("cf-mitigated")?.trim().toLowerCase() === "challenge") return true;
+  return /<title>\s*Just a moment\.\.\./i.test(body)
+    || /cf-chl-|challenge-platform|challenges\.cloudflare\.com/i.test(body);
+}
+
+async function readResponsePrefix(response: Response, limit = CHALLENGE_PREFIX_LIMIT): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < limit) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      const chunk = value.subarray(0, limit - size);
+      chunks.push(chunk);
+      size += chunk.byteLength;
+      if (chunk.byteLength < value.byteLength) break;
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* best effort */ }
+  }
+  const buffer = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder().decode(buffer);
+}
+
+async function isHtmlChallenge(response: Response): Promise<boolean> {
+  if (isCloudflareChallenge(response)) return true;
+  if (!response.headers.get("content-type")?.toLowerCase().includes("text/html")) return false;
+  return isCloudflareChallenge(response, await readResponsePrefix(response));
 }
 
 /**
@@ -49,13 +87,42 @@ export async function submitConnectPairing(
     throw new PairingError("unreachable");
   }
   if (!response.ok) {
+    if (await isHtmlChallenge(response)) throw new PairingError("cloudflare-challenge");
     try { await response.body?.cancel(); } catch { /* best effort */ }
-    throw new PairingError(response.status === 401 || response.status === 403 ? "refused" : "request-failed");
+    if (response.status === 401) throw new PairingError("refused");
+    if (response.status === 403) throw new PairingError("origin-denied");
+    throw new PairingError("request-failed");
   }
   let html: string;
   try { html = await response.text(); }
   catch (error) { if (signal?.aborted) throw error; throw new PairingError("invalid-response"); }
   signal?.throwIfAborted();
+  if (isCloudflareChallenge(response, html)) throw new PairingError("cloudflare-challenge");
   if (!installApiSessionFromHtml("shared", html)) throw new PairingError("invalid-response");
   return true;
+}
+
+/** Accept pairing only after the new browser session can read the protected Remote Link status. */
+export async function validateRemoteLinkSession(apiBase: string, fetchImpl?: typeof fetch): Promise<void> {
+  const send = fetchImpl ?? ((input, init) => window.fetch(input, init));
+  let response: Response;
+  try {
+    response = await send(`${apiBase}/api/link/status`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+  } catch {
+    throw new PairingError("unreachable");
+  }
+  if (!response.ok) {
+    if (await isHtmlChallenge(response)) throw new PairingError("cloudflare-challenge");
+    try { await response.body?.cancel(); } catch { /* best effort */ }
+    if (response.status === 401) throw new PairingError("remote-link-unauthorized");
+    if (response.status === 403) throw new PairingError("remote-link-forbidden");
+    throw new PairingError("request-failed");
+  }
+  if (await isHtmlChallenge(response)) throw new PairingError("cloudflare-challenge");
+  if (!hasApiSession("shared")) throw new PairingError("invalid-response");
+  try { parseRemoteLinkStatus(await response.json()); }
+  catch { throw new PairingError("invalid-response"); }
 }

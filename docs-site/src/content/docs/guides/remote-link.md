@@ -51,6 +51,8 @@ The Child waits for its configured port while the old process releases it. If a 
 
 If **Child** says to pair this machine first, open this computer's configured literal-loopback HTTP dashboard, for example `http://127.0.0.1:<configured-port>`. The local pairing form appears only when pairing is missing and the dashboard and API use the same loopback origin. Copy the form's `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` command, run it in a terminal on this computer, and paste the one-use code into the form. Use the exact origin shown in the form; a provider API key or admin token is not a pairing code. Missing pairing is separate from a configured-port mismatch.
 
+On a Hub dashboard opened through a non-loopback address, the browser may have no loopback session or may have a shared session that cannot manage machine links. When Remote Link reports that session or permission problem, choose **Connect this dashboard to the hub** in the Remote Link page to open the one-time pairing form. Run the displayed command on the Hub and enter its code. The page validates the new session's Remote Link access before it closes the form.
+
 The **Child** role also requires a standalone OpenCodex runtime running on its configured port, because the Child restarts on exactly that port. If the dashboard says OpenCodex is not running on its configured port, restart it there first.
 
 ## Link status

@@ -183,9 +183,9 @@ Tailscale identity headers authorize session issuance only when the request arri
 listener and the exact login appears in `remoteGui.allowedTailscaleUsers`. The public listener and
 the unauthenticated data-loopback listener always pass `trustedTailscaleIngress: false`, regardless
 of `Host`, `Origin`, `Forwarded`, `X-Forwarded-*`, or `Tailscale-User-*` values. A generic TLS proxy
-cannot establish that identity and uses the existing single-use, digest-only, origin-bound pairing
-exchange. Pairing accepts no admin/data credential substitute and consumes a grant only after the
-full origin predicate succeeds.
+cannot establish a Tailscale identity and uses the existing single-use, digest-only, origin-bound
+pairing exchange. Hub pairing through `hub.managementIngress` trusts its actual `requestServer`, requires `Host` to match HTTPS `hub.managementPublicOrigin`, and ignores forwarded headers.
+That canonical origin governs management CORS, session admission and CSRF; public/data listeners cannot claim the path, standalone/loopback rules are unchanged, and grants remain single-use.
 
 The server issues a local in-memory session for five minutes or a remote session for twelve hours,
 with 128 live sessions maximum. Stored-key reads require a current pairing or trusted Tailscale-identity session, not automatic loopback issuance or admin tokens. `POST /api/keys/reveal` uses `createManagementSessionControl().canRevealDataKeys` before and after body reception; absent controls deny. Every session is bound to the exact server and browser origins;

@@ -11,7 +11,7 @@ export function ConnectPairingForm({
   local = false,
 }: {
   target: ApiTarget;
-  onConnected: () => void;
+  onConnected: () => void | Promise<void>;
   /** Let a secret-bearing surface expire its previous disclosure lifetime. */
   onPairingStart?: () => void;
   /** Explicit local pairing for a standalone link join; never an automatic bootstrap. */
@@ -37,7 +37,10 @@ export function ConnectPairingForm({
     activeRequest.current = controller;
     try {
       await submitConnectPairing(target, grant, undefined, controller.signal);
-      if (!controller.signal.aborted) onConnected();
+      if (!controller.signal.aborted) {
+        setGrant("");
+        await onConnected();
+      }
     } catch (failure) {
       if (!controller.signal.aborted) setError(failure instanceof PairingError ? failure.kind : "unreachable");
     } finally {
@@ -70,6 +73,9 @@ export function ConnectPairingForm({
         {t(error === "invalid-code" ? "connection.pairing.notApiKey"
           : error === "unreachable" ? "connection.pairing.networkError"
           : error === "request-failed" ? "connection.pairing.requestError"
+          : error === "origin-denied" ? "connection.pairing.originDenied"
+          : error === "cloudflare-challenge" ? "connection.pairing.cloudflareChallenge"
+          : error === "remote-link-unauthorized" || error === "remote-link-forbidden" ? "connection.pairing.sessionNotAuthorized"
           : error === "invalid-response" ? "connection.pairing.responseError" : "connection.pairing.error")}
       </p>}
     </form>
