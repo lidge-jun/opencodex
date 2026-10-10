@@ -118,8 +118,8 @@ import {
 import { handleChatCompletions } from "../chat-completions";
 import { anthropicErrorResponse } from "../../claude/outbound";
 import {
-  buildDesktop3pRegistry,
   desktop3pModelOptions,
+  buildDesktop3pRegistryPreserving,
   generateDesktop3pModels,
 } from "../../claude/desktop-3p";
 import { buildDesktopDiscoveryInputs } from "../../claude/desktop-discovery-inputs";
@@ -1034,7 +1034,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           }
           if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, policy);
           // Build Desktop 3P registry so inbound alias resolution works for subsequent requests.
-          buildDesktop3pRegistry(
+          // Preserving: refresh from discovery without dropping aliases seeded from the on-disk
+          // profile, so a degraded discovery here cannot strip a still-served wire id.
+          buildDesktop3pRegistryPreserving(
             desktopNativeSlugs,
             desktopInputs.routedModels,
             config.claudeCode?.desktopProfile,

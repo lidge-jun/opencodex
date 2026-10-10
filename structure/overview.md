@@ -228,6 +228,12 @@ still cover the rule, which is a judgement only review makes.
   Desktop 3P aliases the registry decodes, and relays the upstream bytes unchanged on any failure;
   see [`runtime.md`](runtime.md).
   Enforced by `tests/claude-integration/claude-cli-picker.test.ts`.
+- **INV-DESKTOPWIRE-01** — The Desktop 3P wire decoder is seeded from disk before provider
+  discovery, so a cold start whose upstream providers are not yet up still decodes the borrowed/role
+  wire ids the static Desktop profile actually sends rather than passing them through; the persisted
+  profile alone reproduces the written mapping, and discovery only adds to it. See
+  [`claude-desktop.md`](clients/claude-desktop.md).
+  Enforced by `tests/claude-integration/claude-desktop-wire-map.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage

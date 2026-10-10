@@ -390,6 +390,22 @@ exact operator mappings and recognized native IDs keep their existing handling. 
 or reapplying the connected hub profile may supply the missing mapping; retry alone does not
 guarantee resolution.
 
+The Desktop 3P decoder must not depend on live provider discovery for the wire ids a written profile
+actually sends. Startup seeds the in-memory registry from disk before discovery runs, from two
+sources in precedence order: the persisted `claudeCode.desktopProfile` is replayed through the same
+slot allocator the writer used, so an install written before any snapshot existed still decodes; and
+an `.ocx-wire.json` sidecar (written beside the profile at the same mutation boundary) supplies the
+exact table that was written, overriding the derived rows. Because the sidecar records the file
+actually applied to Desktop, it wins over a newer desired profile until the next apply rewrites both
+together; the derivation matches the writer exactly whenever the persisted profile carries the
+reconciled route set the apply committed. Discovery then only ADDS, so a degraded
+build cannot strip an alias the on-disk profile still sends. Without this, a cold start whose
+upstream providers are not up yet leaves the registry empty while the static profile keeps sending
+the same wire ids; those resolve to neither the passthrough identity nor a managed id, so the request
+is misrouted and the provider rejects the unknown model. `deriveDesktop3pWireMap` in
+`src/claude/desktop-3p.ts` owns the reconstruction and `seedDesktop3pRegistryFromDisk` in
+`src/claude/desktop-3p-startup.ts` owns the merge.
+
 The remote-alias slice does not change thinking/redacted-thinking replay or prompt-cache
 behavior. Those remain the separate request tracked in #3719; proxy admission alone does not
 establish native Anthropic passthrough or imply that translated Anthropic caching is disabled.

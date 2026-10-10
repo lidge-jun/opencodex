@@ -557,6 +557,14 @@ async function handleStart(options: { block?: boolean } = {}) {
         const localAttestationSecret = createLocalAttestationSecret();
         const config = loadConfig();
         await (await import("../plugins/loader")).loadAndReportOcxPlugins();
+        // Decode the Desktop 3P wire ids from the profile already on disk BEFORE the listener can
+        // serve. Discovery below only refines this; if the upstream providers are not up yet (the
+        // usual cold-start race), the profile-seeded decoder still resolves the wire ids the static
+        // Desktop profile sends instead of passing them through.
+        {
+          const { seedDesktop3pRegistryFromDisk } = await import("../claude/desktop-3p-startup");
+          seedDesktop3pRegistryFromDisk(config);
+        }
         let server: ReturnType<typeof serverModule.startServer>;
         for (let attempt = 0; ; attempt++) {
           try {

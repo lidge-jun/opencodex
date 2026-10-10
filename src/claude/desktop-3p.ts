@@ -121,6 +121,107 @@ let desktop3pRegistry = new Map<string, string>();
 let desktop3pAliasesByRoute = new Map<string, string>();
 let desktop3pRealAnthropicIds = new Set<string>();
 
+/**
+ * The decoder for Desktop's static profile must survive a cold start whose upstream providers are
+ * not up yet. The registry is otherwise built only from live discovery, so at boot it is empty while
+ * the on-disk profile still sends the wire ids it was written with. An empty registry cannot
+ * decode them, so the request is misrouted and the upstream rejects the unknown model.
+ *
+ * Two disk sources seed the registry before discovery, and discovery then only ADDS to it:
+ *
+ * 1. `deriveDesktop3pWireMap` rebuilds it from the persisted profile alone. The writer allocates a
+ *    wire id per route from the profile's own assignment set, so replaying that allocation over the
+ *    same routes reproduces the exact ids that profile was written with. This is the self-healing
+ *    path: an install written before any sidecar existed still decodes on the next cold start.
+ * 2. The `.ocx-wire.json` sidecar records the registry actually written, which stays authoritative
+ *    for the rare case where the route set used at write time is not recoverable from the profile
+ *    (for example a route that was later excluded while its slot was still reserved).
+ */
+export const DESKTOP_3P_WIRE_MAP_SUFFIX = ".ocx-wire.json";
+
+/** The wire-decoder sidecar path for one owned profile id (the id is validated by profilePath). */
+export function desktop3pWireMapPath(libraryPath: string, id: string): string {
+  return profilePath(libraryPath, id) + DESKTOP_3P_WIRE_MAP_SUFFIX;
+}
+
+/**
+ * Read the persisted wire decoder. Missing, unreadable, or malformed content yields an empty map:
+ * a lost sidecar degrades to the derived decoder, it never throws on the startup path. Entries
+ * whose id is not a usable descriptor are dropped rather than trusted.
+ */
+export function readDesktop3pWireMap(libraryPath: string, id: string): Map<string, string> {
+  try {
+    const path = desktop3pWireMapPath(libraryPath, id);
+    if (!existsSync(path)) return new Map();
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!isRecord(parsed) || !isRecord(parsed.wireMap)) return new Map();
+    const out = new Map<string, string>();
+    for (const [alias, route] of Object.entries(parsed.wireMap)) {
+      if (typeof alias === "string" && alias.length > 0 && typeof route === "string" && route.length > 0) {
+        out.set(alias, route);
+      }
+    }
+    return out;
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Persist the exact wire table that the matching profile file describes. Written at the same
+ * mutation boundary as the profile itself so the two can never disagree; a failure here is
+ * non-fatal (the profile is already safely on disk).
+ */
+export function writeDesktop3pWireMap(libraryPath: string, id: string, registry: Map<string, string>): void {
+  try {
+    const wireMap = Object.fromEntries([...registry.entries()].sort(([a], [b]) => a.localeCompare(b)));
+    atomicWriteFile(
+      desktop3pWireMapPath(libraryPath, id),
+      JSON.stringify({ version: 1, wireMap }, null, 2) + "\n",
+    );
+  } catch {
+    // Non-fatal: the in-memory registry stays authoritative for this process.
+  }
+}
+
+/**
+ * Install a disk-derived decoder into the live registry before discovery runs. Existing entries
+ * win, so this is safe to call repeatedly; it never clobbers a fresher build. Discovery still runs
+ * afterwards and re-asserts its own rows, so a stale derived alias cannot shadow a live one.
+ */
+export function installDesktop3pWireMap(wireMap: Map<string, string>): void {
+  for (const [alias, route] of wireMap) if (!desktop3pRegistry.has(alias)) desktop3pRegistry.set(alias, route);
+}
+
+/**
+ * Rebuild the wire decoder for one persisted profile, with no provider access.
+ *
+ * The writer derives every wire id from the profile's own assignment set (slot allocation groups by
+ * family over the live routes it rendered), so feeding the profile's routes back through the
+ * builder reproduces the exact ids the profile was written with. The excludedModels filter drops
+ * the rows the operator excluded, matching the writer, which never allocates them a slot.
+ *
+ * Exactness holds when the profile's route set equals the writer's live route set. A route the
+ * operator deleted from `providers` while a slot stayed reserved in the profile is the one drift
+ * this cannot see; it can shift a family's slot below that route. The `.ocx-wire.json` sidecar is
+ * the authoritative record for any install that has one.
+ */
+export function deriveDesktop3pWireMap(
+  profile: OcxClaudeDesktopProfile,
+  excludedModels: Iterable<string> = [],
+): Map<string, string> {
+  const excluded = new Set(excludedModels);
+  const routes: Desktop3pRoutedModel[] = [];
+  for (const route of Object.keys(profile.assignments).sort()) {
+    if (excluded.has(route)) continue;
+    const slash = route.indexOf("/");
+    if (slash <= 0 || slash === route.length - 1) continue;
+    routes.push({ provider: route.slice(0, slash), id: route.slice(slash + 1) });
+  }
+  if (routes.length === 0) return new Map();
+  return collectDesktop3pModels([], routes, profile).registry;
+}
+
 /** Derive a stable letter-first, three-character base36 code from a route key. */
 export function deriveDesktop3pCode(route: string): string {
   const hash = createHash("sha256").update(route).digest();
@@ -313,6 +414,28 @@ export function buildDesktop3pRegistry(
   nativeContextCap?: NativeContextLimitsInput,
 ): Map<string, string> {
   const { registry, realAnthropicIds } = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
+  desktop3pRegistry = registry;
+  desktop3pRealAnthropicIds = realAnthropicIds;
+  return registry;
+}
+
+/**
+ * Refresh the registry from discovery WITHOUT dropping aliases already installed from disk.
+ *
+ * `buildDesktop3pRegistry` replaces the registry wholesale, which is right only when discovery is
+ * authoritative. On a cold start whose discovery failed, the on-disk profile still sends the aliases
+ * it was written with, and those must stay decodable. This variant keeps any installed
+ * (sidecar-seeded) alias that discovery did not reproduce: discovery only ADDS.
+ */
+export function buildDesktop3pRegistryPreserving(
+  nativeSlugs: string[],
+  routedModels: Array<Desktop3pRoutedModel>,
+  profile?: OcxClaudeDesktopProfile,
+  nativeContextCap?: NativeContextLimitsInput,
+): Map<string, string> {
+  const preserved = desktop3pRegistry;
+  const { registry, realAnthropicIds } = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
+  for (const [alias, route] of preserved) if (!registry.has(alias)) registry.set(alias, route);
   desktop3pRegistry = registry;
   desktop3pRealAnthropicIds = realAnthropicIds;
   return registry;
@@ -638,7 +761,7 @@ function removeDesktop3pStandardPivotLocal(
 
     const residualPaths: string[] = [];
     for (const id of targetIds) {
-      for (const candidate of [profilePath(inspected.libraryPath, id), `${profilePath(inspected.libraryPath, id)}.bak`]) {
+      for (const candidate of [profilePath(inspected.libraryPath, id), `${profilePath(inspected.libraryPath, id)}.bak`, desktop3pWireMapPath(inspected.libraryPath, id)]) {
         try {
           if (existsSync(candidate)) (options.unlink ?? unlinkSync)(candidate);
         } catch {
@@ -841,6 +964,10 @@ function writeDesktop3pConfigWithGenerator(
       if (backupPath && existsSync(backupPath)) copyFileSync(backupPath, configPath);
       throw metaError;
     }
+    // Persist the exact decoder for the bytes just written, so a later cold start (upstream
+    // provider not up yet) can rebuild it from disk instead of serving an empty registry.
+    // generateDesktop3pConfig installed desktop3pRegistry as a side effect of the same call.
+    writeDesktop3pWireMap(libraryPath, id, desktop3pRegistry);
     return { written: true, path: configPath, fingerprint };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
