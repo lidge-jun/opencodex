@@ -79,7 +79,7 @@ Authorization: Bearer <admin-token>
 
 결과를 확인하지 못한 사용 요청은 HTTP 502와 `error.code: "attempt_unresolved"`, 실제 `operationId`를 반환합니다. 이 ID를 보존하세요. 새 ID는 다른 작업을 시작합니다. CLI는 전송 전에 ID를 생성하고, 전송이나 응답이 불확실하면 같은 `--operation-id`를 보존하라는 안내를 출력합니다. 구버전 원장의 `open` 기록과 결과가 확인되지 않은 `redeem_failed` 기록은 불확정 상태로 격리되어 재사용 요청을 허용하지 않습니다.
 
-**Providers > xAI Grok > Accounts**의 계정별 티켓 배지에서 남은 쿠폰과 유효 기간을 확인합니다. 대화상자는 클라이언트가 생성한 `operationId`를 전송합니다. 전송이나 결과가 불확정이면 계정 컨트롤러가 마운트되어 있는 동안 같은 시도를 보존하며, 대화상자를 닫았다 다시 열어도 유지합니다. 새로고침은 GET만 보내고 추가 사용 POST를 허용하지 않습니다. `ocx account grok-reset-coupons`는 대응하는 터미널 명령입니다.
+**Providers > xAI Grok > Accounts**의 계정별 티켓 배지에서 남은 쿠폰과 유효 기간을 확인합니다. 대화상자는 클라이언트가 생성한 `operationId`를 전송합니다. 전송이나 결과가 불확정이면 대시보드가 브라우저 탭 세션 동안 같은 시도를 보존하며, 대화상자를 닫았다 다시 열거나 페이지를 이동하거나 새로고침해도 유지합니다. 보존 기록은 요청을 보내기 전에 저장되고, 같은 `operationId`에 대한 확정 응답이 올 때만 해제됩니다. 새로고침은 GET만 보내고 추가 사용 POST를 허용하지 않습니다. `ocx account grok-reset-coupons`는 대응하는 터미널 명령입니다.
 
 Claude 사용량 리셋도 **Providers > Anthropic > Accounts**에서 같은 방식으로 씁니다. 로그인한
 계정 행마다 남은 리셋 수를 보여 주는 티켓 배지가 붙고, 대화상자에서 한 번 더 확인하면 리셋

@@ -79,7 +79,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 
 無法確認兌換結果時，回傳 HTTP 502、`error.code: "attempt_unresolved"` 和實際的 `operationId`。請保留此 ID；新 ID 會啟動另一項操作。CLI 在送出前產生 ID，並在請求送達或回應不確定時提示保留相同的 `--operation-id`。第一版帳本的舊 `open` 記錄與結果未確認的 `redeem_failed` 記錄會隔離為不確定嘗試，不允許再次兌換。
 
-在 **Providers > xAI Grok > Accounts** 中，每個帳號的票券徽章可查看剩餘優惠券及有效期間。對話框送出客戶端產生的 `operationId`。請求送達或結果不確定時，帳號控制器在保持掛載期間保留同一次嘗試，關閉並重新開啟對話框也會保留。重新整理只送出 GET，不允許額外的兌換 POST。對應的終端指令是 `ocx account grok-reset-coupons`。
+在 **Providers > xAI Grok > Accounts** 中，每個帳號的票券徽章可查看剩餘優惠券及有效期間。對話框送出客戶端產生的 `operationId`。請求送達或結果不確定時，儀表板會在瀏覽器分頁工作階段期間保留同一次嘗試，關閉並重新開啟對話框、切換頁面或重新載入後也會保留。該記錄在送出請求之前寫入，只有收到同一 `operationId` 的確定回應時才會清除。重新整理只送出 GET，不允許額外的兌換 POST。對應的終端指令是 `ocx account grok-reset-coupons`。
 
 Claude 用量重設也可從 **Providers > Anthropic > Accounts** 以相同方式操作。每個已登入帳號列都有票券徽章，顯示剩餘重設次數；對話框會在第二次確認後使用一次重設機會。重設會補滿 5 小時與每週額度，但不會改變每週重設日。如果使用請求未收到回應，對話框會保留其 `operationId`，並在十分鐘內提供使用相同 ID 重試的選項；Claude Code 用戶端也以此方式復原。在此期間，系統會拒絕對同一重設機會發起新操作。重設機會只能透過儀表板使用：僅持有管理員權杖會收到 `403 session_required`。
 

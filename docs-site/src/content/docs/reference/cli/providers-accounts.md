@@ -958,6 +958,8 @@ ocx account grok-reset-coupons --consume --yes --token-id <token-id>
 
 Pass `--operation-id <uuid>` (must be a valid UUIDv4) to guarantee idempotent settlement. If the network drops or the command is retried, identical operation IDs replay the durably recorded outcome instead of consuming a second coupon.
 
+The command exits nonzero unless the settled code is `redeemed` (including a replayed `redeemed`). When the outcome is unconfirmed (a missing or unrecognized settled code, `attempt_unresolved`, `attempt_in_progress`, `attempt_reconcile_failed`, `operation_state_changed`, `operation_token_mismatch`, `attempt_mark_failed`, or `ledger_unavailable` with an operation ID), it prints the `--operation-id` to preserve; rerun with that same ID instead of starting a new operation. Any other settled code, such as a replayed failure, prints `Coupon was not redeemed (<code>)`.
+
 ### `ocx account main <subcommand>`
 
 Manage named native Codex main-login profiles without changing OpenCodex account-pool routing:
