@@ -24,6 +24,7 @@ import {
   recordAttemptCredentialSource,
 } from "../request-log";
 import { clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
@@ -91,7 +92,8 @@ import {
 } from "../../providers/opencode-zen-rate-limit";
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { consumeComboFailure } from "./core-combo-failure";
-import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
+import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
+import { OllamaLateAttributionBudgetError } from "../../adapters/ollama-native";
 import { isFixedCodexAccount } from "./core-codex-account";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import {
@@ -341,6 +343,14 @@ export async function prepareAdapterExchange(
     cleanupUpstreamAbort();
     upstream.abort();
     if (options.abortSignal?.aborted) return clientCancelledResponse();
+    if (err instanceof OllamaLateAttributionBudgetError) return lateAttributionLimitResponse();
+    // An adapter can also throw the shared translator budget while sizing generated
+    // request content (e.g. Ollama late-tool attribution); keep its established 413.
+    if (isTranslatorBudgetExceededError(err)) {
+      return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
+        code: "translation_buffer_limit",
+      });
+    }
     const msg = err instanceof Error ? err.message : String(err);
     return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
   }
@@ -606,11 +616,19 @@ export async function prepareAdapterExchange(
         } catch (err) {
           if (preserveFailureResponse && !options.abortSignal?.aborted) return { failed: preserveFailureResponse };
           // A rotated/rebuilt adapter build failure is a request-shaping error, not an
-          // upstream connect failure: tear the abort link down and map it as 400 (no 413
-          // translator-budget mapping here — that stays with parseRequest/buildToolBridgeMaps).
+          // upstream connect failure: tear the abort link down and map it as 400. A
+          // translator-budget refusal keeps its established 413 here as well — adapters
+          // can throw it while sizing generated content (e.g. Ollama late-tool
+          // attribution), not only parseRequest/buildToolBridgeMaps.
           cleanupUpstreamAbort();
           upstream.abort();
           if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
+          if (err instanceof OllamaLateAttributionBudgetError) return { failed: lateAttributionLimitResponse() };
+          if (isTranslatorBudgetExceededError(err)) {
+            return { failed: formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
+              code: "translation_buffer_limit",
+            }) };
+          }
           const msg = err instanceof Error ? err.message : String(err);
           return { failed: formatErrorResponse(400, "invalid_request_error", redactSecretString(msg)) };
         }

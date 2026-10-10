@@ -80,6 +80,7 @@ import {
   buildComboChildHeaders,
   createChildPassthroughCallbackGate,
   consumeComboFailure,
+  isLateAttributionRefusal,
 } from "./core-combo-failure";
 import {
   linkRequestSessionLane,
@@ -100,7 +101,7 @@ import {
   markEagerRelaySseResponse,
 } from "../relay";
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
-import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
+import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
 import { settleOperatorReplacement } from "../../lib/upstream-retry";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
@@ -1007,6 +1008,10 @@ export async function executeComboResponses(
       retainCancelledAttempt();
       return clientCancelledResponse();
     }
+    // A member's local late-attribution refusal reaches the client only as the literal constant
+    // envelope: swap the response, keep every classification input, and skip the overflow rewrite.
+    const lateAttributionRefusal = isLateAttributionRefusal(failure);
+    if (lateAttributionRefusal) failure = { ...failure, response: lateAttributionLimitResponse() };
     sealRequestAttemptIdentity(
       attempt,
       childLog.provider,
@@ -1047,7 +1052,7 @@ export async function executeComboResponses(
       });
     const wantsStream = (rawBody as { stream?: unknown } | null)?.stream === true;
     // Local byte admission has its own diagnostic; do not relabel it as an upstream refusal.
-    const classifyOverflow = failure.response.status === 413
+    const classifyOverflow = failure.response.status === 413 && !lateAttributionRefusal
       && (wantsStream || (failure.upstreamCode !== "outbound_body_too_large"
         && failure.upstreamCode !== "translation_buffer_limit"));
     lastFailureClassifiesOverflow = classifyOverflow;
