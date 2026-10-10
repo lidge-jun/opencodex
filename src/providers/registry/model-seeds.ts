@@ -129,7 +129,7 @@ export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => i
  *
  * Authoritative source: `GET https://api.z.ai/api/v1/models` returns `input_modalities:
  * ["text"]` for glm-5.3 and `["text", "image"]` for glm-5.3-flash (captured in
- * devlog/_plan/260912_zcode_protocol_and_catalog/evidence/zai-responses-models.json).
+ * devlog/_fin/260912_zcode_protocol_and_catalog/evidence/zai-responses-models.json).
  * docs.z.ai/devpack/latest-model says the same in prose: "GLM-5.3 is a text-only model...
  * GLM-5.3-FLASH is a multimodal model". Upstream also lists video and file for Flash;
  * neither the internal vocabulary nor the export vocabulary can express them, so `image`
@@ -158,7 +158,7 @@ export const ZAI_GLM_5X_REASONING_EFFORTS: Record<string, string[]> = {
 // 260930 MiniMax-M3.1-Flash-Preview: Token Plan / MiniMax Code only, 1M context, thinking
 // always on (effort none or thinking disabled answers 400 code 2013), omitted effort = max.
 // It returns thinking as reasoning_content and ignores reasoning_split. The live /v1/models
-// roster does not list it yet. Evidence: devlog/_plan/260930_minimax_m31_flash_preview/.
+// roster does not list it yet. Evidence: devlog/_fin/260930_minimax_m31_flash_preview/.
 export const MINIMAX_M31_FLASH_PREVIEW = "MiniMax-M3.1-Flash-Preview";
 export const MINIMAX_MODELS = [
   MINIMAX_M31_FLASH_PREVIEW,
@@ -416,7 +416,7 @@ export const COMMAND_CODE_IMAGE_MODELS = [
   // Live 2026-09-23 3x3 random-color grid (180x180) via ocx 2.62.0:
   // 4.7 read 9/9 in user messages and tool results; 4.6 read 9/9 and 8/9.
   // Neither route requested a vision sidecar. Evidence:
-  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  // devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
   "xai/grok-4.6",
   "xai/grok-4.7",
   // Native Z.AI VLM (docs.z.ai/guides/vlm/glm-5.3-flash). This exact id is already

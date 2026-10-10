@@ -7,7 +7,7 @@
  * ten minutes (`b5o = 600000`) and mints a new one afterwards; this journal keeps
  * the same window.
  *
- * Rules (devlog/_plan/260923_claude_reset_grants/010_plan.md, "Ledger contract"):
+ * Rules (devlog/_fin/260923_claude_reset_grants/010_plan.md, "Ledger contract"):
  * - Every read-modify-write runs synchronously inside a cross-process
  *   `BEGIN IMMEDIATE` lock on a sibling SQLite file; nothing awaits inside it,
  *   and the upstream claim always runs after the open record is on disk.

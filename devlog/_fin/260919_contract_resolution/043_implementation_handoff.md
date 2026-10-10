@@ -19,4 +19,4 @@ Use the request-time main baseline134c92a01b120162f00c7275189cc47858720379 throu
 
 Later verification: run35483995896 attempt1 completed SUCCESS at source278513a79e, including all event-applicable jobs and both macOS shards. The earlier integration timing exception remains a historical fact; the formerly pending source-PR platform checks are now complete. Full main-through-candidate regression, promotion and release remain separate follow-up work.
 
-The still-open follow-up lives in [the regression and release unit](../../_plan/260920_regression_release/000_scope.md); this archive contains only the completed implementation record and its handoff.
+The still-open follow-up lives in [the regression and release unit](../../_fin/260920_regression_release/000_scope.md); this archive contains only the completed implementation record and its handoff.

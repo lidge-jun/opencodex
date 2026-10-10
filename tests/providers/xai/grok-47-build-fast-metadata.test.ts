@@ -6,7 +6,7 @@ import type { ProviderRegistryEntry } from "../../../src/providers/registry/type
 // xAI documents Grok 4.7 Fast as "the same model served on faster infrastructure", listed for
 // Cursor and Grok Build and not available on the public xAI API
 // (docs.x.ai/developers/grok-4-7). The discovered OAuth id inherits grok-4.7's documented facts and,
-// since the 2026-09-30 probe (devlog/_plan/260930_grok47_build_unify/010_probe-evidence.md), its OAuth
+// since the 2026-09-30 probe (devlog/_fin/260930_grok47_build_unify/010_probe-evidence.md), its OAuth
 // Responses wire. Its service tier stays unclaimed: priority multiplied its cost for no measured gain.
 const BASE = "grok-4.7";
 const BUILD_FAST = "grok-4.7-build-fast";

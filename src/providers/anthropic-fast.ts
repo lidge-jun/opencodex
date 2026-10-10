@@ -12,7 +12,7 @@
  * account rate limit and must keep flowing into the existing wait/rotation handling, so only an
  * error message that names fast mode or the speed parameter, or a fast-pool header reporting
  * zero remaining, counts. Live probe strings (2026-09-23,
- * devlog/_plan/260923_anthropic_fast_speed/020_probe-evidence.md):
+ * devlog/_fin/260923_anthropic_fast_speed/020_probe-evidence.md):
  *   429 "Usage credits are required for fast mode."
  *   400 "Fast mode is not enabled for your organization. ..."
  *   400 "'<model>' does not support the `speed` parameter. ..."

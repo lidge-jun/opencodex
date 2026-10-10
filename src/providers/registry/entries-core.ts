@@ -94,7 +94,7 @@ import {
  * Only the models Anthropic documents for the lane are classified; Opus 4.6 silently runs
  * standard and Opus 4.7, Sonnet, Haiku and Fable reject `speed`, so they and future ids stay
  * unclassified. Source: https://platform.claude.com/docs/en/build-with-claude/fast-mode
- * (2026-09-23) and the live probe in devlog/_plan/260923_anthropic_fast_speed.
+ * (2026-09-23) and the live probe in devlog/_fin/260923_anthropic_fast_speed.
  */
 const ANTHROPIC_FAST_WIRE = Object.freeze({
   kind: "anthropic-speed" as const,
@@ -209,7 +209,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   },
   {
     // The canonical Cognition account provider, after absorbing `devin-cli`
-    // (devlog/_plan/260913_devin_provider_merge). The two ids were the same
+    // (devlog/_fin/260913_devin_provider_merge). The two ids were the same
     // `devin` adapter, the same server.codeium.com api-server, and the same
     // `devin-session-token$<JWT>` credential — only the account source
     // differed: this entry did an Auth0 browser sign-in while `devin-cli`
@@ -273,7 +273,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // the field but answers service_tier "default" — a live downgrade, not a fast tier.
     // Unlisted and future-discovered ids stay unclassified.
     // grok-4.7 applied and confirmed priority on OAuth Responses in the 2026-09-23
-    // live probe: devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+    // live probe: devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
     modelSupportsServiceTier: {
       "grok-4.7": true,
       "grok-4.6": true,
@@ -320,7 +320,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     models: XAI_MODELS,
     // grok-4.7-build-fast arrives only through OAuth discovery: xAI's Grok 4.7 Fast, "the same model
     // served on faster infrastructure" (docs.x.ai/developers/grok-4-7). Probed 2026-09-30
-    // (devlog/_plan/260930_grok47_build_unify/010_probe-evidence.md): identical effort ladder, image
+    // (devlog/_fin/260930_grok47_build_unify/010_probe-evidence.md): identical effort ladder, image
     // input, 500k limit and advertised defaults, 1.5-1.7x faster, ~2x the ticks per output token. It is
     // not a second model row: shouldExposeProviderModel hides it, and grok-4.7's Fast selection on OAuth
     // serializes it (src/providers/xai-fast-model.ts). It keeps grok-4.7's facts in the lists below so an
@@ -450,7 +450,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // documents high as the 4.6 default but no multi-agent default, so do not invent one.
     modelReasoningEfforts: {
       // 2026-09-23 live probe accepted low..xhigh and rejected max on both wires;
-      // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+      // devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
       "grok-4.7": ["low", "medium", "high", "xhigh"],
       "grok-4.7-build-fast": ["low", "medium", "high", "xhigh"],
       "grok-4.6": ["low", "medium", "high", "xhigh"],
@@ -460,7 +460,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelDefaultReasoningEfforts: { "grok-4.7": "high", "grok-4.7-build-fast": "high", "grok-4.6": "high" },
     modelContextWindows: {
       // 500k confirmed by context_length_exceeded:
-      // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+      // devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
       "grok-4.7": 500_000,
       "grok-4.7-build-fast": 500_000,
       "grok-4.6": 500_000,

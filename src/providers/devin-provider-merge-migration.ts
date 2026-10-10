@@ -1,6 +1,6 @@
 /**
  * Merge the retired `devin-cli` provider id into `devin` at startup
- * (devlog/_plan/260913_devin_provider_merge).
+ * (devlog/_fin/260913_devin_provider_merge).
  *
  * The two registry entries were the same adapter, api-server, and credential
  * shape — only the login path differed — so `devin-cli` was removed from the

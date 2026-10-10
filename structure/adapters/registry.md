@@ -116,7 +116,7 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   outer error message. Each bounded replay evaluates its own typed delay or compatible message, so
   a later refusal may change between the raw reset sentence and the generated diagnostic without
   losing the next wait. Raw text stays internal because it can reflect credentials. Investigation and limits:
-  `devlog/_plan/260917_devin_input_ceiling/000_review.md`.
+  `devlog/_fin/260917_devin_input_ceiling/000_review.md`.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 

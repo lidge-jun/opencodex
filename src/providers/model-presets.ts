@@ -12,7 +12,7 @@
  * The preset is a SEED, not a lock. Materialization evaluates these rules against the provider's
  * current catalog and stores CONCRETE ids in `selectedModels`, so the visibility hot path
  * (`filterCatalogVisibleModels`) never learns about patterns and an older binary still sees a
- * plain allowlist. Design: devlog/_plan/260824_model_ux_aliases_and_defaults/030_default_preset.md
+ * plain allowlist. Design: devlog/_fin/260824_model_ux_aliases_and_defaults/030_default_preset.md
  */
 
 import type { OcxProviderConfig } from "../types";
