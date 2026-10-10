@@ -114,3 +114,9 @@ for (const quote of ['"""', "'''"]) {
     expect(readPromptLayers(paths).modelInstructionsFile).toBe("real.md");
   });
 }
+test("the parser fallback reads a CRLF model_instructions_file line with a trailing comment", () => {
+  const config = 'model_context_window = 9223372036854775807\r\nmodel_instructions_file = "real.md" # note\r\n';
+  const paths = fixture(config);
+  writeFileSync(join(roots.at(-1)!, "real.md"), "Real body.");
+  expect(readPromptLayers(paths).modelInstructionsFile).toBe("real.md");
+});

@@ -383,7 +383,7 @@ function readModelInstructionsFile(configBytes: string | null): string | null {
     //
     // Bun may reject an unrelated safe-for-Codex integer. Decode the standard
     // TOML escapes here, and never mistake an undecodable literal for a path.
-    const m = /^\s*model_instructions_file\s*=\s*("(?:[^"\\]|\\.)*")\s*(?:#.*)?$/.exec(line);
+    const m = /^\s*model_instructions_file\s*=\s*("(?:[^"\\]|\\.)*")\s*(?:#.*)?$/.exec(line.replace(/\r$/, ""));
     if (m) return decodeTomlBasicString(m[1]!) ?? "<unreadable model_instructions_file>";
   }
   // A present non-string value or unrecognised spelling fails closed. Only
