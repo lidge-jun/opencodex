@@ -20,6 +20,7 @@ import {
 } from "../../../src/grok/reset-coupons";
 import {
   grokCouponJournalPath,
+  markGrokResetCouponAttempt,
   openGrokResetCouponOperation,
   recordGrokResetCouponSettlement,
 } from "../../../src/grok/reset-coupon-ledger";
@@ -299,6 +300,60 @@ describe("grok reset coupons", () => {
     expect(replay.kind).toBe("replay");
     expect(replay.code).toBe("redeemed");
     expect(replay.settledAt).toBeDefined();
+  });
+
+  it("replays an interrupted attempt without a code and settles it later", () => {
+    const ledgerPath = grokCouponJournalPath(tempDir);
+    const identity = { accountId: "acc-123", tokenId: "tok-456", operationId: "op-uuid-2" };
+
+    openGrokResetCouponOperation(identity, undefined, ledgerPath);
+    markGrokResetCouponAttempt("op-uuid-2", "tok-456", undefined, ledgerPath);
+
+    // An attempted-but-never-settled op replays with no code: the route must
+    // reconcile upstream rather than trusting the record as a success.
+    const interrupted = openGrokResetCouponOperation(identity, undefined, ledgerPath);
+    expect(interrupted.kind).toBe("replay");
+    expect(interrupted.code).toBeUndefined();
+    expect(interrupted.tokenId).toBe("tok-456");
+
+    // Once the reconcile settles it, the next open replays the real outcome.
+    recordGrokResetCouponSettlement(
+      { operationId: "op-uuid-2", tokenId: "tok-456", code: "redeemed", status: "success" },
+      undefined,
+      ledgerPath,
+    );
+    const settled = openGrokResetCouponOperation(identity, undefined, ledgerPath);
+    expect(settled.kind).toBe("replay");
+    expect(settled.code).toBe("redeemed");
+  });
+
+  it("expires stranded open and attempted records past the retention window", () => {
+    const ledgerPath = grokCouponJournalPath(tempDir);
+    const t0 = 1_700_000_000_000;
+    const DAY = 24 * 60 * 60_000;
+
+    openGrokResetCouponOperation(
+      { accountId: "acc-123", tokenId: "tok-456", operationId: "op-old" },
+      t0,
+      ledgerPath,
+    );
+    markGrokResetCouponAttempt("op-old", "tok-456", t0, ledgerPath);
+
+    // A later write prunes the stranded attempt...
+    openGrokResetCouponOperation(
+      { accountId: "acc-123", tokenId: "tok-999", operationId: "op-new" },
+      t0 + 31 * DAY,
+      ledgerPath,
+    );
+
+    // ...so the same operationId can open fresh instead of being a dead
+    // record occupying the 256-operation cap forever.
+    const reopened = openGrokResetCouponOperation(
+      { accountId: "acc-123", tokenId: "tok-456", operationId: "op-old" },
+      t0 + 31 * DAY + 1,
+      ledgerPath,
+    );
+    expect(reopened.kind).toBe("execute");
   });
 
   it("refreshes token on 401 when integrated with refresh provider stub", async () => {
