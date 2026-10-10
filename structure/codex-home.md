@@ -344,7 +344,8 @@ evidence, with a one-second command timeout; Windows retains trusted PowerShell 
 Choosing evidence is published atomically before the bakery scan.
 Lock filesystem operations reuse `src/lib/windows-atomic-replace.ts`: Windows EPERM, EBUSY and EACCES retry after 25ms and 50ms; exhaustion returns busy. Unreadable evidence or a contended exclusive open followed by EEXIST never authorizes takeover.
 `src/codex/prompt-lock-evidence.ts` shares the claim and reusable-lock guards. Every destructive attempt revalidates captured parent/entry dev/ino and exact evidence bytes; replacements and parent retargets survive retry sleeps. Stale quarantine rename binds the dead-owner observation to those bytes and identity; cleanup deletes only the moved entry, on both acquisition and failure paths. Exclusive creation also revalidates the captured parent on every attempt. Completed local reservations whose cleanup exhausts are tracked by path/token and retried before acquisition, without reclaiming active live-self reservations. Release binds the matching token to the captured file identity, contents and parent before every unlink attempt; protected writer errors propagate.
-`tests/codex-integration/codex-prompt-lock-sharing.test.ts` covers sharing violations.
+The default stat provider retains device, inode and UID evidence as bigints, so distinct 64-bit file IDs remain distinct across retry fences. POSIX ownership still compares the exact UID to the current user; injected numeric stat providers remain supported.
+`tests/codex-integration/codex-prompt-lock-sharing.test.ts` covers sharing violations and distinct 64-bit file IDs that collide when converted to numbers.
 The last reservation removes its directory only with atomic empty-directory rmdir.
 Unsafe acquisition is non-retryable and carries the lock-path diagnostic through writer results.
 Automatic recovery is a no-op when the Codex home is proven absent and creates nothing.

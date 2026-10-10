@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, type Stats } from "node:fs";
+import { lstatSync, readFileSync, type BigIntStats, type Stats } from "node:fs";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsRegExe } from "../lib/windows-elevation";
 import { hostname } from "node:os";
 
@@ -6,11 +6,12 @@ import { LockFileBusy, lockFileOperation } from "./prompt-lock-io";
 
 export interface HostIdentity { hostname: string; machine: string }
 export interface OwnerEvidence { pid: number; host?: HostIdentity; processStart?: string }
+export type LockStat = Stats | BigIntStats;
 export interface OwnerDeps {
   isProcessAlive: (pid: number) => boolean | undefined;
   hostIdentity: () => HostIdentity | undefined;
   processStart: (pid: number) => string | undefined;
-  lstat: (path: string) => Stats;
+  lstat: (path: string) => LockStat;
   uid: () => number | undefined;
   platform: NodeJS.Platform;
 }
@@ -94,7 +95,9 @@ export const ownerDefaults: OwnerDeps = {
       return code === "ESRCH" ? false : code === "EPERM" ? true : undefined;
     }
   },
-  ...identity, lstat: lstatSync,
+  // File IDs can exceed Number's exact range on Windows. Keep every bit for
+  // the entry/parent witnesses used before destructive operations and retries.
+  ...identity, lstat: path => lstatSync(path, { bigint: true }),
   uid: () => process.getuid?.(), platform: process.platform,
 };
 export function ownEvidence(deps: OwnerDeps): OwnerEvidence {
@@ -122,7 +125,8 @@ export function safeNamespace(path: string, kind: "file" | "directory", deps: Ow
   try {
     const stat = lockFileOperation(() => deps.lstat(path), deps.platform), uid = deps.uid();
     return !stat.isSymbolicLink() && (kind === "file" ? stat.isFile() : stat.isDirectory())
-      && (deps.platform === "win32" || (uid !== undefined && stat.uid === uid));
+      && (deps.platform === "win32" || (uid !== undefined
+        && stat.uid === (typeof stat.uid === "bigint" ? BigInt(uid) : uid)));
   } catch (error) {
     if (error instanceof LockFileBusy) throw error;
     return missing && (error as NodeJS.ErrnoException).code === "ENOENT";
