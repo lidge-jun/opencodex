@@ -448,6 +448,10 @@ const UNCONFIRMED_COUPON_CODES: ReadonlySet<string> = new Set([
 ]);
 /** Pre-dispatch ledger refusals: unconfirmed when anchored to an operation, never a settled code. */
 const LEDGER_REFUSAL_CODES: ReadonlySet<string> = new Set(["ledger_unavailable", "capacity"]);
+/** The only codes the ledger records as a definitive outcome; any other settled code is unconfirmed. */
+const DEFINITIVE_SETTLED_CODES: ReadonlySet<string> = new Set([
+  "redeemed", "auth_failed", "fetch_resets_failed", "no_coupons_available", "coupon_unavailable", "token_unresolved",
+]);
 
 async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
@@ -499,8 +503,7 @@ async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<v
   if (consume) {
     // A 200 can replay a recorded refusal; only "redeemed" is a successful spend.
     const settled = result && typeof result === "object" ? (result as { code?: unknown }).code : undefined;
-    if (typeof settled !== "string" || settled.trim() === ""
-      || UNCONFIRMED_COUPON_CODES.has(settled) || LEDGER_REFUSAL_CODES.has(settled)) throw unconfirmed();
+    if (typeof settled !== "string" || !DEFINITIVE_SETTLED_CODES.has(settled)) throw unconfirmed();
     if (settled !== "redeemed") {
       printData(result, wantsJson);
       throw new RuntimeApiError(`Coupon was not redeemed (${settled}).`, 409, result);

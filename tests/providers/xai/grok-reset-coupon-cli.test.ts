@@ -180,6 +180,17 @@ describe("ocx account grok-reset-coupons", () => {
     expect(out.errors.join("\n")).not.toContain("--operation-id");
   });
 
+  for (const body of [{ code: "future_uncertain_code", replayed: true }, { code: "Redeemed" }]) {
+    test(`#6897 an unrecognized 200 code ${JSON.stringify(body)} fails closed with the recovery id`, async () => {
+      const calls: Captured[] = [];
+      const out = capture();
+      try {
+        expect(await handleAccountAuthCommand("grok-reset-coupons", ["main", "--consume", "--yes"],
+          deps(() => body, calls))).toBeGreaterThan(0);
+      } finally { out.restore(); }
+      expect(out.errors.join("\n")).toContain(`--operation-id ${(calls[0].body as { operationId: string }).operationId}`);
+    });
+  }
   for (const body of [{}, { code: "" }, { code: "   " }, { code: 7 }, { code: "attempt_unresolved" },
     { code: "ledger_unavailable", replayed: true }, { code: "capacity", replayed: true }]) {
     test(`an unconfirmed 200 ${JSON.stringify(body)} keeps the recovery id`, async () => {

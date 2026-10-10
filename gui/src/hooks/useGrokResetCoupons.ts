@@ -62,6 +62,10 @@ const UNRESOLVED_COUPON_CODES = new Set([
   "operation_state_changed", "redeem_failed", "attempt_mark_failed", "operation_token_mismatch",
 ]);
 const LEDGER_REFUSAL_CODES = new Set(["ledger_unavailable", "capacity"]);
+/** The only codes the ledger records as a definitive outcome; any other settled code keeps the hold. */
+const DEFINITIVE_SETTLED_CODES = new Set([
+  "redeemed", "auth_failed", "fetch_resets_failed", "no_coupons_available", "coupon_unavailable", "token_unresolved",
+]);
 
 // The Map is the admission authority even if sessionStorage is denied. Snapshot
 // identity changes only on a write, allowing old controllers to notify new ones.
@@ -285,8 +289,8 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
       const data: unknown = await response.json().catch(() => null);
       const replayed = Boolean(data && typeof data === "object" && (data as { replayed?: unknown }).replayed === true);
       const code = settledCode(data);
-      // A settled body never legitimately carries a ledger refusal code.
-      if (code === null || unresolvedCode(code, data) || LEDGER_REFUSAL_CODES.has(code)) return hold(request, code ?? "attempt_unresolved");
+      // Fail closed: an unrecognized or unresolved settled code cannot release the operation.
+      if (code === null || !DEFINITIVE_SETTLED_CODES.has(code)) return hold(request, code ?? "attempt_unresolved");
       clearMatchingHold();
       await read(accountId, epoch.current);
       return { ok: code === "redeemed", code, replayed };

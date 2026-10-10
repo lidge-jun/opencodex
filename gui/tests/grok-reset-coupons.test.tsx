@@ -674,6 +674,17 @@ test("#6897 capacity anchored to the operation stays unknown; a 200 ledger refus
   expect(harness.consumes).toHaveLength(2);
 });
 
+for (const code of ["future_uncertain_code", "Redeemed"]) {
+  test(`#6897 an unrecognized 200 code ${code} keeps the hold`, async () => {
+    const controller = await mountController();
+    const request = attempt();
+    harness.consumeReply = async () => json({ code, replayed: true });
+    expect((await redeemController(controller, request)).uncertain).toBe(true);
+    expect((await redeemController(controller)).operationId).toBe(request.operationId);
+    expect(harness.consumes).toHaveLength(1);
+  });
+}
+
 for (const hold of [
   { tokenId: "", operationId: crypto.randomUUID() },
   { tokenId: "restok_a1", operationId: "not-a-uuid" },
