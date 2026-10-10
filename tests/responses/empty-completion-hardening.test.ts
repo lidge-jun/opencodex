@@ -17,6 +17,71 @@ function eventsOf(...items: AdapterEvent[]): AsyncIterable<AdapterEvent> {
 }
 
 describe("empty-completion guard hardening", () => {
+  // #6876: Vertex fails a turn with MALFORMED_FUNCTION_CALL after dropping the model's only call.
+  const malformed = (usage?: { inputTokens: number; outputTokens: number }): AdapterEvent => ({
+    type: "error",
+    message: "Vertex AI response truncated upstream before the turn completed (MALFORMED_FUNCTION_CALL)",
+    replaySafeBeforeOutput: true,
+    ...(usage ? { usage } : {}),
+  });
+
+  test("a replay-safe error before any output retries the identical turn once", async () => {
+    let continuations = 0;
+    const events = await collect(guardEmptyCompletionEventStream({
+      firstEvents: eventsOf({ type: "thinking_delta", thinking: "plan" }, malformed({ inputTokens: 10, outputTokens: 0 })),
+      continuation: () => {
+        continuations += 1;
+        return eventsOf({ type: "text_delta", text: "answer" }, { type: "done", usage: { inputTokens: 10, outputTokens: 3 } });
+      },
+    }));
+    expect(continuations).toBe(1);
+    expect(events.some(event => event.type === "error")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "done", usage: { inputTokens: 20, outputTokens: 3 } });
+  });
+
+  test("a replay-safe error that repeats surfaces its own message after one retry", async () => {
+    let continuations = 0;
+    const events = await collect(guardEmptyCompletionEventStream({
+      firstEvents: eventsOf(malformed({ inputTokens: 10, outputTokens: 0 })),
+      continuation: () => {
+        continuations += 1;
+        return eventsOf(malformed({ inputTokens: 10, outputTokens: 0 }));
+      },
+    }));
+    expect(continuations).toBe(1);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("MALFORMED_FUNCTION_CALL"),
+      usage: { inputTokens: 20, outputTokens: 0 },
+    });
+  });
+
+  test("a replay-safe error after output passes through without a retry", async () => {
+    let continuations = 0;
+    const events = await collect(guardEmptyCompletionEventStream({
+      firstEvents: eventsOf({ type: "text_delta", text: "partial" }, malformed()),
+      continuation: () => {
+        continuations += 1;
+        return eventsOf({ type: "done" });
+      },
+    }));
+    expect(continuations).toBe(0);
+    expect(events.map(event => event.type)).toEqual(["text_delta", "error"]);
+  });
+
+  test("an ordinary pre-output error is still not retried", async () => {
+    let continuations = 0;
+    const events = await collect(guardEmptyCompletionEventStream({
+      firstEvents: eventsOf({ type: "error", message: "upstream 500", status: 500 }),
+      continuation: () => {
+        continuations += 1;
+        return eventsOf({ type: "done" });
+      },
+    }));
+    expect(continuations).toBe(0);
+    expect(events.at(-1)).toMatchObject({ type: "error", message: "upstream 500" });
+  });
+
   test("usage keeps the retry's absolute context checkpoint without summing it", async () => {
     const events = await collect(guardEmptyCompletionEventStream({
       firstEvents: eventsOf(

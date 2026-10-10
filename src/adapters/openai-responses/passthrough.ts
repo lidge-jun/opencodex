@@ -37,6 +37,7 @@ import {
 } from "../../providers/fastwire";
 import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
 import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripRejectedSamplingParams } from "./request-strips";
+import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
@@ -505,6 +506,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                   stripEncryptedContent: threadServingIdentityChanged || requiresPlaintextReasoningReplay(provider),
                   dropForeignItemId: parsed._dropForeignReasoningItemIds === true,
                   requirePlaintextReasoning: requiresPlaintextReasoningReplay(provider),
+                  onPlaintextReasoningBlanked: () => notePlaintextReasoningDropped(provider),
                 },
               ),
               provider,

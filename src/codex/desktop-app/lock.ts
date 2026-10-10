@@ -22,7 +22,7 @@
  *   itself. An unconditional unlink would let a late release destroy somebody else's
  *   live lock, which is exactly the mutual exclusion this file exists to provide.
  *
- * Design: `devlog/_plan/260913_cross_platform_desktop_app_restart/020_phase2_detached_self_handoff.md` §4.1.
+ * Design: `devlog/_fin/260913_cross_platform_desktop_app_restart/020_phase2_detached_self_handoff.md` §4.1.
  */
 import { mkdirSync, openSync, closeSync, writeSync, readFileSync, unlinkSync, renameSync } from "node:fs";
 import { join, dirname } from "node:path";

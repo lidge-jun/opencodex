@@ -1055,23 +1055,40 @@ mod tests {
                 if *shell == "bash" {
                     command.arg("-l");
                 }
+                // System rc files may print to stdout (Ubuntu's /etc/bash.bashrc sudo hint), so only
+                // the marked result lines count; a failed lookup or CLI run still fails the shell, and
+                // the end marker makes any extra CLI output line fail the comparison.
                 let output = command
-                    .args(["-i", "-c", "command -v ocx; ocx hello"])
+                    .args([
+                        "-i",
+                        "-c",
+                        "p=$(command -v ocx) || exit 11; o=$(ocx hello) || exit 12; \
+                         printf 'OCX-PATH:%s\\nOCX-OUT:%s:OCX-END\\n' \"$p\" \"$o\"",
+                    ])
                     .output()
                     .expect("cannot start real shell");
                 assert!(output.status.success(), "{shell}: command failed");
                 let stdout = String::from_utf8(output.stdout).expect("shell stdout is not UTF-8");
-                let lines: Vec<_> = stdout.lines().collect();
+                let marked = |tag: &str| {
+                    stdout
+                        .lines()
+                        .filter_map(|line| line.strip_prefix(tag))
+                        .collect::<Vec<_>>()
+                };
+                let (paths, outputs) = (marked("OCX-PATH:"), marked("OCX-OUT:"));
                 // Keep captured system-rc output and temporary HOME paths out of failure logs.
                 assert!(
-                    lines.len() == 2,
-                    "{shell}: expected exactly two stdout lines"
+                    paths.len() == 1 && outputs.len() == 1,
+                    "{shell}: expected exactly one marked path and one marked output line"
                 );
                 assert!(
-                    lines[0] == expected_path.to_str().unwrap(),
+                    paths[0] == expected_path.to_str().unwrap(),
                     "{shell}: command resolution selected the wrong executable"
                 );
-                assert!(lines[1] == expected_output, "{shell}: wrong CLI output");
+                assert!(
+                    outputs[0] == format!("{expected_output}:OCX-END"),
+                    "{shell}: wrong CLI output"
+                );
             }
         };
         check_shells(&npm.join("ocx"), "npm-ocx");

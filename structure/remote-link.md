@@ -12,7 +12,7 @@ Every remote `ocx` call goes through `remoteOcxArgv`, which runs `sh -c` with a 
 
 `src/link/routes.ts` holds the one route and method table for linked traffic; the hub-link listener and the client relay both decide admission from it.
 
-`src/link/store.ts` persists link records in `<configDir>/link/links.json` with private permissions. Records hold aliases, ports, confirmed host-key fingerprints and data-key ids, never keys. The file is a trust boundary: unknown fields, malformed values and duplicate ids are errors, and `hasLinks` reports false for a damaged file. A null host-key fingerprint is accepted only for a client-initiated link, because the hub never opens SSH to that client.
+`src/link/store.ts` persists link records in `<configDir>/link/links.json` with private permissions. Records hold aliases, ports, confirmed host-key fingerprints and data-key ids, never keys. The file is a trust boundary: unknown fields, malformed values and duplicate ids are errors, and `hasLinks` reports false for a damaged file. A null host-key fingerprint is accepted only for a client-initiated link, because the hub never opens SSH to that client. Link create/delete, compensation, and listener-port persistence re-read and mutate the store under `withConfigMutationLockSync`. A bind revalidates both the stored port and the presence of a recorded link before activation; deleting the last link during bind closes that listener without publishing a port.
 
 ## Client-initiated links
 

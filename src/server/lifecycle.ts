@@ -36,6 +36,7 @@ export const SESSION_LANE_ID_BYTES = 32;
 const turnGate = createAdmissionGate("active_turns", MAX_ACTIVE_TURNS);
 export interface ActiveTurnLease extends AdmissionLease {
   attach(lease: AdmissionLease): void;
+  bindAbortSignal(signal: AbortSignal): () => void;
   bindAbortController(ac: AbortController): void;
   beginCodexAccountSelection(): CodexAccountSelectionAdmission;
   isTransferred(): boolean;
@@ -169,7 +170,7 @@ export function resetLifecycleDrainStateForTests(): void {
   serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
   releaseServerStartupLifecycleImpl = releaseNativeMainStartupLifecycle;
 }
-export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
+export function tryAdmitTurn(sessionLaneId?: string, clientSignal?: AbortSignal): ActiveTurnLease | null {
   if (isDraining()) return null;
   const opaqueSessionLaneId = sessionLaneId
     ? createHash("sha256").update(sessionLaneId).digest("hex").slice(0, SESSION_LANE_ID_BYTES)
@@ -192,6 +193,8 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
   }
   const controllers = new Set<AbortController>();
   const attachedLeases = new Set<AdmissionLease>();
+  const abortListeners = new Map<AbortSignal, () => void>();
+  let cancellationReason: unknown;
   let active = true;
   let transferred = false;
   let nativeMainClaimed = false;
@@ -200,22 +203,40 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
       if (!active) attachedLease.release();
       else attachedLeases.add(attachedLease);
     },
+    bindAbortSignal(signal) {
+      if (!active || abortListeners.has(signal)) return () => {};
+      const onAbort = () => {
+        cancellationReason = signal.reason;
+        const boundControllers = [...controllers];
+        lease.release();
+        for (const controller of boundControllers) controller.abort(cancellationReason);
+      };
+      abortListeners.set(signal, onAbort);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      return () => {
+        if (abortListeners.get(signal) !== onAbort) return;
+        signal.removeEventListener("abort", onAbort);
+        abortListeners.delete(signal);
+      };
+    },
     bindAbortController(ac) {
       knownTurnControllers.add(ac);
       if (!active) {
-        ac.abort(new Error("turn already settled"));
+        ac.abort(cancellationReason ?? new Error("turn already settled"));
         return;
       }
       transferred = true;
       controllers.add(ac);
       activeTurns.set(ac, lease);
+      lease.bindAbortSignal(ac.signal);
     },
     beginCodexAccountSelection() {
       const mainProfileDraining = nativeMainDrainOwners.size > 0;
-      let selectionActive = !mainProfileDraining;
+      let selectionActive = active && !mainProfileDraining;
       let released = false;
       if (selectionActive) nativeMainSelections += 1;
-      return {
+      const selection: CodexAccountSelectionAdmission = {
         mainProfileDraining,
         claimMainProfile() {
           if (released || mainProfileDraining || !active) return false;
@@ -228,18 +249,23 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
         release() {
           if (released) return;
           released = true;
+          attachedLeases.delete(selection);
           if (selectionActive) {
             selectionActive = false;
             nativeMainSelections = Math.max(0, nativeMainSelections - 1);
           }
         },
       };
+      lease.attach(selection);
+      return selection;
     },
     isTransferred() { return transferred; },
     release() {
       if (!active) return;
       active = false;
       admittedTurns.delete(lease);
+      for (const [signal, listener] of abortListeners) signal.removeEventListener("abort", listener);
+      abortListeners.clear();
       for (const controller of controllers) {
         if (activeTurns.get(controller) === lease) activeTurns.delete(controller);
       }
@@ -258,6 +284,7 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
     },
   };
   admittedTurns.add(lease);
+  if (clientSignal) lease.bindAbortSignal(clientSignal);
   return lease;
 }
 export function codexAccountSelectionForTurn(

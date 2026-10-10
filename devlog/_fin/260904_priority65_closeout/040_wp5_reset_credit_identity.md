@@ -39,7 +39,7 @@ $ rg -n 'openResetCreditOperation|settleResetCreditOperation|markResetCreditOper
 (출력 없음)
 
 $ rg -n 'reset-credit-operation-ledger' -g '!node_modules' .
-devlog/_plan/260902_nonbug_adoption_backlog/130_wp13_reset_credit_auto_redeem.md:6
+devlog/_fin/260902_nonbug_adoption_backlog/130_wp13_reset_credit_auto_redeem.md:6
 tests/codex-reset-credit-operation-ledger.test.ts:24
 ```
 
@@ -60,7 +60,7 @@ legacy 행 승격 + 부분 실패 롤백을 넣지 않는다. 이건 "언젠가 
 
 **(4) 별도 devlog가 이 원장을 "unused"로 명시하고 재사용을 계획한다.**
 
-`devlog/_plan/260902_nonbug_adoption_backlog/130_wp13_reset_credit_auto_redeem.md:6`:
+`devlog/_fin/260902_nonbug_adoption_backlog/130_wp13_reset_credit_auto_redeem.md:6`:
 
 > An unused #657 ledger (`reset-credit-operation-ledger.ts`, kinds `recovery|manual`) exists.
 

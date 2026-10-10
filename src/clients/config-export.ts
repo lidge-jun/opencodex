@@ -1367,7 +1367,7 @@ function buildAsideContribution(ctx: ExportContext): ManagedContribution {
  * the keyed `providers`, the `models` ARRAY whose identity is `id`, the
  * `openai-completions` dialect, the loopback placeholder, and the
  * `thinkingLevelMap` levels. Evidence:
- * `devlog/_plan/260912_omo_client_integration/001_omo_contract.md`.
+ * `devlog/_fin/260912_omo_client_integration/001_omo_contract.md`.
  *
  * The flag is passed HERE as well as in the spec's `build`, which is the one
  * thing Prime and Aside do not do. They pass the default on both paths, so they

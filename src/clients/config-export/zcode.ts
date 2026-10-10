@@ -1,7 +1,6 @@
 // ZCode config export.
 import type { ExportContext, ManagedContribution } from "./contracts";
-import { normalizeExportModels, inputModalitiesForClient, exportModelLabel, authoritativeContextWindow, singleFragment } from "./model-metadata";
-import { sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
+import { normalizeExportModels, inputModalitiesForClient, exportModelLabel, authoritativeContextWindow, singleFragment, zcodeSelectableEfforts } from "./model-metadata";
 import { OPENCODE_PROVIDER_ID, LOOPBACK_API_KEY_PLACEHOLDER } from "./constants";
 
 
@@ -86,9 +85,8 @@ export function buildZcodeClientConfig(ctx: ExportContext): ZcodeGeneratedConfig
     // `ultra` when present: ZCode forwards the selected variant to the wire field its
     // kind uses — `reasoning.effort` on `openai`, which is what `/v1/responses` reads
     // natively. Set `defaultVariant` only when it survives that filter.
-    const efforts = sanitizeCodexReasoningEfforts(model.reasoningEfforts)
-      ?.filter(effort => effort !== "none");
-    if (efforts && efforts.length > 0) {
+    const efforts = zcodeSelectableEfforts(model.reasoningEfforts);
+    if (efforts !== undefined) {
       const defaultVariant = model.defaultReasoningEffort?.trim().toLowerCase();
       entry.reasoning = {
         enabled: true,

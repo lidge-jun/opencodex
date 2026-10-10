@@ -29,7 +29,7 @@
  * never reported as "nothing to do". A stale picker is a much smaller problem than a
  * wrongly killed process.
  *
- * Design and audit history: devlog/_plan/260913_cross_platform_desktop_app_restart/.
+ * Design and audit history: devlog/_fin/260913_cross_platform_desktop_app_restart/.
  */
 import {
   acquireDesktopRestartLock,

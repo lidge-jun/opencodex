@@ -65,7 +65,7 @@ classifier mark Grok temporarily unavailable. Regression coverage:
 context/effort/vision rows and grok-4.7's OAuth Responses wire default, because xAI documents Grok
 4.7 Fast as the same model on faster infrastructure (Cursor and Grok Build only, not the public xAI
 API) and the 2026-09-30 probe confirmed identical capabilities
-(`devlog/_plan/260930_grok47_build_unify/010_probe-evidence.md`). It stays out of the lineup seed and
+(`devlog/_fin/260930_grok47_build_unify/010_probe-evidence.md`). It stays out of the lineup seed and
 `modelSupportsServiceTier`, and it is not published as a row of its own; see "Grok 4.7 Fast lane" below.
 Regression coverage: `tests/providers/xai/grok-47-build-fast-metadata.test.ts`.
 
@@ -229,7 +229,7 @@ Renamed fixed-key providers receive [missing reasoning metadata](../catalog.md#r
 xAI's Priority Processing (`service_tier: "priority"` on Chat Completions and Responses,
 documented for the API-key product) is honored by the Grok OAuth subscription gateway on a
 probed model set (live probes 2026-09-13 and 2026-09-23, `devlog/_fin/260913_xai_oauth_fast/`
-and `devlog/_plan/260923_grok47_parity/010_probe-evidence.md`): grok-4.7, grok-4.6,
+and `devlog/_fin/260923_grok47_parity/010_probe-evidence.md`): grok-4.7, grok-4.6,
 grok-4.5, grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast each echoed `priority` upstream. The registry entry classifies exactly
 that set in `modelSupportsServiceTier` and declares `chatServiceTier: true`, so the OAuth lane

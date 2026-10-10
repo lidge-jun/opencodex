@@ -381,6 +381,12 @@ from provider enforcement, rate limits, or account actions.
 
 Terminal refresh failures mark the account as needing reauthentication instead of retrying forever.
 
+For the native main Codex credential in `CODEX_HOME/auth.json`, cancelling a request stops a
+waiting refresh before the token exchange starts. An exchange already started finishes within
+its own 30-second timeout and saves successful access and refresh tokens before reporting the
+request's cancellation. This preserves the rotated refresh token for later requests; a concurrent
+external credential replacement still takes precedence.
+
 **Cooldowns (Codex pool).** Upstream `429` / quota responses set a hard cooldown from
 `Retry-After`, quota `reset` headers (capped), or a short default backoff. Accounts on an explicit
 `Retry-After` cooldown are not probed early; reset-derived cooldowns may receive a paced probe lease
@@ -608,6 +614,8 @@ public `GET /v1/models` and keeps active Chat Completions models (plus the Respo
 Create a key in the [OpenGateway dashboard](https://opengateway.ai/api-keys), then run
 `ocx provider add opengateway` or select **OpenGateway** in the dashboard. Chat requests
 use the configured Bearer key; the public model list does not validate that key.
+On the Responses wire OpenGateway rejects replayed native custom tool calls, so the preset
+lowers Codex custom tools such as code-mode `exec` to function tools before sending them.
 
 **TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
 OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),

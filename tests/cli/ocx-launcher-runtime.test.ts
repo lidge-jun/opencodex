@@ -10,6 +10,7 @@ import { findDesktopCli, findPathBun, type PathBunIo } from "../../src/lib/bun-p
 import { REAL_BUN_MIN_BYTES } from "../../src/lib/bun-binary-validator.mjs";
 import { killProxy } from "../../src/lib/process-control";
 import { repoPath } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const BIN_OCX = repoPath("bin", "ocx.mjs");
 const nodeAvailable = spawnSync("node", ["--version"], {
@@ -27,6 +28,11 @@ const runnable = process.platform === "win32" && nodeAvailable;
 // their own headroom after readiness settles.
 const PROXY_HEALTH_TIMEOUT_MS = 90_000;
 const EFFECTIVE_RUNTIME_TEST_TIMEOUT_MS = PROXY_HEALTH_TIMEOUT_MS + 30_000;
+// A loaded win32 runner starts pwsh.exe past 10s and a freshly copied bun.exe
+// past a couple of seconds. Both waits stay inside the shared spawn budget.
+const WINDOWS_COLD_SPAWN_MS = process.platform === "win32"
+  ? SPAWN_BUDGET_MS - INTERNAL_DEADLINE_MS
+  : INTERNAL_DEADLINE_MS;
 
 type Health = {
   status: string;
@@ -97,7 +103,7 @@ function windowsProcessIdentity(pid: number): WindowsProcessIdentity | null {
       "-Command",
       `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $p = Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\"; if ($null -ne $p) { $p | Select-Object ProcessId, ParentProcessId, ExecutablePath, CreationDate | ConvertTo-Json -Compress }`,
     ],
-    { encoding: "utf8", timeout: 10_000, windowsHide: true },
+    { encoding: "utf8", timeout: WINDOWS_COLD_SPAWN_MS, windowsHide: true },
   );
   if (result.status !== 0) throw new Error(`could not inspect process identity: ${result.stderr.trim()}`);
   if (!result.stdout.trim()) return null;
@@ -609,12 +615,22 @@ describe("real PATH Bun validation", () => {
       if (process.platform === "win32") copyFileSync(process.execPath, join(last, name));
       else writeFileSync(join(last, name), '#!/bin/sh\ncase "$1" in --version|-e) printf "1.4.0\\n";; *) exit 1;; esac\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
       chmodSync(join(first, name), 0o755); chmodSync(join(last, name), 0o755);
-      const selected = findPathBun({ env: { ...process.env, PATH: [first, last].join(process.platform === "win32" ? ";" : ":") }, pinnedVersion: "1.4.2", deadlineMs: 2000 });
+      const selected = findPathBun({ env: { ...process.env, PATH: [first, last].join(process.platform === "win32" ? ";" : ":") }, pinnedVersion: "1.4.2", deadlineMs: process.platform === "win32" ? INTERNAL_DEADLINE_MS : 2000 });
       expect(selected?.path).toBe(realpathSync.native(join(last, name)));
       expect(selected?.version).toMatch(/^1\.(?:[4-9]|[1-9]\d+)\./);
     } finally { removeTree(root); }
   });
 });
+
+function warmCopiedBun(path: string): void {
+  if (process.platform !== "win32") return;
+  const warmed = spawnSync(path, ["--version"], {
+    encoding: "utf8",
+    timeout: WINDOWS_COLD_SPAWN_MS,
+    windowsHide: true,
+  });
+  expect(warmed.status, warmed.stderr).toBe(0);
+}
 
 function launcherFallbackFixture(mode: "missing" | "bundled" | "repair" | "broken" | "override" | "none" | "inspection" | "rejected") {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-path-launcher-")));
@@ -632,7 +648,13 @@ function launcherFallbackFixture(mode: "missing" | "bundled" | "repair" | "broke
     if (mode === "rejected") {
       writeFileSync(pathBun, '#!/bin/sh\nprintf "2.0.0\\n"\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
       chmodSync(pathBun, 0o755);
-    } else if (mode !== "none") { copyFileSync(process.execPath, pathBun); chmodSync(pathBun, 0o755); }
+    } else if (mode !== "none") {
+      copyFileSync(process.execPath, pathBun);
+      chmodSync(pathBun, 0o755);
+      // The product PATH probe is 5s for both execs together. Warm the copy first so
+      // that budget measures a scanned binary; a cold win32 bun.exe is the flake.
+      warmCopiedBun(pathBun);
+    }
     const bundleDir = join(root, "node_modules", "bun");
     if (["bundled", "repair", "broken", "inspection"].includes(mode)) {
       mkdirSync(join(bundleDir, "bin"), { recursive: true });

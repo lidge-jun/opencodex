@@ -12,10 +12,13 @@ import { buildWindowsServiceScript } from "../../src/service/windows-taskxml";
 import { defaultWinswEntry } from "../../src/lib/winsw";
 import { recordOwnedConfigPath, CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST } from "../../src/lib/config-ownership";
 import type { ServiceDiagnostic } from "../../src/service/diagnostics";
+import { windowsEnvIndirectBatchValue } from "../../src/lib/win-paths";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
 const runtime: DurableBunRuntime = { path: process.execPath, source: "override", overrideEnv: "OPENCODEX_BUN_PATH" };
+/** The service script writes a profile-located Bun as a %LOCALAPPDATA%/%USERPROFILE% token with batch escaping. */
+const bunLine = () => `set "OCX_BUN=${windowsEnvIndirectBatchValue(runtime.path, v => v.replace(/%/g, "%%").replace(/\^/g, "^^").replace(/"/g, ""))}"`;
 const roots: string[] = [];
 const envKeys = ["OPENCODEX_HOME", "CODEX_HOME", BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV] as const;
 const originalEnv = envKeys.map(key => process.env[key]);
@@ -117,7 +120,7 @@ describe("service selected-runtime admission", () => {
           stopScheduler: () => { order.push("installer-stop"); },
           writeSchedulerAssets: admitted => {
             seen.push(admitted); order.push("assets");
-            expect(buildWindowsServiceScript(cliEntry(admitted), 12345, [])).toContain(runtime.path);
+            expect(buildWindowsServiceScript(cliEntry(admitted), 12345, [])).toContain(bunLine());
           },
           schedulerCommand: args => { order.push(args[0]!); return ""; },
           assertNativeAccount: () => { order.push("account"); },

@@ -144,7 +144,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Auto-context compaction threshold (default `829800`); only injected when auto-context is enabled |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (optional) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (optional; legacy `ANTHROPIC_SMALL_FAST_MODEL` too) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; on a subscription launch an unset slot gets the native `claude-opus-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]`, so `--model opus`, `sonnet` and `fable` keep their 1M context |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; on a subscription launch an unset slot gets the native `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`, so `--model opus`, `sonnet` and `fable` keep their 1M context |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` when `alwaysEnableEffort` is on (conditional) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` when set (conditional; off by default — see [MCP tool schemas fill the context](#troubleshooting)) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Legacy context override when `maxContextTokens` is set (conditional) |

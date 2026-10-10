@@ -5,7 +5,7 @@
  * Evidence: https://developers.openai.com/api/docs/models/gpt-6.1-sol (1,050,000 context,
  * 922,000 input, 128,000 output, efforts low..max), https://developers.openai.com/api/docs/pricing
  * ($2 / $0.10 cached / $2.50 write / $10), openai/codex models.json after #49318 (Codex row:
- * low..ultra, default low, 272,000 / 872,000). Plan: devlog/_plan/260930_gpt_6_1_sol_rollout/.
+ * low..ultra, default low, 272,000 / 872,000). Plan: devlog/_fin/260930_gpt_6_1_sol_rollout/.
  * Only Sol moved to 6.1, so no GPT-6.1 Luna or Astra may appear anywhere.
  */
 import { afterEach, describe, expect, test } from "bun:test";

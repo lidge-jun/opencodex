@@ -263,6 +263,16 @@ fn perform_in(
             issues.push(e);
         }
     }
+    #[cfg(windows)]
+    if !remove && r.enabled {
+        if let Some(owned) = &r.windows {
+            match windows::machine_conflict(&owned.entry) {
+                Ok(true) => issues.push("machine-path-conflict".into()),
+                Ok(false) => {}
+                Err(e) => issues.push(e),
+            }
+        }
+    }
     let configured = r.enabled
         && r.bundle.is_some()
         && (r.posix.is_some() || r.windows.is_some())

@@ -67,7 +67,7 @@ to the Grok CLI gateway even if its saved base URL differs; custom provider IDs 
 default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
 existing wire and tier policy. The OAuth lane is service-tier classified per model
 (`modelSupportsServiceTier` on the registry entry, live-probed 2026-09-13 and 2026-09-23;
-`devlog/_plan/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
+`devlog/_fin/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
 grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast accept `service_tier: "priority"` over Grok OAuth and echo it, so those
 routes resolve Fast-eligible, publish `--fast` rows, and forward a caller-sent tier on either wire (`chatServiceTier: true`) — except OAuth grok-4.7, whose Fast serializes `grok-4.7-build-fast` with no tier ([xAI Grok](../providers/xai-grok.md#oauth-fast-tier-priority-processing)).

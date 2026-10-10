@@ -510,8 +510,9 @@ async function resolveMainAccountToken(
         }
         const refresh = dependencies.refreshToken ?? refreshNativeMainGrant;
         let refreshed: OAuthCredentials;
+        if (signal.aborted) throw signal.reason;
         try {
-          refreshed = await refresh(locked.refreshToken, { signal });
+          refreshed = await refresh(locked.refreshToken, { signal: refreshTimeout });
         } catch (cause) {
           // A refusal already classified at the endpoint keeps that verdict. An injected refresh
           // threw an ordinary Error and has only its message, so prose still decides there --
@@ -535,16 +536,14 @@ async function resolveMainAccountToken(
           }
           throw new MainAccountTokenRefreshError(reason, { cause });
         }
-        // The refresh may resolve after the caller went away (an implementation that does
-        // not observe the signal, or an abort landing in the window between resolution and
-        // commit). A cancelled request's late refresh must not rewrite auth.json on behalf
-        // of a request that no longer exists -- the same fence the reauth twin applies
-        // before its own commit above.
-        if (dependencies.signal?.aborted) throw dependencies.signal.reason;
+        // Once the exchange starts, only its own timeout may abort it: a successful
+        // rotating grant retires the old refresh token. Save the only live grant before
+        // honoring caller cancellation, while retaining the external-writer guards.
         const result = persistRefreshedMainAuthJson(locked, refreshed);
         // A permitted in-flight success speaks only for its own profile and grant.
         clearMainRefreshGrantRejection(mainRefreshGrantKey(locked)!);
         if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+        if (dependencies.signal?.aborted) throw dependencies.signal.reason;
         return result;
       }),
       { waitMs: 30_000, signal },

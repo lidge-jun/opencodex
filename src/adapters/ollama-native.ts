@@ -81,7 +81,7 @@ interface PendingToolBatch {
 }
 
 interface NativeStreamToolCall {
-  key: string;
+  fallbackKey: string;
   budgetKey: string;
   order: number;
   name: string;
@@ -639,6 +639,7 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
   }
   if (message.tool_calls !== undefined) {
     if (!Array.isArray(message.tool_calls)) throw new Error("ollama-native response tool_calls was not an array");
+    const frameCalls = new Map<NativeStreamToolCall, string | undefined>();
     for (let position = 0; position < message.tool_calls.length; position++) {
       const rawCall = message.tool_calls[position];
       if (!isRecord(rawCall) || !isRecord(rawCall.function)) {
@@ -653,12 +654,16 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
       const args = assertObjectArguments(fn.arguments, "response tool call");
       const index = isFiniteNonNegativeInteger(fn.index) ? fn.index : undefined;
       const nativeId = validNativeToolCallId(rawCall.id);
-      const key = index === undefined ? `position:${position}` : `index:${index}`;
-      // Tool-call identity is explicitly keyed by the provider index when supplied: a later
-      // frame for the same index updates that call's arguments, while a distinct index creates a
-      // second call. This narrow tool-call compatibility rule is independent from text/thinking
-      // semantics, where every non-empty native field is an appended partial delta.
-      const existing = state.toolCalls.get(key);
+      const fallbackKey = index === undefined ? `position:${position}` : `index:${index}`;
+      // Native ids distinguish calls even when Ollama repeats index zero. Index/position are
+      // fallback identities only; within one frame only entries sharing an id may update a call.
+      // An id arriving for a call first seen without one still adopts that call by its fallback.
+      const available = (call: NativeStreamToolCall) =>
+        !frameCalls.has(call) || (nativeId !== undefined && frameCalls.get(call) === nativeId);
+      const calls = [...state.toolCalls.values()];
+      const existing = (nativeId ? calls.find(call => call.nativeId === nativeId && available(call)) : undefined)
+        ?? calls.find(call => call.fallbackKey === fallbackKey
+          && (!nativeId || !call.nativeId) && available(call));
       if (!existing && !state.allowParallelToolCalls && state.toolCalls.size > 0) {
         throw new Error("ollama-native provider emitted parallel tool calls while parallelToolCalls:false was requested");
       }
@@ -666,16 +671,14 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
         throw new Error(`ollama-native response exceeded ${NATIVE_MAX_PENDING_TOOL_CALLS} pending tool calls`);
       }
       if (existing) {
-        if (existing.name !== fn.name) throw new Error("ollama-native response reused a tool-call index for another function");
-        if (nativeId && existing.nativeId && nativeId !== existing.nativeId) {
-          throw new Error("ollama-native response changed a tool-call id for an existing index");
-        }
+        if (existing.name !== fn.name) throw new Error("ollama-native response reused a tool-call identity for another function");
         if (!existing.nativeId && nativeId) existing.nativeId = nativeId;
         replaceNativeToolArguments(existing, args, budget);
+        frameCalls.set(existing, nativeId);
       } else {
         const call: NativeStreamToolCall = {
-          key,
-          budgetKey: `ollama-native:${key}`,
+          fallbackKey,
+          budgetKey: `ollama-native:${state.nextToolOrder}`,
           order: state.nextToolOrder++,
           name: fn.name,
           ...(nativeId ? { nativeId } : {}),
@@ -695,7 +698,8 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
           });
           call.metadataBytes = metadataBytes;
           replaceNativeToolArguments(call, args, budget);
-          state.toolCalls.set(key, call);
+          state.toolCalls.set(call.budgetKey, call);
+          frameCalls.set(call, nativeId);
         } catch (error) {
           if (call.metadataBytes > 0) {
             budget.releaseRetained(call.metadataBytes, { kind: "tool_args" });

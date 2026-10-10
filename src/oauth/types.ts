@@ -30,7 +30,7 @@ export interface KiroOAuthMetadata {
  *
  * The Model API is authenticated by the `LLM|` key in `access`; this token authenticates
  * the Meta ACCOUNT and exists only to mint that key and to read subscription usage
- * (devlog/_plan/260912_muse_device_oauth/002 A). Keeping it out of `access` is what lets
+ * (devlog/_fin/260912_muse_device_oauth/002 A). Keeping it out of `access` is what lets
  * every request path stay unchanged.
  *
  * It must never be added to `OAuthAccountSummary` (src/oauth/index.ts:1803) or to

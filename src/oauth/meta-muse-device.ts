@@ -6,7 +6,7 @@
  * resulting account token into the `LLM|` Model API key our request path sends as a
  * bearer.
  *
- * Protocol source: devlog/_plan/260912_muse_device_oauth/001_reference_measurements.md.
+ * Protocol source: devlog/_fin/260912_muse_device_oauth/001_reference_measurements.md.
  * It is second-party, not vendor documentation, so every response is parsed defensively
  * and every failure names a kind instead of throwing a bare string.
  *

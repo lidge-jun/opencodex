@@ -3,7 +3,7 @@
 How OpenCodex Desktop puts its bundled `ocx` first on the user's PATH, how it records what it owns, and
 what it refuses to touch. The shell surrounding this feature (startup sequence, tray, update page) is
 described in [Desktop shell](desktop-shell.md); design history is in
-`devlog/_plan/261009_desktop_owned_path_cli/`.
+`devlog/_fin/261009_desktop_owned_path_cli/`.
 
 `desktop/src-tauri/src/cli_command.rs` schedules one blocking reconcile after launch-origin
 adoption, independently of proxy startup. Stable macOS apps, Windows installs and Linux deb
