@@ -97,7 +97,11 @@ impl Drop for OwnedRoot {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
                 Err(error) => {
                     if std::time::Instant::now() >= cleanup_deadline {
-                        eprintln!("warning: owned fixture cleanup failed: {error}");
+                        use std::io::Write as _;
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "warning: owned fixture cleanup failed: {error}"
+                        );
                         break;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(25));
