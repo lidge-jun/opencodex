@@ -2,6 +2,8 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { comboImagesSupported, comboVisionSidecarTargets } from "../../gui/src/combo-capabilities";
+import type { ModelOption } from "../../gui/src/components/combo-workspace-types";
 import {
   advanceComboAfterFailure,
   clearComboSelectionState,
@@ -40,6 +42,7 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { syncCatalogModels } from "../../src/codex/catalog";
+import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
 import { injectClaudeAgentDefs } from "../../src/claude/agents-inject";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -526,6 +529,213 @@ describe("combo management API", () => {
       expect(listed.combos).toEqual([expect.objectContaining({
         id: "limited", imageInput: "disabled",
       })]);
+    });
+  });
+
+  test("PUT visionSidecarTargets declares exact members text-only and never persists the request field", async () => {
+    await withTempHome(async () => {
+      const base = baseConfig();
+      const config = baseConfig({
+        providers: {
+          ...base.providers,
+          b: {
+            ...base.providers.b!,
+            modelCapabilities: { m2: { contextTier: "long_context" } },
+          },
+        },
+        combos: undefined,
+      });
+      saveConfig(config);
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "mixed",
+        visionSidecarTargets: [
+          { provider: "b", model: "m2" },
+          { provider: "b", model: "m2" }, // exact duplicates are deduplicated
+        ],
+        combo: {
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+          ],
+        },
+      });
+      expect(response?.status).toBe(200);
+      // Exact text-only declaration added; the sibling capability axis survives.
+      expect(config.providers?.b?.modelCapabilities).toEqual({
+        m2: { contextTier: "long_context", inputModalities: ["text"] },
+      });
+      // Untouched member provider gains no declaration.
+      expect(config.providers?.a?.modelCapabilities).toBeUndefined();
+      // Request-only field never leaks into the persisted combo.
+      expect(config.combos?.mixed).not.toHaveProperty("visionSidecarTargets");
+    });
+  });
+
+  test("PUT rejects invalid visionSidecarTargets without mutating config", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const before = readFileSync(getConfigPath(), "utf8");
+      const bodies: unknown[] = [
+        { id: "x", visionSidecarTargets: "nope", combo: VALID_COMBO },
+        { id: "x", visionSidecarTargets: [{ provider: "a" }], combo: VALID_COMBO },
+        // Not a target of the submitted combo.
+        { id: "x", visionSidecarTargets: [{ provider: "c", model: "m3" }], combo: VALID_COMBO },
+        // Enrollment only makes sense while images are accepted.
+        {
+          id: "x",
+          visionSidecarTargets: [{ provider: "a", model: "m1" }],
+          combo: { targets: [{ provider: "a", model: "m1" }], imageInput: "disabled" },
+        },
+      ];
+      for (const body of bodies) {
+        const response = await comboApi(config, "PUT", "/api/combos", body);
+        expect(response?.status).toBe(400);
+      }
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+      expect(config.providers?.a?.modelCapabilities).toBeUndefined();
+    });
+  });
+
+  test("PUT rejects already-image-capable and audio-only sidecar targets instead of overwriting", async () => {
+    await withTempHome(async () => {
+      const cases: Array<{ name: string; config: OcxConfig }> = [
+        {
+          name: "capability axis already declares image",
+          config: baseConfig({
+            providers: {
+              ...baseConfig().providers,
+              b: { ...baseConfig().providers.b!, modelCapabilities: { m2: { inputModalities: ["text", "image"] } } },
+            },
+            combos: undefined,
+          }),
+        },
+        {
+          name: "capability axis declares audio only",
+          config: baseConfig({
+            providers: {
+              ...baseConfig().providers,
+              b: { ...baseConfig().providers.b!, modelCapabilities: { m2: { inputModalities: ["audio"] } } },
+            },
+            combos: undefined,
+          }),
+        },
+        {
+          name: "custom row declares audio only",
+          config: baseConfig({
+            customModels: [{ id: "custom-b-m2", provider: "b", modelId: "m2", inputModalities: ["audio"] }],
+            combos: undefined,
+          }),
+        },
+      ];
+      for (const { config } of cases) {
+        saveConfig(config);
+        const before = readFileSync(getConfigPath(), "utf8");
+        const response = await comboApi(config, "PUT", "/api/combos", {
+          id: "mixed",
+          visionSidecarTargets: [{ provider: "b", model: "m2" }],
+          combo: {
+            targets: [
+              { provider: "a", model: "m1" },
+              { provider: "b", model: "m2" },
+            ],
+          },
+        });
+        expect(response?.status).toBe(400);
+        expect(config.combos).toBeUndefined();
+        expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+      }
+    });
+  });
+
+  test("PUT treats an already-covered member as a no-op write", async () => {
+    await withTempHome(async () => {
+      const exactTextOnly = baseConfig({
+        providers: {
+          ...baseConfig().providers,
+          b: { ...baseConfig().providers.b!, modelCapabilities: { m2: { inputModalities: ["text"] } } },
+        },
+        combos: undefined,
+      });
+      saveConfig(exactTextOnly);
+      const viaCapability = await comboApi(exactTextOnly, "PUT", "/api/combos", {
+        id: "mixed",
+        visionSidecarTargets: [{ provider: "b", model: "m2" }],
+        combo: { targets: [{ provider: "b", model: "m2" }] },
+      });
+      expect(viaCapability?.status).toBe(200);
+      // The operator's declaration is preserved verbatim, never rewritten.
+      expect(exactTextOnly.providers?.b?.modelCapabilities).toEqual({ m2: { inputModalities: ["text"] } });
+      expect(isModelVisionSidecarConsumer(exactTextOnly.providers!.b!, "m2")).toBe(true);
+
+      const viaNoVision = baseConfig({
+        providers: {
+          ...baseConfig().providers,
+          b: { ...baseConfig().providers.b!, noVisionModels: ["m2"] },
+        },
+        combos: undefined,
+      });
+      saveConfig(viaNoVision);
+      const response = await comboApi(viaNoVision, "PUT", "/api/combos", {
+        id: "mixed",
+        visionSidecarTargets: [{ provider: "b", model: "m2" }],
+        combo: { targets: [{ provider: "b", model: "m2" }] },
+      });
+      expect(response?.status).toBe(200);
+      expect(viaNoVision.providers?.b?.modelCapabilities).toBeUndefined();
+      expect(isModelVisionSidecarConsumer(viaNoVision.providers!.b!, "m2")).toBe(true);
+    });
+  });
+
+  test("PUT enrolls the member so the runtime treats it as a sidecar consumer", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "mixed",
+        visionSidecarTargets: [{ provider: "b", model: "m2" }],
+        combo: { targets: [{ provider: "b", model: "m2" }] },
+      });
+      expect(response?.status).toBe(200);
+      // The exact declaration the catalog's consumer check reads: text without image.
+      expect(isModelVisionSidecarConsumer(config.providers!.b!, "m2")).toBe(true);
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persisted.providers?.b?.modelCapabilities?.m2?.inputModalities).toEqual(["text"]);
+    });
+  });
+
+  test("PUT rolls back combo, declarations, and migrated references when the save fails", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({
+        combos: {
+          old: { strategy: "failover", targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
+        },
+        subagentModels: ["combo/old"],
+      });
+      saveConfig(config);
+      const before = readFileSync(getConfigPath(), "utf8");
+      const req = new Request("http://localhost/api/combos", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: "new",
+          renameFrom: "old",
+          visionSidecarTargets: [{ provider: "b", model: "m2" }],
+          combo: { targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
+        }),
+      });
+      const response = await handleManagementAPI(req, new URL(req.url), config, {
+        createManagementConvergeCodex: catalogConvergenceFactory(),
+        saveConfigPreservingClaudeCode: () => { throw new Error("disk full"); },
+      });
+      expect(response?.status).toBe(500);
+      expect(await responseJson(response)).toEqual({ error: "combo could not be saved" });
+      // Nothing moved: the combo keeps its old key, references stay unmigrated,
+      // and the sidecar declaration was never applied.
+      expect(Object.keys(config.combos!)).toEqual(["old"]);
+      expect(config.subagentModels).toEqual(["combo/old"]);
+      expect(config.providers?.b?.modelCapabilities).toBeUndefined();
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
     });
   });
 
@@ -1423,6 +1633,86 @@ describe("combo management API", () => {
     expect(disabledRows.filter(row => row.namespaced === "gpt-5.6-sol")).toEqual([
       expect.objectContaining({ provider: "combo", id: "free", disabled: true }),
     ]);
+  });
+
+  test("GET models flags a legacy noVisionModels member as the sidecar consumer the runtime sees", async () => {
+    const config = baseConfig();
+    for (const provider of Object.values(config.providers)) provider.liveModels = false;
+    config.providers.a!.noVisionModels = ["m1"];
+
+    const response = await comboApi(config, "GET", "/api/models");
+    expect(response?.status).toBe(200);
+    const rows = await response!.json() as Array<{
+      provider: string;
+      id: string;
+      inputModalities?: string[];
+      inputModalitiesDeclared?: string[];
+      visionSidecarConsumer?: boolean;
+    }>;
+    const row = rows.find(r => r.provider === "a" && r.id === "m1");
+    // Legacy `noVisionModels` carries no declaration while the catalog widens the
+    // row to image: only the flag keeps the GUI from calling this native vision.
+    expect(row).toMatchObject({ visionSidecarConsumer: true });
+    expect(row!.inputModalitiesDeclared).toBeUndefined();
+    expect(row!.inputModalities).toContain("image");
+
+    // The Combos page parses exactly these whitelisted fields off the row.
+    const models: ModelOption[] = rows
+      .filter(r => r.provider !== "combo")
+      .map(r => ({
+        provider: r.provider,
+        id: r.id,
+        ...(r.inputModalities?.length ? { inputModalities: r.inputModalities } : {}),
+        ...(r.inputModalitiesDeclared?.length ? { inputModalitiesDeclared: r.inputModalitiesDeclared } : {}),
+        ...(r.visionSidecarConsumer === true ? { visionSidecarConsumer: true } : {}),
+      }));
+    expect(comboImagesSupported([{ provider: "a", model: "m1" }], models)).toBe(true);
+    expect(comboVisionSidecarTargets([{ provider: "a", model: "m1" }], models))
+      .toEqual([{ provider: "a", model: "m1" }]);
+  });
+
+  test("GET models flags registry-seeded noVisionModels rows as sidecar consumers", async () => {
+    const config = baseConfig({
+      providers: {
+        ...baseConfig().providers,
+        umans: {
+          adapter: "anthropic",
+          baseUrl: "https://api.code.umans.ai",
+          models: ["umans-glm-5.2"],
+          liveModels: false,
+        },
+      },
+    });
+    for (const provider of Object.values(config.providers)) provider.liveModels = false;
+
+    const response = await comboApi(config, "GET", "/api/models");
+    expect(response?.status).toBe(200);
+    const rows = await response!.json() as Array<{
+      provider: string;
+      id: string;
+      inputModalities?: string[];
+      inputModalitiesDeclared?: string[];
+      visionSidecarConsumer?: boolean;
+    }>;
+    const row = rows.find(r => r.provider === "umans" && r.id === "umans-glm-5.2");
+    // Registry enrichment classifies the row at read time and also seeds its
+    // declaration, but the flag stays the authoritative verdict for the GUI.
+    expect(row).toMatchObject({ visionSidecarConsumer: true });
+    expect(row!.inputModalitiesDeclared).toEqual(["text"]);
+    expect(row!.inputModalities).toContain("image");
+
+    const models: ModelOption[] = rows
+      .filter(r => r.provider !== "combo")
+      .map(r => ({
+        provider: r.provider,
+        id: r.id,
+        ...(r.inputModalities?.length ? { inputModalities: r.inputModalities } : {}),
+        ...(r.inputModalitiesDeclared?.length ? { inputModalitiesDeclared: r.inputModalitiesDeclared } : {}),
+        ...(r.visionSidecarConsumer === true ? { visionSidecarConsumer: true } : {}),
+      }));
+    expect(comboImagesSupported([{ provider: "umans", model: "umans-glm-5.2" }], models)).toBe(true);
+    expect(comboVisionSidecarTargets([{ provider: "umans", model: "umans-glm-5.2" }], models))
+      .toEqual([{ provider: "umans", model: "umans-glm-5.2" }]);
   });
 
   test("PUT alias changes reject a migrated shadow-call self-target (#2706)", async () => {

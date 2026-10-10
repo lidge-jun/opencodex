@@ -25,6 +25,7 @@ export default function ComboWorkspace({
   providers,
   models,
   cataloguedComboIds,
+  visionEnabled,
   loading,
   onRefresh,
   onSave,
@@ -224,6 +225,7 @@ export default function ComboWorkspace({
             providerQuotaStates={providerQuotaStates}
             providers={providers}
             models={models}
+            visionEnabled={visionEnabled}
             onBack={() => trySelect(null)}
             onSaved={(item) => {
               setDetailDirty(false);
@@ -253,6 +255,7 @@ export default function ComboWorkspace({
             providerQuotaStates={providerQuotaStates}
             providers={providers}
             models={models}
+            visionEnabled={visionEnabled}
             onSaved={(item) => {
               setDetailDirty(false);
               setSelectedId(item.id);
