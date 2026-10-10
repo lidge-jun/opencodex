@@ -154,6 +154,9 @@ function applyLineEdit(lines: string[], i: number, key: string, replacement: str
   }
 }
 
+type EditMode = "inplace" | "appended" | "noop";
+interface LineEdit { text: string; mode: EditMode }
+
 /**
  * Set a root-scope boolean, inserting above the first table when absent.
  *
@@ -170,7 +173,7 @@ function applyLineEdit(lines: string[], i: number, key: string, replacement: str
  * and a trailing comment survives a write or a removal whether or not a space
  * precedes the `#`.
  */
-export function setRootBool(content: string, key: string, value: boolean | null): string {
+function setRootBoolLines(content: string, key: string, value: boolean | null): LineEdit {
   const eol = dominantEol(content);
   const { bom, body } = splitBom(content);
   const lines = splitLines(body);
@@ -179,11 +182,11 @@ export function setRootBool(content: string, key: string, value: boolean | null)
   for (let i = 0; i < limit; i += 1) {
     if (!starts[i] || !matchKeyHead(lines[i]!, key)) continue;
     applyLineEdit(lines, i, key, value === null ? null : String(value));
-    return bom + joinLines(lines, eol);
+    return { text: bom + joinLines(lines, eol), mode: "inplace" };
   }
-  if (value === null) return bom + joinLines(lines, eol);
+  if (value === null) return { text: bom + joinLines(lines, eol), mode: "noop" };
   lines.splice(limit, 0, `${key} = ${value}`);
-  return bom + joinLines(lines, eol);
+  return { text: bom + joinLines(lines, eol), mode: "appended" };
 }
 
 /**
@@ -193,7 +196,7 @@ export function setRootBool(content: string, key: string, value: boolean | null)
  * rather than an empty string: `model_instructions_file = ""` is a path Codex would try
  * to read, not an absent setting.
  */
-export function setRootString(content: string, key: string, value: string | null): string {
+function setRootStringLines(content: string, key: string, value: string | null): LineEdit {
   const eol = dominantEol(content);
   const { bom, body } = splitBom(content);
   const lines = splitLines(body);
@@ -202,11 +205,11 @@ export function setRootString(content: string, key: string, value: string | null
   for (let i = 0; i < limit; i += 1) {
     if (!starts[i] || !matchKeyHead(lines[i]!, key)) continue;
     applyLineEdit(lines, i, key, value === null ? null : encodeBasicString(value));
-    return bom + joinLines(lines, eol);
+    return { text: bom + joinLines(lines, eol), mode: "inplace" };
   }
-  if (value === null) return bom + joinLines(lines, eol);
+  if (value === null) return { text: bom + joinLines(lines, eol), mode: "noop" };
   lines.splice(limit, 0, `${key} = ${encodeBasicString(value)}`);
-  return bom + joinLines(lines, eol);
+  return { text: bom + joinLines(lines, eol), mode: "appended" };
 }
 
 /**
@@ -216,7 +219,7 @@ export function setRootString(content: string, key: string, value: string | null
  * is valid TOML, and deleting the header would also orphan any comments the
  * user wrote inside the table.
  */
-export function setTableBool(content: string, table: string, key: string, value: boolean | null): string {
+function setTableBoolLines(content: string, table: string, key: string, value: boolean | null): LineEdit {
   const eol = dominantEol(content);
   const { bom, body } = splitBom(content);
   const lines = splitLines(body);
@@ -225,22 +228,23 @@ export function setTableBool(content: string, table: string, key: string, value:
   const header = new RegExp(`^\\s*\\[${escaped}\\]\\s*(?:#.*)?$`);
   const start = lines.findIndex((l, i) => starts[i] === true && header.test(l));
   if (start === -1) {
-    if (value === null) return bom + joinLines(lines, eol);
+    if (value === null) return { text: bom + joinLines(lines, eol), mode: "noop" };
     const tail = lines.length > 0 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
     lines.splice(tail, 0, `[${table}]`, `${key} = ${value}`);
-    return bom + joinLines(lines, eol);
+    return { text: bom + joinLines(lines, eol), mode: "appended" };
   }
   let end = start + 1;
   while (end < lines.length && !(starts[end] && TABLE_HEADER.test(lines[end]!))) end += 1;
   for (let i = start + 1; i < end; i += 1) {
     if (!starts[i] || !matchKeyHead(lines[i]!, key)) continue;
     applyLineEdit(lines, i, key, value === null ? null : String(value));
-    return bom + joinLines(lines, eol);
+    return { text: bom + joinLines(lines, eol), mode: "inplace" };
   }
-  if (value === null) return bom + joinLines(lines, eol);
+  if (value === null) return { text: bom + joinLines(lines, eol), mode: "noop" };
   lines.splice(end, 0, `${key} = ${value}`);
-  return bom + joinLines(lines, eol);
+  return { text: bom + joinLines(lines, eol), mode: "appended" };
 }
+
 
 /**
  * Replace, insert, or remove the generated two-line block. Canonical form is
@@ -290,3 +294,103 @@ export function removeUnownedProjection(content: string): string {
   }
   return joinLines(lines, eol);
 }
+
+/**
+ * Refuse, before any write, an edit that does not do exactly what it was asked.
+ *
+ * The line editors above address bare table headers and bare or quoted keys. A
+ * quoted, spaced, inline or dotted spelling of the same table makes them append a
+ * duplicate header (a file Codex cannot load) or, for restore-default, leave the
+ * override in place while the caller reports success. Both are caught by parsing
+ * the before and after images: the parsed result must equal the parsed input with
+ * only the intended path set or removed. When Bun cannot parse the input (its
+ * parser has documented gaps a valid Codex config can hit, such as i64 extremes),
+ * only an in-place replacement of a key the editor located is trusted; an append
+ * or a no-op restore cannot be verified and is refused. A target value with
+ * control characters is checked for presence and type only, for the same reason.
+ */
+function checkedEdit(before: string, edit: LineEdit, path: readonly string[], value: string | boolean | null): string {
+  const after = edit.text;
+  let parsedBefore: Record<string, unknown>;
+  try { parsedBefore = Bun.TOML.parse(before.replace(/^\ufeff/, "")) as Record<string, unknown>; } catch {
+    if (edit.mode === "inplace") return after;
+    throw new UnsupportedTomlForm("config.toml uses syntax this editor cannot verify; edit it by hand");
+  }
+  let parsedAfter: Record<string, unknown>;
+  try { parsedAfter = Bun.TOML.parse(after.replace(/^\ufeff/, "")) as Record<string, unknown>; } catch {
+    throw new UnsupportedTomlForm("edit would leave config.toml unparseable");
+  }
+  try {
+    const expected = tomlClone(parsedBefore) as Record<string, unknown>;
+    let parent: Record<string, unknown> | null = expected;
+    let afterParent: unknown = parsedAfter;
+    for (const segment of path.slice(0, -1)) {
+      const next: unknown = parent?.[segment];
+      afterParent = isPlainTable(afterParent) ? afterParent[segment] : undefined;
+      if (next === undefined) {
+        if (value === null) { parent = null; break; }
+        parent![segment] = {};
+        parent = parent![segment] as Record<string, unknown>;
+        continue;
+      }
+      if (!isPlainTable(next)) throw new UnsupportedTomlForm("edit target is not a plain table");
+      parent = next;
+    }
+    const key = path[path.length - 1]!;
+    if (parent !== null) {
+      if (value === null) delete parent[key];
+      else if (typeof value === "string" && /[\u0000-\u001f\u007f]/.test(value)) {
+        const landed = isPlainTable(afterParent) ? afterParent[key] : undefined;
+        if (typeof landed !== "string") throw new UnsupportedTomlForm("edit did not land on the intended key");
+        parent[key] = landed;
+      } else parent[key] = value;
+    }
+    if (!tomlEqual(parsedAfter, expected)) throw new UnsupportedTomlForm("edit did not land on the intended key");
+  } catch (error) {
+    if (error instanceof UnsupportedTomlForm) throw error;
+    throw new UnsupportedTomlForm("edit could not be verified");
+  }
+  return after;
+}
+
+function isPlainTable(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/** Arrays and plain tables are copied; TOML date/time values are immutable and shared. */
+function tomlClone(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(tomlClone);
+  if (isPlainTable(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, tomlClone(v)]));
+  return value;
+}
+
+function tomlEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => tomlEqual(v, b[i]));
+  }
+  if (isPlainTable(a) || isPlainTable(b)) {
+    if (!isPlainTable(a) || !isPlainTable(b)) return false;
+    const ka = Object.keys(a), kb = Object.keys(b);
+    return ka.length === kb.length && ka.every(k => Object.hasOwn(b, k) && tomlEqual(a[k], b[k]));
+  }
+  if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+    return Object.getPrototypeOf(a) === Object.getPrototypeOf(b) && String(a) === String(b);
+  }
+  return false;
+}
+
+export function setRootBool(content: string, key: string, value: boolean | null): string {
+  return checkedEdit(content, setRootBoolLines(content, key, value), [key], value);
+}
+
+export function setRootString(content: string, key: string, value: string | null): string {
+  return checkedEdit(content, setRootStringLines(content, key, value), [key], value);
+}
+
+export function setTableBool(content: string, table: string, key: string, value: boolean | null): string {
+  return checkedEdit(content, setTableBoolLines(content, table, key, value), [...table.split("."), key], value);
+}
+

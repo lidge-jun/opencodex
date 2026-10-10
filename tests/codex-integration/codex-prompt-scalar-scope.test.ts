@@ -1,8 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { importBaseVariant, previewBaseImport, readPromptLayers, setToggle } from "../../src/codex/prompt-layers";
+import { importBaseVariant, previewBaseImport, readPromptLayers, recoverPromptJournal, setToggle } from "../../src/codex/prompt-layers";
+import { journalPathFor } from "../../src/codex/prompt-layers/paths";
+import { encodeJournal, hashBytes } from "../../src/codex/prompt-journal";
+import * as atomic from "../../src/lib/windows-atomic-replace";
 import { rootKeyValueForm, setRootBool, setRootString, setTableBool, UnsupportedTomlForm } from "../../src/codex/prompt-layers/toml-edit";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -120,3 +123,93 @@ test("the parser fallback reads a CRLF model_instructions_file line with a trail
   writeFileSync(join(roots.at(-1)!, "real.md"), "Real body.");
   expect(readPromptLayers(paths).modelInstructionsFile).toBe("real.md");
 });
+
+
+// Debate round 2 regressions (PRO-1, CON-2, CON-1).
+test("a toggle under a quoted table header with decoy prose refuses instead of writing invalid TOML", () => {
+  const config = '["skills"]\npreserve = """\n[skills]\n"include_instructions" = false\n"""\n[unrelated]\nkeep = true\n';
+  const paths = fixture(config);
+  for (const enabled of [false, true]) {
+    const result = setToggle("skills", enabled, readPromptLayers(paths).revision, paths);
+    expect(result.ok).toBe(false);
+    expect(result.ok ? null : result.error).toBe("unsupported_form");
+    expect(readFileSync(paths.configPath, "utf8")).toBe(config);
+  }
+});
+
+for (const [form, config] of [
+  ["quoted", '["skills"]\ninclude_instructions = false # keep\n'],
+  ["spaced", "[ skills ]\ninclude_instructions = false\n"],
+  ["dotted", "skills.include_instructions = false\n"],
+  ["inline", "skills = { include_instructions = false }\n"],
+] as const) {
+  test("restore-default refuses a " + form + " table it cannot address and leaves the override untouched", () => {
+    const paths = fixture(config);
+    const result = setToggle("skills", null, readPromptLayers(paths).revision, paths);
+    expect(result.ok ? "ok" : result.error).toBe("unsupported_form");
+    expect(readFileSync(paths.configPath, "utf8")).toBe(config);
+  });
+}
+
+for (const entry of ["recovery", "ordinary-write"] as const) {
+  test(entry + ": an in-place edit during a Windows sharing retry is never overwritten", () => {
+    const paths = fixture('model = "attempt"\n');
+    const draft = { id: "draft1", title: "Unsaved ideas", body: "precious disabled draft", enabled: false };
+    const oldLayers = [draft, { id: "active", title: "Custom", body: "old custom", enabled: true }];
+    const newLayers = [draft, { id: "active", title: "Custom", body: "new custom", enabled: true }];
+    const preConfig = 'model = "original"\n', postConfig = 'model = "attempt"\n';
+    const preStore = JSON.stringify({ version: 1, layers: oldLayers }), postStore = JSON.stringify({ version: 1, layers: newLayers });
+    writeFileSync(paths.storePath, preStore);
+    const journal = journalPathFor(paths.storePath);
+    writeFileSync(journal, encodeJournal({ configPath: paths.configPath, storePath: paths.storePath, preConfig: hashBytes(preConfig), postConfig: hashBytes(postConfig), preStore: hashBytes(preStore), postStore: hashBytes(postStore), preConfigBytes: preConfig, postConfigBytes: postConfig, preStoreBytes: preStore, postStoreBytes: postStore }));
+    const newer = 'model = "newer user data"\n';
+    const original = atomic.renameAtomicFile;
+    let attempts = 0, intercepted = false;
+    const hook = spyOn(atomic, "renameAtomicFile").mockImplementation((source, destination, io, publisher, hooks) => {
+      if (destination !== realpathSync(paths.configPath) || intercepted) return original(source, destination, io, publisher, hooks);
+      intercepted = true;
+      return original(source, destination, {
+        platform: "win32",
+        rename: (a: string, b: string) => { attempts += 1; if (attempts === 1) throw Object.assign(new Error("simulated sharing violation"), { code: "EBUSY" }); renameSync(a, b); },
+        sleep: () => writeFileSync(paths.configPath, newer),
+      } as never, publisher, hooks);
+    });
+    let result;
+    try {
+      result = entry === "recovery" ? recoverPromptJournal(paths) : setToggle("apps", false, readPromptLayers(paths).revision, paths);
+    } finally { hook.mockRestore(); }
+    expect(intercepted).toBe(true);
+    expect(result.ok ? "ok" : result.error).toBe("recovery_required");
+    expect(readFileSync(paths.configPath, "utf8")).toBe(newer);
+    expect(existsSync(journal)).toBe(true);
+  });
+}
+
+
+
+// Debate round 2 reviewer findings: Bun-unparseable input and TOML date/time values.
+const I64 = "model_context_window = 9223372036854775807\n";
+test("Bun-unparseable input refuses an unverifiable append or restore instead of trusting the line editor", () => {
+  const decoy = I64 + '["skills"]\npreserve = """\n[skills]\n"include_instructions" = false\n"""\n';
+  expect(() => Bun.TOML.parse(decoy)).toThrow();
+  expect(() => setTableBool(decoy, "skills", "include_instructions", true)).toThrow(UnsupportedTomlForm);
+  for (const config of [I64 + '["skills"]\ninclude_instructions = false\n', I64 + "skills.include_instructions = false\n", I64 + "skills = { include_instructions = false }\n"]) {
+    expect(() => setTableBool(config, "skills", "include_instructions", null)).toThrow(UnsupportedTomlForm);
+    const paths = fixture(config);
+    const result = setToggle("skills", null, readPromptLayers(paths).revision, paths);
+    expect(result.ok ? "ok" : result.error).toBe("unsupported_form");
+    expect(readFileSync(paths.configPath, "utf8")).toBe(config);
+  }
+  // An in-place replacement of a key the editor located is still allowed.
+  expect(setTableBool(I64 + "[skills]\ninclude_instructions = true\n", "skills", "include_instructions", false)).toBe(I64 + "[skills]\ninclude_instructions = false\n");
+});
+
+for (const [kind, literal] of [["offset date-time", "1979-05-27T07:32:00Z"], ["local date-time", "1979-05-27T07:32:00"], ["local date", "1979-05-27"], ["local time", "07:32:00"]] as const) {
+  test("an unrelated " + kind + " value does not block a verified edit", () => {
+    const config = "stamp = " + literal + "\n[skills]\ninclude_instructions = true\n";
+    expect(Bun.TOML.parse(setTableBool(config, "skills", "include_instructions", false)) as Record<string, any>).toHaveProperty("skills.include_instructions", false);
+    expect((Bun.TOML.parse(setRootBool(config, "hide_agent_reasoning", true)) as Record<string, any>).hide_agent_reasoning).toBe(true);
+    expect((Bun.TOML.parse(setRootString(config, "model_instructions_file", "/managed/copy.md")) as Record<string, any>).model_instructions_file).toBe("/managed/copy.md");
+  });
+}
+

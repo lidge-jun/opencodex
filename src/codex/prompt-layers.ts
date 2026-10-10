@@ -41,6 +41,7 @@ import {
   hashBytes,
   recoverIfNeeded as recoverJournal,
   type JournalRecord,
+  expectingImage,
 } from "./prompt-journal";
 import { readBaseImportSource } from "./prompt-layers/import-source";
 import { release, stillHeld, tryAcquire } from "./prompt-lock";
@@ -778,8 +779,8 @@ function commitPrepared(
           return rollback(record, journalPath, "stale_revision", configHandle);
         }
         publishConfigWrite(configPath, configHandle, (destination, hooks) => {
-          if (nextConfig === null) durableDelete(destination, hooks);
-          else durableWrite(destination, nextConfig, hooks);
+          if (nextConfig === null) durableDelete(destination, expectingImage(hooks, record.preConfig));
+          else durableWrite(destination, nextConfig, expectingImage(hooks, record.preConfig));
         });
       }
       if (storeChanged) {
@@ -787,8 +788,8 @@ function commitPrepared(
           return rollback(record, journalPath, "stale_revision", configHandle);
         }
         publishConfigWriteTarget(configPath, configHandle, storePath, (destination, hooks) => {
-          if (nextStore === null) durableDelete(destination, hooks);
-          else durableWrite(destination, nextStore, hooks);
+          if (nextStore === null) durableDelete(destination, expectingImage(hooks, record.preStore));
+          else durableWrite(destination, nextStore, expectingImage(hooks, record.preStore));
         });
       }
     } catch (error) {
@@ -832,14 +833,14 @@ function rollback(record: JournalRecord, journalPath: string, error: WriteError,
   }
   if (configNow === record.postConfig) {
     publishConfigWrite(record.configPath, held, (destination, hooks) => {
-      if (record.preConfigBytes === null) durableDelete(destination, hooks);
-      else durableWrite(destination, record.preConfigBytes, hooks);
+      if (record.preConfigBytes === null) durableDelete(destination, expectingImage(hooks, record.postConfig));
+      else durableWrite(destination, record.preConfigBytes, expectingImage(hooks, record.postConfig));
     });
   }
   if (storeNow === record.postStore) {
     publishConfigWriteTarget(record.configPath, held, record.storePath, (destination, hooks) => {
-      if (record.preStoreBytes === null) durableDelete(destination, hooks);
-      else durableWrite(destination, record.preStoreBytes, hooks);
+      if (record.preStoreBytes === null) durableDelete(destination, expectingImage(hooks, record.postStore));
+      else durableWrite(destination, record.preStoreBytes, expectingImage(hooks, record.postStore));
     });
   }
   publishConfigWriteTarget(record.configPath, held, journalPath, (destination, hooks) => durableDelete(destination, hooks));
