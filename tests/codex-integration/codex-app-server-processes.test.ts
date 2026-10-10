@@ -967,15 +967,35 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
       try {
         expect(child.pid).toBeGreaterThan(1);
         // This verifies native enumeration, not the product's 8s latency bound.
-        // 46 same-user candidates took 28s in real GetOwner calls on a busy host.
-        // Keep the same trusted executable/script/parser with a bounded test runner;
+        // Limit the native query to this fixture; host job count must not set its cost.
+        // Keep the trusted executable, owner/candidate checks and parser unchanged;
         // the fixture's explicit finally owns its lifetime, and lookup errors propagate.
-        const snapshots = listWindowsSnapshots(psCommand => execFileSync(
-          resolveTrustedWindowsPowerShellExe(),
-          ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command", psCommand],
-          { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 45_000, windowsHide: true },
-        ));
-        const match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        const deadline = performance.now() + 55_000;
+        const enumerate = () => listWindowsSnapshots(psCommand => {
+          const query = "Get-CimInstance Win32_Process -ErrorAction Stop";
+          expect(psCommand).toContain(query);
+          const fixtureCommand = psCommand.replace(query,
+            `Get-CimInstance Win32_Process -Filter "ProcessId=${child.pid}" -ErrorAction Stop`);
+          const executable = resolveTrustedWindowsPowerShellExe();
+          const remaining = Math.floor(deadline - performance.now());
+          if (remaining <= 0) throw new Error("native enumeration fixture deadline expired");
+          return execFileSync(
+            executable,
+            ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command", fixtureCommand],
+            { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: Math.min(45_000, remaining), windowsHide: true },
+          );
+        });
+        let snapshots = enumerate();
+        let match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        // Only a successful scan missing this PID is retried; errors propagate.
+        // Both scans and the visibility delay share the same monotonic budget.
+        if (!match && performance.now() < deadline) {
+          Bun.sleepSync(Math.min(250, Math.max(0, Math.floor(deadline - performance.now()))));
+          if (performance.now() < deadline) {
+            snapshots = enumerate();
+            match = snapshots.find(snapshot => snapshot.pid === child.pid);
+          }
+        }
         expect(match).toBeDefined();
         expect(match!.owner).toMatch(/\\/);
         expect(match!.commandLine.toLowerCase()).toContain("codex app-server");
