@@ -1471,6 +1471,7 @@ async fn register(app: &AppHandle, deadline: Instant) -> Registration {
     // than the state from before first run.
     let login = first_run::apply_start_at_login_default(app);
     first_run::adopt_launch_origin_argument(app);
+    crate::cli_command::reconcile_on_launch(app);
 
     // The verdict is published only once an icon actually exists. Announcing a tray and then
     // failing to install it would hide the window into nothing, which is the exact stranding D6
@@ -1616,7 +1617,9 @@ fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
         let mode = startup
             .as_ref()
             .map_or(Mode::Launch, |startup| startup.mode());
-        if keeps_update_page(mode, crate::window::shows_update_page(&window)) {
+        if crate::window::shows_cli_page(&window)
+            || keeps_update_page(mode, crate::window::shows_update_page(&window))
+        {
             return;
         }
         if loads_dashboard_on_ready(LaunchOrigin::detect(), visible, requested) {
@@ -1655,8 +1658,9 @@ pub fn open_dashboard(app: &AppHandle) {
 }
 
 pub fn return_to_dashboard(app: &AppHandle) -> Result<(), String> {
-    let startup = app.try_state::<Startup>().ok_or("dashboard is not ready")?;
-    let dashboard = startup.ready_dashboard();
+    let dashboard = app
+        .try_state::<Startup>()
+        .and_then(|startup| startup.ready_dashboard());
     let window = app
         .get_webview_window("main")
         .ok_or("dashboard window is unavailable")?;
@@ -1669,7 +1673,11 @@ fn return_ready_dashboard(
     dashboard: Option<&str>,
     navigate: impl FnOnce(&str) -> bool,
 ) -> Result<(), String> {
-    let dashboard = dashboard.ok_or("dashboard is not ready")?;
+    let dashboard = dashboard.unwrap_or(if cfg!(target_os = "windows") {
+        "http://tauri.localhost/index.html"
+    } else {
+        "tauri://localhost/index.html"
+    });
     if !navigate(dashboard) {
         return Err("dashboard could not be opened".into());
     }
@@ -2377,11 +2385,7 @@ mod tests {
     }
 
     #[test]
-    fn update_page_return_requires_a_ready_dashboard_and_retries_refused_navigation() {
-        assert_eq!(
-            return_ready_dashboard(None, |_| true).unwrap_err(),
-            "dashboard is not ready"
-        );
+    fn settings_page_return_opens_a_ready_dashboard_and_retries_refused_navigation() {
         assert_eq!(
             return_ready_dashboard(Some("http://127.0.0.1:10100/#/usage"), |_| false).unwrap_err(),
             "dashboard could not be opened"
@@ -2395,6 +2399,26 @@ mod tests {
             .is_ok()
         );
         assert_eq!(visited.as_deref(), Some("http://127.0.0.1:10100/#/usage"));
+    }
+
+    #[test]
+    fn settings_page_return_without_a_ready_dashboard_opens_the_bundled_startup_page() {
+        assert_eq!(
+            return_ready_dashboard(None, |_| false).unwrap_err(),
+            "dashboard could not be opened"
+        );
+        let mut visited = None;
+        assert!(return_ready_dashboard(None, |url| {
+            visited = Some(url.to_owned());
+            true
+        })
+        .is_ok());
+        let expected = if cfg!(target_os = "windows") {
+            "http://tauri.localhost/index.html"
+        } else {
+            "tauri://localhost/index.html"
+        };
+        assert_eq!(visited.as_deref(), Some(expected));
     }
 
     #[test]

@@ -204,7 +204,7 @@ export async function executeResponsesSidecars(
   ): Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null> => {
     const antigravityValidationResponse = canRunWebSearch && route.providerName === "google-antigravity"
       && route.provider.authMode === "oauth" && originalResponse?.status === 403;
-    if (route.providerName !== "kiro" && !(anthropicInstance && originalResponse?.status === 403)
+    if (route.providerName !== "kiro" && !(anthropicInstance && (originalResponse?.status === 403 || originalResponse?.status === 401))
       && !antigravityValidationResponse && originalResponse && originalResponse.status !== 429) return null;
     let antigravityVerification = false;
     if (antigravityValidationResponse) {
@@ -368,7 +368,7 @@ export async function executeResponsesSidecars(
         hop.permit?.release();
         return null;
       }
-      recoveryKind = "anthropic-oauth-429";
+      recoveryKind = originalResponse?.status === 401 ? "oauth-401" : "anthropic-oauth-429";
       sidecarBudget.ownCredentialHop(hop.permit);
     } else {
       // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement

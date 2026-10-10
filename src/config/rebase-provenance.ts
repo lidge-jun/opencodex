@@ -141,6 +141,17 @@ export function clearPendingConfigTopLevelDeletions(config: OcxConfig): void {
   pendingTopLevelDeletions.delete(config);
 }
 
+/** A scoped durable adoption consumes only those fields' earlier deletion intent. */
+export function clearConfigTopLevelDeletionIntent(config: OcxConfig, keys: readonly (keyof OcxConfig)[]): void {
+  const pending = pendingTopLevelDeletions.get(config);
+  for (const key of keys) pending?.delete(key);
+  const parsed = parsedConfigRebaseDeletionKeys(config);
+  if (parsed === null) return;
+  for (const key of keys) parsed.delete(key);
+  if (parsed.size === 0) delete config.configRebaseProvenance;
+  else config.configRebaseProvenance = { version: 1, deletedTopLevelKeys: [...parsed].sort() };
+}
+
 export function clearPendingConfigObjectChildDeletions(config: OcxConfig): void {
   pendingObjectChildDeletions.delete(config);
 }

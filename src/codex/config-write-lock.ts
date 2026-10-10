@@ -54,13 +54,21 @@ interface ConfigWriteRecovery {
   refreshBeforeSpawn: boolean;
 }
 const recoveries = new WeakMap<LockHandle, ConfigWriteRecovery>();
+export class ConfigWriteParentMissing extends Error {
+  constructor(readonly path: string) { super(`Codex configuration parent is missing or unresolved at ${path}`); }
+}
+type ConfigWriteAcquireResult = AcquireResult | { ok: false; error: "missing-parent"; detail: string };
 function destination(path: string): Destination {
   const absolute = resolve(path);
   let canonical: string;
   try { canonical = realpathSync.native(absolute); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    canonical = join(realpathSync.native(dirname(absolute)), basename(absolute));
+    try { canonical = join(realpathSync.native(dirname(absolute)), basename(absolute)); }
+    catch (parentError) {
+      if ((parentError as NodeJS.ErrnoException).code === "ENOENT") throw new ConfigWriteParentMissing(dirname(absolute));
+      throw parentError;
+    }
   }
   try {
     const stat = statSync(canonical, { bigint: true });
@@ -78,10 +86,15 @@ export const CONFIG_WRITE_LOCKED_MESSAGE =
   "another opencodex process is writing Codex configuration — retry shortly";
 export type ConfigWriteLockOutcome<T> =
   | { ok: true; value: T }
-  | Exclude<AcquireResult, { ok: true }>;
+  | Exclude<ConfigWriteAcquireResult, { ok: true }>;
 
-function acquire(configPath: string): AcquireResult {
-  const target = destination(configPath);
+function acquire(configPath: string): ConfigWriteAcquireResult {
+  let target: Destination;
+  try { target = destination(configPath); }
+  catch (error) {
+    if (error instanceof ConfigWriteParentMissing) return { ok: false, error: "missing-parent", detail: error.path };
+    throw error;
+  }
   const acquired = tryAcquire(`${target.canonical}.ocx-write.lock`);
   if (acquired.ok) destinations.set(acquired.handle, target);
   return acquired;
@@ -254,7 +267,7 @@ export const CONFIG_WRITE_LOCK_WAIT_MS = 2_000;
 export async function acquireConfigWriteLock(
   configPath: string,
   options: { timeoutMs?: number; nowMs?: () => number; sleep?: (ms: number) => Promise<void> } = {},
-): Promise<AcquireResult> {
+): Promise<ConfigWriteAcquireResult> {
   const timeoutMs = options.timeoutMs ?? CONFIG_WRITE_LOCK_WAIT_MS;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 10_000) throw new RangeError("Invalid config lock timeout");
   const now = options.nowMs ?? (() => performance.now());
@@ -262,7 +275,7 @@ export async function acquireConfigWriteLock(
   const deadline = now() + timeoutMs;
   for (;;) {
     const acquired = acquire(configPath);
-    if (acquired.ok || acquired.error === "unsafe") return acquired;
+    if (acquired.ok || acquired.error !== "locked") return acquired;
     const remaining = deadline - now();
     if (timeoutMs === 0 || remaining <= 0) return { ok: false, error: "locked" };
     await sleep(Math.max(1, Math.min(remaining,
@@ -304,7 +317,8 @@ export function publishConfigWriteTarget<T>(
   });
 }
 
-export function configWriteLockFailureMessage(failure: Exclude<AcquireResult, { ok: true }>): string {
+export function configWriteLockFailureMessage(failure: Exclude<ConfigWriteAcquireResult, { ok: true }>): string {
+  if (failure.error === "missing-parent") return `Codex configuration parent is missing or unresolved at ${failure.detail}; no files were changed.`;
   return failure.error === "unsafe"
     ? `Unsafe Codex configuration lock at ${failure.detail}; deliberate removal is required. Files and recovery evidence were preserved.`
     : CONFIG_WRITE_LOCKED_MESSAGE;
@@ -312,7 +326,7 @@ export function configWriteLockFailureMessage(failure: Exclude<AcquireResult, { 
 
 export class ConfigWriteLockRefusal extends Error {
   readonly retryable: boolean;
-  constructor(failure: Exclude<AcquireResult, { ok: true }>) {
+  constructor(failure: Exclude<ConfigWriteAcquireResult, { ok: true }>) {
     super(configWriteLockFailureMessage(failure));
     this.retryable = failure.error === "locked";
   }

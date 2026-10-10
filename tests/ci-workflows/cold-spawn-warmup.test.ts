@@ -84,6 +84,10 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
     warmed: true,
     why: "every ocx subcommand here loads the same src/cli/index.ts static graph",
   },
+  "tests/cli/cli-update-badge.test.ts": {
+    warmed: true,
+    why: "the badge child loads the same src/cli/index.ts static graph as the other ocx commands",
+  },
   "tests/clients/client-connect.test.ts": {
     warmed: true,
     why: "three graphs: the state eval, the connect-transaction eval, and the generated lifecycle fixture",
@@ -103,15 +107,6 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
       + "launcher, so the cold cost is shell and process startup rather than a repository module "
       + "graph, and an import scan has nothing to warm. The generated shim never loads a repository "
       + "module in the child: the point of the file is what the shell does with an exit status.",
-  },
-  "tests/codex-integration/codex-shim.test.ts": {
-    warmed: false,
-    why:
-      "Its Windows children are a cmd.exe or PowerShell driver tree, so the cold cost is shell and "
-      + "process startup rather than a repository module graph, and an import scan has nothing to warm. "
-      + "The file also sits exactly on its file-size ratchet cap of 2388 lines in "
-      + "tests/fixtures/file-size-baseline.json, and that cap only moves downward, so a warm-up cannot "
-      + "be added here without unrelated deletions. Left for a separate change.",
   },
 };
 

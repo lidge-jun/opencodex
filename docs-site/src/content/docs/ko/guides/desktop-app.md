@@ -48,6 +48,31 @@ macOS에서는 대시보드를 닫아도 앱이 메뉴 막대에서 계속 실�
 
 ## 데스크톱 앱과 ocx CLI 함께 사용하기
 
+안정된 위치의 macOS 앱, Windows 설치본, 설치된 Linux deb에서는 Desktop이 시작할 때
+새 터미널이 번들 `ocx`를 사용하도록 자동 설정합니다. 대시보드 사이드바의 데스크톱
+업데이트 옆 **터미널 명령**, 또는 트레이 메뉴의 **Terminal command…**에서 끄기,
+복구, 제거를 선택하세요. **Use Desktop's ocx command in new terminals**을 끄면 관리
+설정을 제거합니다. **Remove terminal command**도 꺼 둔 선택을 저장하며, 재시작 후에도
+자동으로 다시 설치하지 않습니다. AppImage와 개발 실행에서는 터미널 명령을 설정하지 않습니다.
+
+macOS와 Linux에서는 `~/.opencodex-desktop/bin`의 shim, 공유 `path.sh` 도우미,
+zsh·bash·fish 시작 파일의 관리 블록을 사용합니다. 소유권과 복구 정보는
+`~/.opencodex-desktop/cli.json`에 저장합니다. 이 기록만 삭제해도 명령이나 셸 블록은
+제거되지 않습니다. Linux deb의 `/usr/bin/ocx`는 그대로 유지됩니다. Windows에서는
+설치 디렉터리를 사용자 `Path` 앞에 추가하고 나머지 항목을 보존합니다. Windows 시스템
+`Path`의 다른 명령이 먼저 선택될 수 있으며, Desktop은 이를 부분 적용으로 표시하고
+시스템 `Path`는 변경하지 않습니다.
+
+설정을 켜거나 복구한 뒤에는 새 터미널을 여세요. macOS/Linux에서는 `type -a ocx`,
+Windows에서는 `Get-Command ocx -All`과 `where.exe ocx`로 확인하세요. 이미 열린 셸,
+별칭, 절대 경로 명령, 이후 PATH 변경은 다른 실행 파일을 선택할 수 있습니다.
+Desktop을 종료해도 설정은 유지됩니다. 번들이 사라지면 POSIX shim은 다른 `ocx`를
+조용히 선택하지 않고 복구 또는 제거 안내와 함께 실패합니다.
+
+POSIX에서는 launch proof 생성 도구가 있으면 셸에서 export한 Anthropic 설정을
+보존합니다. proof를 생성할 수 없거나 Windows에서 직접 실행하면 신뢰되지 않은
+Anthropic 환경 설정을 제거하는 기존 번들 CLI 동작을 유지합니다.
+
 macOS와 Linux에서 데스크톱 앱이 번들 프록시를 실행하는 것으로 확인되면,
 `ocx status`에 `Runtime supervisor: OpenCodex Desktop`이 표시됩니다.
 기록된 소유권이 없어도 이 관계를 확인할 수 있습니다. 백그라운드 서비스를
@@ -108,6 +133,12 @@ Tauri 업데이터가 새 앱 버전을 찾으면 macOS 메뉴 막대 아이콘�
 macOS 앱에는 OpenCodex WidgetKit 확장이 포함됩니다. 위젯 설정과 로컬 스냅샷에 관한 자세한 내용은 [macOS 메뉴 막대 앱 가이드](/ko/guides/macos-menu-bar/)를 참고하세요.
 
 ## 제거
+
+지원되는 Desktop 설치본을 제거하기 전에 대시보드나 트레이의 **Terminal command**를
+열어 **Remove terminal command**를 선택하세요. Desktop은 변경되지 않은 자신의 관리
+설정만 제거합니다. 사용자가 수정한 블록이나 파일은 보존하고 알려 주므로, 앱을 삭제하기
+전에 해당 문제를 처리하세요. 앱만 직접 제거하면 셸 파일이나 사용자 `Path` 정리가
+보장되지 않습니다.
 
 macOS에서는 Applications의 `OpenCodex.app`을 휴지통으로 옮깁니다. Windows에서는 **Installed apps**에서 OpenCodex를 제거합니다. Debian 기반 Linux에서는 다음 명령을 실행합니다.
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { handleClientIntegrationCommand } from "../../src/cli/integrations";
 import { handleIntegrationAsideSync, type AsideSyncCliDeps } from "../../src/cli/integration-aside-sync";
+import { asideProfileRecoveryLines } from "../../src/cli/aside-profile-recovery";
 import { getRuntimePortPath } from "../../src/config/process-state";
 import { LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, createLocalAttestationProof } from "../../src/lib/local-management-attestation";
 import { LOCAL_ASIDE_SYNC_CAPABILITY_HEADER, LOCAL_ASIDE_SYNC_CAPABILITY_VERSION, LOCAL_ASIDE_SYNC_EXPECTED_PID_HEADER, LOCAL_ASIDE_SYNC_EXPIRES_AT_HEADER, LOCAL_ASIDE_SYNC_NONCE_HEADER, LOCAL_ASIDE_SYNC_PATH, verifyLocalAsideSyncCapability } from "../../src/lib/local-aside-sync-contract";
@@ -52,9 +53,35 @@ describe("Aside-only synchronization command", () => {
     expect(f.calls[0]!.init).toMatchObject({ method: "POST", body: "{}" });
     expect(json()).toEqual({ results: [{ client: "aside", profileId: 2, ok: true, changed: true }] });
   });
-  test("empty eligible set is described as no work", async () => {
+  test("empty eligible set is described as no work and names the reviewed recovery commands", async () => {
     const f = fixture(); expect(await handleIntegrationAsideSync(["--client", "aside"], f.deps)).toBe(0);
-    expect(channels()).toContain("No eligible Aside profiles"); expect(channels()).not.toContain("updated");
+    const text = channels();
+    expect(text).toContain("No eligible Aside profiles"); expect(text).not.toContain("updated");
+    expect(text).toContain("Sync refreshes only profiles whose sync preference is on.");
+    expect(text).toContain("List profiles with: ocx integration client status --client aside");
+    expect(text).toContain("review: ocx integration client preview --client aside --operation apply --profile <N>");
+    expect(text).toContain("Then, if the preview permits the change and you accept it: ocx integration client enable --client aside --profile <N>");
+    // Guidance only: the one sync POST is the whole exchange; nothing previews or enables on the user's behalf.
+    expect(f.calls).toHaveLength(1); expect(f.calls[0]!.url).toEndWith("/api/client-integrations/aside/sync");
+  });
+  test("recovery lines cover only valid, distinct off (stale) profile ids", () => {
+    const lines = asideProfileRecoveryLines([
+      { profileId: 0, enabled: false, state: "stale" }, { profileId: 1, enabled: true, state: "stale" },
+      { profileId: 2, enabled: false, state: "conflict" }, { profileId: 3, enabled: false, state: "unsafe" },
+      { profileId: 5, enabled: false, state: "current" }, { profileId: 6, state: "stale" },
+      { profileId: -1, enabled: false, state: "stale" }, { profileId: -0, enabled: false, state: "stale" },
+      { profileId: 1.5, enabled: false, state: "stale" }, { profileId: "7", enabled: false, state: "stale" },
+      { profileId: Number.MAX_SAFE_INTEGER + 1, enabled: false, state: "stale" },
+      { profileId: 4, enabled: false, state: "stale" }, { profileId: 4, enabled: false, state: "stale" }, null,
+      { profileId: Number.MAX_SAFE_INTEGER, enabled: false, state: "stale" },
+    ]);
+    expect(lines.filter(line => line.startsWith("Aside profile")).map(line => line.split(" ")[2])).toEqual(["0", "4", String(Number.MAX_SAFE_INTEGER)]);
+    expect(lines.slice(0, 4)).toEqual([
+      "Aside profile 0 is off (stale). To reconnect it, review: ocx integration client preview --client aside --operation apply --profile 0",
+      "Then, if the preview permits the change and you accept it: ocx integration client enable --client aside --profile 0",
+      "Aside profile 4 is off (stale). To reconnect it, review: ocx integration client preview --client aside --operation apply --profile 4",
+      "Then, if the preview permits the change and you accept it: ocx integration client enable --client aside --profile 4",
+    ]);
   });
   test.each([true, false])("partial results preserve safe outcomes and return nonzero (JSON %s)", async wantsJson => {
     const f = fixture({ results: [

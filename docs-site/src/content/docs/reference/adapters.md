@@ -292,6 +292,10 @@ MiMo model Command Code serves.
 - Always sends `anthropic-version: 2023-06-01`. Streams `content_block_delta` (`text_delta`,
   `thinking_delta`, compatible `reasoning_delta`, `input_json_delta`). The SSE decoder preserves
   event state across fetch chunks and accepts a terminal `message_stop` without a trailing newline.
+  At `message_stop`, the translated stream emits its terminal outcome and ends without waiting for
+  upstream EOF. Later pings or comments do not turn that completed message into a web-search stream
+  error. Pings and comments before `message_stop` still keep long thinking turns alive; refusals
+  remain non-retryable incomplete outcomes and upstream error stop reasons remain failures.
 - For routed Anthropic Responses turns with client tools, a bounded terminal guard detects the
   high-confidence case where the user requested an action but Claude ends with an execution claim
   and no tool call. It performs at most one internal continuation; normal answers, clarification

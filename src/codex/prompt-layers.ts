@@ -31,6 +31,7 @@ import { dirname, join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { expandUserPath } from "../config";
 import { resolveCodexHomeDir } from "./home";
+import { prepareCodexHome } from "./prepared-home";
 import {
   durableWrite,
   durableWriteExclusive,
@@ -672,13 +673,20 @@ function commit(
   build: (snapshot: PromptLayerSnapshot, configBytes: string | null, storeBytes: string | null)
     => Mutation | { error: WriteError; detail?: string },
 ): WriteResult {
+  for (const path of [activeConfigPath(opts), activeStorePath(opts)]) prepareCodexHome(dirname(path), 0o700);
+  return commitPrepared(opts, revision, build);
+}
+
+function commitPrepared(
+  opts: Paths | undefined,
+  revision: string,
+  build: (snapshot: PromptLayerSnapshot, configBytes: string | null, storeBytes: string | null)
+    => Mutation | { error: WriteError; detail?: string },
+): WriteResult {
   const configPath = activeConfigPath(opts);
   const storePath = activeStorePath(opts);
   const journalPath = journalPathFor(storePath);
   const lockPath = lockPathFor(storePath);
-
-  ensureDir(configPath);
-  ensureDir(storePath);
 
   const acquired = tryAcquire(lockPath);
   if (!acquired.ok) return { ok: false, error: acquired.error, ...(acquired.error === "unsafe" ? { detail: configWriteLockFailureMessage(acquired) } : {}) };
@@ -785,7 +793,7 @@ function commit(
     // successful write reported an empty variant list back to its caller.
     return { ok: true, changed: true, snapshot: readPromptLayers({ ...opts, configPath, storePath }) };
     });
-    return configLocked.ok ? configLocked.value as WriteResult : { ok: false, error: configLocked.error, ...(configLocked.error === "unsafe" ? { detail: configWriteLockFailureMessage(configLocked) } : {}) };
+    return configLocked.ok ? configLocked.value as WriteResult : { ok: false, error: configLocked.error === "locked" ? "locked" : "unsafe", ...(configLocked.error !== "locked" ? { detail: configWriteLockFailureMessage(configLocked) } : {}) };
   } finally { release(handle); }
 }
 

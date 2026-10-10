@@ -400,6 +400,12 @@ advisor and scoped-cache schemas. Advisor may perform sub-inference already requ
 no feature or beta-gated body is injected. Generic managed callers keep the narrower allowance,
 and compatible destinations receive no first-party allowance. These handles grant no credential authority.
 
+Managed native Messages record validated caller controls as `requestedEffort` on the final row
+and physical attempts. Existing annotations win; otherwise a recognized `output_config.effort`
+wins, followed by disabled thinking (`none`) or an enabled positive safe-integer budget
+(`budget:<tokens>`). Adaptive thinking without an explicit effort stays absent. This metadata
+comes from the body handed to the lane; it does not rewrite the wire or confirm upstream effort.
+
 `handleNativeMessages` mirrors native Chat on the shared pieces: `beginInferenceAttempt`,
 `createFinalRequestLog`, the request spend tracker charged per physical send, proactive key
 selection, 401 and 429 key-pool rotation, same-target 429 replay, the reset/transient retry

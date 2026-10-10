@@ -18,6 +18,8 @@ import {
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../paths";
+import { getCodexHome } from "../paths";
+import { codexHomeIsAbsent } from "../codex-home-owner";
 import { transformManagedSubagentDefaults } from "../subagent-defaults";
 import {
   applyEol,
@@ -188,6 +190,10 @@ export interface RemoveCodexConfigResult {
 export function removeCodexConfig(
   options: RemoveCodexConfigOptions = {},
 ): RemoveCodexConfigResult {
+  if (codexHomeIsAbsent(getCodexHome())) return {
+    success: true,
+    message: `Codex config not found; no native restore was needed${options.preserveProfile ? "." : ", and the opencodex profile was removed if present."}`,
+  };
   const historyDisposition = options.historyDisposition ?? "refuse-on-any";
   const historyError = preflightCodexHistoryInjection(false, false);
   // The preflight answers "may I rewrite conversation history?". Routing removal is a

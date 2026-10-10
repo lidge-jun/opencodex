@@ -10,6 +10,8 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../src/service/desktop-supervision.mjs";
+import { planDesktopCliHandoff, runDesktopCliHandoff } from "../src/lib/desktop-cli-handoff.mjs";
+import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
@@ -1018,6 +1020,36 @@ if (codexCliUpdateInspection && typeof process.versions.bun === "string") {
   process.exit(1);
 }
 
+const { launchProof, launchContext, inheritedEnv } = createNodeLaunchContext();
+const desktopPlan = planDesktopCliHandoff({ selfPaths: [fileURLToPath(import.meta.url), process.execPath] });
+if (desktopPlan.kind === "error") {
+  if (desktopPlan.issue.startsWith("record-")) {
+    console.error(`opencodex: OpenCodex Desktop's terminal-command record at ${desktopCliRecordPath()} could not be used (${desktopPlan.issue}). Open OpenCodex Desktop to repair the terminal command, or run with OCX_NO_DESKTOP_HANDOFF=1.`);
+  } else {
+    console.error(`opencodex: Desktop CLI handoff refused (${desktopPlan.issue}). Repair the terminal command in OpenCodex Desktop, or run with OCX_NO_DESKTOP_HANDOFF=1.`);
+  }
+  process.exit(1);
+}
+if (desktopPlan.kind === "handoff") {
+  const result = await runDesktopCliHandoff(desktopPlan, {
+    argv: process.argv.slice(2), env: inheritedEnv, proof: launchProof, context: launchContext,
+  });
+  if (result.kind === "error") {
+    console.error(`opencodex: Desktop CLI handoff failed (${result.issue}). Repair the terminal command in OpenCodex Desktop, or run with OCX_NO_DESKTOP_HANDOFF=1.`);
+    process.exit(127);
+  }
+  if (result.kind === "exit") {
+    if (result.signal) {
+      process.kill(process.pid, result.signal);
+    } else {
+      process.exit(result.code);
+    }
+    // Signal delivery is asynchronous; never resume package repair or Bun lookup.
+    await new Promise(() => {});
+  }
+  // Only confirmed target ENOENT reaches the ordinary package path below.
+}
+
 if (process.argv[2] === "update" && installMethod === "mise") {
   if (installOwnership.owner) {
     console.error(
@@ -1072,64 +1104,68 @@ const bun = bunRuntime.path;
 // billing and prevents it from redirecting the subscriber's OAuth bearer.
 // Disabling Bun's dotenv wholesale with --no-env-file is NOT an option: config
 // interpolation and provider settings legitimately read the project environment.
-const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
-  .filter(name => typeof process.env[name] === "string" && process.env[name] !== "");
-// A configured CODEX_CLI_PATH may legitimately be cwd-relative (`./tools/codex`), which the
-// ordinary runtime resolver accepts. Inspection only trusts absolute local paths, so capture
-// the absolute form here, in the launcher, while the original cwd is still authoritative;
-// resolving it later would silently reinterpret it against a different working directory.
-//
-// A bare command with no separator (`codex`) is NOT a relative path: the runtime resolver
-// deliberately hands those to executable lookup along PATH. Rewriting it to `<cwd>/codex`
-// would make the inspector treat it as an explicit path and stop searching PATH entirely.
-const configuredCodexCliPath = typeof process.env.CODEX_CLI_PATH === "string" && process.env.CODEX_CLI_PATH !== ""
-  ? process.env.CODEX_CLI_PATH
-  : null;
-const preBunCodexCliPath = configuredCodexCliPath !== null
-    && (configuredCodexCliPath.includes("/") || configuredCodexCliPath.includes("\\") || /^[A-Za-z]:/.test(configuredCodexCliPath))
-  ? resolve(configuredCodexCliPath)
-  : configuredCodexCliPath;
-const preBunPath = typeof process.env.PATH === "string" ? process.env.PATH : null;
-const preBunPathExt = typeof process.env.PATHEXT === "string" ? process.env.PATHEXT : null;
-const preBunCodexCliManagerRoots = Object.fromEntries(
-  CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS.flatMap(name => {
-    const value = process.env[name];
-    return typeof value === "string" && value !== "" ? [[name, value]] : [];
-  }),
-);
-const launchProof = randomBytes(32).toString("base64url");
-const launchContext = JSON.stringify({
-  version: 1,
-  proof: launchProof,
-  anthropicEnvSlots: preBunAnthropicSlots,
-  codexCliInspectionEnv: codexCliUpdateInspection ? {
-    codexCliPath: preBunCodexCliPath,
-    path: preBunPath,
-    pathExt: preBunPathExt,
-    managerRoots: preBunCodexCliManagerRoots,
-    configDir: configDir(),
-  } : null,
-});
-// The inspection snapshot above already carries PATH, PATHEXT, and the manager-root slots as
-// proof-bound values, and `inspectCodexCliInstall` reads them from that snapshot rather than
-// from the live environment. Inheriting them again would spend the 32,767-character Windows
-// environment block twice, so a large-but-valid shell environment could stop the Bun child
-// from spawning and fail the command before it reports anything. Drop the duplicates for the
-// one-shot inspection launch only; every other launch inherits the environment unchanged.
-// Windows environment names are case-insensitive, but this spread produces an ordinary
-// case-sensitive object, and a real Windows environment commonly spells the variable `Path`.
-// Deleting only the canonical upper-case spelling would silently leave that copy behind and
-// reintroduce the duplication this block exists to prevent, so match on the lowercase form.
-const inheritedEnv = { ...process.env };
-if (codexCliUpdateInspection) {
-  const snapshotted = new Set(
-    ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase()),
+function createNodeLaunchContext() {
+  const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
+    .filter(name => typeof process.env[name] === "string" && process.env[name] !== "");
+  // A configured CODEX_CLI_PATH may legitimately be cwd-relative (`./tools/codex`), which the
+  // ordinary runtime resolver accepts. Inspection only trusts absolute local paths, so capture
+  // the absolute form here, in the launcher, while the original cwd is still authoritative;
+  // resolving it later would silently reinterpret it against a different working directory.
+  //
+  // A bare command with no separator (`codex`) is NOT a relative path: the runtime resolver
+  // deliberately hands those to executable lookup along PATH. Rewriting it to `<cwd>/codex`
+  // would make the inspector treat it as an explicit path and stop searching PATH entirely.
+  const configuredCodexCliPath = typeof process.env.CODEX_CLI_PATH === "string" && process.env.CODEX_CLI_PATH !== ""
+    ? process.env.CODEX_CLI_PATH
+    : null;
+  const preBunCodexCliPath = configuredCodexCliPath !== null
+      && (configuredCodexCliPath.includes("/") || configuredCodexCliPath.includes("\\") || /^[A-Za-z]:/.test(configuredCodexCliPath))
+    ? resolve(configuredCodexCliPath)
+    : configuredCodexCliPath;
+  const preBunPath = typeof process.env.PATH === "string" ? process.env.PATH : null;
+  const preBunPathExt = typeof process.env.PATHEXT === "string" ? process.env.PATHEXT : null;
+  const preBunCodexCliManagerRoots = Object.fromEntries(
+    CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS.flatMap(name => {
+      const value = process.env[name];
+      return typeof value === "string" && value !== "" ? [[name, value]] : [];
+    }),
   );
-  for (const name of Object.keys(inheritedEnv)) {
-    if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];
+  const launchProof = randomBytes(32).toString("base64url");
+  const launchContext = JSON.stringify({
+    version: 1,
+    proof: launchProof,
+    anthropicEnvSlots: preBunAnthropicSlots,
+    codexCliInspectionEnv: codexCliUpdateInspection ? {
+      codexCliPath: preBunCodexCliPath,
+      path: preBunPath,
+      pathExt: preBunPathExt,
+      managerRoots: preBunCodexCliManagerRoots,
+      configDir: configDir(),
+    } : null,
+  });
+  // The inspection snapshot above already carries PATH, PATHEXT, and the manager-root slots as
+  // proof-bound values, and `inspectCodexCliInstall` reads them from that snapshot rather than
+  // from the live environment. Inheriting them again would spend the 32,767-character Windows
+  // environment block twice, so a large-but-valid shell environment could stop the Bun child
+  // from spawning and fail the command before it reports anything. Drop the duplicates for the
+  // one-shot inspection launch only; every other launch inherits the environment unchanged.
+  // Windows environment names are case-insensitive, but this spread produces an ordinary
+  // case-sensitive object, and a real Windows environment commonly spells the variable `Path`.
+  // Deleting only the canonical upper-case spelling would silently leave that copy behind and
+  // reintroduce the duplication this block exists to prevent, so match on the lowercase form.
+  const inheritedEnv = { ...process.env };
+  if (codexCliUpdateInspection) {
+    const snapshotted = new Set(
+      ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase()),
+    );
+    for (const name of Object.keys(inheritedEnv)) {
+      if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];
+    }
   }
+  return { launchProof, launchContext, inheritedEnv };
 }
-const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2)], {
+
+const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2).filter(arg => !arg.startsWith(NODE_LAUNCH_PROOF_PREFIX))], {
   stdio: "inherit",
   // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no
   // console to inherit. Without this flag Windows allocates a visible console for

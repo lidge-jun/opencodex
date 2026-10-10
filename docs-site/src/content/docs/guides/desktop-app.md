@@ -73,6 +73,31 @@ or Task Manager remain disabled.
 
 ## Using the ocx CLI with the desktop app
 
+On a stable macOS app, Windows installation, or installed Linux deb, Desktop automatically
+configures its bundled `ocx` for new terminals at launch. Open **Terminal command** beside
+**Desktop update** in the dashboard sidebar, or **Terminal command…** in the tray menu,
+to turn it off, repair it, or remove it. Turning off **Use Desktop's ocx command in new
+terminals** removes the managed configuration; **Remove terminal command** also keeps
+the off choice for future launches. AppImage and development launches do not configure it.
+
+macOS and Linux use a shim in `~/.opencodex-desktop/bin`, a shared `path.sh` helper and
+managed blocks in zsh, bash and fish startup files. Desktop records ownership and recovery
+information in `~/.opencodex-desktop/cli.json`; deleting that record does not remove the
+command or its shell blocks. The Linux deb's `/usr/bin/ocx` remains unchanged. Windows
+prepends the installation directory to the user `Path`, preserving its other entries.
+A command in the Windows system `Path` can still take precedence; Desktop reports that
+conflict as partial configuration and does not change the system `Path`.
+
+After enabling or repairing, open a new terminal. Check `type -a ocx` on macOS/Linux,
+or `Get-Command ocx -All` and `where.exe ocx` on Windows. Existing shells, aliases,
+absolute commands and later PATH changes can still select another executable.
+Configuration persists after Desktop quits. If the bundle is missing, the POSIX shim
+fails with repair/removal guidance instead of silently selecting another `ocx`.
+
+On POSIX, the shim preserves shell-exported Anthropic settings when launch-proof tools
+are available. If proof generation fails, and for Windows direct execution, the bundled
+CLI retains its existing stripping of untrusted Anthropic environment settings.
+
 On macOS and Linux, `ocx status` shows `Runtime supervisor: OpenCodex Desktop` when
 it verifies that the desktop app runs its bundled proxy, even without recorded ownership.
 Turn on **Start at Login** in the OpenCodex menu instead of installing a background
@@ -229,6 +254,12 @@ The macOS app includes the OpenCodex WidgetKit extension. See the
 local snapshot details.
 
 ## Uninstall
+
+Before uninstalling a supported Desktop installation, open **Terminal command** in the
+dashboard or tray and choose **Remove terminal command**. Desktop removes only its unchanged
+managed configuration. Modified blocks or files are preserved and reported; resolve those
+issues before deleting the app. Uninstalling the app directly does not guarantee cleanup
+of shell files or the user `Path`.
 
 On macOS, drag `OpenCodex.app` from Applications to the Trash. On Windows, remove
 OpenCodex from **Installed apps**. On Debian-based Linux systems, run:

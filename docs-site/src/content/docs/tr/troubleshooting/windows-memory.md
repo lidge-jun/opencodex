@@ -86,14 +86,7 @@ onu zaten yeniden başlatır.
    zamanını yükseltecektir ve daha güvenli akış yolu Windows'ta otomatik olarak
    açılacaktır (macOS aşağıdaki açık katılımı gerektirmeye devam eder).
 
-2. **`OPENCODEX_BUN_PATH` ile güvendiğiniz bir Bun çalışma zamanını
-   çalıştırın.** Bu doğrulanmamış bir alandır — opencodex'i test etmediğimiz bir
-   çalışma zamanında kendi sorumluluğunuzda çalıştırıyorsunuz. Servis
-   yüklemeleri için önemli: geçersiz kılma servis başlangıcında değil, **servis
-   varlığı oluşturulduğunda** okunur. Ortam değişkenini ayarlayın, ardından
-   yolun dayanıklı servis tanımına yerleştirilmesi için aynı kabuktan `ocx
-   service repair`'ı yeniden çalıştırın. Ortamı tek başına ayarlamak zaten
-   kurulu bir servis için hiçbir şey yapmaz.
+2. **`OPENCODEX_BUN_PATH` ile güvendiğiniz bir Bun çalışma zamanı kullanın.** Aynı kabukta `ocx` başlatılmadan önce değişkeni ayarlayın, ardından seçilen çalışma zamanını hizmet tanımına yazmak için `ocx service repair` çalıştırın. Sonradan yüklenen proje `.env` dosyası seçimi değiştirmez. Yalnızca ortam değişkenini değiştirmek kurulu hizmeti güncellemez.
 
 3. **`streamMode: "eager-relay"` ile sınırlı aktarıma katılın.** İki yol vardır:
    `config.json` dosyasını düzenleyin (`"streamMode": "eager-relay"` ekleyin)
@@ -113,3 +106,9 @@ sonraki `ocx doctor` bellek bölümlerini bildirin — bu azaltmanın beklediği
 doğrulama tam olarak budur.
 
 
+
+## Windows seçilen çalışma zamanı yazma reddi
+
+Windows hizmet kurulumu ve onarımı ile Codex shim kurulumu ve yenilemesi, seçilen yürütülebilir dosyanın OpenCodex yapılandırma kökünde bir dizin oluşturup kaldırabildiğini denetler. Bu bir yazma politikası denetimidir; bellek düzeltmesi değildir. Başarısızlık hizmet durdurma, indirme, hazırlama, belirteç veya başlatıcı yazma işlemlerinden önce reddedilir. Otomatik shim onarımı yönlendirmeyle ertelenir ve başlangıç devam eder. Sağlıklı veya devre dışı shim denetlenmez. Başka çalışma zamanı aranmaz. İlk zamanlayıcı kurulumu bu denetimden önce görevini kaydeder ve yapılandırma kökünü sahiplenir; ret durumunda yeni kayıt geri alınır ve sahiplenilen kök yeniden deneme için kalır.
+
+> Seçilen Bun çalışma zamanı yapılandırma dizininde bir dizin oluşturup kaldıramadı. Windows uygulama politikası bu yürütülebilir konumundan yazmayı engelleyebilir. `ocx` başlatılmadan önce `OPENCODEX_BUN_PATH` değerini politikanızın izin verdiği güvenilir Bun yürütülebilir dosyasına ayarlayın veya `npm install -g @bitkyc08/opencodex` ile yeniden kurup tekrar deneyin. Başka çalışma zamanı seçilmedi.

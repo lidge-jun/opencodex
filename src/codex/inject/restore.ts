@@ -1,5 +1,5 @@
 import { beginCodexWriteSection, cleanExternalProviderJournal, publishCodexArtifact } from "./config-write-section";
-import { assertCodexHomeOwner, codexHomeOwnerBlocksCompensation, CodexHomeOwnerRefusal, type CodexHomeOwnerRefusalReason } from "../codex-home-owner";
+import { assertCodexHomeOwner, codexHomeIsAbsent, codexHomeOwnerBlocksCompensation, CodexHomeOwnerRefusal, type CodexHomeOwnerRefusalReason } from "../codex-home-owner";
 import { loadConfig } from "../../config";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { siblingOfLivePort, siblingSkipMessage } from "../sibling-start";
@@ -548,6 +548,7 @@ function restoreCodexCatalogArtifact(
 export async function restoreNativeCodexAsync(
   options: { revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
 ): Promise<CodexNativeRestoreResult> {
+  if (codexHomeIsAbsent(getCodexHome())) return skippedRestoreEnvelope(true, "Codex config not found; no native restore was needed.");
   const sibling = siblingRestoreSkip();
   if (sibling) return sibling;
   try {
@@ -776,6 +777,7 @@ function homeOwnerRestoreRefusal(error: CodexHomeOwnerRefusal): CodexNativeResto
 export function restoreNativeCodex(
   options: { skipHistory?: boolean; revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
 ): CodexNativeRestoreResult {
+  if (codexHomeIsAbsent(getCodexHome())) return skippedRestoreEnvelope(true, "Codex config not found; no native restore was needed.");
   const sibling = siblingRestoreSkip();
   if (sibling) return sibling;
   try {

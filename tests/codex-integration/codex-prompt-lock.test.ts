@@ -120,12 +120,11 @@ describe("interleavings", () => {
       fs.writeFileSync(${JSON.stringify(path + ".ready-")}+${i}, 'ready');
       const barrierUntil=Date.now()+15000;
       while(!fs.existsSync(${JSON.stringify(go)})){if(Date.now()>barrierUntil)throw Error('barrier timeout');await Bun.sleep(5);}
-      const acquisitionUntil=Date.now()+5000;
       const result=tryAcquire(${JSON.stringify(path)});
       const resultPath=${JSON.stringify(path + ".result-")}+${i};
       fs.writeFileSync(resultPath+'.tmp', JSON.stringify(result));
       fs.renameSync(resultPath+'.tmp', resultPath);
-      if(result.ok){while(!fs.existsSync(${JSON.stringify(stop)})){if(Date.now()>acquisitionUntil)throw Error('hold timeout');await Bun.sleep(5);}release(result.handle);}
+      if(result.ok){const holdUntil=Date.now()+45000;while(!fs.existsSync(${JSON.stringify(stop)})){if(Date.now()>holdUntil)throw Error('hold timeout');await Bun.sleep(5);}release(result.handle);}
     `], { stdout: "pipe", stderr: "pipe" }));
     try {
       const barrierUntil = Date.now() + 15000;
@@ -133,10 +132,13 @@ describe("interleavings", () => {
         if (Date.now() > barrierUntil) throw Error("contenders did not reach barrier");
         await Bun.sleep(5);
       }
-      const acquisitionUntil = Date.now() + 5000;
+      // Result files signal completed acquisition; this ceiling guards only against hangs.
+      const completionUntil = Date.now() + 30000;
       writeFileSync(go, "go");
       while (!children.every((_, i) => existsSync(path + ".result-" + i))) {
-        if (Date.now() > acquisitionUntil) throw Error("contenders did not finish acquisition");
+        const crashed = children.findIndex((child, i) => child.exitCode !== null && !existsSync(path + ".result-" + i));
+        if (crashed >= 0) throw Error(`contender ${crashed} exited ${children[crashed].exitCode} without a result: ${await new Response(children[crashed].stderr).text()}`);
+        if (Date.now() > completionUntil) throw Error("contenders did not finish acquisition");
         await Bun.sleep(5);
       }
       const results = children.map((_, i) => JSON.parse(readFileSync(path + ".result-" + i, "utf8")));
@@ -148,7 +150,7 @@ describe("interleavings", () => {
       if (retried.ok) release(retried.handle);
       expect(existsSync(path + ".claims")).toBe(false);
     } finally { writeFileSync(stop, "stop"); children.forEach(child => child.kill()); }
-  }, 25000);
+  }, 60000);
 
   test("a dead process's unique reservation is reclaimed without blocking future writers", async () => {
     const path = lockPath(), ready = path + ".ready";

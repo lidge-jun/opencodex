@@ -34,7 +34,8 @@ export interface V2CliDeps {
 
 export type CodexFeaturesInvocationDeps =
   & Parameters<typeof commandInvocation>[3]
-  & Pick<ResolveCodexRuntimeDeps, "existsSync" | "execFileSync" | "configDir" | "readFileSync">;
+  & Pick<ResolveCodexRuntimeDeps, "existsSync" | "execFileSync" | "configDir" | "readFileSync">
+  & { requireAvailable?: boolean };
 
 /**
  * Shared invocation for `codex features enable|disable <feature>` — the single
@@ -50,14 +51,18 @@ export function codexFeaturesInvocation(
   platform: NodeJS.Platform = process.platform,
   deps: CodexFeaturesInvocationDeps = {},
 ): SpawnInvocation {
-  const command = resolveAndPersistCodexRuntime({
+  const resolved = resolveAndPersistCodexRuntime({
     env: deps.env ?? process.env,
     platform,
     existsSync: deps.existsSync,
     execFileSync: deps.execFileSync,
     configDir: deps.configDir,
     readFileSync: deps.readFileSync,
-  }).runtime.command || "codex";
+  });
+  if (deps.requireAvailable && resolved.runtime.source === "fallback" && resolved.runtime.version === null) {
+    throw Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT" });
+  }
+  const command = resolved.runtime.command || "codex";
   return commandInvocation(command, ["features", action, feature], platform, deps);
 }
 
@@ -72,8 +77,9 @@ export function runCodexFeaturesCommand(
   feature: string,
   env: NodeJS.ProcessEnv,
   validateBeforeSpawn: () => void,
+  preparedInvocation?: SpawnInvocation,
 ): void {
-  const inv = codexFeaturesInvocation(action, feature, process.platform, { env });
+  const inv = preparedInvocation ?? codexFeaturesInvocation(action, feature, process.platform, { env });
   validateBeforeSpawn();
   execFileSync(inv.file, inv.args,
     {

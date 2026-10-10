@@ -1576,7 +1576,7 @@ test("native passthrough precedes even invalid compatibility mode", async () => 
 test("compatibility survives management toggles and rejects Desktop source features", async () => {
   const { server: upstream, urls } = mockChatUpstreamCapturing();
   saveConfig(mockConfig(new URL("/v1", upstream.url).href, { compatibility: "enforce" }));
-  const server = startServer(0);
+  const server = startServer(0, { managementApi: { claudeAgentConfigDir: join(testDir, "claude-agents") } });
   try {
     for (const enabled of [false, true]) {
       const toggle = await fetch(new URL("/api/native-integrations/claude", server.url), {

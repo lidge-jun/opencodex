@@ -38,6 +38,7 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { AtomicWriteResidualTempError, AtomicWriteSecretResidualError, atomicWriteFile, getConfigDir } from "../config";
 import { ConfigWriteDestinationChanged, assertNativeConfigWriteDestination, runConfigWriteChild, withConfigWriteRecovery, publishConfigWrite, configWriteLockFailureMessage, withConfigWriteLock, withConfigWriteLockHeld, type LockHandle } from "./config-write-lock";
+import { codexHomeIsAbsent } from "./codex-home-owner";
 import { forgetEphemeralSecretPath } from "../lib/windows-secret-acl";
 import { resolveCodexHomeDir } from "./home";
 import { resolveAndPersistCodexRuntime } from "./runtime";
@@ -116,6 +117,7 @@ function editCodexConfigToml(
   edit: (content: string) => TomlEditOutcome,
   heldConfigWriteLock?: LockHandle,
 ): ConfigEditResult {
+  if (codexHomeIsAbsent(dirname(path))) return { ok: false, error: `config.toml not readable at ${path}` };
   const locked = withConfigWriteLockHeld(path, heldConfigWriteLock, (held): ConfigEditResult => {
     const content = readConfigText(path);
     if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
@@ -1544,6 +1546,7 @@ export function transitionMultiAgentV2(
     return { ok: false, error: "thread limit must be an integer >= 1" };
   }
   const path = options.configPath ?? activeCodexConfigPath();
+  if (codexHomeIsAbsent(dirname(path))) return { ok: false, error: `config.toml not readable at ${path}` };
   const runTransition = (held: LockHandle): MultiAgentV2TransitionResult => {
   const original = readConfigText(path);
   if (original === null) return { ok: false, error: `config.toml not readable at ${path}` };

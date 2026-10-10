@@ -254,6 +254,8 @@ latter need a live target. Before live operations, run `ocx ready --json` and
 version mismatch. `unknown` does not confirm matching builds. Offline help,
 local configuration and local Lab inspection do not require startup.
 
+`ocx status --json` includes `cliCommand`: configured Desktop intent, the expected executable, observed PATH candidates, `pathFirst`, `desktopFirstOnPath`, issue codes, and `shellResolution: "unobserved"`. The human status report prints one command-selection line. `ocx doctor` adds an “ocx command selection” section: invalid, unsafe (`record-unsafe`) or enabled-pending records and missing/unusable Desktop targets fail the check, while disabled cleanup-pending records, PATH ordering conflicts and incomplete scans warn. `OCX_NO_DESKTOP_HANDOFF=1` suppresses package-launcher handoff for one invocation; it leaves the Desktop shim and PATH configuration in place. These read-only observations do not execute candidates, resolve parent-shell aliases/functions, or identify the proxy’s runtime owner. On Windows, package-launcher handoff is disabled; user `Path` order selects the Desktop `ocx.exe`. Status and doctor still read the record and report the first PATH candidate. A possible cmd current-directory candidate is reported separately from PATH order.
+
 Output flags are per command. `doctor` rejects `--json` with exit 2;
 [`v2` (family reference)](/reference/cli/agents/)
 supports `--json` for local and `--live` targets. Even for JSON-capable management commands, API failures

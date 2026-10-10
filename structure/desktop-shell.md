@@ -460,6 +460,11 @@ authentication remains in the shared API boundary.
 The desktop webview uses a Mozilla-compatible `OpenCodexDesktop/` user-agent
 marker, which the GUI detects to identify the shell without using IPC.
 
+## Desktop-owned terminal command
+
+Installing, repairing and removing the Desktop-owned `ocx` command on PATH is documented in
+[Desktop-owned terminal command](desktop-terminal-command.md).
+
 ## Release packaging and updater
 
 ### Linux packaged-shell acceptance

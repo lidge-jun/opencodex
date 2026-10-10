@@ -317,6 +317,25 @@ its defaults and exclusions are owned by [Responses transport](../transports/res
 
 The provider summary default applies at Responses ingress; native Chat and Anthropic inbound preferences keep their existing handling. Raw content is never renamed to a summary. See [bridge contract](../providers/chat-compat.md).
 
+## Messages request-log correlation
+
+The Messages HTTP boundary in `src/server/index/serve-options.ts` publishes its generated
+request-log id in both `request-id` and `x-opencodex-request-id`. Native, translated, streamed,
+collected and logged refusal responses use the same id as the final request-history row.
+Stream headers precede final accounting; they identify the row owned by the turn, rather than
+attest to successful persistence. Authentication, origin, drain and active-turn rejections
+without a request-log owner, and count_tokens, receive no OCX correlation id.
+
+`src/server/messages-response-headers.ts` retains only an upstream `request-id` matching
+`req_[A-Za-z0-9_-]{1,128}` on native delivered results and upstream HTTP errors. At the final
+HTTP boundary, `src/server/index/startup-warnings.ts` moves this diagnostic value into
+`x-opencodex-upstream-request-id` and assigns the OCX id to `request-id`. Missing or nonconforming
+upstream ids are omitted; translated adapter ids are not inferred. The standard/custom OCX
+headers and the optional upstream header are exposed through CORS alongside existing names.
+`tests/claude-integration/messages-request-id-endpoint.test.ts` covers the protocol boundary;
+`tests/claude-integration/messages-request-id-headers.test.ts` covers header and stream identity.
+Responses retains its existing custom-header contract.
+
 ## Claude context rejection
 
 Claude Messages preserves the classified `context_length_exceeded` error (`src/claude/outbound.ts`, `src/protocols/encoders/messages.ts`, `src/server/claude-messages.ts`): one streaming `invalid_request_error` terminal, or HTTP 400 without a retry hint when collected or failed-JSON.
@@ -496,6 +515,8 @@ Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) requires original Responses ingress; translated Chat and Messages calls retain their own routing.
+
+Native Messages and translated Anthropic requests share [revoked-token recovery](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery); only pre-output recovery may send a sibling.
 
 Managed native Anthropic OAuth metadata follows [the native Messages binding contract](protocol-paths.md#managed-native-messages): the serving credential's provider UUID replaces only recognized account metadata, with each attempt rebuilt from the source.
 

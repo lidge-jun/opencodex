@@ -7,19 +7,19 @@ import { isRealBunBinary } from "../lib/bun-binary-validator.mjs";
 import { isProcessAlive } from "../lib/process-control";
 import { parseStrictSemver } from "../lib/strict-semver";
 import { startArgv } from "../lib/self-launch-argv";
-import { diagnoseService } from "../service/diagnostics";
-import { inspectGuardedManagerTarget } from "../service/guarded-manager-target";
+import { inspectGuardedManagerTarget, type GuardedManagerDeps } from "../service/guarded-manager-target";
 import { acquireOwnershipMutationLease, unprivilegedOwnershipMutationEnvironment } from "../service/ownership-mutation-lease.mjs";
 import { serviceStatePaths } from "../service/state";
 import { findLiveProxy, probeEndpointLiveness, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { waitForPortAvailable } from "../server/ports";
 import { UPDATE_RESTART_CHILD_ENV, type UpdateRestartChildMarker } from "./update-restart-child";
-import { assertUpdateRestartConfiguration, assertUpdateRestartHome, readUpdateRestartHome, type UpdateRestartHome } from "./update-restart-home";
+import { assertUpdateRestartConfiguration, assertUpdateRestartHome, readUpdateRestartHome, type UpdateRestartHome, type UpdateRestartHomeDeps } from "./update-restart-home";
 import { observeAttestedUpdateReplacement, stopAttestedUpdateTarget } from "./update-restart-transport";
 import type { UpdateRestartCandidate } from "./update-restart-candidate";
 import { INCOMPLETE_INSTALL_RECOVERY } from "./restart-failure";
 import { computeVersionSkew } from "./version-skew";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
+import { classifyUpdateRestartSystemdSupervision, probeUpdateRestartSupervision, resolveUpdateRestartSupervisor, runBoundedUpdateRestartSupervisor, UPDATE_RESTART_SYSTEMD_ARGS, type UpdateRestartSupervisionDeps } from "./update-restart-supervision";
 
 export interface UpdateRestartChild { pid?: number; exitCode: number | null; signalCode: string | null }
 export interface UpdateRestartIo {
@@ -191,29 +191,64 @@ export function describeUpdateRestartFailure(code: string, reason?: UpdateRestar
   }
 }
 
-function standalone(target: UpdateRestartCandidate["target"]): boolean {
-  try { assertUpdateRestartConfiguration(target.hostname ?? ""); }
+export interface UpdateRestartStandaloneDeps {
+  platform?: NodeJS.Platform;
+  expectedHome?: UpdateRestartHome;
+  checkConfiguration?: typeof assertUpdateRestartConfiguration;
+  command?: typeof readProcessCommandLine;
+  parent?: (pid: number) => string;
+  home?: UpdateRestartHomeDeps;
+  supervision?: UpdateRestartSupervisionDeps;
+  manager?: GuardedManagerDeps;
+}
+
+export function standalone(target: UpdateRestartCandidate["target"], deadlineAt: number, deps: UpdateRestartStandaloneDeps = {}): boolean {
+  const platform = deps.platform ?? process.platform;
+  try { (deps.checkConfiguration ?? assertUpdateRestartConfiguration)(target.hostname ?? ""); }
   catch { throw new UpdateRestartEligibilityError("configuration_changed"); }
-  if (process.platform !== "darwin" && process.platform !== "linux") {
-    throw new UpdateRestartEligibilityError(process.platform === "win32" ? "windows" : "unsupported_platform");
+  if (platform !== "darwin" && platform !== "linux") {
+    throw new UpdateRestartEligibilityError(platform === "win32" ? "windows" : "unsupported_platform");
   }
   const host = probeHostname(target.hostname).replace(/^\[|\]$/g, "");
   if (target.role === "client") throw new UpdateRestartEligibilityError("shared_or_client");
   if (target.packageTreeFenced) throw new UpdateRestartEligibilityError("package_tree_fenced");
   if (!isIP(host) || target.source !== "runtime") throw new UpdateRestartEligibilityError("unverifiable_ancestry");
-  const command = readProcessCommandLine(target.pid);
+  const command = (deps.command ?? readProcessCommandLine)(target.pid);
   if (!command || !isOcxStartCommandLine(command)) throw new UpdateRestartEligibilityError("unverifiable_ancestry");
-  if (diagnoseService().installed) throw new UpdateRestartEligibilityError("service");
-  const manager = inspectGuardedManagerTarget(target.pid, target.port);
+  let home: UpdateRestartHome;
+  try {
+    home = readUpdateRestartHome(deps.home);
+    if (deps.expectedHome && JSON.stringify(home) !== JSON.stringify(deps.expectedHome)) throw new Error("changed");
+  }
+  catch { throw new UpdateRestartEligibilityError("service"); }
+  const supervision = { ...deps.supervision, platform };
+  const managerCommand = resolveUpdateRestartSupervisor(supervision);
+  if (!managerCommand) throw new UpdateRestartEligibilityError("service");
+  if (probeUpdateRestartSupervision(deadlineAt, supervision, managerCommand) !== "inactive") throw new UpdateRestartEligibilityError("service");
+  const manager = inspectGuardedManagerTarget(target.pid, target.port, {
+    ...deps.manager, platform,
+    launchctl: args => {
+      const result = runBoundedUpdateRestartSupervisor(managerCommand, args, deadlineAt, supervision);
+      return { ...result, ok: result.status === 0 };
+    },
+    systemdShow: () => {
+      const result = runBoundedUpdateRestartSupervisor(managerCommand, UPDATE_RESTART_SYSTEMD_ARGS, deadlineAt, supervision);
+      if (classifyUpdateRestartSystemdSupervision(result) !== "inactive") throw new Error("update_restart_supervision_unverified");
+      return result.stdout;
+    },
+  });
   if (manager.kind !== "absent") throw new UpdateRestartEligibilityError(manager.kind === "bound" ? "service" : "unverifiable_ancestry");
   let parent: string;
   try {
-    parent = execFileSync("ps", ["-o", "ppid=", "-p", String(target.pid)], {
+    parent = deps.parent ? deps.parent(target.pid) : execFileSync("ps", ["-o", "ppid=", "-p", String(target.pid)], {
       encoding: "utf8", timeout: 1000, stdio: ["ignore", "pipe", "ignore"],
     }).trim();
   } catch { throw new UpdateRestartEligibilityError("unverifiable_ancestry"); }
   if (!/^[1-9]\d*$/.test(parent)) throw new UpdateRestartEligibilityError("unverifiable_ancestry");
   if (parent !== "1") throw new UpdateRestartEligibilityError("foreground");
+  try {
+    if (JSON.stringify(readUpdateRestartHome(deps.home)) !== JSON.stringify(home)) throw new Error("changed");
+  } catch { throw new UpdateRestartEligibilityError("service"); }
   return true;
 }
 
@@ -224,7 +259,7 @@ export function restartFromCurrentInstallation(candidate: UpdateRestartCandidate
   return runUpdateRestart(candidate, deadlineAt, {
     now: Date.now,
     acquire: () => acquireOwnershipMutationLease(serviceStatePaths(), { waitMs: Math.max(0, Math.min(2000, deadlineAt - Date.now())) }),
-    home: readUpdateRestartHome, checkHome: assertUpdateRestartHome, runtime: readRuntimePort, standalone,
+    home: readUpdateRestartHome, checkHome: home => assertUpdateRestartHome(home, deadlineAt), runtime: readRuntimePort, standalone: target => standalone(target, deadlineAt, { expectedHome: candidate.home }),
     runtimeReady: () => isRealBunBinary(executable),
     stop: async (target, deadline, beforeStop) => {
       const token = configuredAdminToken();

@@ -135,6 +135,8 @@ test("conversation digest and preimage use the existing owner, including alias s
   expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, conversationId: "hello", conversationQueryHash: await hashLogConversationQuery("hello") }, NOW).map(row => row.id)).toEqual(["digest", "direct"]);
   expect(await run(logs, ["--conversationId", digest])).toBe(0);
   expect(ids()).toEqual(["digest"]);
+  expect(await run(logs, ["--conversation=codex://threads/hello?hostId=durable"])).toBe(0);
+  expect(ids()).toEqual(["digest", "direct"]);
 });
 
 test("modern scope counts ignore server totals and unknown metadata, preserving recent ordered duplicates", async () => {

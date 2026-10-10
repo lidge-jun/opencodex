@@ -43,6 +43,10 @@ export function withLockClaim<T>(
   }
   if (!safeNamespace(directory, "directory", deps)) throw new UnsafeLockNamespace(directory);
   const parents = [root, { path: directory, stat: io(() => deps.lstat(directory)) }];
+  const claimDirectoryGone = (): boolean => {
+    try { const now = deps.lstat(directory); return now.dev !== parents[1].stat.dev || now.ino !== parents[1].stat.ino; }
+    catch { return true; }
+  };
   const ownName = `${process.pid}-${token}.claim`, ownPath = join(directory, ownName);
   const temporary = `${path}.claim-init-${token}`;
   let ownEntry: Entry | undefined, temporaryEntry: Entry | undefined;
@@ -108,7 +112,10 @@ export function withLockClaim<T>(
     if (!safeNamespace(path, "file", deps, true)) throw new UnsafeLockNamespace(path);
     return { ok: true, value: run() };
   } catch (error) {
-    if (error instanceof LockFileBusy || (error as NodeJS.ErrnoException).code === "ENOENT") return { ok: false };
+    const code = (error as NodeJS.ErrnoException).code;
+    // A peer's final rmdir can remove the claims directory between our identity check and the
+    // link/rename into it; platforms report that as ENOENT or (macOS link) EINVAL. Either is contention.
+    if (error instanceof LockFileBusy || code === "ENOENT" || (code === "EINVAL" && claimDirectoryGone())) return { ok: false };
     throw error;
   } finally {
     if (temporaryEntry) {

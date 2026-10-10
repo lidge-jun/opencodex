@@ -429,6 +429,25 @@ invalidates old evidence. Request-owned bearers are matched only against a crede
 workspace already observed under native ownership; an unrelated or unmatched keyring credential
 is not attributed to stored main and introduces no physical-main read. Credential equality tags
 remain process-local and never enter disk, logs, or management DTOs.
+Plain-main HTTP and WebSocket Responses on the canonical OpenAI forward provider refresh cached
+main usage under that same credential/workspace match, including stored-main substitution and
+an identical caller-owned credential. Materialization captures a process-local dispatch proof;
+HTTP delivery captures the response-arrival proof before any body await and retains it for those
+headers even if deferred recovery renews the context. Publication rechecks identity and credential
+generations, including after an awaited HTTP import
+and for every WebSocket frame. A replaced credential, unmatched workspace, or custom destination
+cannot publish main usage. Pool health/failover handling stays scoped to Pool contexts.
+The dispatch additionally fences the process-wide credential mutation epoch, so native main
+refresh and same-account reauth commits reject an older response before quota observation catches
+up. Publications for other credentials also conservatively drop the main update.
+Each plain-main WS observer renews its live dispatch object with every captured fence unchanged.
+Every invocation claims that observer's own copy before checking liveness, preventing
+HTTP publication from stream-wrapper replacement Responses. A failed-upgrade HTTP fallback with no WS quota
+frames remains unclaimed and publishes normally, including after an earlier attempt observed quota;
+response markers remain an additional guard.
+An operator-granted HTTP replacement renews only the dispatch object identity, copying all captured
+credential and config fences unchanged. Its unclaimed attempt can publish only while those original
+fences remain live; the failed WS observer retains its old claimed object.
 `src/codex/auth-api/main-account-probe.ts` re-reads the bounded stored main credential and
 rechecks its writer, bearer and generation after body/retry awaits, before publishing main usage,
 credits, plan, reauth or Reserve state, including terminal 401/403 mutations. An unreadable file

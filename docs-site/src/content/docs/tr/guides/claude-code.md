@@ -470,10 +470,11 @@ giderme adımıdır; kesin çözüm değildir. OpenCodex seçici durumunu gözle
 her isteğin taşıdığı model kimliğini yönlendirir. İstemcinin ne gönderdiğini
 **Logs → requestedModel** altında kontrol edin.
 
-Yetkili 1M bağlam penceresine sahip modeller fazladan bir `…[1m]` seçici satırı
-alır: bunu seçmek Claude Code'un bu model için tam 1M bağlam hesabı yapmasını
-sağlar (otomatik sıkıştırma açık kalır) — proxy yönlendirmeden önce işaretçiyi
-kaldırır.
+Uzun bağlam penceresine sahip modeller (1M, veya en az 829.800 token varsayılan
+sıkıştırma eşiği; Anthropic rotasındaki Claude modellerinin gerçekten 1M olması
+gerekir) fazladan bir `…[1m]` seçici satırı alır: bunu seçmek Claude Code'un bu
+model için tam 1M bağlam hesabı yapmasını sağlar (otomatik sıkıştırma açık kalır)
+— proxy yönlendirmeden önce işaretçiyi kaldırır.
 Birini seçmek, onu Claude Code'un `settings.json` `model` alanına kaydeder;
 gelen istekler takma adı yönlendirilen modele geri çözer. Eski Claude Code
 sürümlerinde seçici yerel kalır — `ANTHROPIC_MODEL` aracılığıyla yuvaları
@@ -512,10 +513,12 @@ kimliklerini korur.
 
 ### Bağlam değişkeni `[1m]` işaretçisi
 
-Yetkili bağlam penceresi 1M olan (veya otomatik bağlam altında 200k üzerinde ve
-en az sıkıştırma eşiğinde olan) modeller fazladan bir `…[1m]` seçici satırı
-alır. Bunu seçmek Claude Code'un tam 1M bağlam hesabı yapmasını sağlar. Proxy,
-takma ad çözümleme ve yönlendirmeden önce büyük/küçük harfe duyarsız `[1m]`
+Yetkili bağlam penceresi 1M olan veya varsayılan sıkıştırma eşiği olan 829.800
+tokene ulaşan modeller fazladan bir `…[1m]` seçici satırı alır. Bu taban sabittir:
+sıkıştırma değerini değiştirmek onu düşürmez ve Anthropic rotasındaki Claude
+modellerinin gerçekten 1M olması gerekir. Otomatik bağlam kapatılırsa satır yalnızca
+1M pencerelere kalır. Bunu seçmek Claude Code'un tam 1M bağlam hesabı yapmasını sağlar.
+Proxy, takma ad çözümleme ve yönlendirmeden önce büyük/küçük harfe duyarsız `[1m]`
 sonekini kaldırır.
 
 ## Otomatik bağlam (200k tavanı olmayan büyük bağlamlı modeller)
@@ -523,9 +526,10 @@ sonekini kaldırır.
 Claude Code, tanımadığı herhangi bir model için 200k token hesabı yapar.
 **Otomatik bağlam** (varsayılan olarak açık) bunu düzeltir:
 
-1. Gerçek penceresi 200k'nın üzerinde **ve** en az otomatik sıkıştırma eşiğinde
-   olan modeller, seçici satırlarında ve ortam yuvalarında `[1m]` işaretçisini
-   alır.
+1. Başlatma ortam yuvaları, gerçek pencere 200k'nın üzerinde **ve** en az yapılandırılmış
+   otomatik sıkıştırma eşiğindeyken `[1m]` işaretçisini alır. Keşif ve Desktop seçici
+   satırları bu eşiği izlemez: sabit 829.800 token tabanını kullanırlar (Anthropic
+   rotasındaki Claude modelleri için gerçek 1M).
 2. Görüşmenin bu noktada otomatik olarak özetlenmesi için
    `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (varsayılan `829800`, aralık
    `100000`–`1000000`) enjekte edilir.
@@ -542,8 +546,9 @@ penceresinin üzerine çıkarmak o modeli bozar — sohbet özetleme tetiklenmed
 önce hata verir.
 
 1M altı yerel Anthropic modelleri hiçbir zaman otomatik olarak işaretlenmez.
-Kendi dışa aktardığınız değerler her zaman kazanır (proxy hangi modellerin
+Kendi dışa aktardığınız sıkıştırma penceresi, başlatma yuvası işaretlemesinde her zaman kazanır (proxy hangi modellerin
 işaretlenmesinin güvenli olduğuna karar vermek için SİZİN değerinizi kullanır).
+Keşif satırları bu dışa aktarımı yok sayar ve sabit tabanı korur.
 Geçersiz elle düzenlenen yapılandırma değerleri 829,800'ya geri döner.
 
 ### Geçerli model ortamı (Effective model environment)
@@ -697,7 +702,7 @@ olarak test edilmelidir.
 
 ## Akıl yürütme çabası (Reasoning effort)
 
-Claude Code'un `/effort` ayarı adaptör genelinde korunur:
+Messages → Responses olarak çevrilen isteklerde Claude Code'un `/effort` ayarı şöyle eşlenir:
 
 | Hat formatı | Eşleme |
 | --- | --- |
@@ -705,7 +710,9 @@ Claude Code'un `/effort` ayarı adaptör genelinde korunur:
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, üzeri→`high` |
 | `thinking.type: "disabled"` | `reasoning: { effort: "none" }`; özet atlanır |
 
-Çözümlenen değer, istek günlüğünün **Reasoning effort** sütununda görünür.
+Çevrilen isteklerde eşlenen seviye, istek günlüğünün **Reasoning effort** sütununda görünür.
+Yönetilen yerel Messages isteklerinde tanınan bir `output_config.effort` yoksa etkin düşünme bütçesi
+`budget:<tokens>` olarak kaydedilir; bu günlük kaydı gönderilen istek gövdesini değiştirmez.
 
 ## Gelen çeviri (Messages → Responses)
 
@@ -850,8 +857,8 @@ veya `ocx claude` komutunu yeniden çalıştırın.
 
 **Büyük modele rağmen 200k bağlam tavanı** — Seçicide `[1m]` varyantını seçin
 veya otomatik bağlamı etkinleştirin (varsayılan olarak açık). Seçici hiçbir
-`[1m]` satırı göstermiyorsa, modelin yetkili bağlam penceresi otomatik
-sıkıştırma eşiğinin altında olabilir.
+`[1m]` satırı göstermiyorsa, modelin yetkili bağlam penceresi sabit 829.800
+token tabanının altında olabilir.
 
 **Yetenek yüklemelerinden kaynaklanan yüksek token sayısı** — Paketlenmiş
 `claude-api` yeteneği (~136k token) Claude model adları anıldığında otomatik
@@ -878,10 +885,12 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
 
 Explicit gateway selectors on a generated agent request take precedence over its legacy `ocx-route` fallback, even if the saved force setting changes after launch. For shell or settings overrides of generated roster agents, use an explicit gateway alias; bare Claude ids retain the older-client fallback behavior. Native aliases restore their bare model before the existing credential and model-map checks. Connected launches validate force targets against a fresh authenticated gateway catalog; failed discovery skips automatic force injection, and cached context windows alone never prove availability.
+
+Yalnızca çıktı başlamadan önce: HTTP 401 authentication_error (error.code olmadan) iletisi tam olarak “OAuth access token has been revoked.” olduğunda, isteği gönderen OAuth hesabı yeniden oturum açılması gereken durumda işaretlenir ve oturum bağları temizlenir. Çıktı başlamadan önce mevcut gönderim sınırları içinde aynı havuzdaki uygun hesaba geçilebilir. Alternatif yoksa özgün 401 döndürülür; hesap yeniden giriş yapılana kadar seçim dışı kalır. Diğer 401 yanıtlarının işlenmesi değişmez.

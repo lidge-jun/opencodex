@@ -283,7 +283,7 @@ import/export는 로컬 설정만 다뤄요. 허브 프로필을 바꾸지 않�
 능력 정보(추론 강도 사다리, thinking 타입)를 실어 보냅니다 — Claude Desktop의 서드파티
 게이트웨이 모드가 추론 강도 선택 UI를 열 수 있게 하기 위해서입니다. 실제 Anthropic 모델은
 원래 id를 그대로 유지합니다. 합성된 2026 날짜는 내부 슬롯이며 출시일이 아닙니다. 구버전의
-해시 별칭과 `claude-ocx-<provider>--<model>`, `claude-ocx2-<provider>--<model>` 별칭도 계속 해석됩니다. 저장된 `claude-ocx-`는 `ocx-claude-`로, 이스케이프된 `claude-ocx2-`는 `ocx-claude2-`로 한 번 다시 고르면 실제 컨텍스트 창과 compact가 함께 적용됩니다. 컨텍스트가 1M인 모델에는
+해시 별칭과 `claude-ocx-<provider>--<model>`, `claude-ocx2-<provider>--<model>` 별칭도 계속 해석됩니다. 저장된 `claude-ocx-`는 `ocx-claude-`로, 이스케이프된 `claude-ocx2-`는 `ocx-claude2-`로 한 번 다시 고르면 실제 컨텍스트 창과 compact가 함께 적용됩니다. 컨텍스트가 1M이거나 기본 압축 임곗값(829,800) 이상인 모델에는
 `…[1m]` 행이 하나 더 생깁니다 — 이걸 고르면 Claude Code가 그 모델의 컨텍스트를 1M로 계산합니다
 (자동 요약 유지, 프록시가 표식을 떼고 라우팅). 선택하면 Claude Code의
 `settings.json` `model` 필드에 저장되고, 인바운드 요청에서
@@ -343,8 +343,9 @@ v2 별칭은 이스케이프를 펼쳐요. 읽기 쉬운 형식으로 표현할 
 
 ### 컨텍스트 변형 `[1m]` 표식
 
-공식 컨텍스트 창이 1M인 모델에는 `…[1m]` 선택기 행이 하나 더 생겨요. 자동 컨텍스트를 사용할
-때는 컨텍스트가 200k를 넘고 압축 임곗값 이상인 모델도 해당해요. 이 행을 선택하면 Claude Code가
+공식 컨텍스트 창이 1M이거나 기본 압축 임곗값(829,800) 이상인 모델에는 `…[1m]` 선택기 행이 하나 더
+생겨요. 이 기준은 고정이라 압축 값을 직접 바꿔도 낮아지지 않고, Anthropic 경로의 Claude 모델은 실제 1M이어야
+해요. 자동 컨텍스트를 끄면 1M 모델만 해당해요. 실제 창을 넘으면 `prompt is too long` 오류가 오고 Claude Code가 자동으로 압축해요. 이 행을 선택하면 Claude Code가
 전체 1M 컨텍스트를 계산해요. 프록시는 별칭 해석과 라우팅 전에 대소문자를 구분하지 않고 `[1m]`
 접미사를 제거해요.
 
@@ -353,8 +354,9 @@ v2 별칭은 이스케이프를 펼쳐요. 읽기 쉬운 형식으로 표현할 
 Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산해요. 기본으로 켜져 있는 **자동
 컨텍스트**는 이 문제를 해결해요.
 
-1. 실제 컨텍스트 창이 200k보다 크고 자동 압축 임곗값 이상인 모델의 선택기 행과 환경 슬롯에
-   `[1m]` 표식이 붙어요.
+1. 실행 환경 슬롯에는 실제 컨텍스트 창이 200k보다 크고 설정한 자동 압축 임곗값 이상일 때
+   `[1m]` 표식이 붙어요. 디스커버리와 Desktop 선택기 행은 그 임곗값을 따르지 않고, 고정된 829,800 토큰 하한
+   (Anthropic 경로의 Claude 모델은 실제 1M)을 써요.
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`(기본값 `829800`, 범위 `100000`–`1000000`)를 주입해 해당
    지점에서 대화를 자동으로 요약해요.
 
@@ -367,9 +369,24 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
 **연결 → Claude**에서 압축 값을 조절할 수 있어요. **경고:** 모델의 실제 컨텍스트 창보다 크게 올리면
 요약을 시작하기 전에 채팅 오류가 발생해요.
 
-1M 미만인 네이티브 Anthropic 모델에는 자동으로 표식을 붙이지 않아요. 직접 내보낸 값이 항상
+1M 미만인 네이티브 Anthropic 모델에는 자동으로 표식을 붙이지 않아요. 직접 내보낸 압축 값은 실행 슬롯 표식에서 항상
 우선하며, 프록시는 **사용자가 지정한** 값을 기준으로 어떤 모델에 안전하게 표식을 붙일지 결정해요.
+디스커버리 행은 그 값을 무시하고 고정 하한을 유지해요.
 직접 편집한 설정값이 잘못되면 829,800로 돌아가요.
+
+### 컨텍스트 계산 방식 (기본 1M, 200k는 옵트인)
+
+`claudeCode.contextAccounting`은 opencodex가 기본으로 고르는 값을 정해요. 설정하지 않으면(`1m`, 기본값)
+긴 컨텍스트 모델이 실행 환경 슬롯, Desktop 선택기, Desktop 3P(`prefer1m`), 생성된 서브에이전트에서 1M으로
+잡혀요. `200k`로 바꾸면 자동 `[1m]` 표식을 붙이지 않고 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`도 넣지 않으며,
+Desktop 3P는 `supports1m`은 남기고 `prefer1m`만 빼요. 직접 `[1m]`을 붙인 선택은 계속 쓸 수 있어요(생성된
+서브에이전트와 강제 서브에이전트는 모델 창이 감당하지 못하는 표식을 여전히 떼요). 디스커버리 목록에는 실제 1M 모델의
+`· 1M` 행이 계속 나와요. `200k`는 자동 컨텍스트보다 우선해요. 직접 export한 압축 값이 있어도 자동 표식은 다시 켜지지
+않고, 그 export 값은 opencodex가 건드리지 않아요.
+
+```bash
+ocx claude config set --context-accounting 200k
+```
 
 ### 실제 모델 환경
 
@@ -502,7 +519,7 @@ fingerprint 방식을 그대로 따르지만, 장시간 무인 작업에 쓰기 
 
 ## 추론 강도
 
-Claude Code의 `/effort` 설정은 어댑터에서도 유지돼요.
+Messages → Responses로 변환되는 요청에서는 Claude Code의 `/effort` 설정을 다음과 같이 매핑해요.
 
 | 전송 형식 | 매핑 |
 | --- | --- |
@@ -510,7 +527,9 @@ Claude Code의 `/effort` 설정은 어댑터에서도 유지돼요.
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, 그보다 크면→`high` |
 | `thinking.type: "disabled"` | `reasoning: { effort: "none" }`을 명시하고 `summary`는 생략해요 |
 
-해석된 값은 요청 로그의 **Reasoning effort** 열에 표시돼요.
+변환된 요청에서는 매핑된 단계가 요청 로그의 **Reasoning effort** 열에 표시돼요.
+관리형 네이티브 Messages는 인식 가능한 `output_config.effort`가 없을 때 활성화된 thinking 예산을
+`budget:<tokens>`로 기록하며, 이 로깅은 전송 본문을 변경하지 않아요.
 
 ## 입력 변환(Messages → Responses)
 
@@ -664,7 +683,7 @@ Anthropic 백엔드를 명시하면 의도적으로 실패 후 중단해요.
 
 **대형 모델인데도 컨텍스트가 200k로 제한됨** — 선택기에서 `[1m]` 변형을 고르거나 기본으로
 켜져 있는 자동 컨텍스트를 사용하세요. 선택기에 `[1m]` 행이 없다면 모델의 공식 컨텍스트 창이
-자동 압축 임곗값보다 작을 수 있어요.
+고정된 829,800 토큰 하한보다 작을 수 있어요.
 
 **스킬을 불러올 때 토큰 수가 많음** — 번들 `claude-api` 스킬(약 136k 토큰)은 Claude 모델을
 언급하면 자동으로 불러와요. 네이티브 패스스루에서는 정상이며, 라우팅 모델에서는 opencodex가
@@ -684,10 +703,12 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
 
 Explicit gateway selectors on a generated agent request take precedence over its legacy `ocx-route` fallback, even if the saved force setting changes after launch. For shell or settings overrides of generated roster agents, use an explicit gateway alias; bare Claude ids retain the older-client fallback behavior. Native aliases restore their bare model before the existing credential and model-map checks. Connected launches validate force targets against a fresh authenticated gateway catalog; failed discovery skips automatic force injection, and cached context windows alone never prove availability.
+
+출력 전의 응답에서만 정확한 HTTP 401 authentication_error (error.code 없음) 메시지가 “OAuth access token has been revoked.”이면 요청을 보낸 OAuth 계정에 재로그인이 필요하다고 표시하고 세션 연결을 해제합니다. 출력 전에는 기존 전송 제한 안에서 같은 풀의 사용 가능한 계정으로 전환할 수 있습니다. 대체 계정이 없으면 원래 401을 반환하며, 해당 계정은 재로그인할 때까지 선택에서 제외됩니다. 다른 401의 처리는 바뀌지 않습니다.

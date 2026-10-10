@@ -8,6 +8,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { currentServingCommand, deferServiceChildToNewerRuntime, markDelegatedServiceReady, recordServingRuntime } from "../config/serving-runtimes";
 import { packageVersion } from "../lib/package-version";
+import { codexHomeIsAbsent } from "../codex/codex-home-owner";
+import { getCodexHome } from "../codex/paths";
 import { admitUpdateRestartChild } from "./update-restart-child";
 import { UpdateRestartRequired } from "./update-restart-candidate";
 import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
@@ -654,10 +656,12 @@ async function handleStart(options: { block?: boolean } = {}) {
     removeRuntimePort(process.pid);
     if (teardown.restoreNativeCodex && !currentExternalCodexModelProvider()) {
       try {
-        const restored = restoreNativeCodex();
-        if (!restored.success) {
-          cleanupSucceeded = false;
-          console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
+        if (!codexHomeIsAbsent(getCodexHome())) {
+          const restored = restoreNativeCodex();
+          if (!restored.success) {
+            cleanupSucceeded = false;
+            console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
+          }
         }
       } catch (error) {
         cleanupSucceeded = false;

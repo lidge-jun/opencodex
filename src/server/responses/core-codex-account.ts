@@ -6,6 +6,7 @@ import {
   computeQuotaCooldown,
   formatCodexProviderForLog,
 } from "../../codex/routing";
+import { claimMainQuotaDispatchForWs, isMainQuotaDispatchLive, renewMainQuotaDispatchForAttempt, type MainQuotaDispatch } from "../../codex/main-account-cache";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isCodexAccountGenerationLive } from "../../codex/account-store";
@@ -121,8 +122,28 @@ export function usesCodexForwardPoolAuth(
 }
 
 
+/** Live proof that this plain-main response used the observed main credential. */
+export function liveMainQuotaDispatch(
+  authCtx: CodexAuthContext, provider: OcxProviderConfig,
+): MainQuotaDispatch | undefined {
+  if (authCtx.kind !== "main" || !authCtx.mainQuotaDispatch) return undefined;
+  if (!isCanonicalOpenAiForwardProvider(provider)
+    || provider.authMode !== "forward" || provider.adapter !== "openai-responses") return undefined;
+  return isMainQuotaDispatchLive(authCtx.mainQuotaDispatch) ? authCtx.mainQuotaDispatch : undefined;
+}
+
 export function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxProviderConfig, modelId?: string): CodexWsQuotaObserver | undefined {
-  if (!isCanonicalOpenAiForwardProvider(provider) || !usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
+  if (!isCanonicalOpenAiForwardProvider(provider)) return undefined;
+  if (!usesCodexForwardPoolAuth(authCtx, provider)) {
+    const captured = liveMainQuotaDispatch(authCtx, provider);
+    if (!captured || authCtx.kind !== "main") return undefined;
+    const dispatch = authCtx.mainQuotaDispatch = renewMainQuotaDispatchForAttempt(captured);
+    return headers => {
+      claimMainQuotaDispatchForWs(dispatch);
+      if (!isMainQuotaDispatchLive(dispatch)) return;
+      applyCapturedCodexQuota(MAIN_CODEX_ACCOUNT_ID, headers, dispatch.configGeneration, dispatch.writer, { modelId });
+    };
+  }
   const { accountId, writerGeneration } = authCtx;
   const credentialGeneration = authCtx.kind === "pool" ? authCtx.generation : undefined;
   const mainWriter = authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined;

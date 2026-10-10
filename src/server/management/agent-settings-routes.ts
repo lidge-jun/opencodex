@@ -3,6 +3,9 @@ import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-sta
 import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { prepareCodexHome } from "../../codex/prepared-home";
+import { codexHomeIsAbsent } from "../../codex/codex-home-owner";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../config/provider-validation";
@@ -429,6 +432,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
      */
     const needsCodexConfigWrites = requestedFlag !== undefined || wantsThreads
       || wantsAgentsEnabled || wantsMaxDepth || wantsSubagentInstructions || wantsModeHintText;
+    if (needsCodexConfigWrites && codexHomeIsAbsent(dirname(activeCodexConfigPath()))) {
+      return jsonResponse({ error: `config.toml not readable at ${activeCodexConfigPath()}` }, 502);
+    }
     const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage } = await import("../../codex/config-write-lock");
     const configWriteLock = needsCodexConfigWrites ? await acquireConfigWriteLock(activeCodexConfigPath()) : null;
     if (configWriteLock !== null && !configWriteLock.ok) {
@@ -558,45 +564,55 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const before = isDefaultModeRequestUserInputEnabled();
     let toggle = deps.toggleDefaultModeRequestUserInput;
     if (!toggle) {
-      const { runCodexFeaturesCommand } = await import("../../cli/v2");
-      toggle = (enabled, env, validate) => runCodexFeaturesCommand(enabled ? "enable" : "disable", DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, env, validate);
+      try {
+        const { codexFeaturesInvocation, runCodexFeaturesCommand } = await import("../../cli/v2");
+        const action = body.enabled ? "enable" : "disable";
+        const invocation = codexFeaturesInvocation(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, process.platform, { requireAvailable: true });
+        toggle = (_enabled, env, validate) => runCodexFeaturesCommand(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, env, validate, invocation);
+      } catch (error) {
+        return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${error instanceof Error ? error.message : String(error)}` }, 502);
+      }
     }
     // The `codex features` subprocess rewrites config.toml itself — run it
     // under the shared write lock so it cannot interleave with an opencodex
     // scalar edit or injection mid-write on either side.
     const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage, runConfigWriteChild, ConfigWriteDestinationChanged } = await import("../../codex/config-write-lock");
     const configPath = activeCodexConfigPath();
-    const configLock = await acquireConfigWriteLock(configPath);
-    if (!configLock.ok) {
-      return jsonResponse({ error: configWriteLockFailureMessage(configLock), retryable: configLock.error === "locked" }, 502);
+    // Preserve native home creation only after executable resolution succeeds.
+    prepareCodexHome(dirname(configPath));
+    {
+      const configLock = await acquireConfigWriteLock(configPath);
+      if (!configLock.ok) {
+        return jsonResponse({ error: configWriteLockFailureMessage(configLock), retryable: configLock.error === "locked" }, 502);
+      }
+      let toggleError: string | null = null;
+      let destinationChanged = false;
+      try {
+        runConfigWriteChild(configPath, configLock.handle, (env, validate) => toggle!(body.enabled as boolean, env, validate));
+      } catch (error) {
+        destinationChanged = error instanceof ConfigWriteDestinationChanged;
+        const err = error as { stderr?: unknown; message?: string };
+        const raw = err.stderr;
+        const stderrText = typeof raw === "string"
+          ? raw.trim()
+          : raw instanceof Uint8Array ? new TextDecoder().decode(raw).trim() : "";
+        toggleError = stderrText || (err.message ?? String(error));
+      } finally {
+        releaseConfigWriteLock(configLock.handle);
+      }
+      if (destinationChanged) return jsonResponse({ error: toggleError, retryable: false }, 502);
+      const enabled = isDefaultModeRequestUserInputEnabled();
+      if (toggleError !== null || enabled !== body.enabled) {
+        const reason = toggleError
+          ?? `postcondition failed - the installed Codex build may not know the ${DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY} flag yet`;
+        return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${reason}` }, 502);
+      }
+      const warnings: string[] = [];
+      if (enabled !== before) {
+        warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the change.");
+      }
+      return jsonResponse({ ok: true, enabled, changed: enabled !== before, warnings });
     }
-    let toggleError: string | null = null;
-    let destinationChanged = false;
-    try {
-      runConfigWriteChild(configPath, configLock.handle, (env, validate) => toggle!(body.enabled as boolean, env, validate));
-    } catch (error) {
-      destinationChanged = error instanceof ConfigWriteDestinationChanged;
-      const err = error as { stderr?: unknown; message?: string };
-      const raw = err.stderr;
-      const stderrText = typeof raw === "string"
-        ? raw.trim()
-        : raw instanceof Uint8Array ? new TextDecoder().decode(raw).trim() : "";
-      toggleError = stderrText || (err.message ?? String(error));
-    } finally {
-      releaseConfigWriteLock(configLock.handle);
-    }
-    if (destinationChanged) return jsonResponse({ error: toggleError, retryable: false }, 502);
-    const enabled = isDefaultModeRequestUserInputEnabled();
-    if (toggleError !== null || enabled !== body.enabled) {
-      const reason = toggleError
-        ?? `postcondition failed - the installed Codex build may not know the ${DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY} flag yet`;
-      return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${reason}` }, 502);
-    }
-    const warnings: string[] = [];
-    if (enabled !== before) {
-      warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the change.");
-    }
-    return jsonResponse({ ok: true, enabled, changed: enabled !== before, warnings });
   }
 
   // Subagent prompt injection model: single native or routed model whose info is
@@ -1456,6 +1472,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       alwaysEnableEffort: config.claudeCode?.alwaysEnableEffort === true,
       autoContext: config.claudeCode?.autoContext !== false,
       autoCompactWindow: config.claudeCode?.autoCompactWindow ?? null,
+      contextAccounting: config.claudeCode?.contextAccounting === "200k" ? "200k" : "1m",
       blockedSkills: config.claudeCode?.blockedSkills ?? null,
       injectAgents: config.claudeCode?.injectAgents !== false,
       sidecarPools: {
@@ -1492,7 +1509,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       return prototype === Object.prototype || prototype === null;
     };
     if (!isPlainObject(parsedBody)) return jsonResponse({ error: "body must be an object" }, 400);
-    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; contextAccounting?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
     if (body.cliFirstParty !== undefined && typeof body.cliFirstParty !== "boolean")
       return jsonResponse({ error: "cliFirstParty must be a boolean" }, 400);
     if (body.cliFirstParty !== undefined && Object.keys(body).length !== 1)
@@ -1762,6 +1779,15 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (body.autoContext) delete next.autoContext;
       else next.autoContext = false;
     }
+    if (body.contextAccounting !== undefined) {
+      // Sparse like autoContext (devlog/_plan/261009_claude_1m_default/030): "1m" is the default
+      // and drops the key; "200k" is the only stored value.
+      if (body.contextAccounting !== "1m" && body.contextAccounting !== "200k") {
+        return jsonResponse({ error: "contextAccounting must be \"1m\" or \"200k\"" }, 400);
+      }
+      if (body.contextAccounting === "200k") next.contextAccounting = "200k";
+      else delete next.contextAccounting;
+    }
     if (body.injectAgents !== undefined) {
       // Default-on boolean (devlog 260712 070): true = drop the key, false = store.
       if (typeof body.injectAgents !== "boolean") return jsonResponse({ error: "injectAgents must be a boolean" }, 400);
@@ -1876,7 +1902,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // levers feed the same injection, so a changed or cleared slot must not linger in
     // launchd until the next restart.
     const systemEnvInputs = ["systemEnv", "authMode", "model", "smallFastModel", "tierModels",
-      "maxContextTokens", "alwaysEnableEffort", "autoContext", "autoCompactWindow"] as const;
+      "maxContextTokens", "alwaysEnableEffort", "autoContext", "autoCompactWindow", "contextAccounting"] as const;
     if (systemEnvInputs.some(field => body[field] !== undefined)) {
       try {
         await applySystemEnvToggle(config, config.port);

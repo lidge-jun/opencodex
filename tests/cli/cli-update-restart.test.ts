@@ -6,7 +6,7 @@ import { updateRestartVeto } from "../../src/update/restart-ownership";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
 
 const candidate: UpdateRestartCandidate = {
-  home: { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0 },
+  home: { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) } },
   target: { pid: 123, port: 10100, hostname: "127.0.0.1", source: "runtime", version: "2.76.0" },
   runtime: { pid: 123, port: 10100, hostname: "127.0.0.1", attestationSecret: "a".repeat(43) },
   cliVersion: "2.77.0",
@@ -14,7 +14,7 @@ const candidate: UpdateRestartCandidate = {
 function setup() {
   const calls: string[] = [];
   let now = 1000;
-  const home = { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0 };
+  const home = { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) } };
   const live: LiveProxy = { ...candidate.target, pid: 456, version: "2.77.0" };
   const io: UpdateRestartIo = {
     now: () => now, acquire: () => { calls.push("acquire"); return { release: () => { calls.push("release"); } }; },

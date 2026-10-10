@@ -765,10 +765,23 @@ export function readResponseSpill(responseId: string, ref: ResponseSpillRef): Re
 export function deleteResponseSpill(ref: ResponseSpillRef): void {
   if (!validSpillRef(ref)) return;
   const dir = responseSpillDirectory();
+  const path = join(dir, ref.fileName);
   try {
-    unlink(join(dir, ref.fileName));
+    unlink(path);
     fsyncDirectoryBestEffort(dir);
-  } catch { /* best effort */ }
+  } catch (error) {
+    // Still best effort, but no longer invisible: a file a failed unlink left behind occupies
+    // the volume, so the accounting owner keeps pricing it until the path is gone (#6747).
+    if (!isErrno(error, "ENOENT")) spillUnlinkFailureObserver?.(path, ref.payloadBytes);
+  }
+}
+
+type SpillUnlinkFailureObserver = (path: string, bytes: number) => void;
+let spillUnlinkFailureObserver: SpillUnlinkFailureObserver | null = null;
+
+/** The owner of spill accounting registers here so a failed unlink cannot under-report disk use. */
+export function setResponseSpillUnlinkFailureObserver(next: SpillUnlinkFailureObserver | null): void {
+  spillUnlinkFailureObserver = next;
 }
 
 type SpillDirNameKind = "spill" | "temp";
