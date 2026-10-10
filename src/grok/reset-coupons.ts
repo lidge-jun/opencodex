@@ -231,10 +231,12 @@ function buildGrokHeaders(accessToken: string): Record<string, string> {
  * Reads available Grok reset tokens for the authenticated xAI account.
  */
 function assertConfirmedCouponStatus(decoded: ReturnType<typeof decodeGrpcWebResponse>): void {
-  const rawStatus = decoded.trailers?.metadata["grpc-status"];
+  const rawStatus = decoded.statusValues[0];
   // The shared decoder defaults a missing/malformed status to zero. Coupon
   // availability and an irreversible redemption need affirmative confirmation.
-  if (rawStatus === undefined || !/^\d+$/.test(rawStatus) || !Number.isSafeInteger(Number(rawStatus))) {
+  if (decoded.framingComplete !== true || rawStatus === undefined
+    || decoded.statusValues.some((value) => !/^\d+$/.test(value)
+      || !Number.isSafeInteger(Number(value)) || value !== rawStatus)) {
     throw new Error("Grok coupon response has no confirmed gRPC status");
   }
   const status = Number(rawStatus);
