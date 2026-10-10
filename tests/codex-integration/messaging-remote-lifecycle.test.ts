@@ -10,6 +10,7 @@ import { resolveRemoteRoute, startRemoteOwner } from "../../src/messaging/remote
 import { remoteMessagingPair } from "../helpers/messaging-remote";
 import { parseRemoteMessageArgs } from "../../src/cli/message-remote-args";
 import { repoPath } from "../helpers/repo-root";
+import { LocalFixtureRpcError } from "../helpers/messaging-local";
 
 test("every remote module remains inert on import", async () => {
   const modules = ["contract", "files", "store", "process", "auth", "rpc-admission", "bridge", "ports", "tunnels", "owner", "enrollment", "send"];
@@ -177,6 +178,79 @@ test.skipIf(process.platform === "win32")("an immediate restart replaces only a 
   }
 });
 
+for (const failRenewal of [false, true]) test.skipIf(process.platform === "win32")(`slow multi-peer setup joins final return leases before readiness (renewal failure=${failRenewal})`, async () => {
+  let nativeInitializations = 0, siblingRenewed = false;
+  const pair = remoteMessagingPair(undefined, async call => {
+    if (call.method === "initialize") {
+      const attempt = ++nativeInitializations;
+      if (failRenewal && attempt === 3) return new LocalFixtureRpcError(-32000, "fixture final renewal refusal");
+      if (attempt === 4) { await Bun.sleep(30); siblingRenewed = true; }
+    }
+    return undefined;
+  }), other = remoteMessagingPair(), budget = new MessageBudget();
+  const receivers: Awaited<ReturnType<typeof startRemoteOwner>>[] = [], closes: (() => Promise<void>)[] = [];
+  let owner: Awaited<ReturnType<typeof startRemoteOwner>> | undefined, clock = 0, controls = 0, ownedCapacity: RemoteCapacity | undefined;
+  const now = () => clock, machine = pair.aStore.requireEnabled().machine;
+  const initiating = { ssh: "fixture", hostKey: "fixture ssh-ed25519 Zml4dHVyZQ==\n", fingerprint: "SHA256:fixture" };
+  pair.aStore.mutate(state => {
+    Object.assign(state.peers[0]!, initiating);
+    state.peers.push({ ...other.aStore.peer("worker"), ...initiating, alias: "colleague" });
+  });
+  other.bStore.mutate(state => { state.peers[0]!.machine = machine; });
+  try {
+    receivers.push(await startRemoteOwner(pair.bStore, pair.b.codexHome, [], undefined, { now }));
+    receivers.push(await startRemoteOwner(other.bStore, other.b.codexHome, [], undefined, { now }));
+    const startup = startRemoteOwner(pair.aStore, pair.a.codexHome, ["worker", "colleague"], undefined, {
+      now,
+      run: async () => {
+        if (controls++ === 1) {
+          clock = 26000;
+          await expect(resolveRemoteRoute(pair.bStore, machine.id, budget)).rejects.toThrow("No live messaging route");
+        }
+        return JSON.stringify({ port: pair.aStore.requireEnabled().port });
+      },
+      spawn: (argv, capacity) => {
+        ownedCapacity = capacity;
+        const index = closes.length, free = capacity.reserveHelper("persistent"), sockets = new Set<Socket>();
+        const forward = argv.indexOf("-L"), destination = receivers[Math.floor(index / 2)]!.port;
+        const listener = forward < 0 ? undefined : createServer(incoming => {
+          const outgoing = connect(destination, "127.0.0.1");
+          for (const socket of [incoming, outgoing]) {
+            sockets.add(socket); socket.on("close", () => sockets.delete(socket));
+            socket.on("error", () => { incoming.destroy(); outgoing.destroy(); });
+          }
+          incoming.pipe(outgoing).pipe(incoming);
+        }).listen(Number(argv[forward + 1]!.split(":")[1]), "127.0.0.1");
+        let finish!: (code: number) => void, closing: Promise<void> | undefined;
+        const exited = new Promise<number>(resolve => { finish = resolve; });
+        const close = () => closing ??= (async () => {
+          for (const socket of sockets) socket.destroy();
+          if (listener) await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+          free(); finish(0);
+        })();
+        closes.push(close); return { pid: 0, exited, output: Promise.resolve(""), close };
+      },
+    });
+    if (failRenewal) {
+      await expect(startup).rejects.toThrow();
+      expect(siblingRenewed).toBe(true); expect(nativeInitializations).toBe(4);
+      expect(ownedCapacity!.snapshot()).toEqual({ connections: 0, requests: 0, helpers: 0, outputBytes: 0 });
+      return;
+    }
+    owner = await startup;
+    expect(siblingRenewed).toBe(true); expect(nativeInitializations).toBe(4);
+    for (const receiver of [pair.bStore, other.bStore]) {
+      const route = await resolveRemoteRoute(receiver, machine.id, budget);
+      expect(route.endpoint.port).toBe(owner.port);
+    }
+    expect((await resolveRemoteRoute(pair.aStore, "worker", budget)).endpoint.port).toBeGreaterThan(1023);
+    expect(owner.capacity.snapshot().helpers).toBe(4);
+  } finally {
+    budget.dispose(); await Promise.allSettled([owner?.close(), ...receivers.map(receiver => receiver.close()), ...closes.map(close => close())]);
+    await Promise.all([pair.close(), other.close()]);
+  }
+});
+
 test("remote parser rejects ambiguous/malformed usage without runtime allocation", () => {
   for (const args of [["enable", "--port", "80"], ["serve", "--host", "a", "--host", "a"],
     ["hosts", "add", "bad alias", "--ssh", "fixture", "--fingerprint", "SHA256:fixture"],
@@ -202,7 +276,7 @@ test.skipIf(process.platform === "win32")("idempotent close shares one cleanup f
   const helper = spawnRemoteHelper([process.execPath, "-e", 'setInterval(() => {}, 1000)'], capacity);
   expect(helper.close()).toBe(helper.close()); await helper.close();
   const budget = new MessageBudget();
-  try { await expect(runRemoteHelper([process.execPath, "-e", 'console.log("x".repeat(65537))'], budget, capacity)).rejects.toThrow("safely"); }
+  try { await expect(runRemoteHelper([process.execPath, "-e", 'console.log("x".repeat(65537))'], budget, capacity)).rejects.toThrow("cleanup budget"); }
   finally { budget.dispose(); }
-  expect(capacity.snapshot().helpers).toBe(0); expect(capacity.snapshot().outputBytes).toBe(0);
+  expect(capacity.snapshot().helpers).toBe(1); expect(capacity.snapshot().outputBytes).toBe(0);
 });

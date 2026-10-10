@@ -9,6 +9,7 @@ import { startRemoteTunnels, type RemoteTunnelPair, type RemoteTunnelDeps } from
 import { isThreadId, LocalMessagingError } from "./types";
 
 interface Route { peer: RemotePeer; port: number; generation: string; expiry: number; ready: boolean; tunnels?: RemoteTunnelPair }
+export interface RemoteOwnerDeps extends RemoteTunnelDeps { now?: () => number }
 /** Local owner-control capability never leaves this configuration home or enters remote enrollment. */
 export function ownerEndpoint(state: RemoteState): RemoteEndpoint {
   return { port: state.port, machineId: state.machine.id, transaction: state.generation, key: state.controlKey };
@@ -28,8 +29,9 @@ export async function resolveRemoteRoute(store: RemoteMessageStore, selector: st
 
 /** Explicit foreground lifetime: one listener, aggregate reservations and bounded owned tunnel teardown. */
 export async function startRemoteOwner(store: RemoteMessageStore, home: string, selectors: readonly string[], parent?: AbortSignal,
-  tunnelDeps: RemoteTunnelDeps = {}) {
+  tunnelDeps: RemoteOwnerDeps = {}) {
   const state = store.requireEnabled(), generation = crypto.randomUUID(), controller = new AbortController();
+  const now = tunnelDeps.now ?? (() => performance.now());
   const capacity = new RemoteCapacity(), routes = new Map<string, Route>(), operations = new Set<Promise<unknown>>();
   // Availability may retire before cleanup settles; retain every published pair's join and failure.
   const ownedTunnels = new Set<RemoteTunnelPair>();
@@ -54,7 +56,7 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
         exactRecord(params, []);
         const current = check();
         return { routes: [...routes.values()].filter(route => route.ready && current.peers.some(p => p.transaction === route.peer.transaction)
-          && (route.tunnels ? route.tunnels.alive : route.expiry > performance.now())).map(route => ({
+          && (route.tunnels ? route.tunnels.alive : route.expiry > now())).map(route => ({
           machineId: route.peer.machine.id, transaction: route.peer.transaction, port: route.port, kind: route.tunnels ? "initiated" : "leased" })) };
       }
       if (method !== "message/lease" || !peer) throw new Error();
@@ -65,7 +67,7 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
       check(); budget.throwIfEnded(); store.requireCurrentPeer(state, peer);
       const existing = routes.get(peer.machine.id);
       if (existing?.tunnels) throw new Error();
-      if (existing && existing.generation !== lease.generation && existing.expiry > performance.now()) {
+      if (existing && existing.generation !== lease.generation && existing.expiry > now()) {
         if (existing.port === lease.port) throw new Error();
         // A live generation keeps its lease. Native availability is not owner identity evidence.
         const release = capacity.reserve("connections"); let oldBudget: MessageBudget | undefined;
@@ -82,7 +84,7 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
         check(); budget.throwIfEnded(); store.requireCurrentPeer(state, peer);
         if (authenticated || routes.get(peer.machine.id) !== existing) throw new Error();
       }
-      routes.set(peer.machine.id, { peer, port: lease.port, generation: lease.generation, ready: true, expiry: performance.now() + REMOTE_LIMITS.leaseMs });
+      routes.set(peer.machine.id, { peer, port: lease.port, generation: lease.generation, ready: true, expiry: now() + REMOTE_LIMITS.leaseMs });
       return { leased: true, generation: lease.generation };
     },
   });
@@ -91,8 +93,16 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
     try {
       const result = exactRecord(await remoteControl(check(), peerEndpoint(route.peer, route.port), "message/lease",
         { port: route.tunnels!.returnPort, generation }, budget), ["leased", "generation"]);
+      check(); budget.throwIfEnded(); store.requireCurrentPeer(state, route.peer);
+      if (routes.get(route.peer.machine.id) !== route) throw new Error();
       if (result.leased !== true || result.generation !== generation || !route.tunnels!.alive) throw new Error();
     } finally { free(); }
+  };
+  const renew = async (budget: MessageBudget) => {
+    const results = await Promise.allSettled([...routes.values()].filter(route => route.tunnels).map(route => register(route, budget)));
+    const failure = results.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+    check(); budget.throwIfEnded();
   };
   const close = (): Promise<void> => closing ??= (async () => {
     stopping = true; clearInterval(timer); parent?.removeEventListener("abort", abort); controller.abort();
@@ -126,8 +136,12 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
       });
       // The data connection proves both the peer and native initialization before ready publication.
       await probe(peer, route.port, setup); await register(route, setup);
-      check(); setup.throwIfEnded(); route.ready = true;
+      check(); setup.throwIfEnded();
     }
+    // Earlier peers may have spent their lease lifetime waiting for later setup.
+    const renewal = new MessageBudget(setup.remainingMs(5000), setup.signal);
+    try { await renew(renewal); for (const route of routes.values()) route.ready = true; }
+    finally { renewal.dispose(); }
   } catch (error) { await close(); throw error; }
   finally { setup.dispose(); }
   if (stopping) { await close(); throw remoteError("owner_retired", "Messaging owner stopped during setup."); }
@@ -136,15 +150,15 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
     if (refreshing || stopping) return;
     refreshing = true;
     const task = (async () => {
-      const budget = new MessageBudget(10000, controller.signal);
+      const budget = new MessageBudget(5000, controller.signal);
       try {
         check();
         for (const route of [...routes.values()]) {
           if (!store.read()?.peers.some(peer => peer.transaction === route.peer.transaction)) {
             routes.delete(route.peer.machine.id); await route.tunnels?.close();
-          } else if (route.tunnels) await register(route, budget);
-          else if (route.expiry <= performance.now()) routes.delete(route.peer.machine.id);
+          } else if (!route.tunnels && route.expiry <= now()) routes.delete(route.peer.machine.id);
         }
+        await renew(budget);
       } catch { abort(); }
       finally { budget.dispose(); refreshing = false; }
     })();

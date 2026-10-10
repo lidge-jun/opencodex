@@ -30,6 +30,11 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
   const readers = [child.stdout.getReader(), child.stderr.getReader()];
   let closing: Promise<void> | undefined;
   let failure: Error | undefined;
+  const cancelledPipes = [false, false];
+  const pipeEnds: (() => void)[] = [];
+  const naturalPipes = readers.map(() => new Promise<void>(resolve => { pipeEnds.push(resolve); }));
+  const physicallyClosed = Promise.all([child.exited, ...naturalPipes]);
+  void physicallyClosed.then(() => release()).catch(() => {});
   let stopOutput!: (reason: unknown) => void;
   const stopped = new Promise<never>((_, reject) => { stopOutput = reject; });
   const signalGroup = (kind: NodeJS.Signals) => {
@@ -44,16 +49,18 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
     let timer: ReturnType<typeof setTimeout> | undefined;
     let cleanupFailure: unknown;
     try {
-      await Promise.race([child.exited, new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(remoteError("cleanup_incomplete", "An owned messaging helper did not exit within cleanup budget.")), REMOTE_LIMITS.shutdownMs);
+      await Promise.race([physicallyClosed, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(remoteError("cleanup_incomplete", "An owned messaging helper or its pipes did not settle within cleanup budget.")), REMOTE_LIMITS.shutdownMs);
       })]);
     } catch (error) { cleanupFailure = error; throw error; }
     finally {
       clearTimeout(force); clearTimeout(timer);
       // Escaped descendants retaining a pipe cannot hold shutdown open forever.
-      for (const reader of readers) void reader.cancel().catch(() => {});
+      for (const [index, reader] of readers.entries()) {
+        cancelledPipes[index] = true; void reader.cancel().catch(() => {});
+      }
       stopOutput(cleanupFailure ?? failure ?? remoteError("ssh_incomplete", "Messaging helper output capture was stopped."));
-      // A cleanup timeout does not prove physical exit; keep its capacity charged until observed.
+      // Cancellation cannot prove natural EOF; unresolved ownership keeps its helper capacity charged.
     }
   })();
   const abort = () => { void close().catch(() => {}); };
@@ -64,7 +71,8 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
     let bytes = 0;
     try {
       for (;;) {
-        const next = await readers[index]!.read(); if (next.done) break;
+        const next = await readers[index]!.read();
+        if (next.done) { if (!cancelledPipes[index]) pipeEnds[index]!(); break; }
         bytes += next.value.byteLength;
         if (bytes > 64 * 1024) throw remoteError("ssh_output_limit", "Messaging helper output exceeded its limit.");
         const free = capacity.reserve("outputBytes", next.value.byteLength || 1);
@@ -87,7 +95,7 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
     if (failure) throw failure; return out;
   })]);
   void output.catch(() => {});
-  void child.exited.then(() => { signal?.removeEventListener("abort", abort); release(); }).catch(() => {});
+  void child.exited.then(() => { signal?.removeEventListener("abort", abort); }).catch(() => {});
   return { pid: child.pid, exited: child.exited, output, close };
 }
 

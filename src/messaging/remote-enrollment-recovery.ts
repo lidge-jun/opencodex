@@ -40,7 +40,7 @@ export function abandonRemoteEnrollment(store: RemoteMessageStore, transaction: 
     if (!pending || pending.transaction !== transaction) throw remoteError("enrollment_pending", "Pending enrollment changed; inspect it before abandoning the exact transaction.");
     unlinkSync(join(store.directory, "enrollment.json"));
     return { protocol: REMOTE_PROTOCOL, transaction, locallyAbandoned: true, remote: "unconfirmed",
-      remoteCleanupCommand: `ocx message hosts remove ${pending.machineId} --json`,
+      remoteCleanupCommand: `ocx message hosts remove ${pending.machineId} --transaction ${transaction} --json`,
       message: "Only the local recovery journal was removed. Existing peers are unchanged; the remote node may retain an enrollment requiring explicit cleanup." };
   });
 }
