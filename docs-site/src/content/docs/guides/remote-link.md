@@ -57,7 +57,7 @@ The **Child** role also requires a standalone OpenCodex runtime running on its c
 
 - **Connected** means the SSH tunnel is ready and the Child can use the Home link.
 - **Reconnecting** means the tunnel is being retried. Requests can temporarily return `503` with `Retry-After` while the retry is in progress. On a Child that connected from its own dashboard, a request first waits up to 15 seconds for the tunnel to come back.
-- **Failed** means the link needs attention. Check SSH authentication, the confirmed host key, forwarding, or the timeout reason shown in the dashboard. A Child that connected from its own dashboard keeps retrying by itself, after sleep, an outage or a restart: about once a minute after a timeout or forwarding error, and every five minutes after an authentication error. A changed host key is never retried.
+- **Failed** means the link needs attention. Check SSH authentication, the confirmed host key, forwarding, or the timeout reason shown in the dashboard. The side that runs the SSH tunnel keeps retrying by itself, after sleep, an outage or a restart: Home for a Child it added, and the Child for a link it joined from its own dashboard. It retries about once a minute after a timeout or forwarding error, and every five minutes after an authentication error. A changed host key is never retried. To try again at once, select **Retry** in the Home's dashboard or run `ocx link reconnect --link-id <id>` on the Home. It restarts that link's tunnel without restarting OpenCodex.
 
 A failed link does not silently switch to a local provider.
 The Child returns a retryable `503` without forwarding the link key or request when its tunnel is failed, stopped, or not supervised.
@@ -95,6 +95,7 @@ ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
+ocx link reconnect --link-id <id> [--json]
 ```
 
 ## Related guides

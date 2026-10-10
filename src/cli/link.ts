@@ -23,6 +23,7 @@ export const LINK_USAGE = `Usage:
   ocx link issue --alias <alias> --tunnel-port <port> [--json]
   ocx link status [--json]
   ocx link revoke --link-id <id> [--force --yes] [--json]
+  ocx link reconnect --link-id <id> [--json]
 
 Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.`;
 
@@ -303,6 +304,18 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
   console.log(JSON.stringify({ linkId }));
 }
 
+async function runReconnect(args: string[], deps: LinkCliDeps): Promise<void> {
+  takeJsonFlag(args);
+  const linkId = takeOption(args, "--link-id");
+  if (!linkId || !LINK_ID.test(linkId)) throw new CliUsageError("reconnect requires a valid --link-id", LINK_USAGE);
+  rejectArgs(args, LINK_USAGE);
+  const response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}/reconnect`, { method: "POST" }, deps);
+  if (!isRecord(response)) throw new Error("invalid link API response: reconnect object");
+  assertExactKeys(response, ["linkId"], "reconnect");
+  if (response.linkId !== linkId) throw new Error("invalid link API response: reconnect link id");
+  console.log(JSON.stringify({ linkId }));
+}
+
 export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}): Promise<number> {
   return runCliAction(async () => {
     const args = [...rawArgs];
@@ -311,6 +324,7 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "issue") await runIssue(args, deps);
     else if (command === "status") await runStatus(args, deps);
     else if (command === "revoke") await runRevoke(args, deps);
-    else throw new CliUsageError("link requires one of: port, issue, status, revoke", LINK_USAGE);
+    else if (command === "reconnect") await runReconnect(args, deps);
+    else throw new CliUsageError("link requires one of: port, issue, status, revoke, reconnect", LINK_USAGE);
   });
 }

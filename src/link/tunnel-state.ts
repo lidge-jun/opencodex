@@ -6,10 +6,10 @@
  * - reconnecting: a transient failure; requests through the link fail with 503 meanwhile, and a
  *   new attempt is due at `retryAt`.
  * - failed: auth, host key and forward failures, and a link that stayed down for FAILED_AFTER_MS.
- *   Without a retry policy (the Home's `-R` supervisor) it needs the user. With one (the Child's
- *   own `-L` tunnel) a reason that has a delay is tried again at `retryAt`, and the retry attempt
- *   runs with `inFlight` while the state still reads failed; a reason without a delay stays
- *   terminal.
+ *   Without a retry policy it needs the user. With one (the Home's `-R` supervisor and the Child's
+ *   own `-L` tunnel both run with one) a reason that has a delay is tried again at `retryAt`, and
+ *   the retry attempt runs with `inFlight` while the state still reads failed; a reason without a
+ *   delay stays terminal.
  */
 
 export type TunnelFailure = "auth" | "hostkey" | "forward" | "timeout";
@@ -47,6 +47,13 @@ export const MAX_DELAY_MS = 30_000;
 export const CLIENT_TUNNEL_RETRY_POLICY: TunnelRetryPolicy = {
   retryFailedAfterMs: { timeout: 60_000, forward: 60_000, auth: 5 * 60_000 },
 };
+
+/**
+ * The Home's `-R` supervisor dials the Child's sshd on the same cadence and limits. A sleep, an
+ * outage longer than FAILED_AFTER_MS, or a forward the Child's sshd still holds for the session
+ * that just died heals about a minute after it clears, instead of waiting for a proxy restart.
+ */
+export const HOME_TUNNEL_RETRY_POLICY: TunnelRetryPolicy = CLIENT_TUNNEL_RETRY_POLICY;
 
 export const IDLE: TunnelState = { kind: "idle" };
 
