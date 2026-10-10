@@ -122,6 +122,22 @@ test("a transport failure remains attempted instead of recording a definitive fa
   expect(redeem).toHaveBeenCalledTimes(1);
 });
 
+test("an unconfirmed HTTP 200 redemption preserves attempted state rather than recording success", async () => {
+  const realRedeem = coupons.redeemGrokResetCoupon;
+  const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockResolvedValue({ accessToken: "fixture-access-token" } as never);
+  const remaining = spyOn(coupons, "getGrokRemainingResets").mockResolvedValue({ tokens: [TOKEN] } as never);
+  const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockImplementation(options => realRedeem({
+    ...options, fetchFn: async () => new Response(null, { status: 200 }),
+  }));
+  spies.push(auth, remaining, redeem);
+  const response = await handleGrokCouponRoutes(request());
+  expect(response!.status).toBe(502);
+  expect((await response!.json()).error.code).toBe("redeem_failed");
+  expect(ledger.openGrokResetCouponOperation(identity())).toMatchObject({ kind: "replay", code: undefined });
+  expect(JSON.parse(readFileSync(ledger.grokCouponJournalPath(), "utf8")).operations[OP].status).toBe("attempted");
+  expect(redeem).toHaveBeenCalledTimes(1);
+});
+
 test("a stale attempt with a still-listed token is inspected without a second spend", async () => {
   ledger.openGrokResetCouponOperation(identity());
   ledger.markGrokResetCouponAttempt(OP, TOKEN.tokenId, Date.now() - 120_000);

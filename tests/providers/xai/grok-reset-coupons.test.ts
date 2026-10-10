@@ -274,6 +274,39 @@ describe("grok reset coupons", () => {
     expect(grpcErr.statusMessage).toContain("Invalid token_id");
   });
 
+  for (const rpc of ["inspection", "redemption"] as const) {
+    for (const response of ["empty", "data-only", "missing-status", "invalid-status"] as const) {
+      it(`${rpc} rejects HTTP 200 ${response} without a confirmed gRPC status`, async () => {
+        let bytes = new Uint8Array(0);
+        if (response === "data-only") bytes = encodeGrpcWebEnvelope(new Uint8Array(0));
+        if (response === "missing-status" || response === "invalid-status") {
+          const payload = new TextEncoder().encode(response === "missing-status"
+            ? "grpc-message:ok\r\n" : "grpc-status:0garbage\r\n");
+          bytes = new Uint8Array(5 + payload.length);
+          bytes[0] = 0x80;
+          new DataView(bytes.buffer).setUint32(1, payload.length, false);
+          bytes.set(payload, 5);
+        }
+        const fetchFn: typeof fetch = async () => new Response(bytes, { status: 200 });
+        const result = rpc === "inspection"
+          ? getGrokRemainingResets({ accessToken: "fixture-token", fetchFn })
+          : redeemGrokResetCoupon({ accessToken: "fixture-token", tokenId: "fixture-coupon", fetchFn });
+        await expect(result).rejects.toThrow("Grok coupon response has no confirmed gRPC status");
+      });
+    }
+  }
+
+  it("accepts a redemption with an explicit successful gRPC trailer", async () => {
+    const payload = new TextEncoder().encode("grpc-status:0\r\n");
+    const bytes = new Uint8Array(5 + payload.length);
+    bytes[0] = 0x80;
+    new DataView(bytes.buffer).setUint32(1, payload.length, false);
+    bytes.set(payload, 5);
+    const fetchFn: typeof fetch = async () => new Response(bytes, { status: 200 });
+    expect(await redeemGrokResetCoupon({ accessToken: "fixture-token", tokenId: "fixture-coupon", fetchFn }))
+      .toMatchObject({ success: true, status: 0 });
+  });
+
   it("handles crash-safe ledger open and idempotent replay", () => {
     const ledgerPath = grokCouponJournalPath(tempDir);
 
