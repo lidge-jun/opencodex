@@ -396,14 +396,14 @@ Native passthrough SSE has TWO shapes, selected per request in
   inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
   including the #44 late-terminal semantics.
 
-Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`.
+Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`. EOF synthesis also retains narrowly recognized rate-limit codes (`rate_limit_exceeded`, `rate_limit_error`) and overload codes (`server_is_overloaded`, `overloaded_error`); recognized types apply only without an explicit code.
 At EOF without a real terminal they synthesize `response.failed` rather than `adapter_eof`; a code without a message still
 produces a terminal. Codex retries codes outside its fatal set, so code and message follow the same candidate precedence;
 recognized refusal copy is used only when the event has no code. A read failure after refusal reports that refusal (#5176).
 The shared outbound rewrite masks diagnostics on real failed and incomplete terminals before SSE or buffered JSON delivery,
 while preserving status and output; failed turns are not retained as continuation state. Buffered JSON masks selected credentials in synthetic bare-error fields before log inspection or client formatting; request logs keep transport status.
 The delivering reader owns refusal evidence before EOF; asynchronous tee inspection cannot reliably supply it.
-Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence.
+Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence. Unknown codes retain `upstream_error` / `upstream_server_error`; refusal precedence is unchanged and classification adds no replay or retry. Bare-error log status is provisional until a genuine terminal supersedes it through `src/server/request-log-terminal-status.ts`.
 Native recovery preflight keeps the rejected body reader and bounded prefix for normal mid-stream failure, without decrypt retry.
 
 Native Responses may rebuild once when encrypted function/custom-tool output or

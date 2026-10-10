@@ -555,7 +555,7 @@ enabling it takes effect without a restart.
 
 ## Usage history and model identity
 
-`src/server/request-log.ts` preserves upstream `servedModel` independently of route-derived
+`src/server/request-log-terminal-status.ts` owns the diagnostics shared by request contexts and final rows in `src/server/request-log.ts`. It provisionally maps bare upstream `error` events with recognized rate-limit classes to 429 and explicit overload to 503; unknown codes remain 502 and policy refusals retain precedence. Genuine completed, failed, or incomplete terminals supersede provisional status before account-health recording. Final rows keep the first `upstreamErrorType`, `upstreamErrorCode` and `upstreamRequestId` using the existing 128-character diagnostic token allowlist; the event discriminator is not an error class. It preserves upstream `servedModel` independently of route-derived
 `resolvedModel`; `src/usage/log.ts` persists it with `wireModel`. The Logs model column and detail view
 compare `servedModel` with `wireModel ?? model`. `recordObservedServedModel` in `src/usage/log.ts` refuses
 the client's own selector echoed in `response.model` (Anthropic routes keep `anthropic/<model>` there), and

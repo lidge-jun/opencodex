@@ -639,6 +639,24 @@ export function adapterFailureFromMessage(message: string): { httpStatus: number
   return { httpStatus, error };
 }
 
+/** Narrow structured classes carried through a synthesized bare-error terminal. */
+export function recognizedUpstreamError(error: { type?: unknown; code?: unknown }):
+  { type: string; code: string; httpStatus: 429 | 503 } | undefined {
+  const code = typeof error.code === "string" ? error.code : undefined;
+  // An explicit unknown code must not gain a recognized class from its type or copy.
+  if (code !== undefined && !["rate_limit_exceeded", "rate_limit_error", "server_is_overloaded", "overloaded_error"].includes(code)) return undefined;
+  if (code === "rate_limit_exceeded" || code === "rate_limit_error"
+    || (code === undefined && error.type === "rate_limit_error")) {
+    return { type: "rate_limit_error", code: code ?? "rate_limit_exceeded", httpStatus: 429 };
+  }
+  if (code === "server_is_overloaded" || code === "overloaded_error"
+    || (code === undefined && error.type === "overloaded_error")) {
+    return { type: error.type === "overloaded_error" ? "overloaded_error" : "server_error",
+      code: code ?? "server_is_overloaded", httpStatus: 503 };
+  }
+  return undefined;
+}
+
 /** Map a terminal Responses error object to the HTTP status we record in /api/logs. */
 export function httpStatusFromTerminalError(error: {
   type?: string;
@@ -650,6 +668,8 @@ export function httpStatusFromTerminalError(error: {
   if (isCyberPolicyCode(error.code) || (error.message ? isCyberPolicyMessage(error.message) : false)) {
     return 400;
   }
+  const recognized = recognizedUpstreamError(error);
+  if (recognized) return recognized.httpStatus;
   if (error.type === "rate_limit_error" || error.code === "rate_limit_exceeded") return 429;
   if (error.type === "authentication_error" || error.code === "invalid_api_key") return 401;
   if (
