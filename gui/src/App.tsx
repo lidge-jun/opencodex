@@ -22,8 +22,9 @@ import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
-import { adminTokenPromptAllowed, apiBaseForPlane, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
+import { apiBaseForPlane, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
 import { ConnectPairingForm } from "./connect-pairing";
+import { validateRemoteLinkSession } from "./connect-pairing-transport";
 import { type Page } from "./app-routing";
 import { readModelsTab, type ModelsTab } from "./pages/models-tab";
 import { useAppRouteState } from "./use-app-route-state";
@@ -138,6 +139,7 @@ export default function App() {
   const [targetError, setTargetError] = useState(false);
   const [sharedSessionReady, setSharedSessionReady] = useState(() => hasApiSession("shared"));
   const [sharedSessionEpoch, setSharedSessionEpoch] = useState(0);
+  const [hubPairingOpen, setHubPairingOpen] = useState(false);
   const [remoteWorkspaceAvailableState, setRemoteWorkspaceAvailable] = useState(false);
   const [sessionLoggingOut, setSessionLoggingOut] = useState(false);
   /*
@@ -207,12 +209,12 @@ export default function App() {
   // Claude is a tab inside Connect: both pages render one Integrations shell under one
   // boundary, so moving between Claude and another Connect tab keeps drafts and focus.
   const shellPage: Page = page === "claude" ? "integrations" : page;
-  // A standalone/hub dashboard exposed through an authenticated non-loopback origin can need a
-  // consent-bearing GUI session even though it is not a connected client. Remote Link requires
-  // that stronger principal, so offer the existing one-time pairing flow instead of a dead-end
-  // "sign in" warning. Other pages keep their ordinary admin-token flow unchanged.
-  const remotePairingRequired = page === "remote" && !sharedSessionReady
-    && runtimeRoleFromDocument() === "hub" && adminTokenPromptAllowed();
+  // A Hub can serve the dashboard on a public HTTPS origin without requiring an admin token.
+  // Such a request cannot mint the ordinary loopback session; only an operator-paired session
+  // can manage Remote Link. Pairing recovery therefore follows the actual runtime role and the
+  // RemoteLink authorization result, not the unrelated admin-token prompt policy.
+  const hubPairingAvailable = page === "remote" && runtimeRoleFromDocument() === "hub";
+  const remotePairingFormOpen = hubPairingAvailable && hubPairingOpen;
 
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
@@ -594,9 +596,11 @@ export default function App() {
                 {targetError && (
                   <div className="alert alert-err" role="alert">{t("connection.machineUnavailable")}</div>
                 )}
-                {((targets.connected && !sharedSessionReady) || remotePairingRequired) && (
-                  <ConnectPairingForm key={`${targets.shared.serverOrigin}:${targets.shared.bootstrapPath}`} target={targets.shared} onConnected={() => {
-                    setSharedSessionReady(true);
+                {((targets.connected && !sharedSessionReady) || remotePairingFormOpen) && (
+                  <ConnectPairingForm key={`${targets.shared.serverOrigin}:${targets.shared.bootstrapPath}`} target={targets.shared} onConnected={async () => {
+                    if (remotePairingFormOpen) await validateRemoteLinkSession(sharedBase);
+                    setHubPairingOpen(false);
+                    setSharedSessionReady(hasApiSession("shared"));
                     setSharedSessionEpoch(epoch => epoch + 1);
                   }} />
                 )}
@@ -609,7 +613,7 @@ export default function App() {
                 {page === "logs" && <Logs apiBase={sharedBase} />}
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />}
                 {page === "storage" && <Storage apiBase={sharedBase} />}
-                {page === "remote" && !remotePairingRequired && <RemoteLink apiBase={sharedBase} sessionReady={sharedSessionReady} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
+                {page === "remote" && !remotePairingFormOpen && <RemoteLink key={`${sharedBase}:${sharedSessionEpoch}`} apiBase={sharedBase} sessionReady={sharedSessionReady} pairingRecoveryAvailable={hubPairingAvailable} onRequestPairing={() => setHubPairingOpen(true)} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
                 {page === "remote-workspace" && <RemoteWorkspaceRoute available={remoteWorkspaceAvailable} apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} onOpenRemoteLink={() => navigateToPage("remote")} />}
                 {page === "codex-set" && <CodexSet apiBase={sharedBase} />}
                 {shellPage === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}

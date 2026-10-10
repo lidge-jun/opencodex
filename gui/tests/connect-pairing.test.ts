@@ -234,14 +234,74 @@ test("a cancelled pairing body cannot install its obsolete session", async () =>
   await expect(pending).rejects.toMatchObject({ name: "AbortError" });
 });
 
-test("pairing reports refusal, server failure and network failure separately", async () => {
+test("pairing distinguishes expired or origin-bound grants, HTTP 403, server failure and network failure", async () => {
   const { submitConnectPairing } = await import("../src/connect-pairing-transport");
   const target = { id: "shared" as const, baseUrl: "https://hub.example.test", serverOrigin: "https://hub.example.test",
     bootstrapPath: "https://hub.example.test/opencodex-session", transport: "direct" as const };
-  for (const [status, kind] of [[403, "refused"], [503, "request-failed"]] as const) {
+  for (const [status, kind] of [[401, "refused"], [403, "origin-denied"], [503, "request-failed"]] as const) {
     await expect(submitConnectPairing(target, `ocx_pair_${"a".repeat(43)}`,
       (async () => new Response(null, { status })) as typeof fetch)).rejects.toMatchObject({ kind });
   }
   await expect(submitConnectPairing(target, `ocx_pair_${"a".repeat(43)}`,
     (async () => { throw new Error("network"); }) as typeof fetch)).rejects.toMatchObject({ kind: "unreachable" });
+});
+
+test("pairing identifies Cloudflare HTML challenges without surfacing their body", async () => {
+  const { submitConnectPairing } = await import("../src/connect-pairing-transport");
+  const target = { id: "shared" as const, baseUrl: "https://hub.example.test", serverOrigin: "https://hub.example.test",
+    bootstrapPath: "https://hub.example.test/opencodex-session", transport: "direct" as const };
+  const code = `ocx_pair_${"a".repeat(43)}`;
+  await expect(submitConnectPairing(target, code, (async () => new Response("challenge-content-secret", {
+    status: 403,
+    headers: { "content-type": "text/html", "cf-mitigated": "challenge" },
+  })) as typeof fetch)).rejects.toMatchObject({ kind: "cloudflare-challenge" });
+  await expect(submitConnectPairing(target, code, (async () => new Response(
+    "<html><title>Just a moment...</title><script>challenge-platform</script></html>",
+    { status: 200, headers: { "content-type": "text/html" } },
+  )) as typeof fetch)).rejects.toMatchObject({ kind: "cloudflare-challenge" });
+});
+
+test("Remote Link session validation distinguishes 401, 403 and Cloudflare challenges", async () => {
+  const { validateRemoteLinkSession } = await import("../src/connect-pairing-transport");
+  for (const [status, kind] of [[401, "remote-link-unauthorized"], [403, "remote-link-forbidden"], [503, "request-failed"]] as const) {
+    await expect(validateRemoteLinkSession("https://hub.example.test", (async () => new Response(null, { status })) as typeof fetch))
+      .rejects.toMatchObject({ kind });
+  }
+  await expect(validateRemoteLinkSession("https://hub.example.test", (async () => new Response(
+    "<html><title>Just a moment...</title><script>challenge-platform</script></html>",
+    { status: 403, headers: { "content-type": "text/html" } },
+  )) as typeof fetch)).rejects.toMatchObject({ kind: "cloudflare-challenge" });
+});
+
+test("pairing refuses a returned session bound to a different browser origin", async () => {
+  const previousWindow = Reflect.get(globalThis, "window");
+  const previousDocument = Reflect.get(globalThis, "document");
+  const win = new Window({ url: "https://browser.example.test/#remote" });
+  Object.defineProperties(globalThis, {
+    window: { configurable: true, value: win },
+    document: { configurable: true, value: win.document },
+  });
+  const { resetApiAuthFetchForTests, configureApiTargets, hasApiSession } = await import("../src/api");
+  const { standaloneApiTargets } = await import("../src/api-targets");
+  const { submitConnectPairing } = await import("../src/connect-pairing-transport");
+  resetApiAuthFetchForTests();
+  configureApiTargets(standaloneApiTargets("https://hub.example.test"));
+  const target = { id: "shared" as const, baseUrl: "https://hub.example.test", serverOrigin: "https://hub.example.test",
+    bootstrapPath: "https://hub.example.test/opencodex-session", transport: "direct" as const };
+  try {
+    await expect(submitConnectPairing(target, `ocx_pair_${"a".repeat(43)}`, (async () => new Response([
+      '<meta name="opencodex-session-token" content="ocx_session_origin_fixture">',
+      '<meta name="opencodex-session-csrf" content="fixture-csrf">',
+      '<meta name="opencodex-session-origin" content="https://different.example.test">',
+      '<meta name="opencodex-session-server-origin" content="https://hub.example.test">',
+    ].join(""), { headers: { "content-type": "text/html" } })) as typeof fetch)).rejects.toMatchObject({ kind: "invalid-response" });
+    expect(hasApiSession("shared")).toBe(false);
+  } finally {
+    resetApiAuthFetchForTests();
+    win.close();
+    Object.defineProperties(globalThis, {
+      window: { configurable: true, value: previousWindow },
+      document: { configurable: true, value: previousDocument },
+    });
+  }
 });
