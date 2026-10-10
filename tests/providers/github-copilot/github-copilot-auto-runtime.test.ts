@@ -98,7 +98,7 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
     expect(body.model).toBe(model);
     expect(headers.get("copilot-session-token")).toBe(session);
     if (options.nativeExpiry && options.negotiationRefusal === 401)
-      expect(headers.get("authorization")).toBe("Bearer synthetic-access-a-renewed");
+      expect(headers.get("authorization")).toBe(`Bearer synthetic-access-${"a"}-renewed`);
     inferenceCount++;
     if (options.nativeFirst && options.closedNativeBody && inferenceCount === 1)
       return Response.json({ error: { message: "native-inference-secret" } }, { status: 401 });
