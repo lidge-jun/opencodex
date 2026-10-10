@@ -258,6 +258,32 @@ describe("main account protection setting", () => {
     expect(toggle(host).getAttribute("aria-pressed")).toBe("false");
     expect(testWindow.document.activeElement).toBe(toggle(host));
   });
+
+  test("the credit-override switch reflects the server and saves its own field", async () => {
+    const bodies: unknown[] = [];
+    const host = await mount((async (_input, init) => {
+      if (init?.method === "PUT") {
+        bodies.push(JSON.parse(String(init.body)));
+        return response({ ok: true, ...settings(true, "blocked"), codexMainAccountCreditsOverrideHardLock: true });
+      }
+      return response({ ...settings(true, "blocked"), codexMainAccountCreditsOverrideHardLock: false });
+    }) as typeof fetch);
+    const switches = host.querySelectorAll<HTMLButtonElement>("#codex-main-hard-lock-setting > .toggle");
+    expect(switches).toHaveLength(2);
+    expect(switches[1]!.getAttribute("aria-pressed")).toBe("false");
+    await click(switches[1]!);
+    expect(bodies).toEqual([{ codexMainAccountCreditsOverrideHardLock: true }]);
+    expect(switches[1]!.getAttribute("aria-pressed")).toBe("true");
+    expect(host.textContent).toContain("Credit override is on");
+  });
+
+  test("an older proxy without the override key renders the switch off, not errored", async () => {
+    const host = await mount((async () => response(settings(true, "ready"))) as typeof fetch);
+    const switches = host.querySelectorAll<HTMLButtonElement>("#codex-main-hard-lock-setting > .toggle");
+    expect(switches).toHaveLength(2);
+    expect(switches[1]!.getAttribute("aria-pressed")).toBe("false");
+    expect(switches[1]!.disabled).toBe(false);
+  });
 });
 
 function mainAccount(state: MainAccountHardLockStatus["state"]): CodexAccountEntry {

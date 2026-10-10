@@ -410,6 +410,8 @@
   gap: 12px;
 }
 .codex-main-hard-lock-copy { flex: 1 1 240px; min-width: 0; }
+/* Forces the credit-override row onto its own line without wrapping the toggles a test selects. */
+.codex-main-hard-lock-break { flex: 1 0 100%; height: 0; }
 .codex-main-hard-lock-setting > .toggle { flex: 0 0 auto; margin-left: auto; }
 .codex-main-hard-lock-feedback { flex: 1 0 100%; min-width: 0; }
 .codex-main-hard-lock-feedback:empty { display: none; }

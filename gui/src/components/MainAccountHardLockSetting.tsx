@@ -5,7 +5,12 @@ import { useT } from "../i18n/shared";
 import { hardLockThresholds, type MainAccountHardLockStatus } from "../hooks/useCodexAccountPool";
 
 type Props = { apiBase: string; onSaved: () => Promise<boolean> };
-type Snapshot = { codexMainAccountHardLock: boolean; mainAccountHardLock: MainAccountHardLockStatus };
+type Field = "codexMainAccountHardLock" | "codexMainAccountCreditsOverrideHardLock";
+type Snapshot = {
+  codexMainAccountHardLock: boolean;
+  codexMainAccountCreditsOverrideHardLock: boolean;
+  mainAccountHardLock: MainAccountHardLockStatus;
+};
 
 function readSnapshot(value: unknown): Snapshot {
   if (!value || typeof value !== "object") throw new Error("settings shape");
@@ -17,7 +22,14 @@ function readSnapshot(value: unknown): Snapshot {
     || (policy.resetAt !== undefined && (typeof policy.resetAt !== "number" || !Number.isFinite(policy.resetAt)))) {
     throw new Error("settings shape");
   }
-  return payload as Snapshot;
+  // Absent means off: an older proxy that predates the key renders the switch off rather than
+  // erroring, which is also the server default.
+  return {
+    codexMainAccountHardLock: payload.codexMainAccountHardLock,
+    codexMainAccountCreditsOverrideHardLock: typeof payload.codexMainAccountCreditsOverrideHardLock === "boolean"
+      ? payload.codexMainAccountCreditsOverrideHardLock : false,
+    mainAccountHardLock: policy,
+  };
 }
 
 function HardLockConfirmation({ pending, thresholds, onCancel, onConfirm }: {
@@ -78,6 +90,7 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
   const [saveError, setSaveError] = useState(false);
   const [refreshError, setRefreshError] = useState(false);
   const [saved, setSaved] = useState<boolean | null>(null);
+  const [overrideSaved, setOverrideSaved] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const busyRef = useRef(false);
@@ -85,6 +98,8 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
   const generationRef = useRef(0);
   const readAbortRef = useRef<AbortController | null>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
+  const overrideToggleRef = useRef<HTMLButtonElement>(null);
+  const focusTargetRef = useRef<HTMLButtonElement | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const restoreFocusRef = useRef(false);
 
@@ -102,6 +117,7 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
       setSnapshot(next);
       setLoadError(false);
       setSaved(null);
+      setOverrideSaved(null);
     } catch {
       if (mountedRef.current && generation === generationRef.current) setLoadError(true);
     } finally {
@@ -124,8 +140,9 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
 
   useEffect(() => {
     if (confirming || saving || !restoreFocusRef.current) return;
-    if (toggleRef.current && !toggleRef.current.disabled) {
-      toggleRef.current.focus();
+    const target = focusTargetRef.current ?? toggleRef.current;
+    if (target && !target.disabled) {
+      target.focus();
       restoreFocusRef.current = false;
     } else {
       // Keep the intent through failed/pending authoritative reads: the section is
@@ -140,7 +157,7 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
     if (mountedRef.current) setRefreshError(!confirmed);
   };
 
-  const save = async (requested: boolean) => {
+  const save = async (field: Field, requested: boolean) => {
     // The toggle requires a successful read before opening confirmation. A later poll
     // failure must not silently turn an already-open confirmation into a no-op.
     if (busyRef.current || !snapshot) return;
@@ -151,12 +168,13 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
     setSaveError(false);
     setRefreshError(false);
     setSaved(null);
+    setOverrideSaved(null);
     const bounded = createBoundedFetch(15_000);
     let acknowledged = false;
     try {
       const response = await fetch(`${apiBase}/api/settings`, {
         method: "PUT", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ codexMainAccountHardLock: requested }), signal: bounded.signal,
+        body: JSON.stringify({ [field]: requested }), signal: bounded.signal,
       });
       if (!response.ok) throw new Error("save");
       const payload: unknown = await response.json();
@@ -168,7 +186,8 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
       if (mountedRef.current) {
         setSnapshot(next);
         setLoadError(false);
-        setSaved(next.codexMainAccountHardLock);
+        if (field === "codexMainAccountHardLock") setSaved(next.codexMainAccountHardLock);
+        else setOverrideSaved(next.codexMainAccountCreditsOverrideHardLock);
       }
     } catch {
       if (mountedRef.current) {
@@ -200,6 +219,7 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
     if (mountedRef.current) setSaving(false);
   };
   const enabled = snapshot?.codexMainAccountHardLock;
+  const overrideEnabled = snapshot?.codexMainAccountCreditsOverrideHardLock;
   const thresholds = hardLockThresholds(snapshot?.mainAccountHardLock.thresholds);
   return (
     <section ref={sectionRef} id="codex-main-hard-lock-setting" tabIndex={-1}
@@ -221,7 +241,8 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
         onClick={() => {
           if (busyRef.current || enabled === undefined || loadError) return;
           restoreFocusRef.current = true;
-          if (enabled) void save(false);
+          focusTargetRef.current = toggleRef.current;
+          if (enabled) void save("codexMainAccountHardLock", false);
           else setConfirming(true);
         }}><span className="toggle-knob" /></button>
       <div className="codex-main-hard-lock-feedback">
@@ -234,7 +255,24 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
           <button type="button" className="link-btn" disabled={saving} onClick={() => { void retryRefresh(); }}>{t("common.retry")}</button>
         </p>}
       </div>
-      {confirming && <HardLockConfirmation pending={saving} thresholds={thresholds} onCancel={cancel} onConfirm={() => { void save(true); }} />}
+      <div className="codex-main-hard-lock-break" aria-hidden="true" />
+      <div className="codex-main-hard-lock-copy">
+        <strong id={`${id}-override-title`}>{t("codexAuth.mainCreditsOverrideTitle")}</strong>
+        <div id={`${id}-override-desc`} className="card-sub">{t("codexAuth.mainCreditsOverrideDesc")}</div>
+      </div>
+      <button ref={overrideToggleRef} type="button" className={`toggle ${overrideEnabled === true ? "on" : ""}`}
+        disabled={saving || overrideEnabled === undefined || loadError} aria-pressed={overrideEnabled === true}
+        aria-label={t("codexAuth.mainCreditsOverrideTitle")} aria-describedby={`${id}-override-desc`}
+        onClick={() => {
+          if (busyRef.current || overrideEnabled === undefined || loadError) return;
+          restoreFocusRef.current = true;
+          focusTargetRef.current = overrideToggleRef.current;
+          void save("codexMainAccountCreditsOverrideHardLock", !overrideEnabled);
+        }}><span className="toggle-knob" /></button>
+      <div className="codex-main-hard-lock-feedback">
+        {overrideSaved !== null && !saveError && <p role="status">{t(overrideSaved ? "codexAuth.mainCreditsOverrideOn" : "codexAuth.mainCreditsOverrideOff")}</p>}
+      </div>
+      {confirming && <HardLockConfirmation pending={saving} thresholds={thresholds} onCancel={cancel} onConfirm={() => { void save("codexMainAccountHardLock", true); }} />}
     </section>
   );
 }
