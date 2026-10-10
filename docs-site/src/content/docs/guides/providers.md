@@ -608,6 +608,8 @@ public `GET /v1/models` and keeps active Chat Completions models (plus the Respo
 Create a key in the [OpenGateway dashboard](https://opengateway.ai/api-keys), then run
 `ocx provider add opengateway` or select **OpenGateway** in the dashboard. Chat requests
 use the configured Bearer key; the public model list does not validate that key.
+On the Responses wire OpenGateway rejects replayed native custom tool calls, so the preset
+lowers Codex custom tools such as code-mode `exec` to function tools before sending them.
 
 **TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
 OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),

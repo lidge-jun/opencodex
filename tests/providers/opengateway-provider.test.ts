@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fixture from "../fixtures/opengateway-models.json";
+import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { buildCatalogEntries, gatherRoutedModels } from "../../src/codex/catalog";
 import { clearModelCache } from "../../src/codex/model-cache";
 import { buildModelsRequest } from "../../src/oauth";
-import { deriveInitProviders, deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
+import { deriveInitProviders, deriveProviderPresets, enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
 import { extractProviderModelItems, resolveProviderModelDiscovery, providerModelDiscoverySpecError } from "../../src/providers/model-discovery";
 import { PROVIDER_REGISTRY, providerModelWireDefault } from "../../src/providers/registry";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
-import type { OcxConfig } from "../../src/types";
+import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 const entry = PROVIDER_REGISTRY.find(row => row.id === "opengateway")!;
 const provider = { ...providerConfigSeed(entry), apiKey: "test-key" };
 const discovery = resolveProviderModelDiscovery("opengateway", provider);
@@ -70,5 +72,43 @@ describe("OpenGateway", () => {
       expect(catalog.map(row => row.slug)).toEqual(expected.map(id => `opengateway/${id.replaceAll("/", "-")}`));
       expect(catalog.slice().sort((a,b)=>Number(a.priority)-Number(b.priority)).map(row=>row.slug)).toEqual(catalog.map(row=>row.slug));
     }
+  });
+});
+
+// #6877: on the Responses wire OpenGateway answers 400 to replayed native custom tool history.
+describe("OpenGateway Responses custom tools", () => {
+  // A row written by an older install carries no supportsResponsesCustomTools of its own.
+  const saved = (): OcxProviderConfig => ({ adapter: "openai-chat", baseUrl: "https://apis.opengateway.ai/v1", apiKey: "test-key" } as OcxProviderConfig);
+  test("the preset declares native custom tool shapes unsupported, without overriding an explicit value", () => {
+    expect(entry.supportsResponsesCustomTools).toBe(false);
+    const inherited = saved();
+    enrichProviderFromRegistry("opengateway", inherited);
+    expect(inherited.supportsResponsesCustomTools).toBe(false);
+    const explicit = { ...saved(), supportsResponsesCustomTools: true };
+    enrichProviderFromRegistry("opengateway", explicit);
+    expect(explicit.supportsResponsesCustomTools).toBe(true);
+  });
+  test("replayed exec history whose tool is no longer declared reaches the upstream as function calls", () => {
+    const routed = saved();
+    enrichProviderFromRegistry("opengateway", routed);
+    const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({ ...routed, adapter: "openai-responses" }));
+    const built = adapter.buildRequest({
+      modelId: expected[0]!,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: expected[0],
+        input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "list files" }] },
+          { type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "text(1)" },
+          { type: "custom_tool_call_output", call_id: "call_exec", output: "1" },
+        ],
+      },
+    } as Parameters<typeof adapter.buildRequest>[0], { headers: new Headers() });
+    const body = JSON.parse(String(built.body)) as { input: Array<Record<string, unknown>> };
+    expect(body.input.map(item => item.type)).toEqual(["message", "function_call", "function_call_output"]);
+    expect(body.input[1]).toMatchObject({ call_id: "call_exec" });
+    expect(body.input[2]).toMatchObject({ call_id: "call_exec" });
   });
 });
