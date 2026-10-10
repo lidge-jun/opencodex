@@ -1,12 +1,12 @@
 # 000 — remote Codex messaging: second contribution
 
-Status: implemented locally; contribution qualification in progress. No publication,
+Status: implemented locally; bounded contribution qualification recorded. No publication,
 deployment or maintainer acceptance of the remote boundary is implied.
 
 ## Baseline and direction
 
 The contribution branch is rebuilt on upstream `dev`
-`396d3ee40142db4c2a859c69a5fe7fe9a750a165`, containing integrated local messaging
+`a47a1b52a94ef3d65d8435944bd4e6bf34a2e622`, containing integrated local messaging
 [PR #6544](https://github.com/lidge-jun/opencodex/pull/6544).
 It does not carry the superseded local PR commits.
 The broader deployed experiment remains separate.

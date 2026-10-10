@@ -2,7 +2,7 @@
 
 ## Source identities
 
-Destination: upstream `dev` `396d3ee40142db4c2a859c69a5fe7fe9a750a165`.
+Destination: upstream `dev` `a47a1b52a94ef3d65d8435944bd4e6bf34a2e622`.
 Source reference: local `feat/claude-messaging`, including completed direct-RPC
 hardening at `a665128c3`. This is responsibility-based extraction and narrow
 rewriting, not a whole-commit cherry-pick or a copy of the deployed subsystem.
