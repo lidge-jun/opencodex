@@ -162,3 +162,29 @@ test("genuine success clears the provisional policy error code", () => {
   expect(log.terminalHttpStatus).toBeUndefined();
   expect(log.terminalErrorCode).toBeUndefined();
 });
+
+for (const field of ["error", "last_error", "response"] as const) {
+  test(`credential-shaped ${field} type and code never reach the final log row or warning`, () => {
+    const fixture = "sk-" + "A".repeat(48);
+    const envelope = { type: fixture, code: fixture, message: "fixture" };
+    const payload = field === "response" ? { response: { error: envelope } } : { [field]: envelope };
+    const log = context();
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = ((line: string) => { warnings.push(String(line)); }) as typeof console.warn;
+    let row: RequestLogEntry | undefined;
+    try {
+      noteUpstreamRequestId(log, new Headers({ "x-request-id": fixture }));
+      inspectResponseLogJson(log, JSON.stringify(payload));
+      addFinalRequestLog("probe", Date.now(), log, 502, undefined, entry => { row = entry; });
+    } finally {
+      console.warn = warn;
+    }
+    expect(log.upstreamErrorType).toBeUndefined();
+    expect(log.upstreamErrorCode).toBeUndefined();
+    expect(log.upstreamRequestId).toBeUndefined();
+    expect(JSON.stringify(row)).not.toContain(fixture);
+    expect(warnings.join("\n")).not.toContain(fixture);
+  });
+}
+

@@ -6,6 +6,7 @@ import {
   isRateLimitOrQuotaFailureMessage,
   recognizedUpstreamError,
 } from "../lib/errors";
+import { redactSecretString } from "../lib/redact";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -37,13 +38,22 @@ const genuineTerminals = new WeakSet<TerminalStatusContext>();
 
 const UPSTREAM_DIAGNOSTIC_TOKEN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
+/**
+ * Upstream diagnostics are provider-controlled. The token alphabet alone also admits
+ * credential formats (an echoed `sk-...` key fits it), so a value the shared redactor
+ * would change is dropped rather than recorded, warned, or projected into log rows.
+ */
+function isSafeDiagnosticToken(value: unknown): value is string {
+  return typeof value === "string" && UPSTREAM_DIAGNOSTIC_TOKEN.test(value) && redactSecretString(value) === value;
+}
+
 function noteBoundedDiagnostic(
   logCtx: TerminalStatusContext,
   field: "upstreamErrorCode" | "upstreamErrorType" | "upstreamRequestId",
   value: unknown,
 ): void {
   if (logCtx[field] !== undefined) return;
-  if (typeof value !== "string" || !UPSTREAM_DIAGNOSTIC_TOKEN.test(value)) return;
+  if (!isSafeDiagnosticToken(value)) return;
   logCtx[field] = value;
   const status = logCtx.terminalHttpStatus;
   if (status === undefined || status >= 500) console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${logCtx.upstreamErrorCode ? ` code=${logCtx.upstreamErrorCode}` : ""}${logCtx.upstreamRequestId ? ` request_id=${logCtx.upstreamRequestId}` : ""}`);
