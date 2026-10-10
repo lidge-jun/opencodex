@@ -1,5 +1,5 @@
 # GUI And Management API
-
+Provider DELETE in `src/server/management/provider-routes.ts` runs [GCP credential cleanup](providers/google.md#vertex-credential-markers) only after saving; failed saves preserve secrets and other persisted references retain them.
 Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
 `autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
 `PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;

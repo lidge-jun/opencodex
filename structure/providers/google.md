@@ -1,5 +1,14 @@
 # Google Provider
 
+## Vertex credential markers
+
+`src/lib/gcp-adc.ts` resolves an explicit `gcp-sa:<account>` through the OS credential store.
+An empty or whitespace-only account is rejected before token resolution; it never selects host ADC.
+`src/providers/api-keys.ts` stores pasted credential JSON as markers, including multiple JSON objects
+in one atomic pool update. Failed batches remove only newly created, unreferenced secrets.
+`src/providers/gcp-credential-cleanup.ts` cleans removed markers after config persistence, under the
+config mutation lock, retaining credentials still referenced by any persisted provider.
+
 ## Google thought-text visibility boundary
 
 Google-family parts with `thought: true` stay separate from assistant output. After a CCA

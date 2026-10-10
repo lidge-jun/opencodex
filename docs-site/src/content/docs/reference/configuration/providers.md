@@ -1412,6 +1412,15 @@ model key.
 
 ## Storing keys in the OS keychain
 
+For Vertex, the API-key input also accepts complete GCP `service_account` or `authorized_user`
+credential JSON. Paste the JSON contents, not a Windows, Unix, or relative file path. Multiple
+JSON objects separated by commas or whitespace are stored together as separate pool entries;
+the first becomes active. Configuration contains only `gcp-sa:<account>` references, never the
+credential JSON. Empty marker accounts are invalid and do not fall back to host credentials.
+Removing a key or provider deletes its unreferenced GCP credentials after the configuration is
+saved; a credential referenced by another provider is retained. If OS-store cleanup fails, a
+warning requests manual inspection without undoing the committed configuration removal.
+
 By default a provider's `apiKey` and `apiKeyPool` sit in `config.json` (mode 0600, atomic writes).
 If you would rather keep the key material out of the file, move it into the OS credential store:
 

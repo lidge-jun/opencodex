@@ -1,6 +1,7 @@
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
+import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { CatalogModel } from "../../codex/catalog";
@@ -1848,11 +1849,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // Deleting still succeeds; the response names the shadow-call target left without a provider.
     const shadowDependency = shadowInterceptProviderDependency(config, name);
     if (fallbackDefault) config.defaultProvider = fallbackDefault;
+    const removedCredentials = providerGcpCredentialMarkers(config.providers[name]!);
     delete config.providers[name];
     const { dropProviderCustomModels } = await import("../../providers/provider-id-rewrite");
     const droppedCustomModels = dropProviderCustomModels(config, name);
     forgetProviderContextCap(config, name);
     save(config);
+    cleanupRemovedGcpCredentials(removedCredentials);
     await replaceProviderAccountSet(name, null);
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
