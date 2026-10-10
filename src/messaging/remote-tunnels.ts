@@ -28,7 +28,9 @@ export async function startRemoteTunnels(store: RemoteMessageStore, peer: Remote
   let alive = true, closing: Promise<void> | undefined;
   const close = (): Promise<void> => closing ??= (async () => {
     alive = false; ownerSignal.removeEventListener("abort", abort);
-    await Promise.all(helpers.map(helper => helper.close()));
+    const results = await Promise.allSettled(helpers.map(helper => helper.close()));
+    const failure = results.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
   })();
   const abort = () => { void close().catch(() => {}); };
   ownerSignal.addEventListener("abort", abort, { once: true });

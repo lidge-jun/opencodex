@@ -94,9 +94,13 @@ export async function startRemoteOwner(store: RemoteMessageStore, home: string, 
     for (const selector of selectors) {
       check(); const peer = store.peer(selector);
       const tunnels = await startRemoteTunnels(store, peer, setup, capacity, controller.signal, tunnelDeps);
-      check(); setup.throwIfEnded();
       const route: Route = { peer, port: tunnels.localPort, generation, expiry: Infinity, ready: false, tunnels };
-      routes.set(peer.machine.id, route);
+      try {
+        check(); setup.throwIfEnded(); routes.set(peer.machine.id, route);
+      } catch (error) {
+        // Before publication this local scope, not the routes map, owns the join.
+        await tunnels.close(); throw error;
+      }
       // The data connection proves both the peer and native initialization before ready publication.
       await probe(peer, route.port, setup); await register(route, setup);
       check(); setup.throwIfEnded(); route.ready = true;
