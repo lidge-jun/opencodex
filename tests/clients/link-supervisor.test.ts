@@ -377,6 +377,50 @@ test("the Home's -R supervisor promotes a retry whose grace ends at the outage l
   await supervisor.stop();
 });
 
+test("a host-key exit still draining stderr at the outage limit stays terminal", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  fake.children[0]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  current = 300_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  const stderr = deferred<string>();
+  Object.defineProperty(fake.children[1]!.child, "stderr", { value: stderr.promise });
+  current = 305_000;
+  fake.children[1]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  // The outage limit is reached while the exit's stderr is still being read.
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "reconnecting", since: 5_000 });
+  stderr.resolve("Host key verification failed.");
+  await Promise.resolve();
+  await Promise.resolve();
+  const failed = supervisor.status()[0]!.state;
+  expect(failed).toEqual({ kind: "failed", since: 305_000, reason: "hostkey" });
+  for (; current < 2 * 60 * 60_000; current += 10_000) timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  expect(supervisor.status()[0]!.state).toEqual(failed);
+  await supervisor.stop();
+});
+
 test("a reload neither skips the reconnect backoff nor a failed link's retry delay", async () => {
   const fake = fakeRunner();
   const timers: Array<() => void> = [];
