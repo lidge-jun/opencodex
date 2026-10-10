@@ -418,5 +418,3 @@ describe("combo handling of the Ollama late-attribution refusal", () => {
     expect(isLateAttributionRefusal(failure({ upstreamMessage: undefined }))).toBe(false);
   });
 });
-
-

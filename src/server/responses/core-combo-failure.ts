@@ -235,4 +235,3 @@ export function isLateAttributionRefusal(failure: ConsumedComboFailure): boolean
     && failure.upstreamCode === "request_too_large"
     && failure.upstreamMessage === OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;
 }
-

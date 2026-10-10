@@ -112,4 +112,3 @@ describe("Ollama late-attribution refusal and emergency recovery", () => {
     expect(decideCompactionRecovery(config, failure({ ...refusal, upstreamFailure: true })).recover).toBe(false);
   });
 });
-

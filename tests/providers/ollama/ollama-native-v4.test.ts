@@ -244,4 +244,3 @@ describe("ollama-native — omit sentinel under the ultra boundary", () => {
     expect(JSON.parse(String(body)).think).toBe(false);
   });
 });
-
