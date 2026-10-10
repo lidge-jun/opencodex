@@ -46,7 +46,7 @@ claimed to be terminated; retained pipes are canceled.
 | messaging-remote-store.test.ts | Absent reads stay absent, strict bounded schema, private ownership/mode/symlink/file guards, locking, secret omission. |
 | messaging-remote-enrollment.test.ts | Explicit receiver enable, immutable transaction, fingerprint mismatch, lost-reply reconciliation, post-commit cancellation, full registry refusal and unconfirmed local-first removal. |
 | messaging-remote-send.test.ts | Same connection, machine-aware replies, return-only receiver, strict correlation/rejection, unload, missing/revoked routes, lost/malformed receipts, no replay. |
-| messaging-remote-lifecycle.test.ts | Inert imports and pure parser, owned helper cancellation/TERM/KILL, shared cleanup and output overflow. |
+| messaging-remote-lifecycle.test.ts | Inert imports and pure parser, owned helper cancellation/TERM/KILL, shared cleanup and output overflow; unpublished tunnel cleanup joins both helpers before startup rejects, including cleanup failure. |
 | messaging-remote-interop.test.ts | Opt-in generated-key loopback SSH enrollment, duplex delivery and zero owned reservations after cleanup. |
 | messaging-remote-native.test.ts | Opt-in explicit stock binary, real queue/turn contract in isolated home, synthetic provider and return delivery. |
 
@@ -56,9 +56,15 @@ golden-file guards; run those explicitly.
 
 ## Remaining gates
 
-Full suite or a documented proportionate resource exception; typecheck, privacy,
-structure, generated surface, layout/size and docs build; independent security
-review; exact-head hosted CI once publication is authorized; macOS interoperability.
+Full-suite qualification remains incomplete: the existing runner stopped its
+parallel lane after 900 seconds, exit 124; serial lanes were not reached. The
+local PR packet records the resource exception, observed failures, focused
+coverage and commands instead of claiming a passing full suite. No ratchet,
+timeout or required check was relaxed.
+
+Required exact-head hosted CI once publication is authorized and macOS
+interoperability remain outstanding. Local checks and independent source review
+are recorded separately from maintainer acceptance and operational qualification.
 No receipt from an unrun or skipped tier is described as passing.
 
 Unreleased security assessment material belongs in ignored scratch or managed

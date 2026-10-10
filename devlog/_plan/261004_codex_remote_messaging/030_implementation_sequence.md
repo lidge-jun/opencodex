@@ -1,8 +1,8 @@
 # 030 — implementation and handover
 
 Status: the agreed remote slice is implemented locally on
-`feat/codex-remote-contribution`; final integrated qualification and review are
-in progress. Neither publication nor deployment is authorized by this status.
+`feat/codex-remote-contribution`; bounded qualification and source review are
+recorded in the local PR packet. Neither publication nor deployment is authorized.
 
 ## Completed implementation sequence
 
@@ -20,8 +20,12 @@ in progress. Neither publication nor deployment is authorized by this status.
    local-only Unix trust and queued/not_sent/unknown/no-replay behavior.
 7. Added registered isolated regressions, generated surfaces, public CLI docs,
    source ownership and a foreground decision record.
-8. Qualified disposable loopback SSH and stock Codex 0.160.1 separately. Full
-   integration gates and independent review remain to be recorded.
+8. Qualified disposable loopback SSH and stock Codex 0.160.1 separately. Joined
+   unpublished tunnel cleanup has dedicated regressions and a narrow independent
+   review. The rebase carried the implementation unchanged, verified by range-diff.
+9. Recorded the full-suite 900-second timeout as incomplete evidence with a
+   proportionate resource exception. Hosted CI, macOS qualification and maintainer
+   acceptance remain outstanding; no unrun tier is reported as passing.
 
 ## Maintainer adjustment points
 
