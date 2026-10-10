@@ -77,6 +77,23 @@ export function resolveAdmissionModelScope(
 }
 
 /**
+ * May this request reach a combo target marked `metered` (pay-per-use billing)?
+ *
+ * The environment token and loopback admission are the operator's own clients, so they may.
+ * An issued key may not unless its entry opts in with `allowMeteredComboTargets`: a key with
+ * `allowedModels` naming a subscription model must not start spending pay-per-use credit the
+ * moment that subscription is exhausted, which is what a failover combo would otherwise do.
+ */
+export function admissionMayUseMeteredComboTargets(
+  config: Pick<OcxConfig, "apiKeys">,
+  admission: DataPlaneAdmission | undefined,
+): boolean {
+  if (!admission || admission.kind !== "configured") return true;
+  const entry = (config.apiKeys ?? []).find(key => key.id === admission.keyId);
+  return entry?.allowMeteredComboTargets === true;
+}
+
+/**
  * Does this scope admit this resolved destination?
  *
  * The two lists are independent conditions and both must hold when both are

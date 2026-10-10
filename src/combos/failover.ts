@@ -634,6 +634,7 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
   "exceed the context window",
   "context window exceeded",
   "context length exceeded",
+  "cursor context limit exceeded",
   "maximum context length",
   "maximum context window",
   "too many tokens",

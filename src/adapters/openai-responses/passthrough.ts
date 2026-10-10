@@ -574,6 +574,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);
       }
       const body = JSON.stringify(applyGithubCopilotContextTier(finalBody, provider, parsed.modelId, incoming.providerName));
+      const wireReasoning = isPlainObject(finalBody) && isPlainObject(finalBody.reasoning)
+        ? finalBody.reasoning.effort : undefined;
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
         Buffer.byteLength(body, "utf8"),
@@ -583,6 +585,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         method: "POST",
         headers,
         body,
+        ...(typeof wireReasoning === "string" ? { reasoningLog: {
+          effectiveEffort: wireReasoning,
+          wireField: "reasoning.effort" as const,
+          wireValue: wireReasoning,
+        } } : {}),
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
         ...(routedCustomToolRepairNames ? { routedCustomToolRepairNames } : {}),

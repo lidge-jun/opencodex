@@ -338,6 +338,12 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     return anthropicAccountPoolConfig(config).enabled === true;
   }
 
+  function anthropicQuotaRecheckMs(config: OcxConfig): number | undefined {
+    const value = anthropicAccountPoolConfig(config).quotaRecheckMs;
+    return typeof value === "number" && Number.isInteger(value) && value >= 60_000 && value <= 86_400_000
+      ? value : undefined;
+  }
+
   function anthropicAutoSwitchThreshold(config: OcxConfig): number {
     const value = anthropicAccountPoolConfig(config).autoSwitchThreshold;
     if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100) return value;
@@ -1084,7 +1090,9 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     // account is back in the rotation a minute later.
     const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
     const resetDerived = status === 429 && parsedRetry === undefined ? parseRateLimitReset(rateLimitHeaders, now) : undefined;
-    const cooldownMs = parsedRetry ?? resetDerived?.delayMs ?? (status === 403 ? ACCOUNT_REFUSAL_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
+    const statedCooldownMs = parsedRetry ?? resetDerived?.delayMs ?? (status === 403 ? ACCOUNT_REFUSAL_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
+    const recheckMs = anthropicQuotaRecheckMs(config);
+    const cooldownMs = status === 429 && recheckMs !== undefined ? Math.min(statedCooldownMs, recheckMs) : statedCooldownMs;
     const cooldownGeneration = noteAnthropicCooldownMutation(failedAccountId);
     upstreamHealth.set(failedAccountId, {
       cooldownUntil: now + cooldownMs,

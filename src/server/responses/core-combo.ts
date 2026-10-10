@@ -4,7 +4,7 @@ import {
   isDeclaredReasoningEffort,
   resolveEffortAtOrBelow,
 } from "../../reasoning-effort";
-import { resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
+import { admissionMayUseMeteredComboTargets, resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import { recordAttemptRequestedEffort } from "../request-log";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
@@ -446,8 +446,10 @@ export async function executeComboResponses(
   let comboPayloadReadable = false;
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
+  const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission);
   const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
-    (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
+    (meteredAllowed || !target.metered)
+    && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
     && payloadEligible(target)
     && reasoningReplayEligible(target)
     && (protocolLanes?.pickable(target) ?? true);
@@ -521,6 +523,9 @@ export async function executeComboResponses(
     now?: number;
   }) => pickComboTargetWithWait(config, comboId, {
     ...pickOptions,
+    // Every pick, including the recovery picks that skip `targetEligible`, keeps metered
+    // targets away from callers that may not spend on them.
+    eligible: target => (meteredAllowed || !target.metered) && (pickOptions.eligible?.(target) ?? true),
     waitForCooldownMs: combo.waitForCooldownMs,
     abortSignal: options.abortSignal,
   });
@@ -913,7 +918,7 @@ export async function executeComboResponses(
         onResponseComplete: callbackGate.onResponseComplete,
       });
       // Both lanes applied the initial choice before provider pins/caps; retain those transitions.
-      restoreOriginalRequestedEffort(childLog, initialJevDecision?.effort);
+      restoreOriginalRequestedEffort(childLog, initialJevDecision?.effort ?? pick.target.reasoningEffort);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {
@@ -968,6 +973,11 @@ export async function executeComboResponses(
       );
       attemptRetained = true;
       noteComboSuccess(comboId, combo, pick.target, pick.writerGeneration);
+      if (pick.targetIndex > 0) {
+        console.info(
+          `[combo] ${comboId}: served by target #${pick.targetIndex + 1} ${targetKey(pick.target)}${pick.target.metered ? " (metered)" : ""} after ${pick.attempted.length - 1} earlier target(s)`,
+        );
+      }
       Object.assign(logCtx, childLog, {
         requestedModel,
         model: requestedModel,
@@ -1113,12 +1123,17 @@ export async function executeComboResponses(
     const poolLocalRefusal = isAnthropicPoolLocalRefusal(
       config, pick.target.provider, failure.response.status, failedAccount, failureNow,
     );
+    const poolInstance = configuredAnthropicInstance(config, pick.target.provider);
+    const rechecksPoolQuota = poolLocalRefusal && poolInstance !== undefined
+      && anthropicRoutingFor(poolInstance).anthropicAccountPoolConfig(config).quotaRecheckMs !== undefined;
     const nextPick = advanceComboAfterFailure(config, pick, {
       retryAfter: poolLocalRefusal ? undefined : failure.retryAfter,
       resetAt: failure.resetAt,
       cooldownMs: combo.cooldownMs,
       now: failureNow,
-      cooldownScope: failureCooldownScope,
+      // The pool already refuses locally until its account deadline. A second target
+      // cooldown would slide that deadline forward on each intervening request.
+      cooldownScope: rechecksPoolQuota ? "none" : failureCooldownScope,
       eligible: targetEligible,
       status: failure.response.status,
       code: failure.upstreamCode,

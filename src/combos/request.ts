@@ -61,7 +61,7 @@ function responsesInputNodeHasImage(value: unknown): boolean {
  */
 export function concreteComboRequestBody(
   body: unknown,
-  target: Pick<OcxComboTarget, "provider" | "model">,
+  target: Pick<OcxComboTarget, "provider" | "model" | "reasoningEffort" | "serviceTier">,
   defaultEffort: OcxComboDefaultEffort | null,
   targetReasoningEfforts: readonly string[] | undefined,
   reasoningEffortMode: OcxComboReasoningEffortMode = "strict",
@@ -69,6 +69,15 @@ export function concreteComboRequestBody(
 ): Record<string, unknown> {
   const clone = structuredClone(body) as Record<string, unknown>;
   clone.model = `${target.provider}/${target.model}`;
+  if (target.serviceTier !== undefined) clone.service_tier = target.serviceTier;
+  if (target.reasoningEffort !== undefined) {
+    const reasoning = clone.reasoning;
+    const preserved = reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)
+      ? reasoning as Record<string, unknown> : {};
+    stripAlternativeReasoningControls(clone);
+    clone.reasoning = { ...preserved, effort: target.reasoningEffort };
+    return clone;
+  }
   if (defaultEffortMode === "force" && (!defaultEffort || !isCodexReasoningEffort(defaultEffort))) {
     throw new Error("force combo default effort requires a valid defaultEffort");
   }

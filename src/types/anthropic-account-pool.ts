@@ -30,4 +30,11 @@ export interface AnthropicAccountPoolConfig {
   quotaWindow?: OcxAccountPoolQuotaWindow;
   /** Ordered model allowlists; inactive while the pool is disabled. Stored account IDs only. */
   routes?: AnthropicModelRoute[];
+  /**
+   * Re-offer a quota-exhausted account after at most this many milliseconds instead of waiting
+   * for the stated reset (which can be days away for a weekly window). A still-spent account
+   * answers 429 again and is re-cooled; one that recovered early serves at once. Absent keeps
+   * the stated reset. Range 60000..86400000.
+   */
+  quotaRecheckMs?: number;
 }

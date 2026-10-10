@@ -16,6 +16,18 @@ function parsed(modelId: string): OcxParsedRequest {
   };
 }
 
+test("Responses reasoning metadata records the serialized effort rather than the caller label", async () => {
+  const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({
+    adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key", apiKey: "test-key",
+  }));
+  const input = parsed("gpt-6-astra");
+  input.options.reasoning = "medium";
+  input._rawBody = { model: "gpt-6-astra", input: "OK", reasoning: { effort: "high" } };
+  const request = await adapter.buildRequest(input, { headers: new Headers() });
+  expect(JSON.parse(String(request.body)).reasoning.effort).toBe("high");
+  expect(request.reasoningLog).toEqual({ effectiveEffort: "high", wireField: "reasoning.effort", wireValue: "high" });
+});
+
 function openaiChatProvider(): OcxProviderConfig {
   return {
     adapter: "openai-chat",

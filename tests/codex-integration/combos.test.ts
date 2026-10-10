@@ -297,6 +297,21 @@ describe("combo request cloning", () => {
     expect(concrete.input).not.toBe(raw.input);
   });
 
+  test("target effort and tier override only that child while preserving the caller", () => {
+    const raw = { model: "combo/free", reasoning: { effort: "medium", summary: "auto" }, service_tier: "default", thinking: { budget_tokens: 1024 } };
+    const concrete = concreteComboRequestBody(raw, {
+      provider: "openai", model: "gpt-6-astra", reasoningEffort: "high", serviceTier: "priority",
+    }, null, undefined);
+    expect(concrete.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(concrete.service_tier).toBe("priority");
+    expect(concrete.thinking).toBeUndefined();
+    expect(raw.reasoning.effort).toBe("medium");
+    expect(raw.service_tier).toBe("default");
+    const ordinary = concreteComboRequestBody(raw, target, null, undefined);
+    expect(ordinary.reasoning).toEqual(raw.reasoning);
+    expect(ordinary.service_tier).toBe("default");
+  });
+
   test("combo target capability strips unsupported client reasoning controls", () => {
     expect(concreteComboRequestBody({ model: "combo/x", reasoning: null }, target, "high", []).reasoning).toBeNull();
     expect(concreteComboRequestBody(
@@ -1639,7 +1654,7 @@ describe("combo validation and normalization", () => {
       alias: null,
       nativeAlias: false,
       displayName: null,
-      targets: [{ provider: "a", model: "m1", weight: 2, lastResort: false }],
+      targets: [{ provider: "a", model: "m1", weight: 2, lastResort: false, metered: false }],
     });
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();
     const targetReasoningEfforts: OcxComboDefaultEffort[] = ["low", "high"];

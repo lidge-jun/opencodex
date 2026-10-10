@@ -712,8 +712,11 @@ export async function executeResponsesRunTurn(
         if (preflight.error || preflight.empty) {
           runTurnAbort.abort();
           queue.close();
-          const message = preflight.error?.message ?? "Adapter ended before producing a response";
-          const failure = formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          const classified = adapterFailureFromEvent(preflight.error ?? {
+            type: "error", status: 502, message: "Adapter ended before producing a response",
+          });
+          const failure = formatErrorResponse(classified.httpStatus, classified.error.type,
+            redactSecretString(classified.error.message), { code: classified.error.code });
           // A replay-unsafe heartbeat means the adapter already ran a local side effect, so the
           // combo must not send this turn to another target: the failure stays with this child.
           if (preflight.replayUnsafe) markResponseNonReplayable(failure);
@@ -909,10 +912,11 @@ export async function executeResponsesRunTurn(
           ? classifyUndeclaredFirstTool(firstMeaningful)
           : undefined;
         if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
-          const message = classifiedError?.message ?? (firstMeaningful?.type === "error"
-            ? firstMeaningful.message
-            : "Adapter ended before producing a response");
-          const failure = formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          const classified = adapterFailureFromEvent(classifiedError ?? (firstMeaningful?.type === "error"
+            ? firstMeaningful
+            : { type: "error", status: 502, message: "Adapter ended before producing a response" }));
+          const failure = formatErrorResponse(classified.httpStatus, classified.error.type,
+            redactSecretString(classified.error.message), { code: classified.error.code });
           if (replayUnsafe) markResponseNonReplayable(failure);
           return failure;
         }

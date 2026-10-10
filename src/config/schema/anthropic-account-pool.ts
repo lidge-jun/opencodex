@@ -25,6 +25,10 @@ function poolError(value: unknown, path: string): string | undefined {
     const parsed = parseAnthropicModelRoutes(pool.routes);
     if (!parsed.ok) return `schema_invalid: ${path}.routes: ${parsed.error}`;
   }
+  if (pool.quotaRecheckMs !== undefined && (typeof pool.quotaRecheckMs !== "number"
+    || !Number.isInteger(pool.quotaRecheckMs) || pool.quotaRecheckMs < 60_000 || pool.quotaRecheckMs > 86_400_000)) {
+    return `schema_invalid: ${path}.quotaRecheckMs: must be an integer from 60000 to 86400000`;
+  }
   return undefined;
 }
 

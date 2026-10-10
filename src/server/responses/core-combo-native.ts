@@ -14,7 +14,7 @@
  * No `./` sibling import on purpose: `core-options.ts` names this module's types, so an edge back
  * into the owner graph would close a cycle.
  */
-import type { OcxConfig } from "../../types";
+import type { OcxConfig, OcxComboTarget } from "../../types";
 import type { RouteResult } from "../../router";
 import type { DataPlaneAdmission } from "../auth-cors";
 import type { AdmissionLease } from "../../lib/admission";
@@ -52,7 +52,7 @@ import { addProtocolEntryReason, markAttemptProtocolPath, markProtocolBlocked } 
 import { markClientWire } from "../inference/client-wire";
 
 type Rec = Record<string, unknown>;
-type ComboTarget = { provider: string; model: string };
+type ComboTarget = Pick<OcxComboTarget, "provider" | "model" | "reasoningEffort" | "serviceTier">;
 
 /** What the source needs to run one native child on the combo's open attempt. */
 export interface NativeComboChildRun {
@@ -263,6 +263,7 @@ function applyComboEffort(
     combo.defaultEffortMode,
   );
   const reasoning = shaped.reasoning;
+  if (shaped.service_tier !== undefined) body.service_tier = shaped.service_tier;
   if (reasoning === undefined) {
     if (hadEffort) delete body.reasoning_effort;
     return;

@@ -793,6 +793,8 @@ export const apiKeyEntrySchema = z.object({
   // rather than promoting it.
   allowedProviders: z.array(z.string().trim().min(1).max(256)).optional(),
   allowedModels: z.array(z.string().trim().min(1).max(256)).optional(),
+  // Not `.catch`ed for the same reason: a damaged value must not grant metered spend.
+  allowMeteredComboTargets: z.boolean().optional(),
 }).passthrough();
 
 /**
