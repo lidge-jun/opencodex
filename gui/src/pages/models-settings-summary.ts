@@ -43,6 +43,9 @@ export interface ModelsSettingsState {
   keepNativeOnV1?: boolean;
   shadowEnabled: boolean;
   shadowModel?: string;
+  /** Global auto-review override; folded whenever enabled, a blank model reading as pending. */
+  autoReviewEnabled?: boolean;
+  autoReviewModel?: string;
   windowOn: boolean;
   windowValue: number;
   /** The SAVED picker mode — an unapplied draft is not the catalog's state. */
@@ -81,6 +84,9 @@ export function modelsSettingsSummary(t: TFn, state: ModelsSettingsState): Setti
     label: t("models.shadowCallIntercept"),
     value: state.shadowEnabled && state.shadowModel ? state.shadowModel : off,
   });
+  if (state.autoReviewEnabled) {
+    items.push({ id: "auto-review", label: t("models.autoReviewOverride"), value: state.autoReviewModel || t("models.autoReviewPending") });
+  }
   items.push({ id: "window", label: t("models.contextCapLabel"), value: state.windowOn ? fmtK(state.windowValue) : off });
   const pickerKey = PICKER_MODE_KEYS[state.pickerMode];
   items.push({ id: "order", label: t("models.pickerOrder.label"), value: pickerKey ? t(pickerKey) : state.pickerMode });

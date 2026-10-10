@@ -28,6 +28,7 @@ import {
   CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
+  autoReviewOverrideSchema,
   compactionRoutingSchema,
   memoryModelSettingSchema,
   memoryModelsSchema,
@@ -185,6 +186,9 @@ export const configSchema = z.object({
     z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535).optional() }),
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
+  // Models settings panel writes the global reviewer override; an invalid hand edit is
+  // stripped by load degradation so it cannot reject the providers that carry it.
+  autoReviewOverride: autoReviewOverrideSchema.optional(),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
   compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   compactionRecovery: compactionRecoverySchema.optional().catch(undefined),

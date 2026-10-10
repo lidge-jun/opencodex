@@ -72,7 +72,7 @@ describe("gui exhaustive-deps suppression stays scoped and effective", () => {
 
   test("the effect keeps the in-file record of why the dep array stays short", async () => {
     const models = await readText("gui/src/pages/Models.tsx");
-    const effectEnd = models.indexOf("}, [catalogActive, loadShadowCall, loadV2]);");
+    const effectEnd = models.indexOf("}, [catalogActive, loadShadowCall, loadAutoReview, loadV2]);");
     expect(effectEnd).toBeGreaterThan(-1);
 
     // The reasoning has to sit on the effect, not in a commit message. Read the comment

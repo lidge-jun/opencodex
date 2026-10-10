@@ -168,6 +168,12 @@ export interface ShadowCallData {
   sourceModels?: string[];
 }
 
+/** The global auto-review (approval reviewer) override the Models settings panel writes. */
+export interface AutoReviewData {
+  enabled: boolean;
+  model: string;
+}
+
 export const CAP_OPTIONS = Array.from({ length: 18 }, (_, i) => 100_000 + i * 50_000); // 100k … 950k
 export const CAP_OPTION_SET = new Set(CAP_OPTIONS);
 /**
@@ -226,6 +232,27 @@ export function activeModelOptions(
       // Friendly label (display-name provider prefix) while the raw route stays the value.
       options.push({ value: m.namespaced, label: t ? formatNamespacedModelId(m.namespaced, t) : m.namespaced });
     }
+  }
+  return options;
+}
+
+/**
+ * Narrow the catalog options to the routed rows an auto-review override may name.
+ *
+ * The reviewer selector has to resolve to a provider-namespaced catalog row; native rows are
+ * dropped because Codex's own default already covers them and choosing one would pin the
+ * subscription model the override exists to avoid. A value saved before its row left the list
+ * stays selectable, or the control would read back blank and the next save would erase it.
+ */
+export function routedModelOptions(
+  visible: readonly { value: string; label: string }[],
+  models: readonly ModelRow[],
+  saved?: string,
+): { value: string; label: string }[] {
+  const native = new Set(models.filter(model => model.native === true).map(model => model.namespaced));
+  const options = visible.filter(option => !native.has(option.value));
+  if (saved && !options.some(option => option.value === saved)) {
+    options.push({ value: saved, label: visible.find(option => option.value === saved)?.label ?? saved });
   }
   return options;
 }

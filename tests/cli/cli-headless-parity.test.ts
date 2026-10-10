@@ -597,6 +597,7 @@ describe("headless GUI parity CLI", () => {
       // `ocx link port|issue` plus `ocx connect --link`, which the apply flow drives over SSH.
       ["/api/link", "ocx link"],
       ["/api/shadow", "ocx models"],
+      ["/api/auto-review-settings", "ocx models auto-review"],
       ["/api/sidecar", "ocx agent"],
       ["/api/startup", "ocx system"],
       ["/api/stop", "ocx stop"],

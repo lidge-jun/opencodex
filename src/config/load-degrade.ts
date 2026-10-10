@@ -8,6 +8,7 @@ import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import {
   modelPinnedEffortsConfigError,
   pinnedReasoningEffortConfigError,
+  autoReviewOverrideConfigError,
   autoReviewModelOverridesConfigError,
   autoReviewModelTargetConfigError,
   modelCapabilitiesConfigError,
@@ -405,6 +406,11 @@ export function sanitizeModelCostsForLoad(parsed: unknown): void {
 export function sanitizeAutoReviewForLoad(parsed: unknown): void {
   if (!parsed || typeof parsed !== "object") return;
   const root = parsed as Record<string, unknown>;
+  if (root.autoReviewOverride !== undefined
+    && autoReviewOverrideConfigError(root.autoReviewOverride) !== null) {
+    console.warn("⚠️  config.json autoReviewOverride is invalid — ignoring the override");
+    delete root.autoReviewOverride;
+  }
   const providers = root.providers;
   if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
   for (const [name, providerValue] of Object.entries(providers as Record<string, unknown>)) {

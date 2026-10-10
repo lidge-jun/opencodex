@@ -1386,8 +1386,16 @@ dashboard or `custom` in `ocx init` and enter the base URL. See the
 
 Codex asks a second model to review approval requests, and takes that reviewer from
 `auto_review_model_override` on the catalog row of the current turn's model. The root
-`auto_review_model` in `$CODEX_HOME/config.toml` applies one reviewer to every row. To give a
-routed provider its own — usually cheaper — reviewer, set the selector on that provider row in
+`auto_review_model` in `$CODEX_HOME/config.toml` is Codex's fallback. The dashboard's global
+**Auto-review override** in Model settings applies one reviewer to all catalog rows that do not
+have a provider-scoped reviewer. It stores `autoReviewOverride` in `~/.opencodex/config.json`; the
+setting must be enabled and name a model. An enabled setting with no model remains pending and
+leaves the Codex fallback in effect. The Models page reports a pending catalog refresh, which you
+can retry with `ocx sync`. From the CLI, read the setting with `ocx models auto-review status` or
+change it with `ocx models auto-review set <model|-> [--enabled <on|off>]`; use `-` to clear the
+model. CLI output recommends `ocx sync` when a refresh can be retried. If a refresh fails, the
+setting remains saved and the command exits 1. Resolve the failure before syncing. To give a routed
+provider its own — usually cheaper — reviewer, set the selector on that provider row in
 `~/.opencodex/config.json`:
 
 ```json
@@ -1419,9 +1427,10 @@ no per-model override, leaving a valid provider-wide target as fallback. Whateve
 keep the root selector, or upstream behavior when that is unset. Removing the root selector leaves
 provider stamps alone, and removing a provider selector clears only that provider's stamps.
 
-These fields are available through configuration, `PATCH /api/providers?name=<provider>`, and
-the dashboard raw JSON provider editor; dedicated form controls are not present. The canonical `openai` provider
-rejects them. Field-by-field rules live in the
+Provider fields are available through configuration, `PATCH /api/providers?name=<provider>`, and
+the dashboard raw JSON provider editor; dedicated provider form controls are not present. The
+global override is available in Model settings. The canonical `openai` provider rejects provider
+reviewer fields. Field-by-field rules live in the
 [provider configuration reference](/reference/configuration/providers/#auto-review-approval-model-selection).
 
 ## Rate limits in the providers overview

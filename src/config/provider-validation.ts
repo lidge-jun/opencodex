@@ -256,10 +256,11 @@ export function autoReviewModelTargetConfigError(
   field = "autoReviewModel",
   allowClear = false,
 ): string | null {
-  if (value === undefined || (allowClear && (value === null || value === ""))) return null;
+  if (value === undefined || (allowClear && value === null)) return null;
   if (typeof value !== "string") return `${field} must be a string`;
   const trimmed = value.trim();
-  if (!trimmed) return `${field} must be nonblank`;
+  // `allowClear` callers trim then delete, so whitespace-only is a clear, not a blank selector.
+  if (!trimmed) return allowClear ? null : `${field} must be nonblank`;
   if (trimmed.length > 1024 || AUTO_REVIEW_MODEL_CONTROL_CHARS.test(trimmed)) {
     return `${field} must be a catalog selector without whitespace or control characters`;
   }
@@ -269,6 +270,26 @@ export function autoReviewModelTargetConfigError(
 /** True when the value is a valid Codex catalog auto-review selector. */
 export function isValidAutoReviewModel(value: unknown): value is string {
   return typeof value === "string" && autoReviewModelTargetConfigError(value) === null;
+}
+
+/**
+ * Validate the global auto-review override block the Models settings panel writes.
+ *
+ * `enabled` is optional so a save may carry only the model during an edit; `model` follows the
+ * same selector rules as the provider-scoped field, and an empty value clears the override.
+ */
+export function autoReviewOverrideConfigError(value: unknown, field = "autoReviewOverride"): string | null {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return `${field} must be a plain object with own properties`;
+  }
+  const block = value as Record<string, unknown>;
+  if (block.enabled !== undefined && typeof block.enabled !== "boolean") {
+    return `${field}.enabled must be a boolean`;
+  }
+  return autoReviewModelTargetConfigError(block.model, `${field}.model`, true);
 }
 
 /** Canonical model key used for map matching, duplicate detection, and route tombstones. */
