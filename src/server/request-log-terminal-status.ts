@@ -7,6 +7,8 @@ import {
   recognizedUpstreamError,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
+import { configuredCredentials, type ConfiguredCredentials } from "./configured-credentials";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -74,9 +76,29 @@ function noteBoundedDiagnostic(
   if (logCtx[field] !== undefined) return;
   if (!isSafeDiagnosticToken(value)) return;
   if (field === "upstreamErrorType" && !KNOWN_UPSTREAM_ERROR_TYPES.has(value)) return;
+  if (!diagnosticValueAllowed(value)) return;
   logCtx[field] = value;
   const status = logCtx.terminalHttpStatus;
-  if (status === undefined || status >= 500) console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${logCtx.upstreamErrorCode ? ` code=${logCtx.upstreamErrorCode}` : ""}${logCtx.upstreamRequestId ? ` request_id=${logCtx.upstreamRequestId}` : ""}`);
+  if (status === undefined || status >= 500) {
+    const { upstreamErrorCode: code, upstreamRequestId: requestId } = upstreamDiagnosticLogFields(logCtx);
+    console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${code ? ` code=${code}` : ""}${requestId ? ` request_id=${requestId}` : ""}`);
+  }
+}
+
+/**
+ * A diagnostic must not repeat a configured credential or a credential this process sent upstream
+ * (an echo). All three fields fail closed while either source cannot vouch for complete coverage:
+ * a closed type vocabulary does not prove a member is not also a credential. Applied at capture,
+ * again for every retained value interpolated into a warning, and at projection, because a
+ * credential can be configured or sent after the value was captured.
+ */
+export function diagnosticValueAllowed(
+  value: string,
+  registry: OutboundCredentialRegistry = outboundCredentials(),
+  configured: ConfiguredCredentials = configuredCredentials(),
+): boolean {
+  if (!registry.complete() || !configured.complete) return false;
+  return !registry.matches(value) && !configured.matches(value);
 }
 
 export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: Headers): void {
@@ -94,10 +116,17 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
 }
 
 export function upstreamDiagnosticLogFields(logCtx: UpstreamErrorDiagnostics): UpstreamErrorDiagnostics {
+  const allowed = (field: keyof UpstreamErrorDiagnostics): string | undefined => {
+    const value = logCtx[field];
+    return value && diagnosticValueAllowed(value) ? value : undefined;
+  };
+  const code = allowed("upstreamErrorCode");
+  const type = allowed("upstreamErrorType");
+  const requestId = allowed("upstreamRequestId");
   return {
-    ...(logCtx.upstreamErrorCode ? { upstreamErrorCode: logCtx.upstreamErrorCode } : {}),
-    ...(logCtx.upstreamErrorType ? { upstreamErrorType: logCtx.upstreamErrorType } : {}),
-    ...(logCtx.upstreamRequestId ? { upstreamRequestId: logCtx.upstreamRequestId } : {}),
+    ...(code ? { upstreamErrorCode: code } : {}),
+    ...(type ? { upstreamErrorType: type } : {}),
+    ...(requestId ? { upstreamRequestId: requestId } : {}),
   };
 }
 
