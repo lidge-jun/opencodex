@@ -74,3 +74,5 @@ The abort-lifetime contract uses synthetic response bodies whose cancellation re
 Abort finalization changes accounting only; transports retain producer cancellation and terminal precedence. Prepared 200, 499 and 504 bodies remain unchanged.
 
 The async executor contract waits for a real child to install its signal handler before abort or deadline. Caller-facing rejection remains prompt while an independent reaper owns actual exit; on POSIX the SIGTERM-ignoring child is still alive at rejection and must exit after escalation. Windows exercises the same owner with native termination.
+
+The eager-relay EOF contract reads a real ephemeral loopback Bun HTTP response. It verifies that payload messages and the terminal survive, the producer completes once, and a live upstream controller has no remaining relay abort listeners. Ordinary isolated GC must collect the observed native reader. This tests relay ownership, not attribution of a historical production stall.
