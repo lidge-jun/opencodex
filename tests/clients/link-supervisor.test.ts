@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createLinkSupervisor } from "../../src/link/supervisor";
-import type { SshChild, SshRunner } from "../../src/link/ssh-runner";
+import { createSshRunner, type SshChild, type SshRunner } from "../../src/link/ssh-runner";
 import type { LinkStore } from "../../src/link/store";
 
 function deferred<T>() {
@@ -45,6 +45,58 @@ function fakeRunner() {
 function baseStore(...links: LinkStore["links"]): LinkStore {
   return { version: 1, listenerPort: 19001, links };
 }
+
+test.each([
+  ["Host key verification failed.", "hostkey"],
+  ["Permission denied (publickey).", "auth"],
+  ["Connection refused", "network"],
+] as const)("an inherited stderr pipe does not stall the supervisor after %s", async (diagnostic, reason) => {
+  const children: Array<{ exit: (code: number) => void; stderr: ReadableStream<Uint8Array> }> = [];
+  let cancelled = 0;
+  const spawn = (() => {
+    const exit = deferred<number>();
+    const stderr = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(diagnostic)); },
+      cancel() { cancelled += 1; },
+    });
+    const child = { pid: 400 + children.length, stdout: new ReadableStream<Uint8Array>({ start(c) { c.close(); } }),
+      stderr, exited: exit.promise, kill() { exit.resolve(143); } };
+    children.push({ exit: exit.resolve, stderr });
+    return child;
+  }) as unknown as typeof Bun.spawn;
+  let current = 0;
+  let tick!: () => void;
+  const supervisor = createLinkSupervisor({
+    readStore: () => baseStore(record("hub-initiated", "lnk_0123456789abcdef")),
+    runner: createSshRunner({ spawn }), now: () => current, random: () => 0.5,
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    setTimer: callback => { tick = callback; return 1 as unknown as ReturnType<typeof setInterval>; }, clearTimer: () => {},
+  });
+  supervisor.start();
+  try {
+    children[0]!.exit(255);
+    await Bun.sleep(500);
+    expect(cancelled).toBe(1);
+    expect(children[0]!.stderr.locked).toBe(false);
+    if (reason === "network") {
+      expect(supervisor.status()[0]!.state).toMatchObject({ kind: "reconnecting", retryAt: 1_000 });
+      current = 300_000;
+      tick();
+      expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 300_000, reason: "timeout", retryAt: 360_000, inFlight: false });
+      current = 360_000;
+    } else {
+      expect(supervisor.status()[0]!.state).toMatchObject({ kind: "failed", reason });
+      current = 1_000;
+      tick();
+      expect(children).toHaveLength(1); // Never use the transient retry cadence for these diagnostics.
+      current = 300_000;
+    }
+    tick();
+    expect(children).toHaveLength(reason === "hostkey" ? 1 : 2);
+  } finally {
+    await supervisor.stop();
+  }
+});
 
 test.each(["remove", "reload", "R1 reload removal", "R1b client-owned reload", "R2 stop", "store removal", "store record change", "store listener change"] as const)("reconnect with deferred exit cannot outrun %s", async action => {
   const fake = fakeRunner();
