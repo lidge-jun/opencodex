@@ -256,6 +256,8 @@ export interface RequestLogContext {
   conversationStateScrub?: "account-change";
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   terminalSource?: "upstream" | "synthetic";
+  /** Closed failure evidence supplied by the transport, never inferred from provider text. */
+  causeHint?: RequestFailureCause;
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
   /** Full eligible provider/model membership from a policy route; never logged. */
@@ -844,6 +846,7 @@ export function requestLogErrorCode(
   status: number,
   upstreamError?: string,
   terminalErrorCode?: string,
+  replayRefusal = false,
 ): string | undefined {
   if (status >= 200 && status < 400) return undefined;
   // A structured terminal code is authoritative even when the provider message is localized,
@@ -872,10 +875,8 @@ export function requestLogErrorCode(
     return "permission_denied";
   }
   if (status === 429) {
-    // A refused ambiguous reset answers 429 by design (it must not invite a client
-    // retry that could duplicate inference); classify it by its message so the log
-    // distinguishes a proxy refusal from provider throttling.
-    if (upstreamError?.trim() && isUpstreamResetReplayRefusedMessage(upstreamError)) {
+    // Prefer transport provenance; retain the legacy message fallback for older callers.
+    if (replayRefusal || (upstreamError?.trim() && isUpstreamResetReplayRefusedMessage(upstreamError))) {
       return UPSTREAM_RESET_REPLAY_REFUSED_CODE;
     }
     return "rate_limit_exceeded";
@@ -1467,12 +1468,12 @@ export function addFinalRequestLog(
   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
     ? 499
     : status;
-  // A locally assigned code wins: it names a refusal this proxy made itself, which no
-  // status-plus-upstream-message classification can reconstruct.
+  // Locally assigned codes name proxy refusals that status and upstream text cannot reconstruct.
   const errorCode = logCtx.errorCode ?? requestLogErrorCode(
     effectiveStatus,
     logCtx.upstreamError,
     logCtx.terminalErrorCode,
+    logCtx.causeHint === "transport-ambiguous" && logCtx.terminalSource === "synthetic",
   );
   // A response.failed whose classified status is 499 is still a client cancel, not an upstream
   // terminal failure — keep /api/logs closeReason aligned with that.
@@ -1502,6 +1503,7 @@ export function addFinalRequestLog(
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     outputObserved: logCtx.firstOutputMs !== undefined,
+    ...(logCtx.causeHint ? { causeHint: logCtx.causeHint } : {}),
     locallyAnswered: logCtx.localTerminalReason !== undefined,
     ...(logCtx.activeAttempt ? { attempt: logCtx.activeAttempt } : {}),
   });

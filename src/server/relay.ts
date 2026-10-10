@@ -12,7 +12,7 @@ import {
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
-import { carryReplayRefusal } from "../lib/upstream-retry";
+import { carryReplayRefusal, isReplayRefusalResponse } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
 import {
   addRequestLog,
@@ -898,6 +898,11 @@ export function responseWithDeferredRequestLog(
   logCtx: RequestLogContext,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): Response {
+  // A synthetic 429 is a transport verdict, not evidence that the provider declined the turn.
+  if (isReplayRefusalResponse(response)) {
+    logCtx.causeHint = "transport-ambiguous";
+    logCtx.terminalSource = "synthetic";
+  }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (isUsageDebugEnabled() && !logCtx.usageDebugContentType && contentType) {
     logCtx.usageDebugContentType = contentType;
