@@ -763,6 +763,7 @@ test.each([
   ["alwaysEnableEffort", true],
   ["autoContext", false],
   ["autoCompactWindow", 400_000],
+  ["contextAccounting", "200k"],
 ] as const)("%s-only PUT triggers system-env reconciliation", async (field, value) => {
   const applySpy = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false, reason: "test" });
   const server = startServer(0);
@@ -945,6 +946,28 @@ test("PUT/GET round-trips the context/effort levers (devlog 136 B6)", async () =
     expect(persisted.claudeCode?.maxContextTokens).toBeUndefined();
     expect(persisted.claudeCode?.alwaysEnableEffort).toBeUndefined();
   } finally {
+    await server.stop(true);
+  }
+});
+
+test("PUT/GET round-trips contextAccounting; 1m drops the key, anything else is a 400", async () => {
+  const applySpy = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false, reason: "test" });
+  const server = startServer(0);
+  const put = (contextAccounting: unknown) => fetch(new URL("/api/claude-code", server.url), {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contextAccounting }),
+  });
+  const get = async () => (await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>).contextAccounting;
+  try {
+    expect(await get()).toBe("1m");
+    expect((await put("200k")).status).toBe(200);
+    expect(loadConfig().claudeCode?.contextAccounting).toBe("200k");
+    expect(await get()).toBe("200k");
+    expect((await put("1m")).status).toBe(200);
+    expect(loadConfig().claudeCode?.contextAccounting).toBeUndefined();
+    expect(await get()).toBe("1m");
+    expect((await put("500k")).status).toBe(400);
+  } finally {
+    applySpy.mockRestore();
     await server.stop(true);
   }
 });

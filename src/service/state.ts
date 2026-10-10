@@ -360,8 +360,8 @@ export function parseServiceInstallState(value: unknown): ServiceInstallState | 
  * it describes the install that just ran. {@link ServiceInstallState.ownership} deliberately
  * is not part of it.
  */
-function installProvenanceRecord(backend: ServiceBackend, launcherPath?: string | null): ServiceInstallState {
-  const { bun, cli } = cliEntry();
+function installProvenanceRecord(backend: ServiceBackend, launcherPath: string | null | undefined, runtime: DurableBunRuntime): ServiceInstallState {
+  const { bun, cli } = cliEntry(runtime);
   const codexHome = currentCodexHome();
   return {
     version: 2,
@@ -391,9 +391,10 @@ export function writeServiceInstallState(
   backend: ServiceBackend = "scheduler",
   launcherPath?: string | null,
   deps: ServiceStateSwapDeps = {},
+  runtime: DurableBunRuntime = durableBunRuntime(),
 ): void {
   swapServiceInstallState(current => ({
-    ...installProvenanceRecord(backend, launcherPath),
+    ...installProvenanceRecord(backend, launcherPath, runtime),
     ...preservedConsent(current),
   }), deps);
 }

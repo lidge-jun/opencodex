@@ -51,6 +51,55 @@ without running handlers is not covered by this forwarding mechanism.
 
 > Decision record: [ADR-0028](../decisions/ADR-0028-background-service-command-selection.md)
 
+## Guarded CLI update restart
+
+`src/cli/system-restart-client.ts` freezes the newer-CLI candidate's runtime identity and physical homes. `src/cli/update-restart-home.ts` captures the service-record digest from
+`src/cli/update-restart-service-record.ts`: all ordered `serviceStatePaths()` candidates, including confirmed absences and the authoritative position, plus the launchd plist or
+systemd unit. State and ownership resolve from those captured bytes. Each present regular file contributes SHA-256 content and bigint device, inode, size, nanosecond mtime/ctime,
+mode, uid and gid. The opened descriptor must be regular and match device/inode before any read. Each record is limited to 1 MiB, read in bounded chunks with growth beyond that limit
+refused. Descriptor stats bracket the read; a final pathname stat must agree. Symlinks, inconsistent reads, malformed state, unreadable candidates and membership drift
+refuse. Canonical directory aliases remain equivalent. Lock, PID and runtime records are excluded.
+
+`src/cli/update-restart.ts` requires known versions and a detached POSIX target with PID-1
+parent, no ownership claim and no client/sibling role. An installed record without a claim
+admits only with positively inactive supervision. `src/cli/update-restart-supervision.ts`
+probes both launchd domains even without a plist; only exit 112/113 establishes absence.
+Systemd requires loaded or not-found, inactive and MainPID zero. Unknown evidence refuses.
+Manager executables resolve only from /usr/bin/systemctl then /bin/systemctl on Linux, or
+/bin/launchctl on macOS; they must be regular, executable and not world-writable. The
+supervision and retained PID-bound checks share the resolved path. Linux commands use an
+explicit environment from `src/service/systemd.ts`: when XDG_RUNTIME_DIR is missing and
+/run/user/<uid> exists, it is set in that subprocess environment; inherited bus addresses
+are preserved. Restart probes do not mutate process.env. Each command uses at most two seconds
+and the remaining transaction deadline, which is checked again after execution.
+
+The ownership mutation lease covers stop and the single spawn. Every parent `checkHome`
+recaptures the original fingerprint and supervision: after acquisition, immediately before
+stop, after shutdown, after the async Bun-readiness wait, before spawn and throughout
+replacement observation, including success publication. Drift is terminal, never recaptured
+as a new baseline. The executable must pass `REAL_BUN_MIN_BYTES` before stop; after a
+confirmed shutdown it may wait within the same deadline before repeating launch checks.
+`src/cli/update-restart-transport.ts` attests and stops on one direct TCP connection without
+reconnect, PID signals or port reclamation. Predecessor exit, runtime-record removal, port
+availability and definitive endpoint absence precede spawn. Success requires the child PID,
+endpoint, fresh attestation and exact known version, without generic restart recovery.
+
+`src/cli/update-restart-child.ts` requires marker schema 1 and a 64-character lowercase hex
+digest before preflight or lease acquisition. It strips parent lease delegation and takes
+its own lease, validating the frozen homes, digest, supervision, version, endpoint and
+deadline before and under that lease, before/after bind, before PID and runtime publication,
+and at completion. Rollback retains custody until exit; the deadline ends an unfinished child.
+Windows, claimed, supervised and uncertain targets remain ineligible for this update path.
+
+## Windows selected-runtime write preflight
+
+Before service install/repair or a Windows Codex shim mutation, the selected Bun executable must create and remove an exclusive nonce-named directory inside the config root: admission runs that exact lexical path with `-e`, no shell, a hidden window and a five-second timeout, and only a matching nonce acknowledgment admits. Failure refuses with `OCX_RUNTIME_PREFLIGHT_FAILED` (`spawn`, `timeout`, `create`, `remove` or `protocol`) and never discovers another runtime; the Node launcher may pick a validated PATH Bun before CLI startup when bundled Bun is unusable, and durable admission only probes that resulting selection.
+The frozen selection feeds scheduler rendering, the WinSW entry and the install-state writer. `installServiceSafely` refuses live Desktop supervision before selection or admission, then admits once before cleanup and uses internal commit functions; repair refuses Desktop before diagnosis, checks ownership and auth before admission, and admits before native repair or scheduler stop; direct public installers keep their own admission gate.
+The fresh scheduler path captures root absence and freezes the runtime at entry, stages and registers its definition, removes staging and claims config ownership, then probes with `rootWasAbsent: false` immediately before `prepare()`; a refused probe rolls back the new registration before service-manager cleanup or asset/state publication. Healthy or disabled shims do not probe; refused automatic restore defers with guidance and startup continues. Non-Windows admission performs no spawn or filesystem work, selection stays pre-dotenv and `cliEntry` stays I/O-free.
+
+An absent root reaching admission is created with an exclusive non-recursive mode-0700 mkdir under an existing parent and left empty for later ownership claiming; the preflight never deletes the config root (refusal, concurrent creation, contents and replacements are all preserved). Existing roots must be real directories, not files or symlinks/junctions, and probe cleanup is non-recursive.
+A standalone selection is admitted in-process only when its path equals `process.execPath` exactly (standalone is executable packaging, not Desktop ownership); that path has neither child isolation nor a timeout, so synchronous filesystem operations may block, and other standalone selections refuse. Recovery is an operator-selected trusted `OPENCODEX_BUN_PATH` before launching ocx, or an `npm install -g @bitkyc08/opencodex` reinstall followed by retry; no runtime discovery or probe memo is added.
+
 ## Windows npm tray update badge
 
 The npm Windows tray owns six installed ICOs: online, warning, and offline base safety glyphs plus one blue-dot variant of each. Its hidden `ocx __update-badge` child reads the package cache without refreshing or writing it. The tray samples no more often than every 60 seconds, caps stdout and stderr at 16 KiB each, requests termination after 12 seconds or a pipe overflow, and reaps the child on later Windows Forms ticks before allowing another launch. A successful badge observation expires after 180 seconds; failed reads do not extend it. The **Update available** item opens the dashboard and never installs a package. Shutdown requests child termination, waits at most 500 ms, and disposes the probe before tray UI disposal.
@@ -370,6 +419,16 @@ lease boundary before exiting, and thrown failures release it after owner-aware 
 Replacement and recovery inspect both the captured endpoint and the freshly read runtime record.
 Malformed or unreadable records remain unknown. Recovery requires the same complete owner
 identity and proven-dead liveness; unknown or transferred ownership never starts another proxy.
+Live supervision is re-read separately from durable ownership before stop, package replacement,
+service restoration and direct recovery. Each service command, Node/Bun update run and dashboard
+restart decision shares one `createSupervisionLatch()` from `src/service/desktop-supervision.mjs`:
+`desktop` or `unknown` with `desktopSeen: true` blocks; only a later `none` clears it.
+Plain unknown/unsupported evidence preserves existing decisions unless an earlier block remains.
+`src/update/runtime-ownership.mjs` denies all three update authorities and failed-update recovery
+when blocked. A restoration refusal after a completed package swap does not undo that update.
+Service install, repair, start and restart refuse before mutation, including Windows XML staging
+under injected Desktop evidence; production Windows probes remain unsupported. Limits are listed
+in [desktop supervision](../desktop-shell.md#runtime-ownership-from-the-apps-side).
 The lease is released before any service-manager-mediated start (`service repair` in recovery
 or the post-install refresh): the manager's `ocx start` child cannot join it, and holding it
 through the repair's health wait keeps that proxy from starting (#5760). The recovery decision
@@ -390,7 +449,7 @@ direct start stay serialized with a claim that landed in the unleased window; af
 swap, a lease that stays claimed is reported with manual recovery steps and a non-zero exit. The
 dashboard restart worker in `src/update/job.ts` releases the lease immediately before `ocx
 service repair` and re-acquires it at the direct-start fallthrough, waiting long enough to
-outlast one service-wrapper respawn, then re-runs the recorded-owner veto under it before
+outlast one service-wrapper respawn, then re-runs the durable-owner and live-supervision veto under it before
 mutating the port, because a claim could have landed during the now-unleased refresh window. A
 lease that stays claimed fails closed: nothing is started, and the job is marked failed, since
 the refresh before it produced no serving proxy; an ownership veto still ends as succeeded.

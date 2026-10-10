@@ -704,7 +704,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     excludedAccountIds?: ReadonlySet<string>,
   ): string | null {
     if (!admitted(config)) return null;
-    const strategy = anthropicPoolStrategy(config);
+    const strategy = isAnthropicAccountPoolEnabled(config) ? anthropicPoolStrategy(config) : "quota";
     const eligible = routeCandidates(getEligibleAnthropicAccounts(now, model), decision).filter(id => id !== excludeId && !excludedAccountIds?.has(id));
     if (strategy === "round-robin") {
       return peekRoundRobinAccount(poolKey, eligible, stickyLimitForPool(config));

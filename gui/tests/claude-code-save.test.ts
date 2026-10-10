@@ -9,7 +9,7 @@ import {
   revertEditable,
   type ClaudeCodeEditable,
 } from "../src/pages/claude-code-save";
-import type { ClaudeCodeState, MapRow } from "../src/pages/claude-code-types";
+import { normalizeContextAccounting, type ClaudeCodeState, type MapRow } from "../src/pages/claude-code-types";
 
 const STATE = {
   enabled: true,
@@ -26,6 +26,7 @@ const STATE = {
   maxContextTokens: null,
   autoContext: true,
   autoCompactWindow: null,
+  contextAccounting: "1m",
   injectAgents: true,
   smallFastModel: "",
   effectiveModelEnv: {},
@@ -126,4 +127,13 @@ test("a successful Save shows the normalized rows even if the refresh never land
   const kept = acknowledgeSave({ draft: edited, baseline: editable(), adoptNextRead: false }, submitted)!;
   expect(kept.draft).toBe(edited);
   expect(isClaudeCodeDraftDirty(kept.draft, kept.baseline)).toBe(true);
+});
+
+test("context accounting is saved, dirties the draft, and older states read as the 1m default", () => {
+  expect(claudeCodeSaveBody({ ...STATE, contextAccounting: "200k" }, []).contextAccounting).toBe("200k");
+  expect(isClaudeCodeDraftDirty(editable({ contextAccounting: "200k" }), editable())).toBe(true);
+  // A state cached by an older proxy carries no field; the page normalizer reads it as the default.
+  expect(normalizeContextAccounting(undefined)).toBe("1m");
+  expect(normalizeContextAccounting("bogus")).toBe("1m");
+  expect(normalizeContextAccounting("200k")).toBe("200k");
 });

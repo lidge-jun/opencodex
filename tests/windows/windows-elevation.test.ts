@@ -13,6 +13,7 @@ import {
   isWindowsSchtasksCreateAccessDenied,
   resolveTrustedWindowsIcaclsExe,
   resolveTrustedWindowsPowerShellExe,
+  resolveTrustedWindowsRegExe,
   resolveTrustedWindowsSchtasksExe,
   schtasksOperationFromArgs,
   setTrustedWindowsElevationExecutablesForTests,
@@ -220,6 +221,7 @@ describe("windows elevation helpers", () => {
     mkdirSync(join(trustedSystem32, "WindowsPowerShell", "v1.0"), { recursive: true });
     writeFileSync(join(trustedSystem32, "schtasks.exe"), "");
     writeFileSync(join(trustedSystem32, "icacls.exe"), "");
+    writeFileSync(join(trustedSystem32, "reg.exe"), "");
     writeFileSync(join(trustedSystem32, "WindowsPowerShell", "v1.0", "powershell.exe"), "");
 
     const evilRoot = mkdtempSync(join(tmpdir(), "ocx-evil-sys-"));
@@ -227,6 +229,7 @@ describe("windows elevation helpers", () => {
     mkdirSync(join(evilSystem32, "WindowsPowerShell", "v1.0"), { recursive: true });
     writeFileSync(join(evilSystem32, "schtasks.exe"), "evil");
     writeFileSync(join(evilSystem32, "icacls.exe"), "evil");
+    writeFileSync(join(evilSystem32, "reg.exe"), "evil");
     writeFileSync(join(evilSystem32, "WindowsPowerShell", "v1.0", "powershell.exe"), "evil");
 
     const previousSystemRoot = process.env.SystemRoot;
@@ -238,6 +241,7 @@ describe("windows elevation helpers", () => {
       setTrustedWindowsSystemDirectoryResolverForTests(() => trustedSystem32);
 
       const powershell = resolveTrustedWindowsPowerShellExe();
+      expect(resolveTrustedWindowsRegExe()).toBe(join(trustedSystem32, "reg.exe"));
       const schtasks = resolveTrustedWindowsSchtasksExe();
       const icacls = resolveTrustedWindowsIcaclsExe();
       expect(powershell.toLowerCase().includes("ocx-evil-sys")).toBe(false);

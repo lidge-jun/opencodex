@@ -1,3 +1,4 @@
+import { persistCodexAccountSelection } from "./account-selection";
 import { CODEX_ACCOUNT_LOG_LABEL_RE, codexAccountLogLabel } from "../account-label";
 import { poolQuotaHistoryIdentity, readCodexAccountRecord } from "../account-store";
 import { estimateCodexQuotaCapacity, insufficientCodexCapacity } from "../quota-capacity";
@@ -7,13 +8,13 @@ import { getAccountQuotaHistory, listAccountQuotas } from "../quota";
 import { deleteCodexAccount } from "../account-lifecycle";
 import { isCodexAccountPaused, setCodexAccountPaused } from "../account-pause";
 import { setAllCodexAccountsCreditsAfterLimit, setCodexAccountCreditsAfterLimit } from "../account-credit-use";
-import { clearCodexAccountPin, isCodexAccountPriorityKey, pinnedCodexAccountId, setCodexAccountPin, setCodexAccountPriority } from "../account-priority";
-import { codexAccountPinDrainReason, codexQuotaScopeForModel, clearCodexAccountCooldown, clearThreadAccountMapForAccount, getEffectiveActiveCodexAccountId, isEffectiveCodexAccountPinned, resetCodexRoutingForManualSelection } from "../routing";
+import { clearCodexAccountPin, isCodexAccountPriorityKey, pinnedCodexAccountId, setCodexAccountPriority } from "../account-priority";
+import { codexQuotaScopeForModel, clearCodexAccountCooldown, clearThreadAccountMapForAccount, getEffectiveActiveCodexAccountId, isEffectiveCodexAccountPinned } from "../routing";
 import { DEFAULT_ACCOUNT_PRIORITY, MAX_ACCOUNT_PRIORITY, MIN_ACCOUNT_PRIORITY, normalizeAccountPoolStickyLimit, normalizeCodexAccountPoolStrategy, parseAccountPoolStickyLimit, parseCodexAccountPoolStrategy, parseAccountPriority } from "../pool-rotation";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import type { OcxConfig } from "../../types";
-import { CODEX_ACCOUNT_ID_RE, hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount, isValidCodexAccountId } from "../account-id";
+import { CODEX_ACCOUNT_ID_RE, isSelectableCodexPoolAccount, isValidCodexAccountId } from "../account-id";
 import { isCodexResetCreditOperationId } from "../reset-credit-recovery";
 import { listCodexAuthAccounts, selectFallbackAfterPause, pauseExhaustedCodexAccounts } from "./account-list";
 import { jsonResponse, manualImportDisabledResponse } from "./http";
@@ -247,53 +248,13 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/active" && req.method === "PUT") {
-    let body: { accountId: string | null };
-    try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
-    const runtimeConfig = getRuntimeConfig(config);
-    const targetAccountId = body.accountId ?? MAIN_CODEX_ACCOUNT_ID;
-    if (body.accountId === MAIN_CODEX_ACCOUNT_ID && hasLegacyMainCodexPoolAccount(runtimeConfig.codexAccounts)) {
-      return jsonResponse({ error: "Remove the legacy __main__ pool row before selecting the Desktop account" }, 409);
+    let body: unknown;
+    try { body = await req.json(); } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
+    if (!body || typeof body !== "object" || Array.isArray(body)
+      || !("accountId" in body) || (body.accountId !== null && typeof body.accountId !== "string")) {
+      return jsonResponse({ error: "accountId must be an account id or null" }, 400);
     }
-    if (body.accountId != null && isCodexAccountPaused(runtimeConfig, targetAccountId)) {
-      return jsonResponse({ error: "Account is paused" }, 409);
-    }
-    if (body.accountId != null && body.accountId !== MAIN_CODEX_ACCOUNT_ID) {
-      if (!isValidCodexAccountId(body.accountId)) return jsonResponse({ error: "Invalid account id format" }, 400);
-      const exists = (runtimeConfig.codexAccounts ?? [])
-        .some(account => isSelectableCodexPoolAccount(account) && account.id === body.accountId);
-      if (!exists) return jsonResponse({ error: "Account not found" }, 400);
-      if (readCodexAccountRecord(body.accountId)?.codexValidationPending) {
-        return jsonResponse({ error: "Account validation is pending. Refresh quota after recovery to validate it." }, 409);
-      }
-    }
-    runtimeConfig.activeCodexAccountId = body.accountId ?? undefined;
-    // "Use this account now" outranks selection order until the account is spent:
-    // persisted here rather than in resetCodexRoutingForManualSelection, which is
-    // runtime state only. A null id clears the selection instead of making one, so it
-    // must release the pin rather than record one: pinning the `targetAccountId`
-    // fallback would leave a pin that no effective active account matches, which
-    // `isEffectiveCodexAccountPinned` reports as unpinned while the tier filter still
-    // honours it as a ceiling — invisibly capping the pool at the main account's tier.
-    if (body.accountId == null) clearCodexAccountPin(runtimeConfig);
-    else setCodexAccountPin(runtimeConfig, targetAccountId);
-    resetCodexRoutingForManualSelection(targetAccountId);
-    saveRuntimeConfig(config, runtimeConfig);
-    // A pin this route accepts can still be dropped by the very next resolve, and saying
-    // nothing about that is what made the setting look ignored (#4521). The checks above
-    // refuse an account that cannot be selected at all; this reports the one remaining
-    // outcome they do not cover, from the same predicate routing releases on, so the two
-    // cannot drift. Absent means the pin survives — additive for existing clients.
-    // `appliesImmediately` is unchanged: it answers whether thread affinity was cleared,
-    // not whether the pin is durable.
-    const pinDrainReason = body.accountId == null
-      ? undefined
-      : codexAccountPinDrainReason(runtimeConfig, targetAccountId);
-    return jsonResponse({
-      ok: true,
-      activeCodexAccountId: body.accountId,
-      appliesImmediately: true,
-      ...(pinDrainReason !== undefined ? { pinDrained: true, pinDrainReason } : {}),
-    });
+    return persistCodexAccountSelection(getRuntimeConfig(config), body.accountId);
   }
 
   if (url.pathname === "/api/codex-auth/active" && req.method === "GET") {

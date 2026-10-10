@@ -64,8 +64,8 @@ export interface ManagementApiDeps {
   refreshOwnedCatalogIntegrations?: typeof refreshOwnedCatalogIntegrations;
   /** Platform seam for capability projections; does not alter host-level startup behavior. */
   platform?: NodeJS.Platform;
-  toggleCodexMultiAgentV2?: (enabled: boolean) => void;
-  toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
+  toggleCodexMultiAgentV2?: (enabled: boolean, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void) => void;
+  toggleDefaultModeRequestUserInput?: (enabled: boolean, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void) => void;
   createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;
   /** Test-only destination for best-effort Claude agent-definition sync. */
   claudeAgentConfigDir?: string;

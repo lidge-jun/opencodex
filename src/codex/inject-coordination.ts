@@ -7,6 +7,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 
+import { publishCodexArtifact } from "./inject/config-write-section";
+import { withConfigWriteLockHeld, type LockHandle } from "./config-write-lock";
 import { atomicWriteFile } from "../config";
 import type { CodexWriteLockResult, CodexWriteLockSkipReason } from "./codex-write-lock";
 import { HUB_GATED_SKIP_MESSAGE } from "./desired-state";
@@ -367,7 +369,9 @@ export function recordCodexNativeTransactionProvenance(
  */
 export function restoreCodexPreImages(
   pre: CodexPreImages,
+  heldConfigWriteLock?: LockHandle,
 ): { complete: boolean; unrestored: readonly string[] } {
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, held => {
   const unrestored: string[] = [];
   const surfaces: readonly [string, string, string | null][] = [
     ["config", CODEX_CONFIG_PATH, pre.config],
@@ -375,18 +379,23 @@ export function restoreCodexPreImages(
     ["journal", JOURNAL_PATH, pre.journal],
   ];
   for (const [name, path, bytes] of surfaces) {
+    // The current journal remains recovery authority until both artifacts are restored.
+    if (name === "journal" && unrestored.length > 0) { unrestored.push(name); continue; }
     try {
-      if (bytes === null) {
-        // Absent before, so absent after. A leftover file is not a restoration.
-        if (existsSync(path)) require("node:fs").unlinkSync(path);
-      } else if (readOrNull(path) !== bytes) {
-        atomicWriteFile(path, bytes);
-      }
+      publishCodexArtifact(path, held, (destination, hooks) => {
+        if (bytes === null) {
+          hooks.validateBeforeRename?.(destination);
+          if (existsSync(destination)) require("node:fs").unlinkSync(destination);
+          hooks.afterRename?.(destination);
+        } else if (readOrNull(destination) !== bytes) atomicWriteFile(destination, bytes, undefined, hooks);
+      });
     } catch {
       unrestored.push(name);
     }
   }
   return { complete: unrestored.length === 0, unrestored };
+  });
+  return locked.ok ? locked.value : { complete: false, unrestored: ["config", "profile", "journal"] };
 }
 
 export function buildInjectWitness(

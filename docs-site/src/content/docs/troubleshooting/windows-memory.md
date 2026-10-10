@@ -63,6 +63,15 @@ runtime the leak itself remains an upstream problem:
   remembered timeout state. Other failures use null. The cumulative
   `spillAclRetryReturnedTimeouts` and `spillAclTimeoutMemoRefusals` count terminal
   failed publications, not individual ACL commands or transient first attempts.
+  When a new continuation does not fit under the 1 GiB spill ceiling, the proxy
+  first evicts the oldest stored continuations to make room, as long as that can
+  succeed; a continuation that cannot fit even then is refused. The cumulative
+  `spillHeadroomEvictions` counts continuations evicted to make room, and
+  `spillCapacityRefusals` counts continuations refused because the ceiling could
+  not make room (each one is also a failed publication with class `ECAPACITY`).
+  A rising `spillCapacityRefusals` while memory is healthy means the durable
+  continuation set is full of space the proxy cannot reclaim — in-flight
+  publications or files a failed delete left behind — rather than a memory problem.
   Success clears the failure streak but retains the last failure fields and
   cumulative counts; a later unrelated failure sets the last origin to null.
   These values are process-local, so compare snapshots from the same process.
@@ -116,13 +125,7 @@ restart it.
    stream path turns on automatically on Windows (macOS keeps requiring the
    explicit opt-in below).
 
-2. **Run a Bun runtime you trust with `OPENCODEX_BUN_PATH`.** This is
-   unvalidated territory — you are running opencodex on a runtime we have not
-   tested; at your own risk. Important for service installs: the override is
-   read **when the service artifact is generated**, not at service start. Set
-   the environment variable, then re-run `ocx service repair` from that same
-   shell so the path is baked into the durable service definition. Setting
-   the env alone does nothing for an already-installed service.
+2. **Run a Bun runtime you trust with `OPENCODEX_BUN_PATH`.** Set the variable before launching `ocx` from that shell, then run `ocx service repair` to bake the selected runtime into the service definition. A later project `.env` does not change selection; changing the environment alone does not update an installed service.
 
 3. **Opt into the bounded relay with `streamMode: "eager-relay"`.** Two ways:
    edit `config.json` (add `"streamMode": "eager-relay"`), or call the
@@ -138,3 +141,9 @@ If you try any of these on a real Windows workload, please report the before
 and after `ocx doctor` memory sections on
 [#314](https://github.com/lidge-jun/opencodex/issues/314) — that is exactly
 the verification this mitigation is waiting on.
+
+## Windows selected-runtime write refusal
+
+Windows service installation, repair and Codex shim installation/refresh check whether the selected executable can create and remove a directory inside the OpenCodex config root. This is a write-policy check, not a memory fix. Failure refuses before service stops, downloads, staging, token or launcher writes. Automatic shim repair is deferred with guidance and startup continues. Healthy or disabled shims do not probe. No alternate runtime is discovered. A first-time scheduler install registers its task and claims the config root before this check; on refusal that new registration is rolled back and the claimed root stays for a retry.
+
+> The selected Bun runtime could not create and remove a directory in the OpenCodex config directory. Windows application policy may deny writes from this executable location. Set OPENCODEX_BUN_PATH to a trusted Bun executable allowed by your policy before launching ocx, or reinstall opencodex with npm install -g @bitkyc08/opencodex, then retry. No alternate runtime was selected.

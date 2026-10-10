@@ -42,3 +42,56 @@ test("model env slots and auto-compact window are appended before the claude lau
   expect(lines).toContain("export CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000");
   expect(lines.at(-1)).toBe("claude");
 });
+
+test("the 200k opt-in pastes no compact window, matching what the runtime injects", () => {
+  expect(buildManualEnv(state())).toContain("export CLAUDE_CODE_AUTO_COMPACT_WINDOW=829800");
+  expect(buildManualEnv(state({ contextAccounting: "200k" }))).not.toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+});
+
+test("a 200k draft drops automatic 1M marks and keeps one explicit marker", () => {
+  const env = buildManualEnv(state({
+    contextAccounting: "200k",
+    servedContextAccounting: "1m",
+    model: "ocx-claude-native--gpt-5.6-sol",
+    tierModels: { opus: "combo/tev-auto[1m]" },
+    effectiveModelEnv: {
+      ANTHROPIC_MODEL: "ocx-claude-native--gpt-5.6-sol[1m]",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "combo/tev-auto[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5[1m]",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1[1m]",
+    },
+  }));
+  expect(env).not.toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+  expect(env).toContain("export ANTHROPIC_MODEL=ocx-claude-native--gpt-5.6-sol\n");
+  expect(env).not.toContain("ocx-claude-native--gpt-5.6-sol[1m]");
+  expect(env).toContain("export ANTHROPIC_DEFAULT_OPUS_MODEL=combo/tev-auto[1m]");
+  expect(env).not.toContain("ANTHROPIC_DEFAULT_SONNET_MODEL");
+  expect(env).not.toContain("ANTHROPIC_DEFAULT_FABLE_MODEL");
+});
+
+test("a 200k draft without slot evidence still strips automatic marks", () => {
+  const env = buildManualEnv(state({
+    contextAccounting: "200k",
+    servedContextAccounting: "1m",
+    effectiveModelEnv: {
+      ANTHROPIC_MODEL: "mock/test-model[1m]",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5[1m]",
+    },
+  }));
+  expect(env).toContain("export ANTHROPIC_MODEL=mock/test-model\n");
+  expect(env).not.toContain("[1m]");
+  expect(env).not.toContain("ANTHROPIC_DEFAULT_OPUS_MODEL");
+  expect(env).not.toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+});
+
+test("switching back to 1M does not add a compact window beside a 200k model snapshot", () => {
+  const env = buildManualEnv(state({
+    contextAccounting: "1m",
+    servedContextAccounting: "200k",
+    model: "ocx-claude-native--gpt-5.6-sol",
+    effectiveModelEnv: { ANTHROPIC_MODEL: "ocx-claude-native--gpt-5.6-sol" },
+  }));
+  expect(env).not.toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+  expect(env).toContain("export ANTHROPIC_MODEL=ocx-claude-native--gpt-5.6-sol\n");
+  expect(env).not.toContain("[1m]");
+});

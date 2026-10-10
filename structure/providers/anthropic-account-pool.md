@@ -298,6 +298,28 @@ Reactive recovery also works with proactive pooling disabled when multiple accou
 
 Regression coverage: `tests/adapters/anthropic/anthropic-quota-dispatch.test.ts`.
 
+## Revoked OAuth access-token recovery
+
+`src/oauth/anthropic-account-refusal.ts` treats only pre-output HTTP 401 with a complete bounded
+JSON error envelope, root type error, authentication_error type, and the exact message
+“OAuth access token has been revoked.” as terminal for the sent OAuth account.
+Other 401 responses retain their existing behavior. The matching credential is marked
+needsReauth through the generation-fenced writer in `src/oauth/store.ts`;
+a new login is preserved. Successful marking clears all affinities for the account and
+invalidates that instance's cached quorum, even when no retry send remains.
+This is durable reauthentication state rather than a subscription/quota cooldown.
+
+Native Messages, translated Responses, pre-output continuations and fetch search/image
+bridges may select an eligible sibling within the same instance under existing send
+and failover limits. Model routes and exclusions remain binding. Pool-off reactive
+recovery uses quota ordering. No eligible sibling preserves the original 401.
+Native `src/server/messages-native-oauth.ts` validates captured selection/revision and model route before admitting a proposed recovery sibling; ordinary active admission is retained when those proposal fences no longer match. Credential usability and selection CAS still precede physical dispatch.
+Committed output disables this account-refusal branch. A new login clears the flag
+through existing registration. Recovery sends use the existing oauth-401 telemetry.
+
+Regression coverage: `tests/adapters/anthropic/anthropic-revoked-token.test.ts` and
+`tests/claude-integration/messages-revoked-token.test.ts`.
+
 ## Classified 429 admission
 
 `src/oauth/anthropic-rate-limit-policy.ts` classifies trusted unified headers before

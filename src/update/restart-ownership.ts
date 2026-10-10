@@ -6,6 +6,8 @@ import {
   OWNERSHIP_MUTATION_LEASE_TOKEN_ENV,
 } from "../service/ownership-mutation-lease.mjs";
 import { planUpdateRuntimeHandling } from "./runtime-ownership.mjs";
+import { createSupervisionLatch, inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
+type SupervisionInspector = typeof inspectDesktopSupervision;
 
 export type { ServiceOwnershipResolution };
 
@@ -24,6 +26,8 @@ export type { ServiceOwnershipResolution };
  */
 export function updateRestartVeto(
   resolve: () => ServiceOwnershipResolution = resolveServiceOwnership,
+  inspect: SupervisionInspector = inspectDesktopSupervision,
+  latch = createSupervisionLatch(),
 ): string | null {
   const owner = resolve();
   const plan = planUpdateRuntimeHandling({
@@ -31,6 +35,7 @@ export function updateRestartVeto(
     ownershipUnknown: owner.kind === "unknown",
     // The restart decision does not refresh the service; only the stop veto is read here.
     serviceInstalled: false,
+    supervision: latch.observe(inspect()),
   });
   if (plan.mayStopRuntime) return null;
   return plan.notice ?? "The background runtime is owned elsewhere; it was left running.";
@@ -78,7 +83,9 @@ const REACQUIRE_WAIT_MS = 10_000;
 export async function runUpdateRestartWithOwnershipLease<T>(
   resolve: (() => ServiceOwnershipResolution) | undefined,
   restart: (lease: UpdateRestartLeaseControl) => Promise<T>,
+  inspect: SupervisionInspector = inspectDesktopSupervision,
 ): Promise<{ readonly kind: "veto"; readonly notice: string } | { readonly kind: "ran"; readonly value: T }> {
+  const latch = createSupervisionLatch();
   let lease = acquireOwnershipMutationLease(serviceStatePaths());
   const previous = process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
   process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV] = lease.token;
@@ -107,11 +114,11 @@ export async function runUpdateRestartWithOwnershipLease<T>(
       heldNow = true;
       process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV] = lease.token;
     }
-    const veto = updateRestartVeto(resolve);
+    const veto = updateRestartVeto(resolve, inspect, latch);
     return veto ? { notice: veto, failed: false } : null;
   };
   try {
-    const veto = updateRestartVeto(resolve);
+    const veto = updateRestartVeto(resolve, inspect, latch);
     return veto
       ? { kind: "veto", notice: veto }
       : {
@@ -119,7 +126,7 @@ export async function runUpdateRestartWithOwnershipLease<T>(
           value: await restart({
             releaseForServiceManager: release,
             reacquireForDirectStart,
-            vetoAgain: () => updateRestartVeto(resolve),
+            vetoAgain: () => updateRestartVeto(resolve, inspect, latch),
           }),
         };
   } finally {

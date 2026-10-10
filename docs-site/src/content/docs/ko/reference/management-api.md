@@ -337,7 +337,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | `PUT /api/codex-auth/accounts/pause` | 계정과 동일한 로그인 정보를 가진 기존 메인/풀 항목을 수동으로 일시 중지하거나 재개합니다. `affectedAccountIds`를 반환합니다 | 400 잘못된 계정/상태; 404 계정 없음; 503 메인 계정의 로그인 정보가 사용 중이거나 읽을 수 없음 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | account 하나 또는 모든 account의 runtime cooldown을 지웁니다 | 400 잘못된 id |
-| `GET, PUT /api/codex-auth/active` | 활성 account를 읽거나 선택합니다 | 400 잘못되었거나 누락된 account; 409 paused/legacy-row 충돌 |
+| `GET, PUT /api/codex-auth/active` | 활성 account를 읽거나 선택합니다 | 400 잘못되었거나 누락된 account; 409 paused/legacy-row 충돌 또는 `account_selection_unavailable` |
 | `PUT /api/codex-auth/auto-switch` | `id`를 생략한 `{ threshold }`로 전역 임계값을, `{ id, threshold }`로 계정별 재정의 값을 설정합니다. `id: '__main__'`은 Codex Desktop 계정을 지정합니다. `id`가 지정된 경우 `threshold: null`은 재정의 값을 삭제하고 전역 임계값 상속을 복원합니다 | 400 잘못된 ID/임계값, 404 계정 없음 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex account-pool 선택 전략을 업데이트합니다 | 400 잘못된 전략/구성 |
 | `PUT /api/codex-auth/failover` | account failover threshold를 설정합니다 | 400 잘못된 threshold |
@@ -348,6 +348,14 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | `POST /api/codex-auth/login/code` | Codex 로그인 흐름용 수동 코드를 제출합니다 | 400 잘못된 흐름/code |
 | `POST /api/codex-auth/login/cancel` | `{ "flowId": "..." }`로 지정한 대기 중인 Codex 로그인만 취소합니다 | 400 흐름 ID 누락, 알 수 없음 또는 대기 중이 아님 |
 | `GET /api/codex-auth/login-status` | 흐름 또는 account 로그인 상태를 조회합니다. 새 계정 완료 시 복구가 필요할 때만 `catalogRefreshPending: true`를 포함합니다. | 알 수 없는 흐름은 `expired`로 보고되며, 활성 흐름이 없으면 `idle`로 보고됩니다 |
+
+`PUT /api/codex-auth/active`에는 `{ "accountId": "<id>" }`가 필요합니다. 선택을 지우려면
+`{ "accountId": null }`을 명시적으로 지정해야 합니다. 다른 프로세스가 저장된 계정을 변경했더라도
+현재 계정을 다시 선택하는 것은 명시적인 선택으로 처리됩니다. 서버는 관련 없는 저장된 설정을
+보존하고, 대시보드를 불러온 뒤 삭제되거나 일시 중지된 계정의 선택을 거부합니다. 저장된 구성을
+사용할 수 없거나 구성이 유효하지 않으면 기존 런타임 선택과 계정 어피니티는 변경되지 않습니다.
+설정을 다시 불러온 뒤 재시도하십시오. 성공 응답은 커밋된 선택을 나타냅니다. 기존 quota 및
+failover 규칙에 따라 고정이 해제될 수 있으며, `pinDrained`는 현재 알려진 고정 해제 사유를 나타냅니다.
 
 수동 소비가 `reset`으로 확인되면 같은 계정의 새 usage를 조회하여 기존 shared reset-derived
 쿨다운을 즉시 복구할 수 있습니다. 복구는 조건부입니다. 계정이 일시 정지되었거나 재인증이

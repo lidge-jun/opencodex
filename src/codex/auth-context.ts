@@ -81,11 +81,13 @@ import {
 import {
   captureMainAccountIdentityGeneration,
   captureMainQuotaWriter,
+  captureMainQuotaDispatch,
   getObservedMainQuotaIdentityKey,
   isMainQuotaWriterLive,
   matchesMainQuotaCredential,
   observeMainQuotaCredential,
   type MainQuotaWriter,
+  type MainQuotaDispatch,
 } from "./main-account-cache";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported, isCodexReserveRequestEligible } from "./loopback-target";
 import type { DataPlaneAdmission } from "../server/auth-cors";
@@ -275,7 +277,11 @@ export function previewCodexPoolLineage(
 }
 
 export type CodexAuthContext =
-  | { kind: "main"; accountId: null; reserveAuthorization?: MainReserveAuthorization }
+  | {
+      kind: "main"; accountId: null; reserveAuthorization?: MainReserveAuthorization;
+      /** Captured for the observed main credential actually selected for upstream. */
+      mainQuotaDispatch?: MainQuotaDispatch;
+    }
   | {
       kind: "pool";
       accountId: string;
@@ -1635,6 +1641,14 @@ export class CodexMainSubstitutionUnavailableError extends Error {
   }
 }
 
+/** Dispatch identity comes only from an owned observation of the selected credential. */
+function selectedMainQuotaDispatch(selected: Headers): MainQuotaDispatch | undefined {
+  const bearer = selected.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  if (!bearer) return undefined;
+  const accountId = selected.get("chatgpt-account-id") ?? extractAccountId(undefined, bearer);
+  return captureMainQuotaDispatch(bearer, accountId, captureConfigGeneration());
+}
+
 /**
  * Build the upstream auth headers for one Codex turn.
  *
@@ -1654,6 +1668,7 @@ export function materializeCodexUpstreamAuth(
   ctx: CodexAuthContext,
   options: CodexAuthMaterializationOptions = {},
 ): Headers {
+  if (ctx.kind === "main") ctx.mainQuotaDispatch = undefined;
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
     const value = headers.get(name);
@@ -1695,10 +1710,12 @@ export function materializeCodexUpstreamAuth(
     observeSelectedMainCredential(stored, writer);
     assertMainAccountPolicy(options.config);
     assertMaterializedReserve(selected, ctx, options);
+    ctx.mainQuotaDispatch = selectedMainQuotaDispatch(selected);
     return selected;
   }
   if (callerMatchesObservedMain(selected)) assertMainAccountPolicy(options.config);
   assertMaterializedReserve(selected, ctx, options);
+  if (ctx.kind === "main") ctx.mainQuotaDispatch = selectedMainQuotaDispatch(selected);
   return selected;
 }
 
@@ -1749,6 +1766,7 @@ export async function materializeCodexUpstreamAuthAsync(
   ctx: CodexAuthContext,
   options: CodexAuthMaterializationOptions = {},
 ): Promise<Headers> {
+  if (ctx.kind === "main") ctx.mainQuotaDispatch = undefined;
   if (requiresReserveAuthorization(options.config, options.modelId, options.admission)) {
     return materializeReserveUpstreamAuth(headers, ctx, options);
   }
@@ -1776,6 +1794,7 @@ export async function materializeCodexUpstreamAuthAsync(
   assertMainAccountPolicy(options.config);
   // An opt-in enabled during token refresh must not turn a proof-less context into Reserve.
   assertMaterializedReserve(selected, ctx, options);
+  ctx.mainQuotaDispatch = selectedMainQuotaDispatch(selected);
   return selected;
 }
 

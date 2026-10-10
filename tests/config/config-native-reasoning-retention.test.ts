@@ -6,6 +6,8 @@ import { getConfigPath, getDefaultConfig, loadConfig, validateConfigCandidate } 
 import { configDiagnosticsFromRaw } from "../../src/config/diagnostics";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { resolveNativeReasoningRetention } from "../../src/config/schema/native-reasoning-retention";
+import { warnDegradedTopLevelOptIns } from "../../src/config/load-degrade";
+import { codexWsReuseAcrossTurnsEnabled, setCodexWsReuseAcrossTurns } from "../../src/config/codex-ws-reuse-setting";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const off = { modelSwitch: false, accountSwitch: false };
@@ -46,6 +48,31 @@ describe("native reasoning retention configuration", () => {
       expect(diagnostics.error).toBeNull();
       expect(diagnostics.warnings?.join(" ")).toContain("nativeReasoningRetention ignored");
       expect(diagnostics.config.providers).toEqual(candidate.providers);
+    }
+  });
+
+  test.each([
+    { label: "explicit true", value: true, enabled: true },
+    { label: "explicit false", value: false, enabled: false },
+    { label: "absent", value: undefined, enabled: false },
+    { label: "invalid", value: "true", enabled: false },
+  ])("invalid retention still warns while WS reuse honors $label", ({ value, enabled }) => {
+    const previousReuse = codexWsReuseAcrossTurnsEnabled();
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // Start opposite the expected value so this proves live application, including resets.
+      setCodexWsReuseAcrossTurns(!enabled);
+      const raw = { ...getDefaultConfig(), nativeReasoningRetention: { modelSwitch: "true" },
+        ...(value === undefined ? {} : { codexWsReuseAcrossTurns: value }) };
+      const validated = configSchema.parse(raw);
+      warnDegradedTopLevelOptIns(raw, validated);
+      expect(codexWsReuseAcrossTurnsEnabled()).toBe(enabled);
+      expect(resolveNativeReasoningRetention(validated)).toEqual(off);
+      expect(validated.providers).toEqual(raw.providers);
+      expect(warning.mock.calls.some(call => String(call[0]).includes("invalid nativeReasoningRetention"))).toBe(true);
+    } finally {
+      setCodexWsReuseAcrossTurns(previousReuse);
+      warning.mockRestore();
     }
   });
 

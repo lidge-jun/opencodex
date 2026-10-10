@@ -1,6 +1,6 @@
 /**
  * Per-role model for omo (Codex / LazyCodex): `$CODEX_HOME/agents/<role>.toml` plus LazyCodex's
- * `"[codex]".agents.<role>.model` mirror in omo.jsonc. Both halves exist only when LazyCodex is
+ * `"[codex]".agents.<role>` model and reasoning mirror in omo.jsonc. Both halves exist only when LazyCodex is
  * detected; Pi-based and OpenCode-based omo are never read here.
  *
  * Loaded on demand from `src/server/management-api.ts`, like the quota-reset handler, so a
@@ -40,6 +40,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
       omoJsonc: { state: omoState.state },
       roles: roles.listCodexAgentRoleModels(codexHome).map(entry => ({
         ...entry,
+        effort: roles.readCodexAgentRoleEffort(entry.role, codexHome),
         omoJsoncModel: omoModels[entry.role] ?? null,
       })),
     }, 200, req, config);
@@ -114,7 +115,8 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   // The role TOML is what Codex obeys, so its write stands even when the omo mirror cannot follow.
   let omoStatus: ReturnType<typeof omo.writeOmoRoleModel> | "write_failed";
   try {
-    omoStatus = omo.writeOmoRoleModel(role, model, omo.omoJsoncPath());
+    const reasoning = effort === undefined ? undefined : omo.omoReasoningFor(effort);
+    omoStatus = omo.writeOmoRoleModel(role, model, omo.omoJsoncPath(), reasoning);
   } catch {
     omoStatus = "write_failed";
   }

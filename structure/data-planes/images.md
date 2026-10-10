@@ -22,6 +22,8 @@ Codex Spark exception; standalone Images retain the separate relay contract belo
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
+Fetch-based Anthropic image bridge account recovery follows [the revoked-token contract](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery), including output commitment and send-budget gates.
+
 ## Hosted Responses image display
 
 For loopback-admitted Codex Responses clients,

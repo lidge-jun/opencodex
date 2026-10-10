@@ -23,7 +23,7 @@ Canonical forward auth retains its separate fixed credential/metadata allowlist;
 
 Retired Codex Spark has no model-specific tool or Responses Lite override; general Lite handling and
 namespace scrubbing remain shared compatibility behavior. Codex quota/reset evidence follows the
-[shared/Reserve policy](../providers/openai-tiers.md#public-provider-contract), including suppression of retired model-derived evidence before shared recovery.
+[shared/Reserve policy](../providers/openai-tiers.md#public-provider-contract), including suppression of retired model-derived evidence before shared recovery. Plain-main HTTP/WS quota headers refresh `__main__` only on the canonical OpenAI forward provider when the materialized bearer and workspace match the owned main observation, using the hard-lock credential-match rule. `src/server/responses/passthrough-delivery.ts` captures the response-arrival dispatch before any await and keeps that proof for the arrival headers across body classification and deferred replacement, rechecking its credential generation after the awaited import; `src/server/responses/core-codex-account.ts` renews a live dispatch object for each WS observer without recapturing its credential or config fences, retains that copy across frames, and rechecks it for each frame. Rotated credentials and unmatched workspaces publish nothing; dispatch proofs also reject any OpenCodex-owned credential publication epoch change, including native main refresh or same-account reauth before quota re-observation; each plain-main WS observer invocation claims its captured dispatch before liveness checks, and this claim is the authoritative HTTP publication guard across Response replacement; WS upstream responses and separately marked pre-response prelude projections (4xx refusals and 502/504 gateway failures) skip plain-main HTTP quota writes; prelude headers remain available to Pool replay, real HTTP fallbacks still publish; each operator-granted HTTP replacement renews the dispatch object with its original credential and config fences unchanged, and Pool health/failover gates remain unchanged.
 
 ### Credential-bearing HTTP redirects
 
@@ -40,7 +40,7 @@ redirect following; providers requiring a redirect must be configured with their
 
 `src/server/responses/fetch-helpers.ts` is a transport leaf shared by Responses, compact, and native
 Chat. Its runtime imports are limited to the Codex WebSocket transport, provider request pacing, and
-the upstream HTTP-version helper. Server, provider, and WebSocket data types remain type-only edges.
+the upstream HTTP-version helper. Server, provider, and WebSocket data types remain type-only edges. Opt-in `codexWsReuseAcrossTurns` (default off) in `src/server/responses/codex-ws-pool.ts` keeps a socket for an account and thread across turns, waits at most 750ms for a busy socket before dialing another, and leaves `x-codex-turn-state` / `x-codex-turn-metadata` on each frame.
 It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
 modules merely because those imports existed in the pre-split `responses.ts` monolith.
 

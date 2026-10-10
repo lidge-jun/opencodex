@@ -9,6 +9,7 @@ import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
@@ -182,6 +183,17 @@ interface ClientIntegrationSyncOutcome {
   readonly profileId?: number;
 }
 
+/** Only the Desktop write's own applied markers may change during a background projection. */
+function clientProjectionConfig(config: OcxConfig): OcxConfig {
+  const snapshot = structuredClone(config);
+  const profile = snapshot.claudeCode?.desktopProfile;
+  if (profile) {
+    delete profile.appliedFingerprint;
+    delete profile.appliedAt;
+  }
+  return snapshot;
+}
+
 /**
  * Re-inject native clients that are switched ON and every file integration whose
  * OpenCodex ownership record is the operator's durable opt-in.
@@ -205,17 +217,41 @@ export async function syncEnabledClientIntegrations(
   config: OcxConfig,
   deps: Pick<ManagementContext["deps"],
     "fetchAllModels" | "refreshOwnedCatalogIntegrations" | "writeDesktop3pConfig"> = {},
+  options: { unattended?: { isCurrent: () => boolean } } = {},
 ): Promise<ClientIntegrationSyncOutcome[]> {
   // A sibling instance passes its OWN port here; the Grok fence and the Desktop gateway profile
   // stay on the live owner's (`src/codex/sibling-start.ts`).
   if (port === undefined || siblingOfLivePort() !== null) return [];
-  const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } = await import("../../codex/desired-state");
+  const projectionConfig = options.unattended ? clientProjectionConfig(config) : undefined;
+  const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled, localClientSyncAllowed } = await import("../../codex/desired-state");
   const out: ClientIntegrationSyncOutcome[] = [];
+  const unattended = options.unattended;
+  const admit = () => {
+    if (!unattended!.isCurrent()) return false;
+    const fresh = loadConfig();
+    return localClientSyncAllowed(fresh) && isDeepStrictEqual(clientProjectionConfig(fresh), projectionConfig);
+  };
+  const stale = () => unattended !== undefined && !admit();
+  if (stale()) return out;
+  const grok = unattended ? await import("../../grok/inject") : undefined;
 
-  if (grokIntegrationEnabled(config)) {
+  if (grokIntegrationEnabled(config) && (!grok || grok.grokManagedBlockPresent())) {
     try {
       const { syncGrokConfig } = await import("../../grok/sync");
-      const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+      if (stale()) return out;
+      const grokDeps = grok ? {
+        fetchAllModels: deps.fetchAllModels ?? (await import("../management-api")).fetchAllModels,
+        injectGrokConfig: ((...args: Parameters<typeof grok.injectGrokConfig>) =>
+          admit() && grokIntegrationEnabled(loadConfig()) && grok.grokManagedBlockPresent()
+            ? grok.injectGrokConfig(...args)
+            : { ok: true, changed: false, message: "Grok refresh skipped" }),
+      } : undefined;
+      const r = unattended
+        ? await syncGrokConfig(port, config, {
+          ...config.hostname ? { hostname: config.hostname } : {},
+          refreshOnly: { admit },
+        }, grokDeps)
+        : await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {}, grokDeps);
       out.push(r.ok
         ? { client: "grok", ok: true, changed: r.changed === true }
         : { client: "grok", ok: false, reason: r.message });
@@ -224,9 +260,11 @@ export async function syncEnabledClientIntegrations(
     }
   }
 
+  if (stale()) return out;
   const { observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../../claude/desktop-first-party");
   // A first-party Desktop must never get a gateway profile written and selected by a sync.
-  if (claudeDesktopIntegrationEnabled(config) && resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) !== "first-party") {
+  if (claudeDesktopIntegrationEnabled(config) && resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) !== "first-party"
+    && (!unattended || !!config.claudeCode?.desktopProfile?.appliedFingerprint)) {
     try {
       const { writeDesktop3pConfig } = await import("../../claude/desktop-3p");
       const { desktopVisibleNativeSlugs, filterCatalogVisibleModels } = await import("../../codex/catalog");
@@ -240,12 +278,15 @@ export async function syncEnabledClientIntegrations(
         const latest = loadConfig();
         // Discovery awaited: the mode may have changed meanwhile. Re-resolve on the fresh read,
         // immediately before the writer, so a first-party switch during fetchAllModels still wins.
-        if (claudeDesktopIntegrationEnabled(latest) && resolveClaudeDesktopMode(latest, observeClaudeDesktopMode(latest)) !== "first-party") {
+        if (stale()) return;
+        if (claudeDesktopIntegrationEnabled(latest) && resolveClaudeDesktopMode(latest, observeClaudeDesktopMode(latest)) !== "first-party"
+          && (!unattended || !!latest.claudeCode?.desktopProfile?.appliedFingerprint)) {
           const routed = filterCatalogVisibleModels(models, latest)
             .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow }));
           const writtenProfile = latest.claudeCode?.desktopProfile;
           const markerBaseline = captureDesktopAppliedMarker(writtenProfile);
-          const r = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(
+          // Keep the attended writer's argument count unchanged, including its lock test seam.
+          const writeArgs: Parameters<typeof writeDesktop3pConfig> = [
             port,
             [...desktopVisibleNativeSlugs(latest)],
             routed,
@@ -253,7 +294,13 @@ export async function syncEnabledClientIntegrations(
             "static",
             writtenProfile,
             nativeContextLimits(latest),
-          );
+          ];
+          if (unattended) {
+            writeArgs[7] = undefined;
+            writeArgs[8] = { appliedFingerprint: writtenProfile!.appliedFingerprint!, admit };
+          }
+          const r = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(...writeArgs);
+          if (unattended && r.reason === "desktop_refresh_only_skipped") return;
           if (!r.written || !r.fingerprint) {
             out.push({ client: "claude-desktop", ok: false, reason: r.reason ?? "Claude Desktop write failed" });
           } else {
@@ -271,6 +318,7 @@ export async function syncEnabledClientIntegrations(
     }
   }
 
+  if (stale()) return out;
   const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
   const refreshOwned = deps.refreshOwnedCatalogIntegrations ?? refreshOwnedCatalogIntegrations;
   out.push(...await refreshOwned({
@@ -280,7 +328,10 @@ export async function syncEnabledClientIntegrations(
     },
     config,
     port,
-  }, ["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo"]));
+  }, unattended
+    ? ["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo"]
+    : ["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo"],
+  ...unattended ? [{ refreshOnly: true, admit }] as const : []));
 
   return out;
 }

@@ -41,6 +41,8 @@ export interface WorkflowRefusalLog {
   readonly requestId: string;
   readonly start: number;
   readonly logCtx: RequestLogContext;
+  /** Receiving HTTP route's notification after this refusal's final-log call. */
+  readonly onLogged?: () => void;
 }
 
 /**
@@ -84,6 +86,7 @@ export function workflowRefusalResponse(
     addFinalRequestLog(refusalLog.requestId, refusalLog.start, refusalLog.logCtx, 429, {
       closeReason: "terminal",
     });
+    refusalLog.onLogged?.();
   }
   const refusal = formatErrorResponse(
     429,

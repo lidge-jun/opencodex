@@ -1,3 +1,4 @@
+import { beginCodexWriteSection, cleanExternalProviderJournal, publishCodexArtifact } from "./inject/config-write-section";
 import { closeSync, existsSync, openSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import {
@@ -9,6 +10,7 @@ import {
 } from "../config";
 import { assertCodexHomeOwner, codexHomeOwnerBlocksCompensation, CodexHomeOwnerRefusal, type CodexHomeOwnerRefusalReason } from "./codex-home-owner";
 import { CodexWriteLockSkipped, withCodexWriteLock } from "./codex-write-lock";
+import { ConfigWriteDestinationChanged, ConfigWriteLockRefusal, configWriteLockFailureMessage, acquireConfigWriteLock, CONFIG_WRITE_LOCK_WAIT_MS, releaseConfigWriteLock, type LockHandle } from "./config-write-lock";
 import {
   localClientSkipMessage,
   localClientSkipReason,
@@ -36,7 +38,7 @@ import {
   resolveEffectiveUserIdentity,
 } from "./user-identity";
 import {
-  hasUnverifiedJournalBaseline,
+  JOURNAL_PATH, hasUnverifiedJournalBaseline,
   markJournalInjectedState,
   journaledInjectedOpenaiBaseUrl,
   journaledInjectedRealtimeWsBaseUrl,
@@ -196,6 +198,8 @@ export async function injectCodexConfig(
   }
   try { assertCodexHomeOwner(getCodexHome()); return await injectCodexConfigImpl(port, config, options); }
   catch (error) {
+    if (error instanceof ConfigWriteDestinationChanged) return { success: false, retryable: false, message: error.message };
+    if (error instanceof ConfigWriteLockRefusal) return { success: false, retryable: error.retryable, message: error.message };
     if (error instanceof CodexHomeOwnerRefusal) return { success: false, ownershipRefusal: error.reason, message: error.message };
     if (error instanceof CodexHistoryPreflightRefusal) return { success: false, historyPreflightFailureReason: error.message, message: `Codex config injection refused: ${error.message}. Existing configuration and history were preserved.` };
     if (error instanceof CodexInjectRefusal) return error.result;
@@ -239,12 +243,7 @@ async function injectCodexConfigImpl(
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
     // replay that stale snapshot over externally managed config.
     if (!options.validateOnly) {
-      if (options.beforeClientWrite) {
-        withConfigMutationLockSync(() => {
-          runClientWriteGuard(options.beforeClientWrite);
-          removeJournal();
-        });
-      } else removeJournal();
+      cleanExternalProviderJournal(options.beforeClientWrite ? () => runClientWriteGuard(options.beforeClientWrite) : undefined);
     }
     const nativeSubagentDefaultsWarning = configuredManagedSubagentDefaults(
       config,
@@ -419,11 +418,26 @@ async function injectCodexConfigImpl(
    */
   const reconcileAndDerivePlan = (): { plan: CodexInjectionPlanOk; nativeInput: string } => {
     assertCodexHomeOwner(getCodexHome());
-    if (missingConfig) createEmptyCodexConfigInBoundary();
+    /*
+     * Re-admission under the file lock: `rawContent` and `admittedPlan` were
+     * read before this section acquired it, so the file may have moved while
+     * the lock was being waited out — committing the stale plan would rename
+     * over bytes a competing writer landed. Refuse retryably; the next pass
+     * re-reads fresh bytes (the same witness check the coordinated path does).
+     */
+    if ((existsSync(CODEX_CONFIG_PATH) ? readFileSync(CODEX_CONFIG_PATH, "utf-8") : null)
+      !== (missingConfig ? null : rawContent)) {
+      throw new CodexInjectRefusal({
+        success: false,
+        retryable: true,
+        message: "Codex config injection refused: config.toml changed while the write lock was being acquired. Retry to inject on the latest bytes.",
+      });
+    }
+    if (missingConfig) publishCodexArtifact(CODEX_CONFIG_PATH, heldConfigWriteLock, (_path, hooks) => { hooks.validateBeforeRename?.(CODEX_CONFIG_PATH); createEmptyCodexConfigInBoundary(); hooks.afterRename?.(CODEX_CONFIG_PATH); });
     let nativeInput = rawContent;
     let plan = admittedPlan;
     if (v1Reconcile) {
-      const reconciled = v1Reconcile.run();
+      const reconciled = v1Reconcile.run(heldConfigWriteLock);
       if (!reconciled.ok) {
         throw new CodexInjectRefusal({ success: false, message: reconciled.message });
       }
@@ -458,19 +472,19 @@ async function injectCodexConfigImpl(
     plan.historyRelabelRefusal = observeHistoryRefusalOrThrow(plan);
     historyArtifactStageForTests?.("after-preflight");
     assertCodexHomeOwner(getCodexHome());
-    writeJournal({
+    publishCodexArtifact(JOURNAL_PATH, heldConfigWriteLock, (_path, hooks) => writeJournal({
       currentStateIsNative: journalBaselineIsNative(nativeInput),
       configContent: plan.baselineContent,
       owner: options.journalOwner,
-    });
+    }, hooks));
     // A native snapshot may have been refreshed above. An older hashless routed snapshot
     // must not gain the new injection's hash and later overwrite preserved user edits.
     if (hasUnverifiedJournalBaseline(plan.baselineContent, readCurrentProfile())) throw new Error(unverifiedJournalMessage);
-    atomicWriteFile(CODEX_CONFIG_PATH, plan.content);
+    publishCodexArtifact(CODEX_CONFIG_PATH, heldConfigWriteLock, (path, hooks) => atomicWriteFile(path, plan.content, undefined, hooks));
     historyArtifactStageForTests?.("after-config");
     assertCodexHomeOwner(getCodexHome());
-    atomicWriteFile(CODEX_PROFILE_PATH, plan.profileContent);
-    markJournalInjectedState(plan.content, plan.profileContent, {
+    publishCodexArtifact(CODEX_PROFILE_PATH, heldConfigWriteLock, (path, hooks) => atomicWriteFile(path, plan.profileContent, undefined, hooks));
+    publishCodexArtifact(JOURNAL_PATH, heldConfigWriteLock, (_path, hooks) => markJournalInjectedState(plan.content, plan.profileContent, {
       // A root override is ours whenever we wrote one and no user-owned value won. That is
       // loopback Design B, the client-compaction form, and a table form that retained the
       // root line for paginated history. Journaling it matters because the marker comment
@@ -494,7 +508,7 @@ async function injectCodexConfigImpl(
       // This is the catalog artifact selected for this injection, even when config.toml
       // already points at that path and therefore needs no textual rewrite.
       injectedCatalogPath: plan.catalogPath,
-    });
+    }, hooks));
     historyArtifactStageForTests?.("after-artifacts");
     // Detect migration throughout the artifact transaction, not just at entry.
     plan.historyRelabelRefusal = observeHistoryRefusalOrThrow(plan);
@@ -509,6 +523,16 @@ async function injectCodexConfigImpl(
   let transitionReceipt: { nativeGeneration: number; currentTxId: string } | undefined;
 
   /*
+   * The file-level write lock every config.toml writer shares (see
+   * config-write-lock.ts). The injector takes it FIRST — before the SQLite N
+   * lock below — so the feature transition and the artifact commit can never
+   * be interleaved with a scalar edit, a remove/restore transform, or a
+   * prompt-layers commit. The reconcile consumes the same handle rather than
+   * re-acquiring the file it is already holding.
+   */
+  let heldConfigWriteLock: LockHandle | undefined;
+
+  /*
    * The plan the committed write actually used: the admitted plan, or the
    * re-derivation from the post-reconcile bytes when the feature transition
    * rewrote config.toml under the lock. Every reader below the boundary takes
@@ -516,6 +540,19 @@ async function injectCodexConfigImpl(
    */
   let effectivePlan: CodexInjectionPlanOk = admittedPlan;
 
+  const configLock = await acquireConfigWriteLock(CODEX_CONFIG_PATH, {
+    timeoutMs: Math.min(options.lockTimeoutMs ?? CONFIG_WRITE_LOCK_WAIT_MS, CONFIG_WRITE_LOCK_WAIT_MS),
+  });
+  if (!configLock.ok) {
+    return {
+      success: false,
+      retryable: configLock.error === "locked",
+      message: configWriteLockFailureMessage(configLock),
+    };
+  }
+  heldConfigWriteLock = configLock.handle;
+  try {
+  beginCodexWriteSection(configLock.handle);
   if (eligibility.kind === "legacy-uncoordinated") {
     const applyLegacy = (): CodexInjectResult | undefined => {
       const legacyGateSnapshot = loadConfig();
@@ -544,8 +581,8 @@ async function injectCodexConfigImpl(
         applyNativeArtifacts(resolved.plan, resolved.nativeInput);
         effectivePlan = resolved.plan;
       } catch (error) {
-        if (codexHomeOwnerBlocksCompensation(getCodexHome(), error)) throw error;
-        const restored = restoreCodexPreImages(preImages);
+        if (error instanceof ConfigWriteDestinationChanged || codexHomeOwnerBlocksCompensation(getCodexHome(), error)) throw error;
+        const restored = restoreCodexPreImages(preImages, heldConfigWriteLock);
         if (!restored.complete) throw new CodexPartialWriteError(restored.unrestored);
         throw error;
       }
@@ -565,7 +602,7 @@ async function injectCodexConfigImpl(
         ...(eligibility.kind === "adopt" ? { adoption: { direction: "apply" as const } } : {}),
         onPostCallbackFailure: () => {
           if (!coordinatedPreImages) throw new Error("Codex injection preimages were not captured.");
-          const restored = restoreCodexPreImages(coordinatedPreImages);
+          const restored = restoreCodexPreImages(coordinatedPreImages, heldConfigWriteLock);
           if (!restored.complete) throw new CodexPartialWriteError(restored.unrestored);
         },
         admitted: { authoritySnapshotId: witness.comparisonId },
@@ -639,10 +676,10 @@ async function injectCodexConfigImpl(
           }
           applyNativeArtifacts(resolved.plan, resolved.nativeInput);
         } catch (error) {
-          if (codexHomeOwnerBlocksCompensation(getCodexHome(), error)) throw error;
+          if (error instanceof ConfigWriteDestinationChanged || codexHomeOwnerBlocksCompensation(getCodexHome(), error)) throw error;
           // Compensate, then ALWAYS throw. Returning a partial result would let the
           // lock commit a row describing an apply that did not finish.
-          const restored = restoreCodexPreImages(preImages);
+          const restored = restoreCodexPreImages(preImages, heldConfigWriteLock);
           if (!restored.complete) {
             throw new CodexPartialWriteError(restored.unrestored);
           }
@@ -675,6 +712,10 @@ async function injectCodexConfigImpl(
       coordinated.value.receipt.currentTxId,
     );
     transitionReceipt = coordinated.value.receipt;
+  }
+  } finally {
+    releaseConfigWriteLock(configLock.handle);
+    heldConfigWriteLock = undefined;
   }
   // Legacy mode still forward-tags history so re-tagged threads stay listable. Design B needs
   // the opposite: a one-time migration of previously re-tagged threads BACK to openai (restore
@@ -926,6 +967,7 @@ function missingCodexConfigAdmission(): MissingCodexConfig {
  * exclusive: a file that appeared since admission belongs to another writer, and this plan,
  * derived from an absent file, must not replace it.
  */
+
 function createEmptyCodexConfigInBoundary(): void {
   try {
     closeSync(openSync(CODEX_CONFIG_PATH, "wx", 0o600));

@@ -18,6 +18,10 @@ export interface ResponseStateMetrics {
   spillLastWriteFailureOrigin: ResponseSpillWriteFailureOrigin | null;
   spillAclRetryReturnedTimeouts: number;
   spillAclTimeoutMemoRefusals: number;
+  /** Publications refused because the durable spill cap could not make room (cumulative). */
+  spillCapacityRefusals: number;
+  /** Spills evicted by admission to make room for a newer publication (cumulative). */
+  spillHeadroomEvictions: number;
   spillLastWriteFailureAt: number | null;
   spillLastWriteSuccessAt: number | null;
   spillReadFailures: number;
@@ -37,6 +41,8 @@ export function computeResponseStateMetrics(params: {
   spillLastSuccessAt: number | null;
   spillAclRetryReturnedTimeouts: number;
   spillAclTimeoutMemoRefusals: number;
+  spillCapacityRefusals: number;
+  spillHeadroomEvictions: number;
   spillLastFailureAt: number | null;
   spillReadFailures: number;
   replayScopeMismatchDrops: number;
@@ -79,6 +85,8 @@ export function computeResponseStateMetrics(params: {
     spillLastWriteFailureOrigin: params.spillLastFailureOrigin,
     spillAclRetryReturnedTimeouts: params.spillAclRetryReturnedTimeouts,
     spillAclTimeoutMemoRefusals: params.spillAclTimeoutMemoRefusals,
+    spillCapacityRefusals: params.spillCapacityRefusals,
+    spillHeadroomEvictions: params.spillHeadroomEvictions,
     spillLastWriteFailureAt: params.spillLastFailureAt,
     spillLastWriteSuccessAt: params.spillLastSuccessAt,
     spillReadFailures: params.spillReadFailures,

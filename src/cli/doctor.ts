@@ -7,6 +7,7 @@
  * it never sets proxy env, relocates state dirs, mutates quota, or changes
  * networking. See devlog/_plan/260630_wsl-account-autoswitch/30_*.
  */
+import { cliCommandDoctorChecks, collectCliPathDiagnostics } from "./cli-path-diagnostics";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1323,6 +1324,12 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     const flags = [fs.fstype !== "n/a" ? `fs=${fs.fstype}` : null, fs.isDrvfs || fs.isMntDrive ? "WSL /mnt drive" : null]
       .filter(Boolean).join(", ");
     console.log(`  ${row.exists ? "ok " : "-- "} ${row.label}: ${row.path}${flags ? `  (${flags})` : ""}`);
+  }
+
+  console.log("\nocx command selection");
+  for (const check of cliCommandDoctorChecks(collectCliPathDiagnostics())) {
+    console.log(`  ${check.level === "OK" ? "ok " : "!! "} ${check.message}`);
+    if (check.level === "FAIL") recordDoctorFailure();
   }
 
   // Runs without the proxy on purpose: the worst accumulation happens when the proxy will

@@ -31,7 +31,7 @@ import { recoverStaleResponseStateTemps } from "./state/temp-recovery";
 export type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseSpillWriteFailureOrigin } from "./state/spill-failure";
 import type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseSpillWriteFailureOrigin } from "./state/spill-failure";
 export { responseAdmissionCountersForTests } from "./state/spill-failure";
-import { admissionCounters, noteSpillWriteFailure, noteSpillWriteSuccess, spillCounters, spillWriteHealth } from "./state/spill-failure";
+import { admissionCounters, noteSpillWriteFailure, noteSpillWriteSuccess, resetSpillCountersForTests, spillCounters, spillWriteHealth } from "./state/spill-failure";
 import { loadSnapshotEntry } from "./state/snapshot-codec";
 import { isBodyNonPersistable } from "./state/body-policy";
 export { isBodyNonPersistable, markBodyNonPersistable } from "./state/body-policy";
@@ -876,20 +876,29 @@ export function replayOverlapSkipsForTests(): number {
  * This ceiling therefore bounds what the store owns, which is every file it can
  * account for, and not the directory as a whole.
  */
-function enforceSpilledResponseBudget(): number {
+function enforceSpilledResponseBudget(requiredHeadroomBytes?: number): number {
   // Price in-flight publications too: a file being created by
   // `writeResponseSpillDurablyAsync` occupies the volume before it reaches `states`.
   let spilledBytes = accountedResponseSpillBytes();
-  if (spilledBytes <= spillByteCap()) return 0;
+  // Admission (#6747) passes the room its publication needs, 0 included. Evict only while that
+  // room is still reachable: re-read accounting after each attempt, since a failed unlink stays
+  // charged, and stop the moment the publication cannot fit so no unrelated continuation pays.
+  const admission = requiredHeadroomBytes !== undefined;
+  const headroom = admission && requiredHeadroomBytes > 0 ? requiredHeadroomBytes : 0;
+  const feasible = (): boolean => !admission
+    || (spilledBytes = accountedResponseSpillBytes()) - spilledResponseBytes() + headroom <= spillByteCap();
+  if (!feasible() || spilledBytes <= spillByteCap() - headroom) return 0;
   const before = spilledBytes;
   // Deferred generations go first. They are already superseded, so releasing one
   // costs only the crash window the queue exists to cover — the same trade
   // PENDING_SPILL_UNLINKS_MAX already makes against unbounded disk. Evicting a
   // live continuation to make room for a dead file would be the wrong order.
-  while (spilledBytes > spillByteCap() && pendingSpillUnlinks.length > 0) {
+  while (spilledBytes > spillByteCap() - headroom && pendingSpillUnlinks.length > 0) {
     const ref = pendingSpillUnlinks.shift()!;
     spilledBytes -= ref.payloadBytes;
     deleteResponseSpill(ref);
+    if (admission) spillCounters.headroomEvictions += 1;
+    if (!feasible()) return before - spilledBytes;
   }
   // Ordered by createdAt, not by map order. `states` is not an age index:
   // demotion and spill replacement delete and reinsert entries, and
@@ -906,9 +915,11 @@ function enforceSpilledResponseBudget(): number {
     .sort((a, b) => a[1].createdAt - b[1].createdAt
       || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   for (const [id, entry] of spilled) {
-    if (spilledBytes <= spillByteCap()) break;
+    if (spilledBytes <= spillByteCap() - headroom) break;
     spilledBytes -= entry.spill.payloadBytes;
     deleteEntry(id);
+    if (admission) spillCounters.headroomEvictions += 1;
+    if (!feasible()) return before - spilledBytes;
   }
   return before - spilledBytes;
 }
@@ -1210,6 +1221,7 @@ export function responseStateMetrics(): ResponseStateMetrics {
     spillLastSuccessAt: spillWriteHealth.lastSuccessAt,
     spillAclRetryReturnedTimeouts: spillCounters.aclRetryReturnedTimeouts,
     spillAclTimeoutMemoRefusals: spillCounters.aclTimeoutMemoRefusals,
+    spillCapacityRefusals: spillCounters.capacityRefusals, spillHeadroomEvictions: spillCounters.headroomEvictions,
     spillLastFailureAt: spillWriteHealth.lastFailureAt,
     spillReadFailures: spillCounters.readFailures,
     replayScopeMismatchDrops,
@@ -1321,11 +1333,7 @@ export function clearResponseStateMemoryForTests(): void {
   oldestResidentAt = null;
   stateRevision = 0;
   pendingSpillUnlinks.length = 0;
-  spillCounters.writes = 0;
-  spillCounters.writeFailures = 0;
-  spillCounters.readFailures = 0;
-  spillCounters.aclRetryReturnedTimeouts = 0;
-  spillCounters.aclTimeoutMemoRefusals = 0;
+  resetSpillCountersForTests();
   spillWriteHealth.consecutiveFailures = 0;
   spillWriteHealth.lastFailureCode = null;
   spillWriteHealth.lastFailureOrigin = null;

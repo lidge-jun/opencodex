@@ -41,10 +41,11 @@ export function buildInterceptDesiredClients(config: OcxConfig, observed: Claude
  * imports keep the catalog and discovery off the synchronous startup path.
  */
 export async function loadPickerRoutesFromCatalog(): Promise<PickerRouteInput> {
-  const [{ loadConfig }, { fetchAllModels }, catalog] = await Promise.all([
+  const [{ loadConfig }, { fetchAllModels }, catalog, { resolveAutoContext }] = await Promise.all([
     import("../../config"),
     import("../management-api"),
     import("../../codex/catalog"),
+    import("../../claude/context-windows"),
   ]);
   const config = loadConfig();
   const models = await fetchAllModels(config);
@@ -54,6 +55,7 @@ export async function loadPickerRoutesFromCatalog(): Promise<PickerRouteInput> {
       .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow })),
     ...(config.claudeCode?.desktopProfile ? { profile: config.claudeCode.desktopProfile } : {}),
     nativeContextCap: catalog.nativeContextLimits(config),
+    auto: resolveAutoContext(config.claudeCode),
   };
 }
 

@@ -15,7 +15,8 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileS
 import { join } from "node:path";
 import type { OcxConfig } from "../types";
 import { renameAtomicFile } from "../lib/windows-atomic-replace";
-import { entryParts, SAFE_AGENT_MODEL_ID, withSubagentContextMarker } from "./subagent-model";
+import { assertNotRealClaudeConfigUnderTest } from "../lib/test-home-guard";
+import { accountsAt200k, entryParts, SAFE_AGENT_MODEL_ID, withSubagentContextMarker } from "./subagent-model";
 import { stripOneMillionMarker } from "./context-windows";
 import { claudeConfigDir } from "./gateway-cache";
 import { DEFAULT_SUBAGENT_MODELS } from "../config";
@@ -97,7 +98,7 @@ export function buildClaudeAgentDefs(
     // Generated defs mark [1m] on the authoritative window only — never the
     // main-session auto-context predicate (a 372K route marked [1m] would be
     // accounted at 1M with no compaction safety net in the subagent).
-    const model = withSubagentContextMarker(alias, windows);
+    const model = withSubagentContextMarker(alias, windows, accountsAt200k(config));
     const bare = alias.toLowerCase();
     if (coveredModels.has(bare)) return;
     coveredModels.add(bare);
@@ -130,7 +131,7 @@ export function buildClaudeAgentDefs(
   // the next launch sync — documented limit. No resolvable default -> no self def.
   const selfModel = pickerDefaultModel(configDir) ?? (config.claudeCode?.model?.trim() || null);
   if (selfModel) {
-    const marked = withSubagentContextMarker(selfModel, windows);
+    const marked = withSubagentContextMarker(selfModel, windows, accountsAt200k(config));
     defs.push({
       file: `${OWNED_PREFIX}self.md`,
       name: `${OWNED_PREFIX}self`,
@@ -203,6 +204,16 @@ function isOwnedFile(path: string): boolean {
  * atomic (tmp + rename). Best-effort — returns null on any failure.
  */
 export function syncClaudeAgentDefs(defs: readonly ClaudeAgentDef[], configDir = claudeConfigDir()): string[] | null {
+  // Outside the best-effort catch: under an armed test process a write or prune of the
+  // real Claude agents directory must throw, never degrade to "returned null" (#6775).
+  // Every path written is judged by where it resolves, including a pre-placed link named like
+  // a definition or its temporary file.
+  const agentsDir = join(configDir, "agents");
+  assertNotRealClaudeConfigUnderTest(
+    configDir,
+    agentsDir,
+    ...defs.flatMap(def => [join(agentsDir, def.file), `${join(agentsDir, def.file)}.tmp-${process.pid}`]),
+  );
   try {
     const dir = join(configDir, "agents");
     if (defs.length === 0) {

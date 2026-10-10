@@ -42,7 +42,7 @@ stays the home before `config.toml` exists (issue 5441), a bare directory does n
 user off a Windows home they were running against, and a stat failure other than absence keeps the
 local home rather than switching to a different one. Codex runtime discovery (src/codex/runtime.ts) also reads this home on Linux: after an explicit runtime, PATH, and the ordinary install locations, it enumerates the direct children of <effective CODEX_HOME>/bin/wsl/<version-hash>/codex newest first, probes each through the isolated --version seam, and re-enumerates on every resolve so a Desktop update that replaces the hash directory is picked up (issue 5635). An explicitly
 set path that is unreadable or not a directory is an error, not a fallback: silently using a
-different home than the operator named would write provider state where nobody is looking for it. A fresh install can have that directory but no `config.toml` yet; applying the integration then creates an empty `config.toml` there (never overwriting an existing file) and continues, while a missing home directory is refused with instructions to start Codex once or set `CODEX_HOME` (issue 5422).
+different home than the operator named would write provider state where nobody is looking for it. A proven missing home (including explicit `CODEX_HOME`) resolves lexically; native restore, remove and journal reconcile succeed without creating a directory or acquiring the config write lock. Dangling links do not prove absence, and existing homes retain ownership checks. Lock-path resolution never creates parents; unresolved parents yield a typed, handled refusal. Scalar and multi-agent feature edits refuse missing homes; prompt commits and native feature commands retain their directory creation before locking. The management native feature toggle resolves and retains the spawn invocation before preparing a home; unavailable executables return the toggle failure without creating it. Failed native toggles and prompt commits keep a home they created (`src/codex/prepared-home.ts`): a pathname-based removal cannot prove it still names that directory, and an empty home is what Codex itself creates. A fresh install can have that directory but no `config.toml` yet; applying the integration then creates an empty `config.toml` there (never overwriting an existing file) and continues, while a missing home directory is refused with instructions to start Codex once or set `CODEX_HOME` (issue 5422).
 `src/codex/home.ts` imports path expansion directly from `src/config/paths.ts`, so a fresh WSL process can resolve its Codex home without re-entering the config facade before the resolver initializes.
 The managed files are:
 
@@ -288,6 +288,79 @@ rename replaces the destination. Handled publication failures retain the previou
 directory syncing remains best-effort. This does not make a partial permanent purge reversible:
 restore still fails closed when a recorded logical entry has no surviving file.
 
+OpenCodex config writers share `config.toml.ocx-write.lock`: feature scalar and CLI-toggle
+batches, injection, journal replay, removal, and restore/compensation read and write while
+holding it. Injection and coordinated restore take config before SQLite N; prompt writes
+take prompt-store before config. Nested writers receive an explicit live handle for the
+same canonical config destination; implicit nesting refuses fast. Symlink aliases contend
+on the real destination's lock. Each publication revalidates canonical identity and inode immediately before rename,
+including each Windows retry; the confirmed publication hook advances that witness. Async acquisition uses a monotonic
+deadline, defaults to two seconds, and accepts only integer timeouts from zero to ten
+seconds. Zero permits one immediate attempt.
+Native feature commands in `src/cli/v2.ts` receive an explicit child environment with
+`CODEX_HOME` bound to the canonical home recorded by the held config lock, without
+an inherited Orca home override or case-variant home key. Native feature paths retain
+the selected home alias, including the default `.codex`, for drift validation. The held destination is
+validated immediately before spawning and after exit, including failed exits. Native commands
+require the held canonical destination to be the canonical child home's config.toml; a link
+to a differently named file refuses before transition staging or child writes.
+The recovery scope captures exact bytes or proven absence and file identity before any writes.
+Standalone toggles refresh this preimage immediately before spawn; multi-agent transitions retain
+it from before staging. All later validation, publication, child failures and postconditions run
+inside that scope, including wrapper entry and the initial spawn validator. Alias drift restores
+that preimage through the canonical path while the lock remains held.
+Recovery validates the canonical file identity immediately before publication and every rename
+retry. A changed canonical target refuses recovery, preserves existing journal evidence, and
+retains a private preimage file beside the canonical config with its location in the diagnostic.
+Drift is non-retryable and stops further parent publication or alias-based compensation; a
+successful child replacement advances the inode witness before subsequent parent writes.
+
+`src/codex/prompt-lock-claim.ts` reserves the acquisition/takeover interval with a unique
+PID/token file and bakery ticket. A contender still choosing makes peers refuse, and a
+later contender sees an earlier published ticket. Dead reservations are removed by their
+unique filename; stale observation cannot rename a live successor's reusable lock path.
+Lock and claim records include host evidence and optional process-start evidence. Takeover requires a
+matching local host and two dead-PID observations; a reused PID with a different known start identity
+remains busy. Unknown start identity disables only that comparison: live or unknown PID liveness
+remains busy, and a dead lock owner is recoverable only past the grace window. Foreign-host, unknown-host, legacy and malformed records are unsafe and
+preserved for deliberate removal. Unknown process liveness remains busy. The lock file,
+claims directory and entries must have the expected type, current-user ownership on POSIX,
+and no symlinks. On Windows, namespace ownership relies on the per-user profile ACL;
+acquisition does not run a separate ACL hardener for claims directories.
+Machine identity is read lazily once per process, including unavailable results. Linux reads
+`/etc/machine-id`, falling back to `/var/lib/dbus/machine-id`, without spawning. Windows queries
+MachineGuid through trusted System32 reg.exe with argv, no shell, a three-second timeout and
+strict registry-key, REG_SZ and UUID parsing. Executable resolution uses the same OS system-directory
+resolver as trusted PowerShell and ignores PATH, SystemRoot and WINDIR. macOS retains its
+one-second sysctl boot-session lookup. If host discovery fails, a free lock can still be acquired,
+but its hostless record is unsafe for every later contender and requires deliberate removal.
+This process's start identity is cached where available; on Windows it is unknown without spawning.
+Another PID's start lookup runs only for a dead-owner takeover decision when the record has start
+evidence, with a one-second command timeout; Windows retains trusted PowerShell for that lookup.
+Choosing evidence is published atomically before the bakery scan.
+Lock filesystem operations reuse `src/lib/windows-atomic-replace.ts`: Windows EPERM, EBUSY and EACCES retry after 25ms and 50ms; exhaustion returns busy. Unreadable evidence or a contended exclusive open followed by EEXIST never authorizes takeover.
+`src/codex/prompt-lock-evidence.ts` shares the claim and reusable-lock guards. Every destructive attempt revalidates captured parent/entry dev/ino and exact evidence bytes; replacements and parent retargets survive retry sleeps. Stale quarantine rename binds the dead-owner observation to those bytes and identity; cleanup deletes only the moved entry, on both acquisition and failure paths. Exclusive creation also revalidates the captured parent on every attempt. Completed local reservations whose cleanup exhausts are tracked by path/token and retried before acquisition, without reclaiming active live-self reservations. Release binds the matching token to the captured file identity, contents and parent before every unlink attempt; protected writer errors propagate.
+`tests/codex-integration/codex-prompt-lock-sharing.test.ts` covers sharing violations.
+The last reservation removes its directory only with atomic empty-directory rmdir.
+Unsafe acquisition is non-retryable and carries the lock-path diagnostic through writer results.
+Automatic recovery is a no-op when the Codex home is proven absent and creates nothing.
+Journal replay selects its current evidence under the config lock; automatic recovery
+also decides owner liveness there and passes the held handle to replay, so stale evidence
+cannot authorize restoration of a replacement journal owned by a live session.
+Absence handling, profile removal, courtesy cleanup and compensation share this section.
+Prompt commits acquire through the held-handle helper and release the store lock even if
+config acquisition throws. Recovery and compensation revalidate the destination before
+writing and retain recovery evidence if the destination or selected journal changes.
+Incomplete config/profile compensation preserves the current journal as recovery authority.
+`tests/codex-integration/codex-prompt-lock.test.ts` uses separate synthetic processes to
+cover stale observation, initialization, and a killed reservation owner.
+
+This is advisory serialization among cooperating OpenCodex writers. Native Codex and
+manual writes ignore it; injection witnesses and journal byte comparisons retain their
+separate role. It is not a kernel lock, a cross-host lock, or protection against an external
+writer between byte verification and rename. A rolling mix of old writers that do not
+reserve takeover has the same cooperation limit.
+
 Windows secret-file hardening resolves the effective token SID through an absolute, trusted
 PowerShell path before granting the owner and removing inherited broad ACL entries. The normal
 path obtains System32 from `GetSystemDirectoryW`. Windows ARM64 Bun builds that cannot execute
@@ -310,9 +383,9 @@ The durable response-spill directory `~/.opencodex/responses-state-spill/` is bo
 aggregate, not only per file. Continuation state demoted out of the in-memory cap
 (`MAX_STORED_RESPONSE_BYTES`) is written there, and eviction past
 `MAX_SPILLED_RESPONSE_BYTES` removes oldest-first through the same deletion point that serves
-TTL and count eviction, so an evicted entry unlinks its file. One function owns that ceiling and
-three callers drive it: mutation pruning, the lazy load that follows a restart, and the periodic
-sweep. The periodic caller is not redundant — the mutation path runs only when traffic arrives, so a
+TTL and count eviction, so an evicted entry unlinks its file. One function owns that ceiling; mutation
+pruning, the post-restart lazy load, the periodic sweep and [spill admission](transports/byte-accounting.md#durable-spill-admission)
+drive it. The periodic caller is not redundant — the mutation path runs only when traffic arrives, so a
 process that comes up over budget from a snapshot written under a larger ceiling would otherwise
 stay over it while idle.
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { redactUserPath } from "../lib/redact";
 import type { RefusalReason } from "../integrations/mutation-plan";
+import { ASIDE_SYNC_EMPTY_LINES } from "./aside-profile-recovery";
 import { refreshAsideProfilesThroughServer } from "./aside-profiles";
 import { runCatalogAction } from "./catalog-command-result";
 import { CliUsageError, RuntimeApiError, printData, takeFlag, takeOption, type RuntimeApiDeps } from "./runtime-api";
@@ -56,7 +57,7 @@ export function handleIntegrationAsideSync(argv: string[], deps: AsideSyncCliDep
     const parsed = resultsSchema.safeParse(outcomes);
     if (!parsed.success) throw new Error("Invalid Aside synchronization outcome");
     const results = parsed.data;
-    const lines = results.length === 0 ? ["No eligible Aside profiles to synchronize. Check integration status and profile sync preferences."]
+    const lines = results.length === 0 ? [...ASIDE_SYNC_EMPTY_LINES]
       : results.flatMap(row => [
         `Aside profile ${row.profileId}: ${row.ok ? row.changed ? "updated" : "unchanged" : "failed"}.`,
         ...(row.reason ? [row.reason] : []),

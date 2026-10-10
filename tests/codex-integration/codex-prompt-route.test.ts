@@ -646,6 +646,7 @@ describe("020 coverage completions", () => {
       write_failed: 500,
       recovery_required: 409,
       locked: 409,
+      unsafe: 422,
     });
   });
 

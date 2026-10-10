@@ -503,3 +503,32 @@ test("malformed protocol containers and siblings retain disabled native policy a
     expect(validateConfigCandidate(raw).ok).toBe(false);
   }
 });
+
+test("a malformed Aside profile sync policy warns once without echoing it and keeps the all-off fallback", () => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const raw = { ...candidate(undefined), asideProfileSync: { profiles: { "0": "secret-shaped-aside-off" } } };
+    const bytes = JSON.stringify(raw);
+    writeFileSync(getConfigPath(), bytes, "utf8");
+    const loaded = loadConfig();
+    expect(loaded.asideProfileSync).toEqual({ allProfiles: false });
+    expect(loaded.providers.xai).toMatchObject({ note: "keep me" });
+    const messages = warn.mock.calls.flat().join("\n");
+    expect(messages.match(/asideProfileSync is invalid/g)).toHaveLength(1);
+    expect(messages).toContain("ocx integration client status --client aside");
+    expect(messages).not.toContain("secret-shaped-aside-off");
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+    for (const invalid of [null, [], "on", { allProfiles: "yes" }, { profiles: { "01": true } }, { legacyProfileId: -1 }]) {
+      warn.mockClear();
+      writeFileSync(getConfigPath(), JSON.stringify({ ...candidate(undefined), asideProfileSync: invalid }), "utf8");
+      expect(loadConfig().asideProfileSync).toEqual({ allProfiles: false });
+      expect(warn.mock.calls.flat().join("\n").match(/asideProfileSync is invalid/g)).toHaveLength(1);
+    }
+    for (const valid of [undefined, { allProfiles: true }, { profiles: { "0": false } }, { allProfiles: false, futureKey: "kept" }]) {
+      warn.mockClear();
+      writeFileSync(getConfigPath(), JSON.stringify({ ...candidate(undefined), asideProfileSync: valid }), "utf8");
+      loadConfig();
+      expect(warn.mock.calls.flat().join("\n")).not.toContain("asideProfileSync");
+    }
+  } finally { warn.mockRestore(); }
+});

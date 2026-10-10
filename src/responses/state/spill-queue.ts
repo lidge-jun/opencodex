@@ -11,12 +11,14 @@ import {
   responseSpillNow,
   type ResponseSpillPublicationControl,
   type ResponseSpillRef,
+  setResponseSpillUnlinkFailureObserver,
   writeResponseSpillDurably,
   writeResponseSpillDurablyAsync,
 } from "../spill-store";
 import { enforceAppOwnedMemoryBudget } from "../../lib/app-owned-memory";
 import {
   admissionCounters,
+  noteSpillCapacityRefusal,
   noteSpillWriteFailure,
   noteSpillWriteSuccess,
   spillAclMemoRefusalOrigin,
@@ -42,7 +44,8 @@ export interface SpillQueueStore {
   pruneResponses(): void;
   accountedResponseSpillBytes(): number;
   spillByteCap(): number;
-  enforceSpilledResponseBudget(): number;
+  /** No argument: plain cap pruning. A number (0 included): admission reclaim of that headroom. */
+  enforceSpilledResponseBudget(requiredHeadroomBytes?: number): number;
   terminalizationMaxPasses(): number;
 }
 
@@ -122,6 +125,8 @@ function chargeUnreclaimableSpillPath(path: string | null | undefined, bytes: nu
   if (!path || bytes <= 0) return;
   unreclaimableSpillPaths.set(path, bytes);
 }
+// A failed unlink of an installed or deferred spill leaves a real file too; price it the same way.
+setResponseSpillUnlinkFailureObserver(chargeUnreclaimableSpillPath);
 
 /** Drop charges for paths that have since disappeared; returns the surviving total. */
 function reconcileUnreclaimableSpillPaths(): number {
@@ -286,9 +291,10 @@ export function queuePendingResponseSpill(
   // against a total that is short by a whole envelope.
   const inheritedBytes = inheritedSpill?.payloadBytes ?? 0;
   if (requireStore().accountedResponseSpillBytes() + footprint + inheritedBytes > requireStore().spillByteCap()) {
-    requireStore().enforceSpilledResponseBudget();
+    // An envelope over the replay ceiling ends in EFBIG anyway; never evict a continuation for it.
+    if (footprint / 2 <= responseSpillPayloadCap()) requireStore().enforceSpilledResponseBudget(footprint + inheritedBytes);
     if (requireStore().accountedResponseSpillBytes() + footprint + inheritedBytes > requireStore().spillByteCap()) {
-      noteSpillWriteFailure(null, "ECAPACITY");
+      noteSpillCapacityRefusal();
       requireStore().replaceWithSpillFailure(id, candidate);
       requireStore().deferSupersededSpill(inheritedSpill);
       return;
@@ -421,10 +427,11 @@ function installShutdownFallbackSpill(
     // over budget. `replaceWithSpillFailure` is the same fail-closed ending the budget
     // exhaustion path uses, so replay reports `spill_failed` and the client resends.
     if (requireStore().accountedResponseSpillBytes() + supersededBytes > requireStore().spillByteCap()) {
-      requireStore().enforceSpilledResponseBudget();
+      // The footprint is already reserved above, so only the superseded generation is extra room.
+      if (footprint / 2 <= responseSpillPayloadCap()) requireStore().enforceSpilledResponseBudget(supersededBytes);
       if (requireStore().accountedResponseSpillBytes() + supersededBytes > requireStore().spillByteCap()) {
         if (requireStore().currentEntry(job.id) === candidate) {
-          noteSpillWriteFailure(null, "ECAPACITY");
+          noteSpillCapacityRefusal();
           requireStore().replaceWithSpillFailure(job.id, candidate);
           requireStore().deferSupersededSpill(job.supersededSpill);
         }

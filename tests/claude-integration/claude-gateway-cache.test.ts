@@ -49,9 +49,10 @@ describe("Claude Code gateway-model cache pre-write (devlog 260712 030)", () => 
       process.env.CLAUDE_CONFIG_DIR = "/tmp/custom-claude";
       expect(claudeConfigDir()).toBe("/tmp/custom-claude");
       delete process.env.CLAUDE_CONFIG_DIR;
-      // Platform-correct separator (Windows CI joins with backslash).
-      const { homedir } = require("node:os") as typeof import("node:os");
-      expect(claudeConfigDir()).toBe(join(homedir(), ".claude"));
+      // The current platform home variable, which the preload points at the sandbox; Bun's
+      // os.homedir() would still name the real home (#6775). join() keeps the separator right.
+      const home = process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME;
+      expect(claudeConfigDir()).toBe(join(home!, ".claude"));
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = prev;

@@ -8,6 +8,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { currentServingCommand, deferServiceChildToNewerRuntime, markDelegatedServiceReady, recordServingRuntime } from "../config/serving-runtimes";
 import { packageVersion } from "../lib/package-version";
+import { codexHomeIsAbsent } from "../codex/codex-home-owner";
+import { getCodexHome } from "../codex/paths";
 import { admitUpdateRestartChild } from "./update-restart-child";
 import { UpdateRestartRequired } from "./update-restart-candidate";
 import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
@@ -85,11 +87,11 @@ import {
   recheckRestartFailedStart, reobserveRestartReplacement,
   restartStartOutcome,
   waitForProxyReplacement,
-  runProxyRestart,
   runTrayProxyStart,
   type ProxyRestartLive,
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
+import { duplicateRuntimeMessage, runDesktopAwareProxyRestart } from "./desktop-runtime-guidance";
 import { reportRestartFailure } from "./restart-failure";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
@@ -329,7 +331,7 @@ async function chooseListenPort(
         throw new StartCommandExit(serviceStayOutExitCode());
       }
       if (decision === "refuse-live-proxy") {
-        console.error(`⚠️  Proxy already running (PID ${holder?.pid ?? "unknown"}, port ${preferred}). Use 'ocx stop' first.`);
+        console.error(duplicateRuntimeMessage(holder?.pid, preferred));
         throw new StartCommandExit(1);
       }
       if (decision === "refuse-unidentified-holder") {
@@ -444,7 +446,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       process.exit(serviceStayOutExitCode());
     }
     if (decision === "refuse" || decision === "await-parent") {
-      console.error(`⚠️  Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}). Use 'ocx stop' first.`);
+      console.error(duplicateRuntimeMessage(owner.live.pid ?? owner.pidSnapshot, owner.live.port));
       process.exit(1);
     }
     // Sibling path. The new instance takes over this home's ocx.pid / runtime-port.json while
@@ -654,10 +656,12 @@ async function handleStart(options: { block?: boolean } = {}) {
     removeRuntimePort(process.pid);
     if (teardown.restoreNativeCodex && !currentExternalCodexModelProvider()) {
       try {
-        const restored = restoreNativeCodex();
-        if (!restored.success) {
-          cleanupSucceeded = false;
-          console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
+        if (!codexHomeIsAbsent(getCodexHome())) {
+          const restored = restoreNativeCodex();
+          if (!restored.success) {
+            cleanupSucceeded = false;
+            console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
+          }
         }
       } catch (error) {
         cleanupSucceeded = false;
@@ -928,7 +932,7 @@ async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
-  const result = await runProxyRestart({
+  const result = await runDesktopAwareProxyRestart({
     findLive: () => discoverStableProxyForRestart({
       findLive: () => findLiveProxy({ deadlineAt, attempts: 2, acceptPackageTreeFenced: true }),
       expired: () => Date.now() >= deadlineAt,

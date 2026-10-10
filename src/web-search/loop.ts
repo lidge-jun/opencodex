@@ -577,6 +577,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
       while ((prepared.response.status === 429
+        || (prepared.response.status === 401 && isAnthropicInstanceId(deps.incomingMeta?.providerName)
+          && !accountRefusalOutputStarted)
         || (prepared.response.status === 403
           && (isAnthropicInstanceId(deps.incomingMeta?.providerName) || deps.incomingMeta?.providerName === "google-antigravity")
           && !accountRefusalOutputStarted)

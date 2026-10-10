@@ -16,6 +16,7 @@ import {
   planStoppedRuntimeRecovery,
   planUpdateRuntimeHandling,
 } from "../../src/update/runtime-ownership.mjs";
+import { createSupervisionLatch, type SupervisionEvidence } from "../../src/service/desktop-supervision.mjs";
 import { parseInstallStateRecord, selectAuthoritativeServiceState } from "../../src/service/install-state-contract.mjs";
 
 describe("the runtime-ownership veto", () => {
@@ -270,4 +271,195 @@ describe("every updater re-reads ownership before it starts a proxy directly", (
     expect(veto).toContain("resolveServiceOwnership");
     expect(veto).toContain("acquireOwnershipMutationLease");
   });
+});
+
+
+const desktopEvidence: SupervisionEvidence = {
+  kind: "desktop", runtimePid: 321, supervisorPid: 123, app: "/fixture/opencodex-desktop", proxy: "/fixture/ocx",
+};
+const desktopNotice = "OpenCodex Desktop runs this proxy from its own bundle; use the app's updater (tray → Check for Updates). "
+  + "This npm/Bun install was left unchanged; quit OpenCodex first to update it.";
+
+describe("live Desktop update authority", () => {
+  test("supervision takes precedence over missing, CLI and unreadable durable ownership", () => {
+    for (const ownership of [null, { owner: "cli", installId: "fixture", consentGeneration: 1 }]) {
+      for (const supervision of [desktopEvidence, { kind: "unknown", reason: "probe-failed", desktopSeen: true } as const, true]) {
+        expect(planUpdateRuntimeHandling({ ownership, ownershipUnknown: true, serviceInstalled: true, supervision }))
+          .toEqual({ mayReplacePackage: false, mayStopRuntime: false, mayRestoreService: false, notice: desktopNotice });
+      }
+    }
+  });
+
+  test("none, unsupported and unknown without Desktop evidence preserve the ordinary policy", () => {
+    for (const supervision of [{ kind: "none" }, { kind: "unsupported" },
+      { kind: "unknown", reason: "probe-failed", desktopSeen: false }] as const) {
+      expect(planUpdateRuntimeHandling({ ownership: null, serviceInstalled: true, supervision }))
+        .toEqual({ mayReplacePackage: true, mayStopRuntime: true, mayRestoreService: true, notice: null });
+      expect(planUpdateRuntimeHandling({ ownership: null, ownershipUnknown: true, serviceInstalled: true, supervision }).mayReplacePackage).toBe(false);
+    }
+  });
+
+  test("one latch retains Desktop through inconclusive reads, and only none clears recovery and refresh", () => {
+    const latch = createSupervisionLatch();
+    for (const [evidence, blocked] of [
+      [desktopEvidence, true],
+      [{ kind: "unknown", reason: "probe-failed", desktopSeen: false }, true],
+      [{ kind: "unsupported" }, true],
+      [{ kind: "none" }, false],
+    ] as const) {
+      const supervision = latch.observe(evidence);
+      expect(supervision).toBe(blocked);
+      const plan = planUpdateRuntimeHandling({ ownership: null, serviceInstalled: true, supervision });
+      expect(plan.mayReplacePackage).toBe(!blocked);
+      expect(plan.mayStopRuntime).toBe(!blocked);
+      expect(plan.mayRestoreService).toBe(!blocked);
+      for (const serviceInstalled of [false, true]) {
+        const recovery = planStoppedRuntimeRecovery({
+          stopAttempted: true, ownership: null, sameOwner: true, liveness: "dead", serviceInstalled,
+          launcherUsable: true, hadRuntimeState: true, supervision,
+        });
+        expect(recovery.action).toBe(blocked ? "none" : serviceInstalled ? "service" : "direct");
+        if (blocked) expect(recovery.reason).toBe("desktop-supervised");
+      }
+    }
+  });
+
+  // Evaluate the actual pre-stop production blocks with injected inspectors and inert spawns.
+  // The launcher module cannot be imported without executing its top-level dispatch.
+  for (const lane of ["Bun", "Node"] as const) {
+    test(`${lane}: none → Desktop at pre-stop performs zero stop/package/service mutations`, async () => {
+      expect(await exercisePreStop(lane, desktopEvidence)).toEqual([0, 0, 0]);
+    });
+    test(`${lane}: desktopSeen at pre-stop activates the same refusal`, async () => {
+      expect(await exercisePreStop(lane, { kind: "unknown", reason: "probe-failed", desktopSeen: true })).toEqual([0, 0, 0]);
+    });
+    test(`${lane}: plain unknown and unsupported keep stop/package/service activation`, async () => {
+      for (const evidence of [{ kind: "none" }, { kind: "unsupported" },
+        { kind: "unknown", reason: "probe-failed", desktopSeen: false }] as const) {
+        expect(await exercisePreStop(lane, evidence)).toEqual([1, 1, 1]);
+      }
+    });
+  }
+});
+
+async function exercisePreStop(lane: "Bun" | "Node", evidence: SupervisionEvidence, runtimeTrusted = true): Promise<number[]> {
+  const source = readFileSync(repoPath(lane === "Bun" ? "src/update/index.ts" : "bin/ocx.mjs"), "utf8");
+  const start = source.indexOf(lane === "Bun" ? "  if (runtimePlan.mayStopRuntime &&" : "    if (stopNeeded) {");
+  const end = source.indexOf(lane === "Bun" ? '    if (stopStdio === "pipe")' : "      const stillHasRuntimeState", start);
+  expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+  const counts = [0, 0, 0];
+  const latch = createSupervisionLatch();
+  const owner = { ownership: null, ownershipUnknown: false };
+  const runtimePlan = planUpdateRuntimeHandling({ ...owner, serviceInstalled: true, supervision: latch.observe({ kind: "none" }) });
+  const exit = new Error("fixture exit");
+  const inspect = (deps?: { targetPid?: number }) => {
+    if (lane === "Bun") expect(deps).toEqual({ targetPid: runtimeTrusted ? 321 : undefined });
+    else expect(deps).toBeUndefined();
+    return evidence;
+  };
+  const run = new Function("deps", `with (deps) { return (async () => {
+    let stopAttempted = false;
+    ${source.slice(start, end)}
+    }
+    packageMutation(); serviceMutation();
+  })(); }`);
+  try {
+    await run({
+      runtimePlan, serviceWasInstalled: true, readPid: () => 321, readRuntimePort: () => ({}),
+      pendingTeardownOutstanding: () => false, stopNeeded: true,
+      resolvedRuntimeOwnership: async () => owner, readOwnership: () => owner,
+      planUpdateRuntimeHandling, supervisionLatch: latch, inspectDesktopSupervision: inspect,
+      observeSupervision: () => latch.observe(inspect()), runtimeTrusted, livePid: 321,
+      console: { log() {}, error(notice: string) { expect(notice).toBe(desktopNotice); } },
+      process: { execPath: "fixture", exit() { throw exit; } },
+      selfLaunchArgv: () => [], launcher: "fixture", mutation: { controlEnvironment: () => ({}) },
+      mutationChildEnvironment: () => ({}), releaseUpdateLease() {}, updateChildStdio: () => "ignore",
+      spawnSync: () => { counts[0]++; return { status: 0 }; },
+      packageMutation: () => { counts[1]++; }, serviceMutation: () => { counts[2]++; },
+    });
+  } catch (error) { if (error !== exit) throw error; }
+  return counts;
+}
+
+
+test("Bun pre-stop uses inspector correlation when runtime identity is untrusted", async () => {
+  expect(await exercisePreStop("Bun", desktopEvidence, false)).toEqual([0, 0, 0]);
+  expect(await exercisePreStop("Bun", { kind: "none" }, false)).toEqual([1, 1, 1]);
+});
+
+describe("Node service refresh mutation boundaries", () => {
+  // The same function handles normal restoration and stopped-runtime failure recovery.
+  const source = readFileSync(repoPath("bin/ocx.mjs"), "utf8");
+  const start = source.indexOf("  function refreshBackgroundServiceOrStartDirect() {");
+  const end = source.indexOf("  const updateLease =", start);
+  const run = new Function("deps", `with (deps) {
+    ${source.slice(start, end)}
+    refreshBackgroundServiceOrStartDirect();
+  }`);
+  function refresh(evidence: SupervisionEvidence[], prior?: SupervisionEvidence): number[] {
+    const latch = createSupervisionLatch();
+    if (prior) latch.observe(prior);
+    const mutations = [0, 0, 0]; // repair, absent-service install, direct fallback
+    run({
+      observeSupervision: () => latch.observe(evidence.shift() ?? { kind: "none" }),
+      planUpdateRuntimeHandling, readOwnership: () => ({ ownership: null }),
+      process: { env: {}, execPath: "fixture" }, bakePort: 12345, postUpdateLauncher: "fixture",
+      console: { log() {}, warn() {} }, mutationChildEnvironment: () => ({}),
+      serviceRefreshArgs: () => ["repair"], serviceInstallArgs: () => ["install"],
+      readServiceInstalledFromStatus: () => false,
+      spawnSync: (_bin: string, args: string[]) => {
+        if (args[0] === "repair") { mutations[0]++; return { status: 1 }; }
+        if (args[0] === "install") { mutations[1]++; return { status: 1 }; }
+        throw new Error("unexpected spawn");
+      },
+      startProxyDirectly: () => { mutations[2]++; },
+    });
+    return mutations;
+  }
+  test("a prior Desktop followed by plain unknown cannot refresh the service", () => {
+    expect(refresh([{ kind: "unknown", reason: "probe-failed", desktopSeen: false }], desktopEvidence)).toEqual([0, 0, 0]);
+  });
+  test("Desktop appearing after repair prevents the absent-service install", () => {
+    expect(refresh([{ kind: "none" }, desktopEvidence])).toEqual([1, 0, 0]);
+  });
+  test("Desktop appearing after install prevents direct fallback", () => {
+    expect(refresh([{ kind: "none" }, { kind: "none" }, desktopEvidence])).toEqual([1, 1, 0]);
+  });
+  test("positive none clears the previous veto and activates repair, install and direct fallback", () => {
+    expect(refresh([{ kind: "none" }], desktopEvidence)).toEqual([1, 1, 1]);
+  });
+});
+
+test("Bun and Node replacement, recovery and refresh plans all receive fresh latch verdicts", () => {
+  for (const file of ["src/update/index.ts", "bin/ocx.mjs"]) {
+    const source = readFileSync(repoPath(file), "utf8");
+    expect(source.match(/createSupervisionLatch\(\)/g)).toHaveLength(1);
+    for (const call of source.matchAll(/plan(?:UpdateRuntimeHandling|StoppedRuntimeRecovery)\(\{([\s\S]*?)\}\)/g)) {
+      expect(call[1]).toMatch(/\bsupervision\b/);
+    }
+    expect(source).toContain("supervisionLatch.observe(inspectDesktopSupervision(");
+  }
+});
+
+
+test("Bun refresh gate vetoes retained Desktop and activates only after positive none", async () => {
+  const source = readFileSync(repoPath("src/update/index.ts"), "utf8");
+  const start = source.indexOf("      const mayRefresh = async () => {");
+  const end = source.indexOf("      if (!await mayRefresh())", start);
+  expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+  const run = new Function("deps", `with (deps) { return (async () => {
+    ${source.slice(start, end)}
+    return await mayRefresh();
+  })(); }`);
+  const latch = createSupervisionLatch(); latch.observe(desktopEvidence);
+  for (const [evidence, allowed] of [
+    [{ kind: "unknown", reason: "probe-failed", desktopSeen: false }, false],
+    [{ kind: "unsupported" }, false], [{ kind: "none" }, true],
+  ] as const) {
+    expect(await run({
+      resolvedRuntimeOwnership: async () => ({ ownership: null }),
+      observeSupervision: () => latch.observe(evidence), planUpdateRuntimeHandling,
+      console: { warn() {} },
+    })).toBe(allowed);
+  }
 });

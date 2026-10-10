@@ -365,7 +365,9 @@ daemon briefly holding a second link to a journal inside a synced folder could t
 diagnosed from an instrumented build. The guard is unchanged.
 `src/lib/synced-state-location.ts` is the advisory half. `acquireSpendLedgerServerLifecycle`
 warns once at startup when the state directory resolves inside iCloud Drive, a File Provider
-folder, or Desktop/Documents with iCloud Desktop & Documents sync detected, and it refuses
+folder, Desktop/Documents with iCloud Desktop & Documents sync detected, or Desktop/Documents
+while Google Drive for desktop is present (`GoogleDrive-*` under CloudStorage, or DriveFS),
+and it refuses
 nothing on that basis. `tests/lib/spend-ledger-file-journal.test.ts` pins the refusal shape, and
 `tests/lib/synced-state-location.test.ts` pins the classification.
 

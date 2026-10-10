@@ -1,3 +1,4 @@
+import { collectCliPathDiagnostics, formatCliStatusHealthLabel, type CliPathDiagnostics } from "./cli-path-diagnostics";
 import type { CodexMainAccountPolicyHealth } from "../oauth/health";
 import { durableBunRuntime } from "../lib/bun-runtime";
 import { existsSync, readFileSync } from "node:fs";
@@ -216,6 +217,7 @@ export type CliStatusJson = {
    * ignores the key is unaffected, and `proxyVersion` is null when nothing is live.
    */
   versionSkew: VersionSkew;
+  cliCommand: CliPathDiagnostics;
   startupSource: "live" | "local" | "local-supervision-override";
 };
 
@@ -727,6 +729,7 @@ export function missingCodexCatalogLines(missingCatalogPath: string | null): str
 
 /** `mainAccountPolicy`: only `--json` asks; the human report reads the same accounts once via OAuth health. */
 export async function collectStatus(options: { mainAccountPolicy?: boolean } = {}): Promise<CliStatusView> {
+  const cliCommand = collectCliPathDiagnostics();
   const configDiagnostics = readConfigDiagnostics();
   const config = configDiagnostics.config;
   const claudeDesktop = {
@@ -916,7 +919,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
 
   return {
     proxyLabel,
-    healthLabel: health.label,
+    healthLabel: formatCliStatusHealthLabel(health.label, cliCommand, remoteHub.connected),
     json: {
       ...(mainAccountHardLock ? { mainAccountHardLock } : {}),
       schemaVersion: 1,
@@ -979,6 +982,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
       // fact about this install, not about the Codex runtime, and filing it there would
       // print it under the wrong heading (#2701).
       versionSkew,
+      cliCommand,
       startupSource,
     },
   };
