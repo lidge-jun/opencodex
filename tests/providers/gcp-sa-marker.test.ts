@@ -115,6 +115,16 @@ describe("splitCredentialPaste", () => {
     expect(() => splitCredentialPaste(`${JSON.stringify(sa1)} garbage ${JSON.stringify(sa1)}`)).toThrow(/unexpected content|Paste credential/i);
   });
 
+  test("text after the last credential JSON is rejected", () => {
+    for (const input of [SERVICE_ACCOUNT_JSON, `${SERVICE_ACCOUNT_JSON}, ${SERVICE_ACCOUNT_JSON_2}`]) {
+      expect(() => splitCredentialPaste(`${input} trailing-garbage`)).toThrow(/after the last JSON object/i);
+    }
+  });
+
+  test("separators after the last credential JSON remain valid", () => {
+    expect(splitCredentialPaste(`${SERVICE_ACCOUNT_JSON}, \n\t`)).toEqual([{ credentialJson: SERVICE_ACCOUNT_JSON }]);
+  });
+
   test("truncated JSON is rejected", () => {
     expect(() => splitCredentialPaste('{"type": "service_account", "client_email"')).toThrow();
   });
