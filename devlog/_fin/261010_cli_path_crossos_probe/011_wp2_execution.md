@@ -84,6 +84,8 @@ These supersede earlier rows where they conflict.
    `sudo ip netns delete ocxprobe-a`, `sudo ip netns delete ocxprobe-b`,
    `sudo rm -rf /var/tmp/ocx-probe /var/tmp/ocx-probe-evidence`, and
    `ls -d /var/tmp/ocx-probe* /tmp/ocx-probe-261010` must fail; `ip netns list` must not show either name.
+   A rerun must first confirm that `/var/tmp/ocx-probe` and `/var/tmp/ocx-probe-evidence` do not exist (or use fresh
+   `mktemp -d` paths): `mkdir -p` accepts existing directories, and this cleanup removes everything under the fixed paths.
 4. **Supervision gate.** Live L9/L10 coverage is claimed only if `resolve --json` (or a direct
    `inspectDesktopSupervision()` call) inside the namespace reports `kind: "desktop"` for the Desktop's child;
    otherwise those rows are recorded unverified with the inspector's actual result.
