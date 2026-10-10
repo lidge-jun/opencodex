@@ -488,7 +488,10 @@ export default function BaseVariantDialog({
                 <button
                   type="button"
                   className="btn btn-sm"
-                  onClick={onClose}
+                  // Same guarded path as Close and Escape: the dialog may hold
+                  // unsaved variant drafts, and cancelling the import must not
+                  // discard them without the confirmation.
+                  onClick={requestClose}
                 >
                   {t("common.cancel")}
                 </button>

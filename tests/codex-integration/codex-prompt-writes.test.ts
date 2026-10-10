@@ -8,7 +8,8 @@
  * rides along and is asserted byte-identical after every verb: proving the
  * fixture changed does not prove nothing else did.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -612,6 +613,42 @@ describe("POST /api/codex-prompt/base/import", () => {
     const res = await importConfirmed(fx);
     expect(res.status).toBe(200);
     expect(res.body.snapshot.baseVariants[0].body).toBe("Ship the external base — revised after preview.");
+  });
+
+  test("a source rewritten while the write locks are acquired is refused, not activated stale", async () => {
+    const { fx, externalPath } = externalFixture("approved body");
+    const preview = await previewImport(fx);
+    const rev = await revision(fx);
+    const configBefore = read(fx.configPath);
+    // Rewrite the source at the moment the config write lock is created: both
+    // locks are held from here on, after the pre-lock hash check already passed.
+    const lockPath = configWriteLockPath(fx.configPath);
+    const write = fs.writeFileSync;
+    let rewritten = false;
+    const spy = spyOn(fs, "writeFileSync").mockImplementation(((path: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+      write(path, data, options);
+      if (!rewritten && String(path) === lockPath) {
+        rewritten = true;
+        write(externalPath, "edited while the confirm held the locks", "utf8");
+      }
+    }) as typeof fs.writeFileSync);
+    let res: Awaited<ReturnType<typeof call>>;
+    try {
+      res = await call("POST", "/api/codex-prompt/base/import", fx, {
+        confirm: true, revision: rev, previewSha256: preview.body.preview.previewSha256,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(rewritten).toBe(true);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("import_body_changed");
+    // Nothing was activated, the newer source survives, and the copied variant
+    // file that provably no config references is cleaned up.
+    expect(read(fx.configPath)).toBe(configBefore);
+    expect(read(externalPath)).toBe("edited while the confirm held the locks");
+    expect(existsSync(fx.baseVariantDir) ? readdirSync(fx.baseVariantDir) : []).toEqual([]);
+    expect(existsSync(journalPathFor(fx.storePath))).toBe(false);
   });
 
   test("the hash binds the title: confirming a different spelling is refused", async () => {

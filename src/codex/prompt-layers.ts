@@ -1250,6 +1250,15 @@ export function importBaseVariant(
     if (snapshot.baseSelection.kind !== "external") {
       return { error: "developer_instructions_not_owned", detail: "model_instructions_file no longer points at an external file" };
     }
+    // The hash check above ran before either write lock was held, so the source
+    // could have been rewritten while the locks were being acquired. Re-read it
+    // now, under both locks, and refuse unless it still serializes to exactly
+    // what the caller previewed: activating an older copy of a file that has
+    // since changed is the surprise the preview hash exists to prevent.
+    const recheck = previewBaseImport(opts, input.title);
+    if (recheck.previewSha256 !== preview.previewSha256 || recheck.resolvedPath !== preview.resolvedPath) {
+      return { error: "import_body_changed", detail: "the source changed while the import was being confirmed; preview it again" };
+    }
     return {
       nextConfig: setRootString(configBytes ?? "", "model_instructions_file", resolve(path)),
       nextStore: storeBytes,

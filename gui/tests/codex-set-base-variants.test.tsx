@@ -804,3 +804,25 @@ for (const [title, body] of [["Terse", "a\tb"], ["Terse", "a\r\nb"], ["  Renamed
     } finally { await act(async () => { root.unmount(); }); }
   });
 }
+
+test("cancelling an import preview keeps an unsaved variant draft behind the discard confirmation", async () => {
+  stubRoutes(call => (call.url.includes("/api/codex-prompt/base/import")
+    ? json({ ok: true, changed: false, preview: PREVIEW })
+    : json(snapshot({ baseVariants: VARIANTS, ...EXTERNAL }))));
+  const { container, root } = await mount();
+  try {
+    const dlg = await openBaseDialog(container);
+    const next = dlg.querySelectorAll(".codex-set-base-dialog__nav button")[1] as HTMLButtonElement;
+    await act(async () => { next.click(); });
+    expect(slotKind(dlg)).toBe("variant");
+    await act(async () => { typeInto(dlg.querySelector("textarea") as HTMLTextAreaElement, "unsaved base draft"); });
+    await act(async () => { importButton(dlg).click(); });
+    expect(dlg.querySelector("pre")).not.toBeNull();
+    // Cancel goes through the same dirty check as Close and Escape: the dialog
+    // stays open, asks before discarding, and the draft is still there.
+    await act(async () => { actionButton(dlg, "cancel").click(); });
+    expect(document.querySelector("dialog.codex-set-base-dialog")).toBe(dlg);
+    expect(dlg.querySelector(".codex-set-custom-dialog__discard")).not.toBeNull();
+    expect((dlg.querySelector("textarea") as HTMLTextAreaElement).value).toBe("unsaved base draft");
+  } finally { await act(async () => { root.unmount(); }); }
+});
