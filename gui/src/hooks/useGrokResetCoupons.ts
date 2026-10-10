@@ -192,6 +192,15 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
     const held = uncertainRef.current.get(accountId) ?? activeRedeems.current.get(accountId);
     if (held) return hold(held);
     activeRedeems.current.set(accountId, request);
+    const clearMatchingHold = () => {
+      if (uncertainRef.current.get(accountId)?.operationId === request.operationId) uncertainRef.current.delete(accountId);
+      setUncertain(current => {
+        if (current[accountId]?.operationId !== request.operationId) return current;
+        const next = { ...current };
+        delete next[accountId];
+        return next;
+      });
+    };
     const bounded = createBoundedFetch(REDEEM_TIMEOUT_MS);
     try {
       const response = await fetch(`${apiBase}/api/grok/reset-coupons/consume`, {
@@ -203,18 +212,14 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
       if (!response.ok) {
         const code = errorCode(await response.json().catch(() => null));
         if (["attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "redeem_failed"].includes(code)) return hold(request, code);
+        clearMatchingHold();
         return { ok: false, code, replayed: false };
       }
       const data = await response.json().catch(() => null) as unknown;
       const replayed = Boolean(data && typeof data === "object" && (data as { replayed?: unknown }).replayed === true);
       const code = settledCode(data);
       if (code === null) return hold(request);
-      uncertainRef.current.delete(accountId);
-      setUncertain(current => {
-        const next = { ...current };
-        delete next[accountId];
-        return next;
-      });
+      clearMatchingHold();
       await read(accountId, epoch.current);
       return { ok: code === "redeemed", code, replayed };
     } catch {

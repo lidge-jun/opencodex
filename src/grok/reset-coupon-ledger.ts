@@ -109,6 +109,19 @@ function writeGrokCouponLedger(filePath: string, ledger: GrokResetCouponLedger, 
 
 const MAX_GROK_RESET_COUPON_OPERATION_IDS = 256;
 
+/** Resolve an omitted-account retry from its durable identity, within retention. */
+export function getGrokResetCouponOperationAccountId(
+  operationId: string,
+  now = Date.now(),
+  journalPath?: string,
+): string | undefined {
+  return withConfigMutationLockSync(() => {
+    const record = readGrokCouponLedger(journalPath ?? grokCouponJournalPath()).operations[operationId];
+    if (!record || record.updatedAt <= now - 30 * 24 * 60 * 60_000) return undefined;
+    return record.accountId;
+  });
+}
+
 export function openGrokResetCouponOperation(
   identity: GrokResetCouponOperationIdentity,
   now = Date.now(),

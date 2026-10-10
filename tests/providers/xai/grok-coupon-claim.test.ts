@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as oauth from "../../../src/oauth";
+import * as oauthStore from "../../../src/oauth/store";
+import { handleAccountAuthCommand } from "../../../src/cli/account-auth";
 import * as coupons from "../../../src/grok/reset-coupons";
 import * as ledger from "../../../src/grok/reset-coupon-ledger";
 import { ConfigMutationLockError } from "../../../src/config/mutation-lock";
@@ -50,6 +52,71 @@ function confirmedRedemption() {
 function busySettlement() {
   return new ConfigMutationLockError("Config mutation already in progress", { cause: { code: "SQLITE_BUSY" } });
 }
+
+for (const tokenId of [null, 42, {}, [], true, "", "   "]) {
+  test(`invalid coupon token ${JSON.stringify(tokenId)} refuses before opening the ledger`, async () => {
+    const redeem = confirmedRedemption();
+    const ctx = request();
+    const response = await handleGrokCouponRoutes({ ...ctx, req: new Request(ctx.url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...identity(), tokenId }),
+    }) });
+    expect(response!.status).toBe(400);
+    expect((await response!.json()).error.code).toBe("invalid_token_id");
+    expect(fs.existsSync(ledger.grokCouponJournalPath())).toBe(false);
+    expect(oauth.getValidAccessSnapshotForAccount).not.toHaveBeenCalled();
+    expect((await handleGrokCouponRoutes(request()))!.status).toBe(200);
+    expect(redeem).toHaveBeenCalledTimes(1);
+  });
+}
+
+test("an open-operation retry without a token reuses its journaled coupon", async () => {
+  const redeem = confirmedRedemption();
+  const remaining = spyOn(coupons, "getGrokRemainingResets")
+    .mockRejectedValueOnce(new Error("fixture list failure"))
+    .mockResolvedValue({ tokens: [{ ...TOKEN, tokenId: "fixture-other-coupon" }, TOKEN] });
+  spies.push(remaining);
+  expect((await handleGrokCouponRoutes(request()))!.status).toBe(502);
+  const response = await handleGrokCouponRoutes(request(true));
+  expect(response!.status).toBe(200);
+  expect(redeem).toHaveBeenCalledTimes(1);
+  expect(redeem.mock.calls[0]![0].tokenId).toBe(TOKEN.tokenId);
+});
+
+test("an omitted-account CLI retry recovers the operation's recorded account", async () => {
+  let active = "fixture-original-account";
+  const selection = spyOn(oauthStore, "captureOAuthAccountSelection")
+    .mockImplementation(() => ({ accountId: active }) as never);
+  const redeem = confirmedRedemption().mockRejectedValue(new Error("fixture lost response"));
+  spies.push(selection);
+  const calls: Array<Record<string, unknown>> = [];
+  const responses: Array<{ status: number; code: string }> = [];
+  const errors: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+  const deps = { baseUrl: "http://localhost", fetchImpl: (async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    calls.push(body);
+    const ctx = request();
+    const response = (await handleGrokCouponRoutes({ ...ctx, req: new Request(ctx.url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }) }))!;
+    responses.push({ status: response.status, code: (await response.clone().json()).error.code });
+    return response;
+  }) as typeof fetch };
+  try {
+    expect(await handleAccountAuthCommand("grok-reset-coupons", ["--consume", "--yes", "--operation-id", OP], deps)).toBeGreaterThan(0);
+    expect(errors.join("\n")).toContain(OP);
+    active = "fixture-new-active-account";
+    expect(await handleAccountAuthCommand("grok-reset-coupons", ["--consume", "--yes", "--operation-id", OP], deps)).toBeGreaterThan(0);
+  } finally { console.error = originalError; }
+  expect(calls).toHaveLength(2);
+  expect(calls.every(body => body.accountId === undefined)).toBe(true);
+  expect(responses[0].code).toBe("attempt_unresolved");
+  expect(responses[1]).toEqual({ status: 409, code: "attempt_in_progress" });
+  expect(oauth.getValidAccessSnapshotForAccount).toHaveBeenLastCalledWith("xai", "fixture-original-account", { requireUsableAccount: true });
+  expect(redeem).toHaveBeenCalledTimes(1);
+});
 
 test("the attempted claim flushes its file and parent before redemption", async () => {
   const sync = fs.fsyncSync;

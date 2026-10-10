@@ -326,6 +326,34 @@ test("closing and reopening during dispatch cannot post a new operation", async 
   }
 });
 
+for (const code of ["coupon_unavailable", "auth_failed", "fetch_resets_failed"]) {
+  test(`a definitive ${code} releases a speculative pending hold`, async () => {
+    harness.coupons.set("acct-a", [COUPON("restok_a1", 10)]);
+    let finish!: (response: Response) => void;
+    harness.consumeReply = () => new Promise(resolve => { finish = resolve; });
+    const host = await mountPanel([ACCOUNT("acct-a")]);
+    await openDialog(host);
+    await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
+    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!.click(); await flush(); });
+    await openDialog(host);
+    await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
+    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+    expect(harness.consumes).toHaveLength(1);
+    expect(dialogText(host)).toContain("outcome is unknown");
+    await act(async () => { finish(json({ error: { code } }, 409)); await flush(); });
+    await act(async () => { buttonWithText(host, "Close").click(); await flush(); });
+    await openDialog(host);
+    expect(dialogText(host)).not.toContain("outcome is unknown");
+    expect(buttonWithText(host, "Use 1 coupon").disabled).toBe(false);
+    harness.consumeReply = async () => json({ code: "redeemed" });
+    await act(async () => { buttonWithText(host, "Use 1 coupon").click(); await flush(); });
+    await act(async () => { buttonWithText(host, "Use coupon").click(); await flush(); });
+    expect(harness.consumes).toHaveLength(2);
+    expect(harness.consumes[1].operationId).not.toBe(harness.consumes[0].operationId);
+  });
+}
+
 test("one row's retry does not cancel another row's in-flight read", async () => {
   harness.coupons.set("acct-a", [COUPON("restok_a1", 10)]);
   harness.coupons.set("acct-b", [COUPON("restok_b1", 10), COUPON("restok_b2", 12)]);

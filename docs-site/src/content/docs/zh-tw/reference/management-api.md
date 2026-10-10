@@ -73,6 +73,8 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `GET /api/claude-desktop/status` | 檢查已儲存 vs 已套用設定檔與 Desktop 健康 | 400 狀態讀取失敗 |
 | `GET, PUT /api/claude-code` | 讀取或更新 Claude Code 閘道、auth-mode、model-map、context、agent 與 sidecar 設定 | 400 無效欄位或結構 |
 
+若提供 `tokenId`，它必須是非空字串；無效值會在讀取憑證或開啟帳本前回傳 `400 invalid_token_id`。在 30 天保留期內，以相同 `operationId` 重試且省略 `accountId` 時，即使目前帳號已變更，也會使用記錄的帳號。可執行的 `open` 操作重試且省略 `tokenId` 時，會使用記錄的權杖。明確指定不同帳號或權杖仍會被拒絕。收到確定的失敗後，儀表板會清除該待處理請求對應的暫時保留狀態，允許明確確認新的嘗試；真正未知的結果仍維持保留。
+
 兌換前會將嘗試持久記錄在帳本中。只有收到上游確認兌換成功的回應，才會記錄 `redeemed`；券從清單中消失不能證明本次操作成功。逾時或結果儲存失敗後，重試只查詢可用性，不會再次兌換，並回傳 `attempt_unresolved`；近期嘗試回傳 `attempt_in_progress`。遲到的檢查拒絕只能寫入仍處於 `open` 的操作；狀態已變更時回傳 `operation_state_changed`，應使用相同操作 ID 重試以讀取持久狀態。帳本無法讀取或鎖定時回傳 `ledger_unavailable`，不執行兌換。
 
 無法確認兌換結果時，回傳 HTTP 502、`error.code: "attempt_unresolved"` 和實際的 `operationId`。請保留此 ID；新 ID 會啟動另一項操作。CLI 在送出前產生 ID，並在請求送達或回應不確定時提示保留相同的 `--operation-id`。第一版帳本的舊 `open` 記錄與結果未確認的 `redeem_failed` 記錄會隔離為不確定嘗試，不允許再次兌換。

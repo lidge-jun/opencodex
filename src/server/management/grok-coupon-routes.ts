@@ -21,6 +21,7 @@ import {
   type GrokResetCoupon,
 } from "../../grok/reset-coupons";
 import {
+  getGrokResetCouponOperationAccountId,
   markGrokResetCouponAttempt,
   openGrokResetCouponOperation,
   recordGrokResetCouponSettlement,
@@ -137,6 +138,10 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
 
     const { accountId: rawAccountId, tokenId: requestedTokenId, operationId } = body;
 
+    if (requestedTokenId !== undefined && (typeof requestedTokenId !== "string" || requestedTokenId.trim() === "")) {
+      return jsonResponse({ error: { code: "invalid_token_id", message: "tokenId must be a non-empty string" } }, 400, req, config);
+    }
+
     if (operationId !== undefined && !isCodexResetCreditOperationId(operationId)) {
       return jsonResponse(
         { error: { code: "invalid_operation_id", message: "operationId must be a valid UUIDv4" } },
@@ -146,9 +151,16 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
       );
     }
 
+    let recordedAccountId: string | undefined;
+    if (rawAccountId === undefined && operationId !== undefined) {
+      try { recordedAccountId = getGrokResetCouponOperationAccountId(operationId); }
+      catch {
+        return jsonResponse({ error: { code: "ledger_unavailable", message: "Coupon ledger could not be read or locked; no redemption was attempted" } }, 503, req, config);
+      }
+    }
     let accountId: string;
     try {
-      accountId = resolveTargetAccountId(rawAccountId);
+      accountId = resolveTargetAccountId(rawAccountId ?? recordedAccountId);
     } catch (err) {
       return jsonResponse(
         { error: { code: "no_account", message: err instanceof Error ? err.message : String(err) } },
@@ -182,7 +194,7 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
       return jsonResponse({ error: { code: "ledger_unavailable", message: "Coupon ledger could not be read or locked; no redemption was attempted" } }, 503, req, config);
     }
 
-    let resolvedTokenId = requestedTokenId;
+    let resolvedTokenId = requestedTokenId ?? opRecord.tokenId;
     let resolvedTokenValidityEnd: number | undefined;
 
     if (opRecord.kind === "replay") {
