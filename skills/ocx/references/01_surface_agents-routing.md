@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 50.
+Declared capabilities: 59.
 
 ### `ocx agent subagents force`
 
@@ -157,7 +157,7 @@ JSON mode: `payload`.
 
 ### `ocx message sessions`
 
-Discover already-loaded local Codex sessions without reading conversation history.
+Discover already-loaded Codex sessions locally or on an explicitly enrolled peer.
 
 State-changing: no.
 
@@ -165,15 +165,16 @@ Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit a versioned local session directory. |
+| `--json` | boolean | Emit a versioned session directory. |
+| `--host` | string | Exact enrolled peer alias or machine UUID; requires a live foreground owner. |
 
 JSON mode: `envelope`.
 
-- Linux/macOS Unix socket only. Uses effective CODEX_HOME; starts no daemon and returns no partial directory.
+- Linux/macOS only. Local discovery uses the effective CODEX_HOME Unix socket; --host uses the live foreground owner's authenticated loopback route. Starts no daemon and returns no partial directory.
 
 ### `ocx message send`
 
-Submit one correlated peer message to an exact loaded local Codex destination.
+Submit one correlated peer message to an exact loaded Codex destination.
 
 State-changing: yes.
 
@@ -187,12 +188,152 @@ Drives no management route.
 | `--kind` | string | request (default), response or notification. |
 | `--in-reply-to` | string | Request message UUID; required only for a response. |
 | `--json` | boolean | Emit a receipt with not_sent, queued or unknown status. |
+| `--host` | string | Exact enrolled peer alias or machine UUID; omit for the unchanged local path. |
 
 JSON mode: `envelope`.
 
 - Requires daemon support for experimental thread/queue/add. Sender context comes from CODEX_THREAD_ID, not an authentication claim.
 - queued means submitted, not processed. unknown must not be replayed; no automatic retry, daemon start or thread resume.
-- Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No remote/Claude transport or skill installation.
+- Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No Claude transport, native lifecycle mutation or skill installation.
+
+### `ocx message enable`
+
+Explicitly enable private remote messaging state, without starting a listener.
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--port` | number | Unprivileged IPv4-loopback port; defaults to 39176 on first enable. |
+| `--json` | boolean | Emit configuration without credentials. |
+
+JSON mode: `envelope`.
+
+### `ocx message disable`
+
+Disable remote admission and retire the foreground owner generation.
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit safe configuration. |
+
+JSON mode: `envelope`.
+
+### `ocx message status`
+
+Read enabled, running and leased/initiated route states without activation.
+
+State-changing: no.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit safe configuration and owner observations. |
+
+JSON mode: `envelope`.
+
+### `ocx message serve`
+
+Own a foreground listener and optional duplex SSH peer routes; no automatic reconnect.
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--host` | string | Exact initiating peer; repeat for at most four distinct peers. |
+| `--json` | boolean | Emit the startup observation without credentials. |
+
+JSON mode: `envelope`.
+
+### `ocx message hosts probe`
+
+Offer an SSH host fingerprint without enrollment or persistent changes.
+
+State-changing: no.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--ssh` | string | OpenSSH destination/alias. |
+| `--json` | boolean | Emit the offered fingerprint. |
+
+JSON mode: `envelope`.
+
+### `ocx message hosts add`
+
+Usage: `ocx message hosts add <alias> --ssh <destination> --fingerprint <SHA256> [--json]`
+
+Enroll one explicitly enabled peer after SSH fingerprint confirmation.
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--ssh` | string | OpenSSH destination/alias. |
+| `--fingerprint` | string | Explicitly confirmed offered SSH host-key fingerprint. |
+| `--json` | boolean | Emit enrollment metadata, never credentials. |
+
+JSON mode: `envelope`.
+
+### `ocx message hosts list`
+
+List exact peer identities without credentials or listener activation.
+
+State-changing: no.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit safe peer metadata. |
+
+JSON mode: `envelope`.
+
+### `ocx message hosts remove`
+
+Usage: `ocx message hosts remove <alias-or-machine-uuid> [--transaction <uuid>] [--json]`
+
+Revoke local admission first and report any unconfirmed remote cleanup explicitly.
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--transaction` | string | Remove only this exact enrollment; refuse a replacement transaction. |
+| `--json` | boolean | Emit local and remote revocation outcomes. |
+
+JSON mode: `envelope`.
+
+### `ocx message hosts abandon`
+
+Usage: `ocx message hosts abandon --transaction <uuid> [--json]`
+
+Abandon an exact pending local enrollment; remote cleanup remains unconfirmed (exit 3).
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--transaction` | string | Exact pending UUID from hosts list or status; never an alias. |
+| `--json` | boolean | Emit local abandonment and explicit remote-cleanup guidance. |
+
+JSON mode: `envelope`.
 
 ### `ocx agent status`
 

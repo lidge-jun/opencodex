@@ -28,7 +28,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [lifecycle](01_surface_lifecycle.md) | 12 |
 | [providers-models](01_surface_providers-models.md) | 47 |
 | [accounts](01_surface_accounts.md) | 40 |
-| [agents-routing](01_surface_agents-routing.md) | 50 |
+| [agents-routing](01_surface_agents-routing.md) | 59 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 92 |
 | [access-remote](01_surface_access-remote.md) | 28 |
@@ -618,6 +618,42 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx message send`
 
 [State-changing task](01_surface_agents-routing.md#ocx-message-send)
+
+### `ocx message enable`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-enable)
+
+### `ocx message disable`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-disable)
+
+### `ocx message status`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-message-status)
+
+### `ocx message serve`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-serve)
+
+### `ocx message hosts probe`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-message-hosts-probe)
+
+### `ocx message hosts add`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-add)
+
+### `ocx message hosts list`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-message-hosts-list)
+
+### `ocx message hosts remove`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-remove)
+
+### `ocx message hosts abandon`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-abandon)
 
 ### `ocx agent status`
 
@@ -1373,6 +1409,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 331
-- of those, state-changing: 200
+- declared capabilities: 340
+- of those, state-changing: 206
 - head-resolved invocations: 2

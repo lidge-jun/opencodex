@@ -59,6 +59,16 @@ export class LocalMessageRpc implements LocalMetadataClient {
         if (budget.signal.aborted) abort();
       });
     } catch (error) { socket.terminate(); throw error; }
+    return LocalMessageRpc.attach(socket, budget, rpcTimeoutMs);
+  }
+
+  /** Initialize an already authenticated transport; local connect still accepts Unix sockets only. */
+  static async attach(socket: LocalSocket, budget: MessageBudget, rpcTimeoutMs = 10_000): Promise<LocalMessageRpc> {
+    try { budget.throwIfEnded(); } catch (error) { socket.terminate(); throw error; }
+    if (socket.readyState !== 1 || !Number.isInteger(rpcTimeoutMs) || rpcTimeoutMs <= 0 || rpcTimeoutMs > 10_000) {
+      socket.terminate();
+      throw new LocalMessagingError("invalid_transport", "Messaging transport must be connected with a bounded RPC deadline.");
+    }
     const rpc = new LocalMessageRpc(socket, budget, rpcTimeoutMs);
     try {
       const result = await rpc.request("initialize", {
@@ -97,7 +107,8 @@ export class LocalMessageRpc implements LocalMetadataClient {
   }
 
   /** Submit once on this connection; after an accepted write only a correlated reply is definitive. */
-  async queueMessage(threadId: string, text: string, messageId: string): Promise<QueueResult> {
+  async queueMessage(threadId: string, text: string, messageId: string,
+    acknowledge?: (submissionId: string) => void): Promise<QueueResult> {
     let written = false;
     try {
       if (!isThreadId(threadId) || !isThreadId(messageId) || !text || text.includes("\0")
@@ -115,6 +126,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
           && (!Array.isArray(queued.input[0].text_elements) || queued.input[0].text_elements.length !== 0))) {
         throw this.invalidMetadata();
       }
+      acknowledge?.(queued.id);
       return { status: "queued" };
     } catch (error) {
       if (error instanceof QueueRejection || !written) {

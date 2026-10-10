@@ -401,6 +401,7 @@ describe("test runner transpiler cache isolation", () => {
         expect(entry.uid).toBe(process.geteuid!());
         expect(entry.mode & 0o777).toBe(0o700);
         expect(lstatSync(isolated.root).mode & 0o777).toBe(0o700);
+        expect(lstatSync(isolated.env.TMPDIR!).mode & 0o777).toBe(0o700);
       }
     } finally { isolated.cleanup(); }
     expect(existsSync(isolated.root)).toBe(false);
