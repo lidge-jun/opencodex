@@ -7,6 +7,7 @@ import {
   recognizedUpstreamError,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -74,9 +75,29 @@ function noteBoundedDiagnostic(
   if (logCtx[field] !== undefined) return;
   if (!isSafeDiagnosticToken(value)) return;
   if (field === "upstreamErrorType" && !KNOWN_UPSTREAM_ERROR_TYPES.has(value)) return;
+  if (!diagnosticValueAllowed(field, value)) return;
   logCtx[field] = value;
   const status = logCtx.terminalHttpStatus;
-  if (status === undefined || status >= 500) console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${logCtx.upstreamErrorCode ? ` code=${logCtx.upstreamErrorCode}` : ""}${logCtx.upstreamRequestId ? ` request_id=${logCtx.upstreamRequestId}` : ""}`);
+  if (status === undefined || status >= 500) {
+    const { upstreamErrorCode: code, upstreamRequestId: requestId } = upstreamDiagnosticLogFields(logCtx);
+    console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${code ? ` code=${code}` : ""}${requestId ? ` request_id=${requestId}` : ""}`);
+  }
+}
+
+/**
+ * A diagnostic must not repeat a header value this process sent upstream (an echoed credential).
+ * Code and request id are open vocabularies, so they also fail closed once the registry can no
+ * longer vouch for complete coverage. The type is a closed vocabulary; the check is depth only.
+ * Applied at capture, again for every retained value interpolated into a warning, and at
+ * projection, because a credential can be sent after the value was captured.
+ */
+export function diagnosticValueAllowed(
+  field: "upstreamErrorCode" | "upstreamErrorType" | "upstreamRequestId",
+  value: string,
+  registry: OutboundCredentialRegistry = outboundCredentials(),
+): boolean {
+  if (registry.matches(value)) return false;
+  return field === "upstreamErrorType" || registry.complete();
 }
 
 export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: Headers): void {
@@ -94,10 +115,17 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
 }
 
 export function upstreamDiagnosticLogFields(logCtx: UpstreamErrorDiagnostics): UpstreamErrorDiagnostics {
+  const allowed = (field: keyof UpstreamErrorDiagnostics): string | undefined => {
+    const value = logCtx[field];
+    return value && diagnosticValueAllowed(field, value) ? value : undefined;
+  };
+  const code = allowed("upstreamErrorCode");
+  const type = allowed("upstreamErrorType");
+  const requestId = allowed("upstreamRequestId");
   return {
-    ...(logCtx.upstreamErrorCode ? { upstreamErrorCode: logCtx.upstreamErrorCode } : {}),
-    ...(logCtx.upstreamErrorType ? { upstreamErrorType: logCtx.upstreamErrorType } : {}),
-    ...(logCtx.upstreamRequestId ? { upstreamRequestId: logCtx.upstreamRequestId } : {}),
+    ...(code ? { upstreamErrorCode: code } : {}),
+    ...(type ? { upstreamErrorType: type } : {}),
+    ...(requestId ? { upstreamRequestId: requestId } : {}),
   };
 }
 
