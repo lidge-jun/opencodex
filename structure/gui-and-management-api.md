@@ -183,9 +183,9 @@ Tailscale identity headers authorize session issuance only when the request arri
 listener and the exact login appears in `remoteGui.allowedTailscaleUsers`. The public listener and
 the unauthenticated data-loopback listener always pass `trustedTailscaleIngress: false`, regardless
 of `Host`, `Origin`, `Forwarded`, `X-Forwarded-*`, or `Tailscale-User-*` values. A generic TLS proxy
-cannot establish that identity and uses the existing single-use, digest-only, origin-bound pairing
-exchange. Pairing accepts no admin/data credential substitute and consumes a grant only after the
-full origin predicate succeeds.
+cannot establish a Tailscale identity and uses the existing single-use, digest-only, origin-bound
+pairing exchange. Hub pairing through `hub.managementIngress` trusts its actual `requestServer` and ignores forwarded headers. Loopback `Host` retains the observed local origin for `ocx gui` and local CLI management; non-loopback `Host` must match HTTPS `hub.managementPublicOrigin`.
+That canonical origin governs non-loopback management CORS, session admission and CSRF on the marked management listener. Only that listener's requests carry the mark, and the data-loopback and link listeners never resolve it. The public listener keeps its existing hub behavior: with authentication on, it can still redeem a pairing grant that arrives with the canonical public Host and Origin, as before this change. With authentication off, it rejects that path. Standalone and loopback rules are unchanged, and grants remain single-use and origin-bound.
 
 The server issues a local in-memory session for five minutes or a remote session for twelve hours,
 with 128 live sessions maximum. Stored-key reads require a current pairing or trusted Tailscale-identity session, not automatic loopback issuance or admin tokens. `POST /api/keys/reveal` uses `createManagementSessionControl().canRevealDataKeys` before and after body reception; absent controls deny. Every session is bound to the exact server and browser origins;
@@ -567,8 +567,8 @@ POST before a concurrent DELETE settles. Retryable GET/DELETE races preserve sam
 retry, last trusted device details, and the existing poll cadence. Outside same-flow cancellation
 ownership, a GET HTTP failure stops polling without starting a second login POST.
 
-Pairing-grant source limiting applies only to invalid guesses from an allowed browser origin; disallowed
-origins record no limiter state, and a valid grant redeems even from a throttled source. Standalone grant delivery also requires a one-use configuration-write intent; see [Standalone pairing delivery](remote-link.md#standalone-pairing-delivery).
+Pairing-grant source limiting applies only to invalid guesses from an allowed browser origin; disallowed origins record no limiter state, and a valid grant redeems even from a throttled source. Standalone grant delivery also requires a one-use configuration-write intent; see [Standalone pairing delivery](remote-link.md#standalone-pairing-delivery).
+`gui/src/connect-pairing.tsx` retains an opaque, memory-only handoff from `gui/src/api.ts` until validation succeeds. Remote Link validation reads the candidate's protected status without 401 renewal or admin-token fallback. Network, 5xx, Cloudflare challenge and malformed-status failures offer validation retry without another grant exchange. Definitive hub rejection (401/403) or cancellation restores the previous session even after background 401 invalidation, unless a newer login, logout or target change superseded the handoff. Only automatic invalidation inherits its opaque ownership marker. Credentials never enter form state, browser storage, errors or session event payloads. Coverage: `gui/tests/connect-pairing.test.ts` and `gui/tests/remote-link-route.test.tsx`.
 
 ## Durable provider PATCH
 

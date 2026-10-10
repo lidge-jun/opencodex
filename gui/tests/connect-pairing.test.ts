@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, createElement } from "react";
 
@@ -234,14 +234,285 @@ test("a cancelled pairing body cannot install its obsolete session", async () =>
   await expect(pending).rejects.toMatchObject({ name: "AbortError" });
 });
 
-test("pairing reports refusal, server failure and network failure separately", async () => {
+test("pairing distinguishes expired or origin-bound grants, HTTP 403, server failure and network failure", async () => {
   const { submitConnectPairing } = await import("../src/connect-pairing-transport");
   const target = { id: "shared" as const, baseUrl: "https://hub.example.test", serverOrigin: "https://hub.example.test",
     bootstrapPath: "https://hub.example.test/opencodex-session", transport: "direct" as const };
-  for (const [status, kind] of [[403, "refused"], [503, "request-failed"]] as const) {
+  for (const [status, kind] of [[401, "refused"], [403, "origin-denied"], [503, "request-failed"]] as const) {
     await expect(submitConnectPairing(target, `ocx_pair_${"a".repeat(43)}`,
       (async () => new Response(null, { status })) as typeof fetch)).rejects.toMatchObject({ kind });
   }
   await expect(submitConnectPairing(target, `ocx_pair_${"a".repeat(43)}`,
     (async () => { throw new Error("network"); }) as typeof fetch)).rejects.toMatchObject({ kind: "unreachable" });
+});
+
+test("pairing identifies Cloudflare HTML challenges without surfacing their body", async () => {
+  const { submitConnectPairing } = await import("../src/connect-pairing-transport");
+  const target = { id: "shared" as const, baseUrl: "https://hub.example.test", serverOrigin: "https://hub.example.test",
+    bootstrapPath: "https://hub.example.test/opencodex-session", transport: "direct" as const };
+  const code = `ocx_pair_${"a".repeat(43)}`;
+  await expect(submitConnectPairing(target, code, (async () => new Response("challenge-content-secret", {
+    status: 403,
+    headers: { "content-type": "text/html", "cf-mitigated": "challenge" },
+  })) as typeof fetch)).rejects.toMatchObject({ kind: "cloudflare-challenge" });
+  await expect(submitConnectPairing(target, code, (async () => new Response(
+    "<html><title>Just a moment...</title><script>challenge-platform</script></html>",
+    { status: 200, headers: { "content-type": "text/html" } },
+  )) as typeof fetch)).rejects.toMatchObject({ kind: "cloudflare-challenge" });
+});
+
+test("Remote Link session validation distinguishes 401, 403 and Cloudflare challenges", async () => {
+  const { validateRemoteLinkSession } = await import("../src/connect-pairing-transport");
+  for (const [status, kind] of [[401, "remote-link-unauthorized"], [403, "remote-link-forbidden"], [503, "request-failed"]] as const) {
+    await expect(validateRemoteLinkSession("https://hub.example.test", (async () => new Response(null, { status })) as typeof fetch))
+      .rejects.toMatchObject({ kind });
+  }
+  await expect(validateRemoteLinkSession("https://hub.example.test", (async () => new Response(
+    "<html><title>Just a moment...</title><script>challenge-platform</script></html>",
+    { status: 403, headers: { "content-type": "text/html" } },
+  )) as typeof fetch)).rejects.toMatchObject({ kind: "cloudflare-challenge" });
+});
+
+test("pairing refuses a returned session bound to a different browser origin", async () => {
+  const previousWindow = Reflect.get(globalThis, "window");
+  const previousDocument = Reflect.get(globalThis, "document");
+  const win = new Window({ url: "https://browser.example.test/#remote" });
+  Object.defineProperties(globalThis, {
+    window: { configurable: true, value: win },
+    document: { configurable: true, value: win.document },
+  });
+  const { resetApiAuthFetchForTests, configureApiTargets, hasApiSession } = await import("../src/api");
+  const { standaloneApiTargets } = await import("../src/api-targets");
+  const { submitConnectPairing } = await import("../src/connect-pairing-transport");
+  resetApiAuthFetchForTests();
+  configureApiTargets(standaloneApiTargets("https://hub.example.test"));
+  const target = { id: "shared" as const, baseUrl: "https://hub.example.test", serverOrigin: "https://hub.example.test",
+    bootstrapPath: "https://hub.example.test/opencodex-session", transport: "direct" as const };
+  try {
+    await expect(submitConnectPairing(target, `ocx_pair_${"a".repeat(43)}`, (async () => new Response([
+      '<meta name="opencodex-session-token" content="ocx_session_origin_fixture">',
+      '<meta name="opencodex-session-csrf" content="fixture-csrf">',
+      '<meta name="opencodex-session-origin" content="https://different.example.test">',
+      '<meta name="opencodex-session-server-origin" content="https://hub.example.test">',
+    ].join(""), { headers: { "content-type": "text/html" } })) as typeof fetch)).rejects.toMatchObject({ kind: "invalid-response" });
+    expect(hasApiSession("shared")).toBe(false);
+  } finally {
+    resetApiAuthFetchForTests();
+    win.close();
+    Object.defineProperties(globalThis, {
+      window: { configurable: true, value: previousWindow },
+      document: { configurable: true, value: previousDocument },
+    });
+  }
+});
+
+
+test("cancelled Remote Link validation forwards the abort signal and rejects a late response", async () => {
+  const { validateRemoteLinkSession } = await import("../src/connect-pairing-transport");
+  const controller = new AbortController();
+  let release!: (response: Response) => void;
+  let observedSignal: AbortSignal | null | undefined;
+  const pending = validateRemoteLinkSession("https://hub.example.test", (async (_input, init) => {
+    observedSignal = init?.signal;
+    return new Promise<Response>(resolve => { release = resolve; });
+  }) as typeof fetch, controller.signal);
+  expect(observedSignal).toBe(controller.signal);
+  controller.abort();
+  release(Response.json({ role: "standalone", listener: { state: "off", port: null }, links: [], child: null }));
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+});
+
+async function withPairingValidation(
+  firstValidation: () => Response | Promise<Response>,
+  check: (fixture: {
+    container: HTMLDivElement; input: HTMLInputElement; submit: () => Promise<void>;
+    retry: () => Promise<void>; close: () => Promise<void>; sessionIs: (kind: string) => Promise<boolean>;
+    background401: () => Promise<void>; replaceSession: () => void; logout: () => Promise<boolean>; replaceTarget: () => void;
+    counts: { posts: number; validations: number; connected: number; bootstraps: number };
+  }) => Promise<void>,
+  bootstrapResponse: () => Response = () => new Response(null, { status: 401 }),
+) {
+  const keys = ["window", "document", "navigator", "sessionStorage", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
+  const previous = Object.fromEntries(keys.map(key => [key, Reflect.get(globalThis, key)]));
+  const win = new Window({ url: "http://localhost/#remote" });
+  for (const [key, value] of Object.entries({ window: win, document: win.document, navigator: win.navigator,
+    sessionStorage: win.sessionStorage, localStorage: win.localStorage, IS_REACT_ACT_ENVIRONMENT: true })) {
+    Object.defineProperty(globalThis, key, { configurable: true, value });
+  }
+  const counts = { posts: 0, validations: 0, connected: 0, bootstraps: 0 };
+  const html = (kind: string) => [
+    `<meta name="opencodex-session-token" content="ocx_session_${kind}">`,
+    `<meta name="opencodex-session-csrf" content="${kind}-csrf">`,
+    '<meta name="opencodex-session-origin" content="http://localhost">',
+    '<meta name="opencodex-session-server-origin" content="https://hub.example.test">',
+  ].join("");
+  const mockFetch = (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/opencodex-session")) {
+      if (init?.method !== "POST") { counts.bootstraps++; return bootstrapResponse(); }
+      counts.posts++;
+      return new Response(html("candidate"), { headers: { "content-type": "text/html" } });
+    }
+    const headers = new Headers(init?.headers);
+    if (url.endsWith("/api/background")) return new Response(null, { status: 401 });
+    if (url.endsWith("/api/link/status")) {
+      expect(headers.get("x-opencodex-api-key")).toBe("ocx_session_candidate");
+      if (++counts.validations === 1) return firstValidation();
+      return Response.json({ role: "standalone", listener: { state: "off", port: null }, links: [], child: null });
+    }
+    // Observe the entire restored session through authenticated requests, never a token getter.
+    return Response.json({ previous: headers.get("x-opencodex-api-key") === "ocx_session_previous"
+      && headers.get("x-opencodex-csrf-token") === "previous-csrf"
+      && headers.get("x-opencodex-gui-origin") === "http://localhost",
+      candidate: headers.get("x-opencodex-api-key") === "ocx_session_candidate",
+      replacement: headers.get("x-opencodex-api-key") === "ocx_session_replacement",
+      missing: !headers.has("x-opencodex-api-key") });
+  }) as typeof fetch;
+  Object.defineProperty(win, "fetch", { configurable: true, value: mockFetch });
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: mockFetch });
+  const api = await import("../src/api");
+  const { standaloneApiTargets } = await import("../src/api-targets");
+  const { validateRemoteLinkSession } = await import("../src/connect-pairing-transport");
+  const targets = standaloneApiTargets("https://hub.example.test");
+  api.resetApiAuthFetchForTests();
+  api.configureApiTargets(targets);
+  api.installApiAuthFetch();
+  api.installApiSessionFromHtml("shared", html("previous"));
+  const { LanguageProvider } = await import("../src/i18n/provider");
+  const { ConnectPairingForm } = await import("../src/connect-pairing");
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(LanguageProvider, null, createElement(ConnectPairingForm, {
+      target: targets.shared,
+      onConnected: async signal => { await validateRemoteLinkSession(targets.shared.baseUrl, undefined, signal); counts.connected++; },
+    }))));
+    const input = container.querySelector("#connect-pairing-code") as HTMLInputElement;
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, `ocx_pair_${"c".repeat(43)}`);
+    await act(async () => { input.dispatchEvent(new win.Event("input", { bubbles: true })); });
+    await check({ container, input, counts,
+      submit: () => act(async () => { input.closest("form")!.dispatchEvent(new win.Event("submit", { bubbles: true, cancelable: true })); }),
+      retry: () => act(async () => {
+        const button = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Retry validation");
+        expect(button).toBeDefined();
+        button!.click();
+      }),
+      close: () => act(async () => root.render(null)),
+      background401: () => act(async () => { expect((await win.fetch(`${targets.shared.baseUrl}/api/background`)).status).toBe(401); }),
+      replaceSession: () => { api.installApiSessionFromHtml("shared", html("replacement")); },
+      logout: () => api.logoutApiSession("shared"),
+      replaceTarget: () => {
+        api.configureApiTargets(standaloneApiTargets("https://other-hub.example.test"));
+        api.configureApiTargets(targets);
+      },
+      sessionIs: async kind => (await (await win.fetch(`${targets.shared.baseUrl}/api/check-session`, { method: "POST" })).json())[kind] === true,
+    });
+  } finally {
+    await act(async () => root.unmount());
+    api.resetApiAuthFetchForTests();
+    win.close();
+    for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: previous[key] });
+  }
+}
+
+test.each(["network", "5xx", "malformed", "challenge"] as const)("%s validation failure retries the installed session without another pairing POST", async failure => {
+  await withPairingValidation(() => {
+    if (failure === "network") throw new Error("offline");
+    if (failure === "challenge") return new Response(null, { status: 403, headers: { "cf-mitigated": "challenge" } });
+    return failure === "5xx" ? new Response(null, { status: 503 }) : Response.json({ invalid: true });
+  }, async ({ container, input, submit, retry, close, sessionIs, counts }) => {
+    await submit();
+    expect(counts.connected).toBe(0);
+    expect(input.value).toBe("");
+    expect(input.disabled).toBe(true);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry validation");
+    expect(await sessionIs("candidate")).toBe(true);
+    await retry();
+    expect(counts).toEqual({ posts: 1, validations: 2, connected: 1, bootstraps: 0 });
+    expect(await sessionIs("candidate")).toBe(true);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(winStorageHasSession()).toBe(false);
+    await close();
+    expect(await sessionIs("candidate")).toBe(true);
+  });
+});
+
+test("leaving a pending validation restores the previous session", async () => {
+  await withPairingValidation(() => new Response(null, { status: 503 }), async ({ submit, close, sessionIs }) => {
+    await submit();
+    expect(await sessionIs("candidate")).toBe(true);
+    await close();
+    expect(await sessionIs("previous")).toBe(true);
+  });
+});
+
+function winStorageHasSession(): boolean {
+  return Object.keys(sessionStorage).some(key => /session|token/i.test(key))
+    || Object.keys(localStorage).some(key => /session|token/i.test(key));
+}
+
+test.each([401, 403])("validation HTTP %i restores the previous shared session", async status => {
+  await withPairingValidation(() => new Response(null, { status }), async ({ container, input, submit, sessionIs, counts }) => {
+    await submit();
+    expect(counts).toEqual({ posts: 1, validations: 1, connected: 0, bootstraps: 0 });
+    expect(await sessionIs("previous")).toBe(true);
+    expect(input.value).toBe("");
+    expect(input.disabled).toBe(false);
+    expect(container.textContent).not.toContain("Retry validation");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("cannot manage Remote Link");
+    expect(winStorageHasSession()).toBe(false);
+  });
+});
+
+test.each(["rejection", "cancellation"] as const)("background 401 recovery preserves rollback ownership on %s", async outcome => {
+  let release!: (response: Response) => void;
+  await withPairingValidation(() => new Promise<Response>(resolve => { release = resolve; }),
+    async ({ container, submit, background401, close, sessionIs, counts }) => {
+      await submit();
+      expect(await sessionIs("candidate")).toBe(true);
+      await background401();
+      expect(counts.bootstraps).toBe(1);
+      expect(await sessionIs("candidate")).toBe(false);
+      if (outcome === "cancellation") await close();
+      await act(async () => { release(new Response(null, { status: 401 })); });
+      if (outcome === "rejection") expect(container.querySelector('[role="alert"]')?.textContent).toContain("cannot manage Remote Link");
+      expect(await sessionIs("previous")).toBe(true);
+      expect(counts.connected).toBe(0);
+      expect(winStorageHasSession()).toBe(false);
+    });
+});
+
+test.each(["new-login", "logout", "invalidated-logout", "target"] as const)("pending rollback yields to %s", async replacement => {
+  let release!: (response: Response) => void;
+  await withPairingValidation(() => new Promise<Response>(resolve => { release = resolve; }),
+    async ({ submit, background401, replaceSession, logout, replaceTarget, sessionIs }) => {
+      await submit();
+      if (replacement === "logout") expect(await logout()).toBe(true);
+      else {
+        await background401();
+        if (replacement === "new-login") replaceSession();
+        else if (replacement === "invalidated-logout") expect(await logout()).toBe(false);
+        else replaceTarget();
+      }
+      await act(async () => { release(new Response(null, { status: 401 })); });
+      expect(await sessionIs("previous")).toBe(false);
+      expect(await sessionIs("candidate")).toBe(false);
+      expect(await sessionIs("replacement")).toBe(replacement === "new-login");
+      expect(await sessionIs("missing")).toBe(replacement !== "new-login");
+    });
+});
+
+test("a malformed recovery bootstrap does not lose pending cancellation ownership", async () => {
+  let release!: (response: Response) => void;
+  await withPairingValidation(() => new Promise<Response>(resolve => { release = resolve; }),
+    async ({ submit, background401, close, sessionIs, counts }) => {
+      await submit();
+      await background401();
+      expect(counts.bootstraps).toBe(1);
+      await close();
+      await act(async () => { release(new Response(null, { status: 401 })); });
+      expect(await sessionIs("previous")).toBe(true);
+    }, () => new Response("<html></html>", { headers: { "content-type": "text/html" } }));
 });

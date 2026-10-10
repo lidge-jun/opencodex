@@ -29,7 +29,10 @@ export function hubConfig(publicOrigin = "https://hub.example.test"): OcxConfig 
 }
 
 /** Keep real ingress/handlers while the kernel allocates both ports at the actual bind. */
-export async function startEphemeralHubServer(deps: Parameters<typeof startServer>[1]) {
+export async function startEphemeralHubServer(
+  deps: Parameters<typeof startServer>[1],
+  expectedHostnames: unknown[] = ["0.0.0.0", "127.0.0.1"],
+) {
   const nativeServe = Bun.serve.bind(Bun);
   const listeners: Array<ReturnType<typeof Bun.serve>> = [];
   const hostnames: unknown[] = [];
@@ -49,7 +52,7 @@ export async function startEphemeralHubServer(deps: Parameters<typeof startServe
     }
     expect(listeners).toHaveLength(2);
     expect(listeners[0]).toBe(server);
-    expect(hostnames).toEqual(["0.0.0.0", "127.0.0.1"]);
+    expect(hostnames).toEqual(expectedHostnames);
     const managementPort = listeners[1]?.port;
     if (!managementPort || managementPort === server.port) throw new Error("expected distinct live ingress ports");
     return { server, managementPort };
