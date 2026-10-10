@@ -373,8 +373,9 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   which keeps a standard role on the cheaper model. Unpriced, unmapped models are never proposed. A role
   gets the lowest sufficient tier, then the lowest price. Effort binds to ladder positions of the chosen
   model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
-  only for a role whose file already sets `model_reasoning_effort`, and written by the same span-preserving
-  editor as `model`, located by the same TOML-aware scan. A routed model's ladder is its row's
+  for every sized role whose chosen model has a non-empty ladder (none when the ladder is empty), and
+  written by the same span-preserving editor as `model`, located by the same TOML-aware scan. A routed
+  model's ladder is its row's
   `reasoningEfforts`; a row that declares none takes the ladder the written Codex catalog shows for it, an
   explicit empty list stays empty, and a row without its own default takes the catalog's default when that
   rung is on the ladder.
@@ -393,9 +394,8 @@ parser and the role rubric followed by a short addendum (`DELEGATED_WORK_SIZING_
 sizer size the described one-shot work rather than a standing role; the role rubric's own text is unchanged.
 It maps the answer with the same `buildRoleProposals`. Two things differ from roles in the mapping,
 both at the call site: candidates are the `available` list `GET /api/injection-model` offers (one helper
-builds both), with effort ladders cut to the Codex levels `PUT /api/injection-model` accepts, and
-`alwaysProposeEffort` proposes an effort even when none is set, because the delegation effort is a
-picker of its own. The route writes nothing; the page shows tier, effort, rationale and move triggers,
+builds both), with effort ladders cut to the Codex levels `PUT /api/injection-model` accepts. Like a
+role, the delegation default always gets an effort proposed, even when none is set. The route writes nothing; the page shows tier, effort, rationale and move triggers,
 and **Use this** goes through the page's ordinary `PUT /api/injection-model` save. It is not
 sibling-refused, like the `PUT` it feeds, since both touch only this instance's config.
 

@@ -209,7 +209,7 @@ export async function proposeDelegationModel(options: {
     role: DELEGATED_WORK_ROLE,
     model: options.config.injectionModel ?? null,
     effort: options.config.injectionEffort ?? null,
-  }], outcomes, classified, { alwaysProposeEffort: true });
+  }], outcomes, classified);
   return {
     sizingModel,
     sizingError,
