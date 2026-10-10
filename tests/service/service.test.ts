@@ -321,7 +321,7 @@ describe("systemd service unit", () => {
     // condition, `restart` would fall through to the usage error.
     expect(serviceCommand).toContain('if (command === "repair" || command === "restart") {');
     expect(serviceCommand).toContain('const verb: ServiceRepairVerb = command === "restart" ? "restart" : "repair";');
-    expect(serviceCommand).toContain("await repairService({ verb });");
+    expect(serviceCommand).toContain("await repairService({ verb, supervisionLatch });");
   });
 
   test("Windows install presence distinguishes unknown queries from proven absence", () => {
@@ -2443,13 +2443,13 @@ describe("service lifecycle cleanup ordering", () => {
   test("Windows service install ends the running task before rewriting its assets, with write retry", async () => {
     const service = await readText("src/service/windows-ops.ts");
     const assetsHelper = service.slice(
-      service.indexOf("function writeWindowsSchedulerAssets()"),
-      service.indexOf("function installWindows()"),
+      service.indexOf("function writeWindowsSchedulerAssets("),
+      service.indexOf("function installWindows("),
     );
-    const installWindows = service.slice(service.indexOf("function installWindows()"), service.indexOf("async function installWindowsNative()"));
+    const installWindows = service.slice(service.indexOf("function installWindows("), service.indexOf("async function installWindowsNative("));
 
-    const stopAt = installWindows.indexOf("stopWindows();");
-    const assetsAt = installWindows.indexOf("writeWindowsSchedulerAssets();");
+    const stopAt = installWindows.indexOf("(deps.stopScheduler ?? stopWindows)();");
+    const assetsAt = installWindows.indexOf("(deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);");
     const createAt = installWindows.indexOf("buildWindowsSchtasksCreateArgs");
     expect(stopAt).toBeGreaterThan(-1);
     expect(assetsAt).toBeGreaterThan(-1);
@@ -2467,9 +2467,9 @@ describe("service lifecycle cleanup ordering", () => {
     const service = await readText("src/service/cli.ts");
     const installCase = service.slice(service.indexOf('case "install":'), service.indexOf('case "start":'));
     expect(installCase).toContain('scheduler.status === "absent"');
-    expect(installCase).toContain("await installFreshWindowsSchedulerSafely()");
+    expect(installCase).toContain("await installFreshWindowsSchedulerSafely({ supervisionLatch })");
     expect(installCase.indexOf('scheduler.status === "absent"')).toBeLessThan(
-      installCase.indexOf("await installFreshWindowsSchedulerSafely()"),
+      installCase.indexOf("await installFreshWindowsSchedulerSafely({ supervisionLatch })"),
     );
   });
 
@@ -2533,8 +2533,8 @@ describe("service lifecycle cleanup ordering", () => {
 
   test("native install refuses Microsoft-account logins before removing the scheduler backend", async () => {
     const service = await readText("src/service/windows-ops.ts");
-    const installNative = service.slice(service.indexOf("async function installWindowsNative()"), service.indexOf("function startWindows()"));
-    expect(installNative.indexOf("assertWindowsNativeServiceAccountSupported()")).toBeLessThan(installNative.indexOf("uninstallWindows()"));
+    const installNative = service.slice(service.indexOf("async function installWindowsNative("), service.indexOf("function startWindows()"));
+    expect(installNative.indexOf("(deps.assertNativeAccount ?? assertWindowsNativeServiceAccountSupported)()")).toBeLessThan(installNative.indexOf("(deps.uninstallScheduler ?? uninstallWindows)()"));
     expect(service).toContain("Microsoft-account Windows login");
   });
 

@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { accessSync, constants, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { accessSync, constants, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { readPid } from "../config/process-state";
 import { resolveServiceOwnership, sameServiceOwnershipSubject, type ServiceOwnershipResolution } from "./state";
+import { inspectDesktopSupervision, processIdentity, procfs, type ProcReader } from "./desktop-supervision.mjs";
 
 export interface DesktopStartupDiagnostic {
   /** Durable desktop claim; failed supervision does not release ownership. */
@@ -11,11 +12,13 @@ export interface DesktopStartupDiagnostic {
   loginEnabled: boolean;
   running: boolean;
   viable: boolean;
+  /** Live parentage when no durable claim exists; never converts supervision into ownership. */
+  supervisor?: { supervisorPid: number; runtimePid: number; app: string };
 }
 
-/** A login item alone is insufficient: the same app must own and supervise this proxy. */
+/** A login item alone is insufficient: the same app must supervise this proxy. */
 export function deriveDesktopStartup(facts: Omit<DesktopStartupDiagnostic, "viable">): DesktopStartupDiagnostic {
-  return { ...facts, viable: facts.owned && facts.loginEnabled && facts.running };
+  return { ...facts, viable: (facts.owned || facts.supervisor !== undefined) && facts.loginEnabled && facts.running };
 }
 
 function run(command: string, args: string[]): string {
@@ -28,24 +31,11 @@ interface DesktopStartupDeps {
   uid?: number;
   ownership?: () => ServiceOwnershipResolution;
   readPid?: () => number | null;
+  readRuntimePortPid?: () => number | null;
   run?: typeof run;
   env?: NodeJS.ProcessEnv;
   proc?: ProcReader;
 }
-
-/** Linux process identity from procfs: executable target and parent pid. */
-interface ProcReader {
-  exe(pid: number): string;
-  parent(pid: number): number;
-}
-const procfs: ProcReader = {
-  exe: pid => readlinkSync(`/proc/${pid}/exe`),
-  // comm may contain spaces or parentheses, so fields are counted after the last ')'.
-  parent: pid => {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
-  },
-};
 
 /** Cheap ownership-only snapshot: no launchd/process probes on the server request path. */
 export function desktopStartupOwnership(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
@@ -56,9 +46,47 @@ export function desktopStartupOwnership(deps: DesktopStartupDeps = {}): DesktopS
     ? deriveDesktopStartup({ owned: true, loginEnabled: false, running: false }) : undefined;
 }
 
-function processIdentity(pid: number, execute: typeof run): { parent: number; executable: string } | null {
-  const row = /^(\d+)\s+(.+)$/.exec(execute("/bin/ps", ["-p", String(pid), "-o", "ppid=,comm="]));
-  return row ? { parent: Number(row[1]), executable: realpathSync(row[2]!) } : null;
+function macLoginRegistration(deps: DesktopStartupDeps) {
+  const execute = deps.run ?? run;
+  const path = join(deps.home ?? homedir(), "Library", "LaunchAgents", "OpenCodex.plist");
+  const plist = JSON.parse(execute("/usr/bin/plutil", ["-convert", "json", "-o", "-", path]));
+  const args = plist.ProgramArguments;
+  if (plist.Label !== "OpenCodex" || plist.RunAtLoad !== true || !Array.isArray(args)
+    || args.length !== 2 || args[1] !== "--autostart" || typeof args[0] !== "string"
+    || !args[0].endsWith("/Contents/MacOS/opencodex-desktop")
+    || (plist.Program !== undefined && plist.Program !== args[0])) return null;
+  const app = realpathSync(args[0]);
+  const proxy = realpathSync(join(dirname(app), "ocx"));
+  accessSync(app, constants.X_OK);
+  accessSync(proxy, constants.X_OK);
+  const domain = `gui/${deps.uid ?? process.getuid!()}`;
+  const disabled = execute("/bin/launchctl", ["print-disabled", domain]);
+  const loaded = execute("/bin/launchctl", ["print", `${domain}/OpenCodex`]);
+  const program = /^\s*program = (.+)$/m.exec(loaded)?.[1];
+  const loadedPath = /^\s*path = (.+)$/m.exec(loaded)?.[1];
+  const loginEnabled = /^\s*disabled services = \{[\s\S]*\}\s*$/.test(disabled)
+    && !/"OpenCodex"\s*=>\s*(?:disabled|true)/.test(disabled)
+    && program !== undefined && realpathSync(program) === app
+    && loadedPath !== undefined && realpathSync(loadedPath) === realpathSync(path);
+  return { app, proxy, loginEnabled };
+}
+
+function diagnoseSupervisedStartup(deps: DesktopStartupDeps, ownerRevision: number, loginFor: (app: string) => boolean): DesktopStartupDiagnostic | undefined {
+  const evidence = inspectDesktopSupervision(deps);
+  if (evidence.kind !== "desktop") return undefined;
+  let loginEnabled = false;
+  try { loginEnabled = loginFor(evidence.app); }
+  catch { /* Login failure revokes restart viability, not the observed live supervisor. */ }
+  if ((deps.ownership ?? resolveServiceOwnership)().kind !== "none") return undefined;
+  // Login probes can outlive the runtime or its parent; only the same live chain gets credit.
+  const final = inspectDesktopSupervision({ ...deps, targetPid: evidence.runtimePid });
+  if (final.kind !== "desktop" || final.runtimePid !== evidence.runtimePid
+    || final.supervisorPid !== evidence.supervisorPid || final.app !== evidence.app) return undefined;
+  // A new claim or revision during the last process probe invalidates the unowned projection.
+  const finalOwner = (deps.ownership ?? resolveServiceOwnership)();
+  if (finalOwner.kind !== "none" || finalOwner.revision !== ownerRevision) return undefined;
+  const { supervisorPid, runtimePid, app } = evidence;
+  return deriveDesktopStartup({ owned: false, loginEnabled, running: true, supervisor: { supervisorPid, runtimePid, app } });
 }
 
 /** Read-only macOS desktop ownership, login registration and live parent/child checks. */
@@ -66,6 +94,10 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
   if ((deps.platform ?? process.platform) !== "darwin") return undefined;
   const ownership = deps.ownership ?? resolveServiceOwnership;
   const owner = ownership();
+  if (owner.kind === "none") return diagnoseSupervisedStartup(deps, owner.revision, app => {
+    const login = macLoginRegistration(deps);
+    return login !== null && login.app === app && login.loginEnabled;
+  });
   if (owner.kind !== "owned" || owner.ownership.owner !== "desktop") return undefined;
   const facts = { owned: true, loginEnabled: false, running: false };
   const execute = deps.run ?? run;
@@ -74,26 +106,10 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
     const home = deps.home ?? homedir();
     const id = readFileSync(join(home, "Library", "Application Support", "com.opencodex.desktop", "install-id"), "utf8").trim();
     if (id !== owner.ownership.installId) return deriveDesktopStartup(facts);
-    const path = join(home, "Library", "LaunchAgents", "OpenCodex.plist");
-    const plist = JSON.parse(execute("/usr/bin/plutil", ["-convert", "json", "-o", "-", path]));
-    const args = plist.ProgramArguments;
-    if (plist.Label !== "OpenCodex" || plist.RunAtLoad !== true || !Array.isArray(args)
-      || args.length !== 2 || args[1] !== "--autostart" || typeof args[0] !== "string"
-      || !args[0].endsWith("/Contents/MacOS/opencodex-desktop")
-      || (plist.Program !== undefined && plist.Program !== args[0])) return deriveDesktopStartup(facts);
-    const app = realpathSync(args[0]);
-    const proxy = realpathSync(join(dirname(app), "ocx"));
-    accessSync(app, constants.X_OK);
-    accessSync(proxy, constants.X_OK);
-    const domain = `gui/${deps.uid ?? process.getuid!()}`;
-    const disabled = execute("/bin/launchctl", ["print-disabled", domain]);
-    const loaded = execute("/bin/launchctl", ["print", `${domain}/OpenCodex`]);
-    const program = /^\s*program = (.+)$/m.exec(loaded)?.[1];
-    const loadedPath = /^\s*path = (.+)$/m.exec(loaded)?.[1];
-    facts.loginEnabled = /^\s*disabled services = \{[\s\S]*\}\s*$/.test(disabled)
-      && !/"OpenCodex"\s*=>\s*(?:disabled|true)/.test(disabled)
-      && program !== undefined && realpathSync(program) === app
-      && loadedPath !== undefined && realpathSync(loadedPath) === realpathSync(path);
+    const login = macLoginRegistration(deps);
+    if (!login) return deriveDesktopStartup(facts);
+    const { app, proxy } = login;
+    facts.loginEnabled = login.loginEnabled;
     const pid = pidReader();
     if (pid !== null) {
       const child = processIdentity(pid, execute);
@@ -135,6 +151,16 @@ export function diagnoseLinuxDesktopStartup(deps: DesktopStartupDeps = {}): Desk
   if ((deps.platform ?? process.platform) !== "linux") return undefined;
   const ownership = deps.ownership ?? resolveServiceOwnership;
   const owner = ownership();
+  if (owner.kind === "none") return diagnoseSupervisedStartup(deps, owner.revision, app => {
+    const home = deps.home ?? homedir();
+    const configured = (deps.env ?? process.env).XDG_CONFIG_HOME;
+    const config = configured && isAbsolute(configured) ? configured : join(home, ".config");
+    // auto-launch's HOME entry must remain inside the session's XDG autostart search path.
+    if (resolve(config) !== resolve(home, ".config")) return false;
+    const entry = readFileSync(join(home, ".config", "autostart", "OpenCodex.desktop"), "utf8");
+    const login = linuxLoginApp(entry);
+    return login !== null && realpathSync(login) === app;
+  });
   if (owner.kind !== "owned" || owner.ownership.owner !== "desktop") return undefined;
   const facts = { owned: true, loginEnabled: false, running: false };
   const proc = deps.proc ?? procfs;

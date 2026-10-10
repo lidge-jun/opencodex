@@ -81,6 +81,7 @@ function probeVersionOnce(
       windowsShim ? ["/c", shimCommand] : [...args, "--version"],
       {
         timeout: VERSION_PROBE_TIMEOUT_MS, encoding: "utf8", stdio: "pipe",
+        env: { ...deps.env, OCX_NO_DESKTOP_HANDOFF: "1" },
         windowsHide: true, ...(windowsShim ? { windowsVerbatimArguments: true } : {}),
       },
     ) as SpawnSyncReturns<string>;

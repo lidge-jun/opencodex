@@ -194,6 +194,8 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly alternateTargetSends: number;
   readonly targetTransitions: number;
   readonly lastTargetKey: string | undefined;
+  /** Seed a fresh derived scope with the actual endpoint of its already-paid initial send. */
+  bindPrepaidTarget?(targetKey: string): void;
   /**
    * Spend one operator-granted replacement for an AMBIGUOUS failure of this logical request,
    * up to `limit`. False once the request has none left.
@@ -390,6 +392,7 @@ function createAmbiguousResendGrant(): Pick<SharedSendLedger, "claimAmbiguousRes
   };
 }
 
+/** Keep target-local transition state over the shared ledger and its single-use bookings. */
 function createRequestExecutionBudgetWithLedger(
   policy: RequestExecutionBudgetPolicy,
   logicalRequestId: string | undefined,
@@ -441,6 +444,11 @@ function createRequestExecutionBudgetWithLedger(
     get alternateTargetSends() { return alternateTargetSends; },
     get targetTransitions() { return targetTransitions; },
     get lastTargetKey() { return lastTargetKey; },
+    /** Seed only a fresh scope; never reset recovery history on an existing target. */
+    bindPrepaidTarget(targetKey: string): void {
+      // Only a fresh scope may bind: this is initial identity, never a recovery rebase.
+      if (lastTargetKey === undefined) lastTargetKey = targetKey;
+    },
     remainingBaseSends(cap: number): number {
       const capped = Number.isFinite(cap) ? Math.trunc(cap) : 0;
       return Math.max(0, Math.min(capped, policy.baseSendAllowance - counter.spent));

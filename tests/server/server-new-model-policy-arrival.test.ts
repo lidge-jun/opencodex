@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig, saveConfig } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
+import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import { clearModelCache } from "../../src/codex/model-cache";
 import type { OcxConfig } from "../../src/types";
@@ -28,6 +31,9 @@ afterEach(async () => {
     await lifecycle.close();
   } finally {
     clearModelCache(provider);
+    await flushNativeMainStartupReleases();
+    await flushConfigDirHardeningForTests();
+    await flushWindowsSecretAclReapsBeforeRemoval(home.root);
     home.remove();
   }
 });

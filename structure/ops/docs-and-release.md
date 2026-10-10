@@ -1,6 +1,6 @@
 # Docs And Release
 
-The activation scheduling contract is covered by `tests/codex-integration/codex-quota-auto-refresh.test.ts`, including restart recovery and bounded retries. See the [quota activation contract](../providers/openai-tiers.md#public-provider-contract). `.github/workflows/catalog-async-contracts.yml` runs portable Rust-owned Bun catalog contracts on Linux, macOS and Windows for runtime, fixture or dependency changes. It has read-only permissions and no release effect.
+The activation scheduling contract is covered by `tests/codex-integration/codex-quota-auto-refresh.test.ts`, including restart recovery and bounded retries. See the [quota activation contract](../providers/openai-tiers.md#public-provider-contract). `.github/workflows/catalog-async-contracts.yml` runs portable Rust-owned Bun catalog contracts on Linux, macOS and Windows for runtime, fixture or dependency changes on pushes to `dev`/`main`/`preview`, pull requests or manual dispatch. It has read-only permissions and no release effect.
 
 Automatic package-tree restart holds a releasable data-plane drain until its scheduled
 service-home check succeeds. A veto releases that fence; a committed shutdown uses the
@@ -211,8 +211,7 @@ contexts retain exit 0.
 
 The PR-target resolver accepts commit-index candidates only when their base repository's
 owner and name match the workflow repository. Foreign or incomplete fork-network entries
-cannot supply a write-job PR number. If no unique local current-head candidate remains,
-the existing repository-scoped open-PR lookup runs; absent or ambiguous matches emit no identity.
+cannot supply a write-job PR number. If no unique local current-head candidate remains, the existing repository-scoped open-PR lookup runs; absent or ambiguous matches emit no identity.
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
@@ -221,6 +220,7 @@ the existing repository-scoped open-PR lookup runs; absent or ambiguous matches 
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. The `preflight` job checks channel, version sources, tag, GitHub release, npm, global tag ordering and the `dev` pre-move before any packaging job starts. The publish job repeats those checks, requires a successful push-event Cross-platform CI run for the exact `GITHUB_SHA` (a pull-request run does not qualify), requires `dev` to outrank the target, then checks the target against the freshly fetched global tag set before publish or dry-run. After a real publish, `release-outcomes` reports the public GitHub release, the npm version read-back and the npm dist-tag as separate rows. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. This is the deploy path; the pull-request build gate is the `docs-site-build` job in `ci.yml`. |
 | `.github/workflows/service-lifecycle.yml` | `pull_request` to `main`/`dev` and `push` to `main`/`preview`, both filtered on the service path set (`src/service.ts`, `src/cli.ts`, `src/cli/index.ts`, `src/lib/bun-runtime.ts`, `package.json`, `bun.lock`, the workflow), or manual dispatch | Service-lifecycle smoke on three platforms: Linux systemd, macOS launchd, and Windows Scheduled Tasks. Each installs, verifies, stops via `ocx stop`, and uninstalls. The path list is kept in sync with the `release.yml` service-gate regex. |
+| `.github/workflows/catalog-async-contracts.yml` | `push` to `dev`/`main`/`preview` and any `pull_request`, both filtered on `src/**`, the diagnostic crate, the setup action, the workflow, `package.json` and `bun.lock`; or manual dispatch | Runs the Rust-owned Bun-module catalog contracts on Linux, macOS and Windows with synthetic homes and cleared child environments. Read-only (`contents: read`), no secrets, no release-eligibility effect. Pull-request runs share one concurrency group per PR and cancel superseded runs; push and manual runs each get their own group. |
 | `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, labeled, unlabeled, ready_for_review, synchronize) plus default-branch `status` events filtered to successful `CodeRabbit` statuses | The `enforce-target` gate: rejects pull requests whose head ancestry sits on the `main` tip while far behind `dev`, rejects empty or malformed descriptions, requires a GUI screenshot when the title/body mentions `gui` (immediately waivable with the maintainer-controlled `gui-screenshot-waived` label; legacy maintainer comments remain compatibility evidence on later PR events), keeps contributor PRs in draft until a four-box readiness checklist is complete, verifies the CI / latest-dev / Codex+CodeRabbit-findings claims (review threads plus current-head CodeRabbit review-body findings outside the diff range), and adds a `review-ready` status label at the ready moment. CodeRabbit status SHAs must resolve to exactly one open current-head PR before writes. Stacked child PRs targeting another open PR's head skip the wrong-base gate. |
 | `.github/workflows/enforce-issue-quality.yml` | `issues` (opened, edited, reopened), `issue_comment` (created, edited), or manual dispatch with an issue number | Issue-template compliance gate. |
 | `.github/workflows/issue-quality-tests.yml` | `pull_request` and `push` to `main`/`preview` filtered on the issue/PR automation scripts, templates, and their workflows | Tests the issue and PR automation scripts themselves, so the gates cannot rot silently. |
@@ -343,11 +343,11 @@ npm dependency pinned to `1.4.2` (esbuild-style: a tiny main package plus platfo
 
 Invariants:
 
-- `bin/ocx.mjs` resolves the bundled binary via `require.resolve("bun/package.json")` and a size gate
-  (`>= 1 MB`) that rejects the ~450-byte placeholder stub left by `--ignore-scripts`/pnpm; it then
-  lazy-runs `install.js` and execs `src/cli/index.ts` under Bun, propagating exit code and signal.
-  The Windows service wrapper applies the same gate before each launch and waits on a placeholder
-  instead of executing it ([Windows service wrapper](#windows-service-wrapper-and-incomplete-updates)).
+- `bin/ocx.mjs` selects explicit override, bundled Bun, allowed installer recovery, then validated PATH Bun.
+  `src/lib/bun-path-runtime.mjs` requires absolute entries, canonical regular/executable files, the >=1 MB gate, and rejects group/world-writable resolved files or parent directories on POSIX.
+  Bounded version-policy and identity checks require `--version` to match `-e`'s `Bun.version`, a stable version with the pinned major and minor ≥ pinned minor (currently 1.4.0 ≤ version < 2.0.0).
+  PATH selection stamps `process`; failure may name an installed Desktop CLI without executing it.
+  The [Windows service wrapper](#windows-service-wrapper-and-incomplete-updates) keeps its own placeholder wait gate; updater inspection never runs installer recovery.
 - `package.json` carries `"trustedDependencies": ["bun"]` so `bun install` runs the dependency's
   postinstall, and `"engines": { "node": ">=18" }` (Bun is no longer a user prerequisite).
 - The plain-Node launcher owns `OPENCODEX_BUN_PATH` selection before Bun can load project dotenv and

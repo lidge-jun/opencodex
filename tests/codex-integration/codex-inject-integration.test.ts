@@ -171,7 +171,7 @@ describe("injectCodexConfig integration (Design B)", () => {
   // read-only bit, so neither can express the permission this test needs.
   const unreadablePreimages =
     process.platform === "win32" || process.getuid?.() === 0 ? test.skip : test;
-  unreadablePreimages("unreadable preimages abort capture and remain visible as compensation failures", () => {
+  unreadablePreimages.each(["same", "absent", "different"] as const)("unreadable preimages abort capture and remain visible as compensation failures (journal preimage=%s)", (journalPreimage) => {
     console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"unreadable_preimages_entered"}');
     const script = `
       const fs = require("node:fs");
@@ -200,7 +200,7 @@ describe("injectCodexConfig integration (Design B)", () => {
         catch(error) { outcomes.push(error.code==="EACCES"); }
         unchangedAfterEach.push(readWatched().every((bytes,i)=>bytes===original[i]));
       }
-      const restored=restoreCodexPreImages({config:original[0],profile:original[1],journal:original[2]});
+      const restored=restoreCodexPreImages({config:original[0],profile:original[1],journal:${journalPreimage === "same" ? "original[2]" : journalPreimage === "absent" ? "null" : JSON.stringify("# stale journal preimage\n")}});
       const preserved=readWatched().every((bytes,i)=>bytes===original[i]);
       allow();
       console.log(JSON.stringify({unreadable,captureCode,restored,outcomes,unchangedAfterEach,preserved}));
@@ -241,8 +241,10 @@ describe("injectCodexConfig integration (Design B)", () => {
       errorCode,
     })}`);
     expect(child.status, child.stderr).toBe(0);
+    // Failed profile compensation retains the current recovery journal rather than
+    // deleting it or replacing it with a preimage; that deferred restore is reported.
     expect(JSON.parse(child.stdout)).toEqual({
-      unreadable: true, captureCode: "EACCES", restored: { complete: false, unrestored: ["profile"] }, outcomes: [true, true, true], unchangedAfterEach: [true, true, true], preserved: true,
+      unreadable: true, captureCode: "EACCES", restored: { complete: false, unrestored: ["profile", "journal"] }, outcomes: [true, true, true], unchangedAfterEach: [true, true, true], preserved: true,
     });
   });
 

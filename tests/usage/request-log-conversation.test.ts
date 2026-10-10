@@ -9,6 +9,7 @@ import {
   reasoningReplayConversationIdFromResponsesRequest,
   sessionIdHeaderFromRequest,
   summarizeConversationLogs,
+  unwrapLogConversationQuery,
 } from "../../src/server/request-log-conversation";
 import {
   filterRequestLogs,
@@ -59,6 +60,50 @@ describe("matchesLogConversationId", () => {
     expect(matchesLogConversationId(stored, raw)).toBe(true);
     expect(matchesLogConversationId(stored, "other")).toBe(false);
     expect(matchesLogConversationId(undefined, raw)).toBe(false);
+  });
+
+  test("unwraps a pasted codex://threads deep link to the bare thread id", () => {
+    const threadId = "019f6482-67d5-77c2-a643-02daddaa7115";
+    const stored = digest32(threadId);
+    expect(matchesLogConversationId(stored, `codex://threads/${threadId}`)).toBe(true);
+    expect(matchesLogConversationId(stored, `  CODEX://THREADS/${threadId}/  `)).toBe(true);
+    expect(matchesLogConversationId(threadId, `codex://threads/${threadId}`)).toBe(true);
+    expect(matchesLogConversationId(stored, "codex://threads/other-thread")).toBe(false);
+    expect(matchesLogConversationId(stored, "codex://other/x")).toBe(false);
+    expect(matchesLogConversationId(stored, "codex://threads/")).toBe(false);
+  });
+
+  test("unwraps codex://threads links carrying query or fragment metadata", () => {
+    const threadId = "019f6482-67d5-77c2-a643-02daddaa7115";
+    const stored = digest32(threadId);
+    for (const paste of [
+      `codex://threads/${threadId}?hostId=durable`,
+      `codex://threads/${threadId}?hostId=remote-control%3Aexample-environment`,
+      `codex://threads/${threadId}/?hostId=durable&view=full`,
+      `codex://threads/${threadId}#section`,
+    ]) {
+      expect(matchesLogConversationId(stored, paste)).toBe(true);
+      expect(matchesLogConversationId(threadId, paste)).toBe(true);
+    }
+  });
+
+  test("a literal codex://threads session id stays findable by its whole-string digest", () => {
+    const uri = "codex://threads/019f6482-67d5-77c2-a643-02daddaa7115";
+    const stored = digest32(uri);
+    expect(matchesLogConversationId(stored, uri)).toBe(true);
+    const withHost = `${uri}?hostId=durable`;
+    expect(matchesLogConversationId(digest32(withHost), withHost)).toBe(true);
+    expect(matchesLogConversationId(stored, withHost)).toBe(false);
+    expect(matchesLogConversationId(stored, "codex://threads/other-thread")).toBe(false);
+  });
+
+  test("rejects malformed or oversized codex://threads pastes without backtracking", () => {
+    const stored = digest32("019f6482-67d5-77c2-a643-02daddaa7115");
+    const slashFlood = `codex://threads/${"/".repeat(4000)}\u2028x`;
+    expect(unwrapLogConversationQuery(slashFlood)).toBe(slashFlood.trim());
+    expect(matchesLogConversationId(stored, slashFlood)).toBe(false);
+    expect(matchesLogConversationId(stored, "codex://threads/id/extra")).toBe(false);
+    expect(matchesLogConversationId(stored, `codex://threads/${"a".repeat(600)}`)).toBe(false);
   });
 });
 
@@ -190,6 +235,22 @@ describe("request log conversation persistence / filter", () => {
       .toEqual(["a"]);
     expect(filterRequestLogs(logs, new URLSearchParams(`conversation=${digest32("conv-2")}`)).map(e => e.requestId))
       .toEqual(["b"]);
+  });
+
+  test("filterRequestLogs unwraps a pasted codex://threads link", () => {
+    const threadId = "019f6482-67d5-77c2-a643-02daddaa7115";
+    const logs = [
+      log({ requestId: "a", conversationId: digest32(threadId) }),
+      log({ requestId: "b", conversationId: digest32("conv-2") }),
+    ];
+    const params = new URLSearchParams(`conversationId=${encodeURIComponent(`codex://threads/${threadId}`)}`);
+    expect(filterRequestLogs(logs, params).map(e => e.requestId)).toEqual(["a"]);
+    for (const hostId of ["durable", "remote-control%3Aexample-environment"]) {
+      const withHost = new URLSearchParams(
+        `conversationId=${encodeURIComponent(`codex://threads/${threadId}?hostId=${hostId}`)}`,
+      );
+      expect(filterRequestLogs(logs, withHost).map(e => e.requestId)).toEqual(["a"]);
+    }
   });
 
   test("hydrated usage rows keep conversationId", () => {

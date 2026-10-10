@@ -123,3 +123,25 @@ NEW `tests/claude-integration/claude-context-accounting.test.ts` (registered in 
 - `bun run typecheck`
 - focused files above + `tests/ci-workflows/skill-ocx.test.ts` (capability map) + `bun run skill:surface:check`
 - `bun run structure:check`
+
+## P amendment (wp3 entry, after wp2 review)
+
+wp2 changed two interfaces this doc relied on; the policy threads through them instead:
+
+- `withSubagentContextMarker(selector, windows, accounting200k = false)`: the marking mode is now
+  per selector (`subagentSelectorMode`: genuine 1M for Claude models, unpaired otherwise). Under
+  `200k` an unmarked selector stays bare; an explicit `[1m]` keeps following its selector mode
+  (kept when the window can carry it, stripped otherwise). `agents-inject.ts:100,133` and
+  `resolveSubagentForceModel` pass `resolveAutoContext(config.claudeCode).accounting200k === true`;
+  the `subagentMarkingMode` helper is not needed.
+- Desktop eligibility is `claudeSurfaceSupportsOneMillion(provider, modelId, window)` /
+  `routeSupportsOneMillion(route, window)`; the policy only drops `prefer1m`, so those predicates
+  are unchanged.
+- Discovery needs no change: `variantMode = auto.enabled ? UNPAIRED : OFF` already keeps the
+  >= 1M variants under `ACCOUNTING_200K` (enabled false).
+
+Audit of the amendment (PASS) notes: the earlier `withSubagentContextMarker(..., mode = UNPAIRED_AUTO_CONTEXT)`
+snippet and the `subagentMarkingMode` chain row above are **superseded** by this amendment; the
+picker keeps its Claude-model guard and takes `ACCOUNTING_200K` first; `shouldMarkOneMillion`
+checks `accounting200k` before its >= 1M early return. wp3 B also carries the docs-site sync the
+layer 1 and layer 2 branches still owe (cascaded onto those branches).

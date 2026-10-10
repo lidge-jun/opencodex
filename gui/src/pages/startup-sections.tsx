@@ -1,6 +1,6 @@
 import { useI18n, type TKey } from "../i18n/shared";
 import { confirmAction } from "../action-dialogs";
-import { startupRiskDetailKey } from "../startup-health-ui";
+import { desktopManagesStartup, startupRiskDetailKey } from "../startup-health-ui";
 import { IconAlert, IconCheck, IconPower, IconTerminal } from "../icons";
 import type {
   StartupHealthData,
@@ -88,7 +88,7 @@ export function StartupDetailsSection({
   // Repair only rewrites stale assets — conflict/disabled need uninstall/reinstall, not repair.
   const serviceNeedsRepair = data.serviceSupported && data.serviceInstalled && data.serviceStale && !data.serviceConflict;
   const shimNeedsRepair = data.shimInstalled && !data.shimHealthy;
-  const actionsDisabled = installBusy !== null || failed || loading || data.desktop?.owned === true;
+  const actionsDisabled = installBusy !== null || failed || loading || desktopManagesStartup(data);
 
   return (
     <section className="panel startup-details">
@@ -98,7 +98,7 @@ export function StartupDetailsSection({
       </div>
       {data.desktop && (
         <div className="startup-detail-row">
-          <div><strong>{t("startup.protection.desktop")}</strong><span>{t(!failed && data.desktop.viable ? "startup.desktopHint" : "startup.desktopRecovery")}</span></div>
+          <div><strong>{t("startup.protection.desktop")}</strong><span>{t(!failed && data.desktop.viable ? "startup.desktopHint" : startupRiskDetailKey(data))}</span></div>
           <div className="startup-detail-actions">
             <StartupStateBadge ok={!failed && data.desktop.viable} yes={t("startup.viable")} no={t("startup.unhealthy")} />
           </div>
@@ -256,10 +256,10 @@ export function StartupRecoverySection({
         commands are the fallback. Open by default only while protection is missing.
       */}
       <details className="startup-recovery-details" open={data.status !== "protected"}>
-        <summary className="muted">{t(data.desktop?.owned ? "startup.protection.desktop" : "startup.recoveryHint")}</summary>
-      {data.desktop?.owned && <p className="muted">{t("startup.desktopRecovery")}</p>}
+        <summary className="muted">{t(desktopManagesStartup(data) ? "startup.protection.desktop" : "startup.recoveryHint")}</summary>
+      {desktopManagesStartup(data) && <p className="muted">{t(startupRiskDetailKey(data))}</p>}
       <div className="startup-command-list">
-        {data.serviceSupported && !data.desktop?.owned && (
+        {data.serviceSupported && !desktopManagesStartup(data) && (
           <div className="startup-command-row">
             <div>
               <strong>{t("startup.command.service")}</strong>
@@ -270,7 +270,7 @@ export function StartupRecoverySection({
             </button>
           </div>
         )}
-        {!data.desktop?.owned && <div className="startup-command-row">
+        {!desktopManagesStartup(data) && <div className="startup-command-row">
           <div>
             <strong>{t("startup.command.shim")}</strong>
             <code>{data.commands.installShim}</code>
@@ -289,7 +289,7 @@ export function StartupRecoverySection({
           </button>
         </div>
       </div>
-      {data.status === "at-risk" && data.recommendedCommand && !data.desktop?.owned && (
+      {data.status === "at-risk" && data.recommendedCommand && !desktopManagesStartup(data) && (
         <div className="notice notice-warn startup-action-notice" role="alert">
           <IconPower /> {t("startup.recommended", { cmd: data.recommendedCommand })}
         </div>

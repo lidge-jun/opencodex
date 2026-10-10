@@ -102,13 +102,22 @@ WantedBy=default.target
 
 /** The per-user runtime dir systemd creates (holds the user-bus socket), or null. */
 function userRuntimeDir(): string | null {
-  const fromEnv = process.env.XDG_RUNTIME_DIR;
-  if (fromEnv && existsSync(fromEnv)) return fromEnv;
-  if (typeof process.getuid === "function") {
-    const candidate = `/run/user/${process.getuid()}`;
-    if (existsSync(candidate)) return candidate;
+  const env = { ...process.env };
+  if (env.XDG_RUNTIME_DIR && !existsSync(env.XDG_RUNTIME_DIR)) delete env.XDG_RUNTIME_DIR;
+  return systemdUserBusEnvironment(env).XDG_RUNTIME_DIR || null;
+}
+
+/** Return explicit SSH user-bus discovery without changing the caller's environment. */
+export function systemdUserBusEnvironment(environment: NodeJS.ProcessEnv = process.env, deps: {
+  uid?: number; exists?: (path: string) => boolean;
+} = {}): NodeJS.ProcessEnv {
+  const env = { ...environment };
+  if (!env.XDG_RUNTIME_DIR) {
+    const uid = deps.uid ?? process.getuid?.();
+    const candidate = uid === undefined ? null : `/run/user/${uid}`;
+    if (candidate && (deps.exists ?? existsSync)(candidate)) env.XDG_RUNTIME_DIR = candidate;
   }
-  return null;
+  return env;
 }
 
 /**
@@ -119,8 +128,8 @@ function userRuntimeDir(): string | null {
  */
 function ensureUserBusEnv(): void {
   if (process.env.XDG_RUNTIME_DIR) return;
-  const dir = userRuntimeDir();
-  if (dir) process.env.XDG_RUNTIME_DIR = dir;
+  const env = systemdUserBusEnvironment();
+  if (env.XDG_RUNTIME_DIR) process.env.XDG_RUNTIME_DIR = env.XDG_RUNTIME_DIR;
 }
 
 export function isSystemd(): boolean {

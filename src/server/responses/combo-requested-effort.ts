@@ -10,5 +10,7 @@ export function comboRequestedEffortLabel(
   const forcedTransition = forcedEffort != null && forcedEffort !== originalRequestedEffort
     ? `->${forcedEffort}`
     : "";
-  return `${originalRequestedEffort}${forcedTransition}${laterTransitions}`;
+  const segments = `${originalRequestedEffort}${forcedTransition}${laterTransitions}`.split("->");
+  // A pin that kept the effort it was given is not a transition; drop the repeated segment.
+  return segments.filter((segment, index) => index === 0 || segment !== segments[index - 1]).join("->");
 }

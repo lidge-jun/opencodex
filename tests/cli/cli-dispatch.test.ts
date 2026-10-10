@@ -524,7 +524,10 @@ describe("a busy preferred port never becomes a second proxy (#5004)", () => {
 
     // Both refusals preserve the exit code through the caller's lease-cleanup boundary.
     expect(fn).toMatch(/decision === "refuse-live-proxy"[\s\S]{0,400}?StartCommandExit\(1\)/);
-    expect(fn).toContain("Use 'ocx stop' first.");
+    // The refusal text moved into the guidance leaf so a Desktop-supervised holder gets Desktop
+    // guidance; the ordinary holder still hears "Use 'ocx stop' first." from the same function.
+    expect(fn).toMatch(/decision === "refuse-live-proxy"[\s\S]{0,200}?duplicateRuntimeMessage\(holder\?\.pid, preferred\)/);
+    expect(readFileSync(repoPath("src/cli/desktop-runtime-guidance.ts"), "utf8")).toContain("Use 'ocx stop' first.");
     expect(fn).toMatch(/decision === "refuse-unidentified-holder"[\s\S]{0,700}?StartCommandExit\(1\)/);
     // The wrapper receives an explicit stay-out signal for a served port.
     expect(fn).toMatch(/decision === "service-stay-out"[\s\S]{0,500}?StartCommandExit\(serviceStayOutExitCode\(\)\)/);

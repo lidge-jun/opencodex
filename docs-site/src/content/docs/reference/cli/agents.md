@@ -19,13 +19,13 @@ ocx agent subagents set ark/model-a,openai/gpt-5.5
 
 `ocx agent roles` is for omo (Codex / LazyCodex). It lists each Codex agent role in
 `$CODEX_HOME/agents` with its model pin and whether `~/.omo/omo.jsonc` can be updated, or says
-LazyCodex is not installed, in which case `set` is refused. `ocx agent roles set <role> <model>` rewrites only
-that role's root `model` line and mirrors the value into omo.jsonc at
-`[codex].agents.<role>.model`. A missing omo.jsonc, or one containing comments, is left unchanged
+LazyCodex is not installed, in which case `set` is refused. `ocx agent roles set <role> <model> [--effort <level>]` rewrites only
+that role's root `model` line, and its `model_reasoning_effort` line with `--effort`, and mirrors both into omo.jsonc at
+`[codex].agents.<role>` as `model` and `reasoning`. An effort LazyCodex has no level for, such as `ultra`, is written to the role file only. A missing omo.jsonc, or one containing comments, is left unchanged
 and the command says so. See [omo (Codex / LazyCodex) role models](/guides/integrations/#omo-codex--lazycodex-role-models).
 
 ```bash
-ocx agent roles set explorer xai/grok-4.5
+ocx agent roles set explorer xai/grok-4.5 --effort medium
 ```
 
 `ocx agent roles suggest` is omo (Codex / LazyCodex) only, refused like `set` when LazyCodex is not
@@ -1034,6 +1034,14 @@ Additional system booleans take on/off: `--show-codex-credits`, `--account-picke
 explicit fields and may combine with existing system options. Showing credits is
 a display preference, not paid-credit opt-in; system Ultra Fast is separate from
 provider Fast.
+
+Ultra Fast is an opt-in retention setting, not a capability or entitlement claim.
+With `--ultra-fast-tier on`, sync and catalog convergence retain an existing routed
+row's operator-supplied `ultrafast` entries in `service_tiers` and
+`additional_speed_tiers` alongside its current Fast capability. Declarations belong
+to the exact provider/model slug; they are not copied to other models. The setting
+does not create missing declarations or restore removed models. Turning it off
+removes Ultra Fast from ordinary routed rows on the next catalog regeneration.
 
 ```bash
 ocx system settings --json

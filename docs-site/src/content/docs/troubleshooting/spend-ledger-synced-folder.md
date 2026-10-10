@@ -45,10 +45,14 @@ the journal can have two links for a moment after an ordinary write. A request t
 that moment is refused, and the next one may succeed. Once the sync settles, the file is back to
 one link, so inspecting it afterwards shows nothing wrong.
 
-At startup opencodex now warns when the state directory resolves inside iCloud Drive
-(`~/Library/Mobile Documents`), a File Provider folder (`~/Library/CloudStorage`), or Desktop
-or Documents while iCloud Desktop & Documents sync appears to be on. The warning is advisory.
-The detection reads the folder layout and can be wrong in either direction.
+At startup opencodex warns when the state directory resolves inside iCloud Drive
+(`~/Library/Mobile Documents`), a File Provider folder (`~/Library/CloudStorage`), Desktop
+or Documents while iCloud Desktop & Documents sync appears to be on, or Desktop or Documents
+while Google Drive for desktop appears to be in use. The Google Drive hint is the presence
+of `~/Library/CloudStorage/GoogleDrive-*` or `~/Library/Application Support/Google/DriveFS`.
+It does not read which folders the app was told to sync, so Drive being installed can warn
+even when Documents is not selected. The warning is advisory. The detection reads the folder
+layout and can be wrong in either direction.
 
 ## Fix
 

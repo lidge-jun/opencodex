@@ -7,6 +7,12 @@ opencodex installs two equivalent command names, `ocx` and `opencodex`. Both lau
 local HTTP server (built on Bun). Model requests go to the provider selected by routing; optional
 vision and web-search sidecars can also use your ChatGPT login when a routed model needs them.
 
+## Desktop terminal command
+
+A stable OpenCodex Desktop install configures `ocx` for new terminals when the app starts. Open a new terminal and run `ocx status` or `ocx doctor` to inspect the first executable on PATH. On macOS and Linux deb installs, a managed block at the end of zsh, bash and fish startup files puts `~/.opencodex-desktop/bin` first on PATH and uses the Desktop-owned shim. Windows puts the bundled `ocx.exe` install directory first in the user `Path`. Existing terminals, aliases, shell caches and later PATH changes can still select another command; a conflicting Windows system PATH entry can also win. Use the app’s Terminal command settings to repair, disable or remove this configuration. AppImage is excluded.
+
+On macOS and Linux, a current npm/pnpm package launcher that still runs delegates eligible commands to the Desktop CLI when its record is enabled and passes ownership, permission and file-safety checks. Windows has no package-launcher handoff: new terminals select the Desktop `ocx.exe` through user `Path` order. A `record-unsafe` error means the record or its directory failed a safety check. Open OpenCodex Desktop to repair the terminal command, or use `OCX_NO_DESKTOP_HANDOFF=1` for a package invocation on macOS/Linux. Package update/removal and internal inspection keep their existing path. `OCX_NO_DESKTOP_HANDOFF=1` suppresses that package handoff for one invocation; it does not change a direct Desktop shim or PATH configuration.
+
 ## Prerequisites
 
 | Requirement | Why |
@@ -30,9 +36,22 @@ pnpm add -g --allow-build=bun @bitkyc08/opencodex
 :::note[npm blocked the bun postinstall?]
 Recent npm versions may block bun's postinstall script (`npm warn
 install-scripts ... blocked because they are not covered by allowScripts`),
-which leaves the bundled Bun runtime unprepared. Reinstall allowing bun's
-script — and always include the package name (npm's abbreviated suggestion
-omits it, which would reinstall the current directory instead):
+which leaves the bundled Bun runtime unprepared. After trying permitted bundled-runtime
+recovery, the launcher can use an executable Bun from an absolute PATH directory if its
+stable version has the pinned major and a minor at least the pinned minor. With the current
+1.4.2 dependency, that means 1.4.0 or newer within major 1. Bounded version-policy and identity
+checks require `bun --version` to match `bun -e`'s `Bun.version`; on POSIX, the resolved file
+and its parent directory must not be group- or world-writable. A one-line stderr notice names
+the selected Bun version. Bun is still bundled; installing it yourself is optional.
+
+If no runtime works, the error still includes “the `bun` dependency is not installed” when
+the dependency is missing. On macOS, it also names an executable Desktop CLI found at
+`/Applications/OpenCodex.app/Contents/MacOS/ocx` or
+`~/Applications/OpenCodex.app/Contents/MacOS/ocx`. You can invoke that path explicitly;
+the package launcher does not delegate automatically or install a PATH shim.
+
+To repair the bundled runtime, reinstall allowing bun's script. Always include the package
+name: npm's abbreviated suggestion omits it and would reinstall the current directory:
 
 ```bash
 npm install -g --allow-scripts=bun @bitkyc08/opencodex
@@ -48,6 +67,12 @@ Verify both command aliases are on your `PATH`:
 ocx --version
 opencodex --version
 ```
+
+Before start, stop, restart, service, or an update handled by the Bun CLI, a brief stderr
+notice can identify a CLI/proxy version mismatch. It is advisory and preserves the command's
+exit code; JSON and help output do not trigger it. npm/pnpm updates handled by the Node launcher
+before the Bun CLI starts do not emit this notice. `ocx status`, `ocx doctor`, and `ocx resolve`
+already report version skew through their diagnostics.
 
 If you install the background service from a shell using fnm, nvm, mise, asdf, or volta,
 OpenCodex leaves shell-local multishell directories out of the service PATH. On Linux it

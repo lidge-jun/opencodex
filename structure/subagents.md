@@ -341,7 +341,7 @@ catalog path calls it, and opencodex never creates, repairs, or removes a role f
 - The role name must equal a listed `*.toml` stem, which is also the path-traversal check. The
   target must be a regular file owned by the running user; the replacement is atomic and does
   not follow a symbolic link.
-- The same pick is mirrored into LazyCodex's `[codex].agents.<role>.model`; that half belongs to
+- The same pick is mirrored into LazyCodex's `[codex].agents.<role>` as `model` and, for an effort LazyCodex can express, `reasoning`; that half belongs to
   [client integrations](clients/integrations.md#omo-codex-lazycodex-role-models). The role file is written first
   and stands even when the mirror is skipped.
 
@@ -506,7 +506,7 @@ The account history response can include a [low-confidence effective capacity es
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
@@ -546,6 +546,6 @@ Automatic account exhaustion and recovery use the [spendable Codex credit eviden
 
 ### Forced Claude Code subagent model
 
-`src/claude/subagent-model.ts` shares the roster alias and authoritative context-marker resolver with routed launch force. `claudeCode.subagentModelForce` is opt-in and default-off. Force availability excludes retained unavailable roster entries. Caller-added `[1m]` suffixes require finite authoritative million-token capacity or an exact advertised marked identity; exact upstream ids remain literal, while legacy roster marker handling is unchanged. The generated-agent legacy directive cannot replace a wire selector matching the configured forced alias. `src/claude/subagent-force-status.ts` performs bounded, read-only server-local version and settings-key inspection; unknown is not supported.
+`src/claude/subagent-model.ts` shares the roster alias and authoritative context-marker resolver with routed launch force. `claudeCode.subagentModelForce` is opt-in and default-off. Force availability excludes retained unavailable roster entries. Caller-added `[1m]` suffixes require a finite authoritative long window (`src/claude/long-context.ts`: 1M, or at least the 829,800 default compact window; a genuine 1M for Claude models on either Anthropic pool or a bare `claude-*` id) or an exact advertised marked identity; generated markers follow the same rule; exact upstream ids remain literal, while legacy roster marker handling is unchanged. `claudeCode.contextAccounting` `"200k"` stops automatic marking on generated and forced selectors; an explicit `[1m]` still follows the window rule above ([Claude Desktop picker mode](clients/claude-desktop.md#picker-mode-the-desktop-egress-proxy)). The generated-agent legacy directive cannot replace a wire selector matching the configured forced alias. `src/claude/subagent-force-status.ts` performs bounded, read-only server-local version and settings-key inspection; unknown is not supported.
 
 Explicit gateway selectors outrank generated-agent `ocx-route` fallback independently of saved force state. `src/claude/inbound-model-options.ts` shares this precedence across Messages and count-tokens; bare Claude fallback and requests without directives retain their existing behavior. Native Claude force targets use reversible native aliases, restored before existing credential/model-map checks. Connected launch exposure comes from fresh authenticated gateway rows, not cached context-window keys; acquisition is independent of cache-write success.

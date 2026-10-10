@@ -11,7 +11,7 @@ with no real credentials and one unavailable loopback provider. Other network
 egress is not blocked or audited.
 
 ```powershell
-cargo nextest run --locked --manifest-path scripts/diagnostics/windows-version-control/Cargo.toml --test-threads 10
+cargo test --locked --manifest-path scripts/diagnostics/windows-version-control/Cargo.toml --test async_contracts -- --test-threads=4
 cargo clippy --locked --manifest-path scripts/diagnostics/windows-version-control/Cargo.toml --all-targets -- -D warnings
 cargo build --locked --release --manifest-path scripts/diagnostics/windows-version-control/Cargo.toml
 & <target>/release/ocx-version-control.exe <absolute-bun.exe> <absolute-repo> <new-absolute-fixture-root> <absolute-node_modules> [cumulative|pipe] | Out-String

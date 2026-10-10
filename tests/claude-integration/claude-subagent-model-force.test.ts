@@ -39,11 +39,12 @@ test("exported values independently win and native launches retain exports", () 
   }
 });
 
-test("alias resolution reuses roster provider/native semantics and authoritative million boundary", () => {
+test("alias resolution reuses roster provider/native semantics and the long-context boundary", () => {
   for (const entry of deps.forceAvailable) {
     const c = config(entry);
     const { alias } = entryParts(entry, c);
-    expect(resolveSubagentForceModel(c, { [alias]: 999999 }, { entries: deps.forceAvailable })).toBe(alias);
+    expect(resolveSubagentForceModel(c, { [alias]: 829_799 }, { entries: deps.forceAvailable })).toBe(alias);
+    expect(resolveSubagentForceModel(c, { [alias]: 829_800 }, { entries: deps.forceAvailable })).toBe(`${alias}[1m]`);
     expect(resolveSubagentForceModel(c, { [alias]: 1000000 }, { entries: deps.forceAvailable })).toBe(`${alias}[1m]`);
   }
 });

@@ -15,15 +15,14 @@ import { parseV2Command, V2_USAGE, type V2ParsedCommand } from "./v2-input";
 import { handleV2RuntimeCommand } from "./v2-runtime";
 import { localV2State, v2LocalSyncResult, type V2LocalSync } from "./v2-local-output";
 import { execFileSync } from "node:child_process";
-import { dirname } from "node:path";
-import { activeCodexConfigPath, getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getMultiAgentModeHintText, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, setMultiAgentModeHintText, transitionMultiAgentV2 } from "../codex/features";
+import { getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getMultiAgentModeHintText, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, setMultiAgentModeHintText, transitionMultiAgentV2 } from "../codex/features";
 
 import { commandInvocation, type SpawnInvocation } from "../lib/win-exec";
 import { deleteConfigTopLevelKey, loadConfig, saveConfig } from "../config";
 import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
 
 export interface V2CliDeps {
-  execFile?: (file: string, args: string[], options?: SpawnInvocation["options"]) => void;
+  execFile?: (file: string, args: string[], options?: SpawnInvocation["options"] & { env?: NodeJS.ProcessEnv }) => void;
   isEnabled?: typeof isMultiAgentV2Enabled;
   hasMaxThreads?: typeof hasAgentsMaxThreads;
   sync?: (port?: number) => Promise<unknown>;
@@ -35,7 +34,8 @@ export interface V2CliDeps {
 
 export type CodexFeaturesInvocationDeps =
   & Parameters<typeof commandInvocation>[3]
-  & Pick<ResolveCodexRuntimeDeps, "existsSync" | "execFileSync" | "configDir" | "readFileSync">;
+  & Pick<ResolveCodexRuntimeDeps, "existsSync" | "execFileSync" | "configDir" | "readFileSync">
+  & { requireAvailable?: boolean };
 
 /**
  * Shared invocation for `codex features enable|disable <feature>` — the single
@@ -51,14 +51,18 @@ export function codexFeaturesInvocation(
   platform: NodeJS.Platform = process.platform,
   deps: CodexFeaturesInvocationDeps = {},
 ): SpawnInvocation {
-  const command = resolveAndPersistCodexRuntime({
+  const resolved = resolveAndPersistCodexRuntime({
     env: deps.env ?? process.env,
     platform,
     existsSync: deps.existsSync,
     execFileSync: deps.execFileSync,
     configDir: deps.configDir,
     readFileSync: deps.readFileSync,
-  }).runtime.command || "codex";
+  });
+  if (deps.requireAvailable && resolved.runtime.source === "fallback" && resolved.runtime.version === null) {
+    throw Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT" });
+  }
+  const command = resolved.runtime.command || "codex";
   return commandInvocation(command, ["features", action, feature], platform, deps);
 }
 
@@ -70,27 +74,30 @@ export function codexFeaturesInvocation(
  */
 export function runCodexFeaturesCommand(
   action: "enable" | "disable",
-  feature: string = "multi_agent_v2",
+  feature: string,
+  env: NodeJS.ProcessEnv,
+  validateBeforeSpawn: () => void,
+  preparedInvocation?: SpawnInvocation,
 ): void {
-  const inv = codexFeaturesInvocation(action, feature);
+  const inv = preparedInvocation ?? codexFeaturesInvocation(action, feature, process.platform, { env });
+  validateBeforeSpawn();
   execFileSync(inv.file, inv.args,
     {
       stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, windowsHide: true, encoding: "utf8",
-      // The reader resolves $CODEX_HOME at call time (including the WSL Windows-home
-      // detection); force the same home on the child so it never toggles a different
-      // config than the one the postcondition re-reads.
-      env: { ...process.env, CODEX_HOME: dirname(activeCodexConfigPath()) },
       ...inv.options,
+      env,
     });
 }
 
-function runCodexFeatures(action: "enable" | "disable", deps: V2CliDeps): void {
+function runCodexFeatures(action: "enable" | "disable", deps: V2CliDeps, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void): void {
   if (deps.execFile) {
-    const inv = (deps.featuresInvocation ?? codexFeaturesInvocation)(action);
-    deps.execFile(inv.file, inv.args, inv.options);
+    const inv = deps.featuresInvocation ? deps.featuresInvocation(action)
+      : codexFeaturesInvocation(action, "multi_agent_v2", process.platform, { env });
+    validateBeforeSpawn();
+    deps.execFile(inv.file, inv.args, { ...inv.options, env });
     return;
   }
-  runCodexFeaturesCommand(action);
+  runCodexFeaturesCommand(action, "multi_agent_v2", env, validateBeforeSpawn);
 }
 
 export function v2StatusLine(enabled: boolean): string {
@@ -182,7 +189,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     }
     if (parsed.verb === "threads") {
       const enabled = (deps.isEnabled ?? isMultiAgentV2Enabled)();
-      const result = transitionMultiAgentV2(enabled, next => runCodexFeatures(next ? "enable" : "disable", deps), { threadLimit: parsed.value });
+      const result = transitionMultiAgentV2(enabled, (next, env, validate) => runCodexFeatures(next ? "enable" : "disable", deps, env, validate), { threadLimit: parsed.value });
       if (!result.ok) return emit(false, ["Unable to update the native thread limit. Read ocx v2 status before retrying."]);
       changed = result.changed;
       return emit(true, [changed ? `max_threads = ${parsed.value} (${enabled ? "v2" : "v1"}) — applies to new sessions.` : `max_threads already ${parsed.value} — nothing to do.`]);
@@ -194,7 +201,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
       changed = (config.multiAgentMode ?? "default") !== parsed.value;
       if (parsed.value !== "default") {
         const target = parsed.value === "v2" && config.keepNativeChatGptOnV1 !== true;
-        const transition = transitionMultiAgentV2(target, next => runCodexFeatures(next ? "enable" : "disable", deps));
+        const transition = transitionMultiAgentV2(target, (next, env, validate) => runCodexFeatures(next ? "enable" : "disable", deps, env, validate));
         if (!transition.ok) { changed = false; return emit(false, ["Native mode transition failed. Read ocx v2 status before retrying."]); }
         changed ||= transition.changed;
       }
@@ -207,7 +214,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
       unchangedKeep = (config.keepNativeChatGptOnV1 === true) === parsed.value;
       changed = !unchangedKeep;
       if (parsed.value && requiresGlobalV2Disabled(config.multiAgentMode, true)) {
-        const transition = transitionMultiAgentV2(false, next => runCodexFeatures(next ? "enable" : "disable", deps));
+        const transition = transitionMultiAgentV2(false, (next, env, validate) => runCodexFeatures(next ? "enable" : "disable", deps, env, validate));
         if (!transition.ok) { changed = false; return emit(false, ["Native hybrid-mode transition failed. Read ocx v2 status before retrying."]); }
         changed ||= transition.changed;
       }
@@ -222,7 +229,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
       if (want && requiresGlobalV2Disabled(config.multiAgentMode, config.keepNativeChatGptOnV1 === true)) {
         return emit(false, ["v2 on: incompatible with keep-native-v1 while mode is v2 — Codex's global multi_agent_v2 overrides the native v1 catalog pin. Run 'ocx v2 keep-native-v1 off' first."]);
       }
-      const transition = transitionMultiAgentV2(want, next => runCodexFeatures(next ? "enable" : "disable", deps));
+      const transition = transitionMultiAgentV2(want, (next, env, validate) => runCodexFeatures(next ? "enable" : "disable", deps, env, validate));
       if (!transition.ok) return emit(false, ["Native feature transition failed. Read ocx v2 status before retrying."]);
       changed = transition.changed;
       if (!changed) return emit(true, [`multi_agent_v2 already ${want ? "ON" : "OFF"} — nothing to do.`]);

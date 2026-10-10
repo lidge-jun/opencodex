@@ -131,14 +131,20 @@ Missing or unreadable evidence blocks the guarded stop.
 
 When this CLI is newer than an attested standalone POSIX proxy, restart can stop the old
 installation and launch this one. This guarded update requires an unclaimed physical home,
-a detached proxy whose parent is PID 1, no installed or active service, and a known CLI version.
+a detached proxy whose parent is PID 1, positively inactive service supervision, and a known CLI
+version. An installed but unloaded launchd or inactive systemd service record is eligible only
+when it carries no ownership claim. Both launchd domains must be absent; systemd must report
+inactive with MainPID zero. Unreadable or uncertain manager evidence refuses. The command freezes
+all service records and the platform definition and checks them through stop, launch and child
+publication. Any rewrite, replacement, permission change or record creation/deletion refuses;
+retry after inspecting `ocx status`.
 The stop uses the same connection that proved the old proxy's identity. The command launches
 once only after confirmed shutdown, then requires the exact child PID, endpoint, fresh identity
 proof and matching version. Missing version, uncertain stop, timeout or an unexpected replacement
 reports failure without another stop or start. If the runtime this CLI would launch is still the
 small placeholder an in-place npm install leaves before its postinstall, restart refuses before
 stopping anything; after a confirmed stop it waits for the runtime within the same deadline and
-launches nothing if it does not arrive. Windows, foreground, desktop-supervised, service,
+launches nothing if it does not arrive. Windows, foreground, desktop-supervised, active-service,
 connected-client and sibling runtimes do not use this update path; use their owning lifecycle
 controls. A newer proxy or incomparable version still refuses an in-place downgrade. Use the newer
 installation's `ocx` to restart; inspect `which -a ocx` and `ocx status` to identify it.

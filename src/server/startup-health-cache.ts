@@ -88,7 +88,8 @@ export function markStartupHealthDiagnosticStale(value: StartupHealth): StartupH
     // Mirror deriveStartupHealth's choice: an already-registered service is refreshed in
     // place. Hardcoding installService here silently undid that for every stale-cache
     // read, which is the path the dashboard hits while a probe is revalidating.
-    recommendedCommand: value.routingKind === "opencodex-local" && value.desktop?.owned
+    recommendedAction: value.desktop ? "Reopen OpenCodex and check Start at Login." : value.recommendedAction,
+    recommendedCommand: value.routingKind === "opencodex-local" && value.desktop !== undefined
       ? null
       : value.routingKind === "custom-local" || value.routingKind === "unknown"
       ? value.commands.restoreNative

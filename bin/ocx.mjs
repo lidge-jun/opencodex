@@ -9,6 +9,9 @@
  * src/cli/index.ts — only the published npm/pnpm `bin` routes through here.)
  */
 import { spawn, spawnSync } from "node:child_process";
+import { createSupervisionLatch, inspectDesktopSupervision } from "../src/service/desktop-supervision.mjs";
+import { planDesktopCliHandoff, runDesktopCliHandoff } from "../src/lib/desktop-cli-handoff.mjs";
+import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
@@ -34,6 +37,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
+import { findDesktopCli, findPathBun } from "../src/lib/bun-path-runtime.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
 import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
@@ -92,6 +96,15 @@ function currentPackageVersion() {
     return JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version ?? "?";
   } catch {
     return "?";
+  }
+}
+
+function pinnedBunVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
+    return typeof pkg.dependencies?.bun === "string" ? pkg.dependencies.bun : "";
+  } catch {
+    return "";
   }
 }
 
@@ -323,11 +336,13 @@ function runPackageManagerSelfUpdate(manager) {
     : JSON.stringify(observation.ownership
       ? ["owned", observation.ownership.owner, observation.ownership.installId, observation.ownership.consentGeneration]
       : ["none"]);
+  const supervisionLatch = createSupervisionLatch();
+  const observeSupervision = () => supervisionLatch.observe(inspectDesktopSupervision());
   const initialOwnership = readOwnership();
-  let runtimePlan = planUpdateRuntimeHandling({ ...initialOwnership, serviceInstalled: serviceWasInstalled });
+  let runtimePlan = planUpdateRuntimeHandling({ ...initialOwnership, serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
   if (runtimePlan.notice) console.log(runtimePlan.notice);
   if (!runtimePlan.mayReplacePackage) {
-    console.error("opencodex: update stopped before tray handoff, runtime stop, or package replacement because runtime ownership is unknown.");
+    console.error("opencodex: update stopped before tray handoff, runtime stop, or package replacement because runtime authority does not permit it.");
     process.exit(1);
   }
   const trayBeforeUpdate = planWindowsTrayUpdate(
@@ -456,6 +471,14 @@ function runPackageManagerSelfUpdate(manager) {
     : unprivilegedOwnershipMutationEnvironment(process.env);
 
   function startProxyDirectly() {
+    const supervision = observeSupervision();
+    const plan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: false, supervision });
+    if (!plan.mayStopRuntime) {
+      console.warn(supervision
+        ? "OpenCodex Desktop supervises the proxy; no CLI runtime was restored."
+        : plan.notice);
+      return false;
+    }
     if (!postUpdateLauncherUsable || !existsSync(postUpdateLauncher)) {
       console.error("opencodex: cannot restart the proxy because the launcher is missing; reinstall opencodex manually.");
       return false;
@@ -488,6 +511,15 @@ function runPackageManagerSelfUpdate(manager) {
   }
 
   function refreshBackgroundServiceOrStartDirect() {
+    const mayRefresh = () => {
+      const supervision = observeSupervision();
+      const plan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: true, supervision });
+      if (!plan.mayRestoreService) console.warn(supervision
+        ? "OpenCodex Desktop supervises the proxy; CLI recovery was skipped. Use the app's updater (tray → Check for Updates)."
+        : plan.notice);
+      return plan.mayRestoreService;
+    };
+    if (!mayRefresh()) return;
     const prevBake = process.env.OCX_BAKE_PORT;
     process.env.OCX_BAKE_PORT = String(bakePort);
     try {
@@ -503,6 +535,7 @@ function runPackageManagerSelfUpdate(manager) {
       // failure would resurrect the elevation prompt this change exists to avoid, and
       // could re-register a service the user just uninstalled.
       if (svc.status !== 0 && readServiceInstalledFromStatus(postUpdateLauncher) === false) {
+        if (!mayRefresh()) return;
         console.log("No registered service found — installing it instead.");
         svc = spawnSync(process.execPath, serviceInstallArgs(), {
           stdio: "inherit", windowsHide: true, env: mutationChildEnvironment(),
@@ -535,9 +568,12 @@ function runPackageManagerSelfUpdate(manager) {
         // Re-read rather than reuse the plan from before the package install: the app can
         // claim the runtime during an update that takes minutes, and the refusal that repair
         // just returned is indistinguishable from any other failure at this layer.
-        const nowOwned = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: true });
+        const supervision = observeSupervision();
+        const nowOwned = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: true, supervision });
         if (!nowOwned.mayStopRuntime) {
-          console.warn(nowOwned.notice ?? "opencodex: the background runtime is owned elsewhere; not starting a second proxy.");
+          console.warn(supervision
+            ? "OpenCodex Desktop supervises the proxy; CLI recovery was skipped. Use the app's updater (tray → Check for Updates)."
+            : nowOwned.notice ?? "opencodex: the background runtime is owned elsewhere; not starting a second proxy.");
           return;
         }
         // Repair normally avoids elevation for a healthy registration, but a stale Windows
@@ -574,7 +610,7 @@ function runPackageManagerSelfUpdate(manager) {
     // Stop authority is decided under the same lease the child joins. A takeover between the
     // earlier preflight and this boundary therefore blocks stop before it is sent.
     const lockedOwnership = readOwnership();
-    const lockedPlan = planUpdateRuntimeHandling({ ...lockedOwnership, serviceInstalled: serviceWasInstalled });
+    const lockedPlan = planUpdateRuntimeHandling({ ...lockedOwnership, serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
     if (lockedOwnership.subjectToken !== initialOwnership.subjectToken || !lockedPlan.mayReplacePackage) {
       releaseUpdateLease();
       console.error(lockedPlan.notice
@@ -616,6 +652,7 @@ function runPackageManagerSelfUpdate(manager) {
           liveness,
           plan: planStoppedRuntimeRecovery({
             stopAttempted,
+            supervision: observeSupervision(),
             ...recoveryOwnership,
             sameOwner: ownershipIdentity(recoveryOwnership) === stoppedOwnershipIdentity,
             liveness,
@@ -633,7 +670,9 @@ function runPackageManagerSelfUpdate(manager) {
         releaseUpdateLease();
         ({ liveness: recoveryLiveness, plan: recovery } = planRecovery());
       }
-      if (recovery.reason === "ownership-unknown") {
+      if (recovery.reason === "desktop-supervised") {
+        console.log("OpenCodex Desktop supervises the proxy; no CLI runtime was restored.");
+      } else if (recovery.reason === "ownership-unknown") {
         console.error(`opencodex: ${reason}; runtime ownership is unknown, so automatic recovery was refused. Run 'ocx status --json' and repair the service-state record before retrying.`);
       } else if (recovery.reason === "ownership-transferred") {
         console.log("opencodex: runtime ownership moved to another installation; the stopped CLI runtime was not revived.");
@@ -666,6 +705,14 @@ function runPackageManagerSelfUpdate(manager) {
       process.exit(1);
     }
     if (stopNeeded) {
+      const preStopPlan = planUpdateRuntimeHandling({
+        ...readOwnership(), serviceInstalled: serviceWasInstalled, supervision: observeSupervision(),
+      });
+      if (!preStopPlan.mayStopRuntime) {
+        console.error(preStopPlan.notice);
+        releaseUpdateLease();
+        process.exit(1);
+      }
       stopAttempted = true;
       console.log("⏹  Stopping the running proxy before updating...");
       const stopRes = spawnSync(process.execPath, [launcher, "stop"], {
@@ -722,7 +769,7 @@ function runPackageManagerSelfUpdate(manager) {
     }
 
     const replacementOwnership = readOwnership();
-    const replacementPlan = planUpdateRuntimeHandling({ ...replacementOwnership, serviceInstalled: serviceWasInstalled });
+    const replacementPlan = planUpdateRuntimeHandling({ ...replacementOwnership, serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
     const replacementLiveness = currentPackageRuntimeLiveness();
     if (replacementOwnership.subjectToken !== initialOwnership.subjectToken
       || !replacementPlan.mayReplacePackage
@@ -829,9 +876,10 @@ function runPackageManagerSelfUpdate(manager) {
     // path and keeps token restoration coupled to the lease itself.
     releaseUpdateLease();
   }
-  const postInstallPlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
+  const postInstallPlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
+    if (!postInstallPlan.mayStopRuntime) console.warn("Runtime authority does not permit CLI recovery; no service was refreshed or proxy started.");
     repairCodexShimIfNeeded(postUpdateLauncher);
     if (trayBeforeUpdate.refreshAfterReplacement) {
       const tray = spawnSync(process.execPath, [postUpdateLauncher, ...trayBeforeUpdate.installArgs], {
@@ -884,6 +932,8 @@ const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
 // imported; tests/cli/ocx-launcher-source.test.ts pins the two together.
 const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";
 const BUN_RUNTIME_PATH_ENV = "OCX_BUN_RUNTIME_PATH";
+/** Total budget for validating a PATH Bun fallback (both probes together). */
+const PATH_BUN_PROBE_BUDGET_MS = 5_000;
 
 function findBunBinary(bunDir) {
   // The bundled `bun` package ships the binary as bin/bun.exe on every platform;
@@ -899,6 +949,7 @@ function fail(msg) {
   const reinstall = installMethod === "pnpm"
     ? "pnpm add -g --allow-build=bun @bitkyc08/opencodex"
     : "npm install -g --allow-scripts=bun @bitkyc08/opencodex";
+  const desktopCli = findDesktopCli();
   console.error(
     `opencodex: ${msg}\n` +
       "The bundled Bun runtime could not be prepared. This usually means the\n" +
@@ -906,7 +957,8 @@ function fail(msg) {
       "or pnpm did not approve bun's build) or optional dependencies. Reinstall with:\n" +
       `  ${reinstall}\n` +
       "(use sudo if the original install used sudo; without --ignore-scripts\n" +
-      "and without --omit=optional / optional=false)"
+      "and without --omit=optional / optional=false)" +
+      (desktopCli ? `\nAn installed Desktop CLI is available: "${desktopCli}"` : "")
   );
   process.exit(1);
 }
@@ -923,25 +975,32 @@ function resolveBun({ allowInstall = true } = {}) {
     );
   }
 
-  let bunDir;
+  let bunDir = null;
   try {
     bunDir = bunBinDir();
-  } catch {
-    fail("the `bun` dependency is not installed.");
-  }
+  } catch { /* Missing dependency can still fall back to a validated PATH Bun. */ }
 
-  let bin = findBunBinary(bunDir);
+  let bin = bunDir ? findBunBinary(bunDir) : null;
   if (bin) return { path: bin, source: "bundled" };
 
   // Lazy fallback: --ignore-scripts (or a failed postinstall) leaves the
   // ~450-byte placeholder stub. Run the bun package's own installer once.
-  const installJs = join(bunDir, "install.js");
-  if (allowInstall && existsSync(installJs)) {
+  const installJs = bunDir ? join(bunDir, "install.js") : null;
+  if (allowInstall && installJs && existsSync(installJs)) {
     const r = spawnSync(process.execPath, [installJs], { stdio: "inherit" });
     if (r.status === 0) bin = findBunBinary(bunDir);
   }
-  if (!bin) fail("Bun binary missing after install attempt.");
-  return { path: bin, source: "bundled" };
+  if (bin) return { path: bin, source: "bundled" };
+
+  // Reached only when the bundled runtime is unusable. The two probes start the candidate Bun
+  // cold, and on Windows a first run of a copied bun.exe is often held by an on-access scan for
+  // well over a second, so the total budget is generous rather than interactive-tight.
+  const pathBun = findPathBun({ pinnedVersion: pinnedBunVersion(), deadlineMs: PATH_BUN_PROBE_BUDGET_MS });
+  if (pathBun) {
+    console.error(`opencodex: using PATH Bun ${pathBun.version}.`);
+    return { path: pathBun.path, source: "process" };
+  }
+  fail(bunDir ? "Bun binary missing after install attempt." : "the `bun` dependency is not installed.");
 }
 
 // `ocx update --help` prints usage and exits WITHOUT side effects. The Node launcher
@@ -959,6 +1018,36 @@ const codexCliUpdateInspection = isCodexCliUpdateInspectionArgv(process.argv);
 if (codexCliUpdateInspection && typeof process.versions.bun === "string") {
   console.error("opencodex: codex-cli-update inspection must use the published Node launcher.");
   process.exit(1);
+}
+
+const { launchProof, launchContext, inheritedEnv } = createNodeLaunchContext();
+const desktopPlan = planDesktopCliHandoff({ selfPaths: [fileURLToPath(import.meta.url), process.execPath] });
+if (desktopPlan.kind === "error") {
+  if (desktopPlan.issue.startsWith("record-")) {
+    console.error(`opencodex: OpenCodex Desktop's terminal-command record at ${desktopCliRecordPath()} could not be used (${desktopPlan.issue}). Open OpenCodex Desktop to repair the terminal command, or run with OCX_NO_DESKTOP_HANDOFF=1.`);
+  } else {
+    console.error(`opencodex: Desktop CLI handoff refused (${desktopPlan.issue}). Repair the terminal command in OpenCodex Desktop, or run with OCX_NO_DESKTOP_HANDOFF=1.`);
+  }
+  process.exit(1);
+}
+if (desktopPlan.kind === "handoff") {
+  const result = await runDesktopCliHandoff(desktopPlan, {
+    argv: process.argv.slice(2), env: inheritedEnv, proof: launchProof, context: launchContext,
+  });
+  if (result.kind === "error") {
+    console.error(`opencodex: Desktop CLI handoff failed (${result.issue}). Repair the terminal command in OpenCodex Desktop, or run with OCX_NO_DESKTOP_HANDOFF=1.`);
+    process.exit(127);
+  }
+  if (result.kind === "exit") {
+    if (result.signal) {
+      process.kill(process.pid, result.signal);
+    } else {
+      process.exit(result.code);
+    }
+    // Signal delivery is asynchronous; never resume package repair or Bun lookup.
+    await new Promise(() => {});
+  }
+  // Only confirmed target ENOENT reaches the ordinary package path below.
 }
 
 if (process.argv[2] === "update" && installMethod === "mise") {
@@ -1015,64 +1104,68 @@ const bun = bunRuntime.path;
 // billing and prevents it from redirecting the subscriber's OAuth bearer.
 // Disabling Bun's dotenv wholesale with --no-env-file is NOT an option: config
 // interpolation and provider settings legitimately read the project environment.
-const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
-  .filter(name => typeof process.env[name] === "string" && process.env[name] !== "");
-// A configured CODEX_CLI_PATH may legitimately be cwd-relative (`./tools/codex`), which the
-// ordinary runtime resolver accepts. Inspection only trusts absolute local paths, so capture
-// the absolute form here, in the launcher, while the original cwd is still authoritative;
-// resolving it later would silently reinterpret it against a different working directory.
-//
-// A bare command with no separator (`codex`) is NOT a relative path: the runtime resolver
-// deliberately hands those to executable lookup along PATH. Rewriting it to `<cwd>/codex`
-// would make the inspector treat it as an explicit path and stop searching PATH entirely.
-const configuredCodexCliPath = typeof process.env.CODEX_CLI_PATH === "string" && process.env.CODEX_CLI_PATH !== ""
-  ? process.env.CODEX_CLI_PATH
-  : null;
-const preBunCodexCliPath = configuredCodexCliPath !== null
-    && (configuredCodexCliPath.includes("/") || configuredCodexCliPath.includes("\\") || /^[A-Za-z]:/.test(configuredCodexCliPath))
-  ? resolve(configuredCodexCliPath)
-  : configuredCodexCliPath;
-const preBunPath = typeof process.env.PATH === "string" ? process.env.PATH : null;
-const preBunPathExt = typeof process.env.PATHEXT === "string" ? process.env.PATHEXT : null;
-const preBunCodexCliManagerRoots = Object.fromEntries(
-  CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS.flatMap(name => {
-    const value = process.env[name];
-    return typeof value === "string" && value !== "" ? [[name, value]] : [];
-  }),
-);
-const launchProof = randomBytes(32).toString("base64url");
-const launchContext = JSON.stringify({
-  version: 1,
-  proof: launchProof,
-  anthropicEnvSlots: preBunAnthropicSlots,
-  codexCliInspectionEnv: codexCliUpdateInspection ? {
-    codexCliPath: preBunCodexCliPath,
-    path: preBunPath,
-    pathExt: preBunPathExt,
-    managerRoots: preBunCodexCliManagerRoots,
-    configDir: configDir(),
-  } : null,
-});
-// The inspection snapshot above already carries PATH, PATHEXT, and the manager-root slots as
-// proof-bound values, and `inspectCodexCliInstall` reads them from that snapshot rather than
-// from the live environment. Inheriting them again would spend the 32,767-character Windows
-// environment block twice, so a large-but-valid shell environment could stop the Bun child
-// from spawning and fail the command before it reports anything. Drop the duplicates for the
-// one-shot inspection launch only; every other launch inherits the environment unchanged.
-// Windows environment names are case-insensitive, but this spread produces an ordinary
-// case-sensitive object, and a real Windows environment commonly spells the variable `Path`.
-// Deleting only the canonical upper-case spelling would silently leave that copy behind and
-// reintroduce the duplication this block exists to prevent, so match on the lowercase form.
-const inheritedEnv = { ...process.env };
-if (codexCliUpdateInspection) {
-  const snapshotted = new Set(
-    ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase()),
+function createNodeLaunchContext() {
+  const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
+    .filter(name => typeof process.env[name] === "string" && process.env[name] !== "");
+  // A configured CODEX_CLI_PATH may legitimately be cwd-relative (`./tools/codex`), which the
+  // ordinary runtime resolver accepts. Inspection only trusts absolute local paths, so capture
+  // the absolute form here, in the launcher, while the original cwd is still authoritative;
+  // resolving it later would silently reinterpret it against a different working directory.
+  //
+  // A bare command with no separator (`codex`) is NOT a relative path: the runtime resolver
+  // deliberately hands those to executable lookup along PATH. Rewriting it to `<cwd>/codex`
+  // would make the inspector treat it as an explicit path and stop searching PATH entirely.
+  const configuredCodexCliPath = typeof process.env.CODEX_CLI_PATH === "string" && process.env.CODEX_CLI_PATH !== ""
+    ? process.env.CODEX_CLI_PATH
+    : null;
+  const preBunCodexCliPath = configuredCodexCliPath !== null
+      && (configuredCodexCliPath.includes("/") || configuredCodexCliPath.includes("\\") || /^[A-Za-z]:/.test(configuredCodexCliPath))
+    ? resolve(configuredCodexCliPath)
+    : configuredCodexCliPath;
+  const preBunPath = typeof process.env.PATH === "string" ? process.env.PATH : null;
+  const preBunPathExt = typeof process.env.PATHEXT === "string" ? process.env.PATHEXT : null;
+  const preBunCodexCliManagerRoots = Object.fromEntries(
+    CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS.flatMap(name => {
+      const value = process.env[name];
+      return typeof value === "string" && value !== "" ? [[name, value]] : [];
+    }),
   );
-  for (const name of Object.keys(inheritedEnv)) {
-    if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];
+  const launchProof = randomBytes(32).toString("base64url");
+  const launchContext = JSON.stringify({
+    version: 1,
+    proof: launchProof,
+    anthropicEnvSlots: preBunAnthropicSlots,
+    codexCliInspectionEnv: codexCliUpdateInspection ? {
+      codexCliPath: preBunCodexCliPath,
+      path: preBunPath,
+      pathExt: preBunPathExt,
+      managerRoots: preBunCodexCliManagerRoots,
+      configDir: configDir(),
+    } : null,
+  });
+  // The inspection snapshot above already carries PATH, PATHEXT, and the manager-root slots as
+  // proof-bound values, and `inspectCodexCliInstall` reads them from that snapshot rather than
+  // from the live environment. Inheriting them again would spend the 32,767-character Windows
+  // environment block twice, so a large-but-valid shell environment could stop the Bun child
+  // from spawning and fail the command before it reports anything. Drop the duplicates for the
+  // one-shot inspection launch only; every other launch inherits the environment unchanged.
+  // Windows environment names are case-insensitive, but this spread produces an ordinary
+  // case-sensitive object, and a real Windows environment commonly spells the variable `Path`.
+  // Deleting only the canonical upper-case spelling would silently leave that copy behind and
+  // reintroduce the duplication this block exists to prevent, so match on the lowercase form.
+  const inheritedEnv = { ...process.env };
+  if (codexCliUpdateInspection) {
+    const snapshotted = new Set(
+      ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase()),
+    );
+    for (const name of Object.keys(inheritedEnv)) {
+      if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];
+    }
   }
+  return { launchProof, launchContext, inheritedEnv };
 }
-const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2)], {
+
+const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2).filter(arg => !arg.startsWith(NODE_LAUNCH_PROOF_PREFIX))], {
   stdio: "inherit",
   // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no
   // console to inherit. Without this flag Windows allocates a visible console for

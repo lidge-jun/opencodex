@@ -175,6 +175,15 @@ export interface OcxClaudeCodeConfig {
   /** Compact-window tokens for auto-context. Default 829_800 (AUTO_COMPACT_WINDOW_DEFAULT). */
   autoCompactWindow?: number;
   /**
+   * Context accounting on Claude surfaces (devlog/_plan/261009_claude_1m_default/030). Absent
+   * (the default) = "1m": long-window models are offered at 1M wherever opencodex picks the
+   * default (launch env slots, Desktop pickers, Desktop 3P prefer1m, generated subagents).
+   * "200k" is the opt-in: nothing is marked [1m] automatically and no compact window is injected;
+   * a selector the user marks [1m] keeps it, and discovery and Desktop 3P keep offering 1M as a
+   * choice. The only stored value; "1m" deletes the key.
+   */
+  contextAccounting?: "200k";
+  /**
    * Local CONNECT proxy + TLS listener that intercepts Claude Code's own `api.anthropic.com`
    * traffic without any `ANTHROPIC_BASE_URL` rewrite (src/claude/intercept). Claude Code reaches
    * it via `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` in its settings env. Default: enabled on a
@@ -1174,6 +1183,18 @@ export interface OcxConfig {
   accountPoolStickyLimit?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
   upstreamFailoverThreshold?: number;
+  /**
+   * Sliding 60s transient-failure ratio for Codex pool placement. Default on.
+   * Set false to steer new threads from the consecutive counter only.
+   */
+  codexFailureWindow?: boolean;
+  /**
+   * What a manual pin does while its failure window is degraded.
+   * `hold` keeps using it and logs a warning. `detour-new-threads` places only new threads elsewhere.
+   */
+  codexPinnedTransientPolicy?: "hold" | "detour-new-threads";
+  /** Opt-in: retain one Codex WebSocket per account and thread across turns. Default off. */
+  codexWsReuseAcrossTurns?: boolean;
   /**
    * Opt-in provider-origin circuit threshold for proven pre-connection reachability failures.
    * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.

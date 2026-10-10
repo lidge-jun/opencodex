@@ -1044,7 +1044,7 @@ describe("the surfaces around the repair (#4236 defects 1f, 1h, 2)", () => {
     // Without the catch, a throw escaped through src/cli/dispatch.ts to the top level and
     // the one command that can evict a hub never reached its own serving check.
     expect(branch).toContain("try {");
-    expect(branch).toContain("await repairService({ verb });");
+    expect(branch).toContain("await repairService({ verb, supervisionLatch });");
     expect(branch).toContain("} catch (error) {");
     expect(branch).toContain('await reportServiceServing(verb === "restart" ? "restarted" : "repaired", {}, repairError);');
     // ONE outcome (#4914). The failure text has to reach the report, because printing it in

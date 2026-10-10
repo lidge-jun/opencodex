@@ -323,7 +323,7 @@ export interface WebSearchLoopDeps {
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Request-scoped executor retains the core's selection binding across loop retries. */
-  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest) => typeof globalThis.fetch;
+  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter) => typeof globalThis.fetch;
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
@@ -494,7 +494,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
-        const requestFetch = headerDeadline.pacedFetch(deps.fetchForRequest?.(request, iterParsed) ?? routedProviderFetch);
+        const requestFetch = headerDeadline.pacedFetch(deps.fetchForRequest?.(request, iterParsed, requestAdapter) ?? routedProviderFetch);
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
@@ -507,6 +507,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               sendBudget: deps.incomingMeta.sendBudget,
               onPhysicalSend: deps.incomingMeta.onPhysicalSend,
               executor: requestFetch,
+              onRecoveryWithheld: deps.incomingMeta.onRecoveryWithheld,
             });
           } else {
             response = await fetchWithResetRetry(
@@ -576,6 +577,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
       while ((prepared.response.status === 429
+        || (prepared.response.status === 401 && isAnthropicInstanceId(deps.incomingMeta?.providerName)
+          && !accountRefusalOutputStarted)
         || (prepared.response.status === 403
           && (isAnthropicInstanceId(deps.incomingMeta?.providerName) || deps.incomingMeta?.providerName === "google-antigravity")
           && !accountRefusalOutputStarted)

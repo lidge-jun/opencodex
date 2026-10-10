@@ -1060,6 +1060,7 @@ describe("codex-auth API", () => {
   });
 
   test("account DTO exposes the routing plan exclusion and clears it on renewal", async () => {
+    globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch; // Metadata assertions do not depend on quota transport.
     const cfg = makeConfig({ codexPool: { excludedPlans: ["free"] } });
     seedPoolAccount(cfg, { id: "plan-row", email: "plan@example.test", plan: "free" });
     const read = async () => {
@@ -4004,6 +4005,7 @@ describe("codex-auth API", () => {
   });
 
   test("the account list reports selection order, defaulting to zero", async () => {
+    globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch; // Keep synthetic credentials off the quota network path.
     const config = makeConfig({ codexAccountPriorities: { work: 2 } });
     seedPoolAccount(config, { id: "work", email: "work@example.test" });
     seedPoolAccount(config, { id: "side", email: "side@example.test" });

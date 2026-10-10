@@ -2,7 +2,7 @@ import { projectAntigravitySelectedModels } from "../../providers/antigravity-ef
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { initializeConfigOwnership } from "../../lib/config-ownership";
-import { getConfigDir, loadConfig, websocketsEnabled, withConfigMutationLockSync } from "../../config";
+import { getConfigDir, loadConfig, ultraFastTierEnabled, websocketsEnabled, withConfigMutationLockSync } from "../../config";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { legacyCustomModelCatalogSlugs } from "../custom-model-catalog-migration";
 import { getCodexHome } from "../paths";
@@ -508,6 +508,7 @@ function writeRetainedCatalogSync({
     }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined)
     : [];
   catalog.models = mergeCatalogEntriesFromObservedState({
+    ultraFastTier: ultraFastTierEnabled(config),
     modelPickerOrder,
     accountSelectors,
     catalogModels: catalogModelsForMerge,

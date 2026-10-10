@@ -19,6 +19,13 @@ import type { OcxConfig } from "../types";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { recordUpstreamHostFailure } from "./upstream-host-health";
 import type { CodexThreadLineage } from "./lineage";
+import {
+  failureWindowSteersNewThreads,
+  forgetCodexFailureWindow,
+  forgetCodexFailureWindows,
+  noteCodexFailureWindowSample,
+  settleCodexSuccessStreak,
+} from "./routing/failure-window";
 
 import { isCodexPoolRefreshCooling } from "./pool-refresh-backoff";
 import {
@@ -238,6 +245,7 @@ export function clearCodexUpstreamHealth(): void {
   clearAllManualPreferences();
   clearIdleWindowSteering();
   clearUpstreamHealthState();
+  forgetCodexFailureWindows();
   forgetRuntimeActiveCodexAccount();
   // The reconcile watermark is part of this state, not something that outlives it. Keeping
   // it across a full reset is incoherent: there is no health left to protect, yet
@@ -249,6 +257,7 @@ export function clearCodexUpstreamHealth(): void {
 
 export function clearCodexUpstreamHealthForAccount(accountId: string): void {
   deleteAllHealthForAccount(accountId);
+  forgetCodexFailureWindow(accountId);
   // Deletion is the third operator exit, next to pause and exclusion, and it is the one
   // with no reconcile path behind it: once the account is gone nothing can succeed on it,
   // so an unspent preference naming it would suppress the automatic cursor for every other
@@ -829,7 +838,7 @@ export function previewCodexAccountForRequest(
       active = pickLowerUsageAccount(config, active, usage, now, quotaScope, selectionOptions);
     }
   }
-  if (shouldFailover(config, active, now)) {
+  if (shouldFailover(config, active, now) || failureWindowSteersNewThreads(config, active, now)) {
     const best = pickLowestUsageCodexAccount(config, active, now, quotaScope, selectionOptions);
     if (best) active = best;
   }
@@ -1296,6 +1305,7 @@ export function recordCodexUpstreamOutcome(
    */
   dropSpentCredentialFailure(accountId);
   if (outcomeClass === "success") {
+    noteCodexFailureWindowSample(config, accountId, false, now);
     // The operator's one-shot is spent by a dispatch that actually worked, and only by that.
     // A failed lookup leaves it unspent so the intent survives the failure.
     consumeManualPreference(accountId, codexPoolKeyForScope(quotaScope));
@@ -1336,22 +1346,7 @@ export function recordCodexUpstreamOutcome(
     // Non-owners keep every hard-cooldown field, including someone else's live lease.
     const base = ownsProbeLease(current, meta) ? withProbeLeaseReleased(current!, now) : current;
     const preserved = preservedCooldownFields(base);
-    const failoverEnabled = (config.upstreamFailoverThreshold ?? 3) > 0;
-    if (failoverEnabled && current && current.consecutiveFailures >= 2) {
-      const consecutiveSuccesses = (current.consecutiveSuccesses ?? 0) + 1;
-      if (consecutiveSuccesses < 2) {
-        setAccountHealth(accountId, {
-          ...base!,
-          ...preserved,
-          consecutiveSuccesses,
-        });
-        return;
-      }
-    }
-    // Level 1 clears immediately; escalated accounts need two consecutive healthy terminals.
-    // Hard quota cooldown intentionally survives either recovery path.
-    if (cooldownUntil) setAccountHealth(accountId, { consecutiveFailures: 0, ...preserved });
-    else deleteAccountHealth(accountId);
+    settleCodexSuccessStreak(config, accountId, current, base, preserved, cooldownUntil);
     return;
   }
   if (outcomeClass === "caller") {
@@ -1560,6 +1555,7 @@ export function recordCodexUpstreamOutcome(
   // A transient failure concludes an owning probe; an unrelated 5xx must not
   // consume someone else's live lease or drop hard-cooldown bookkeeping (#433).
   const transientBase = ownsProbeLease(current, meta) ? withProbeLeaseReleased(current!, now) : current;
+  noteCodexFailureWindowSample(config, accountId, true, now);
   const stale = current?.lastFailureAt ? now - current.lastFailureAt > CODEX_FAILURE_WINDOW_MS : false;
   const hardCooldownUntil = getCodexAccountCooldownUntil(accountId, now) ?? undefined;
   // Soft avoid + affinity clears are part of failover. When threshold is 0, leave

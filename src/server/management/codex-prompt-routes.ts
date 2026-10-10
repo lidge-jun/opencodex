@@ -83,6 +83,7 @@ const WRITE_ERROR_STATUS: Record<WriteError, number> = {
   write_failed: 500,
   recovery_required: 409,
   locked: 409,
+  unsafe: 422,
 };
 
 /** Read-only view for the route test that asserts every mapping is a client error. */

@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { win32 } from "node:path";
 import { winswXmlPath } from "../lib/winsw";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
+import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
+import { assertSelectedRuntimeWritable, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
 import { parseBakedListenPort } from "./health";
 import { windowsServiceScriptPath } from "./state";
 import { execFileSync } from "node:child_process";
@@ -18,7 +20,7 @@ import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { writeServiceApiTokenFile } from "./guards";
 import type { ServiceStopOutcome } from "./orchestration";
-import { TASK, windowsLauncherVbsPath, windowsTaskXmlPath, serviceStatePath, writeServiceInstallState, serviceSourceDir } from "./state";
+import { TASK, windowsLauncherVbsPath, windowsTaskXmlPath, serviceStatePath, writeServiceInstallState, serviceSourceDir, cliEntry } from "./state";
 import { decodeSchtasksOutput, querySchtasks, schtasks, type WindowsSchedulerTaskProbe, schtasksErrorDetail, probeWindowsSchedulerTask, rollbackWindowsSchedulerTaskOwnedByAttempt } from "./windows-scheduler";
 import { buildWindowsServiceScript, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsLauncherVbs, resolvedWindowsTaskSid, buildWindowsTaskXmlDocument, windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy } from "./windows-taskxml";
 
@@ -108,11 +110,11 @@ function writeServiceAssetWithRetry(path: string, content: string, encoding: "ut
  * Rewrite on-disk scheduler assets (script/VBS/XML) without itself registering the task.
  * Fresh install creates it afterwards; repair does so only when the live definition is stale.
  */
-export function writeWindowsSchedulerAssets(): void {
+export function writeWindowsSchedulerAssets(runtime: DurableBunRuntime = durableBunRuntime()): void {
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
   const script = windowsServiceScriptPath();
-  writeServiceAssetWithRetry(script, buildWindowsServiceScript(), "utf8");
+  writeServiceAssetWithRetry(script, buildWindowsServiceScript(cliEntry(runtime)), "utf8");
   // UTF-16LE + BOM: a BOM-less UTF-8 VBS mis-decodes non-ASCII (e.g. Korean) profile
   // paths on some WSH/codepage combinations — same contract as the task XML below.
   writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le");
@@ -597,16 +599,40 @@ export function removeNativeWindowsServiceForScheduler(
   }
 }
 
-export function installWindows(): void {
-  recordWindowsSchedulerOwnership();
-  removeNativeWindowsServiceForScheduler();
+/** External Windows effects shared by the gated entrypoints and admitted commit paths. */
+export interface WindowsServiceInstallDeps extends RuntimePreflightDeps {
+  recordSchedulerOwnership?: () => boolean;
+  removeNativeService?: () => void;
+  stopScheduler?: () => void;
+  writeSchedulerAssets?: (runtime: DurableBunRuntime) => void;
+  schedulerCommand?: typeof schtasks;
+  writeState?: (backend: "scheduler" | "native", runtime: DurableBunRuntime) => void;
+  assertNativeAccount?: () => void;
+  prepareNativeConfig?: () => void;
+  uninstallScheduler?: () => void;
+  installNativeService?: typeof installWinswService;
+}
+
+export function installWindows(selected?: DurableBunRuntime, deps: WindowsServiceInstallDeps = {}): void {
+  const runtime = Object.freeze({ ...(selected ?? (deps.selectRuntime ?? durableBunRuntime)()) });
+  const configDir = (deps.configDir ?? getConfigDir)();
+  (deps.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { platform: deps.platform, rootWasAbsent: !existsSync(configDir) });
+  commitWindowsInstall(runtime, deps);
+}
+
+/** Internal commit boundary: the caller has admitted this frozen runtime before cleanup. */
+export function commitWindowsInstall(runtime: DurableBunRuntime, deps: WindowsServiceInstallDeps = {}): void {
+  (deps.recordSchedulerOwnership ?? recordWindowsSchedulerOwnership)();
+  (deps.removeNativeService ?? removeNativeWindowsServiceForScheduler)();
   // End a running task BEFORE rewriting the assets it is executing — cmd.exe reading the
   // script mid-rewrite runs a torn batch file, and its open handle can fail the write.
-  try { stopWindows(); } catch { /* not running */ }
-  writeWindowsSchedulerAssets();
-  schtasks(buildWindowsSchtasksCreateArgs(windowsServiceScriptPath()));
-  schtasks(["/run", "/tn", TASK]);
-  writeServiceInstallState("scheduler");
+  try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
+  (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
+  const command = deps.schedulerCommand ?? schtasks;
+  command(buildWindowsSchtasksCreateArgs(windowsServiceScriptPath()));
+  command(["/run", "/tn", TASK]);
+  if (deps.writeState) deps.writeState("scheduler", runtime);
+  else writeServiceInstallState("scheduler", undefined, {}, runtime);
 }
 
 /**
@@ -748,26 +774,38 @@ function readWindowsPrincipalSource(): string | null {
   }
 }
 
-export async function installWindowsNative(): Promise<void> {
-  assertWindowsNativeServiceAccountSupported();
-  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
-  if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
-  writeServiceApiTokenFile();
+export async function installWindowsNative(selected?: DurableBunRuntime, deps: WindowsServiceInstallDeps = {}): Promise<void> {
+  const runtime = Object.freeze({ ...(selected ?? (deps.selectRuntime ?? durableBunRuntime)()) });
+  const configDir = (deps.configDir ?? getConfigDir)();
+  (deps.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { platform: deps.platform, rootWasAbsent: !existsSync(configDir) });
+  await commitWindowsNativeInstall(runtime, deps);
+}
+
+/** Internal commit boundary; direct native installs go through the public admission gate. */
+export async function commitWindowsNativeInstall(runtime: DurableBunRuntime, deps: WindowsServiceInstallDeps = {}): Promise<void> {
+  (deps.assertNativeAccount ?? assertWindowsNativeServiceAccountSupported)();
+  if (deps.prepareNativeConfig) deps.prepareNativeConfig();
+  else {
+    recordOwnedConfigPath(getConfigDir(), serviceStatePath());
+    if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
+    writeServiceApiTokenFile();
+  }
+  const command = deps.schedulerCommand ?? schtasks;
   let hadScheduler = false;
   try {
-    hadScheduler = schtasks(["/query", "/tn", TASK]).includes(TASK);
+    hadScheduler = command(["/query", "/tn", TASK]).includes(TASK);
   } catch { /* task absent */ }
   if (hadScheduler) {
     console.log("🔁 Removing the Task Scheduler backend before installing the native (WinSW) service...");
-    try { stopWindows(); } catch { /* not running */ }
+    try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
     try {
-      uninstallWindows();
+      (deps.uninstallScheduler ?? uninstallWindows)();
     } catch (err) {
       throw new Error(`Cannot remove the Task Scheduler backend before switching to native: ${err instanceof Error ? err.message : String(err)}`);
     }
     // Verify removal — schtasks /delete can silently fail if UAC or policy blocks it.
     try {
-      if (schtasks(["/query", "/tn", TASK]).includes(TASK)) {
+      if (command(["/query", "/tn", TASK]).includes(TASK)) {
         throw new Error("Task Scheduler backend still present after removal — aborting switch.");
       }
     } catch (e) {
@@ -776,12 +814,13 @@ export async function installWindowsNative(): Promise<void> {
     }
   }
   try {
-    await installWinswService(defaultWinswEntry(serviceSourceDir));
+    await (deps.installNativeService ?? installWinswService)(defaultWinswEntry(serviceSourceDir, runtime));
   } catch (err) {
     if (hadScheduler) console.error("⚠️  Native install failed AFTER removing the Task Scheduler backend — no service is installed now. Run `ocx service install` to restore the scheduler backend, or retry `--native`.");
     throw err;
   }
-  writeServiceInstallState("native");
+  if (deps.writeState) deps.writeState("native", runtime);
+  else writeServiceInstallState("native", undefined, {}, runtime);
 }
 
 export function startWindows(): void { schtasks(["/run", "/tn", TASK]); }

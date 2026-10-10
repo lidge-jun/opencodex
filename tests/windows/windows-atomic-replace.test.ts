@@ -80,3 +80,28 @@ describe("renameAtomicFile", () => {
     expect(seam.attempts()).toBe(1);
   });
 });
+
+
+test("a destination change during a Windows retry refuses before another rename", () => {
+  const seam = io(1);
+  let changed = false, validations = 0;
+  seam.sleep = () => { changed = true; };
+  expect(() => renameAtomicFile("temp", "config", seam, "config", {
+    validateBeforeRename: () => {
+      validations += 1;
+      if (changed) throw Error("destination changed");
+    },
+  })).toThrow("destination changed");
+  expect(seam.attempts()).toBe(1);
+  expect(validations).toBe(2);
+});
+
+for (const code of ["EPERM", "EBUSY", "EACCES"]) test(`validation ${code} is not a filesystem retry`, () => {
+  const seam = io(0);
+  const error = Object.assign(new Error("validation refused"), { code });
+  expect(() => renameAtomicFile("temp", "config", seam, "config", {
+    validateBeforeRename: () => { throw error; },
+  })).toThrow(error);
+  expect(seam.attempts()).toBe(0);
+  expect(seam.sleeps).toEqual([]);
+});

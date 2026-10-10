@@ -364,7 +364,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `PUT /api/codex-auth/accounts/pause` | Вручную приостановить или возобновить аккаунт и существующие записи основного аккаунта и пула с той же идентичностью; возвращает `affectedAccountIds` | 400 неверный аккаунт/состояние; 404 аккаунт не найден; 503 данные идентичности основного аккаунта заняты или недоступны для чтения |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Очистить runtime cooldown для одного аккаунта или для всех | 400 invalid id |
-| `GET, PUT /api/codex-auth/active` | Прочитать или выбрать активный аккаунт | 400 invalid or missing account; 409 paused/legacy-row conflict |
+| `GET, PUT /api/codex-auth/active` | Прочитать или выбрать активный аккаунт | 400 invalid or missing account; 409 paused/legacy-row conflict или `account_selection_unavailable` |
 | `PUT /api/codex-auth/auto-switch` | Задать глобальный порог через `{ threshold }` без `id` или переопределение аккаунта через `{ id, threshold }`; `id: '__main__'` выбирает аккаунт Codex Desktop. При указанном `id` значение `threshold: null` удаляет переопределение и восстанавливает наследование глобального порога | 400 invalid id/threshold; 404 missing account |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Обновить стратегию выбора в пуле аккаунтов Codex | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Задать порог failover аккаунтов | 400 invalid threshold |
@@ -375,6 +375,16 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `POST /api/codex-auth/login/code` | Отправить manual code для login-flow Codex | 400 invalid flow/code |
 | `POST /api/codex-auth/login/cancel` | Отменить только ожидающий вход Codex с `{ "flowId": "..." }` | 400 ID потока отсутствует, неизвестен или не ожидает завершения |
 | `GET /api/codex-auth/login-status` | Опрашивать flow или login-state аккаунта. Завершение нового аккаунта включает `catalogRefreshPending: true` только при необходимости восстановления. | Неизвестные flow'ы сообщаются как `expired`; отсутствие активного flow — как `idle` |
+
+`PUT /api/codex-auth/active` требует `{ "accountId": "<id>" }` или явно указанного
+`{ "accountId": null }` для сброса выбора. Повторный выбор текущего аккаунта считается явным
+выбором, даже если другой процесс изменил сохранённый аккаунт. Сервер сохраняет остальные
+сохранённые настройки и отклоняет выбор аккаунтов, удалённых или приостановленных после загрузки
+панели управления. Если сохранённая конфигурация недоступна или некорректна, текущий выбор
+в работающем процессе и привязка запросов к аккаунту не меняются; перед повторной попыткой
+перезагрузите настройки. Успешный ответ описывает зафиксированный выбор. Существующие правила
+квот и failover по-прежнему могут снять закрепление; `pinDrained` сообщает известную на данный
+момент причину снятия закрепления.
 
 Если config row нового аккаунта сохранён, но credential setup не завершён, OAuth `login-status`
 сообщает `status: "error"` и содержит

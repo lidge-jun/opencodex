@@ -10,9 +10,10 @@ import {
 } from "./desktop-3p-library";
 export { resolveDesktop3pConfigLibraryPath, type Desktop3pConfigLibraryOptions } from "./desktop-3p-library";
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, readConfigDiagnostics, withConfigMutationLockSync } from "../config";
+import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
 import type { OcxClaudeDesktopProfile } from "../types";
 import {
@@ -24,6 +25,7 @@ import {
 import { nativeOpenAiContextWindow, type NativeContextLimitsInput } from "../codex/catalog";
 import { localAdmissionToken, localInferenceDestination } from "../lib/local-destinations";
 import { assertDesktop3pModelsValid } from "./desktop-3p-guard";
+import { claudeSurfaceSupportsOneMillion, ONE_MILLION } from "./long-context";
 
 export interface Desktop3pModelEntry {
   name: string;
@@ -55,12 +57,12 @@ export interface Desktop3pRoutedModel {
 }
 
 /**
- * 1M-context eligibility, shared with the Desktop DTO so the dashboard's 1M chip can
- * never disagree with what the writer emits. The DTO imports this from here — keeping
- * the constant in this module avoids a cycle, since shared.ts already reads
- * claude/desktop-profile.
+ * The genuine-1M threshold real Anthropic rows still need. Every other row follows the
+ * long-window rule; the writer, the profile renderer and the dashboard DTO all decide through
+ * `claudeSurfaceSupportsOneMillion` (long-context.ts), so the 1M chip cannot disagree with the
+ * written config.
  */
-export const DESKTOP_SUPPORTS_1M_THRESHOLD = 1_000_000;
+export const DESKTOP_SUPPORTS_1M_THRESHOLD = ONE_MILLION;
 
 /** CLI arg parsing for `ocx claude desktop` mode flags (mutually exclusive). */
 export function parseDesktop3pModeArgs(flags: string[]): { mode: Desktop3pConfigMode } | { error: string } {
@@ -251,7 +253,7 @@ function collectDesktop3pModels(
   for (const { provider, id, contextWindow } of candidates) {
     const route = `${provider}/${id}`;
     const alias = desktop3pAlias(provider, id);
-    const supports1m = typeof contextWindow === "number" && contextWindow >= DESKTOP_SUPPORTS_1M_THRESHOLD
+    const supports1m = claudeSurfaceSupportsOneMillion(provider, id, contextWindow)
       ? { supports1m: true as const }
       : {};
     if (alias === id) {
@@ -317,16 +319,30 @@ export function buildDesktop3pRegistry(
 }
 
 /** Generate Claude Desktop 3P model entries from the proxy's available models. */
+export interface Desktop3pModelOptions {
+  /**
+   * false under claudeCode.contextAccounting "200k": a long-window model stays selectable at 1M
+   * (`supports1m`) but no longer defaults to it (`prefer1m` dropped).
+   */
+  preferOneMillion?: boolean;
+}
+
 export function generateDesktop3pModels(
   nativeSlugs: string[],
   routedModels: Array<Desktop3pRoutedModel>,
   profile?: OcxClaudeDesktopProfile,
   nativeContextCap?: NativeContextLimitsInput,
+  options: Desktop3pModelOptions = {},
 ): Desktop3pModelEntry[] {
   const { models, registry, realAnthropicIds } = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
   desktop3pRegistry = registry;
   desktop3pRealAnthropicIds = realAnthropicIds;
-  return models;
+  return options.preferOneMillion === false ? models.map(({ prefer1m: _prefer1m, ...model }) => model) : models;
+}
+
+/** The Desktop model options a config asks for (one place, so writer and export agree). */
+export function desktop3pModelOptions(claudeCode: { contextAccounting?: string } | undefined): Desktop3pModelOptions {
+  return { preferOneMillion: claudeCode?.contextAccounting !== "200k" };
 }
 
 /** Resolve an alias using the most recently generated Desktop model registry. */
@@ -382,6 +398,7 @@ export function generateDesktop3pConfig(
   mode: Desktop3pConfigMode = "static",
   profile?: OcxClaudeDesktopProfile,
   nativeContextCap?: NativeContextLimitsInput,
+  options: Desktop3pModelOptions = {},
 ): object {
   const base = {
     inferenceProvider: "gateway",
@@ -398,7 +415,7 @@ export function generateDesktop3pConfig(
     ...base,
     modelDiscoveryEnabled: mode === "hybrid",
     inferenceModels: (() => {
-      const models = generateDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
+      const models = generateDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap, options);
       // Fail loud at the write boundary rather than ship a config Desktop rejects:
       // the output counterpart of the request-path guards.
       assertDesktop3pModelsValid(models);
@@ -662,6 +679,7 @@ export function writeDesktop3pConfig(
   profile?: OcxClaudeDesktopProfile,
   nativeContextCap?: NativeContextLimitsInput,
   lifecycleLockDeps?: ClientLifecycleLockDeps,
+  refreshOnly?: { appliedFingerprint: string; admit: () => boolean },
 ): { written: boolean; path: string; reason?: string; fingerprint?: string } {
   try {
     return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
@@ -674,8 +692,28 @@ export function writeDesktop3pConfig(
       if (!claudeDesktopIntegrationEnabled(latest.config)) {
         return { written: false, path: resolveDesktop3pConfigLibraryPath(), reason: "desired_state_changed" };
       }
+      if (refreshOnly && !desktopRefreshPathsSafe(resolveDesktop3pConfigLibraryPath())) {
+        return { written: false, path: resolveDesktop3pConfigLibraryPath(), reason: "desktop_refresh_only_skipped" };
+      }
       if (connection.kind === "connected" || inspectRemoteDesktopCleanup().kind !== "absent") {
         return { written: false, path: resolveDesktop3pConfigLibraryPath(), reason: "desktop_remote_store_active" };
+      }
+      let requiredId: string | undefined;
+      if (refreshOnly) {
+        const refused = { written: false, path: resolveDesktop3pConfigLibraryPath(), reason: "desktop_refresh_only_skipped" };
+        // Ownership and bytes must still match under L→C; discovery outside these locks is not authority.
+        if (!refreshOnly.admit() || latest.config.claudeCode?.desktopProfile?.appliedFingerprint !== refreshOnly.appliedFingerprint) return refused;
+        const inspected = inspectDesktop3pConfigLibrary({ appliedFingerprint: refreshOnly.appliedFingerprint });
+        if (inspected.kind !== "gateway_ours" || !inspected.appliedId || !inspected.selectedProfilePath) return refused;
+        if (!desktopRefreshPathsSafe(inspected.libraryPath, inspected.selectedProfilePath)) return refused;
+        const metadata = parseMetadata(join(inspected.libraryPath, "_meta.json"));
+        if (!isOwnedDesktopGatewayEntry(metadata.entries.find(entry => entry.id === inspected.appliedId))) return refused;
+        try {
+          const selected = JSON.parse(readFileSync(inspected.selectedProfilePath, "utf8")) as Record<string, unknown>;
+          mode = selected.modelDiscoveryEnabled !== true ? "static"
+            : Array.isArray(selected.inferenceModels) ? "hybrid" : "discovery";
+        } catch { return refused; }
+        requiredId = inspected.appliedId;
       }
       // Claude Desktop runs on this machine, so it dials the unauthenticated loopback listener
       // when one is enabled — on such a hub that is the only credential-free local socket
@@ -700,8 +738,9 @@ export function writeDesktop3pConfig(
         );
       }
       return writeDesktop3pConfigWithGenerator(() => (
-        generateDesktop3pConfig(destination.origin, nativeSlugs, routedModels, gatewayKey, mode, profile, nativeContextCap)
-      ));
+        generateDesktop3pConfig(destination.origin, nativeSlugs, routedModels, gatewayKey, mode, profile, nativeContextCap,
+          desktop3pModelOptions(latest.config.claudeCode))
+      ), requiredId && refreshOnly ? { requiredId, expectedFingerprint: refreshOnly.appliedFingerprint, admit: refreshOnly.admit } : undefined);
     }), lifecycleLockDeps);
   } catch { return { written: false, path: resolveDesktop3pConfigLibraryPath(), reason: "desktop_lifecycle_busy_or_unsafe" }; }
 }
@@ -734,17 +773,38 @@ export function writeRemoteDesktop3pConfig(options: {
   } catch { return { written: false, path: "", reason: "desktop_lifecycle_busy_or_unsafe" }; }
 }
 
+/** Refresh-only writes never follow links, including a dangling backup link. */
+function desktopRefreshPathsSafe(libraryPath: string, configPath?: string): boolean {
+  try {
+    if (!lstatSync(libraryPath).isDirectory() || !lstatSync(join(libraryPath, "_meta.json")).isFile()) return false;
+    if (configPath) {
+      if (!lstatSync(configPath).isFile()) return false;
+      try { if (lstatSync(`${configPath}.bak`).isSymbolicLink()) return false; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
+    }
+    return true;
+  } catch { return false; }
+}
+
 function writeDesktop3pConfigWithGenerator(
   generate: () => object,
+  refreshOnly?: { requiredId: string; expectedFingerprint: string; admit: () => boolean },
 ): { written: boolean; path: string; reason?: string; fingerprint?: string } {
   const libraryPath = resolveDesktop3pConfigLibraryPath();
   const metadataPath = join(libraryPath, "_meta.json");
   let configPath = libraryPath;
 
   try {
-    mkdirSync(libraryPath, { recursive: true, mode: 0o700 });
+    if (refreshOnly && !desktopRefreshPathsSafe(libraryPath)) {
+      return { written: false, path: libraryPath, reason: "desktop_refresh_only_skipped" };
+    }
+    if (!refreshOnly) mkdirSync(libraryPath, { recursive: true, mode: 0o700 });
     const metadata = parseMetadata(metadataPath);
     const selected = metadata.entries.find(entry => entry?.id === metadata.appliedId && isOwnedDesktopGatewayEntry(entry));
+    // A refresh may reuse only the applied entry; fallback allocation would silently enroll again.
+    if (refreshOnly && selected?.id !== refreshOnly.requiredId) {
+      return { written: false, path: libraryPath, reason: "desktop_refresh_only_skipped" };
+    }
     const existing = selected ?? metadata.entries.find(entry => isOwnedDesktopGatewayEntry(entry) && typeof entry.id === "string");
     const id = existing?.id ?? randomUUID();
     configPath = profilePath(libraryPath, id);
@@ -757,6 +817,22 @@ function writeDesktop3pConfigWithGenerator(
     const preserved = readDesktopProfileForeignKeys(configPath);
     const configJson = JSON.stringify({ ...preserved, ...generated }, null, 2) + "\n";
     const fingerprint = createHash("sha256").update(configJson).digest("hex").slice(0, 16);
+    if (refreshOnly) {
+      atomicWriteFileNoFollow(configPath, configJson, undefined, {
+        validateBeforeRename: () => {
+          try {
+            if (!refreshOnly.admit() || !desktopRefreshPathsSafe(libraryPath, configPath)) throw new Error();
+            const freshMetadata = parseMetadata(metadataPath);
+            if (freshMetadata.appliedId !== refreshOnly.requiredId
+              || !isOwnedDesktopGatewayEntry(freshMetadata.entries.find(entry => entry.id === refreshOnly.requiredId))
+              || createHash("sha256").update(readFileSync(configPath)).digest("hex").slice(0, 16) !== refreshOnly.expectedFingerprint) {
+              throw new Error();
+            }
+          } catch { throw new Error("desktop_refresh_only_skipped"); }
+        },
+      });
+      return { written: true, path: configPath, fingerprint };
+    }
     const { backupPath } = atomicReplaceDesktopConfig(configPath, configJson);
     try {
       atomicWriteFile(metadataPath, JSON.stringify({ ...metadata, appliedId: id, entries }, null, 2) + "\n");

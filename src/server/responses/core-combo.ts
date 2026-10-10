@@ -717,30 +717,32 @@ export async function executeComboResponses(
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
     // The inherited spend tracker observes this parent log, before the child has its own label.
     logCtx.spendPoolId = targetRoute.providerName;
-    // The first target seeds the ledger's target identity and charges nothing; every later one
-    // is a real transition, refused once the declared hops, the alternate-target ledger or the
-    // request total are spent. `countedExternally` is required: the child charges its own
-    // physical sends, and charging here as well would halve the cap without saying so.
+    // Derive the target's allowance before booking its initial send; the booking occupies it.
+    const targetSendBudget = comboSendScope
+      ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
+      : options.sendBudget;
+    // Every target prepays one send. Only its child may consume that booking; later targets
+    // remain bounded by the shared total, transition ledger and per-target holdback.
+    // `countedExternally` is required: the child charges its own physical sends against this
+    // booking through the exact permit, and charging here as well would halve the cap.
     const hopDecision = comboSendScope?.reserveDispatch({
       sendClass: firstComboTarget ? "initial" : "combo-failover",
       targetKey: `${pick.target.provider}/${pick.target.model}`,
       countedExternally: true,
     });
-    if (hopDecision && hopDecision.allowed) hopDecision.permit.use();
-    else if (hopDecision && firstComboTarget) {
+    if (hopDecision && !hopDecision.allowed && firstComboTarget) {
       // A refused initial reservation authorizes no child send and has no upstream failure to return.
       return formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, "request send budget exhausted before combo dispatch");
     }
-    else if (hopDecision) {
+    else if (hopDecision && !hopDecision.allowed) {
       // Out of budget is not this target's failure. The established exhaustion contract is to
       // return the last real upstream answer with its status, headers and any quota body
       // intact rather than to mint a synthetic error, and a later target only exists because
       // an earlier one already recorded one.
       return exhaustedFailure();
     }
-    const targetSendBudget = comboSendScope
-      ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
-      : options.sendBudget;
+    const initialSend = hopDecision?.allowed ? { permit: hopDecision.permit, producerOwned: false } : undefined;
+    try {
     comboTargetsDispatched += 1;
     const childLog: RequestLogContext = {
       model: pick.target.model,
@@ -764,7 +766,7 @@ export async function executeComboResponses(
       initialJevDecision ? initialJevDecision.effort : comboDefaultEffort(config, comboId),
       initialJevDecision?.effort === null ? [] : targetReasoningEfforts,
       combo.reasoningEffortMode,
-      initialJevDecision !== undefined && initialJevDecision.effort !== null ? "force" : combo.defaultEffortMode,
+      initialJevDecision ? (initialJevDecision.effort === null ? "fallback" : "force") : combo.defaultEffortMode,
     );
     if (initialJevDecision) {
       delete childBody.service_tier;
@@ -860,7 +862,7 @@ export async function executeComboResponses(
           && targetEligible(target)
           && !isComboTargetInCooldown(comboId, target),
         );
-      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget);
+      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget, initialJevDecision);
       response = nativeChild ? await dispatchNativeComboChild({
         source: options.protocolSource!,
         plan: nativeChild,
@@ -890,6 +892,7 @@ export async function executeComboResponses(
         // parent arrived with.
         sendBudget: targetSendBudget,
         comboAttempt: true,
+        comboInitialSend: initialSend,
         comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
@@ -909,8 +912,8 @@ export async function executeComboResponses(
         onNativePassthroughCancel: callbackGate.onCancel,
         onResponseComplete: callbackGate.onResponseComplete,
       });
-      // Native Chat rebuilds its own body and does not apply the initial JEV effort.
-      restoreOriginalRequestedEffort(childLog, nativeChild ? undefined : initialJevDecision?.effort);
+      // Both lanes applied the initial choice before provider pins/caps; retain those transitions.
+      restoreOriginalRequestedEffort(childLog, initialJevDecision?.effort);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {
@@ -1184,6 +1187,11 @@ export async function executeComboResponses(
       }
       // Waiting or recovery may have observed cancellation after the check above.
       if (options.abortSignal?.aborted) return clientCancelledResponse();
+    }
+    } finally {
+      // External receipts make release a no-op after real work. runTurn owns its asynchronous
+      // producer; core transfers cleanup there before returning a streaming response.
+      if (!initialSend?.producerOwned) initialSend?.permit.release();
     }
   }
   const failure = exhaustedFailure();

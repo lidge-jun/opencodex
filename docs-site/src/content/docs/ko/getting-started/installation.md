@@ -24,9 +24,22 @@ npm install -g @bitkyc08/opencodex
 :::note[npm이 bun postinstall을 차단했다면?]
 최신 npm은 bun의 postinstall 스크립트를 차단할 수 있습니다(`npm warn
 install-scripts ... blocked because they are not covered by allowScripts`).
-이 경우 번들 Bun 런타임이 준비되지 않으므로 bun 스크립트를 허용해서
-재설치하세요. npm 경고의 축약 명령에는 패키지 이름이 빠져 있어 현재
-디렉터리를 재설치하게 되니, 항상 패키지 이름을 명시해야 합니다:
+이 경우 번들 Bun 런타임이 준비되지 않을 수 있습니다. 런처는 허용된 번들 복구를
+시도한 다음, 절대 경로 PATH 디렉터리의 실행 가능한 Bun을 검증합니다. 정식 버전의
+major가 패키지 pin과 같고 minor가 pin 이상이면 사용할 수 있습니다. 현재 의존성
+1.4.2에서는 1.4.0 이상, 2.0.0 미만입니다. 제한 시간 안에 버전 정책과 identity를 확인하며,
+`bun --version` 출력이 `bun -e`로 확인한 `Bun.version`과 같아야 합니다. POSIX에서는
+해석된 실행 파일이나 그 부모 디렉터리에 그룹 또는 다른 사용자의 쓰기 권한이 있으면 거부합니다.
+선택한 Bun 버전을 stderr 한 줄로 알립니다. Bun은 계속 패키지에 포함되므로 별도 설치는 선택 사항입니다.
+
+사용할 런타임이 없고 의존성이 빠져 있으면 오류에 “the `bun` dependency is not installed”가
+표시됩니다. macOS에서는 실행 가능한 Desktop CLI가 있으면
+`/Applications/OpenCodex.app/Contents/MacOS/ocx` 또는
+`~/Applications/OpenCodex.app/Contents/MacOS/ocx` 경로도 안내합니다. 이 경로를 직접 실행할
+수 있지만 패키지 런처가 자동 위임하거나 PATH shim을 설치하지는 않습니다.
+
+번들 런타임을 복구하려면 bun 스크립트를 허용해서 재설치하세요. npm 경고의 축약 명령에는
+패키지 이름이 빠져 있어 현재 디렉터리를 재설치하게 되니, 항상 패키지 이름을 명시해야 합니다:
 
 ```bash
 npm install -g --allow-scripts=bun @bitkyc08/opencodex
@@ -42,6 +55,12 @@ sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 opencodex --version
 ```
+
+start, stop, restart, service와 Bun CLI가 처리하는 update에서는 CLI와 실행 중인 프록시의
+버전이 다르면 짧은 stderr 안내가 나올 수 있습니다. 안내는 명령 종료 코드를 바꾸지 않으며
+JSON·도움말 모드에서는 실행하지 않습니다. Bun CLI 시작 전에 Node 런처가 처리하는
+npm/pnpm update에는 이 안내가 적용되지 않습니다. `ocx status`, `ocx doctor`, `ocx resolve`는
+기존 진단에서 버전 차이를 표시합니다.
 
 ## 독립 실행형 바이너리(npm 없음)
 
