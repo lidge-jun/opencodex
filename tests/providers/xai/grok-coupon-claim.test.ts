@@ -570,7 +570,74 @@ for (const [status, code, accountId, tokenId, replay] of [
     });
     expect(result).toMatchObject(replay ? { kind: "replay", code, tokenId } : { kind: "changed" });
     expect(journalReads).toBe(1);
+    const winner = ledger.readGrokResetCouponTerminalReplay(OP, "fixture-account", TOKEN.tokenId);
+    expect(winner).toEqual(replay ? { kind: "replay", code, tokenId, settledAt: JSON.parse(before).operations[OP].updatedAt } : null);
+    expect(journalReads).toBe(2);
     guardedRead.mockRestore();
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 }
+
+for (const [winnerState, replayFailure] of [
+  ["failed", null], ["settled", null], ["attempted", null], ["attempted", "busy"], ["attempted", "read"],
+] as const) {
+  test(`late positive inspection replays only a definitive ${winnerState} claim winner (read failure ${replayFailure})`, async () => {
+    if (replayFailure) spies.push(spyOn(ledger, "readGrokResetCouponTerminalReplay").mockImplementation(() => {
+      throw replayFailure === "busy" ? busySettlement() : new Error("fixture unreadable winner");
+    }));
+    let release!: (value: { tokens: typeof TOKEN[] }) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let reads = 0;
+    const assertOutsideTransaction = () => expect(() => readConfigGenerationInCurrentMutationTransaction()).toThrow();
+    const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockImplementation(async () => {
+      assertOutsideTransaction();
+      return { accessToken: "fixture-access-token" } as never;
+    });
+    const remaining = spyOn(coupons, "getGrokRemainingResets").mockImplementation(() => {
+      assertOutsideTransaction();
+      if (++reads === 1) { entered(); return new Promise(resolve => { release = resolve; }); }
+      return Promise.resolve({ tokens: winnerState === "failed" ? [] : [TOKEN] });
+    });
+    const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockImplementation(async () => {
+      assertOutsideTransaction();
+      if (winnerState === "attempted") throw new Error("fixture lost delivery");
+      return { success: true, status: 0 };
+    });
+    spies.push(auth, remaining, redeem);
+    const loser = handleGrokCouponRoutes(request());
+    await started;
+    try {
+      const winner = (await handleGrokCouponRoutes(request()))!;
+      expect(winner.status).toBe(winnerState === "failed" ? 409 : winnerState === "settled" ? 200 : 502);
+      const before = readFileSync(ledger.grokCouponJournalPath(), "utf8");
+      expect(JSON.parse(before).operations[OP].status).toBe(winnerState);
+      release({ tokens: [TOKEN] });
+      const response = (await loser)!;
+      expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(before);
+      expect(response.status).toBe(winnerState === "attempted" ? 409 : 200);
+      const body = await response.json();
+      if (winnerState === "attempted") {
+        expect(body.error.code).toBe("attempt_in_progress");
+        expect(body.code).toBeUndefined();
+        expect(body.replayed).toBeUndefined();
+      } else {
+        const expectedCode = winnerState === "failed" ? "coupon_unavailable" : "redeemed";
+        expect(body).toEqual({ code: expectedCode, replayed: true, tokenId: TOKEN.tokenId,
+          settledAt: JSON.parse(before).operations[OP].updatedAt });
+        const replay = (await handleGrokCouponRoutes(request()))!;
+        expect(replay.status).toBe(200);
+        expect(await replay.json()).toEqual(body);
+      }
+      expect(redeem).toHaveBeenCalledTimes(winnerState === "failed" ? 0 : 1);
+    } finally { release({ tokens: [TOKEN] }); await loser; }
+  });
+}
+
+test("a missing or still-open operation has no terminal replay", () => {
+  expect(ledger.readGrokResetCouponTerminalReplay(OP, "fixture-account", TOKEN.tokenId)).toBeNull();
+  ledger.openGrokResetCouponOperation(identity());
+  const before = readFileSync(ledger.grokCouponJournalPath(), "utf8");
+  expect(ledger.readGrokResetCouponTerminalReplay(OP, "fixture-account", TOKEN.tokenId)).toBeNull();
+  expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(before);
+});

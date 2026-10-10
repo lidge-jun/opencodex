@@ -25,6 +25,7 @@ import {
   markGrokResetCouponAttempt,
   openGrokResetCouponOperation,
   recordGrokResetCouponSettlement,
+  readGrokResetCouponTerminalReplay,
   settleGrokResetCouponPreflightRefusal,
   type GrokResetCouponOperationRecord,
 } from "../../grok/reset-coupon-ledger";
@@ -421,9 +422,21 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
       // a failed mark write aborts here while nothing has been spent.
       try {
         const claimed = markGrokResetCouponAttempt(effectiveOpId, resolvedTokenId, undefined, undefined, resolvedTokenValidityEnd);
-        if (!claimed) return jsonResponse({ error: {
-          code: "attempt_in_progress", message: "Another request already claimed this operation; no redemption was attempted",
-        } }, 409, req, config);
+        if (!claimed) {
+          // A concurrent request may already have reached a definitive outcome;
+          // replay it rather than holding the caller on a finished operation.
+          // A failed read proves nothing about the winner, so it stays uncertain:
+          // reporting a definitive error here would let the caller open a
+          // replacement operation while this one may already have spent.
+          let winner: ReturnType<typeof readGrokResetCouponTerminalReplay> = null;
+          try { winner = readGrokResetCouponTerminalReplay(effectiveOpId, accountId, resolvedTokenId); } catch { winner = null; }
+          if (winner) return jsonResponse({
+            code: winner.code, replayed: true, tokenId: winner.tokenId, settledAt: winner.settledAt,
+          }, 200, req, config);
+          return jsonResponse({ error: {
+            code: "attempt_in_progress", message: "Another request already claimed this operation; no redemption was attempted",
+          } }, 409, req, config);
+        }
       } catch (err) {
         return jsonResponse(
           { error: { code: "attempt_mark_failed", message: err instanceof Error ? err.message : String(err) } },

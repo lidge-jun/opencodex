@@ -232,6 +232,19 @@ type GrokResetCouponPreflightResult =
   | { kind: "recorded" | "changed" }
   | { kind: "replay"; code: string; tokenId?: string; settledAt: number };
 
+const UNRESOLVED_COUPON_CODES = new Set(["redeem_failed", "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed"]);
+
+/** The durable definitive outcome for this account and token, if the operation has one. */
+function terminalReplay(
+  ledger: GrokResetCouponLedger, operationId: string, accountId: string, tokenId: string | undefined,
+): Extract<GrokResetCouponPreflightResult, { kind: "replay" }> | null {
+  const existing = ledger.operations[operationId];
+  if (!existing || existing.accountId !== accountId) return null;
+  if (tokenId !== undefined && existing.tokenId !== undefined && existing.tokenId !== tokenId) return null;
+  if ((existing.status !== "settled" && existing.status !== "failed") || !existing.code || UNRESOLVED_COUPON_CODES.has(existing.code)) return null;
+  return { kind: "replay", code: existing.code, tokenId: existing.tokenId, settledAt: existing.updatedAt };
+}
+
 /** Settle a refusal or inspect its winner without releasing the mutation transaction. */
 export function settleGrokResetCouponPreflightRefusal(
   settlement: Extract<GrokResetCouponSettlement, { status: "failed" }>,
@@ -242,14 +255,21 @@ export function settleGrokResetCouponPreflightRefusal(
     const filePath = journalPath ?? grokCouponJournalPath();
     const ledger = readGrokCouponLedger(filePath);
     if (recordSettlement(ledger, filePath, settlement, now)) return { kind: "recorded" };
-    const existing = ledger.operations[settlement.operationId];
-    if (existing && existing.accountId === settlement.accountId
-      && (settlement.tokenId === undefined || existing.tokenId === undefined || existing.tokenId === settlement.tokenId)
-      && (existing.status === "settled" || existing.status === "failed") && existing.code
-      && !["redeem_failed", "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed"].includes(existing.code)) {
-      return { kind: "replay", code: existing.code, tokenId: existing.tokenId, settledAt: existing.updatedAt };
-    }
-    return { kind: "changed" };
+    return terminalReplay(ledger, settlement.operationId, settlement.accountId, settlement.tokenId) ?? { kind: "changed" };
+  });
+}
+
+/**
+ * After a lost claim: the definitive winner to replay, or null while the
+ * operation is still unresolved. Terminal states never revert, so reading after
+ * the failed claim cannot replay an outcome that is later replaced.
+ */
+export function readGrokResetCouponTerminalReplay(
+  operationId: string, accountId: string, tokenId?: string, journalPath?: string,
+): Extract<GrokResetCouponPreflightResult, { kind: "replay" }> | null {
+  return withConfigMutationLockSync(() => {
+    const filePath = journalPath ?? grokCouponJournalPath();
+    return terminalReplay(readGrokCouponLedger(filePath), operationId, accountId, tokenId);
   });
 }
 
