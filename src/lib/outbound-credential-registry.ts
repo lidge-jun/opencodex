@@ -23,7 +23,8 @@ export const CREDENTIAL_SUBSTRING_MIN_LENGTH = 8;
 const CREDENTIAL_HEADER_NAME = /api[-_]?key|secret|passw|credential|auth|(?:^|[-_])token$/i;
 const CORRELATION_HEADER_NAME = /^(?:x-(?:client-)?request-id|request-id|traceparent|tracestate)$/i;
 const AUTH_SCHEMES = new Set(["bearer", "basic", "token", "digest", "apikey", "api-key", "key", "sso-key", "negotiate", "dpop"]);
-const PAIR = /^([A-Za-z_][\w.-]*)=(.+)$/;
+/** RFC 9110 auth-param: token BWS "=" BWS ( token / quoted-string ); also cookie and k=v pairs. */
+const AUTH_PARAM = /([!#$%&'*+.^_`|~0-9A-Za-z-]+)[ \t]*=[ \t]*("(?:[^"\\]|\\.)*"|[^\s,;"]*)/g;
 const BASIC_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const PRINTABLE_USER_PASS = /^[\x20-\x7e]*:[\x20-\x7e]*$/;
 
@@ -35,20 +36,23 @@ export function isCredentialName(name: string): boolean {
 /**
  * The whole value plus every part a server could authenticate with on its own: tokens split on
  * whitespace, commas and semicolons with auth scheme words dropped, the value of each name=value
- * pair (cookies, digest parameters), and both halves of a standard Basic credential.
+ * parameter (cookies, digest; whitespace around "=" and quoted strings with escapes are parsed
+ * first, before any splitting), and both halves of a standard Basic credential.
  */
 export function credentialComponents(value: string): string[] {
   const whole = value.trim();
   if (!whole) return [];
   const out = new Set([whole]);
+  for (const [, , raw] of whole.matchAll(AUTH_PARAM)) {
+    const param = raw!.startsWith('"') ? raw!.slice(1, -1).replace(/\\(.)/g, "$1") : raw!;
+    if (param && !/^=+$/.test(param)) out.add(param);
+  }
   let previous: string | undefined;
   for (const part of whole.split(/[\s,;]+/)) {
     if (!part) continue;
     const lower = part.toLowerCase();
     if (AUTH_SCHEMES.has(lower)) { previous = lower; continue; }
     out.add(part);
-    const pair = PAIR.exec(part);
-    if (pair && !/^=+$/.test(pair[2]!)) out.add(pair[2]!.replace(/^"(.*)"$/, "$1"));
     if (previous === "basic" && BASIC_BASE64.test(part)) {
       const decoded = Buffer.from(part, "base64").toString("utf8");
       if (PRINTABLE_USER_PASS.test(decoded) && Buffer.from(decoded, "utf8").toString("base64").replace(/=+$/, "") === part.replace(/=+$/, "")) {

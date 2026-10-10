@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { afterEach, beforeEach, describe } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -14,6 +14,8 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { OutboundCredentialRegistry, credentialComponents, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
 import { diagnosticValueAllowed } from "../../src/server/request-log-terminal-status";
+import { INCOMPLETE_RETRY_MS, configuredCredentials } from "../../src/server/configured-credentials";
+import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/api-key-resolve";
 import { classifyCodexUpstreamOutcome } from "../../src/codex/routing/cooldown-math";
 import { httpStatusFromTerminalError } from "../../src/lib/errors";
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, inspectResponseLogJson, noteUpstreamRequestId, type RequestLogContext, type RequestLogEntry } from "../../src/server/request-log";
@@ -238,6 +240,9 @@ describe("outbound credential registry", () => {
   test("compound values register every part a server could authenticate with", () => {
     expect(credentialComponents("Token opaque-part-1")).toEqual(["Token opaque-part-1", "opaque-part-1"]);
     expect(credentialComponents('Digest username="u1", response="r-value"')).toContain("r-value");
+    // RFC 9110 auth-param allows whitespace around "=" and quoted strings with quoted-pairs.
+    expect(credentialComponents('Digest username = "u1", response = "r sp\\"q-0123456789"')).toContain('r sp"q-0123456789');
+    expect(credentialComponents("Basic dXNlcjpwYXNzd29yZA==")).not.toContain("=");
     expect(credentialComponents("  ")).toEqual([]);
     const reg = new OutboundCredentialRegistry();
     reg.remember({ "x-gateway-credential": "Token opaque-part-1" });
@@ -438,6 +443,18 @@ describe("sent credentials echoed into upstream diagnostics", () => {
     expect(received).toContain(`Token ${token}`);
     expectMasked(token, result);
   });
+
+  for (const framing of ["compact", "spaced"]) {
+    test(`a ${framing} quoted digest parameter echoed back is masked`, async () => {
+      const response = randomBytes(16).toString("hex");
+      const header = framing === "spaced" ? `Digest username = "u1", response = "${response}"` : `Digest username="u1", response="${response}"`;
+      const received: string[] = [];
+      const result = await run({ apiKey: secret("unused"), headers: { "X-Gateway-Credential": header },
+        fetch: echoingExecutor("error", recording("x-gateway-credential", received, value => /response\s*=\s*"([^"]*)"/.exec(value)?.[1] ?? "")) });
+      expect(received).toContain(header);
+      expectMasked(response, result);
+    });
+  }
 
   test("a configured credential echoed before this process ever sent it is masked", async () => {
     const otherKey = secret("never-sent");
@@ -641,5 +658,85 @@ test("OAuth bearers of a reselected account (custom executor, 429 rotation) are 
     inspectResponseLogJson(log, JSON.stringify({ error: { type: "server_error", code: "server_error" } }));
     expect(log.upstreamRequestId).toBe("req_safe");
     expect(log.upstreamErrorCode).toBe("server_error");
+  });
+});
+
+// ---- #6911: configured credential source (private home per test; no global registry state) ----
+describe("configured credential source", () => {
+  let home: string;
+  const previousHome = process.env.OPENCODEX_HOME;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "ocx-configured-cred-"));
+    process.env.OPENCODEX_HOME = home;
+  });
+  afterEach(() => {
+    setProviderKeychainEntryFactoryForTests(null);
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(home);
+  });
+  const writeConfig = (value: unknown) => writeFileSync(join(home, "config.json"), typeof value === "string" ? value : JSON.stringify(value));
+  const keychain = (entries: Map<string, string>) => setProviderKeychainEntryFactoryForTests((_service, account) => ({
+    getPassword: () => entries.get(account) ?? null,
+    setPassword: () => {},
+    deletePassword: () => true,
+  }));
+
+  test("a keychain that becomes readable restores coverage after the retry delay, without a warning", () => {
+    const entries = new Map<string, string>();
+    keychain(entries);
+    const key = "kc-" + randomBytes(12).toString("hex");
+    writeConfig({ providers: { p: { apiKey: "keychain:p" } } });
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = ((line: string) => { warnings.push(String(line)); }) as typeof console.warn;
+    try {
+      const start = Date.now();
+      expect(configuredCredentials(start).complete).toBe(false);
+      entries.set("p", key);
+      expect(configuredCredentials(start + 1_000).complete).toBe(false);
+      const recovered = configuredCredentials(start + INCOMPLETE_RETRY_MS);
+      expect(recovered.complete).toBe(true);
+      expect(recovered.matches(key)).toBe(true);
+    } finally {
+      console.warn = warn;
+    }
+    expect(warnings).toEqual([]);
+  });
+
+  test("a changed environment reference is picked up without a file change", () => {
+    const name = "OCX_6911_CONFIGURED_ENV_KEY";
+    const previous = process.env[name];
+    try {
+      process.env[name] = "env-first-" + randomBytes(8).toString("hex");
+      writeConfig({ providers: { p: { apiKey: "$" + "{" + name + "}", headers: { "x-env-header": "$" + name } } } });
+      expect(configuredCredentials().matches(process.env[name]!)).toBe(true);
+      const first = process.env[name]!;
+      process.env[name] = "env-second-" + randomBytes(8).toString("hex");
+      expect(configuredCredentials().matches(process.env[name]!)).toBe(true);
+      expect(configuredCredentials().matches(first)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
+  });
+
+  test("an existing store with an unexpected shape is incomplete; a missing one is not", () => {
+    expect(configuredCredentials().complete).toBe(true);
+    writeConfig("null");
+    expect(configuredCredentials().complete).toBe(false);
+    writeConfig({ providers: [] });
+    expect(configuredCredentials().complete).toBe(false);
+    writeConfig({ providers: {} });
+    expect(configuredCredentials().complete).toBe(true);
+    writeFileSync(join(home, "auth.json"), "[]");
+    expect(configuredCredentials().complete).toBe(false);
+  });
+
+  test("only credential fields are collected, not labels such as authMode", () => {
+    writeConfig({ providers: { p: { authMode: "oauth", adapter: "openai-responses", apiKey: "configured-key-value" } } });
+    const configured = configuredCredentials();
+    expect(configured.matches("configured-key-value")).toBe(true);
+    for (const label of ["oauth", "openai-responses"]) expect(configured.matches(label)).toBe(false);
   });
 });
