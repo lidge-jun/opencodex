@@ -408,6 +408,21 @@ test.each([401, 403])("terminal passive WHAM %s retains recovery backoff without
   expect(isAccountNeedsReauth(MAIN)).toBe(false);
 });
 
+test.each([401, 403])("missing credit evidence with WHAM %s still waits for recovery pacing", async status => {
+  seed(null); // Eligibility no longer needs prior spendable evidence, so pacing must hold alone.
+  fetchWith(async () => Response.json({ detail: { code: "invalid_workspace_selected" } }, { status }));
+  await runMainAccountHardLockRecovery(cfg);
+  for (let tick = 0; tick < 4; tick++) {
+    now += 60_000;
+    await runMainAccountHardLockRecovery(cfg);
+  }
+  expect(calls).toEqual([whamUrl]);
+  now += 60_001;
+  await runMainAccountHardLockRecovery(cfg);
+  expect(calls).toEqual([whamUrl, whamUrl]);
+  expect(isAccountNeedsReauth(MAIN)).toBe(false);
+});
+
 
 async function joinPassiveRenewal(explicitRefresh: boolean) {
   const entered = deferred<void>();
