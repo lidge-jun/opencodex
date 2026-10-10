@@ -651,6 +651,40 @@ describe("POST /api/codex-prompt/base/import", () => {
     expect(existsSync(journalPathFor(fx.storePath))).toBe(false);
   });
 
+  test("a refused import keeps its copy when a peer selected that copy meanwhile", async () => {
+    const { fx } = externalFixture("approved body");
+    const preview = await previewImport(fx);
+    const rev = await revision(fx);
+    // When the config write lock is created, a non-cooperating writer points the
+    // key at the copy that was just written. The locked recheck then refuses
+    // (the selection is no longer external), and cleanup must not delete a file
+    // the live config now names.
+    const lockPath = configWriteLockPath(fx.configPath);
+    const write = fs.writeFileSync;
+    let peerConfig: string | null = null;
+    const spy = spyOn(fs, "writeFileSync").mockImplementation(((path: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+      write(path, data, options);
+      if (peerConfig === null && String(path) === lockPath) {
+        const copy = join(fx.baseVariantDir, readdirSync(fx.baseVariantDir)[0]!);
+        peerConfig = `model_instructions_file = ${JSON.stringify(copy)}\n# peer selected the managed copy\n`;
+        write(fx.configPath, peerConfig, "utf8");
+      }
+    }) as typeof fs.writeFileSync);
+    let res: Awaited<ReturnType<typeof call>>;
+    try {
+      res = await call("POST", "/api/codex-prompt/base/import", fx, {
+        confirm: true, revision: rev, previewSha256: preview.body.preview.previewSha256,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(peerConfig).not.toBeNull();
+    expect(res.status).toBe(409);
+    expect(read(fx.configPath)).toBe(peerConfig);
+    const [copy] = readdirSync(fx.baseVariantDir);
+    expect(read(join(fx.baseVariantDir, copy!))).toBe("# somebody-elses\napproved body");
+  });
+
   test("the hash binds the title: confirming a different spelling is refused", async () => {
     const { fx } = externalFixture("Ship the external base.");
     const preview = await previewImport(fx); // previews the suggested title

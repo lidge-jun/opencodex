@@ -1266,13 +1266,14 @@ export function importBaseVariant(
   });
 
   if (!result.ok) {
-    // `write_superseded`/`recovery_required` can return AFTER the post-write
-    // state was applied or while its shape is unverified. In that uncertainty
-    // the file stays — deleting a file a live config might point at is exactly
-    // the data loss the refusal was protecting against. Refusals that provably
-    // wrote nothing (stale revision, lock, validation) still clean up.
-    const uncertain = result.error === "write_superseded" || result.error === "recovery_required";
-    if (!uncertain || !variantStillReferenced(targetId, path, opts)) {
+    // The copy is deleted only once the live config is shown not to reference
+    // it, whatever the refusal. `write_superseded`/`recovery_required` can
+    // return after the post-write state was applied, and even a refusal that
+    // wrote nothing (the locked recheck above, a stale revision) cannot rule
+    // out a non-cooperating writer having selected the visible copy in the
+    // meantime. Deleting a file a live config points at strands the prompt in
+    // force, which is the data loss the refusal was protecting against.
+    if (!variantStillReferenced(targetId, path, opts)) {
       try {
         durableDelete(path);
       } catch { /* the returned error already tells the caller to look */ }
