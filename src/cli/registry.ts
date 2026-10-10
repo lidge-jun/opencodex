@@ -144,14 +144,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke>",
+    usage: "ocx link <port|issue|status|revoke|reconnect>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
       "Issue: ocx link issue --alias <alias> --tunnel-port <port> [--json]",
       "Status: ocx link status [--json]",
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
-      "Issue, status, and revoke use the running proxy's loopback management API and admin token.",
+      "Reconnect: ocx link reconnect --link-id <id> [--json]",
+      "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
     ],
   },
   {

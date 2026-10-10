@@ -525,6 +525,27 @@ async function handleJoin(ctx: ManagementContext, state: LinkRouteState): Promis
   }
 }
 
+/**
+ * Restart a Home-initiated link's tunnel now: the dashboard's Retry and `ocx link reconnect`.
+ * The supervisor stops the current ssh child, if any, forgets its backoff or failed state and
+ * spawns a fresh attempt; status then reports it like any other attempt.
+ */
+async function reconnect(ctx: ManagementContext, state: LinkRouteState, id: string): Promise<Response> {
+  if (!LINK_ID.test(id)) return fail("invalid_link_id", "The link id is invalid.", 400);
+  const record = readStoreFor(ctx).links.find(link => link.id === id);
+  if (!record) return fail("link_not_found", "The link was not found.", 404);
+  if (record.direction !== "hub-initiated") {
+    return fail("link_not_home_initiated", "Only a Home-initiated link has a tunnel this computer can restart.", 409);
+  }
+  try {
+    await state.supervisor.ensureStarted();
+    if (!await state.supervisor.reconnect(id)) return fail("link_unavailable", "The link tunnel could not be restarted.", 503);
+  } catch {
+    return fail("link_unavailable", "The link tunnel could not be restarted.", 503);
+  }
+  return Response.json({ linkId: id });
+}
+
 async function remove(ctx: ManagementContext, state: LinkRouteState, id: string): Promise<Response> {
   if (!LINK_ID.test(id)) return fail("invalid_link_id", "The link id is invalid.", 400);
   const current = readStoreFor(ctx);
@@ -636,6 +657,14 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     const denied = auth(ctx, "admin");
     if (denied) return denied;
     return issue(ctx);
+  }
+  const reconnectPath = req.method === "POST" ? /^\/api\/link\/([^/]+)\/reconnect$/.exec(path) : null;
+  if (reconnectPath) {
+    const denied = auth(ctx, "either");
+    if (denied) return denied;
+    let id: string;
+    try { id = decodeURIComponent(reconnectPath[1]!); } catch { return fail("invalid_link_id", "The link id is invalid.", 400); }
+    return reconnect(ctx, state, id);
   }
   if (req.method === "DELETE" && path.startsWith("/api/link/")) {
     const denied = auth(ctx, "either");

@@ -35,6 +35,11 @@ export interface LinkSupervisor {
   ensureStarted(): Promise<void>;
   reload(): Promise<void>;
   stopLink(linkId: string): Promise<void>;
+  /**
+   * Restart one Home-initiated tunnel now: stop its child, forget the backoff or failed state,
+   * and spawn a fresh attempt. False when the link is not a Home-initiated link of this store.
+   */
+  reconnect(linkId: string): Promise<boolean>;
   status(): readonly LinkTunnelStatus[];
   notifyAuthenticatedRequest?(apiKeyId: string): void;
   stop(): Promise<void>;
@@ -242,6 +247,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           let stderr = "";
           // An unreadable stderr (the runner rejects it past its size cap) still reports the exit.
           try { stderr = child.stderr ? await child.stderr : ""; } catch { /* classified as unknown */ }
+          // A reconnect may have started a fresh child meanwhile; its own lifecycle owns the state.
+          if (children.has(record.id)) return;
           setEvent(record.id, { type: "exit", now: now(), stderrClass: classifySshStderr(stderr) });
         } finally {
           exiting.delete(record.id);
@@ -395,6 +402,18 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       });
     },
     stopLink,
+    async reconnect(linkId: string) {
+      // runLifecycle keeps only the latest queued operation, so a reconnect waits for a running
+      // reload instead of queueing behind it where a second reload could replace it.
+      if (lifecycleFlight) await lifecycleFlight;
+      if (stopping || !started) return false;
+      const record = store.links.find(link => link.id === linkId && link.direction === "hub-initiated");
+      if (!record) return false;
+      await stopLink(linkId);
+      if (stopping) return false;
+      spawnFor(record);
+      return true;
+    },
     notifyAuthenticatedRequest(apiKeyId: string) {
       for (const record of store.links) {
         if (record.direction === "hub-initiated" && record.apiKeyId === apiKeyId && children.has(record.id)) {
