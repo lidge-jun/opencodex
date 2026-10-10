@@ -1984,68 +1984,79 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     <>
       <div className="models-control-top-row">
         {modelDiscovery && (
-          <div className="models-shadow-row row muted text-control">
-            <span className="models-shadow-label">{t("models.newPolicyGlobal")}</span>
-            <Switch on={modelDiscovery.policy === "off"} onClick={() => void saveModelDiscovery(modelDiscovery.policy === "off" ? "on" : "off")} label={t("models.newPolicyGlobal")} />
+          <div className="models-control-row">
+            <span className="models-row-label muted text-control">{t("models.newPolicyGlobal")}</span>
+            <div className="models-row-actions">
+              <Switch on={modelDiscovery.policy === "off"} onClick={() => void saveModelDiscovery(modelDiscovery.policy === "off" ? "on" : "off")} label={t("models.newPolicyGlobal")} />
+            </div>
           </div>
         )}
-        <div className="row">
-          <Switch on={aliases.defaults.global} onClick={() => void setDefaultAliases(!aliases.defaults.global)} label={t("models.useDefaultAliasesGlobal")} />
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAliases(value => !value)}>{t("models.aliases")}</button>
+        <div className="models-control-row">
+          <span className="models-row-label muted text-control">{t("models.useDefaultAliasesGlobal")}</span>
+          <div className="models-row-actions">
+            <Switch on={aliases.defaults.global} onClick={() => void setDefaultAliases(!aliases.defaults.global)} label={t("models.useDefaultAliasesGlobal")} />
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAliases(value => !value)}>{t("models.aliases")}</button>
+          </div>
         </div>
-        <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
-          <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip></span>
-          <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
-          <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
-          <div className="models-shadow-model-slot">
-            <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
+        <div className="models-control-row" aria-busy={!shadowCall || undefined}>
+          <span className="models-row-label muted text-control">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip></span>
+          <div className="models-row-actions">
+            <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
+            <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
+            <div className="models-shadow-model-slot">
+              <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
+            </div>
           </div>
         </div>
 
-        <div className="models-shadow-row row muted text-control" aria-busy={!autoReview || undefined}>
-          <span className="models-shadow-label">{t("models.autoReviewOverride")} <Tooltip content={t("models.autoReviewOverrideHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.autoReviewOverrideHint")}>ⓘ</span></Tooltip></span>
-          <Switch on={autoReview?.enabled ?? false} onClick={() => void saveAutoReview({ enabled: !autoReview?.enabled })} disabled={!autoReview || autoReviewSaving} label={t("models.autoReviewOverride")} />
-          <div className="models-shadow-model-slot">
-            <Select value={autoReview?.model ?? ""} options={autoReviewOptions} onChange={v => { setAutoReview(c => c ? { ...c, model: v } : c); void saveAutoReview({ model: v }); }} disabled={!autoReview || autoReviewSaving || !autoReview.enabled} label={t("models.autoReviewOverride")} />
+        <div className="models-control-row" aria-busy={!autoReview || undefined}>
+          <span className="models-row-label muted text-control">{t("models.autoReviewOverride")} <Tooltip content={t("models.autoReviewOverrideHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.autoReviewOverrideHint")}>ⓘ</span></Tooltip></span>
+          <div className="models-row-actions">
+            <Switch on={autoReview?.enabled ?? false} onClick={() => void saveAutoReview({ enabled: !autoReview?.enabled })} disabled={!autoReview || autoReviewSaving} label={t("models.autoReviewOverride")} />
+            <div className="models-shadow-model-slot">
+              <Select value={autoReview?.model ?? ""} options={autoReviewOptions} onChange={v => { setAutoReview(c => c ? { ...c, model: v } : c); void saveAutoReview({ model: v }); }} disabled={!autoReview || autoReviewSaving || !autoReview.enabled} label={t("models.autoReviewOverride")} />
+            </div>
           </div>
         </div>
 
         {(v2Loading || v2) && (
-          <div className="models-v2-mode-row row">
-            <span className="muted text-control">{t("models.v2Label")}</span>
-            <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
-              {(["v1", "default", "v2"] as const).map(mode => (
-                <button
-                  key={mode}
-                  type="button"
-                  role="radio"
-                  aria-checked={(v2?.multiAgentMode ?? "default") === mode}
-                  className={`btn btn-sm${(v2?.multiAgentMode ?? "default") === mode ? " btn-primary" : " btn-ghost"}`}
-                  style={{ background: (v2?.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2?.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
-                  disabled={!v2 || v2Busy}
-                  onClick={() => void setMultiAgentMode(mode)}
-                >
-                  {t(`models.v2Mode_${mode}` as TKey)}
-                </button>
-              ))}
+          <div className="models-control-row">
+            <span className="models-row-label muted text-control">{t("models.v2Label")}</span>
+            <div className="models-row-actions">
+              <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
+                {(["v1", "default", "v2"] as const).map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={(v2?.multiAgentMode ?? "default") === mode}
+                    className={`btn btn-sm${(v2?.multiAgentMode ?? "default") === mode ? " btn-primary" : " btn-ghost"}`}
+                    style={{ background: (v2?.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2?.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
+                    disabled={!v2 || v2Busy}
+                    onClick={() => void setMultiAgentMode(mode)}
+                  >
+                    {t(`models.v2Mode_${mode}` as TKey)}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
+                disabled={!v2}
+                onClick={() => setV2HelpOpen(true)}
+                aria-label={t("models.v2Label")}
+                aria-haspopup="dialog"
+              >
+                <IconInfo width={14} height={14} aria-hidden="true" />
+              </button>
             </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
-              disabled={!v2}
-              onClick={() => setV2HelpOpen(true)}
-              aria-label={t("models.v2Label")}
-              aria-haspopup="dialog"
-            >
-              <IconInfo width={14} height={14} aria-hidden="true" />
-            </button>
           </div>
         )}
         {v2 && v2.multiAgentMode === "v2" && (
-          <div className="models-v2-keep-native-row">
-            <div className="models-v2-keep-native">
-              <span className="models-v2-keep-native-label text-caption">{t("models.keepNativeOnV1")}</span>
+          <div className="models-control-row">
+            <span className="models-row-label text-caption">{t("models.keepNativeOnV1")}</span>
+            <div className="models-row-actions">
               <Switch
                 on={v2.keepNativeChatGptOnV1 === true}
                 onClick={() => void setKeepNativeChatGptOnV1(!v2.keepNativeChatGptOnV1)}
