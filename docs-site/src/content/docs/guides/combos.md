@@ -207,6 +207,51 @@ order. Weights and `stickyLimit` do not affect this strategy.
 
 This ranking and provider exclusion before dispatch require fresh model-inference limits that apply to the current single API key as a whole. OAuth/current-account summaries, caller-forward routes, multiple keys, and snapshots with changed credentials or destinations are display-only for this early decision. The same applies when `Authorization`, `x-api-key`, or `x-goog-api-key` headers override credentials; search-only and MCP-only windows are excluded. If no eligible target has an applicable reset, configuration order wins. Account selection and retries still enforce their normal limits.
 
+### Advisory quota signals for JEV
+
+Quota evidence is separately opt-in **per JEV Combo**, for all three decision methods:
+
+```bash
+ocx combo set coding --decision-quota-signals on --json
+ocx combo set coding --decision-quota-tiers '{"moderate":40}' --json
+```
+
+Only enable this on an existing `strategy: "jev"` Combo. `decisionQuotaSignals: true` adds
+subscription quota tiers to the decision request, not a hard eligibility rule. The decision
+backend is asked to prefer healthier quota among adequate options; it still chooses only from
+configured eligible targets and effort allowlists. Unknown is not exhausted, and ordinary
+fallback, cooldown, account selection and provider limits remain unchanged.
+
+Defaults are `limited: 70` and `nearlyExhausted: 90`, inclusive percentages used. There is no
+moderate tier unless you set it explicitly (for example, `moderate: 40`). Partial overrides merge
+with those defaults, then all thresholds must be finite, within 0–100 and strictly ascending.
+
+Evidence comes only from memory snapshots published by existing quota collectors, accepted
+response headers and credential/account owners. Reading advisory quota evidence never resolves
+credentials, loads auth stores or quota files, reads a keychain, probes upstream, or starts a
+refresher. Normal decision-backend credential resolution is unchanged. Cold, missing, stale (over
+30 minutes), future, invalid or reset-expired evidence is unknown. Each account uses its worst valid
+relevant five-hour, weekly, monthly or structurally model-scoped window. An enabled usable
+Anthropic/Codex pool uses its healthiest account tier; unknown ties healthy. A pool is nearly
+exhausted only if every usable account has known nearly-exhausted evidence. Reserve models
+without separately attributable bars remain unknown. Active-account summaries, multiple-key
+display reports, credits and API/Spark/USD meters are not quota evidence for this decision.
+The separate Anthropic · Pool 2 (`anthropic2`) account pool is not a source of this evidence, so its targets stay unknown.
+
+:::caution[Additional decision data]
+Opting in sends quota tiers, and available used percentage/window/reset delay, to your selected
+decision backend, including hosted TypeSafe. No account ids, tokens or credential fingerprints
+are sent or logged by this feature. Local decision records retain only bounded tier counts and
+the selected tier. If quota would exceed the 64 KiB request cap, it is removed before retrying
+serialization; an ordinary oversized decision still fails open.
+:::
+
+`--decision-quota-signals off` disables evidence while retaining configured tiers; `-` clears
+the switch. `--decision-quota-tiers -` clears overrides, restoring defaults. API `null` clears;
+API `false` disables the switch. Omitted fields survive JEV updates, target replacement and
+rename, including saves through the existing editor. Switching away from JEV removes both
+quota settings. No new editor controls or background quota work are enabled.
+
 ### Decision method
 
 `strategy: "jev"` asks a decision backend to choose the first eligible target and a compatible

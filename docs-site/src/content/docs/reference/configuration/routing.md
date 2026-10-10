@@ -154,6 +154,13 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `decisionProvider?` | `string` | `"jev"` | `strategy: "jev"` only. `"jev"` (the same as omitting it, and stored as omission) is the TypeSafe decision service, valid without a provider row; any other value must name a configured provider with `adapter: "jev-decision"` and a full HTTPS decision `baseUrl` (any path) or a local HTTP `/systemone` endpoint. Userinfo, query strings, and fragments are refused. |
 | `decisionModel?` | `string` | unset | `strategy: "jev"` only, mutually exclusive with `decisionProvider`. An ordinary opencodex route (for example `ollama/qwen3:4b`) asked to pick one offered option as JSON. It runs with the selected provider's stored credentials, never the caller's, and cannot resolve to this combo, any JEV combo, or a `jev-decision` row. |
 | `decisionTimeoutMs?` | `number` | `4000` | `strategy: "jev"` only. Decision deadline before failing open, 1000–120000 ms. |
+| `decisionQuotaSignals?` | `boolean` | `false` | JEV only. Explicit `true` sends loaded advisory quota evidence to the selected backend; never changes hard eligibility or account selection. |
+| `decisionQuotaTiers?` | `{ moderate?: number; limited?: number; nearlyExhausted?: number }` | `{ limited: 70, nearlyExhausted: 90 }` | JEV only. Partial overrides merge with defaults; finite 0–100 values must be strictly ascending. `moderate` is absent unless explicit. Does not enable signals by itself. |
+
+Quota settings, privacy and unknown-pool semantics are described in
+[Advisory quota signals for JEV](/guides/combos/#advisory-quota-signals-for-jev).
+Omitted settings survive JEV API updates/rename; `null` clears, `false` disables signals without
+clearing tiers, and switching to another strategy removes both settings.
 
 ```json
 {

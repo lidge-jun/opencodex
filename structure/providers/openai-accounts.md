@@ -532,3 +532,11 @@ replacement drops that window's warning. Main/all quota cleanup forgets the base
 expire at reset or six hours after detection. Main-card/settings DTOs and live CLI projections expose
 only window kind, previous/current percentage and observation time; the notice says possible usage
 outside opencodex because a long-running request can also explain the rise.
+
+## JEV advisory publication
+
+Existing credential load/persist and accepted quota producer boundaries publish bounded secret-free
+rosters/windows to `src/providers/quota-decision-snapshot.ts`. These owner-observed generations
+are separate from display caches and serving-account selection. Request decisions consume only
+loaded evidence; cold or mismatched generations remain unknown. Usability, partial-window clocks
+and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Codex header/WHAM parsers bind a separate in-memory raw-reset projection to their parsed observation; an explicit invalid reset stays invalid and its producer clock survives publication without changing display, durable history or hard-policy parsing.

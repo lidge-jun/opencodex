@@ -584,6 +584,7 @@ export async function executeComboResponses(
         isDestinationAllowed: (providerName, modelId) => routeAllowedByScope(
           resolveAdmissionModelScope(config, options.admission), { providerName, modelId },
         ),
+        ...(combo.decisionQuotaSignals === true ? { decisionQuotaSignals: true, decisionQuotaTiers: combo.decisionQuotaTiers } : {}),
         ...(combo.decisionProvider ? { decisionProvider: combo.decisionProvider } : {}),
         ...(combo.decisionModel
           ? {
@@ -627,6 +628,7 @@ export async function executeComboResponses(
         ? { chosenProbability: decision.chosenProbability }
         : {}),
       ...(decision.usage ? { usage: decision.usage } : {}),
+      ...(decision.quota ? { quota: decision.quota } : {}),
     });
     console.debug("[combo] JEV decision", {
       backend: decision.backend,

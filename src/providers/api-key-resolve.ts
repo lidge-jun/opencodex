@@ -16,6 +16,7 @@
  * Policy: a reference that cannot be resolved fails closed (no key) and is warned once per
  * account; nothing ever rewrites plaintext into config or its backups.
  */
+import { invalidateDecisionKeyQuotas, observeDecisionKeyCredential } from "./quota-decision-snapshot";
 import { resolveEnvValue } from "../config/proxy-env";
 import { loadKeyringBinding } from "../lib/keyring-native";
 import type { OcxProviderConfig } from "../types";
@@ -43,12 +44,14 @@ const warnedAccounts = new Set<string>();
 /** Test seam: swap the OS entry for an in-memory one and drop caches. */
 export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychainEntryFactory | null): void {
   entryFactory = factory ?? defaultEntryFactory;
+  invalidateDecisionKeyQuotas();
   resolvedCache.clear();
   warnedAccounts.clear();
 }
 
 /** Write-path seam: a store/restore mutated secrets, so cached reads and warnings are stale. */
 export function invalidateResolvedProviderKeyCache(): void {
+  invalidateDecisionKeyQuotas();
   resolvedCache.clear();
   warnedAccounts.clear();
 }
@@ -101,8 +104,9 @@ function readKeychain(account: string): string | undefined {
  */
 export function resolveProviderApiKey(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  if (isKeychainReference(value)) return readKeychain(keychainAccount(value));
-  return resolveEnvValue(value);
+  const resolved = isKeychainReference(value) ? readKeychain(keychainAccount(value)) : resolveEnvValue(value);
+  observeDecisionKeyCredential(value, resolved);
+  return resolved;
 }
 
 export type ProviderKeyStoreKind = "keychain" | "env" | "file" | "none";

@@ -1,3 +1,6 @@
+import { rawAnthropicHeaderWindows } from "./anthropic-decision-windows";
+import { clearDecisionAccountQuotas } from "../quota-decision-snapshot";
+import { bindRawDecisionWindows, publishAnthropicDecisionQuota } from "../quota-decision-publication";
 import { parseAnthropicFamilyHeaders, mergeAnthropicFamilyWindows } from "./anthropic-family-headers";
 import { anthropicModelQuotaFor, ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS } from "../../oauth/anthropic-model-quota";
 import { createHash } from "node:crypto";
@@ -289,6 +292,7 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
   writerGeneration: number,
   status?: number,
   model?: string,
+  decisionCredentialGeneration?: string,
 ): void {
   if (!accountId) return;
   const key = accountCacheKey(instance, accountId);
@@ -318,14 +322,20 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
       ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previous?.quota?.customWindows, observed.customWindows) } : {}),
     }, observed.updatedAt),
   });
+  // Advisory evidence is published for the primary pool only; Pool 2 stays unknown to decisions.
+  if (instance === "anthropic" && generation && generation === decisionCredentialGeneration) {
+    bindRawDecisionWindows(observed, rawAnthropicHeaderWindows(headers, observed.updatedAt));
+    publishAnthropicDecisionQuota(accountId, generation, observed, true);
+  }
   persistAccountQuotaCache();
 }
 
 /** Legacy recorder: config/roster generation is numeric and distinct from bearer ownership. */
 export function recordAnthropicAccountQuotaFromHeaders(
   accountId: string, headers: Headers, writerGeneration: number, status?: number, model?: string,
+  decisionCredentialGeneration?: string,
 ): void {
-  recordAnthropicAccountQuotaFromHeadersForInstance("anthropic", accountId, headers, writerGeneration, status, model);
+  recordAnthropicAccountQuotaFromHeadersForInstance("anthropic", accountId, headers, writerGeneration, status, model, decisionCredentialGeneration);
 }
 
 /**
@@ -446,6 +456,7 @@ export function resetProviderQuotaReconcileStateForTests(): void {
 
 /** Drop cached per-account rows (all, or just one provider's). */
 export function clearAccountQuotaCache(provider?: string): void {
+  clearDecisionAccountQuotas(provider);
   // Anthropic readers use provider-owned epochs; B cannot revoke an A flight.
   if (provider !== "anthropic2") explicitAccountEpoch += 1;
   if (!provider) {

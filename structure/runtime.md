@@ -417,7 +417,7 @@ the old binding; restoring the same configuration may reuse still-fresh evidence
 cooldowns and response-driven retry remain authoritative.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota).
+see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota). JEV separately reads bounded loaded-only advisory snapshots, never this credential-resolving getter; publication, opt-in and privacy follow [loaded advisory quota](providers/jev-decision.md#loaded-advisory-quota).
 
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](transports/responses.md).
 

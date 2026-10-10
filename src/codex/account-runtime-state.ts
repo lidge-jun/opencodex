@@ -1,3 +1,4 @@
+import { setDecisionAccountUsable } from "../providers/quota-decision-snapshot";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { isCodexAccountGenerationLive } from "./account-store";
 
@@ -39,12 +40,14 @@ export function clearMainRefreshGrantRejection(key: string): void {
 }
 
 
+/** Quarantine a Codex account (or one credential generation) after an auth failure, and mark its advisory decision-quota row unusable so routing evidence cannot treat it as healthy. */
 export function markAccountNeedsReauth(
   id: string,
   writerGeneration = captureConfigGeneration(),
   credentialGeneration?: number,
 ): void {
   if (writerGeneration < lastReconciledGeneration && !liveAccountIds.has(id)) return;
+  setDecisionAccountUsable(id === "__main__" ? "codex-main" : "codex", id, false, credentialGeneration);
   // An account-wide mark supersedes a generation-scoped one: it is the stronger claim.
   if (credentialGeneration === undefined || !reauthAccounts.has(id)) {
     reauthAccounts.set(id, credentialGeneration);
@@ -81,6 +84,7 @@ export function isAccountNeedsReauth(id: string): boolean {
   return true;
 }
 
+/** Lift a reauth quarantine only when the proof matches the quarantined credential generation, and restore the advisory decision-quota row's usability. */
 export function clearAccountNeedsReauth(id: string, credentialGeneration?: number): void {
   // A model response proves only the credential it used. Keep account-wide
   // quarantine and evidence from another generation intact.
@@ -88,4 +92,5 @@ export function clearAccountNeedsReauth(id: string, credentialGeneration?: numbe
     && (reauthAccounts.get(id) !== credentialGeneration
       || !isCodexAccountGenerationLive(id, credentialGeneration))) return;
   reauthAccounts.delete(id);
+  setDecisionAccountUsable(id === "__main__" ? "codex-main" : "codex", id, true, credentialGeneration);
 }

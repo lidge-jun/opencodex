@@ -1,3 +1,7 @@
+import { jevQuotaClause, jevQuotaCriterion, JEV_QUOTA_INSTRUCTION, type JevQuotaSignal } from "./jev-quota";
+import type { JevQuotaTiers, JevQuotaDecisionSummary } from "./jev-quota-config";
+import { boundedJevQuotaPayload, jevQuotaCandidates, withJevQuotaSummary } from "./jev-quota-route";
+import { JEV_MAX_REQUEST_BYTES as REQUEST_LIMIT } from "./jev-service-exchange";
 import type { providerOutboundPost } from "../lib/provider-outbound";
 import type { OcxComboDefaultEffort, OcxConfig } from "../types";
 import {
@@ -75,6 +79,7 @@ export interface JevCandidate {
   reasoningEfforts: readonly OcxComboDefaultEffort[];
   /** Optional operator note sent as decision evidence for this target only. */
   modelProfile?: string;
+  quota?: JevQuotaSignal;
 }
 
 /**
@@ -98,6 +103,7 @@ export interface JevDecision {
   effort: OcxComboDefaultEffort | null;
   gate: "apply" | "missing_key" | "no_choices" | "no_state" | "timeout" | "network" | "redirect" | "http" | "malformed" | "invalid";
   latencyMs: number;
+  quota?: JevQuotaDecisionSummary;
   confidence?: number;
   chosenProbability?: number;
   usage?: Record<string, number>;
@@ -113,6 +119,8 @@ export interface ResolveJevDecisionOptions {
    * any other id names a configured `jev-decision` row (for example a self-hosted Ollama `tev1`).
    */
   decisionProvider?: string;
+  decisionQuotaSignals?: boolean;
+  decisionQuotaTiers?: JevQuotaTiers;
   /** Request-local authorization of the concrete decision destination, before credential access. */
   isDestinationAllowed?: (providerName: string, modelId: string) => boolean;
   /** Decision deadline; values outside 1000..120000 ms keep the four-second default. */
@@ -477,11 +485,12 @@ function modelProfile(candidate: JevCandidate): string {
     ?? "Configured target with capability unspecified by JEV; judge it only from the supplied request evidence.";
 }
 
-function criterionDescription(criterion: JevRouteOption["criterion"]): string {
+/** Describe one allowlisted target and effort option for a decision backend, including the optional advisory quota clause. */
+function criterionDescription(criterion: JevRouteOption["criterion"], quota?: JevQuotaSignal): string {
   const effort = criterion.reasoning_effort
     ? `${criterion.reasoning_effort} reasoning effort`
     : "no reasoning-effort control";
-  return `Target ${criterion.target} (provider ${criterion.provider}, model ${criterion.model}) with ${effort}.`;
+  return `Target ${criterion.target} (provider ${criterion.provider}, model ${criterion.model}) with ${effort}.${quota ? jevQuotaClause(quota) : ""}`;
 }
 
 /** One allowlisted target/effort option, shared by every decision backend. */
@@ -498,7 +507,7 @@ export function jevRouteOptions(candidates: readonly JevCandidate[]): JevRouteOp
     key,
     targetKey: option.targetKey,
     effort: option.effort,
-    description: criterionDescription(option.criterion),
+    description: criterionDescription(option.criterion, candidates.find(candidate => candidate.key === option.targetKey)?.quota),
   }));
 }
 
@@ -516,7 +525,8 @@ export function buildJevRouteQuestion(
   const routeOptions = candidateOptions(candidates);
   const criteria: Record<string, unknown> = {};
   for (const [choice, option] of routeOptions) {
-    criteria[choice] = options.descriptiveCriteria ? criterionDescription(option.criterion) : option.criterion;
+    const quota = candidates.find(candidate => candidate.key === option.targetKey)?.quota;
+    criteria[choice] = options.descriptiveCriteria ? criterionDescription(option.criterion, quota) : { ...option.criterion, ...(quota ? { quota: jevQuotaCriterion(quota) } : {}) };
   }
   const modelProfiles: Record<string, string> = {};
   for (const candidate of candidates) modelProfiles[candidate.key] = modelProfile(candidate);
@@ -531,6 +541,7 @@ export function buildJevRouteQuestion(
         model_profiles: modelProfiles,
         effort_profiles: EFFORT_PROFILES,
         speed: "Every option uses standard speed. Fast mode is unavailable.",
+        ...(candidates.some(candidate => candidate.quota) ? { quota: JEV_QUOTA_INSTRUCTION } : {}),
       },
       criteria,
     },
@@ -628,6 +639,7 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
   if (options.candidates.length === 0) return failed("no_choices");
   if (!candidatesFitRequestBounds(options.candidates)) return failed("invalid");
 
+  let candidates = options.candidates;
   const exchanged = await exchangeJevDecision(options, (endpoint) => {
     if (endpoint.descriptiveCriteria) {
       // Self-hosted choice questions accept 2..26 options; decide locally instead of spending a
@@ -638,19 +650,20 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
     }
     const state = buildJevState(options.body, options.candidates);
     if (!hasJevDecisionState(state)) return "no_state";
-    return { body: JSON.stringify({
-      model: endpoint.model,
-      state,
-      questions: buildJevRouteQuestion(options.candidates, { descriptiveCriteria: endpoint.descriptiveCriteria }),
-    }) };
+    const payload = boundedJevQuotaPayload(jevQuotaCandidates(options), rows => JSON.stringify({
+      model: endpoint.model, state,
+      questions: buildJevRouteQuestion(rows, { descriptiveCriteria: endpoint.descriptiveCriteria }),
+    }), REQUEST_LIMIT);
+    candidates = payload.candidates;
+    return { body: payload.body };
   }, (payload) => parseJevDecision(payload, options.candidates));
-  if ("gate" in exchanged) return failed(exchanged.gate);
-  return {
+  if ("gate" in exchanged) return withJevQuotaSummary(failed(exchanged.gate), candidates);
+  return withJevQuotaSummary({
     backend,
     ...exchanged.value,
     gate: "apply",
     latencyMs: Math.max(0, now() - startedAt),
-  };
+  }, candidates);
 }
 
 export type JevDecisionProbeResult =

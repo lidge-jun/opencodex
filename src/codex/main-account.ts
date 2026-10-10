@@ -1,3 +1,4 @@
+import { observeMainDecisionCredentialUsable } from "./main-account-cache";
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createHash } from "node:crypto";
@@ -239,10 +240,12 @@ export function getMainAccountCredentialStatus(now = Date.now()): MainAccountCre
   const current = readMainAuthJsonCredential();
   const refreshGrantRejected = credentialRefreshGrantRejected(current);
   const hasRefreshGrant = !!current?.refreshToken && !refreshGrantRejected;
+  const usable = !refreshGrantRejected && (hasRefreshGrant || mainAccessTokenFresh(current?.accessToken, now, 0));
+  observeMainDecisionCredentialUsable(usable);
   return {
     refreshGrantRejected,
     hasRefreshGrant,
-    usable: !refreshGrantRejected && (hasRefreshGrant || mainAccessTokenFresh(current?.accessToken, now, 0)),
+    usable,
   };
 }
 
@@ -441,6 +444,7 @@ export function beginNativeMainReauth(): {
   };
 }
 
+/** Resolve the main account access token from the owned auth.json read, refreshing through the token endpoint when needed, or return null when no usable credential exists. */
 async function resolveMainAccountToken(
   dependencies: NativeMainRefreshDependencies = {},
   rejectedAccessToken?: string,
@@ -532,7 +536,7 @@ async function resolveMainAccountToken(
           if (signal.aborted) throw signal.reason;
           if (reason === "reauth") {
             assertMainAuthJsonSnapshotUnchanged(locked);
-            markMainRefreshGrantRejected(mainRefreshGrantKey(locked)!);
+            markMainRefreshGrantRejected(mainRefreshGrantKey(locked)!); observeMainDecisionCredentialUsable(false);
           }
           throw new MainAccountTokenRefreshError(reason, { cause });
         }

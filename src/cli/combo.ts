@@ -1,3 +1,4 @@
+import { normalizeJevQuotaTiers } from "../combos/jev-quota-config";
 import { JEV_DECISION_TIMEOUT_MAX_MS, JEV_DECISION_TIMEOUT_MIN_MS } from "../combos/types";
 import {
   CliUsageError,
@@ -26,6 +27,7 @@ const USAGE = `Usage:
       [--native-alias [on|off]] [--display-name <label|->]
       [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>]
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
+      [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->]
       (jev only; the provider must be a configured jev-decision row)
       [--rename-from <id>] [--json]
   ocx combo stats <id> [--range <7d|30d|all>] [--json]
@@ -80,6 +82,7 @@ async function show(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(combo, wantsJson);
 }
 
+/** Handle `ocx combo set`: parse the combo id and flags (including `--decision-quota-signals` and `--decision-quota-tiers`), then create or update the combo through the management API. */
 async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   const args = [...argv];
   const id = args.shift()?.trim();
@@ -129,6 +132,13 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (decisionProvider !== undefined && decisionProvider !== "-" && strategy !== "jev") {
     throw new CliUsageError("--decision-provider applies only to the jev strategy", USAGE);
   }
+  const quotaSignals = takeOption(args, "--decision-quota-signals");
+  const quotaTiers = takeOption(args, "--decision-quota-tiers");
+  if (quotaSignals !== undefined && !["on", "off", "-"].includes(quotaSignals)) throw new CliUsageError("--decision-quota-signals must be on, off or -", USAGE);
+  let parsedQuotaTiers: ReturnType<typeof normalizeJevQuotaTiers> | null;
+  try { parsedQuotaTiers = quotaTiers === undefined || quotaTiers === "-" ? null : normalizeJevQuotaTiers(JSON.parse(quotaTiers)); } catch { throw new CliUsageError("invalid --decision-quota-tiers JSON", USAGE); }
+  if (quotaTiers !== undefined && quotaTiers !== "-" && !parsedQuotaTiers) throw new CliUsageError("quota tiers must be finite 0..100 and strictly ascending", USAGE);
+  if (strategy !== "jev" && (quotaSignals !== undefined && quotaSignals !== "-" || quotaTiers !== undefined && quotaTiers !== "-")) throw new CliUsageError("quota settings apply only to jev", USAGE);
   const decisionTimeout = takeOption(args, "--decision-timeout");
   let decisionTimeoutMs: number | null | undefined;
   if (decisionTimeout !== undefined) {
@@ -168,10 +178,14 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (decisionProvider !== undefined && decisionProvider !== "-") combo.decisionModel = null;
   if (decisionModel !== undefined && decisionModel !== "-") combo.decisionProvider = null;
   if (decisionTimeoutMs !== undefined) combo.decisionTimeoutMs = decisionTimeoutMs;
+  if (quotaSignals !== undefined) combo.decisionQuotaSignals = quotaSignals === "-" ? null : quotaSignals === "on";
+  if (quotaTiers !== undefined) combo.decisionQuotaTiers = parsedQuotaTiers;
   if (strategy !== "jev") {
     delete combo.decisionProvider;
     delete combo.decisionModel;
     delete combo.decisionTimeoutMs;
+    delete combo.decisionQuotaSignals;
+    delete combo.decisionQuotaTiers;
   }
   const current = partialCurrent ?? await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", { redirect: "error" }, deps);
   const existing = (current.combos ?? []).find(row => row.id === (renameFrom ?? id));

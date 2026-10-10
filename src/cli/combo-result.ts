@@ -1,3 +1,4 @@
+import { normalizeJevQuotaTiers } from "../combos/jev-quota-config";
 import { parseComboTargets } from "./combo-input";
 import { printCatalogResult } from "./catalog-command-result";
 
@@ -33,7 +34,12 @@ function publicCombo(value: unknown): Record<string, unknown> {
     } else if (Object.hasOwn(RANGES, key)) {
       const [min, max] = RANGES[key]!;
       if (typeof child !== "number" || !Number.isSafeInteger(child) || child < min || child > max) invalid();
-    } else if (key === "nativeAlias") {
+    } else if (key === "decisionQuotaTiers") {
+      const tiers = normalizeJevQuotaTiers(child);
+      if (!tiers) invalid();
+      result[key] = tiers;
+      continue;
+    } else if (key === "nativeAlias" || key === "decisionQuotaSignals") {
       if (typeof child !== "boolean") invalid();
     } else invalid();
     result[key] = child;

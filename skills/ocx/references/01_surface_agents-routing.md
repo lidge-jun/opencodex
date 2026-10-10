@@ -747,7 +747,7 @@ JSON mode: `payload`.
 
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--display-name <label|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--display-name <label|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
 
 Create, update or rename a combo.
 
@@ -770,6 +770,8 @@ State-changing: yes.
 | `--decision-provider` | string | JEV provider; - clears. |
 | `--decision-model` | string | JEV route; - clears; exclusive with provider. |
 | `--decision-timeout` | string | JEV deadline 1000-120000 ms; - clears. |
+| `--decision-quota-signals` | string | JEV advisory quota on/off; - clears. |
+| `--decision-quota-tiers` | string | Partial JSON thresholds; - clears. |
 | `--rename-from` | string | Existing combo ID to rename. |
 | `--json` | boolean | Emit structured JSON. |
 | `--native-alias` | string | Bare legacy flag means on; explicit on/off preserves presence, including false. |

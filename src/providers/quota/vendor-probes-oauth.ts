@@ -1,3 +1,5 @@
+import { bindRawDecisionWindows } from "../quota-decision-publication";
+import { rawAnthropicUsageWindows } from "./anthropic-decision-windows";
 import { markAnthropicFamilyEnumeration } from "./anthropic-family-headers";
 import { effectiveCodexAuthAccountId, fetchMainAccountInfoSnapshot, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
@@ -268,6 +270,7 @@ function parseClaudeLimit(value: unknown): ProviderQuotaWindow | null {
 /** Claude's OAuth usage endpoint, probed with ONE account's own bearer token. */
 const anthropicUsageInflight = new Map<string, Promise<ProviderQuota | null>>();
 
+/** Read the Anthropic OAuth usage endpoint for an access token and return the parsed quota, or null on a non-OK or malformed response. */
 async function readAnthropicUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
   const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
     headers: {
@@ -314,6 +317,7 @@ async function readAnthropicUsageQuota(accessToken: string): Promise<ProviderQuo
     ...(customWindows.length > 0 ? { customWindows } : {}),
     updatedAt: Date.now(),
   };
+  bindRawDecisionWindows(quota, rawAnthropicUsageWindows(body, quota.updatedAt));
   // Empty / schema-changed payloads must not cache as "success with no bars".
   return hasQuotaRows(quota) ? markAnthropicFamilyEnumeration(quota, Array.isArray(body.limits) && body.limits.every(raw => {
     const kind = asRecord(raw)?.kind;
@@ -392,7 +396,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   if (!initialRow || !currentRow || initialRow.loginId !== currentRow.loginId || initialRow.addedAt !== currentRow.addedAt
     || epoch !== captureProviderAccountQuotaEpoch(instance) || recovery.anthropicAccountIncarnation(probedAccountId) !== incarnation) return null;
   let quota: ProviderQuota | null;
-  let anthropicCurrent: (() => boolean) | undefined;
+  let anthropicCurrent: (() => boolean) | undefined; let anthropicPublish: (() => void) | undefined;
   try {
     const result = await recovery.probeAnthropicQuotaWithRecovery(probedAccountId, accessToken,
       fresh => {
@@ -403,7 +407,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
       () => targetCurrent() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration));
     if (result && !result.isCurrent()) return null;
     quota = result?.quota ?? null;
-    anthropicCurrent = result?.isCurrent;
+    anthropicCurrent = result?.isCurrent; anthropicPublish = result?.publishDecisionQuota;
   } catch (error) {
     if (error instanceof AnthropicQuotaProbeOwnershipError) return null;
     throw error;
@@ -414,7 +418,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   if (probedAccountId && probedAccountKey) {
     const stillOwnsToken = getAccountCredential(instance, probedAccountId)?.access === accessToken;
     if (stillOwnsToken && anthropicCurrent?.() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
-      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent });
+      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent }); anthropicPublish?.();
     }
   }
   const quotaReport = report(provider, "anthropic:oauth-usage", quota);

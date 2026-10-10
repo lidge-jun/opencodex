@@ -1,3 +1,4 @@
+import { normalizeJevQuotaSummary, type JevQuotaDecisionSummary } from "../combos/jev-quota-config";
 import type { OcxComboDefaultEffort } from "../types";
 import type { PersistedUsageEntry } from "./log";
 import { usageDisplayTotalTokens } from "./totals";
@@ -39,6 +40,7 @@ export interface PersistedJevDecisionV1 {
   };
   gate: JevDecisionGate;
   latencyMs: number;
+  quota?: JevQuotaDecisionSummary;
   confidence?: number;
   chosenProbability?: number;
   usage?: {
@@ -182,6 +184,7 @@ export function normalizePersistedJevDecision(value: unknown): PersistedJevDecis
   const confidence = probability(value.confidence);
   const chosenProbability = probability(value.chosenProbability);
   const usage = normalizedDecisionUsage(value.usage);
+  const quota = normalizeJevQuotaSummary(value.quota);
   const backend = value.backend === "typesafe" || value.backend === "systemone" || value.backend === "model"
     ? value.backend
     : undefined;
@@ -196,6 +199,7 @@ export function normalizePersistedJevDecision(value: unknown): PersistedJevDecis
     },
     gate: gate as JevDecisionGate,
     latencyMs,
+    ...(quota ? { quota } : {}),
     ...(confidence !== undefined ? { confidence } : {}),
     ...(chosenProbability !== undefined ? { chosenProbability } : {}),
     ...(usage ? { usage } : {}),

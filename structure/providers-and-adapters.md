@@ -350,7 +350,7 @@ and the upstream URL through `handleResponses`.
 ## TypeSafe JEV decision provider
 
 The JEV Combo decision contract (TypeSafe, compatible HTTPS services with any endpoint path, local System One rows, and opencodex-model
-decision backends) lives in [JEV Decision Routing](providers/jev-decision.md).
+decision backends) lives in [JEV Decision Routing](providers/jev-decision.md), including [loaded-only advisory quota](providers/jev-decision.md#loaded-advisory-quota); credential owners publish bounded secret-free generation projections without expanding the quota barrel or changing hard selection.
 
 ## Preset notes
 

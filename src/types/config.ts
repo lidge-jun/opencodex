@@ -1379,6 +1379,10 @@ export interface OcxComboConfig {
    * whose first call may include a cold model load.
    */
   decisionTimeoutMs?: number;
+  /** JEV-only advisory loaded quota evidence; off/unset leaves request bytes unchanged. */
+  decisionQuotaSignals?: boolean | null;
+  /** Partial 0..100 tier overrides; defaults limited 70/nearlyExhausted 90. null clears. */
+  decisionQuotaTiers?: import("../combos/jev-quota-config").JevQuotaTiers | null;
 }
 
 export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";

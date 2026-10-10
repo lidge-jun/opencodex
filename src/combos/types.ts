@@ -1,3 +1,4 @@
+import { normalizeJevQuotaTiers, type ResolvedJevQuotaTiers } from "./jev-quota-config";
 import { isCodexReasoningEffort, isDeclaredReasoningEffort } from "../reasoning-effort";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
 import type { OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
@@ -70,6 +71,8 @@ export interface NormalizedComboConfig {
   decisionModel?: string;
   /** JEV decision deadline override; absent keeps the default four-second deadline. */
   decisionTimeoutMs?: number;
+  decisionQuotaSignals?: boolean;
+  decisionQuotaTiers?: ResolvedJevQuotaTiers;
   targets: NormalizedComboTarget[];
 }
 
@@ -133,6 +136,7 @@ export interface ComboValidationOptions {
   excludeComboId?: string;
 }
 
+/** Validate a raw combo definition against the configured providers and return every issue found, without mutating the input. */
 export function comboConfigIssues(
   id: string,
   raw: unknown,
@@ -280,6 +284,12 @@ export function comboConfigIssues(
   }
   if (nativeAlias && (typeof body.displayName !== "string" || body.displayName.trim().length === 0)) {
     issues.push({ path: ["displayName"], message: "displayName is required for native aliases" });
+  }
+  for (const field of ["decisionQuotaSignals", "decisionQuotaTiers"] as const) {
+    if (body[field] === undefined || body[field] === null) continue;
+    if (body.strategy !== "jev") issues.push({ path: [field], message: `${field} is only valid with strategy "jev"` });
+    if (field === "decisionQuotaSignals" ? typeof body[field] !== "boolean" : !normalizeJevQuotaTiers(body[field]))
+      issues.push({ path: [field], message: field === "decisionQuotaSignals" ? "decisionQuotaSignals must be a boolean" : "decisionQuotaTiers must contain finite 0..100 strictly ascending thresholds" });
   }
   if (body.decisionProvider !== undefined && body.decisionProvider !== null) {
     const decisionProvider = typeof body.decisionProvider === "string" ? body.decisionProvider.trim() : "";
@@ -467,6 +477,7 @@ export function comboConfigError(
   return comboConfigIssues(id, raw, providers, options)[0]?.message ?? null;
 }
 
+/** Normalize a validated combo definition into its canonical form: trimmed strings, defaults and the opt-in quota signal fields. */
 export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig {
   const alias = typeof raw.alias === "string" ? raw.alias.trim() : "";
   const displayName = typeof raw.displayName === "string" ? raw.displayName.trim() : "";
@@ -492,6 +503,8 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     ...(decisionProvider && decisionProvider !== CANONICAL_JEV_DECISION_PROVIDER ? { decisionProvider } : {}),
     ...(decisionModel ? { decisionModel } : {}),
     ...(typeof raw.decisionTimeoutMs === "number" ? { decisionTimeoutMs: raw.decisionTimeoutMs } : {}),
+    ...(raw.strategy === "jev" && raw.decisionQuotaSignals === true ? { decisionQuotaSignals: true } : {}),
+    ...(raw.strategy === "jev" && normalizeJevQuotaTiers(raw.decisionQuotaTiers) ? { decisionQuotaTiers: normalizeJevQuotaTiers(raw.decisionQuotaTiers)! } : {}),
     targets: raw.targets.map(target => ({
       provider: target.provider.trim(),
       model: target.model.trim(),

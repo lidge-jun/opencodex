@@ -62,6 +62,7 @@ export async function fetchAnthropicAccountQuota(
   // and a thrown read (network failure) both record the unavailable row over the retained
   // in-flight observations, as the pre-instance A path did, so joined callers and later cached
   // reads agree and windows that expired during the shared probe are normalized away.
+  /** Cache the settled probe result for an account and publish its decision evidence only while the flight is still current for its credential and generation. */
   const publish = (result: AnthropicQuotaRecoveryResult | null): AccountQuotaCacheEntry => {
     const previous = accountQuotaCache.get(key);
     const retained = previous?.isCurrent?.() === false ? undefined : previous;
@@ -70,7 +71,7 @@ export async function fetchAnthropicAccountQuota(
       ts: Date.now(), quota: normalizeAnthropicQuota(result?.quota ?? retained?.quota, Date.now()),
       ...(!result ? { unavailable: true as const } : {}), isCurrent,
     };
-    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) { accountQuotaCache.set(key, entry); sweepExpiredOnWrite(entry.ts); }
+    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) { accountQuotaCache.set(key, entry); result?.publishDecisionQuota(); sweepExpiredOnWrite(entry.ts); }
     return entry;
   };
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {

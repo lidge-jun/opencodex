@@ -14,6 +14,7 @@ import {
   hardenExistingSecret,
   withConfigMutationLockSync,
 } from "../config";
+import { publishCodexDecisionQuotaRoster } from "./store-decision-quota";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
@@ -113,30 +114,36 @@ function normalizeRecord(value: CodexAccountCredentials | CodexAccountCredential
   return undefined;
 }
 
+/** Read the Codex account record store from disk with hardened permissions, and republish the secret-free decision-quota roster derived from it. */
 function loadCodexAccountRecordStore(): CodexAccountStore {
   const path = codexAccountsPath();
   hardenConfigDir();
   hardenExistingSecret(path);
-  if (!existsSync(path)) return {};
+  if (!existsSync(path)) { publishCodexDecisionQuotaRoster({}); return {}; }
+  const normalized: CodexAccountStore = {};
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as RawCodexAccountStore;
-    const normalized: CodexAccountStore = {};
     for (const [id, value] of Object.entries(raw)) {
       const record = normalizeRecord(value);
       if (record) normalized[id] = record;
     }
-    return normalized;
   } catch {
     backupInvalidConfig(path);
+    publishCodexDecisionQuotaRoster({});
     return {};
   }
+  // Outside the parse try: roster publication is advisory and must never route a loaded store into the invalid-config backup path.
+  publishCodexDecisionQuotaRoster(normalized);
+  return normalized;
 }
 
+/** Atomically write the Codex account store and republish the decision-quota roster so published evidence tracks the persisted credentials. */
 function persist(store: CodexAccountStore): void {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n");
+  publishCodexDecisionQuotaRoster(store);
 }
 
 function persistCredentialMutation(store: CodexAccountStore): void {
