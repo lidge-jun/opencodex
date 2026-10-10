@@ -92,7 +92,7 @@ Issue bodies are drafted in scratch (`.tmp/issues/`), contain no account data, a
 
 | ID | Proposal | Disposition |
 |---|---|---|
-| P1 | Sentinel-prefixed result lines; capture each command and keep its failure status; shared bash/zsh syntax; reject `.hushlogin` (changes the tested environment) and stderr redirection (the hint is on stdout) | accepted; the `-c` script becomes `p=$(command -v ocx) \|\| exit 11; o=$(ocx hello) \|\| exit 12; printf 'OCX-PATH:%s\\nOCX-OUT:%s\\n' "$p" "$o"`, so a failing lookup or CLI still fails `status.success()` |
+| P1 | Sentinel-prefixed result lines; capture each command and keep its failure status; shared bash/zsh syntax; reject `.hushlogin` (changes the tested environment) and stderr redirection (the hint is on stdout) | accepted; the `-c` script becomes `p=$(command -v ocx) \|\| exit 11; o=$(ocx hello) \|\| exit 12; printf 'OCX-PATH:%s\\nOCX-OUT:%s:OCX-END\\n' "$p" "$o"`, so a failing lookup or CLI still fails `status.success()`; final #6851 head `d785fb1b02` also requires `outputs[0] == format!("{expected_output}:OCX-END")`, so an extra CLI output line fails the comparison |
 | P2 | Expected value from `windowsEnvIndirectBatchValue`; assert the complete `set "OCX_BUN=..."` line; keep the frozen-runtime and `unprobed.exe` checks | accepted; the three assertions check `set "OCX_BUN=<rendered>"` (the shim and the service script both emit that line), with an identity escape justified by `process.execPath` holding none of `% ^ "` |
 | P3a | Feature issue for Windows supervision with the observed trigger, the proof shape, `unknown` on inconclusive evidence; PATH-only handoff stays separate; F4 related, Linux needs deb-vs-npm-symlink distinction | accepted as I1 |
 | P3b | Bug issue for F7; desired behaviour is fresh-logon PATH evaluation; validate `CreateEnvironmentBlock(FALSE)` against real new terminals before choosing it; no speculative PR | accepted as I2 (wording: candidate direction, to be validated) |
@@ -107,11 +107,11 @@ above.
    (`%` → `%%`, `^` → `^^`, drop `"`; `src/codex/shim-templates.ts:170`, `src/service/windows-taskxml.ts:14`) through
    `windowsEnvIndirectBatchValue(runtime.path, batchValue)`, and assert the complete `set "OCX_BUN=..."` line. The
    frozen-runtime and `unprobed.exe` checks stay.
-2. Issues are created with the exact body a form submission renders: `### <field label>` sections in form order with
-   the dropdown value or text under each, the form's title prefix (`[Bug]: ` / `[Feature]: `) and the form's labels
-   (`.github/ISSUE_TEMPLATE/*.yml` `labels:`); `enforce-issue-quality` validates headings, prefix and labels
-   (`.github/scripts/issue-quality-core.cjs` `detectKind`), not the submission route. Each PR body fills Summary,
-   Verification and Checklist from `.github/PULL_REQUEST_TEMPLATE.md` with the host evidence.
+2. Issues use `### <field label>` sections in form order, with the dropdown value or text under each, and the form's
+   labels (`bug` / `enhancement`). The forms define no `title:` prefix; titles follow the repository convention
+   (`[Bug] ...` / `[Feature]: ...`). `enforce-issue-quality` detects the kind from content and validates the body
+   (`.github/scripts/issue-quality-core.cjs` `detectIssueKind`, `validateIssueBody`), not the submission route. Each
+   PR body fills Summary, Verification and Checklist from `.github/PULL_REQUEST_TEMPLATE.md` with the host evidence.
 3. Closeout step 1 records the actual review verdict and its round count rather than presupposing PASS; PR1's Rust
    literal keeps `\\n` and plain `||`.
 

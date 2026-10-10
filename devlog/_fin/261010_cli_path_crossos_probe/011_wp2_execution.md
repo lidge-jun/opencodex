@@ -81,7 +81,8 @@ These supersede earlier rows where they conflict.
    reports 2.61.0 and `sha256sum /usr/bin/ocx` on the real root is unchanged.
 3. **Evidence and rollback.** Evidence is copied back with `rsync -a lidge:/var/tmp/ocx-probe-evidence/out/
    <worktree>/.tmp/evidence/lidge-a/`; then the holder is killed, its mount-ns inode must be absent from `sudo lsns -t mnt`,
-   `sudo ip netns delete ocxprobe-a ocxprobe-b`, `sudo rm -rf /var/tmp/ocx-probe /var/tmp/ocx-probe-evidence`, and
+   `sudo ip netns delete ocxprobe-a`, `sudo ip netns delete ocxprobe-b`,
+   `sudo rm -rf /var/tmp/ocx-probe /var/tmp/ocx-probe-evidence`, and
    `ls -d /var/tmp/ocx-probe* /tmp/ocx-probe-261010` must fail; `ip netns list` must not show either name.
 4. **Supervision gate.** Live L9/L10 coverage is claimed only if `resolve --json` (or a direct
    `inspectDesktopSupervision()` call) inside the namespace reports `kind: "desktop"` for the Desktop's child;

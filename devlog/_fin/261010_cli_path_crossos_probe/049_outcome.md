@@ -3,8 +3,7 @@
 The macOS-built CLI path work (#6802, #6807, #6809, #6812, #6816, #6818) was probed on real hosts: Ubuntu 24.04 (`lidge`)
 and Windows 11 build 26200 (`mini`). Every tested Linux path works, including the deb path and real fish/bash logins. On
 Windows the PATH writer and new-terminal pickup work, but nothing in the CLI recognises the Desktop as the runtime's
-supervisor, and the Desktop's own conflict check reports a false positive. Two test defects that only appear off CI
-were fixed.
+supervisor, and the Desktop's own conflict check reports a false positive. Two test defects that only appear off CI were fixed by #6852 and #6851, merged into `dev` as f2b143baf8 and c35392169c.
 
 ## Findings matrix
 
@@ -25,8 +24,8 @@ were fixed.
 
 | Item | Link | Head / state | Review | CI |
 |---|---|---|---|---|
-| F5 real-shell test reads marked lines | https://github.com/lidge-jun/opencodex/pull/6851 | `d785fb1b02` | Sol 01a122ad: NEAR-PASS → NEAR-PASS → PASS | exact head green: Cross-platform CI 37997020161 (incl. `desktop shell`), Service lifecycle 37997020131, React Doctor 37997020261, `enforce-target`/`hygiene` |
-| F6 preflight assertions follow env-indirect rendering | https://github.com/lidge-jun/opencodex/pull/6852 | `f53bf8de1f` | Sol 01a122ad: NEAR-PASS (body) → PASS | exact head green: Cross-platform CI 37996684810 including Windows shards (changed files passed in `windows 1/9` and `windows 4/9`); `windows 2/9` failed once in the unrelated `claude-desktop-first-party` certificate test and passed on a single-job rerun; React Doctor 37996684793 |
+| F5 real-shell test reads marked lines | https://github.com/lidge-jun/opencodex/pull/6851 | `d785fb1b02`; merged as `c35392169c` | Sol 01a122ad: NEAR-PASS → NEAR-PASS → PASS | exact head green: Cross-platform CI 37997020161 (incl. `desktop shell`), Service lifecycle 37997020131, React Doctor 37997020261, `enforce-target`/`hygiene` |
+| F6 preflight assertions follow env-indirect rendering | https://github.com/lidge-jun/opencodex/pull/6852 | `f53bf8de1f`; merged as `f2b143baf8` | Sol 01a122ad: NEAR-PASS (body) → PASS | exact head green: Cross-platform CI 37996684810 including Windows shards (changed files passed in `windows 1/9` and `windows 4/9`); `windows 2/9` failed once in the unrelated `claude-desktop-first-party` certificate test and passed on a single-job rerun; React Doctor 37996684793 |
 | Windows Desktop supervision (F2, F4) | https://github.com/lidge-jun/opencodex/issues/6853 | open, `enhancement` | — | — |
 | `machine-path-conflict` false positive (F7) | https://github.com/lidge-jun/opencodex/issues/6854 | open, `bug` | — | — |
 
