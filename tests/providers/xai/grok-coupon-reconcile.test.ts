@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -70,15 +70,18 @@ describe("grok coupon attempt reconciliation", () => {
     expect(openGrokResetCouponOperation({ accountId: "acc-1", tokenId: "tok-live", operationId: "11111111-1111-4111-8111-111111111111" })).toMatchObject({ kind: "replay", code: undefined });
   });
 
-  it("settles an interrupted attempt as redeemed when the token is gone but still in-window", async () => {
+  it("does not infer an interrupted operation's success from a missing still-valid token", async () => {
     openGrokResetCouponOperation({ accountId: "acc-1", tokenId: "tok-live", operationId: "22222222-2222-4222-8222-222222222222" });
     markGrokResetCouponAttempt("22222222-2222-4222-8222-222222222222", "tok-live", Date.now() - STALE, undefined, Date.now() + 86_400_000);
     remainingSpy.mockResolvedValue({ tokens: [] } as never);
+    const before = readFileSync(ledgerModule.grokCouponJournalPath(), "utf8");
 
     const res = await handleGrokCouponRoutes(consumeRequest("22222222-2222-4222-8222-222222222222", "tok-live"));
-    expect(res!.status).toBe(200);
+    expect(res!.status).toBe(409);
     const body = await res!.json();
-    expect(body.code).toBe("redeemed");
+    expect(body.error.code).toBe("attempt_unresolved");
+    expect(body.success).toBeUndefined();
+    expect(readFileSync(ledgerModule.grokCouponJournalPath(), "utf8")).toBe(before);
     expect(redeemSpy).not.toHaveBeenCalled();
   });
 

@@ -17,8 +17,8 @@ export interface GrokResetCouponOperationRecord {
   operationId: string;
   accountId?: string;
   tokenId?: string;
-  /** Token expiry (ms) captured when the attempt was marked, if known — used
-   * at reconcile time to tell a consumed coupon from one that merely lapsed. */
+  /** Token expiry (ms) captured at claim time as journal metadata. Remaining
+   * availability or expiry cannot establish this operation's outcome. */
   tokenValidityEnd?: number;
   /** When the attempt was marked (ms) — set only on an "attempted" replay so
    * the route can defer inspection while the attempt may still be in flight. */
@@ -189,22 +189,32 @@ export function markGrokResetCouponAttempt(
   });
 }
 
+type GrokResetCouponSettlement = { operationId: string; accountId: string; code: string } & (
+  | { tokenId?: string; status: "failed"; expectedStatus: "open" }
+  | { tokenId: string; status: "success"; expectedStatus: "attempted" }
+);
+
+/** A preflight refusal cannot replace a claim or a terminal result. */
 export function recordGrokResetCouponSettlement(
-  settlement: { operationId: string; tokenId?: string; code: string; status: "success" | "failed" },
+  settlement: GrokResetCouponSettlement,
   now = Date.now(),
   journalPath?: string,
-): void {
-  withConfigMutationLockSync(() => {
-  const filePath = journalPath ?? grokCouponJournalPath();
-  const ledger = readGrokCouponLedger(filePath);
-  const existing = ledger.operations[settlement.operationId];
-  if (!existing) return;
+): boolean {
+  return withConfigMutationLockSync(() => {
+    const filePath = journalPath ?? grokCouponJournalPath();
+    const ledger = readGrokCouponLedger(filePath);
+    const existing = ledger.operations[settlement.operationId];
+    if (!existing || existing.status !== settlement.expectedStatus
+      || existing.accountId !== settlement.accountId
+      || (settlement.tokenId !== undefined && existing.tokenId !== undefined && existing.tokenId !== settlement.tokenId)
+      || (settlement.status === "success" && existing.tokenId !== settlement.tokenId)) return false;
 
-  existing.status = settlement.status === "success" ? "settled" : "failed";
-  existing.code = settlement.code;
-  if (settlement.tokenId !== undefined) existing.tokenId = settlement.tokenId;
-  existing.updatedAt = now;
+    existing.status = settlement.status === "success" ? "settled" : "failed";
+    existing.code = settlement.code;
+    if (settlement.tokenId !== undefined) existing.tokenId = settlement.tokenId;
+    existing.updatedAt = now;
 
-  writeGrokCouponLedger(filePath, ledger, now);
+    writeGrokCouponLedger(filePath, ledger, now);
+    return true;
   });
 }

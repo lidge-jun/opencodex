@@ -284,11 +284,14 @@ describe("grok reset coupons", () => {
     }, undefined, ledgerPath);
     expect(first.kind).toBe("execute");
 
+    markGrokResetCouponAttempt("op-uuid-1", "tok-456", undefined, ledgerPath);
     recordGrokResetCouponSettlement({
       operationId: "op-uuid-1",
+      accountId: "acc-123",
       tokenId: "tok-456",
       code: "redeemed",
       status: "success",
+      expectedStatus: "attempted",
     }, undefined, ledgerPath);
 
     // Re-opening the same settled operationId replays the durable outcome
@@ -316,9 +319,9 @@ describe("grok reset coupons", () => {
     expect(interrupted.code).toBeUndefined();
     expect(interrupted.tokenId).toBe("tok-456");
 
-    // Once the reconcile settles it, the next open replays the real outcome.
+    // Once a confirmed upstream response is settled, open replays that outcome.
     recordGrokResetCouponSettlement(
-      { operationId: "op-uuid-2", tokenId: "tok-456", code: "redeemed", status: "success" },
+      { operationId: "op-uuid-2", accountId: "acc-123", tokenId: "tok-456", code: "redeemed", status: "success", expectedStatus: "attempted" },
       undefined,
       ledgerPath,
     );
