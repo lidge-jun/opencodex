@@ -910,6 +910,56 @@ test("an auth refusal treats an expired record as unused and reserves the id", a
   expect(journal()[OP]).toMatchObject({ status: "failed", code: "auth_failed" });
 });
 
+test("#6897 an auth refusal never replays another coupon's outcome for the same operation", async () => {
+  writeFileSync(ledger.grokCouponJournalPath(), JSON.stringify({ version: 2, operations: { [OP]: {
+    accountId: "fixture-account", tokenId: TOKEN.tokenId, status: "settled", code: "redeemed",
+    createdAt: Date.now(), updatedAt: Date.now(),
+  } } }));
+  failingAuth();
+  const ctx = request();
+  const req = new Request(ctx.url, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...identity(), tokenId: "fixture-other-coupon" }) });
+  const response = (await handleGrokCouponRoutes({ ...ctx, req }))!;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
+  expect(journal()[OP]).toMatchObject({ status: "settled", code: "redeemed", tokenId: TOKEN.tokenId });
+});
+
+test("#6897 an auth refusal binds its reservation to the requested coupon", async () => {
+  failingAuth();
+  expect((await handleGrokCouponRoutes(request()))!.status).toBe(401);
+  expect(journal()[OP]).toMatchObject({ status: "failed", code: "auth_failed", tokenId: TOKEN.tokenId });
+});
+
+test("#6897 a full ledger keeps a supplied operationId on the capacity refusal", async () => {
+  const operations: Record<string, unknown> = {};
+  for (let i = 0; i < 256; i += 1) operations[`fixture-${i}`] = {
+    accountId: "fixture-account", status: "failed", code: "coupon_unavailable", createdAt: Date.now(), updatedAt: Date.now(),
+  };
+  writeFileSync(ledger.grokCouponJournalPath(), JSON.stringify({ version: 2, operations }));
+  const redeem = confirmedRedemption();
+  const anchored = (await handleGrokCouponRoutes(request()))!;
+  expect(anchored.status).toBe(503);
+  expect(await anchored.json()).toMatchObject({ operationId: OP, error: { code: "capacity" } });
+  const minted = (await handleGrokCouponRoutes(request(false, true)))!;
+  expect(minted.status).toBe(503);
+  expect((await minted.json()).operationId).toBeUndefined();
+  expect(redeem).not.toHaveBeenCalled();
+});
+
+for (const code of ["ledger_unavailable", "capacity", "attempt_mark_failed", "operation_token_mismatch"]) {
+  test(`#6897 a restored failed record coded ${code} is not replayed as definitive`, async () => {
+    writeFileSync(ledger.grokCouponJournalPath(), JSON.stringify({ version: 2, operations: { [OP]: {
+      accountId: "fixture-account", tokenId: TOKEN.tokenId, status: "failed", code, createdAt: Date.now(), updatedAt: Date.now(),
+    } } }));
+    const redeem = confirmedRedemption();
+    const response = (await handleGrokCouponRoutes(request()))!;
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_unresolved" } });
+    expect(redeem).not.toHaveBeenCalled();
+  });
+}
+
 function omittedAccountRequest(): ManagementContext {
   const ctx = request();
   return { ...ctx, req: new Request(ctx.url, { method: "POST", headers: { "Content-Type": "application/json" },

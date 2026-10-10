@@ -61,6 +61,7 @@ const UNRESOLVED_COUPON_CODES = new Set([
   "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed",
   "operation_state_changed", "redeem_failed", "attempt_mark_failed", "operation_token_mismatch",
 ]);
+const LEDGER_REFUSAL_CODES = new Set(["ledger_unavailable", "capacity"]);
 
 // The Map is the admission authority even if sessionStorage is denied. Snapshot
 // identity changes only on a write, allowing old controllers to notify new ones.
@@ -84,8 +85,8 @@ function holdSnapshot(): ReadonlyMap<string, GrokCouponAttempt> {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         for (const [key, value] of Object.entries(parsed)) {
           if (!key.includes("\u0000") || !validHold(value)) continue;
-          const current = couponHolds.get(key);
-          if (current?.operationId === value.operationId && current.tokenId === value.tokenId) continue;
+          // Storage only restores holds this page has lost; it never replaces a live hold.
+          if (couponHolds.has(key)) continue;
           couponHolds = new Map(couponHolds).set(key, { tokenId: value.tokenId, operationId: value.operationId });
         }
       }
@@ -121,7 +122,7 @@ function clearHold(key: string, operationId: string): void {
 }
 
 function unresolvedCode(code: string, body: unknown): boolean {
-  return UNRESOLVED_COUPON_CODES.has(code) || (code === "ledger_unavailable"
+  return UNRESOLVED_COUPON_CODES.has(code) || (LEDGER_REFUSAL_CODES.has(code)
     && Boolean(body && typeof body === "object" && "operationId" in body));
 }
 
@@ -283,7 +284,8 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
       }
       const replayed = Boolean(data && typeof data === "object" && (data as { replayed?: unknown }).replayed === true);
       const code = settledCode(data);
-      if (code === null || unresolvedCode(code, data)) return hold(request, code ?? "attempt_unresolved");
+      // A settled body never legitimately carries a ledger refusal code.
+      if (code === null || unresolvedCode(code, data) || LEDGER_REFUSAL_CODES.has(code)) return hold(request, code ?? "attempt_unresolved");
       clearMatchingHold();
       await read(accountId, epoch.current);
       return { ok: code === "redeemed", code, replayed };

@@ -144,6 +144,7 @@ describe("ocx account grok-reset-coupons", () => {
     [500, "attempt_mark_failed", false],
     [409, "operation_token_mismatch", true],
     [503, "ledger_unavailable", true],
+    [503, "capacity", true],
   ] as const) {
     test(`${code} keeps the client-minted operation id without another POST`, async () => {
       const calls: Captured[] = [];
@@ -179,7 +180,8 @@ describe("ocx account grok-reset-coupons", () => {
     expect(out.errors.join("\n")).not.toContain("--operation-id");
   });
 
-  for (const body of [{}, { code: "" }, { code: 7 }, { code: "attempt_unresolved" }]) {
+  for (const body of [{}, { code: "" }, { code: "   " }, { code: 7 }, { code: "attempt_unresolved" },
+    { code: "ledger_unavailable", replayed: true }, { code: "capacity", replayed: true }]) {
     test(`an unconfirmed 200 ${JSON.stringify(body)} keeps the recovery id`, async () => {
       const calls: Captured[] = [];
       const out = capture();
@@ -192,4 +194,3 @@ describe("ocx account grok-reset-coupons", () => {
     });
   }
 });
-

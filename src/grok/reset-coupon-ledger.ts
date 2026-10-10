@@ -242,7 +242,14 @@ type GrokResetCouponPreflightResult =
   | { kind: "recorded" | "changed" }
   | { kind: "replay"; code: string; tokenId?: string; settledAt: number };
 
-const UNRESOLVED_COUPON_CODES = new Set(["redeem_failed", "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed"]);
+/**
+ * Codes that never prove an outcome. A record carrying one is not replayed as
+ * definitive, even if a restored or hand-edited ledger stores it as settled/failed.
+ */
+const UNRESOLVED_COUPON_CODES = new Set([
+  "redeem_failed", "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed",
+  "attempt_mark_failed", "operation_token_mismatch", "ledger_unavailable", "capacity",
+]);
 
 /**
  * Whether a durable record is a definitive outcome this account and token may replay:
@@ -294,7 +301,7 @@ export type GrokResetCouponPreOpenRefusalResult =
  * else reports "changed" so the caller keeps its hold.
  */
 export function refuseGrokResetCouponBeforeOpen(
-  refusal: { operationId: string; accountId: string; code: string },
+  refusal: { operationId: string; accountId: string; tokenId?: string; code: string },
   now = Date.now(),
   journalPath?: string,
 ): GrokResetCouponPreOpenRefusalResult {
@@ -308,11 +315,14 @@ export function refuseGrokResetCouponBeforeOpen(
     const existing = ledger.operations[refusal.operationId];
     if (existing) {
       if (existing.accountId !== refusal.accountId) return { kind: "identity-mismatch" };
-      return terminalReplay(ledger, refusal.operationId, refusal.accountId, undefined) ?? { kind: "changed" };
+      // Same token binding as a normal replay: a different requested coupon never
+      // replays another coupon's outcome.
+      return terminalReplay(ledger, refusal.operationId, refusal.accountId, refusal.tokenId) ?? { kind: "changed" };
     }
     if (Object.keys(ledger.operations).length >= MAX_GROK_RESET_COUPON_OPERATION_IDS) return { kind: "capacity" };
     ledger.operations[refusal.operationId] = {
-      accountId: refusal.accountId, status: "failed", code: refusal.code, createdAt: now, updatedAt: now,
+      accountId: refusal.accountId, ...(refusal.tokenId !== undefined ? { tokenId: refusal.tokenId } : {}),
+      status: "failed", code: refusal.code, createdAt: now, updatedAt: now,
     };
     writeGrokCouponLedger(filePath, ledger, now);
     return { kind: "recorded" };

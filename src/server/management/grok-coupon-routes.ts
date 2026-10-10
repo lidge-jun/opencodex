@@ -165,7 +165,10 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
       if (operationId === undefined) return definitive;
       if (knownAccountId === undefined) return uncertain(operationId);
       try {
-        const result = refuseGrokResetCouponBeforeOpen({ operationId, accountId: knownAccountId, code });
+        const result = refuseGrokResetCouponBeforeOpen({
+          operationId, accountId: knownAccountId, code,
+          tokenId: typeof requestedTokenId === "string" ? requestedTokenId : undefined,
+        });
         if (result.kind === "recorded") return definitive;
         if (result.kind === "replay") return jsonResponse({
           code: result.code, replayed: true, tokenId: result.tokenId, settledAt: result.settledAt,
@@ -345,11 +348,14 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
     }
 
     if (opRecord.kind !== "execute") {
+      // A capacity refusal cannot reserve the id, so an earlier same-id request still in
+      // credential resolution may open it once records expire: keep the caller on the id.
       return jsonResponse(
         {
+          ...(operationId !== undefined ? { operationId: effectiveOpId } : {}),
           error: {
             code: opRecord.kind,
-            message: "Coupon ledger capacity or unavailable failure",
+            message: "Coupon ledger is at capacity; this request did not attempt a redemption. Retry the same operationId later",
           },
         },
         503,

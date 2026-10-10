@@ -626,28 +626,51 @@ for (const code of ["redeemed", "coupon_unavailable"]) {
   });
 }
 
-test("a stale definitive completion cannot clear a newer hydrated hold", async () => {
+test("#6897 a different persisted hold never replaces a live unresolved hold", async () => {
   const controller = await mountController();
-  const older = attempt();
-  const newer = attempt("restok_a2");
+  const live = attempt();
+  const stale = attempt("restok_a2");
+  harness.consumeReply = async () => json({ operationId: live.operationId, error: { code: "attempt_unresolved" } }, 502);
+  expect((await redeemController(controller, live)).uncertain).toBe(true);
+  await controller.unmount();
+  testWindow.sessionStorage.setItem(HOLD_STORAGE_KEY, JSON.stringify({ [`${testApiBase}\u0000acct-a`]: stale }));
+  const remounted = await mountController();
+  expect(remounted.current.uncertain["acct-a"]).toEqual(live);
+  expect((await redeemController(remounted)).operationId).toBe(live.operationId);
+  expect(harness.consumes).toHaveLength(1);
+});
+
+test("#6897 a different persisted hold cannot replace a pending hold or survive its definitive clear", async () => {
+  const controller = await mountController();
+  const pendingAttempt = attempt();
+  const stale = attempt("restok_a2");
   let finish!: (response: Response) => void;
   harness.consumeReply = () => new Promise(resolve => { finish = resolve; });
   let pending!: ReturnType<GrokResetCouponController["redeem"]>;
-  await act(async () => { pending = controller.current.redeem("acct-a", older); await flush(); });
+  await act(async () => { pending = controller.current.redeem("acct-a", pendingAttempt); await flush(); });
   try {
     await controller.unmount();
-    // Recreate a persisted newer operation before its controller hydrates.
-    testWindow.sessionStorage.setItem(HOLD_STORAGE_KEY, JSON.stringify({ [`${testApiBase}\u0000acct-a`]: newer }));
+    testWindow.sessionStorage.setItem(HOLD_STORAGE_KEY, JSON.stringify({ [`${testApiBase}\u0000acct-a`]: stale }));
     const remounted = await mountController();
-    expect(remounted.current.uncertain["acct-a"]).toEqual(newer);
+    expect(remounted.current.uncertain["acct-a"]).toEqual(pendingAttempt);
     await act(async () => { finish(json({ code: "redeemed" })); await pending; await flush(); });
-    expect(remounted.current.uncertain["acct-a"]).toEqual(newer);
-    expect((await redeemController(remounted)).operationId).toBe(newer.operationId);
-    expect(harness.consumes).toHaveLength(1);
-    expect(JSON.parse(testWindow.sessionStorage.getItem(HOLD_STORAGE_KEY) ?? "{}")[`${testApiBase}\u0000acct-a`]).toEqual(newer);
+    expect(remounted.current.uncertain["acct-a"]).toBeUndefined();
+    expect(JSON.parse(testWindow.sessionStorage.getItem(HOLD_STORAGE_KEY) ?? "{}")[`${testApiBase}\u0000acct-a`]).toBeUndefined();
   } finally {
     await act(async () => { finish(json({ code: "redeemed" })); await flush(); });
   }
+});
+
+test("#6897 capacity anchored to the operation stays unknown; a 200 ledger refusal code holds", async () => {
+  const controller = await mountController();
+  const anchored = attempt();
+  harness.consumeReply = async () => json({ operationId: anchored.operationId, error: { code: "capacity" } }, 503);
+  expect((await redeemController(controller, anchored)).uncertain).toBe(true);
+  const other = await mountController(testApiBase, "acct-b");
+  const replayed = attempt();
+  harness.consumeReply = async () => json({ code: "ledger_unavailable", replayed: true });
+  expect((await redeemController(other, replayed, "acct-b")).uncertain).toBe(true);
+  expect(harness.consumes).toHaveLength(2);
 });
 
 for (const hold of [

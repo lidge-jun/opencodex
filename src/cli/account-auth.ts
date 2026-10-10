@@ -446,6 +446,8 @@ const UNCONFIRMED_COUPON_CODES: ReadonlySet<string> = new Set([
   "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed",
   "redeem_failed", "attempt_mark_failed", "operation_token_mismatch",
 ]);
+/** Pre-dispatch ledger refusals: unconfirmed when anchored to an operation, never a settled code. */
+const LEDGER_REFUSAL_CODES: ReadonlySet<string> = new Set(["ledger_unavailable", "capacity"]);
 
 async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
@@ -488,7 +490,7 @@ async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<v
     const carriesOperation = !!body && typeof body === "object" && typeof body.operationId === "string";
     if (consume && (!apiError || (!apiError.code && (
       (!code && apiError.status >= 500) || UNCONFIRMED_COUPON_CODES.has(code ?? "")
-      || (code === "ledger_unavailable" && carriesOperation)
+      || (LEDGER_REFUSAL_CODES.has(code ?? "") && carriesOperation)
     )))) {
       throw new RuntimeApiError(`Coupon redemption outcome is unconfirmed. Preserve --operation-id ${effectiveOperationId}; reuse it to inspect this attempt and do not create a replacement operation.`, apiError?.status ?? 503, apiError?.body ?? null);
     }
@@ -497,7 +499,8 @@ async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<v
   if (consume) {
     // A 200 can replay a recorded refusal; only "redeemed" is a successful spend.
     const settled = result && typeof result === "object" ? (result as { code?: unknown }).code : undefined;
-    if (typeof settled !== "string" || settled === "" || UNCONFIRMED_COUPON_CODES.has(settled)) throw unconfirmed();
+    if (typeof settled !== "string" || settled.trim() === ""
+      || UNCONFIRMED_COUPON_CODES.has(settled) || LEDGER_REFUSAL_CODES.has(settled)) throw unconfirmed();
     if (settled !== "redeemed") {
       printData(result, wantsJson);
       throw new RuntimeApiError(`Coupon was not redeemed (${settled}).`, 409, result);
