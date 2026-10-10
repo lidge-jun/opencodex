@@ -35,6 +35,11 @@ caller credential as the Pool selection. An exact account binding remains bound 
 
 ## Config injection
 
+OpenCodex serializes its Codex configuration writes. On Windows, a file temporarily held open
+by another process gets a short, bounded retry. If access stays busy, retry the operation shortly;
+OpenCodex preserves the existing lock evidence and does not use that access failure to take over
+another writer's lock.
+
 `ocx init`, `ocx start`, and `ocx sync` call the injector. On the default loopback bind, it keeps
 Codex's built-in `openai` provider id and points that provider at opencodex:
 

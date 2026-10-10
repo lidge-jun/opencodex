@@ -361,14 +361,16 @@ export async function runNativeChatAttempt(
   // key rotation so recovery cannot replace the ceiling along with the active credential.
   const requestTransientPolicy = transientRetryPolicyFor(activeProvider);
   let transientSendsUsed = 0;
-  // A combo child also answers to the request's shared base allowance, at the cap its own ladder
-  // uses. Its first send is exempt: the combo reserved it before dispatching this target.
+  // A Combo child's initial send is prepaid, not exempt from the shared ceiling. Only its
+  // owning permit exposes that one booking in addition to the still-unspent allowance, and only
+  // until this child's first physical send has started and settled the booking.
   const sharedSendCap = requestTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
   let physicalSends = 0;
+  let initialSendStarted = false;
   const remainingSharedSends = (): number => {
     if (!sendBudget) return Number.POSITIVE_INFINITY;
     const remaining = sendBudget.remainingBaseSends(sharedSendCap);
-    return physicalSends === 0 ? Math.max(1, remaining) : remaining;
+    return Math.min(sharedSendCap, remaining + (!initialSendStarted && execution.comboDispatchPermit ? 1 : 0));
   };
   const remainingTransientSends = (): number => Math.min(
     requestTransientPolicy
@@ -404,6 +406,21 @@ export async function runNativeChatAttempt(
     claimAmbiguousResend,
   );
 
+  // Non-enforced accounting for one physical send. Enforced spend is owned by the reporter.
+  const comboReceipt = Boolean(sendBudget && execution.comboDispatchPermit);
+  const settleNonEnforcedSend = (url: string): void => {
+    if (sendBudget) {
+      // Backstop for sends the helper cannot see coming (a reset replay). The first
+      // report settles the combo's booking; each later one is charged and booked.
+      if (physicalSends > 0 && sendBudget.remainingBaseSends(sharedSendCap) <= 0) {
+        throw new SendBudgetExhaustedError(safeHostLabel(url));
+      }
+      physicalSends += 1;
+      reportDispatchSends(sendBudget, 1, execution.comboDispatchPermit);
+      initialSendStarted = true;
+    } else if (!spendTracker?.charge()) throw new NativeChatSpendRefusal();
+  };
+
   const send = async (
     request: AdapterRequest,
     recovery?: "rate-limit-429" | "key-429" | UpstreamSendRecovery,
@@ -433,6 +450,9 @@ export async function runNativeChatAttempt(
           providerFetch(activeProvider, undefined, {
             providerName: route.providerName,
             modelId: route.modelId,
+            onPhysicalDispatch: comboReceipt
+              ? () => { if (!physicalBudget.spendEnforced) settleNonEnforcedSend(request.url); }
+              : undefined,
             dispatchOverride: async (_input, init, execute) => {
               if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
                 const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
@@ -466,15 +486,11 @@ export async function runNativeChatAttempt(
                   if ((logCtx.spendTracker as { refusals?: number } | undefined)?.refusals) throw new NativeChatSpendRefusal();
                   throw new SendBudgetExhaustedError();
                 }
-                if (!physicalBudget.spendEnforced && sendBudget) {
-                  // Backstop for sends the helper cannot see coming (a reset replay). The first
-                  // report settles the combo's booking; each later one is charged and booked.
-                  if (physicalSends > 0 && sendBudget.remainingBaseSends(sharedSendCap) <= 0) {
-                    throw new SendBudgetExhaustedError(safeHostLabel(request.url));
-                  }
-                  physicalSends += 1;
-                  reportDispatchSends(sendBudget, 1, execution.comboDispatchPermit);
-                } else if (!physicalBudget.spendEnforced && !spendTracker?.charge()) throw new NativeChatSpendRefusal();
+                // Enforced spend started this send at `beforeSend`. A Combo child's non-enforced
+                // send is booked by the physical-dispatch receipt instead, so a local refusal
+                // before the wire refunds the booking rather than charging it.
+                if (physicalBudget.spendEnforced) initialSendStarted = true;
+                else if (!comboReceipt) settleNonEnforcedSend(request.url);
                 noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
                 // A reselected provider transport is still a physical send: the connection policy
                 // and manual-redirect ownership wrap the selected implementation (#4992).

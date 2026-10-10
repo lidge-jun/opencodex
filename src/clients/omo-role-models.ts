@@ -34,6 +34,15 @@ type JsonObject = Record<string, unknown>;
 
 const CODEX_SECTION = "[codex]";
 
+/** The reasoning levels LazyCodex accepts for a role; it names Codex's `none` `off`. */
+const LAZYCODEX_REASONING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/** The `reasoning` value LazyCodex reads for a Codex effort, or null when it has no such level. */
+export function omoReasoningFor(effort: string): string | null {
+  const level = effort === "none" ? "off" : effort;
+  return LAZYCODEX_REASONING.has(level) ? level : null;
+}
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -108,7 +117,16 @@ function serialize(text: string, doc: JsonObject): string {
   return text.startsWith("\ufeff") ? `\ufeff${out}` : out;
 }
 
-export function writeOmoRoleModel(role: string, model: string, path: string = omoJsoncPath()): OmoRoleModelWriteStatus {
+/**
+ * `reasoning` left undefined keeps the entry's level; null removes it, so a level LazyCodex cannot
+ * express does not leave a stale one behind for its next install to apply.
+ */
+export function writeOmoRoleModel(
+  role: string,
+  model: string,
+  path: string = omoJsoncPath(),
+  reasoning?: string | null,
+): OmoRoleModelWriteStatus {
   const loaded = load(path);
   if (loaded.kind !== "document") return loaded.kind === "comments" ? "skipped_comments" : loaded.kind;
   const { doc, text } = loaded;
@@ -119,8 +137,11 @@ export function writeOmoRoleModel(role: string, model: string, path: string = om
   if (!isObject(agents)) return "invalid";
   const entry = agents[role] === undefined ? {} : agents[role];
   if (!isObject(entry)) return "invalid";
-  if (entry.model === model) return "unchanged";
-  agents[role] = { ...entry, model };
+  const next: JsonObject = { ...entry, model };
+  if (reasoning === null) delete next.reasoning;
+  else if (reasoning !== undefined) next.reasoning = reasoning;
+  if (entry.model === model && entry.reasoning === next.reasoning) return "unchanged";
+  agents[role] = next;
   codex.agents = agents;
   doc[CODEX_SECTION] = codex;
   assertIntegrationWriteOwnership(path);

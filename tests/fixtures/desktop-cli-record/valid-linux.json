@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "ownerId": "12345678-1234-4234-8234-123456789abc",
+  "installId": "fixture-install",
+  "generation": 1,
+  "enabled": true,
+  "bundle": {
+    "platform": "linux",
+    "kind": "linux-deb",
+    "appExecutable": "/usr/bin/opencodex-desktop",
+    "cliExecutable": "/usr/bin/ocx",
+    "version": "2.82.0"
+  },
+  "posix": null,
+  "windows": null,
+  "pending": null
+}

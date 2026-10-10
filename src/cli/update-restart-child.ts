@@ -16,7 +16,8 @@ function parseMarker(raw: string): UpdateRestartChildMarker {
   if (!value || !Number.isSafeInteger(value.deadlineAt) || !Number.isInteger(value.port)
     || typeof value.hostname !== "string" || value.port < 1 || value.port > 65535 || typeof value.version !== "string"
     || value.version === "0.0.0" || !parseStrictSemver(value.version) || !value.home
-    || !Number.isSafeInteger(value.home.revision)) throw new Error("update_restart_child_marker_invalid");
+    || !Number.isSafeInteger(value.home.revision) || value.home.serviceRecord?.schema !== 1
+    || typeof value.home.serviceRecord.digest !== "string" || !/^[a-f0-9]{64}$/.test(value.home.serviceRecord.digest)) throw new Error("update_restart_child_marker_invalid");
   for (const directory of [value.home.config, value.home.codex]) {
     // Windows reports 64-bit NTFS file ids (MFT sequence in the high 16 bits) as doubles above
     // 2^53. Parent and child read them through the same stat API, so any finite integer is a
@@ -56,7 +57,7 @@ export function admitUpdateRestartChild(argv: string[], io: UpdateRestartChildIo
     if (now() >= marker.deadlineAt) throw new Error("update_restart_deadline_expired");
     const bindHost = (host: string) => !host.trim() || /^localhost\.?$/i.test(host.trim()) ? "127.0.0.1" : host.trim();
     if (port !== marker.port || bindHost(hostname) !== bindHost(marker.hostname) || (io.version ?? packageVersion)() !== marker.version) throw new Error("update_restart_child_identity_changed");
-    (io.checkHome ?? assertUpdateRestartHome)(marker.home);
+    (io.checkHome ?? (home => assertUpdateRestartHome(home, marker.deadlineAt)))(marker.home);
     (io.checkState ?? (expected => {
       assertUpdateRestartConfiguration(expected.hostname);
       const current = readRuntimePort();
@@ -65,6 +66,7 @@ export function admitUpdateRestartChild(argv: string[], io: UpdateRestartChildIo
         throw new Error("update_restart_competing_runtime");
       }
     }))(marker);
+    if (now() >= marker.deadlineAt) throw new Error("update_restart_deadline_expired");
   };
   check();
   const lease = (io.acquire ?? (waitMs => acquireOwnershipMutationLease(serviceStatePaths(), { waitMs })))(Math.min(2000, marker.deadlineAt - now()));

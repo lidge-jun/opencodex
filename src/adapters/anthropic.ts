@@ -1367,7 +1367,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
               }
               case "message_stop": {
                 yield* emitDone();
-                break;
+                return;
               }
               case "ping": {
                 // A data-only `{"type":"ping"}` record carries no SSE `event:` line, so the

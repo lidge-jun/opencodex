@@ -1,3 +1,4 @@
+import { setCodexWsReuseAcrossTurns } from "./codex-ws-reuse-setting";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -26,6 +27,7 @@ import { refreshConfigDerivedRegistries } from "./derived-registries";
 import { type OcxClaudeCodeConfig, type OcxConfig } from "../types";
 import {
   agentTaskRecoverySchema,
+  asideProfileSyncSchema,
   catalogAutoRefreshSchema,
   clientConnectionSchema,
   isUsableApiKeySecret,
@@ -124,6 +126,7 @@ export function warnDegradedCompactionRouting(rawParsed: unknown, validated: Ocx
  * the ratchet only ever moves down: a per-block call there costs a line the file does not have.
  */
 export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
+  setCodexWsReuseAcrossTurns(validated.codexWsReuseAcrossTurns === true);
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, validated);
   if (retentionWarning) console.warn(retentionWarning);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
@@ -133,6 +136,11 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);
   warnDegradedMemoryModels(rawParsed, validated);
+  // The schema replaces a malformed policy with { allProfiles: false }, which silently turns every Aside profile off (#6757).
+  const asidePolicy = rawParsed && typeof rawParsed === "object" ? (rawParsed as Record<string, unknown>).asideProfileSync : undefined;
+  if (asidePolicy !== undefined && !asideProfileSyncSchema.safeParse(asidePolicy).success) {
+    console.warn("⚠️  config.json asideProfileSync is invalid — Aside profile sync falls back to all profiles off; fix the block or inspect `ocx integration client status --client aside`");
+  }
 }
 
 export function degradedReasoningRetentionWarning(rawParsed: unknown, validated: OcxConfig): string | null {

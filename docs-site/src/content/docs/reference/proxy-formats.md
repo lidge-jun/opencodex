@@ -372,8 +372,23 @@ named in `Access-Control-Expose-Headers`, which is what lets browser JavaScript 
 cross-origin — a custom `x-` header is otherwise invisible to `response.headers.get()` even when
 it is on the wire.
 
-Responses rejected at authentication or origin admission never reach this wrapper and carry no id,
-so a missing header means the request was refused before it was logged.
+Responses rejected at authentication or origin admission never reach this wrapper and carry no id.
+
+Logged `POST /v1/messages` replies carry the same OCX request-history id in **both**
+`request-id` and `x-opencodex-request-id`. This applies to native and translated replies,
+streaming and JSON, and logged refusals. Claude Code can use its persisted `requestId`
+metadata from `request-id` to join future transcripts to that OCX history row.
+
+On native delivered replies and upstream HTTP errors, an opaque Anthropic upstream
+`request-id` matching `req_[A-Za-z0-9_-]{1,128}` is preserved separately as
+`x-opencodex-upstream-request-id`. It is a provider diagnostic id, not an OCX ledger key.
+Missing or nonconforming upstream ids, and translated adapter ids, are omitted. These
+response headers are readable through CORS alongside existing exposed headers.
+
+No OCX id is added to authentication, origin, drain or active-turn refusals that have no
+request-log owner, or to count_tokens. Streaming headers identify the turn's eventual
+history row; they do not attest that final usage has already been saved. Old transcripts
+without a shared key remain unlinked; timestamp or token similarity is not an exact join.
 
 ### WebSocket upgrade on the same path
 

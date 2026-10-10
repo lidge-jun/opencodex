@@ -3,6 +3,9 @@ import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-sta
 import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { prepareCodexHome } from "../../codex/prepared-home";
+import { codexHomeIsAbsent } from "../../codex/codex-home-owner";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../config/provider-validation";
@@ -400,6 +403,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       getAgentsEnabled, getAgentsMaxDepth, getSubagentDeveloperInstructions,
       getMultiAgentModeHintText, probeCodexSupportsModeHint, setAgentsEnabled, setAgentsMaxDepth,
       setSubagentDeveloperInstructions, setMultiAgentModeHintText, MODE_HINT_UNSUPPORTED_ERROR,
+      activeCodexConfigPath,
     } = await import("../../codex/features");
     // Probe the capability before any combined-request mutation. The scalar writer
     // repeats this check, but doing it here prevents an earlier flag/mode/agents
@@ -419,17 +423,37 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const requestedFlag = wantsFlag
       ? body.enabled as boolean
       : modeFlag ?? (wantsKeepNative && hybridPinActive ? false : undefined);
+    /*
+     * One held section for every config.toml write this PUT makes — the
+     * feature transition plus each scalar edit. Individually-locked writers
+     * would let a foreign write land between them and leave a half-applied
+     * combination on disk; the lock is released before the post-write readers
+     * and catalog converge below.
+     */
+    const needsCodexConfigWrites = requestedFlag !== undefined || wantsThreads
+      || wantsAgentsEnabled || wantsMaxDepth || wantsSubagentInstructions || wantsModeHintText;
+    if (needsCodexConfigWrites && codexHomeIsAbsent(dirname(activeCodexConfigPath()))) {
+      return jsonResponse({ error: `config.toml not readable at ${activeCodexConfigPath()}` }, 502);
+    }
+    const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage } = await import("../../codex/config-write-lock");
+    const configWriteLock = needsCodexConfigWrites ? await acquireConfigWriteLock(activeCodexConfigPath()) : null;
+    if (configWriteLock !== null && !configWriteLock.ok) {
+      return jsonResponse({ error: configWriteLockFailureMessage(configWriteLock), retryable: configWriteLock.error === "locked" }, 502);
+    }
+    const heldWriteLock = configWriteLock !== null && configWriteLock.ok ? configWriteLock.handle : undefined;
+    try {
     if (requestedFlag !== undefined || wantsThreads) {
     const targetFlag = requestedFlag ?? isMultiAgentV2Enabled();
     let toggle = deps.toggleCodexMultiAgentV2;
     if (!toggle) {
       const { runCodexFeaturesCommand } = await import("../../cli/v2");
-      toggle = (enabled: boolean) => runCodexFeaturesCommand(enabled ? "enable" : "disable");
+      toggle = (enabled, env, validate) => runCodexFeaturesCommand(enabled ? "enable" : "disable", "multi_agent_v2", env, validate);
       }
       const result = transitionMultiAgentV2(targetFlag, toggle, {
         ...(wantsThreads ? { threadLimit: body.maxConcurrentThreadsPerSession as number } : {}),
+        heldConfigWriteLock: heldWriteLock,
       });
-      if (!result.ok) return jsonResponse({ error: `multi_agent_v2 transition failed: ${result.error}` }, 502);
+      if (!result.ok) return jsonResponse({ error: `multi_agent_v2 transition failed: ${result.error}`, ...(result.retryable === false ? { retryable: false } : {}) }, 502);
       if (result.changed && result.threadLimit !== null) warnings.push(`Thread limit ${result.threadLimit} preserved for ${targetFlag ? "v2" : "v1"}.`);
     }
     if (wantsMode) {
@@ -465,10 +489,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // asserts this route file contains no direct write primitive, and matches on the
     // symbol name even inside a comment.
     const scalarWrites: Array<{ field: string; run: () => { ok: true; changed: boolean } | { ok: false; error: string } }> = [];
-    if (wantsAgentsEnabled) scalarWrites.push({ field: "agentsEnabled", run: () => setAgentsEnabled(body.agentsEnabled as boolean | null) });
-    if (wantsMaxDepth) scalarWrites.push({ field: "agentsMaxDepth", run: () => setAgentsMaxDepth(body.agentsMaxDepth as number | null) });
-    if (wantsSubagentInstructions) scalarWrites.push({ field: "subagentDeveloperInstructions", run: () => setSubagentDeveloperInstructions(body.subagentDeveloperInstructions as string | null) });
-    if (wantsModeHintText) scalarWrites.push({ field: "multiAgentModeHintText", run: () => setMultiAgentModeHintText(body.multiAgentModeHintText as string | null) });
+    if (wantsAgentsEnabled) scalarWrites.push({ field: "agentsEnabled", run: () => setAgentsEnabled(body.agentsEnabled as boolean | null, undefined, heldWriteLock) });
+    if (wantsMaxDepth) scalarWrites.push({ field: "agentsMaxDepth", run: () => setAgentsMaxDepth(body.agentsMaxDepth as number | null, undefined, heldWriteLock) });
+    if (wantsSubagentInstructions) scalarWrites.push({ field: "subagentDeveloperInstructions", run: () => setSubagentDeveloperInstructions(body.subagentDeveloperInstructions as string | null, undefined, heldWriteLock) });
+    if (wantsModeHintText) scalarWrites.push({ field: "multiAgentModeHintText", run: () => setMultiAgentModeHintText(body.multiAgentModeHintText as string | null, undefined, heldWriteLock) });
     const landed: string[] = [];
     for (const write of scalarWrites) {
       try {
@@ -481,6 +505,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const message = err instanceof Error ? err.message : String(err);
         return jsonResponse({ error: `writing ${write.field} failed: ${message}${landed.length > 0 ? ` (already applied: ${landed.join(", ")})` : ""}` }, 502);
       }
+    }
+    } finally {
+      if (heldWriteLock) releaseConfigWriteLock(heldWriteLock);
     }
     // Derived from fresh post-write readers (readConfigText is uncached): upstream
     // lets an enabled multi_agent_v2 feature override [agents].enabled = false, so
@@ -533,35 +560,59 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     const body = parsedBody as { enabled?: unknown };
     if (typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
-    const { isDefaultModeRequestUserInputEnabled, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY } = await import("../../codex/features");
+    const { isDefaultModeRequestUserInputEnabled, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, activeCodexConfigPath } = await import("../../codex/features");
     const before = isDefaultModeRequestUserInputEnabled();
     let toggle = deps.toggleDefaultModeRequestUserInput;
     if (!toggle) {
-      const { runCodexFeaturesCommand } = await import("../../cli/v2");
-      toggle = (enabled: boolean) => runCodexFeaturesCommand(enabled ? "enable" : "disable", DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY);
+      try {
+        const { codexFeaturesInvocation, runCodexFeaturesCommand } = await import("../../cli/v2");
+        const action = body.enabled ? "enable" : "disable";
+        const invocation = codexFeaturesInvocation(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, process.platform, { requireAvailable: true });
+        toggle = (_enabled, env, validate) => runCodexFeaturesCommand(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, env, validate, invocation);
+      } catch (error) {
+        return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${error instanceof Error ? error.message : String(error)}` }, 502);
+      }
     }
-    let toggleError: string | null = null;
-    try {
-      toggle(body.enabled);
-    } catch (error) {
-      const err = error as { stderr?: unknown; message?: string };
-      const raw = err.stderr;
-      const stderrText = typeof raw === "string"
-        ? raw.trim()
-        : raw instanceof Uint8Array ? new TextDecoder().decode(raw).trim() : "";
-      toggleError = stderrText || (err.message ?? String(error));
+    // The `codex features` subprocess rewrites config.toml itself — run it
+    // under the shared write lock so it cannot interleave with an opencodex
+    // scalar edit or injection mid-write on either side.
+    const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage, runConfigWriteChild, ConfigWriteDestinationChanged } = await import("../../codex/config-write-lock");
+    const configPath = activeCodexConfigPath();
+    // Preserve native home creation only after executable resolution succeeds.
+    prepareCodexHome(dirname(configPath));
+    {
+      const configLock = await acquireConfigWriteLock(configPath);
+      if (!configLock.ok) {
+        return jsonResponse({ error: configWriteLockFailureMessage(configLock), retryable: configLock.error === "locked" }, 502);
+      }
+      let toggleError: string | null = null;
+      let destinationChanged = false;
+      try {
+        runConfigWriteChild(configPath, configLock.handle, (env, validate) => toggle!(body.enabled as boolean, env, validate));
+      } catch (error) {
+        destinationChanged = error instanceof ConfigWriteDestinationChanged;
+        const err = error as { stderr?: unknown; message?: string };
+        const raw = err.stderr;
+        const stderrText = typeof raw === "string"
+          ? raw.trim()
+          : raw instanceof Uint8Array ? new TextDecoder().decode(raw).trim() : "";
+        toggleError = stderrText || (err.message ?? String(error));
+      } finally {
+        releaseConfigWriteLock(configLock.handle);
+      }
+      if (destinationChanged) return jsonResponse({ error: toggleError, retryable: false }, 502);
+      const enabled = isDefaultModeRequestUserInputEnabled();
+      if (toggleError !== null || enabled !== body.enabled) {
+        const reason = toggleError
+          ?? `postcondition failed - the installed Codex build may not know the ${DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY} flag yet`;
+        return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${reason}` }, 502);
+      }
+      const warnings: string[] = [];
+      if (enabled !== before) {
+        warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the change.");
+      }
+      return jsonResponse({ ok: true, enabled, changed: enabled !== before, warnings });
     }
-    const enabled = isDefaultModeRequestUserInputEnabled();
-    if (toggleError !== null || enabled !== body.enabled) {
-      const reason = toggleError
-        ?? `postcondition failed - the installed Codex build may not know the ${DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY} flag yet`;
-      return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${reason}` }, 502);
-    }
-    const warnings: string[] = [];
-    if (enabled !== before) {
-      warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the change.");
-    }
-    return jsonResponse({ ok: true, enabled, changed: enabled !== before, warnings });
   }
 
   // Subagent prompt injection model: single native or routed model whose info is
@@ -1421,6 +1472,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       alwaysEnableEffort: config.claudeCode?.alwaysEnableEffort === true,
       autoContext: config.claudeCode?.autoContext !== false,
       autoCompactWindow: config.claudeCode?.autoCompactWindow ?? null,
+      contextAccounting: config.claudeCode?.contextAccounting === "200k" ? "200k" : "1m",
       blockedSkills: config.claudeCode?.blockedSkills ?? null,
       injectAgents: config.claudeCode?.injectAgents !== false,
       sidecarPools: {
@@ -1457,7 +1509,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       return prototype === Object.prototype || prototype === null;
     };
     if (!isPlainObject(parsedBody)) return jsonResponse({ error: "body must be an object" }, 400);
-    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; contextAccounting?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
     if (body.cliFirstParty !== undefined && typeof body.cliFirstParty !== "boolean")
       return jsonResponse({ error: "cliFirstParty must be a boolean" }, 400);
     if (body.cliFirstParty !== undefined && Object.keys(body).length !== 1)
@@ -1727,6 +1779,15 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (body.autoContext) delete next.autoContext;
       else next.autoContext = false;
     }
+    if (body.contextAccounting !== undefined) {
+      // Sparse like autoContext (devlog/_plan/261009_claude_1m_default/030): "1m" is the default
+      // and drops the key; "200k" is the only stored value.
+      if (body.contextAccounting !== "1m" && body.contextAccounting !== "200k") {
+        return jsonResponse({ error: "contextAccounting must be \"1m\" or \"200k\"" }, 400);
+      }
+      if (body.contextAccounting === "200k") next.contextAccounting = "200k";
+      else delete next.contextAccounting;
+    }
     if (body.injectAgents !== undefined) {
       // Default-on boolean (devlog 260712 070): true = drop the key, false = store.
       if (typeof body.injectAgents !== "boolean") return jsonResponse({ error: "injectAgents must be a boolean" }, 400);
@@ -1841,7 +1902,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // levers feed the same injection, so a changed or cleared slot must not linger in
     // launchd until the next restart.
     const systemEnvInputs = ["systemEnv", "authMode", "model", "smallFastModel", "tierModels",
-      "maxContextTokens", "alwaysEnableEffort", "autoContext", "autoCompactWindow"] as const;
+      "maxContextTokens", "alwaysEnableEffort", "autoContext", "autoCompactWindow", "contextAccounting"] as const;
     if (systemEnvInputs.some(field => body[field] !== undefined)) {
       try {
         await applySystemEnvToggle(config, config.port);

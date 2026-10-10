@@ -19,6 +19,7 @@ import {
   type JournalRecord,
 } from "../../src/codex/prompt-journal";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { tryAcquire, release } from "../../src/codex/prompt-lock";
 import { OCX_SECTION_MARKER } from "../../src/codex/injected-marker";
 
 // Prompt layers deliberately keep the BARE ownership marker: 'ocx restore' is not their undo,
@@ -256,12 +257,11 @@ describe("transaction", () => {
   test("a held lock refuses a second writer", () => {
     const paths = fixture("model = \"x\"\n");
     const snap = readPromptLayers(paths);
-    writeFileSync(
-      join(paths.root, "opencodex-prompt.lock"),
-      JSON.stringify({ token: "other", pid: process.pid, acquiredAt: Date.now() }),
-      "utf8",
-    );
-    expect(setToggle("apps", false, snap.revision, paths)).toEqual({ ok: false, error: "locked" });
+    const acquired = tryAcquire(join(paths.root, "opencodex-prompt.lock"));
+    expect(acquired.ok).toBe(true);
+    if (!acquired.ok) throw Error("setup: prompt lock acquisition failed");
+    try { expect(setToggle("apps", false, snap.revision, paths)).toEqual({ ok: false, error: "locked" }); }
+    finally { release(acquired.handle); }
   });
 
   test("the revision changes after every real write", () => {

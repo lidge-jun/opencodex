@@ -2,7 +2,7 @@ import { projectAntigravitySelectedModels } from "../providers/antigravity-effor
 import { join } from "node:path";
 import { sameCatalogHealPath } from "./catalog/heal-observation";
 
-import { getConfigDir, saveConfigPreservingClaudeCode, websocketsEnabled, withExpectedConfigGenerationSync } from "../config";
+import { getConfigDir, saveConfigPreservingClaudeCode, ultraFastTierEnabled, websocketsEnabled, withExpectedConfigGenerationSync } from "../config";
 import { reconcileSuccessfulModelDiscoveries } from "../providers/new-model-policy";
 import { pendingModelSelectionProviders } from "../providers/initial-model-selection";
 import { COMBO_NAMESPACE } from "../combos";
@@ -370,6 +370,7 @@ function prepareCatalog(
     )),
   );
   const mergedModels = mergeCatalogEntriesFromObservedState({
+    ultraFastTier: ultraFastTierEnabled(config),
     modelPickerOrder,
     accountSelectors,
     catalogModels,

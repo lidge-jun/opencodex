@@ -32,6 +32,17 @@ export interface ClaudeManualEnvState {
   maxContextTokens: number | null;
   autoContext: boolean;
   autoCompactWindow: number | null;
+  /** Absent on callers built before the field; reads as the "1m" default. */
+  contextAccounting?: "1m" | "200k";
+  /**
+   * Accounting that produced `effectiveModelEnv`. Absent means it matches
+   * `contextAccounting`, which is what a caller with only one snapshot has.
+   */
+  servedContextAccounting?: "1m" | "200k";
+  /** Configured slots, so a 200k draft can drop automatic marks without dropping an explicit `[1m]`. */
+  model?: string;
+  smallFastModel?: string;
+  tierModels?: { opus?: string; sonnet?: string; haiku?: string; fable?: string };
   effectiveModelEnv: Record<string, string>;
   port: number;
 }
@@ -44,15 +55,72 @@ export const MODEL_ENV_NAMES = [
   "ANTHROPIC_DEFAULT_FABLE_MODEL",
 ] as const;
 
+const ONE_M_MARKER = /\[1m\]$/i;
+
+/** Unset tier slots the server fills only while automatic 1M marking is on. */
+const NATIVE_TIER_FILL: Partial<Record<(typeof MODEL_ENV_NAMES)[number], string>> = {
+  ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5",
+  ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5",
+  ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1",
+};
+
+function stripOneMillionMarker(value: string): string {
+  return value.replace(ONE_M_MARKER, "");
+}
+
+function configuredSlot(state: ClaudeManualEnvState, name: (typeof MODEL_ENV_NAMES)[number]): string {
+  const haiku = state.tierModels?.haiku?.trim() || state.smallFastModel?.trim() || "";
+  const raw = name === "ANTHROPIC_MODEL" ? state.model
+    : name === "ANTHROPIC_DEFAULT_OPUS_MODEL" ? state.tierModels?.opus
+    : name === "ANTHROPIC_DEFAULT_SONNET_MODEL" ? state.tierModels?.sonnet
+    : name === "ANTHROPIC_DEFAULT_HAIKU_MODEL" ? haiku
+    : name === "ANTHROPIC_DEFAULT_FABLE_MODEL" ? state.tierModels?.fable
+    : "";
+  return (raw ?? "").trim();
+}
+
+/**
+ * Model exports for the pasted block. A 200k draft over a 1M server snapshot must not keep
+ * automatic `[1m]` marks or native tier fills: the runtime omits both, and an explicit `[1m]`
+ * already on the configured selector stays. A 1M draft over a 200k snapshot cannot re-mark
+ * without the window map, so it keeps that snapshot rather than pairing a compact window
+ * with unmarked ids.
+ */
+export function manualModelEnv(state: ClaudeManualEnvState): Record<string, string> {
+  const accounting = state.contextAccounting ?? "1m";
+  const served = state.servedContextAccounting ?? accounting;
+  if (accounting !== "200k" || served === "200k") return state.effectiveModelEnv;
+  const slotsKnown = state.model !== undefined || state.smallFastModel !== undefined || state.tierModels !== undefined;
+  const out: Record<string, string> = {};
+  for (const name of MODEL_ENV_NAMES) {
+    const server = state.effectiveModelEnv[name];
+    if (!server) continue;
+    if (!slotsKnown) {
+      if (NATIVE_TIER_FILL[name] === stripOneMillionMarker(server)) continue;
+      out[name] = stripOneMillionMarker(server);
+      continue;
+    }
+    const slot = configuredSlot(state, name);
+    if (!slot) continue;
+    out[name] = ONE_M_MARKER.test(slot) ? server : stripOneMillionMarker(server);
+  }
+  return out;
+}
+
 export function buildManualEnv(state: ClaudeManualEnvState): string {
   const baseUrl = `http://127.0.0.1:${state.port}`;
   // "auto" defers to the backend's resolution; an older proxy that does not send one
   // degrades to the historical subscription default rather than guessing proxy.
   const marker = state.authMode === "auto" ? (state.markerMode ?? "subscription") : state.authMode;
-  const autoCompactActive = state.autoContext && state.maxContextTokens === null;
+  const accounting = state.contextAccounting ?? "1m";
+  const served = state.servedContextAccounting ?? accounting;
+  // Compact window and model ids come from one accounting snapshot. A 1M draft whose
+  // env was built under 200k waits for the next read rather than adding the window alone.
+  const autoCompactActive = accounting !== "200k" && served !== "200k" && state.autoContext && state.maxContextTokens === null;
+  const modelEnv = manualModelEnv(state);
   const modelEnvExports = MODEL_ENV_NAMES
-    .filter(name => state.effectiveModelEnv[name])
-    .map(name => `export ${name}=${state.effectiveModelEnv[name]}`);
+    .filter(name => modelEnv[name])
+    .map(name => `export ${name}=${modelEnv[name]}`);
 
   return [
     `export ANTHROPIC_BASE_URL=${baseUrl}`,

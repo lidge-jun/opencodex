@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { handleConfigRoutes } from "../../src/server/management/config-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
+import { warnDegradedTopLevelOptIns } from "../../src/config/load-degrade";
+import { codexWsReuseAcrossTurnsEnabled, setCodexWsReuseAcrossTurns } from "../../src/config/codex-ws-reuse-setting";
 function harness(failSave = false) {
   const config = getDefaultConfig();
   let saves = 0;
@@ -99,3 +101,25 @@ test("reasoning retention failed initial save restores key omission", async () =
   await expect(h.call({ reasoningRetention: { maxTokens: 1000 } })).rejects.toThrow("fixture-save-failed");
   expect(Object.hasOwn(h.config, "reasoningRetention")).toBe(false);
 });
+
+for (const enabled of [false, true]) {
+  test(`malformed reasoning retention warns while WebSocket reuse stays ${enabled}`, () => {
+    const priorReuse = codexWsReuseAcrossTurnsEnabled();
+    const priorWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (value: unknown) => { warnings.push(String(value)); };
+    setCodexWsReuseAcrossTurns(!enabled);
+    try {
+      const validated = { ...getDefaultConfig(), codexWsReuseAcrossTurns: enabled };
+      const raw = { ...validated, reasoningRetention: { maxTokens: "private-fixture-value" } };
+      warnDegradedTopLevelOptIns(raw, validated);
+      expect(codexWsReuseAcrossTurnsEnabled()).toBe(enabled);
+      expect(warnings.filter(value => value.includes("reasoningRetention"))).toHaveLength(1);
+      expect(warnings.join("\n")).not.toContain("private-fixture-value");
+      expect(validated.reasoningRetention).toBeUndefined();
+    } finally {
+      console.warn = priorWarn;
+      setCodexWsReuseAcrossTurns(priorReuse);
+    }
+  });
+}

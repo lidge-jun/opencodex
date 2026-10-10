@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { getConfigDir } from "../config";
+import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
+import { assertSelectedRuntimeWritable, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
 import { randomUUID } from "node:crypto";
 import { defaultWinswEntry, installWinswService } from "../lib/winsw";
 import { resolveWindowsTaskDiagnosticUserId, diagnoseService } from "./diagnostics";
@@ -14,6 +18,7 @@ import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { taskXmlSection, taskXmlWithoutCommentsAndCdata, taskXmlElementCount, taskXmlOptionalValueEquals, windowsTaskRegistrationOwnedByAttempt, windowsTaskHasSessionRecoveryTriggers, windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
 import type { ExpectedWindowsTaskUserId } from "./windows-taskxml";
 import { win32 } from "node:path";
+import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionInspector, type SupervisionLatch } from "./desktop-command-guard";
 
 /**
  * The two CLI verbs `repairService` serves. They differ on ONE platform and ONE case: a
@@ -22,16 +27,18 @@ import { win32 } from "node:path";
  */
 export type ServiceRepairVerb = "repair" | "restart";
 
-export interface RepairServiceDeps {
+export interface RepairServiceDeps extends RuntimePreflightDeps {
+  inspectSupervision?: SupervisionInspector;
+  supervisionLatch?: SupervisionLatch;
   diagnose?: () => ServiceDiagnostic;
   assertEnv?: () => void;
   assertAuth?: () => void;
-  writeSchedulerAssets?: () => void;
+  writeSchedulerAssets?: (runtime: DurableBunRuntime) => void;
   stopScheduler?: () => void;
   startScheduler?: () => void;
-  writeSchedulerState?: () => void;
-  writeNativeState?: () => void;
-  repairNative?: () => void | Promise<void>;
+  writeSchedulerState?: (runtime: DurableBunRuntime) => void;
+  writeNativeState?: (runtime: DurableBunRuntime) => void;
+  repairNative?: (runtime: DurableBunRuntime) => void | Promise<void>;
   repairLaunchd?: () => LaunchdInstallOutcome | void;
   repairSystemd?: () => void;
   /** Restarts a launchd job the install path deliberately left alone. `restart` only. */
@@ -148,6 +155,8 @@ export async function assertSchedulerRegistrationBeforeStart(
  * macOS/Linux: re-run the user-level install/reload path.
  */
 export async function repairService(deps: RepairServiceDeps = {}): Promise<void> {
+  const latch = deps.supervisionLatch ?? createSupervisionLatch();
+  assertNoDesktopSupervision(deps.inspectSupervision, latch);
   const diagnose = deps.diagnose ?? diagnoseService;
   const platform = deps.platform ?? process.platform;
   const diag = diagnose();
@@ -176,14 +185,18 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
 
   (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
   (deps.assertAuth ?? assertServiceAuthEnvironment)();
+  const runtime = Object.freeze({ ...(deps.selectRuntime ?? durableBunRuntime)() });
+  const configDir = (deps.configDir ?? getConfigDir)();
+  (deps.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { platform, rootWasAbsent: !existsSync(configDir) });
 
   const temporaryLauncher = (deps.launcherPathDiagnostic ?? (() => serviceLauncherPathDiagnostic(undefined, platform, true)))();
   if (temporaryLauncher) console.warn(`⚠️ ${temporaryLauncher}`);
 
   if (platform === "win32") {
     if (diag.backend === "native") {
-      await (deps.repairNative ?? (() => installWinswService(defaultWinswEntry(serviceSourceDir))))();
-      (deps.writeNativeState ?? (() => writeServiceInstallState("native")))();
+      await (deps.repairNative ?? ((selected: DurableBunRuntime) => installWinswService(defaultWinswEntry(serviceSourceDir, selected))))(runtime);
+      assertNoDesktopSupervision(deps.inspectSupervision, latch);
+      (deps.writeNativeState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("native", undefined, {}, selected)))(runtime);
       return;
     }
     const readSchedulerXml = deps.readSchedulerXml ?? statusWindowsXml;
@@ -243,7 +256,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       );
     }
     try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
-    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)();
+    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
     // Rewriting the on-disk assets does not touch the definition Task Scheduler holds, so a
     // task registered by an older version keeps its old triggers forever: status reports it
     // stale, tells the user to run repair, and repair changes nothing it complains about.
@@ -311,6 +324,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
             }
             if (probe.status === "absent") {
               try {
+                assertNoDesktopSupervision(deps.inspectSupervision, latch);
                 await (deps.restoreSchedulerIfAbsent ?? restoreWindowsSchedulerTaskIfAbsent)(registeredXml);
                 restartExpectedXml = registeredXml;
               } catch (error) {
@@ -333,6 +347,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
               "The Task Scheduler registration changed again before restart; the newer definition was preserved and not started.",
               "Task Scheduler state remained unreadable before restart; the registration was preserved and not started.",
             );
+            assertNoDesktopSupervision(deps.inspectSupervision, latch);
             (deps.startScheduler ?? startWindows)();
           } catch (error) {
             recoveryErrors.push(error);
@@ -358,8 +373,9 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       "Task Scheduler registration changed before restart; the current definition was preserved and not started.",
       "Task Scheduler registration became unreadable before restart; it was preserved and not started.",
     );
+    assertNoDesktopSupervision(deps.inspectSupervision, latch);
     (deps.startScheduler ?? startWindows)();
-    (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();
+    (deps.writeSchedulerState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("scheduler", undefined, {}, selected)))(runtime);
     return;
   }
   if (platform === "darwin") {

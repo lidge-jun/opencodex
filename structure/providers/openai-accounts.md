@@ -192,6 +192,14 @@ Pool mode needs stable public names and a store that survives concurrent refresh
 
 ## Sidecars, management, and UI
 
+`src/codex/auth-api/account-selection.ts` commits manual active-account and pin changes against
+the latest config under the mutation coordinator. Re-selecting the same account and explicitly
+clearing selection retain their command intent; unrelated saved fields remain untouched. Both
+the live roster and the current persisted roster must admit a selected account. Removed, paused,
+or validation-pending targets are rejected before changing routing. Confirmed publication precedes
+live selection/baseline adoption and affinity reset; an unavailable saved config leaves prior routing
+intact. A post-publication bookkeeping failure adopts only a strictly verified matching selection.
+
 The desktop restart adapter uses [Windows process ownership and installation membership](../runtime.md#codex-desktop-process-membership), independently of Pool/Direct credential selection.
 
 HTTP/SSE, Responses WebSocket, compact, images, search, and vision resolve the same account mode.
@@ -211,6 +219,7 @@ request-scoped: a translated Claude turn resolves through Pool selection like an
 main keeps its health, quarantine and refresh-and-classify handling. Only a bearer the client
 itself supplied is caller-owned and exempt from stored state.
 Both synchronous and asynchronous stored-main substitution in `src/codex/auth-context.ts` remove a caller account header before copying the stored identity; an absent stored account ID leaves no account header. Caller-owned native Direct authentication retains its existing passthrough behavior.
+Plain-main HTTP and WebSocket Responses refresh `__main__` only on the canonical OpenAI forward provider when the sent bearer and effective workspace match the main credential already observed under native ownership, the same equality rule used by the hard lock. `src/codex/auth-context.ts` captures a process-local dispatch proof after materialization; `src/server/responses/passthrough-delivery.ts` captures the response-arrival proof before any awaited body classification and retains it for that response's header publication; it and `src/server/responses/core-codex-account.ts` recheck credential/identity generations before publishing. The dispatch also captures the process-wide credential mutation epoch; any OpenCodex-owned credential publication, including native main refresh or same-account reauth before a new quota credential observation, rejects an older dispatch. Publications for other credentials conservatively drop the main update as well. Same-account token rotation and A→B→A changes reject old responses; Each WebSocket observer renews the live dispatch object with every captured fence unchanged, retains that copy across frames, and claims it on every invocation before checking liveness. A later observer starts unclaimed, so its failed-upgrade HTTP fallback can publish even if the prior WS attempt observed quota. This process-local claim belongs to one physical attempt and prevents plain-main HTTP publication even when a downstream stream wrapper replaces the Response; response markers remain an additional guard, including separately marked pre-response prelude projections (4xx refusals and 502/504 gateway failures). Prelude headers remain available to Pool replay; real HTTP fallback responses still publish through HTTP delivery. An operator-granted HTTP replacement gets a new unclaimed dispatch object with every captured credential and config fence copied unchanged; the failed WS observer retains the old object. Caller-owned requests acquire no physical-main read or Pool health state.
 `src/providers/openai-sidecar.ts` releases quota-probe ownership on every
 materialization or usability failure before transferring a resolved context to its caller.
 Audio reports one terminal upstream outcome after validating the response body; redirects remain
@@ -388,6 +397,8 @@ caches are account-isolated, so each hop restarts from a cold prefix and a 7k-to
 true for unknown usage, correctly for an unbound pick — would trade a warm prefix for an unmeasured
 account. `CODEX_UNKNOWN_USAGE_SCORE` is 101, so the second bar excludes an unobserved destination
 without a special case.
+
+`src/codex/routing/failure-window.ts` keeps a 60-second sliding ratio beside the consecutive streak. Twenty or more terminal samples at a 25% transient-failure ratio mark the account degraded; it clears only after the ratio stays at or below 10% for 30 seconds. The ratio does not depend on completion order. Degraded accounts leave the unbound candidate list, so new threads move. A live thread binding is left alone, and a manual pin stays in place unless `codexPinnedTransientPolicy` is `detour-new-threads`. The default `hold` logs that the pin is degraded and keeps using it. `codexFailureWindow: false` leaves steering to the consecutive counter. Nothing here resends a turn that already started.
 
 Movement is therefore bounded by the number of accounts rather than the number of turns. The rule
 narrows a preference and never a refusal: a 429/402 with no success since, a failover streak, pause,

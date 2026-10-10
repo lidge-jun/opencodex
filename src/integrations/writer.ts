@@ -801,6 +801,11 @@ export interface CoordinatedIntegrationOptions {
    * non-null result refuses without writing anything.
    */
   revalidate?: (frozen: IntegrationWriteInput) => Promise<WriteOutcome | null>;
+  /**
+   * Synchronous last word, evaluated with no await between it and the transaction (after
+   * `revalidate` and any lock acquisition). A non-null result refuses without writing.
+   */
+  guard?: (frozen: IntegrationWriteInput) => WriteOutcome | null;
 }
 
 /** Freeze all mutable resolution seams before the first lock await. */
@@ -942,21 +947,22 @@ async function coordinatedWrite(
   if (!prepared.ok) return prepared.refusal;
   const frozen = prepared.value;
   const spec = INTEGRATION_CLIENTS[frozen.clientId];
+  const guarded = (bound: IntegrationWriteInput) => options?.guard?.(bound) ?? operation(bound);
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
-    return refused ?? operation(frozen);
+    return refused ?? guarded(frozen);
   }
 
   // An absent client home is not created merely to acquire a sibling lock.
   if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") {
     const refused = await options?.revalidate?.(frozen);
     if (refused) return refused;
-    if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") return operation(frozen);
+    if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") return guarded(frozen);
   }
   return withClientLocks(
     frozen,
     spec.writerLock.suffix,
-    () => operation(frozen),
+    () => guarded(frozen),
     options,
   );
 }

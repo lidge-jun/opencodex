@@ -43,6 +43,10 @@ const pacingWebsocketDowngradeWarned = new Set<string>();
  */
 const EGRESS_DECIDED = Symbol.for("opencodex.provider-egress.decided");
 const UPSTREAM_REWRITTEN = Symbol.for("opencodex.plugins.upstream-rewritten");
+// Survives queued credential rebuilds and executor replacement without importing budget owners.
+const PHYSICAL_DISPATCH = Symbol.for("opencodex.physical-dispatch");
+// One WS attempt and its HTTP fallback are one logical physical-send receipt.
+const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
 
 /**
  * Announce once, per provider, that an explicit egress route moved this provider off the
@@ -200,6 +204,7 @@ export function sendWithConnectionPolicy(
   const largeCodexBody = typeof body === "string"
     && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
+  (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
   return physicalFetch(input, {
     ...init,
     ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
@@ -233,10 +238,13 @@ export interface ProviderFetchOptions {
   onCodexWsQuota?: CodexWsQuotaObserver;
   /** Synchronous admission at actual credential dispatch, after pacing/backoff. */
   beforeDispatch?: (headers: Headers) => void;
+  /** One-shot receipt after final local HTTP admission, immediately before executor entry. */
+  onPhysicalDispatch?: () => void;
   /** Revalidate/rebuild a queued request at its physical send boundary, after pacing. */
   dispatchOverride?: (input: Parameters<typeof globalThis.fetch>[0], init: RequestInit, execute: typeof globalThis.fetch) => Promise<Response>;
 }
 
+/** Compose provider pacing and transport admission; receipts run only at executor entry. */
 export function providerFetch(
   provider: OcxProviderConfig,
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
@@ -301,7 +309,14 @@ export function providerFetch(
       options.beforeDispatch?.(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
       // No proxy option is attached here: a `dispatchOverride` may rebuild this request against
       // a different destination, so the route is decided at the physical send instead.
-      const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 };
+      const sharedReceipt = (init as Record<symbol, (() => void) | undefined> | undefined)?.[WS_FALLBACK_RECEIPT];
+      let notified = false;
+      const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0,
+        ...(options.onPhysicalDispatch ? { [PHYSICAL_DISPATCH]: () => {
+          if (sharedReceipt) sharedReceipt();
+          else if (!notified) { options.onPhysicalDispatch!(); notified = true; }
+        } } : {}),
+      };
       return options.dispatchOverride
         ? options.dispatchOverride(input, dispatchInit, dispatch)
         : dispatch(input, dispatchInit);
@@ -332,8 +347,16 @@ export function providerFetch(
       // used, protocol pin included: a WS turn that falls back is serving the
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`
       // there would silently negotiate a transport the operator ruled out.
-      return codexWsUpstreamFetch(input, init, httpFetch, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
-        async () => { (await waitForPacing(init.signal ?? undefined))?.release(); });
+      let notified = false;
+      const notifyOnce = (): void => {
+        if (notified) return;
+        notified = true;
+        options.onPhysicalDispatch?.();
+      };
+      const fallback = ((url: Parameters<typeof globalThis.fetch>[0], fallbackInit?: RequestInit) =>
+        httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit)) as typeof globalThis.fetch;
+      return codexWsUpstreamFetch(input, init, fallback, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
+        async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce);
     }
     return httpFetch(input, init);
   };

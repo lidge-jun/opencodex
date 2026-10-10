@@ -15,8 +15,9 @@ import { desktop3pAlias } from "./desktop-3p";
 import { nativeOpenAiContextWindow, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
 import { ANTHROPIC_MODEL_CONTEXT_WINDOWS } from "../providers/registry/model-seeds";
 import type { OcxClaudeCodeConfig } from "../types";
+import { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR, ONE_MILLION } from "./long-context";
 
-const ONE_MILLION = 1_000_000;
+export { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR } from "./long-context";
 
 /**
  * The native id each Claude Code tier alias resolves to (2.1.282: `--model opus` sends
@@ -27,21 +28,6 @@ const ONE_MILLION = 1_000_000;
  */
 const CLAUDE_CODE_NATIVE_TIERS = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5", fable: "claude-fable-5-1" } as const;
 
-/**
- * Auto-context defaults (devlog 260712 020, user-approved).
- *
- * The compact window is the token count at which Claude Code starts compacting, and it is
- * also the floor `shouldMarkOneMillion` uses — a model may only carry the marker if it can
- * host this window. 350,000 was chosen when the widest native row advertised 372,000.
- *
- * It now matches the auto-compaction limit the Codex catalog ships for the same models
- * (`nativeAutoCompactLimit`: 829,800 against the 922,000 native window). Leaving the two
- * apart meant one model compacting at 350k under Claude Code and at 829,800 under Codex.
- * The value stays clear of the measured 922,000 ceiling by ~92k, so compaction still has
- * room to run before the upstream refuses.
- */
-export const AUTO_COMPACT_WINDOW_DEFAULT = 829_800;
-export const AUTO_CONTEXT_FLOOR = 200_000;
 /** Binary-verified accepted range for CLAUDE_CODE_AUTO_COMPACT_WINDOW (2.1.207: pSo=1e5, yDs=1e6). */
 export const AUTO_COMPACT_WINDOW_MIN = 100_000;
 export const AUTO_COMPACT_WINDOW_MAX = ONE_MILLION;
@@ -59,14 +45,27 @@ export interface AutoContextMode {
   enabled: boolean;
   /** Effective CLAUDE_CODE_AUTO_COMPACT_WINDOW value (tokens). */
   compactWindow: number;
+  /** claudeCode.contextAccounting "200k": nothing is marked [1m] automatically, whatever its window. */
+  accounting200k?: true;
 }
 
 export const AUTO_CONTEXT_OFF: AutoContextMode = { enabled: false, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT };
+
+/**
+ * Marking mode for surfaces whose runner may not inherit the compaction env (Desktop pickers,
+ * discovery, generated subagents). shouldMarkOneMillion under it equals isLongContextWindow
+ * (long-context.ts); kept as a mode so the existing marker helpers serve every surface.
+ */
+export const UNPAIRED_AUTO_CONTEXT: AutoContextMode = { enabled: true, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT };
+
+/** The "200k" opt-in: no widening, no compact-window injection, no automatic marker. */
+export const ACCOUNTING_200K: AutoContextMode = { enabled: false, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT, accounting200k: true };
 
 interface AutoContextConfigSlice {
   autoContext?: boolean;
   autoCompactWindow?: number;
   maxContextTokens?: number;
+  contextAccounting?: string;
 }
 
 function inAutoCompactRange(value: number): boolean {
@@ -90,6 +89,8 @@ function inAutoCompactRange(value: number): boolean {
  * to AUTO_COMPACT_WINDOW_DEFAULT (the management API rejects them; this guards hand-edits).
  */
 export function resolveAutoContext(claudeCode: AutoContextConfigSlice | undefined, envOverride?: string): AutoContextMode {
+  // The 200k opt-in wins over every other lever, a user-exported compact window included.
+  if (claudeCode?.contextAccounting === "200k") return ACCOUNTING_200K;
   if (claudeCode?.autoContext === false) return AUTO_CONTEXT_OFF;
   const maxCtx = claudeCode?.maxContextTokens;
   if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) return AUTO_CONTEXT_OFF;
@@ -132,6 +133,7 @@ export function claudeToolSearchEnv(value: boolean | string | undefined): string
  */
 export function shouldMarkOneMillion(window: number | undefined, auto: AutoContextMode): boolean {
   if (typeof window !== "number" || window <= 0) return false;
+  if (auto.accounting200k) return false;
   if (window >= ONE_MILLION) return true;
   return auto.enabled && window > AUTO_CONTEXT_FLOOR && window >= auto.compactWindow;
 }
@@ -248,7 +250,7 @@ export interface ClaudeTierModels {
  * value injected into BOTH haiku variables.
  */
 export function effectiveModelEnv(
-  claudeCode: { model?: string; smallFastModel?: string; tierModels?: ClaudeTierModels; autoContext?: boolean; autoCompactWindow?: number; maxContextTokens?: number } | undefined,
+  claudeCode: { model?: string; smallFastModel?: string; tierModels?: ClaudeTierModels; autoContext?: boolean; autoCompactWindow?: number; maxContextTokens?: number; contextAccounting?: string } | undefined,
   windows: Record<string, number>,
   autoOverride?: AutoContextMode,
 ): Record<string, string> {

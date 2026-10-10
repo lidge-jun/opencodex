@@ -227,6 +227,7 @@ describe("Codex startup health", () => {
     expect(typeof body.rebootSafe).toBe("boolean");
     expect(typeof body.routingInjected).toBe("boolean");
     expect(body.diagnosticStale).toBe(false);
+    expect(body.recommendedAction).toBeNull();
     expect(body.routingKind).toBe("native");
     expect(probeCalls).toBe(1);
     expect(body.commands).toEqual({
@@ -701,4 +702,21 @@ describe("macOS desktop startup protection", () => {
     const health = deriveStartupHealth({ ...base, platform: "darwin", desktop: deriveDesktopStartup(facts) });
     expect(markStartupHealthDiagnosticStale(health)).toMatchObject({ protection: "none", rebootSafe: false, diagnosticStale: true });
   });
+});
+
+
+test("desktop recovery guidance is scoped to routing owned by OpenCodex", () => {
+  const desktop = { owned: false, loginEnabled: false, running: true, viable: false,
+    supervisor: { supervisorPid: 3131, runtimePid: 4242, app: "/fixture/opencodex-desktop" } };
+  const local = deriveStartupHealth({ ...base, platform: "darwin", desktop });
+  expect(local.recommendedCommand).toBeNull();
+  expect(local.recommendedAction).toContain("Turn on Start at Login");
+  const stopped = deriveStartupHealth({ ...base, platform: "darwin",
+    desktop: { owned: true, loginEnabled: true, running: false, viable: false } });
+  expect(stopped.recommendedAction).toBe("Reopen OpenCodex and check Start at Login.");
+  for (const routingKind of ["native", "custom-remote", "custom-local", "unknown"] as const) {
+    const other = deriveStartupHealth({ ...base, platform: "darwin", desktop, routingKind });
+    expect(other.recommendedAction).toBeNull();
+    expect(other.recommendedCommand).toBe(routingKind === "custom-local" || routingKind === "unknown" ? "ocx restore" : null);
+  }
 });

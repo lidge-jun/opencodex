@@ -532,6 +532,14 @@ per-profile refusal, residual and separately labeled redacted backup information
 inspect the affected profile before retrying. This refresh is separate from each
 profile's preview/bound mutation workflow.
 
+Sync refreshes only profiles whose sync preference is on, so an empty result is not a failure.
+If `ocx integration client status --client aside` shows a profile as `off (stale)`, status
+prints the commands to reconnect it: review `ocx integration client preview --client aside
+--operation apply --profile N`, and run `ocx integration client enable --client aside --profile N`
+only if the preview permits the change and you accept it. Nothing is re-enabled automatically.
+A malformed `asideProfileSync` block in `config.json` turns every profile off and logs a
+warning when the config loads.
+
 Each profile has separate ownership and history. Existing user edits, unsafe paths and linked
 catalogs are refused; the existing explicit overwrite and drift-confirmation controls remain
 available. Fully quit and reopen Aside to load changed model files.
@@ -678,6 +686,11 @@ New Codex sessions pick up the change. The same controls exist on the command li
 ocx agent roles
 ocx agent roles set explorer xai/grok-4.5
 ```
+
+`ocx agent roles set <role> <model> --effort <level>` also sets the role's reasoning effort: it
+rewrites the role file's `model_reasoning_effort` line and writes `[codex].agents.<role>.reasoning`
+in omo.jsonc when LazyCodex has that level (`ultra` stays in the role file only, and an older
+`reasoning` is removed). A Save that changes only the model leaves both effort values as they were.
 
 ### Auto-assign
 

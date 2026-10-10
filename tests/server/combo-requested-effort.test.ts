@@ -12,6 +12,7 @@ describe("Combo requested effort labels", () => {
     ["high", "low->high", "low", "high->low->high"],
     ["high", "high", "high", "high"],
     ["high", "high->low", "high", "high->low"],
+    ["high", "low->low", "low", "high->low"],
     ["high", "medium", undefined, "high"],
     ["high", undefined, undefined, "high"],
     ["high", "medium->low", undefined, "high->low"],

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenCodex terminal command</title>
+  <style>
+    :root { color-scheme: light dark; font: 15px system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
+    main { width: min(38rem, calc(100vw - 3rem)); padding: 1.5rem; }
+    h1 { font-size: 1.5rem; } p { line-height: 1.5; }
+    button { font: inherit; padding: .6rem 1rem; margin: .3rem .3rem .3rem 0; }
+    button:focus-visible, input:focus-visible { outline: 3px solid #408bff; }
+    #error { color: #b3261e; } #target { overflow-wrap: anywhere; }
+    #titlebar { position: fixed; top: 0; left: 0; right: 0; height: 40px; }
+    @media (prefers-color-scheme: dark) { #error { color: #ff9b92; } }
+  </style>
+</head>
+<body>
+  <div id="titlebar" hidden></div>
+  <main>
+    <h1>Terminal command</h1>
+    <label><input id="enabled" type="checkbox" disabled /> Use Desktop's ocx command in new terminals</label>
+    <p id="state" role="status" aria-live="polite">Reading command configuration…</p>
+    <p id="target"></p>
+    <ul id="issues"></ul>
+    <p id="error" role="alert" hidden></p>
+    <p>After enabling or repairing, open a new terminal. Existing shells and aliases can still select another command. Use <code>type -a ocx</code> on POSIX, or <code>Get-Command ocx -All</code> and <code>where.exe ocx</code> on Windows to check.</p>
+    <p>Remove the terminal command here before uninstalling Desktop. Removing it keeps your off choice for the next launch.</p>
+    <div>
+      <button id="repair" type="button" disabled>Repair</button>
+      <button id="remove" type="button" disabled>Remove terminal command</button>
+      <button id="back" type="button" disabled>Back to dashboard</button>
+    </div>
+  </main>
+  <script src="cli.js"></script>
+</body>
+</html>

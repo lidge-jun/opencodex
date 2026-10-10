@@ -42,6 +42,13 @@ const python3Path = process.platform === "win32"
 setCodexShimProbeObservationMsForTests(20);
 afterAll(() => setCodexShimProbeObservationMsForTests(null));
 const psPath = process.platform !== "win32" && existsSync("/bin/ps") ? "/bin/ps" : "";
+// A loaded windows-latest runner starts cmd.exe and pwsh.exe past INTERNAL_DEADLINE_MS
+// (a caller-token restore returned status null at 17.2s; the aged-lock holder has taken
+// 8–19s to write its ready file). The shell is the assertion, so the bound stays inside
+// SPAWN_BUDGET_MS and uses the same derivation as the other Windows spawn waits.
+const SHELL_SPAWN_TIMEOUT_MS = process.platform === "win32"
+  ? SPAWN_BUDGET_MS - INTERNAL_DEADLINE_MS
+  : INTERNAL_DEADLINE_MS;
 
 function successfulLauncher(label: string): string {
   return process.platform === "win32" ? `${label}\r\n` : `#!/bin/sh\n# ${label}\nexit 0\n`;
@@ -1177,8 +1184,8 @@ printf '%s\\n' child-codex
           });
           if (callerToken === undefined) delete env.OPENCODEX_API_AUTH_TOKEN;
           const result = shell === "cmd"
-            ? spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", "driver.cmd"], { cwd: dir, env, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS, windowsHide: true })
-            : spawnSync(`${shell}.exe`, ["-NoProfile", "-NonInteractive", "-File", driverPath], { env, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS, windowsHide: true });
+            ? spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", "driver.cmd"], { cwd: dir, env, encoding: "utf8", timeout: SHELL_SPAWN_TIMEOUT_MS, windowsHide: true })
+            : spawnSync(`${shell}.exe`, ["-NoProfile", "-NonInteractive", "-File", driverPath], { env, encoding: "utf8", timeout: SHELL_SPAWN_TIMEOUT_MS, windowsHide: true });
           expect(result.status, result.stderr).toBe(0);
           expect(result.stdout.trim().split(/\r?\n/)).toEqual([
             `child:${callerToken || "file-token"}`,
@@ -1220,7 +1227,7 @@ printf '%s\\n' child-codex
             const env = shimChildEnv({ OPENCODEX_HOME: dir, OPENCODEX_API_AUTH_TOKEN: callerToken ?? "", OCX_SHIM_BYPASS: "" });
             if (callerToken === undefined) delete env.OPENCODEX_API_AUTH_TOKEN;
             const result = spawnSync(executable, ["-NoProfile", "-NonInteractive", "-File", driverPath], {
-              env, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS, windowsHide: true,
+              env, encoding: "utf8", timeout: SHELL_SPAWN_TIMEOUT_MS, windowsHide: true,
             });
             expect(result.error).toBeUndefined();
             expect(result.status, result.stderr).toBe(0);
@@ -1236,7 +1243,7 @@ printf '%s\\n' child-codex
             // A failed process must complete, rather than satisfy the check through a timeout.
             writeFileSync(driverPath, `\uFEFF$ErrorActionPreference = 'Stop'\n& '${wrapperPath.replace(/'/g, "''")}' exec\n`);
             const uncaught = spawnSync(executable, ["-NoProfile", "-NonInteractive", "-File", driverPath], {
-              env, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS, windowsHide: true,
+              env, encoding: "utf8", timeout: SHELL_SPAWN_TIMEOUT_MS, windowsHide: true,
             });
             expect(uncaught.error).toBeUndefined();
             expect(uncaught.signal).toBeNull();
@@ -1755,7 +1762,7 @@ exit 127
         stderr: "pipe",
       });
       // Spawned holder child writing its ready marker: 8-19 s on windows-latest.
-      const deadline = Date.now() + INTERNAL_DEADLINE_MS;
+      const deadline = Date.now() + SHELL_SPAWN_TIMEOUT_MS;
       while (!existsSync(readyPath) && Date.now() < deadline) await Bun.sleep(5);
       expect(existsSync(readyPath)).toBe(true);
 
@@ -1763,6 +1770,7 @@ exit 127
         cwd: repoRoot(),
         env: childEnv,
         encoding: "utf8",
+        timeout: SHELL_SPAWN_TIMEOUT_MS,
       });
       expect(second.status).toBe(0);
       expect(JSON.parse(second.stdout.trim())).toEqual({ status: "deferred" });

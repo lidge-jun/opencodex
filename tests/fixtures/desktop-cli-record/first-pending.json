@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "ownerId": "12345678-1234-4234-8234-123456789abc",
+  "installId": "fixture-install",
+  "generation": 1,
+  "enabled": true,
+  "bundle": {
+    "platform": "darwin",
+    "kind": "macos-app",
+    "appExecutable": "/Applications/OpenCodex.app/Contents/MacOS/OpenCodex",
+    "cliExecutable": "/Applications/OpenCodex.app/Contents/MacOS/ocx",
+    "version": "2.82.0"
+  },
+  "posix": null,
+  "windows": null,
+  "pending": {
+    "operation": "install",
+    "changes": [
+      {
+        "kind": "file",
+        "path": "/fixture/desktop/bin/ocx",
+        "mode": 448,
+        "backupPath": null,
+        "journalFile": "/fixture/desktop/journal/2-0.json",
+        "beforeSha256": "absent",
+        "afterSha256": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+      }
+    ],
+    "next": {
+      "version": 1,
+      "ownerId": "12345678-1234-4234-8234-123456789abc",
+      "installId": "fixture-install",
+      "generation": 2,
+      "enabled": true,
+      "bundle": {
+        "platform": "darwin",
+        "kind": "macos-app",
+        "appExecutable": "/Applications/OpenCodex.app/Contents/MacOS/OpenCodex",
+        "cliExecutable": "/Applications/OpenCodex.app/Contents/MacOS/ocx",
+        "version": "2.82.0"
+      },
+      "posix": {
+        "binDirectory": "/fixture/desktop/bin",
+        "files": [
+          {
+            "kind": "shim",
+            "path": "/fixture/desktop/bin/ocx",
+            "sha256": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437",
+            "created": true
+          }
+        ],
+        "rcFiles": []
+      },
+      "windows": null,
+      "pending": null
+    }
+  }
+}

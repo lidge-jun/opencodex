@@ -22,7 +22,7 @@ export interface LogFilterState {
   maxTokPerSec?: number;
   interceptedOnly: boolean;
   conversationId: string;
-  conversationQueryHash?: string;
+  conversationQueryHash?: readonly string[];
   /** Absent means "all", so filter states saved before this field existed stay valid. */
   protocolMode?: LogProtocolModeFilter;
 }

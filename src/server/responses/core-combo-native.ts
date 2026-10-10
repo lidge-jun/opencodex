@@ -32,7 +32,7 @@ import {
   type RequestLogContext,
 } from "../request-log";
 import { captureRouteStaticPolicy, routeConcreteModel } from "../../router";
-import { comboDefaultEffort, concreteComboRequestBody, getCombo } from "../../combos";
+import { comboDefaultEffort, concreteComboRequestBody, getCombo, type JevDecision } from "../../combos";
 import { supportedLadderFor } from "../effort-policy";
 import { applyDroidReasoningDefault } from "../droid-reasoning-default";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
@@ -94,6 +94,7 @@ export interface ComboProtocolLanes {
     target: ComboTarget,
     targetRoute: RouteResult,
     targetSendBudget: TransientSendBudget | undefined,
+    initialDecision?: Pick<JevDecision, "effort">,
   ): NativeComboChildPlan | undefined;
 }
 
@@ -101,6 +102,7 @@ interface CandidateVerdict {
   skip?: ProtocolFeature[];
 }
 
+/** Build opt-in native eligibility and child plans; only the initial plan applies a JEV choice. */
 export function createComboProtocolLanes(input: {
   source: ComboProtocolSource | undefined;
   req: Request;
@@ -203,7 +205,7 @@ export function createComboProtocolLanes(input: {
         400, unrepresentableMessage(features), "invalid_request_error", "unsupported_feature",
       ), "chat");
     },
-    nativeChild: (target, targetRoute, targetSendBudget) => {
+    nativeChild: (target, targetRoute, targetSendBudget, initialDecision) => {
       // Without the request's execution budget a native child could not share its sends, so it
       // keeps the bridge rather than opening a tracker of its own.
       if (!isRequestExecutionBudget(targetSendBudget)) return undefined;
@@ -214,7 +216,22 @@ export function createComboProtocolLanes(input: {
         provider: targetRoute.provider,
         modelId: targetRoute.modelId,
       });
-      applyComboEffort(body, config, comboId, target, targetRoute);
+      if (initialDecision) {
+        // A validated JEV choice owns only this first dispatch, including explicit no-effort.
+        // Do not run ordinary force defaults for null: they require a non-null default.
+        delete body.service_tier;
+        delete body.thinking_budget;
+        delete body.thinking;
+        const reasoning = body.reasoning;
+        if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+          const preserved = { ...reasoning as Rec };
+          delete preserved.effort;
+          if (Object.keys(preserved).length > 0) body.reasoning = preserved;
+          else delete body.reasoning;
+        }
+        if (initialDecision.effort === null) delete body.reasoning_effort;
+        else body.reasoning_effort = initialDecision.effort;
+      } else applyComboEffort(body, config, comboId, target, targetRoute);
       return { route, body, sendBudget: targetSendBudget };
     },
   };

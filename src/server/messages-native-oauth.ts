@@ -139,19 +139,20 @@ export async function resolveNativeOAuthBindingForInstance(
     const routeDecision = currentRoute(instance, config, model);
     const manualSelectionGeneration = routing.captureAnthropicManualSelectionGeneration();
     const selection = captureOAuthAccountSelection(instance);
-    // Always ask admission first so pause/login/cooldown retains its typed local refusal.
-    const admittedId = await routing.resolveAnthropicDispatchAccountId(config, sessionKey, routeDecision, model);
-    assertOwner();
-    if (!routeIsCurrent(instance, config, model, routeDecision)) continue;
-    const proposed = routing.resolveAnthropicAccountForSession(sessionKey, config, Date.now(), routeDecision, model);
-    // A lost selection commit discards a recovery proposal: a newer manual/policy choice wins.
+    // A recovery candidate may replace a terminal active credential, including pool-off.
+    // A newer committed selection or route discards the proposal and uses normal admission.
     const recoverySelectionMatches = !!options.expectedRecoverySelection
       && selection?.accountId === options.expectedRecoverySelection.accountId
       && selection?.revision === options.expectedRecoverySelection.revision;
     const recoveryRouteMatches = options.expectedRecoveryRouteDecision === undefined
       || JSON.stringify(options.expectedRecoveryRouteDecision) === JSON.stringify(routeDecision);
-    const accountId = attempt === 0 && options.candidateAccountId && recoverySelectionMatches && recoveryRouteMatches
-      ? options.candidateAccountId : admittedId;
+    const recoveryAccountId = attempt === 0 && options.candidateAccountId && recoverySelectionMatches && recoveryRouteMatches
+      ? options.candidateAccountId : undefined;
+    const accountId = recoveryAccountId
+      ?? await routing.resolveAnthropicDispatchAccountId(config, sessionKey, routeDecision, model);
+    assertOwner();
+    if (!routeIsCurrent(instance, config, model, routeDecision)) continue;
+    const proposed = routing.resolveAnthropicAccountForSession(sessionKey, config, Date.now(), routeDecision, model);
     if (!selection) continue;
     if (!routeCandidates(routing.getEligibleAnthropicAccounts(Date.now(), model), routeDecision).includes(accountId)) {
       throw new NativeOAuthSelectionChangedError();

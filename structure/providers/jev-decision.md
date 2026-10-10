@@ -30,8 +30,9 @@ rows reuse `missing_key`, and `decisionTimeoutMs` (1000..120000) replaces the 4 
 
 Decision backends. `src/combos/jev-dispatch.ts` derives the backend from the Combo and never stores
 it: `decisionModel` set means `model`, a `decisionProvider` other than `jev` means `systemone`, and
-neither means `typesafe`; setting both is a config error. The System One path is `src/combos/jev.ts`
-unchanged, so the TypeSafe request bytes stay pinned by `tests/fixtures/jev-typesafe-request-golden.json`.
+neither means `typesafe`; setting both is a config error. `src/combos/jev.ts` builds and validates
+the route question through `src/combos/jev-service-exchange.ts`, the shared question-agnostic HTTP
+exchange. TypeSafe request bytes stay pinned by `tests/fixtures/jev-typesafe-request-golden.json`.
 `src/combos/jev-model-backend.ts` asks an ordinary opencodex route for `{"choice":"<key>"}` over the
 same bounded state and option map, under the same deadline, bounds, and fail-open gates;
 `src/combos/jev-decision-contract.ts` holds the constants the GUI shares. The server glue
@@ -58,10 +59,23 @@ the JEV credential are excluded. All three text samples omit recognized Codex pr
 and Claude Code `<system-reminder>` blocks before clipping, including nested and unclosed blocks.
 Only an envelope-only `codex_internal_context` goal outside a reminder may supply a fallback task;
 reminder-only text supplies no task. Reminder-free inputs keep their existing sampling behavior.
-It owns the joint target/effort choice map, strict response
-validation, canonical `jev-latest` destination, default four-second deadline, no-redirect policy, bounded response,
-and caller-cancellation propagation. Missing credentials or safe state, transport failures, and invalid
-answers fail open to the first eligible target; no response can escape the configured choice map.
+It owns the joint target/effort choice map and strict answer
+validation, including the complete probability distribution. The service exchange owns the canonical
+`jev-latest` destination, the self-hosted URL (shared `jevDecisionEndpointUrl`: an HTTPS path as
+configured, `/systemone` trailing slashes normalized), credentials, 64 KiB serialized request and response caps, default
+four-second deadline, no-redirect policy, and caller-cancellation ownership. It rejects an already
+aborted caller by reason identity before endpoint, credential or preparation work. It checks again
+after endpoint resolution and preparation (including failures), POST, redirect inspection, HTTP
+error-body cleanup and response reads, and when parsing returns or throws; caller cancellation takes
+precedence over the local outcome at those checkpoints. HTTP error-body cancellation is best effort
+and never awaited. The separate decision deadline remains a `timeout` gate. Its
+request builder receives only `model` and `descriptiveCriteria` after authorization/credential
+resolution; its answer parser runs inside the cancellation boundary. Without caller cancellation,
+question-specific local refusals and invalid answers retain their existing gates. `tests/routing/jev-service-exchange.test.ts` exercises this
+seam independently of route questions; `tests/routing/jev-typesafe-golden.test.ts` keeps the
+unchanged route bytes authoritative. Missing credentials or safe state, transport failures, and
+invalid answers fail open to the first eligible target; no response can escape the configured choice
+map.
 The direct TypeSafe and System One decision destinations are checked against the parent API key's
 resolved provider/model scope before reading decision credentials or extracting state. A denied
 optional decision uses the existing fail-open inference target without sending a decision request;
@@ -78,15 +92,16 @@ target/effort allowlist stay authoritative. The note reaches TypeSafe with each
 applicable decision, so operators must keep secrets and private paths out of it.
 An absent note leaves the prior decision payload shape intact.
 
-`src/server/responses/core-combo.ts` computes current eligibility, asks JEV once for the initial pick,
-applies the validated effort, and removes caller `service_tier` on the Responses child body. The
-opt-in native Chat lane builds a separate body in `src/server/responses/core-combo-native.ts` and
-does not apply that JEV effort override. A retryable child failure re-enters the ordinary Combo
-fallback loop from the untouched request without another JEV call. Request and attempt
-`requestedEffort` labels retain an applied differing JEV effort as `caller->forced`, followed by
-later child transitions; native children omit the unapplied override and preserve their own
-transitions. Absent or unchanged forced efforts keep the existing label.
+`src/server/responses/core-combo.ts` computes current eligibility and asks JEV once for the initial pick.
+The validated effort shapes the first Responses child or the separate opt-in native Chat body in
+`src/server/responses/core-combo-native.ts`; both remove caller `service_tier` and conflicting effort controls.
+Explicit null strips effort using a non-force path, even when the Combo has a forced default; the ordinary
+force-default invariant is unchanged. Provider pins, caps and wire normalization still run afterward.
+A retryable failure rebuilds later targets from the untouched request under ordinary Combo policy, without
+another JEV call. Request and attempt `requestedEffort` labels retain a differing applied JEV effort as
+`caller->forced`, followed by child transitions on either lane; null or unchanged effort keeps the existing label.
 `src/server/responses/combo-requested-effort.ts` owns this pure label calculation.
+`tests/responses/jev-initial-effort-wire.test.ts` captures both lanes across all three decision backends.
 Each target may carry an optional non-empty `reasoningEfforts` allowlist. Omission keeps the
 backward-compatible all-advertised behavior; a present list is intersected with current capabilities,
 and an empty intersection removes that target from the JEV choice map rather than broadening it.

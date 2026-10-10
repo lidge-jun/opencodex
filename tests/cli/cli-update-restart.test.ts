@@ -2,10 +2,11 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { describeUpdateRestartFailure, runUpdateRestart, UpdateRestartEligibilityError, type UpdateRestartIo } from "../../src/cli/update-restart";
 import type { UpdateRestartCandidate } from "../../src/cli/update-restart-candidate";
 import { reportRestartFailure } from "../../src/cli/restart-failure";
+import { updateRestartVeto } from "../../src/update/restart-ownership";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
 
 const candidate: UpdateRestartCandidate = {
-  home: { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0 },
+  home: { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) } },
   target: { pid: 123, port: 10100, hostname: "127.0.0.1", source: "runtime", version: "2.76.0" },
   runtime: { pid: 123, port: 10100, hostname: "127.0.0.1", attestationSecret: "a".repeat(43) },
   cliVersion: "2.77.0",
@@ -13,7 +14,7 @@ const candidate: UpdateRestartCandidate = {
 function setup() {
   const calls: string[] = [];
   let now = 1000;
-  const home = { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0 };
+  const home = { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) } };
   const live: LiveProxy = { ...candidate.target, pid: 456, version: "2.77.0" };
   const io: UpdateRestartIo = {
     now: () => now, acquire: () => { calls.push("acquire"); return { release: () => { calls.push("release"); } }; },
@@ -225,4 +226,15 @@ test("an unverified update home names status and the owning service recovery", (
     const text = errors.mock.calls.flat().join(" ");
     expect(text).toContain("ocx status"); expect(text).toContain("ocx service restart"); expect(text).toContain("No changes were made");
   } finally { errors.mockRestore(); }
+});
+
+
+test("dashboard update restart veto gives Desktop update guidance with injected supervision", () => {
+  const resolve = () => ({ kind: "none" as const, revision: 0 });
+  expect(updateRestartVeto(resolve, () => ({
+    kind: "desktop", runtimePid: 321, supervisorPid: 123, app: "/fixture/opencodex-desktop", proxy: "/fixture/ocx",
+  }))).toContain("use the app's updater (tray → Check for Updates)");
+  expect(updateRestartVeto(resolve, () => ({ kind: "unknown", reason: "probe-failed", desktopSeen: true })))
+    .toContain("quit OpenCodex first");
+  expect(updateRestartVeto(resolve, () => ({ kind: "unknown", reason: "probe-failed", desktopSeen: false }))).toBeNull();
 });

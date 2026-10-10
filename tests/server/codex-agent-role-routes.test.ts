@@ -62,13 +62,38 @@ describe("/api/codex-agent-roles", () => {
     expect((await call("/api/codex-agent-roles")).body).toEqual({
       lazycodex: DETECTED,
       omoJsonc: { state: "present" },
-      roles: [{ role: "explorer", model: "gpt-5.5", omoJsoncModel: null }],
+      roles: [{ role: "explorer", model: "gpt-5.5", effort: null, omoJsoncModel: null }],
     });
     const saved = await put("explorer", "xai/grok-4.5");
     expect(saved.status).toBe(200);
     expect(saved.body).toEqual({ ok: true, role: "explorer", model: "xai/grok-4.5", toml: { status: "written" }, omoJsonc: { status: "written" } });
     expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toBe(ROLE.replace('model = "gpt-5.5"', 'model = "xai/grok-4.5"'));
-    expect((await call("/api/codex-agent-roles")).body.roles).toEqual([{ role: "explorer", model: "xai/grok-4.5", omoJsoncModel: "xai/grok-4.5" }]);
+    expect((await call("/api/codex-agent-roles")).body.roles).toEqual([{ role: "explorer", model: "xai/grok-4.5", effort: null, omoJsoncModel: "xai/grok-4.5" }]);
+  });
+
+  test("an effort goes to the role file and, as reasoning, to omo.jsonc", async () => {
+    const omoPath = join(root, "home", ".omo", "omo.jsonc");
+    writeFileSync(omoPath, '{ "[codex]": { "agents": { "explorer": { "model": "gpt-5.5", "reasoning": "low" } } } }\n');
+    const saved = await call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify({ model: "gpt-5.5", effort: "high" }) });
+    expect(saved.body).toMatchObject({ effort: "high", toml: { status: "written" }, omoJsonc: { status: "written" } });
+    expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toContain('model_reasoning_effort = "high"');
+    expect(JSON.parse(readFileSync(omoPath, "utf8"))["[codex]"].agents.explorer).toEqual({ model: "gpt-5.5", reasoning: "high" });
+    expect((await call("/api/codex-agent-roles")).body.roles).toEqual([{ role: "explorer", model: "gpt-5.5", effort: "high", omoJsoncModel: "gpt-5.5" }]);
+
+    // LazyCodex has no ultra level: the role file keeps it, and omo.jsonc drops the stale low.
+    await call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify({ model: "gpt-5.5", effort: "ultra" }) });
+    expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toContain('model_reasoning_effort = "ultra"');
+    expect(JSON.parse(readFileSync(omoPath, "utf8"))["[codex]"].agents.explorer).toEqual({ model: "gpt-5.5" });
+  });
+
+  test("a model-only save keeps the role's effort and its omo.jsonc reasoning", async () => {
+    const omoPath = join(root, "home", ".omo", "omo.jsonc");
+    writeFileSync(omoPath, '{ "[codex]": { "agents": { "explorer": { "model": "gpt-5.5", "reasoning": "high" } } } }\n');
+    await call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify({ model: "gpt-5.5", effort: "high" }) });
+    const saved = await put("explorer", "xai/grok-4.5");
+    expect(saved.status).toBe(200);
+    expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toContain('model_reasoning_effort = "high"');
+    expect(JSON.parse(readFileSync(omoPath, "utf8"))["[codex]"].agents.explorer).toEqual({ model: "xai/grok-4.5", reasoning: "high" });
   });
 
   test("without LazyCodex it lists nothing, writes nothing, and never opens omo.jsonc", async () => {
@@ -132,7 +157,7 @@ describe("/api/codex-agent-roles", () => {
       expect(listed.body).toEqual({
         lazycodex: DETECTED,
         omoJsonc: { state: "unreadable" },
-        roles: [{ role: "explorer", model: "gpt-5.5", omoJsoncModel: null }],
+        roles: [{ role: "explorer", model: "gpt-5.5", effort: null, omoJsoncModel: null }],
       });
       const saved = await put("explorer", "m3");
       expect(saved.body.toml).toEqual({ status: "written" });

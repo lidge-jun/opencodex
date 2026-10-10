@@ -125,7 +125,7 @@ test.each(["pointer", "keyboard"] as const)("LogsFilterBar %s reset restores foc
   await withFilterBar({
     ...DEFAULT_LOG_FILTER_STATE, surface: "grok", status: "errors", provider: "xai",
     model: "model-a", timeWindow: "1h", minTokPerSec: 50, interceptedOnly: true,
-    conversationId: "conversation-a", conversationQueryHash: "cached-hash",
+    conversationId: "conversation-a", conversationQueryHash: ["cached-hash"],
   }, async ui => {
     expect(ui.container.textContent).toContain("Showing 1 of 2");
     const reset = ui.container.querySelector<HTMLButtonElement>(".logs-filter-status button")!;

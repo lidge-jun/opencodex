@@ -1,6 +1,6 @@
 /**
- * CLI head: version/help early exits, `ocx ready` pre-parse, and the bounded
- * Codex-shim auto-restore preflight, in that order (Phase 1 of the CLI
+ * CLI head: version/help early exits, ready/resolve pre-parse, lifecycle version
+ * notice, then bounded Codex-shim auto-restore preflight (Phase 1 of the CLI
  * deepening — moved out of src/cli/index.ts).
  *
  * `parseCliHead` is pure (no I/O, no process access) so the ordering and the
@@ -16,6 +16,7 @@ import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
 import { noteCredentialArgv, redactSecretArgs } from "./secret-args";
+import { maybeNoticeVersionSkew } from "./version-skew-notice";
 
 export interface CliHead {
   kind: "version" | "help" | "ready" | "resolve" | "command";
@@ -141,6 +142,7 @@ export async function runCli(argv: string[]): Promise<CliHead> {
         console.error(uninstallError);
         process.exit(2);
       }
+      await maybeNoticeVersionSkew(head.command, head.args);
       maybeAutoRestoreCodexShim(head.command, head.args);
       return head;
   }

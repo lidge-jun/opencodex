@@ -423,6 +423,50 @@ test.each(["construction", "admission", "admission cancellation"])(
   },
 );
 
+for (const dispatched of [false, true]) test(`Combo Antigravity 403 sibling hop ${dispatched ? "dispatches" : "stops before dispatch"} with exact settlement`, async () => {
+  const accounts = await seedAntigravityAccounts(2);
+  const cfg = webSearchConfig();
+  let charges = 0, refunds = 0, physical = 0, refused = 0;
+  const sendBudget = createRequestExecutionBudget({
+    maxTotalModelSends: 2, baseSendAllowance: 2, finalRecoveryAllowance: 0,
+    maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+  }, undefined, { charge: () => { charges++; return true; }, refund: () => { refunds++; } });
+  // The stopped child keeps Combo's logical key. The dispatched child pins its
+  // physical endpoint to isolate hop ownership from a target-transition replacement.
+  const initial = sendBudget.reserveDispatch({
+    sendClass: "initial",
+    targetKey: dispatched ? `${DAILY_API_BASE}/v1internal:streamGenerateContent?alt=sse` : "google-antigravity/gemini-3.8-flash",
+    countedExternally: true,
+  });
+  if (!initial.allowed) throw new Error("Combo initial booking denied");
+  installAntigravityFetchMock(({ auth, project }) => {
+    physical++;
+    expect({ auth, project }).toEqual({ auth: accounts[physical - 1]!.auth, project: accounts[physical - 1]!.project });
+    return physical === 1 ? new Response(structuredRefusal, { status: 403 })
+      : new Response(sseSuccessBody("sibling answered"), { headers: { "content-type": "text/event-stream" } });
+  });
+  const originalResolve = adapterResolve.resolveAdapter;
+  const resolveSpy = spyOn(adapterResolve, "resolveAdapter").mockImplementation((provider, ...args) => {
+    const adapter = originalResolve(provider, ...args);
+    if (!dispatched && provider.project === accounts[1]!.project) {
+      adapter.buildRequest = async () => { refused++; throw new Error("synthetic sibling construction refusal"); };
+    }
+    return adapter;
+  });
+  try {
+    const response = await handleResponses(request(), cfg, route, {
+      sendBudget, comboAttempt: true, comboInitialSend: { permit: initial.permit },
+    });
+    await response.text();
+    expect(response.status).toBe(dispatched ? 200 : 403);
+    expect(refused).toBe(dispatched ? 0 : 1);
+    expect(physical).toBe(dispatched ? 2 : 1);
+    expect(charges).toBe(2);
+    expect(refunds).toBe(dispatched ? 0 : 1);
+    expect(sendBudget.used).toBe(dispatched ? 2 : 1);
+  } finally { resolveSpy.mockRestore(); }
+});
+
 test("web-search 429 recovery still uses the sibling's identity and charges exactly two physical sends", async () => {
   const accounts = await seedAntigravityAccounts(2);
   const cfg = webSearchConfig();
