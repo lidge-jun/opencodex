@@ -10,6 +10,7 @@ import { remoteMessagingPair } from "../helpers/messaging-remote";
 import { LOCAL_OTHER } from "../helpers/messaging-local";
 
 const native = process.env.OCX_MESSAGE_CODEX_BINARY;
+class NativeFixtureHistoryUnavailable extends Error {}
 test.skipIf(!native || process.platform === "win32")("isolated real native daemon accepts gateway queue receipt and completes a synthetic turn", async () => {
   const pair = remoteMessagingPair(), home = join(pair.b.root, "native"), work = join(pair.b.root, "work");
   mkdirSync(home, { mode: 0o700 }); mkdirSync(work, { mode: 0o700 });
@@ -27,13 +28,13 @@ test.skipIf(!native || process.platform === "win32")("isolated real native daemo
   const capacity = new RemoteCapacity(), child = spawnRemoteHelper([native!, "app-server", "--listen", "unix://"], capacity,
     undefined, undefined, { PATH: process.env.PATH, HOME: pair.b.root, CODEX_HOME: home, CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG: "1" });
   let socket: ReturnType<typeof localSocket> | undefined, owners: Awaited<ReturnType<typeof pair.owners>> | undefined;
-  const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  const pending = new Map<number, { method: string; resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   const budget = new MessageBudget();
   let nextId = 0;
   const request = (method: string, params: Record<string, unknown>) => new Promise<any>((resolve, reject) => {
     budget.throwIfEnded();
     const id = ++nextId, timer = setTimeout(() => { pending.delete(id); reject(new Error("native fixture control timeout")); }, budget.remainingMs(10000));
-    pending.set(id, { resolve, reject, timer }); socket!.send(JSON.stringify({ id, method, params }));
+    pending.set(id, { method, resolve, reject, timer }); socket!.send(JSON.stringify({ id, method, params }));
   });
   const abortPending = () => {
     for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error("native fixture ended")); }
@@ -59,12 +60,20 @@ test.skipIf(!native || process.platform === "win32")("isolated real native daemo
     socket.onmessage = event => {
       const raw = JSON.parse(String(event.data)), call = pending.get(raw.id); if (!call) return;
       pending.delete(raw.id); clearTimeout(call.timer);
-      if (raw.error) call.reject(new Error("native fixture setup rejected")); else call.resolve(raw.result);
+      if (raw.error) {
+        const historyUnavailable = call.method === "thread/read" && (
+          (raw.error.code === -32601 && raw.error.message === "list_turns is not supported yet")
+          || (raw.error.code === -32600 && typeof raw.error.message === "string"
+            && raw.error.message.endsWith(" is not materialized yet; includeTurns is unavailable before first user message")));
+        call.reject(historyUnavailable ? new NativeFixtureHistoryUnavailable("native fixture turn history is unavailable")
+          : new Error(`native fixture ${call.method} rejected`));
+      } else call.resolve(raw.result);
     };
     await request("initialize", { clientInfo: { name: "isolated_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
     socket.send(JSON.stringify({ method: "initialized", params: {} }));
     // Setup alone creates this disposable thread. The product gateway cannot admit thread/start.
     const thread = (await request("thread/start", { cwd: work, approvalPolicy: "never", sandbox: "read-only" })).thread.id;
+    await expect(request("thread/read", { threadId: thread, includeTurns: true })).rejects.toBeInstanceOf(NativeFixtureHistoryUnavailable);
     owners = await pair.owners(home);
     const receipt = await sendRemoteMessage(pair.aStore, { host: "worker", thread, kind: "request", body: "native gateway fixture" },
       { home: pair.a.codexHome, senderId: LOCAL_OTHER }, budget);
@@ -72,8 +81,11 @@ test.skipIf(!native || process.platform === "win32")("isolated real native daemo
     let completed = false;
     for (let attempt = 0; attempt < 200; attempt++) {
       budget.throwIfEnded();
-      const result = await request("thread/read", { threadId: thread, includeTurns: true });
-      if (result.thread.turns.some((turn: any) => turn.status === "completed" && JSON.stringify(turn).includes(receipt.messageId))) { completed = true; break; }
+      // Queue acknowledgement precedes persistence. Poll only these known native read-only states, never resend.
+      const result = await request("thread/read", { threadId: thread, includeTurns: true }).catch(error => {
+        if (error instanceof NativeFixtureHistoryUnavailable) return null; throw error;
+      });
+      if (result?.thread.turns.some((turn: any) => turn.status === "completed" && JSON.stringify(turn).includes(receipt.messageId))) { completed = true; break; }
       await Bun.sleep(25);
     }
     expect(completed).toBe(true); expect(modelRequests).toBe(1);
